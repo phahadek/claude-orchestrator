@@ -1,0 +1,5 @@
+node_modules/
+packages/backend/dist/
+packages/backend/.env
+packages/frontend/dist/
+*.db
