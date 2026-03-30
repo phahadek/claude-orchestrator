@@ -3,8 +3,10 @@ import { WebSocketServer } from 'ws';
 import http from 'http';
 import path from 'path';
 import dotenv from 'dotenv';
+import { runMigrations } from './db/schema';
 
 dotenv.config();
+runMigrations();
 
 const PORT = parseInt(process.env.PORT ?? '3000');
 
