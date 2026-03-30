@@ -1,9 +1,11 @@
 import { config } from '../config';
 import { upsertTaskCache, getCacheAge, getTaskCache } from '../db/queries';
-import { NotionTask, NotionApiError } from './types';
+import { NotionTask, NotionApiError, ResolvedTask } from './types';
+import { DependencyResolver } from './DependencyResolver';
 
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const NOTION_VERSION = '2022-06-28';
+const resolver = new DependencyResolver();
 
 // ─── Internal Notion API response shapes ───────────────────────────────────
 
@@ -114,12 +116,12 @@ export class NotionClient {
   /**
    * Fetch all tasks from a Notion database board.
    * Results are cached per board with a 5-minute TTL.
-   * Filtering to Ready/dispatchable is left to DependencyResolver + UI.
+   * Returns ResolvedTask[] with dependency annotations.
    */
-  async fetchReadyTasks(boardId: string): Promise<NotionTask[]> {
+  async fetchReadyTasks(boardId: string): Promise<ResolvedTask[]> {
     if (isBoardCacheFresh(boardId)) {
       const cached = readBoardCache(boardId);
-      if (cached) return cached;
+      if (cached) return resolver.resolve(cached);
     }
 
     // Fetch all pages from the board (paginate through all results)
@@ -146,7 +148,7 @@ export class NotionClient {
     } while (startCursor);
 
     writeBoardCache(boardId, tasks);
-    return tasks;
+    return resolver.resolve(tasks);
   }
 
   /** Update the Status select property on a Notion task page. */
