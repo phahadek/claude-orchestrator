@@ -1,0 +1,119 @@
+import { renderHook, act } from '@testing-library/react';
+import { describe, it, expect } from 'vitest';
+import { useSessionStore } from '../useSessionStore';
+import type { ServerMessage } from '@claude-dashboard/backend/src/ws/types';
+
+const SESSION_ID = 'test-session-1';
+
+const msg = {
+  session_started: (): ServerMessage => ({
+    type: 'session_started',
+    sessionId: SESSION_ID,
+    taskName: 'Test Task',
+    notionTaskUrl: 'https://notion.so/task',
+  }),
+  session_event: (): ServerMessage => ({
+    type: 'session_event',
+    sessionId: SESSION_ID,
+    eventType: 'text',
+    content: 'hello',
+  }),
+  session_status: (): ServerMessage => ({
+    type: 'session_status',
+    sessionId: SESSION_ID,
+    status: 'running',
+  }),
+  permission_request: (): ServerMessage => ({
+    type: 'permission_request',
+    sessionId: SESSION_ID,
+    toolName: 'Bash',
+    proposedAction: 'rm -rf /tmp/test',
+  }),
+  session_ended: (): ServerMessage => ({
+    type: 'session_ended',
+    sessionId: SESSION_ID,
+    status: 'done',
+    prUrl: 'https://github.com/pr/1',
+  }),
+  tasks_ready: (): ServerMessage => ({
+    type: 'tasks_ready',
+    tasks: [{ id: 't1', name: 'Task 1', status: '🗂️ Ready', taskUrl: 'https://notion.so/t1' }],
+  }),
+};
+
+describe('useSessionStore', () => {
+  it('handles session_started', () => {
+    const { result } = renderHook(() => useSessionStore());
+    act(() => result.current.dispatch(msg.session_started()));
+    const session = result.current.sessions[0];
+    expect(session).toBeDefined();
+    expect(session.sessionId).toBe(SESSION_ID);
+    expect(session.taskName).toBe('Test Task');
+    expect(session.status).toBe('starting');
+    expect(session.events).toHaveLength(0);
+  });
+
+  it('handles session_event — appends to events', () => {
+    const { result } = renderHook(() => useSessionStore());
+    act(() => result.current.dispatch(msg.session_started()));
+    act(() => result.current.dispatch(msg.session_event()));
+    const session = result.current.sessions[0];
+    expect(session.events).toHaveLength(1);
+    expect(session.events[0].content).toBe('hello');
+    expect(session.events[0].eventType).toBe('text');
+  });
+
+  it('handles session_status — updates status field', () => {
+    const { result } = renderHook(() => useSessionStore());
+    act(() => result.current.dispatch(msg.session_started()));
+    act(() => result.current.dispatch(msg.session_status()));
+    expect(result.current.sessions[0].status).toBe('running');
+  });
+
+  it('handles permission_request — sets needs_permission status and pendingPermission', () => {
+    const { result } = renderHook(() => useSessionStore());
+    act(() => result.current.dispatch(msg.session_started()));
+    act(() => result.current.dispatch(msg.permission_request()));
+    const session = result.current.sessions[0];
+    expect(session.status).toBe('needs_permission');
+    expect(session.pendingPermission?.toolName).toBe('Bash');
+    expect(session.pendingPermission?.proposedAction).toBe('rm -rf /tmp/test');
+  });
+
+  it('handles session_ended — sets final status and prUrl, clears pendingPermission', () => {
+    const { result } = renderHook(() => useSessionStore());
+    act(() => result.current.dispatch(msg.session_started()));
+    act(() => result.current.dispatch(msg.permission_request()));
+    act(() => result.current.dispatch(msg.session_ended()));
+    const session = result.current.sessions[0];
+    expect(session.status).toBe('done');
+    expect(session.prUrl).toBe('https://github.com/pr/1');
+    expect(session.pendingPermission).toBeUndefined();
+  });
+
+  it('handles tasks_ready — updates tasks list', () => {
+    const { result } = renderHook(() => useSessionStore());
+    expect(result.current.tasks).toHaveLength(0);
+    act(() => result.current.dispatch(msg.tasks_ready()));
+    expect(result.current.tasks).toHaveLength(1);
+    expect(result.current.tasks[0].name).toBe('Task 1');
+  });
+
+  it('each session_started dispatch returns a new Map (immutable update)', () => {
+    const { result } = renderHook(() => useSessionStore());
+    const before = result.current.sessions;
+    act(() => result.current.dispatch(msg.session_started()));
+    const after = result.current.sessions;
+    // sessions array reference changes because a new Map was created
+    expect(after).not.toBe(before);
+  });
+
+  it('each session_event dispatch produces a new array reference', () => {
+    const { result } = renderHook(() => useSessionStore());
+    act(() => result.current.dispatch(msg.session_started()));
+    const before = result.current.sessions;
+    act(() => result.current.dispatch(msg.session_event()));
+    expect(result.current.sessions).not.toBe(before);
+    expect(result.current.sessions[0].events).not.toBe(before[0]?.events);
+  });
+});
