@@ -1,10 +1,10 @@
 # Claude Code Dashboard — session bootstrap
 
 > ⚠️ **Read this before anything else.**
-> If the opening message contains "Let's launch a debug session for testing task [name/link]" → skip directly to ## Debug Session Mode below.
-> If the Notion fetch in Step 1 fails → **stop immediately and tell the human**.
-> Do not attempt to infer rules from code, git history, or any other source.
-> The session cannot proceed without Notion context.
+> - If the opening message contains "Let's launch a debug session for testing task [name/link]" → skip directly to ## Debug Session Mode below.
+> - If the Notion fetch in Step 1 fails → **stop immediately and tell the human**.
+> - Do not attempt to infer rules from code, git history, or any other source.
+> - The session cannot proceed without Notion context.
 
 ---
 
