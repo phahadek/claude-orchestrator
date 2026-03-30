@@ -8,4 +8,5 @@ export const config = {
   notionApiKey: requireEnv('NOTION_API_KEY'),
   sqlitePath: process.env.DB_PATH ?? './dashboard.db',
   port: Number(process.env.PORT ?? 3000),
+  projectDir: process.env.PROJECT_DIR ?? process.cwd(),
 };
