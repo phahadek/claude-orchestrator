@@ -1,76 +1,96 @@
-import { useEffect, useState } from 'react';
-import type { NotionTask } from '@claude-dashboard/backend/src/notion/types';
+import { useState, useEffect } from 'react';
+import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
+import type { ResolvedTask } from '@claude-dashboard/backend/src/notion/types';
+import styles from './DispatchModal.module.css';
 
-interface ProjectConfig {
-  name: string;
-  contextUrl: string;
+const PROJECT_CONTEXT_URL = import.meta.env.VITE_PROJECT_CONTEXT_URL as string;
+
+interface Props {
+  tasks: ResolvedTask[];
+  tasksReady: boolean;
+  send: (msg: ClientMessage) => void;
   boardId: string;
-}
-
-interface DispatchModalProps {
-  tasks: NotionTask[];
-  onDispatch: (tasks: { taskUrl: string; projectContextUrl: string }[]) => void;
   onClose: () => void;
 }
 
-export default function DispatchModal({ tasks, onDispatch, onClose }: DispatchModalProps) {
-  const [projectConfig, setProjectConfig] = useState<ProjectConfig | null>(null);
+export function DispatchModal({ tasks, tasksReady, send, boardId, onClose }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('/api/config')
-      .then((res) => res.json() as Promise<ProjectConfig[]>)
-      .then((projects) => {
-        if (projects.length > 0) setProjectConfig(projects[0]);
-      })
-      .catch(() => setError('Failed to load project config'));
+    send({ type: 'fetch_tasks', boardId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function toggleTask(notionUrl: string) {
+  useEffect(() => {
+    if (tasksReady) setLoading(false);
+  }, [tasksReady]);
+
+  const ready = tasks.filter((t) => !t.blocked && !t.nonCode);
+  const blocked = tasks.filter((t) => t.blocked || t.nonCode);
+
+  const toggle = (id: string) =>
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(notionUrl)) next.delete(notionUrl);
-      else next.add(notionUrl);
+      next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
-  }
 
-  function handleDispatch() {
-    if (!projectConfig) return;
-    const payload = [...selected].map((taskUrl) => ({
-      taskUrl,
-      projectContextUrl: projectConfig.contextUrl,
-    }));
-    onDispatch(payload);
-    onClose();
-  }
+  const launch = () => {
+    const toDispatch = ready
+      .filter((t) => selected.has(t.task.id))
+      .map((t) => ({ taskUrl: t.task.notionUrl, projectContextUrl: PROJECT_CONTEXT_URL }));
+    if (toDispatch.length > 0) {
+      send({ type: 'dispatch', tasks: toDispatch });
+      onClose();
+    }
+  };
 
   return (
-    <div role="dialog" aria-modal="true" aria-label="Dispatch tasks">
-      <h2>Dispatch Tasks</h2>
-      {error && <p>{error}</p>}
-      {!projectConfig && !error && <p>Loading project config…</p>}
-      <ul>
-        {tasks.map((task) => (
-          <li key={task.id}>
-            <label>
-              <input
-                type="checkbox"
-                checked={selected.has(task.notionUrl)}
-                onChange={() => toggleTask(task.notionUrl)}
-              />
-              {task.title}
-            </label>
-          </li>
-        ))}
-      </ul>
-      <button type="button" onClick={handleDispatch} disabled={selected.size === 0 || !projectConfig}>
-        Dispatch
-      </button>
-      <button type="button" onClick={onClose}>
-        Cancel
-      </button>
+    <div className={styles['modal-overlay']} onClick={onClose}>
+      <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+        <h2>Launch Sessions</h2>
+        {loading ? (
+          <p>Fetching tasks from Notion…</p>
+        ) : (
+          <>
+            <section>
+              <h3>✅ Ready ({ready.length})</h3>
+              {ready.map((t) => (
+                <label key={t.task.id} className={styles['ready-task']}>
+                  <input
+                    type="checkbox"
+                    checked={selected.has(t.task.id)}
+                    onChange={() => toggle(t.task.id)}
+                  />
+                  {t.task.title}
+                </label>
+              ))}
+              {ready.length === 0 && <p className={styles.empty}>No unblocked tasks.</p>}
+            </section>
+            <section>
+              <h3>🚫 Blocked ({blocked.length})</h3>
+              {blocked.map((t) => (
+                <div key={t.task.id} className={styles['blocked-task']}>
+                  {t.task.title}
+                  {t.nonCode && <span className={styles.tag}>non-code</span>}
+                  {t.blocked && (
+                    <span className={styles.tag}>
+                      blocked by: {t.blockers.map((b) => b.title).join(', ')}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </section>
+          </>
+        )}
+        <div className={styles['modal-footer']}>
+          <button onClick={onClose}>Cancel</button>
+          <button onClick={launch} disabled={selected.size === 0}>
+            Launch{selected.size > 0 ? ` (${selected.size})` : ''} session{selected.size !== 1 ? 's' : ''}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
