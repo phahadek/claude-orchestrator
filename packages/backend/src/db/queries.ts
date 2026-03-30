@@ -40,6 +40,19 @@ const stmtGetAllSessions = db.prepare(`
   SELECT * FROM sessions ORDER BY started_at DESC
 `);
 
+const stmtGetAllSessionIds = db.prepare(`
+  SELECT session_id FROM sessions
+`);
+
+const stmtInsertSessionOrIgnore = db.prepare<NewSession>(`
+  INSERT OR IGNORE INTO sessions
+    (session_id, notion_task_id, notion_task_url, project_context_url,
+     status, started_at, ended_at, pr_url)
+  VALUES
+    (@session_id, @notion_task_id, @notion_task_url, @project_context_url,
+     @status, @started_at, @ended_at, @pr_url)
+`);
+
 export function insertSession(s: NewSession): void {
   stmtInsertSession.run({ ended_at: null, pr_url: null, ...s });
 }
@@ -64,10 +77,23 @@ export function getAllSessions(): Session[] {
   return stmtGetAllSessions.all() as Session[];
 }
 
+export function getAllSessionIds(): string[] {
+  return (stmtGetAllSessionIds.all() as { session_id: string }[]).map(r => r.session_id);
+}
+
+export function insertSessionOrIgnore(s: NewSession): void {
+  stmtInsertSessionOrIgnore.run({ ended_at: null, pr_url: null, ...s });
+}
+
 // ─── session_events ────────────────────────────────────────────────────────
 
 const stmtInsertEvent = db.prepare<NewSessionEvent>(`
   INSERT INTO session_events (session_id, event_type, payload, timestamp)
+  VALUES (@session_id, @event_type, @payload, @timestamp)
+`);
+
+const stmtInsertEventOrIgnore = db.prepare<NewSessionEvent>(`
+  INSERT OR IGNORE INTO session_events (session_id, event_type, payload, timestamp)
   VALUES (@session_id, @event_type, @payload, @timestamp)
 `);
 
@@ -77,6 +103,10 @@ const stmtGetEventsBySession = db.prepare<{ session_id: string }>(`
 
 export function insertEvent(e: NewSessionEvent): void {
   stmtInsertEvent.run(e);
+}
+
+export function insertEventOrIgnore(e: NewSessionEvent): void {
+  stmtInsertEventOrIgnore.run(e);
 }
 
 export function getEventsBySession(sessionId: string): SessionEvent[] {

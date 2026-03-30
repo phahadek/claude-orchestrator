@@ -6,10 +6,10 @@ const resolver = new DependencyResolver();
 
 function makeTask(overrides: Partial<NotionTask> & { id: string }): NotionTask {
   return {
-    name: 'Task',
+    title: 'Task',
     status: '🗂️ Ready',
     type: '💻 Code',
-    taskUrl: `https://notion.so/${overrides.id}`,
+    notionUrl: `https://notion.so/${overrides.id}`,
     dependsOn: [],
     ...overrides,
   };

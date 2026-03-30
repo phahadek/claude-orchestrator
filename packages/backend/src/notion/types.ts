@@ -1,10 +1,10 @@
 export interface NotionTask {
   id: string;
-  name: string;
+  title: string;
   status: string;
-  type: string;
-  taskUrl: string;
-  dependsOn: string[];  // parsed from pipe-delimited rich text field
+  type: string; // '📋 Planning' | '💻 Code' | '🧪 Testing'
+  dependsOn: string[]; // array of Notion page IDs
+  notionUrl: string;
 }
 
 export interface ResolvedTask {
@@ -15,7 +15,10 @@ export interface ResolvedTask {
 }
 
 export class NotionApiError extends Error {
-  constructor(message: string, public readonly statusCode?: number) {
+  constructor(
+    public readonly statusCode: number,
+    message: string,
+  ) {
     super(message);
     this.name = 'NotionApiError';
   }
