@@ -10,6 +10,10 @@ export interface SessionState {
   events: { eventType: string; content: string; timestamp: number }[];
   pendingPermission?: { toolName: string; proposedAction: string };
   prUrl?: string;
+  /** Unix ms — set from SQLite sessions.started_at for JSONL-imported sessions */
+  started_at?: number;
+  /** Unix ms — set from SQLite sessions.ended_at for JSONL-imported sessions */
+  ended_at?: number;
 }
 
 export function useSessionStore() {
