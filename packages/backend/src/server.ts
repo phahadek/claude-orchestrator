@@ -9,6 +9,8 @@ import { NotionClient } from './notion/NotionClient';
 import { handleMessage } from './ws/router';
 import { JsonlReader, DEFAULT_SESSIONS_DIR } from './session/JsonlReader';
 import type { ServerMessage } from './ws/types';
+import { rulesRouter } from './routes/rules';
+import configRouter from './routes/config';
 
 dotenv.config();
 runMigrations();
@@ -23,6 +25,8 @@ const PORT = parseInt(process.env.PORT ?? '3000');
 
 const app = express();
 app.use(express.json());
+app.use('/api/rules', rulesRouter);
+app.use('/api', configRouter);
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'index.html'))

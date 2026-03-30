@@ -132,6 +132,18 @@ const stmtGetRules = db.prepare(`
   SELECT * FROM permission_rules WHERE enabled = 1 ORDER BY order_index ASC
 `);
 
+const stmtGetAllRules = db.prepare(`
+  SELECT * FROM permission_rules ORDER BY order_index ASC
+`);
+
+const stmtGetRuleById = db.prepare<{ id: number }>(`
+  SELECT * FROM permission_rules WHERE id = @id
+`);
+
+const stmtGetMaxOrderIndex = db.prepare(`
+  SELECT COALESCE(MAX(order_index), 0) AS max_idx FROM permission_rules
+`);
+
 const stmtInsertRule = db.prepare<NewPermissionRule>(`
   INSERT INTO permission_rules
     (order_index, pattern, match_type, decision, label, enabled)
@@ -168,8 +180,25 @@ export function getRules(): PermissionRule[] {
   return stmtGetRules.all() as PermissionRule[];
 }
 
+export function getAllRules(): PermissionRule[] {
+  return stmtGetAllRules.all() as PermissionRule[];
+}
+
+export function getRuleById(id: number): PermissionRule | undefined {
+  return stmtGetRuleById.get({ id }) as PermissionRule | undefined;
+}
+
 export function insertRule(r: NewPermissionRule): void {
   stmtInsertRule.run(r);
+}
+
+export function insertRuleReturning(
+  body: Omit<NewPermissionRule, 'order_index'>,
+): PermissionRule {
+  const { max_idx } = stmtGetMaxOrderIndex.get() as { max_idx: number };
+  const r: NewPermissionRule = { ...body, order_index: max_idx + 1 };
+  const result = stmtInsertRule.run(r);
+  return getRuleById(result.lastInsertRowid as number)!;
 }
 
 export function updateRule(id: number, patch: Partial<PermissionRule>): void {
