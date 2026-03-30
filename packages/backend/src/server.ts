@@ -7,9 +7,13 @@ import { runMigrations } from './db/schema';
 import { SessionManager } from './session/SessionManager';
 import { NotionClient } from './notion/NotionClient';
 import { handleMessage } from './ws/router';
+import { JsonlReader, DEFAULT_SESSIONS_DIR } from './session/JsonlReader';
 
 dotenv.config();
 runMigrations();
+
+const sessionsDir = process.env.SESSIONS_DIR ?? DEFAULT_SESSIONS_DIR;
+const jsonlReader = new JsonlReader(sessionsDir);
 
 const sessionManager = new SessionManager();
 const notionClient = new NotionClient();
@@ -32,9 +36,14 @@ wss.on('connection', (ws) => {
   ws.on('close', () => console.log('[WS] client disconnected'));
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`[server] listening on port ${PORT}`);
-  console.log('[server] LAN access enabled — no authentication');
+jsonlReader.importAll().then(() => {
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`[server] listening on port ${PORT}`);
+    console.log('[server] LAN access enabled — no authentication');
+  });
+}).catch((err: unknown) => {
+  console.error('[server] JSONL import failed:', err);
+  process.exit(1);
 });
 
 process.on('SIGTERM', async () => {
