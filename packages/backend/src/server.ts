@@ -4,9 +4,12 @@ import http from 'http';
 import path from 'path';
 import dotenv from 'dotenv';
 import { runMigrations } from './db/schema';
+import { SessionManager } from './session/SessionManager';
 
 dotenv.config();
 runMigrations();
+
+const sessionManager = new SessionManager();
 
 const PORT = parseInt(process.env.PORT ?? '3000');
 
@@ -30,7 +33,8 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('[server] LAN access enabled — no authentication');
 });
 
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   console.log('[server] SIGTERM received — shutting down');
+  await sessionManager.shutdownAll();
   server.close(() => process.exit(0));
 });
