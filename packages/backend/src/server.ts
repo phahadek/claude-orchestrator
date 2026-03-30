@@ -1,5 +1,5 @@
 import express from 'express';
-import { WebSocketServer } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import http from 'http';
 import path from 'path';
 import dotenv from 'dotenv';
@@ -8,6 +8,7 @@ import { SessionManager } from './session/SessionManager';
 import { NotionClient } from './notion/NotionClient';
 import { handleMessage } from './ws/router';
 import { JsonlReader, DEFAULT_SESSIONS_DIR } from './session/JsonlReader';
+import type { ServerMessage } from './ws/types';
 
 dotenv.config();
 runMigrations();
@@ -15,8 +16,8 @@ runMigrations();
 const sessionsDir = process.env.SESSIONS_DIR ?? DEFAULT_SESSIONS_DIR;
 const jsonlReader = new JsonlReader(sessionsDir);
 
-const sessionManager = new SessionManager();
 const notionClient = new NotionClient();
+const sessionManager = new SessionManager(notionClient);
 
 const PORT = parseInt(process.env.PORT ?? '3000');
 
@@ -29,6 +30,14 @@ app.get('*', (_req, res) =>
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
+
+// Broadcast all session events to every connected WS client
+sessionManager.on('message', (msg: ServerMessage) => {
+  const json = JSON.stringify(msg);
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) client.send(json);
+  });
+});
 
 wss.on('connection', (ws) => {
   console.log('[WS] client connected');
