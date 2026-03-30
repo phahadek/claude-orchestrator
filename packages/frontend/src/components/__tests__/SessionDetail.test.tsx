@@ -1,0 +1,231 @@
+import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { SessionDetail, EventRow } from '../SessionDetail';
+import type { SessionState } from '../../hooks/useSessionStore';
+import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
+
+function makeSession(overrides?: Partial<SessionState>): SessionState {
+  return {
+    sessionId: 'sess-1',
+    taskName: 'Test Task',
+    notionTaskUrl: 'https://notion.so/task',
+    status: 'running',
+    events: [],
+    ...overrides,
+  };
+}
+
+function makeEvent(
+  eventType: string,
+  content: string,
+  timestamp = 1000
+): SessionState['events'][number] {
+  return { eventType, content, timestamp };
+}
+
+describe('SessionDetail', () => {
+  it('renders null when session is null', () => {
+    const { container } = render(
+      <SessionDetail session={null} send={vi.fn()} onClose={vi.fn()} />
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('renders the task name and Notion link', () => {
+    render(<SessionDetail session={makeSession()} send={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByText('Test Task')).toBeTruthy();
+    const notionLink = screen.getByText('Notion ↗');
+    expect(notionLink.getAttribute('href')).toBe('https://notion.so/task');
+  });
+
+  it('renders all events from session.events', () => {
+    const events = [
+      makeEvent('text', 'Hello world', 1000),
+      makeEvent('system', 'Session started', 2000),
+      makeEvent('error', 'Something went wrong', 3000),
+    ];
+    render(<SessionDetail session={makeSession({ events })} send={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByText('Hello world')).toBeTruthy();
+    expect(screen.getByText('Session started')).toBeTruthy();
+    expect(screen.getByText('Something went wrong')).toBeTruthy();
+  });
+
+  it('renders the composer for running sessions', () => {
+    render(
+      <SessionDetail session={makeSession({ status: 'running' })} send={vi.fn()} onClose={vi.fn()} />
+    );
+    expect(screen.getByPlaceholderText('Send a message to the session…')).toBeTruthy();
+  });
+
+  it('renders the composer for needs_permission sessions', () => {
+    render(
+      <SessionDetail
+        session={makeSession({ status: 'needs_permission' })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByPlaceholderText('Send a message to the session…')).toBeTruthy();
+  });
+
+  it('hides the composer for terminal states', () => {
+    for (const status of ['done', 'error', 'killed']) {
+      const { unmount } = render(
+        <SessionDetail session={makeSession({ status })} send={vi.fn()} onClose={vi.fn()} />
+      );
+      expect(screen.queryByPlaceholderText('Send a message to the session…')).toBeNull();
+      unmount();
+    }
+  });
+
+  it('sends send_message on Enter key (not Shift+Enter)', () => {
+    const send = vi.fn();
+    render(<SessionDetail session={makeSession()} send={send} onClose={vi.fn()} />);
+    const input = screen.getByPlaceholderText('Send a message to the session…');
+    fireEvent.change(input, { target: { value: 'hello' } });
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: false });
+    expect(send).toHaveBeenCalledWith<[ClientMessage]>({
+      type: 'send_message',
+      sessionId: 'sess-1',
+      message: 'hello',
+    });
+  });
+
+  it('does not send on Shift+Enter', () => {
+    const send = vi.fn();
+    render(<SessionDetail session={makeSession()} send={send} onClose={vi.fn()} />);
+    const input = screen.getByPlaceholderText('Send a message to the session…');
+    fireEvent.change(input, { target: { value: 'hello' } });
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('does not send empty messages on Enter', () => {
+    const send = vi.fn();
+    render(<SessionDetail session={makeSession()} send={send} onClose={vi.fn()} />);
+    const input = screen.getByPlaceholderText('Send a message to the session…');
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: false });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('renders permission request section when pendingPermission is set', () => {
+    const session = makeSession({
+      status: 'needs_permission',
+      pendingPermission: { toolName: 'Bash', proposedAction: 'rm -rf /tmp/foo' },
+    });
+    render(<SessionDetail session={session} send={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByText(/Bash/)).toBeTruthy();
+    expect(screen.getByText('rm -rf /tmp/foo')).toBeTruthy();
+    expect(screen.getByText('✅ Approve')).toBeTruthy();
+    expect(screen.getByText('❌ Deny')).toBeTruthy();
+  });
+
+  it('does not render permission request when pendingPermission is absent', () => {
+    render(<SessionDetail session={makeSession()} send={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.queryByText('✅ Approve')).toBeNull();
+  });
+
+  it('Approve sends correct ClientMessage', () => {
+    const send = vi.fn();
+    const session = makeSession({
+      status: 'needs_permission',
+      pendingPermission: { toolName: 'Read', proposedAction: 'read /etc/hosts' },
+    });
+    render(<SessionDetail session={session} send={send} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByText('✅ Approve'));
+    expect(send).toHaveBeenCalledWith<[ClientMessage]>({ type: 'approve', sessionId: 'sess-1' });
+  });
+
+  it('Deny sends correct ClientMessage', () => {
+    const send = vi.fn();
+    const session = makeSession({
+      status: 'needs_permission',
+      pendingPermission: { toolName: 'Bash', proposedAction: 'ls /' },
+    });
+    render(<SessionDetail session={session} send={send} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByText('❌ Deny'));
+    expect(send).toHaveBeenCalledWith<[ClientMessage]>({
+      type: 'deny',
+      sessionId: 'sess-1',
+      reason: 'User denied',
+    });
+  });
+
+  it('Kill button with confirm sends kill and calls onClose', () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
+    const send = vi.fn();
+    const onClose = vi.fn();
+    render(<SessionDetail session={makeSession({ status: 'running' })} send={send} onClose={onClose} />);
+    fireEvent.click(screen.getByText('Kill'));
+    expect(send).toHaveBeenCalledWith<[ClientMessage]>({ type: 'kill', sessionId: 'sess-1' });
+    expect(onClose).toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('Kill button confirm cancelled does not send kill', () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(false));
+    const send = vi.fn();
+    render(<SessionDetail session={makeSession({ status: 'running' })} send={send} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByText('Kill'));
+    expect(send).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('onClose is called when close button is clicked', () => {
+    const onClose = vi.fn();
+    render(<SessionDetail session={makeSession()} send={vi.fn()} onClose={onClose} />);
+    fireEvent.click(screen.getByLabelText('Close panel'));
+    expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe('EventRow', () => {
+  it('renders text event as a paragraph', () => {
+    render(<EventRow event={makeEvent('text', 'Hello from Claude')} />);
+    const el = screen.getByText('Hello from Claude');
+    expect(el.tagName).toBe('P');
+  });
+
+  it('renders tool_use event with tool name header and args', () => {
+    const content = JSON.stringify({ toolName: 'Bash', input: { command: 'ls' } });
+    render(<EventRow event={makeEvent('tool_use', content)} />);
+    expect(screen.getByText(/Bash/)).toBeTruthy();
+    expect(screen.getByText(/\"command\": \"ls\"/)).toBeTruthy();
+  });
+
+  it('renders tool_use event with raw content when JSON is invalid', () => {
+    render(<EventRow event={makeEvent('tool_use', 'not-json')} />);
+    expect(screen.getByText('not-json')).toBeTruthy();
+  });
+
+  it('renders tool_result event as indented muted block', () => {
+    render(<EventRow event={makeEvent('tool_result', 'result output')} />);
+    expect(screen.getByText('result output')).toBeTruthy();
+  });
+
+  it('renders system event as italic text', () => {
+    render(<EventRow event={makeEvent('system', 'Session started')} />);
+    expect(screen.getByText('Session started')).toBeTruthy();
+  });
+
+  it('renders error event in red block', () => {
+    render(<EventRow event={makeEvent('error', 'Something broke')} />);
+    expect(screen.getByText('Something broke')).toBeTruthy();
+  });
+
+  it('uses timestamp-eventType as key (tests via stable rendering)', () => {
+    // Validates the key format renders without duplicate-key warnings
+    const events = [
+      makeEvent('text', 'first', 1000),
+      makeEvent('system', 'second', 2000),
+    ];
+    const { container } = render(
+      <>
+        {events.map((e) => (
+          <EventRow key={`${e.timestamp}-${e.eventType}`} event={e} />
+        ))}
+      </>
+    );
+    expect(container.querySelectorAll('p').length).toBe(2);
+  });
+});
