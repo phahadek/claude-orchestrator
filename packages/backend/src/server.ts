@@ -5,11 +5,14 @@ import path from 'path';
 import dotenv from 'dotenv';
 import { runMigrations } from './db/schema';
 import { SessionManager } from './session/SessionManager';
+import { NotionClient } from './notion/NotionClient';
+import { handleMessage } from './ws/router';
 
 dotenv.config();
 runMigrations();
 
 const sessionManager = new SessionManager();
+const notionClient = new NotionClient();
 
 const PORT = parseInt(process.env.PORT ?? '3000');
 
@@ -25,6 +28,7 @@ const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws) => {
   console.log('[WS] client connected');
+  ws.on('message', (data) => handleMessage(ws, data.toString(), sessionManager, notionClient));
   ws.on('close', () => console.log('[WS] client disconnected'));
 });
 
