@@ -1,0 +1,84 @@
+import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { SessionCard, truncate } from '../SessionCard';
+import type { SessionState } from '../../hooks/useSessionStore';
+
+function makeSession(overrides?: Partial<SessionState>): SessionState {
+  return {
+    sessionId: 'test-session',
+    taskName: 'Test Task',
+    notionTaskUrl: 'https://notion.so/task',
+    status: 'running',
+    events: [],
+    ...overrides,
+  };
+}
+
+describe('truncate', () => {
+  it('returns the original string when it is within maxLen', () => {
+    expect(truncate('hello', 10)).toBe('hello');
+    expect(truncate('hello', 5)).toBe('hello');
+  });
+
+  it('truncates and appends ellipsis when string exceeds maxLen', () => {
+    const long = 'a'.repeat(130);
+    const result = truncate(long, 120);
+    expect(result).toHaveLength(121); // 120 chars + ellipsis char
+    expect(result.endsWith('…')).toBe(true);
+  });
+});
+
+describe('SessionCard', () => {
+  it('renders task name and status badge', () => {
+    render(<SessionCard session={makeSession()} selected={false} onClick={vi.fn()} />);
+    expect(screen.getByText('Test Task')).toBeDefined();
+    expect(screen.getByText('🔄 Running')).toBeDefined();
+  });
+
+  it('truncates last event content to 120 characters', () => {
+    const longContent = 'x'.repeat(130);
+    const session = makeSession({
+      events: [{ eventType: 'text', content: longContent, timestamp: Date.now() }],
+    });
+    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    const preview = screen.getByText(/x+…/);
+    expect(preview.textContent?.length).toBe(121); // 120 + ellipsis
+  });
+
+  it('renders attention indicator for needs_permission sessions', () => {
+    const session = makeSession({ status: 'needs_permission' });
+    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    expect(screen.getByText(/needs permission/i)).toBeDefined();
+  });
+
+  it('does not render attention indicator for non-needs_permission sessions', () => {
+    render(<SessionCard session={makeSession({ status: 'running' })} selected={false} onClick={vi.fn()} />);
+    expect(screen.queryByText(/needs permission/i)).toBeNull();
+  });
+
+  it('renders PR link when prUrl is set (terminal session)', () => {
+    const session = makeSession({ status: 'done', prUrl: 'https://github.com/pr/42' });
+    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    const link = screen.getByText('PR ↗');
+    expect(link).toBeDefined();
+    expect((link as HTMLAnchorElement).href).toBe('https://github.com/pr/42');
+  });
+
+  it('does not render PR link when prUrl is not set', () => {
+    render(<SessionCard session={makeSession({ status: 'running' })} selected={false} onClick={vi.fn()} />);
+    expect(screen.queryByText('PR ↗')).toBeNull();
+  });
+
+  it('calls onClick when card is clicked', () => {
+    const onClick = vi.fn();
+    render(<SessionCard session={makeSession()} selected={false} onClick={onClick} />);
+    fireEvent.click(screen.getByText('Test Task'));
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not render last-event section when events list is empty', () => {
+    render(<SessionCard session={makeSession({ events: [] })} selected={false} onClick={vi.fn()} />);
+    // No text from an event content — just task name, badge, elapsed
+    expect(screen.queryByText(/^x/)).toBeNull();
+  });
+});
