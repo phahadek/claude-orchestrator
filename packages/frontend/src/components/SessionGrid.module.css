@@ -1,0 +1,19 @@
+.session-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+  padding: 16px;
+}
+
+.session-grid-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 16px;
+  color: #6c7086;
+  font-size: 0.9rem;
+}
+
+.session-grid-empty p {
+  margin: 0;
+}
