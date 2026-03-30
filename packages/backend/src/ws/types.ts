@@ -1,4 +1,4 @@
-import type { NotionTask } from '../notion/types';
+import type { ResolvedTask } from '../notion/types';
 
 // ── Server → Client ──────────────────────────────────────────────
 export type ServerMessage =
@@ -7,7 +7,7 @@ export type ServerMessage =
   | { type: 'session_status';     sessionId: string; status: 'starting' | 'running' | 'needs_permission' | 'done' | 'error' | 'killed' }
   | { type: 'permission_request'; sessionId: string; toolName: string; proposedAction: string }
   | { type: 'session_ended';      sessionId: string; status: string; prUrl?: string }
-  | { type: 'tasks_ready';        tasks: NotionTask[] }
+  | { type: 'tasks_ready';        tasks: ResolvedTask[] }
   | { type: 'error';              message: string };
 
 // ── Client → Server ──────────────────────────────────────────────
