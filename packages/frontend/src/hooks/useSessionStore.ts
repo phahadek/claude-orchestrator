@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import type { ServerMessage } from '@claude-dashboard/backend/src/ws/types';
-import type { NotionTask } from '@claude-dashboard/backend/src/notion/types';
+import type { ResolvedTask } from '@claude-dashboard/backend/src/notion/types';
 
 export interface SessionState {
   sessionId: string;
@@ -18,7 +18,8 @@ export interface SessionState {
 
 export function useSessionStore() {
   const [sessions, setSessions] = useState<Map<string, SessionState>>(new Map());
-  const [tasks, setTasks] = useState<NotionTask[]>([]);
+  const [tasks, setTasks] = useState<ResolvedTask[]>([]);
+  const [tasksReady, setTasksReady] = useState(false);
 
   const dispatch = useCallback((msg: ServerMessage) => {
     setSessions((prev) => {
@@ -80,8 +81,11 @@ export function useSessionStore() {
       return next;
     });
 
-    if (msg.type === 'tasks_ready') setTasks(msg.tasks);
+    if (msg.type === 'tasks_ready') {
+      setTasks(msg.tasks);
+      setTasksReady(true);
+    }
   }, []);
 
-  return { sessions: [...sessions.values()], tasks, dispatch };
+  return { sessions: [...sessions.values()], tasks, tasksReady, dispatch };
 }
