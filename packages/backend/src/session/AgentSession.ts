@@ -7,8 +7,8 @@ import {
   updateSessionStatus,
   getEventsBySession,
 } from '../db/queries';
-import { getRules } from '../db/queries';
 import { PermissionEngine } from '../permissions/PermissionEngine';
+import type { Decision } from '../permissions/types';
 import type { ServerMessage } from '../ws/types';
 import type { NotionClient } from '../notion/NotionClient';
 
@@ -172,10 +172,8 @@ export class AgentSession extends EventEmitter {
     const toolName = String(event.tool_name ?? event.toolName ?? '');
     const toolArgs = JSON.stringify(event.tool_input ?? event.toolArgs ?? {});
 
-    // Load fresh rules from SQLite on each permission request
-    const rules = getRules();
-    const engine = new PermissionEngine(rules);
-    const decision = engine.evaluate(toolName, toolArgs);
+    const engine = new PermissionEngine();
+    const decision: Decision = engine.evaluate(toolName, toolArgs);
 
     if (decision === 'allow') {
       insertPermissionEvent({
