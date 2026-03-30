@@ -1,33 +1,58 @@
+import { EventEmitter } from 'events';
 import { AgentSession } from './AgentSession';
+import { config } from '../config';
+import type { NotionClient } from '../notion/NotionClient';
+import type { ServerMessage } from '../ws/types';
 
-const PROJECT_DIR = process.env.PROJECT_DIR ?? process.cwd();
-
-export class SessionManager {
+export class SessionManager extends EventEmitter {
   private sessions = new Map<string, AgentSession>();
 
-  async start(taskUrl: string, projectContextUrl: string): Promise<string> {
+  constructor(private readonly notionClient: NotionClient) {
+    super();
+  }
+
+  start(taskUrl: string, projectContextUrl: string): string {
     const sessionId = crypto.randomUUID();
-    const session = new AgentSession(sessionId, taskUrl, projectContextUrl, PROJECT_DIR);
+    const session = new AgentSession(
+      sessionId,
+      taskUrl,
+      projectContextUrl,
+      this.notionClient,
+      config.projectDir,
+    );
+
     this.sessions.set(sessionId, session);
-    console.log(`[SessionManager] start ${sessionId}`);
+
+    // Forward all session events to the WS layer via EventEmitter
+    session.on('message', (msg: ServerMessage) => this.emit('message', msg));
+
+    // Fire-and-forget — run() blocks until the subprocess exits
+    session.run().catch((err) =>
+      console.error(`[SessionManager] session ${sessionId} error: ${err}`),
+    );
+
     return sessionId;
   }
 
   async kill(sessionId: string): Promise<void> {
-    console.log(`[SessionManager] kill ${sessionId}`);
-    this.sessions.delete(sessionId);
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      await session.kill();
+      this.sessions.delete(sessionId);
+    }
   }
 
-  async send(sessionId: string, message: string): Promise<void> {
-    console.log(`[SessionManager] send to ${sessionId}: ${message}`);
+  approve(sessionId: string): void {
+    this.sessions.get(sessionId)?.approve();
   }
 
-  async approve(sessionId: string): Promise<void> {
-    console.log(`[SessionManager] approve ${sessionId}`);
+  deny(sessionId: string, reason?: string): void {
+    this.sessions.get(sessionId)?.deny(reason);
   }
 
-  async deny(sessionId: string, reason?: string): Promise<void> {
-    console.log(`[SessionManager] deny ${sessionId}: ${reason}`);
+  // send() is reserved for future resume/fork prompt injection
+  send(_sessionId: string, _message: string): void {
+    // TODO: pipe message to proc.stdin when session resume is implemented
   }
 
   async shutdownAll(): Promise<void> {
