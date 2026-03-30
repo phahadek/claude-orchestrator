@@ -37,7 +37,7 @@ const msg = {
   }),
   tasks_ready: (): ServerMessage => ({
     type: 'tasks_ready',
-    tasks: [{ id: 't1', name: 'Task 1', status: '🗂️ Ready', taskUrl: 'https://notion.so/t1' }],
+    tasks: [{ id: 't1', title: 'Task 1', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: 'https://notion.so/t1' }],
   }),
 };
 
@@ -96,7 +96,7 @@ describe('useSessionStore', () => {
     expect(result.current.tasks).toHaveLength(0);
     act(() => result.current.dispatch(msg.tasks_ready()));
     expect(result.current.tasks).toHaveLength(1);
-    expect(result.current.tasks[0].name).toBe('Task 1');
+    expect(result.current.tasks[0].title).toBe('Task 1');
   });
 
   it('each session_started dispatch returns a new Map (immutable update)', () => {
