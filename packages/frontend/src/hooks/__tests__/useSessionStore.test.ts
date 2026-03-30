@@ -37,7 +37,12 @@ const msg = {
   }),
   tasks_ready: (): ServerMessage => ({
     type: 'tasks_ready',
-    tasks: [{ id: 't1', title: 'Task 1', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: 'https://notion.so/t1' }],
+    tasks: [{
+      task: { id: 't1', title: 'Task 1', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: 'https://notion.so/t1' },
+      blocked: false,
+      blockers: [],
+      nonCode: false,
+    }],
   }),
 };
 
@@ -91,12 +96,22 @@ describe('useSessionStore', () => {
     expect(session.pendingPermission).toBeUndefined();
   });
 
-  it('handles tasks_ready — updates tasks list', () => {
+  it('handles tasks_ready — updates tasks list and sets tasksReady flag', () => {
     const { result } = renderHook(() => useSessionStore());
     expect(result.current.tasks).toHaveLength(0);
+    expect(result.current.tasksReady).toBe(false);
     act(() => result.current.dispatch(msg.tasks_ready()));
     expect(result.current.tasks).toHaveLength(1);
-    expect(result.current.tasks[0].title).toBe('Task 1');
+    expect(result.current.tasks[0].task.title).toBe('Task 1');
+    expect(result.current.tasksReady).toBe(true);
+  });
+
+  it('tasksReady remains true on subsequent tasks_ready (empty board)', () => {
+    const { result } = renderHook(() => useSessionStore());
+    const emptyTasksReady: ServerMessage = { type: 'tasks_ready', tasks: [] };
+    act(() => result.current.dispatch(emptyTasksReady));
+    expect(result.current.tasksReady).toBe(true);
+    expect(result.current.tasks).toHaveLength(0);
   });
 
   it('each session_started dispatch returns a new Map (immutable update)', () => {
