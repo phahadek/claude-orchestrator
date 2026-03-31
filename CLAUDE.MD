@@ -44,6 +44,54 @@ or 🗂️ Ready. Work only on the task you have been assigned.
 
 ---
 
+## Tool Permissions (dashboard-launched sessions)
+
+When sessions are launched via the dashboard, the backend spawns `claude --print`
+with `--permission-mode acceptEdits`. This controls what tools are auto-accepted
+or auto-denied by the CLI. **There is no mid-session approval mechanism** — the
+CLI does not support interactive permission prompts in `--print` mode.
+
+### How Bash permissions work
+
+`acceptEdits` auto-approves **read-only** Bash commands (e.g. `git status`, `ls`).
+**Write** Bash commands (e.g. `git commit`, `npm install`) require explicit
+`--allowed-tools` entries. The CLI supports granular patterns: `Bash(git:*)`
+allows only commands starting with `git`. Unmatched Bash commands are silently
+denied in `--print` mode (no prompt, no error event — just a permission denial
+in the `result` event's `permission_denials` array).
+
+### Auto-accepted (will execute without prompting)
+
+| Tool | Why |
+|---|---|
+| `Read`, `Glob`, `Grep`, `ToolSearch` | Read-only, always safe |
+| `Edit`, `Write` | `acceptEdits` mode auto-approves in-project file operations |
+| `Bash` (read-only: `ls`, `cat`, `head`, etc.) | `acceptEdits` auto-approves read-only Bash |
+| `Bash(git:*)` | Explicitly in `--allowed-tools` — all git operations |
+| `Bash(npm:*)`, `Bash(npx:*)`, `Bash(node:*)` | Explicitly in `--allowed-tools` — Node.js tooling |
+| `Bash(gh:*)` | Explicitly in `--allowed-tools` — GitHub CLI |
+| `Bash(ls:*)`, `Bash(cat:*)`, `Bash(mkdir:*)`, etc. | Explicitly in `--allowed-tools` — common file ops |
+| `TodoWrite`, `Skill`, `EnterPlanMode`, `ExitPlanMode` | Session management tools |
+| `mcp__claude_ai_Notion__*` | Explicitly in `--allowed-tools` |
+| `mcp__github__*` | Explicitly in `--allowed-tools` |
+| `mcp__claude_ai_Asana__*`, `mcp__claude_ai_Google_Calendar__*` | Explicitly in `--allowed-tools` |
+
+### Auto-denied (will fail silently — session sees "permission denied" in tool result)
+
+| Tool | Example |
+|---|---|
+| `Bash` with non-allowlisted prefix | `curl`, `wget`, `rm`, `sudo`, `docker`, `ssh` |
+| Any tool not listed above | Custom MCP tools, `Agent`, etc. |
+| `Write`/`Edit` to paths **outside** the project directory | `/tmp/`, other repos |
+
+### Adding new Bash command prefixes
+
+To allow a new command prefix, add `Bash(<command>:*)` to the `--allowed-tools`
+array in `AgentSession.ts`. Only add commands that are safe for automated use.
+**Never add**: `rm`, `sudo`, `curl`, `wget`, `docker`, `ssh`, `kill`.
+
+---
+
 ## Stack
 
 | Layer | Tech | Path |
