@@ -24,16 +24,26 @@ export class SessionManager extends EventEmitter {
     );
 
     // Insert session into SQLite before anything writes events
+    const startedAt = Date.now();
     insertSession({
       session_id: sessionId,
       notion_task_id: null,
       notion_task_url: taskUrl,
       project_context_url: projectContextUrl,
       status: 'starting',
-      started_at: Date.now(),
+      started_at: startedAt,
       ended_at: null,
       pr_url: null,
     });
+
+    // Broadcast session_started so connected frontends see the card immediately
+    this.emit('message', {
+      type: 'session_started',
+      sessionId,
+      taskName: taskUrl,
+      notionTaskUrl: taskUrl,
+      started_at: startedAt,
+    } satisfies ServerMessage);
 
     this.sessions.set(sessionId, session);
 
