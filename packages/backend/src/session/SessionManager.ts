@@ -56,10 +56,15 @@ export class SessionManager extends EventEmitter {
     }
   }
 
-  /**
-   * Send a follow-up user message to a running session.
-   * Uses --input-format stream-json stdin protocol.
-   */
+  approve(sessionId: string): void {
+    this.sessions.get(sessionId)?.approve();
+  }
+
+  deny(sessionId: string, reason?: string): void {
+    this.sessions.get(sessionId)?.deny(reason);
+  }
+
+  /** Send a follow-up user message to a running session via stdin. */
   send(sessionId: string, message: string): void {
     this.sessions.get(sessionId)?.sendMessage(message);
   }

@@ -7,7 +7,6 @@ import {
   updateSessionStatus,
   getEventsBySession,
 } from '../db/queries';
-import { PermissionEngine } from '../permissions/PermissionEngine';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import type { NotionClient } from '../notion/NotionClient';
 
@@ -44,42 +43,6 @@ function toEventType(raw: string): 'text' | 'tool_use' | 'tool_result' | 'system
   }
 }
 
-/**
- * Build the --allowedTools list from PermissionEngine rules.
- *
- * The claude CLI --allowedTools flag accepts tool names with optional scope
- * patterns: "Bash(git:*) Edit Read". Tools not in the list are auto-denied.
- *
- * We compute this from the PermissionEngine's allow rules:
- * - HARD_ALLOW patterns like "Bash *git status*" → "Bash"
- * - User allow rules → tool name extracted from pattern
- * - Safe read-only tools always included
- */
-function computeAllowedTools(): string[] {
-  // Allow tools needed for coding tasks. The PermissionEngine's HARD_DENY
-  // list still blocks dangerous commands (rm -rf, force-push, etc.) at the
-  // application level after the CLI returns results.
-  const tools = new Set([
-    // Read-only / safe tools
-    'Read', 'Glob', 'Grep', 'ToolSearch', 'TodoWrite',
-    'WebFetch', 'WebSearch', 'ListMcpResourcesTool', 'ReadMcpResourceTool',
-    'Skill', 'Task', 'TaskOutput', 'AskUserQuestion',
-    'EnterPlanMode', 'ExitPlanMode', 'NotebookEdit',
-    // Write tools — needed for coding tasks
-    'Edit', 'Write', 'Bash',
-    // MCP tools are generally safe (server-side only)
-    'mcp__claude_ai_Notion__*', 'mcp__github__*',
-    'mcp__claude_ai_Asana__*', 'mcp__claude_ai_Google_Calendar__*',
-  ]);
-
-  // Add tool names from PermissionEngine allow rules
-  const engine = new PermissionEngine();
-  const allowedFromRules = engine.getAllowedToolNames();
-  for (const t of allowedFromRules) tools.add(t);
-
-  return [...tools];
-}
-
 export class AgentSession extends EventEmitter {
   private proc: ChildProcess | null = null;
 
@@ -100,9 +63,9 @@ export class AgentSession extends EventEmitter {
     const initialPrompt =
       `Task page: ${this.taskUrl}\nProject context: ${this.projectContextUrl}\n\nFetch both Notion pages, then begin the task.`;
 
-    const allowedTools = computeAllowedTools();
-    console.log(`[AgentSession:${this.sessionId}] allowedTools: ${allowedTools.join(', ')}`);
-
+    // Use --input-format stream-json for bidirectional JSON communication.
+    // Use --permission-mode acceptEdits to auto-approve in-project Edit/Write/Bash
+    // without a TUI prompt (the CLI does not emit permission events over stdout).
     this.proc = spawn(
       config.claudePath,
       [
@@ -110,9 +73,14 @@ export class AgentSession extends EventEmitter {
         '--output-format', 'stream-json',
         '--input-format', 'stream-json',
         '--verbose',
-        '--allowed-tools', ...allowedTools,
+        '--permission-mode', 'acceptEdits',
       ],
       { cwd: this.projectDir, stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+
+    // Send the initial prompt via stdin (required by --input-format stream-json)
+    this.proc.stdin!.write(
+      JSON.stringify({ type: 'user', message: { role: 'user', content: initialPrompt } }) + '\n',
     );
 
     let spawnErrored = false;
@@ -123,13 +91,6 @@ export class AgentSession extends EventEmitter {
       updateSessionStatus(this.sessionId, 'error', Date.now());
       this.broadcast({ type: 'session_ended', sessionId: this.sessionId, status: 'error' });
     });
-
-    // Send the initial prompt via stdin (required for --input-format stream-json)
-    const userMessage = JSON.stringify({
-      type: 'user',
-      message: { role: 'user', content: initialPrompt },
-    });
-    this.proc.stdin!.write(userMessage + '\n');
 
     // Pipe stderr to console for diagnostics
     this.proc.stderr!.on('data', (chunk: Buffer) => {
@@ -251,18 +212,21 @@ export class AgentSession extends EventEmitter {
     });
   }
 
+  /** No-op — CLI does not support mid-session permission approval. */
+  approve(): void {}
+
+  /** No-op — CLI does not support mid-session permission denial. */
+  deny(_reason?: string): void {}
+
   /**
    * Send a follow-up user message to the subprocess via stdin.
    * Requires --input-format stream-json.
    */
   sendMessage(message: string): void {
     if (!this.proc?.stdin?.writable) return;
-    const msg = JSON.stringify({
-      type: 'user',
-      message: { role: 'user', content: message },
-    });
-    console.log(`[AgentSession:${this.sessionId}] stdin user message: ${message.slice(0, 100)}`);
-    this.proc.stdin.write(msg + '\n');
+    this.proc.stdin.write(
+      JSON.stringify({ type: 'user', message: { role: 'user', content: message } }) + '\n',
+    );
   }
 
   async kill(): Promise<void> {
