@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import type { SessionState } from '../hooks/useSessionStore';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
 import { StatusBadge } from './StatusBadge';
@@ -180,25 +180,27 @@ export function EventRow({ event }: EventRowProps) {
 
     case 'tool_use': {
       const parsed = extractToolUse(payload);
+      const isBash = parsed?.toolName === 'Bash';
+      const bashCmd = isBash ? extractBashCommand(parsed?.input) : null;
       return (
         <div className={styles.eventToolUse}>
           <div className={styles.toolHeader}>
             🔧 {parsed?.toolName ?? 'tool_use'}
           </div>
-          <pre className={styles.toolArgs}>
-            {parsed ? JSON.stringify(parsed.input, null, 2) : event.content}
-          </pre>
+          {isBash && bashCmd != null ? (
+            <pre className={styles.bashCommand}>$ {bashCmd}</pre>
+          ) : (
+            <pre className={styles.toolArgs}>
+              {parsed ? JSON.stringify(parsed.input, null, 2) : event.content}
+            </pre>
+          )}
         </div>
       );
     }
 
     case 'tool_result': {
       const result = extractToolResult(payload, event.content);
-      return (
-        <div className={styles.eventToolResult}>
-          <pre className={styles.toolResultContent}>{result}</pre>
-        </div>
-      );
+      return <ToolResultRow result={result} />;
     }
 
     case 'system': {
@@ -227,6 +229,29 @@ export function EventRow({ event }: EventRowProps) {
     default:
       return <p className={styles.eventText}>{event.content}</p>;
   }
+}
+
+const TOOL_RESULT_COLLAPSE_LINES = 20;
+
+function ToolResultRow({ result }: { result: string }) {
+  const lines = result.split('\n');
+  const shouldCollapse = lines.length > TOOL_RESULT_COLLAPSE_LINES;
+  const [expanded, setExpanded] = useState(false);
+  const toggle = useCallback(() => setExpanded((e) => !e), []);
+
+  const displayed =
+    shouldCollapse && !expanded ? lines.slice(0, TOOL_RESULT_COLLAPSE_LINES).join('\n') : result;
+
+  return (
+    <div className={styles.eventToolResult}>
+      <pre className={styles.toolResultContent}>{displayed}</pre>
+      {shouldCollapse && (
+        <button className={styles.expandButton} onClick={toggle}>
+          {expanded ? '▲ Collapse' : `▼ Show all ${lines.length} lines`}
+        </button>
+      )}
+    </div>
+  );
 }
 
 // ── Payload extraction helpers ────────────────────────────────────
@@ -268,6 +293,13 @@ function extractText(payload: unknown, rawContent: string): string {
   return rawContent;
 }
 
+/** Extract the command string from a Bash tool input object. */
+function extractBashCommand(input: unknown): string | null {
+  if (typeof input !== 'object' || input === null) return null;
+  const cmd = (input as Record<string, unknown>).command;
+  return typeof cmd === 'string' ? cmd : null;
+}
+
 /** Extract tool name and input from a tool_use event payload. */
 function extractToolUse(payload: unknown): { toolName: string; input: unknown } | null {
   if (typeof payload !== 'object' || payload === null) return null;
@@ -307,6 +339,15 @@ function extractToolResult(payload: unknown, rawContent: string): string {
   return rawContent;
 }
 
+const SYSTEM_SUBTYPE_LABELS: Record<string, string> = {
+  init: '[init]',
+  rate_limit: '[rate limit]',
+  rate_limited: '[rate limit]',
+  thinking: '[thinking]',
+  success: '[done]',
+  error_during_execution: '[execution error]',
+};
+
 /** Extract displayable content from a system/user/file-history-snapshot event payload. */
 function extractSystem(
   payload: unknown,
@@ -332,8 +373,19 @@ function extractSystem(
     }
   }
 
-  if (typeof p.content === 'string') return { rawType, display: p.content };
-  if (typeof p.subtype === 'string') return { rawType, display: `[system: ${p.subtype}]` };
+  if (rawType === 'result') {
+    const subtype = typeof p.subtype === 'string' ? p.subtype : '';
+    const label = SYSTEM_SUBTYPE_LABELS[subtype] ?? `[result: ${subtype || 'unknown'}]`;
+    return { rawType, display: label };
+  }
 
-  return { rawType, display: rawContent };
+  if (typeof p.subtype === 'string') {
+    const label = SYSTEM_SUBTYPE_LABELS[p.subtype] ?? `[system: ${p.subtype}]`;
+    return { rawType, display: label };
+  }
+
+  if (typeof p.content === 'string') return { rawType, display: p.content };
+
+  // Avoid dumping raw JSON — show a generic label instead
+  return { rawType, display: `[${rawType}]` };
 }
