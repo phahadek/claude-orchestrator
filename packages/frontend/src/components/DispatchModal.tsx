@@ -26,8 +26,10 @@ export function DispatchModal({ tasks, tasksReady, send, boardId, onClose }: Pro
     if (tasksReady) setLoading(false);
   }, [tasksReady]);
 
-  const ready = tasks.filter((t) => !t.blocked && !t.nonCode);
-  const blocked = tasks.filter((t) => t.blocked || t.nonCode);
+  const ready = tasks.filter((t) => t.task.status === '🗂️ Ready' && !t.blocked && !t.nonCode);
+  const blocked = tasks.filter((t) => t.task.status === '🗂️ Ready' && (t.blocked || t.nonCode));
+  const inProgress = tasks.filter((t) => t.task.status === '🔄 In Progress');
+  const inReview = tasks.filter((t) => t.task.status === '👀 In Review');
 
   const toggle = (id: string) =>
     setSelected((prev) => {
@@ -68,6 +70,26 @@ export function DispatchModal({ tasks, tasksReady, send, boardId, onClose }: Pro
               ))}
               {ready.length === 0 && <p className={styles.empty}>No unblocked tasks.</p>}
             </section>
+            {inProgress.length > 0 && (
+              <section>
+                <h3>🔄 In Progress ({inProgress.length})</h3>
+                {inProgress.map((t) => (
+                  <div key={t.task.id} className={styles['blocked-task']}>
+                    {t.task.title}
+                  </div>
+                ))}
+              </section>
+            )}
+            {inReview.length > 0 && (
+              <section>
+                <h3>👀 In Review ({inReview.length})</h3>
+                {inReview.map((t) => (
+                  <div key={t.task.id} className={styles['blocked-task']}>
+                    {t.task.title}
+                  </div>
+                ))}
+              </section>
+            )}
             <section>
               <h3>🚫 Blocked ({blocked.length})</h3>
               {blocked.map((t) => (
