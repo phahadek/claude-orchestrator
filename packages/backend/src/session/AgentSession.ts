@@ -37,6 +37,8 @@ function toEventType(raw: string): 'text' | 'tool_use' | 'tool_result' | 'system
     case 'tool_result':
       return 'tool_result';
     case 'system':
+    case 'user':
+    case 'file-history-snapshot':
       return 'system';
     case 'error':
       return 'error';
