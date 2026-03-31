@@ -2,7 +2,7 @@ import type { ResolvedTask } from '../notion/types';
 
 // ── Server → Client ──────────────────────────────────────────────
 export type ServerMessage =
-  | { type: 'session_started';    sessionId: string; taskName: string; notionTaskUrl: string }
+  | { type: 'session_started';    sessionId: string; taskName: string; notionTaskUrl: string; started_at?: number; ended_at?: number }
   | { type: 'session_event';      sessionId: string; eventType: 'text' | 'tool_use' | 'tool_result' | 'system'; content: string }
   | { type: 'session_status';     sessionId: string; status: 'starting' | 'running' | 'needs_permission' | 'done' | 'error' | 'killed' }
   | { type: 'permission_request'; sessionId: string; toolName: string; proposedAction: string }
