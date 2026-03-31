@@ -73,6 +73,15 @@ export class AgentSession extends EventEmitter {
       { cwd: this.projectDir, stdio: ['pipe', 'pipe', 'pipe'] },
     );
 
+    let spawnErrored = false;
+
+    this.proc.on('error', (err) => {
+      spawnErrored = true;
+      console.error(`[AgentSession] spawn error: ${err.message}`);
+      updateSessionStatus(this.sessionId, 'error', Date.now());
+      this.broadcast({ type: 'session_ended', sessionId: this.sessionId, status: 'error' });
+    });
+
     // Pipe stderr to console for diagnostics — not forwarded to UI
     this.proc.stderr!.on('data', (chunk: Buffer) => {
       console.error(`[claude:${this.sessionId}] ${chunk.toString().trimEnd()}`);
@@ -121,6 +130,8 @@ export class AgentSession extends EventEmitter {
     });
 
     // ── Post-exit handling ────────────────────────────────────────────────
+    if (spawnErrored) return; // already handled by 'error' event
+
     if (exitCode === 0) {
       await this.handleCleanExit();
     } else {
