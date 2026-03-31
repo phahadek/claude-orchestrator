@@ -16,13 +16,41 @@ export interface RawSessionEvent {
 
 export const DEFAULT_SESSIONS_DIR = path.join(os.homedir(), '.claude', 'projects');
 
+// Includes both our internal types and the real types emitted by the Claude CLI.
 const VALID_EVENT_TYPES: ReadonlySet<string> = new Set([
   'text',
   'tool_use',
   'tool_result',
   'system',
   'error',
+  // Real Claude CLI event types
+  'user',
+  'assistant',
+  'message',
+  'file-history-snapshot',
 ]);
+
+/** Map raw Claude CLI event type strings to our internal EventType union. */
+function toEventType(raw: string): EventType {
+  switch (raw) {
+    case 'assistant':
+    case 'text':
+    case 'message':
+      return 'text';
+    case 'tool_use':
+      return 'tool_use';
+    case 'tool_result':
+      return 'tool_result';
+    case 'system':
+    case 'user':
+    case 'file-history-snapshot':
+      return 'system';
+    case 'error':
+      return 'error';
+    default:
+      return 'system';
+  }
+}
 
 export class JsonlReader {
   constructor(private readonly sessionsDir: string) {}
@@ -108,7 +136,7 @@ export class JsonlReader {
       }
 
       events.push({
-        type: obj.type as EventType,
+        type: toEventType(obj.type),
         content: obj.content,
         timestamp:
           typeof obj.timestamp === 'number' ? obj.timestamp : undefined,
