@@ -64,8 +64,12 @@ export class AgentSession extends EventEmitter {
       `Task page: ${this.taskUrl}\nProject context: ${this.projectContextUrl}\n\nFetch both Notion pages, then begin the task.`;
 
     // Use --input-format stream-json for bidirectional JSON communication.
-    // Use --permission-mode acceptEdits to auto-approve in-project Edit/Write/Bash
-    // without a TUI prompt (the CLI does not emit permission events over stdout).
+    // Use --permission-mode acceptEdits to auto-approve in-project Edit/Write.
+    // acceptEdits also auto-approves read-only Bash (git status, ls, cat, etc.)
+    // but blocks write Bash commands unless explicitly allowed via --allowed-tools.
+    // Use Bash(<prefix>:*) patterns for granular Bash access — only commands
+    // starting with the given prefix are allowed. Unmatched Bash commands are
+    // silently denied in --print mode.
     this.proc = spawn(
       config.claudePath,
       [
@@ -74,6 +78,29 @@ export class AgentSession extends EventEmitter {
         '--input-format', 'stream-json',
         '--verbose',
         '--permission-mode', 'acceptEdits',
+        '--allowed-tools',
+        'Bash(git:*)',
+        'Bash(npm:*)',
+        'Bash(npx:*)',
+        'Bash(node:*)',
+        'Bash(gh:*)',
+        'Bash(ls:*)',
+        'Bash(cat:*)',
+        'Bash(echo:*)',
+        'Bash(mkdir:*)',
+        'Bash(cp:*)',
+        'Bash(mv:*)',
+        'Bash(head:*)',
+        'Bash(tail:*)',
+        'Bash(wc:*)',
+        'Bash(find:*)',
+        'Bash(grep:*)',
+        'Bash(sort:*)',
+        'Bash(pwd:*)',
+        'mcp__claude_ai_Notion__*',
+        'mcp__github__*',
+        'mcp__claude_ai_Asana__*',
+        'mcp__claude_ai_Google_Calendar__*',
       ],
       { cwd: this.projectDir, stdio: ['pipe', 'pipe', 'pipe'] },
     );
