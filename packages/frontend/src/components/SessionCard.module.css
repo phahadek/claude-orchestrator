@@ -53,6 +53,11 @@
   gap: 8px;
 }
 
+.type-icon {
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
 .task-name {
   font-weight: 600;
   font-size: 0.95rem;

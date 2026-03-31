@@ -14,7 +14,7 @@ export class SessionManager extends EventEmitter {
     super();
   }
 
-  start(taskUrl: string, projectContextUrl: string): string {
+  start(taskUrl: string, projectContextUrl: string, taskType?: string): string {
     if (this.sessions.size >= config.maxConcurrentSessions) {
       throw new Error(`Max concurrent sessions (${config.maxConcurrentSessions}) reached`);
     }
@@ -62,6 +62,7 @@ export class SessionManager extends EventEmitter {
       sessionId,
       taskName: taskUrl,
       notionTaskUrl: taskUrl,
+      ...(taskType != null && { taskType }),
       started_at: startedAt,
     } satisfies ServerMessage);
 
