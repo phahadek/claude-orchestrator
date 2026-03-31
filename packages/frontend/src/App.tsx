@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSessionStore } from './hooks/useSessionStore';
 import { useWebSocket } from './hooks/useWebSocket';
 import { SessionGrid } from './components/SessionGrid';
 import { SessionDetail } from './components/SessionDetail';
 import { DispatchModal } from './components/DispatchModal';
 import { PermissionRules } from './components/PermissionRules';
+import { Notifications } from './components/Notifications';
+import type { NotificationItem } from './components/Notifications';
 
 export default function App() {
   const { sessions, tasks, tasksReady, dispatch, deleteSession } = useSessionStore();
@@ -13,6 +15,12 @@ export default function App() {
   const [showModal, setShowModal] = useState(false);
   const [showRules, setShowRules] = useState(false);
   const [boardId, setBoardId] = useState('');
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const notifiedRef = useRef<Set<string>>(new Set());
+
+  const dismissNotification = useCallback((id: string) => {
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+  }, []);
 
   useEffect(() => {
     fetch('/api/config')
@@ -22,6 +30,28 @@ export default function App() {
       })
       .catch(() => {/* leave boardId empty — DispatchModal handles the empty case */});
   }, []);
+
+  useEffect(() => {
+    for (const session of sessions) {
+      if (
+        (session.status === 'done' || session.status === 'error') &&
+        !notifiedRef.current.has(session.sessionId)
+      ) {
+        notifiedRef.current.add(session.sessionId);
+        const notifId = `${session.sessionId}-notif`;
+        setNotifications((prev) => [
+          ...prev,
+          {
+            id: notifId,
+            taskName: session.taskName,
+            status: session.status as 'done' | 'error',
+            prUrl: session.prUrl,
+          },
+        ]);
+        setTimeout(() => dismissNotification(notifId), 10000);
+      }
+    }
+  }, [sessions, dismissNotification]);
 
   const selectedSession = selectedId != null
     ? (sessions.find((s) => s.sessionId === selectedId) ?? null)
@@ -75,6 +105,8 @@ export default function App() {
           onClose={() => setShowModal(false)}
         />
       )}
+
+      <Notifications notifications={notifications} onDismiss={dismissNotification} />
     </div>
   );
 }

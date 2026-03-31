@@ -1,0 +1,93 @@
+.container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 1000;
+  max-width: 360px;
+  width: 100%;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid;
+  background: #1e1e2e;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  animation: slide-in 0.2s ease-out;
+}
+
+.toastDone {
+  border-color: #a6e3a1;
+}
+
+.toastError {
+  border-color: #f38ba8;
+}
+
+.body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.taskName {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #cdd6f4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message {
+  font-size: 0.8rem;
+  color: #a6e3a1;
+}
+
+.messageError {
+  font-size: 0.8rem;
+  color: #f38ba8;
+}
+
+.prLink {
+  color: #89b4fa;
+  text-decoration: none;
+}
+
+.prLink:hover {
+  text-decoration: underline;
+}
+
+.dismiss {
+  background: none;
+  border: none;
+  color: #6c7086;
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.dismiss:hover {
+  color: #cdd6f4;
+}
+
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
