@@ -12,6 +12,7 @@ import { JsonlReader, DEFAULT_SESSIONS_DIR } from './session/JsonlReader';
 import type { ServerMessage } from './ws/types';
 import { rulesRouter } from './routes/rules';
 import configRouter from './routes/config';
+import { getAllSessions } from './db/queries';
 
 runMigrations();
 
@@ -46,6 +47,22 @@ sessionManager.on('message', (msg: ServerMessage) => {
 
 wss.on('connection', (ws) => {
   console.log('[WS] client connected');
+
+  // Send existing sessions to the new client so the UI populates on load
+  for (const s of getAllSessions()) {
+    ws.send(JSON.stringify({
+      type: 'session_started',
+      sessionId: s.session_id,
+      taskName: s.notion_task_url ?? s.session_id.slice(0, 8),
+      notionTaskUrl: s.notion_task_url ?? '',
+    } satisfies ServerMessage));
+    ws.send(JSON.stringify({
+      type: 'session_status',
+      sessionId: s.session_id,
+      status: s.status,
+    } satisfies ServerMessage));
+  }
+
   ws.on('message', (data) => handleMessage(ws, data.toString(), sessionManager, notionClient));
   ws.on('close', () => console.log('[WS] client disconnected'));
 });
