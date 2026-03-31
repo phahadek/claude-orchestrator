@@ -1,8 +1,9 @@
+import './bootstrap';
 import express from 'express';
 import { WebSocket, WebSocketServer } from 'ws';
 import http from 'http';
 import path from 'path';
-import dotenv from 'dotenv';
+import os from 'os';
 import { runMigrations } from './db/schema';
 import { SessionManager } from './session/SessionManager';
 import { NotionClient } from './notion/NotionClient';
@@ -11,11 +12,12 @@ import { JsonlReader, DEFAULT_SESSIONS_DIR } from './session/JsonlReader';
 import type { ServerMessage } from './ws/types';
 import { rulesRouter } from './routes/rules';
 import configRouter from './routes/config';
+import { getAllSessions } from './db/queries';
 
-dotenv.config();
 runMigrations();
 
-const sessionsDir = process.env.SESSIONS_DIR ?? DEFAULT_SESSIONS_DIR;
+const rawSessionsDir = process.env.SESSIONS_DIR ?? DEFAULT_SESSIONS_DIR;
+const sessionsDir = rawSessionsDir.replace(/^~/, os.homedir());
 const jsonlReader = new JsonlReader(sessionsDir);
 
 const notionClient = new NotionClient();
@@ -45,6 +47,22 @@ sessionManager.on('message', (msg: ServerMessage) => {
 
 wss.on('connection', (ws) => {
   console.log('[WS] client connected');
+
+  // Send existing sessions to the new client so the UI populates on load
+  for (const s of getAllSessions()) {
+    ws.send(JSON.stringify({
+      type: 'session_started',
+      sessionId: s.session_id,
+      taskName: s.notion_task_url ?? s.session_id.slice(0, 8),
+      notionTaskUrl: s.notion_task_url ?? '',
+    } satisfies ServerMessage));
+    ws.send(JSON.stringify({
+      type: 'session_status',
+      sessionId: s.session_id,
+      status: s.status,
+    } satisfies ServerMessage));
+  }
+
   ws.on('message', (data) => handleMessage(ws, data.toString(), sessionManager, notionClient));
   ws.on('close', () => console.log('[WS] client disconnected'));
 });
