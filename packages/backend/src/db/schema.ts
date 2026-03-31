@@ -10,7 +10,8 @@ export function runMigrations(): void {
       status              TEXT    NOT NULL,
       started_at          INTEGER NOT NULL,
       ended_at            INTEGER,
-      pr_url              TEXT
+      pr_url              TEXT,
+      worktree_path       TEXT
     );
 
     CREATE TABLE IF NOT EXISTS session_events (
@@ -49,4 +50,7 @@ export function runMigrations(): void {
       raw_json       TEXT    NOT NULL
     );
   `);
+
+  // Idempotent column additions for existing databases
+  try { db.exec(`ALTER TABLE sessions ADD COLUMN worktree_path TEXT`); } catch { /* already exists */ }
 }
