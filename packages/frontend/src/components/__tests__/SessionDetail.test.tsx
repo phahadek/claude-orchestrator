@@ -26,13 +26,13 @@ function makeEvent(
 describe('SessionDetail', () => {
   it('renders null when session is null', () => {
     const { container } = render(
-      <SessionDetail session={null} send={vi.fn()} onClose={vi.fn()} />
+      <SessionDetail session={null} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} />
     );
     expect(container.firstChild).toBeNull();
   });
 
   it('renders the task name and Notion link', () => {
-    render(<SessionDetail session={makeSession()} send={vi.fn()} onClose={vi.fn()} />);
+    render(<SessionDetail session={makeSession()} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} />);
     expect(screen.getByText('Test Task')).toBeTruthy();
     const notionLink = screen.getByText('Notion ↗');
     expect(notionLink.getAttribute('href')).toBe('https://notion.so/task');
@@ -44,7 +44,7 @@ describe('SessionDetail', () => {
       makeEvent('system', 'Session started', 2000),
       makeEvent('error', 'Something went wrong', 3000),
     ];
-    render(<SessionDetail session={makeSession({ events })} send={vi.fn()} onClose={vi.fn()} />);
+    render(<SessionDetail session={makeSession({ events })} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} />);
     expect(screen.getByText('Hello world')).toBeTruthy();
     expect(screen.getByText('Session started')).toBeTruthy();
     expect(screen.getByText('Something went wrong')).toBeTruthy();
@@ -52,7 +52,7 @@ describe('SessionDetail', () => {
 
   it('renders the composer for running sessions', () => {
     render(
-      <SessionDetail session={makeSession({ status: 'running' })} send={vi.fn()} onClose={vi.fn()} />
+      <SessionDetail session={makeSession({ status: 'running' })} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} />
     );
     expect(screen.getByPlaceholderText('Send a message to the session…')).toBeTruthy();
   });
@@ -63,6 +63,7 @@ describe('SessionDetail', () => {
         session={makeSession({ status: 'needs_permission' })}
         send={vi.fn()}
         onClose={vi.fn()}
+        onDelete={vi.fn()}
       />
     );
     expect(screen.getByPlaceholderText('Send a message to the session…')).toBeTruthy();
@@ -71,7 +72,7 @@ describe('SessionDetail', () => {
   it('hides the composer for terminal states', () => {
     for (const status of ['done', 'error', 'killed']) {
       const { unmount } = render(
-        <SessionDetail session={makeSession({ status })} send={vi.fn()} onClose={vi.fn()} />
+        <SessionDetail session={makeSession({ status })} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} />
       );
       expect(screen.queryByPlaceholderText('Send a message to the session…')).toBeNull();
       unmount();
@@ -80,7 +81,7 @@ describe('SessionDetail', () => {
 
   it('sends send_message on Enter key (not Shift+Enter)', () => {
     const send = vi.fn();
-    render(<SessionDetail session={makeSession()} send={send} onClose={vi.fn()} />);
+    render(<SessionDetail session={makeSession()} send={send} onClose={vi.fn()} onDelete={vi.fn()} />);
     const input = screen.getByPlaceholderText('Send a message to the session…');
     fireEvent.change(input, { target: { value: 'hello' } });
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: false });
@@ -93,7 +94,7 @@ describe('SessionDetail', () => {
 
   it('does not send on Shift+Enter', () => {
     const send = vi.fn();
-    render(<SessionDetail session={makeSession()} send={send} onClose={vi.fn()} />);
+    render(<SessionDetail session={makeSession()} send={send} onClose={vi.fn()} onDelete={vi.fn()} />);
     const input = screen.getByPlaceholderText('Send a message to the session…');
     fireEvent.change(input, { target: { value: 'hello' } });
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
@@ -102,7 +103,7 @@ describe('SessionDetail', () => {
 
   it('does not send empty messages on Enter', () => {
     const send = vi.fn();
-    render(<SessionDetail session={makeSession()} send={send} onClose={vi.fn()} />);
+    render(<SessionDetail session={makeSession()} send={send} onClose={vi.fn()} onDelete={vi.fn()} />);
     const input = screen.getByPlaceholderText('Send a message to the session…');
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: false });
     expect(send).not.toHaveBeenCalled();
@@ -113,7 +114,7 @@ describe('SessionDetail', () => {
       status: 'needs_permission',
       pendingPermission: { toolName: 'Bash', proposedAction: 'rm -rf /tmp/foo' },
     });
-    render(<SessionDetail session={session} send={vi.fn()} onClose={vi.fn()} />);
+    render(<SessionDetail session={session} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} />);
     expect(screen.getByText(/Bash/)).toBeTruthy();
     expect(screen.getByText('rm -rf /tmp/foo')).toBeTruthy();
     expect(screen.getByText('✅ Approve')).toBeTruthy();
@@ -121,7 +122,7 @@ describe('SessionDetail', () => {
   });
 
   it('does not render permission request when pendingPermission is absent', () => {
-    render(<SessionDetail session={makeSession()} send={vi.fn()} onClose={vi.fn()} />);
+    render(<SessionDetail session={makeSession()} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} />);
     expect(screen.queryByText('✅ Approve')).toBeNull();
   });
 
@@ -131,7 +132,7 @@ describe('SessionDetail', () => {
       status: 'needs_permission',
       pendingPermission: { toolName: 'Read', proposedAction: 'read /etc/hosts' },
     });
-    render(<SessionDetail session={session} send={send} onClose={vi.fn()} />);
+    render(<SessionDetail session={session} send={send} onClose={vi.fn()} onDelete={vi.fn()} />);
     fireEvent.click(screen.getByText('✅ Approve'));
     expect(send).toHaveBeenCalledWith<[ClientMessage]>({ type: 'approve', sessionId: 'sess-1' });
   });
@@ -142,7 +143,7 @@ describe('SessionDetail', () => {
       status: 'needs_permission',
       pendingPermission: { toolName: 'Bash', proposedAction: 'ls /' },
     });
-    render(<SessionDetail session={session} send={send} onClose={vi.fn()} />);
+    render(<SessionDetail session={session} send={send} onClose={vi.fn()} onDelete={vi.fn()} />);
     fireEvent.click(screen.getByText('❌ Deny'));
     expect(send).toHaveBeenCalledWith<[ClientMessage]>({
       type: 'deny',
@@ -155,7 +156,7 @@ describe('SessionDetail', () => {
     vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
     const send = vi.fn();
     const onClose = vi.fn();
-    render(<SessionDetail session={makeSession({ status: 'running' })} send={send} onClose={onClose} />);
+    render(<SessionDetail session={makeSession({ status: 'running' })} send={send} onClose={onClose} onDelete={vi.fn()} />);
     fireEvent.click(screen.getByText('Kill'));
     expect(send).toHaveBeenCalledWith<[ClientMessage]>({ type: 'kill', sessionId: 'sess-1' });
     expect(onClose).toHaveBeenCalled();
@@ -165,7 +166,7 @@ describe('SessionDetail', () => {
   it('Kill button confirm cancelled does not send kill', () => {
     vi.stubGlobal('confirm', vi.fn().mockReturnValue(false));
     const send = vi.fn();
-    render(<SessionDetail session={makeSession({ status: 'running' })} send={send} onClose={vi.fn()} />);
+    render(<SessionDetail session={makeSession({ status: 'running' })} send={send} onClose={vi.fn()} onDelete={vi.fn()} />);
     fireEvent.click(screen.getByText('Kill'));
     expect(send).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
@@ -173,7 +174,7 @@ describe('SessionDetail', () => {
 
   it('onClose is called when close button is clicked', () => {
     const onClose = vi.fn();
-    render(<SessionDetail session={makeSession()} send={vi.fn()} onClose={onClose} />);
+    render(<SessionDetail session={makeSession()} send={vi.fn()} onClose={onClose} onDelete={vi.fn()} />);
     fireEvent.click(screen.getByLabelText('Close panel'));
     expect(onClose).toHaveBeenCalled();
   });

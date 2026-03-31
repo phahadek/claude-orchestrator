@@ -17,3 +17,48 @@
 .session-grid-empty p {
   margin: 0;
 }
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 16px 12px;
+  align-items: center;
+}
+
+.filter-toggle {
+  background: transparent;
+  border: 1px solid #45475a;
+  border-radius: 16px;
+  color: #9399b2;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 3px 10px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.filter-toggle:hover {
+  border-color: #585b70;
+  color: #cdd6f4;
+}
+
+.filter-toggle--active {
+  background: #313244;
+  border-color: #89b4fa;
+  color: #89b4fa;
+}
+
+.filter-clear {
+  background: transparent;
+  border: none;
+  color: #6c7086;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 3px 6px;
+  text-decoration: underline;
+  transition: color 0.15s;
+}
+
+.filter-clear:hover {
+  color: #cdd6f4;
+}

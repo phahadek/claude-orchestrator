@@ -44,6 +44,14 @@ const stmtGetAllSessionIds = db.prepare(`
   SELECT session_id FROM sessions
 `);
 
+const stmtDeleteSessionEvents = db.prepare<{ session_id: string }>(`
+  DELETE FROM session_events WHERE session_id = @session_id
+`);
+
+const stmtDeleteSession = db.prepare<{ session_id: string }>(`
+  DELETE FROM sessions WHERE session_id = @session_id
+`);
+
 const stmtInsertSessionOrIgnore = db.prepare<NewSession>(`
   INSERT OR IGNORE INTO sessions
     (session_id, notion_task_id, notion_task_url, project_context_url,
@@ -83,6 +91,19 @@ export function getAllSessionIds(): string[] {
 
 export function insertSessionOrIgnore(s: NewSession): void {
   stmtInsertSessionOrIgnore.run({ ended_at: null, pr_url: null, ...s });
+}
+
+export function deleteSession(sessionId: string): boolean {
+  stmtDeleteSessionEvents.run({ session_id: sessionId });
+  const result = stmtDeleteSession.run({ session_id: sessionId });
+  return result.changes > 0;
+}
+
+export function getSessionsByStatus(statuses: string[]): Session[] {
+  const placeholders = statuses.map(() => '?').join(', ');
+  return db.prepare(`
+    SELECT * FROM sessions WHERE status IN (${placeholders}) ORDER BY started_at DESC
+  `).all(...statuses) as Session[];
 }
 
 // ─── session_events ────────────────────────────────────────────────────────
