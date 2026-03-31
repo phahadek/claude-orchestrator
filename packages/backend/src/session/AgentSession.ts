@@ -45,13 +45,14 @@ function toEventType(raw: string): 'text' | 'tool_use' | 'tool_result' | 'system
 
 export class AgentSession extends EventEmitter {
   private proc: ChildProcess | null = null;
+  public prUrl: string | undefined;
 
   constructor(
     public readonly sessionId: string,
     public readonly taskUrl: string,
     public readonly projectContextUrl: string,
     private readonly notionClient: NotionClient,
-    private readonly projectDir: string,
+    private readonly worktreePath: string,
   ) {
     super();
   }
@@ -105,7 +106,7 @@ export class AgentSession extends EventEmitter {
         'mcp__claude_ai_Asana__*',
         'mcp__claude_ai_Google_Calendar__*',
       ],
-      { cwd: this.projectDir, stdio: ['pipe', 'pipe', 'pipe'] },
+      { cwd: this.worktreePath, stdio: ['pipe', 'pipe', 'pipe'] },
     );
 
     // Send the initial prompt via stdin (required by --input-format stream-json)
@@ -220,6 +221,7 @@ export class AgentSession extends EventEmitter {
       }
     }
 
+    this.prUrl = prUrl;
     updateSessionStatus(this.sessionId, 'done', Date.now());
 
     const taskId = parseNotionPageId(this.taskUrl);
