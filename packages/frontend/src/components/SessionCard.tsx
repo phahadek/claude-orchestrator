@@ -18,6 +18,11 @@ export function SessionCard({ session, selected, onClick }: Props) {
       onClick={onClick}
     >
       <div className={styles['card-header']}>
+        {session.taskType && (
+          <span className={styles['type-icon']} title={session.taskType}>
+            {taskTypeIcon(session.taskType)}
+          </span>
+        )}
         <span className={styles['task-name']}>{session.taskName}</span>
         <StatusBadge status={session.status} />
       </div>
@@ -37,6 +42,13 @@ export function SessionCard({ session, selected, onClick }: Props) {
       </div>
     </div>
   );
+}
+
+function taskTypeIcon(type: string): string {
+  if (type.includes('💻')) return '💻';
+  if (type.includes('📋')) return '📋';
+  if (type.includes('🧪')) return '🧪';
+  return '';
 }
 
 const TERMINAL_STATUSES = new Set(['done', 'error', 'killed']);
