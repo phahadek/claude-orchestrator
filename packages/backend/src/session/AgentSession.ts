@@ -84,6 +84,9 @@ export class AgentSession extends EventEmitter {
         'Bash(npx:*)',
         'Bash(node:*)',
         'Bash(gh:*)',
+        'Bash(cd:*)',        // compound: cd <dir> && git ... / npm ...
+        'Bash(which:*)',     // command lookup (Unix)
+        'Bash(where:*)',     // command lookup (Windows)
         'Bash(ls:*)',
         'Bash(cat:*)',
         'Bash(echo:*)',
