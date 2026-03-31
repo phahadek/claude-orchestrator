@@ -1,6 +1,7 @@
 import { spawn, ChildProcess } from 'child_process';
 import { createInterface } from 'readline';
 import { EventEmitter } from 'events';
+import { config } from '../config';
 import {
   insertEvent,
   insertPermissionEvent,
@@ -70,7 +71,7 @@ export class AgentSession extends EventEmitter {
       `Task page: ${this.taskUrl}\nProject context: ${this.projectContextUrl}\n\nFetch both Notion pages, then begin the task.`;
 
     this.proc = spawn(
-      'claude',
+      config.claudePath,
       ['--print', '--output-format', 'stream-json', '--verbose', initialPrompt],
       { cwd: this.projectDir, stdio: ['pipe', 'pipe', 'pipe'] },
     );
