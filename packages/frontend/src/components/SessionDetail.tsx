@@ -160,12 +160,16 @@ interface EventRowProps {
 }
 
 export function EventRow({ event }: EventRowProps) {
+  const payload = tryParseJson(event.content);
+
   switch (event.eventType) {
-    case 'text':
-      return <p className={styles.eventText}>{event.content}</p>;
+    case 'text': {
+      const text = extractText(payload, event.content);
+      return <p className={styles.eventText}>{text}</p>;
+    }
 
     case 'tool_use': {
-      const parsed = tryParseToolUse(event.content);
+      const parsed = extractToolUse(payload);
       return (
         <div className={styles.eventToolUse}>
           <div className={styles.toolHeader}>
@@ -178,41 +182,148 @@ export function EventRow({ event }: EventRowProps) {
       );
     }
 
-    case 'tool_result':
+    case 'tool_result': {
+      const result = extractToolResult(payload, event.content);
       return (
         <div className={styles.eventToolResult}>
-          <pre className={styles.toolResultContent}>{event.content}</pre>
+          <pre className={styles.toolResultContent}>{result}</pre>
         </div>
       );
+    }
 
-    case 'system':
-      return <p className={styles.eventSystem}>{event.content}</p>;
+    case 'system': {
+      const { rawType, display } = extractSystem(payload, event.content);
+      if (rawType === 'file-history-snapshot') {
+        return <p className={styles.eventSystem}>📄 {display}</p>;
+      }
+      if (rawType === 'user') {
+        return <p className={styles.eventUser}>{display}</p>;
+      }
+      return <p className={styles.eventSystem}>{display}</p>;
+    }
 
-    case 'error':
+    case 'error': {
+      const errMsg =
+        typeof payload === 'object' && payload !== null
+          ? String((payload as Record<string, unknown>).message ?? event.content)
+          : event.content;
       return (
         <div className={styles.eventError}>
-          <pre>{event.content}</pre>
+          <pre>{errMsg}</pre>
         </div>
       );
+    }
 
     default:
       return <p className={styles.eventText}>{event.content}</p>;
   }
 }
 
-function tryParseToolUse(content: string): { toolName: string; input: unknown } | null {
+// ── Payload extraction helpers ────────────────────────────────────
+
+function tryParseJson(s: string): unknown {
   try {
-    const parsed = JSON.parse(content) as unknown;
-    if (
-      parsed !== null &&
-      typeof parsed === 'object' &&
-      'toolName' in parsed &&
-      'input' in parsed
-    ) {
-      return parsed as { toolName: string; input: unknown };
-    }
-    return null;
+    return JSON.parse(s);
   } catch {
     return null;
   }
+}
+
+/** Extract displayable text from a text/assistant event payload. */
+function extractText(payload: unknown, rawContent: string): string {
+  if (typeof payload === 'string') return payload;
+  if (payload === null || typeof payload !== 'object') return rawContent;
+
+  const p = payload as Record<string, unknown>;
+
+  // Full assistant event: {type:'assistant', message:{content:[{type:'text',text:'...'}]}}
+  if (p.type === 'assistant' || p.type === 'message') {
+    const msg = p.message as Record<string, unknown> | undefined;
+    if (msg) {
+      const content = msg.content;
+      if (Array.isArray(content)) {
+        const texts = content
+          .filter((b): b is Record<string, unknown> => typeof b === 'object' && b !== null)
+          .filter((b) => b.type === 'text')
+          .map((b) => String(b.text ?? ''));
+        if (texts.length > 0) return texts.join('\n');
+      }
+      if (typeof content === 'string') return content;
+    }
+  }
+
+  if (typeof p.text === 'string') return p.text;
+  if (typeof p.content === 'string') return p.content;
+
+  return rawContent;
+}
+
+/** Extract tool name and input from a tool_use event payload. */
+function extractToolUse(payload: unknown): { toolName: string; input: unknown } | null {
+  if (typeof payload !== 'object' || payload === null) return null;
+  const p = payload as Record<string, unknown>;
+
+  // Claude CLI format: {type:'tool_use', name:'...', input:{...}}
+  if (typeof p.name === 'string' && 'input' in p) {
+    return { toolName: p.name, input: p.input };
+  }
+  // Legacy format: {toolName:'...', input:{...}}
+  if (typeof p.toolName === 'string') {
+    return { toolName: p.toolName, input: p.input };
+  }
+  return null;
+}
+
+/** Extract displayable content from a tool_result event payload. */
+function extractToolResult(payload: unknown, rawContent: string): string {
+  if (typeof payload === 'string') return payload;
+  if (payload === null || typeof payload !== 'object') return rawContent;
+
+  const p = payload as Record<string, unknown>;
+
+  if (typeof p.content === 'string') return p.content;
+  if (Array.isArray(p.content)) {
+    return p.content
+      .map((b): string => {
+        if (typeof b === 'object' && b !== null) {
+          const block = b as Record<string, unknown>;
+          return String(block.text ?? block.content ?? JSON.stringify(b));
+        }
+        return String(b);
+      })
+      .join('\n');
+  }
+
+  return rawContent;
+}
+
+/** Extract displayable content from a system/user/file-history-snapshot event payload. */
+function extractSystem(
+  payload: unknown,
+  rawContent: string,
+): { rawType: string; display: string } {
+  if (typeof payload !== 'object' || payload === null) {
+    return { rawType: 'system', display: typeof payload === 'string' ? payload : rawContent };
+  }
+
+  const p = payload as Record<string, unknown>;
+  const rawType = typeof p.type === 'string' ? p.type : 'system';
+
+  if (rawType === 'file-history-snapshot') {
+    return { rawType, display: 'File history snapshot' };
+  }
+
+  if (rawType === 'user') {
+    const msg = p.message as Record<string, unknown> | undefined;
+    const content = msg?.content ?? p.content;
+    if (typeof content === 'string') {
+      const stripped = content.replace(/<[^>]+>/g, '').trim();
+      return { rawType, display: stripped };
+    }
+  }
+
+  if (typeof p.content === 'string') return { rawType, display: p.content };
+  if (typeof p.subtype === 'string') return { rawType, display: `[system: ${p.subtype}]` };
+
+  return { rawType, display: rawContent };
 }
