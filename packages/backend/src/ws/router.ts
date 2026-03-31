@@ -23,7 +23,7 @@ export function handleMessage(
         ws.send(JSON.stringify({ type: 'error', message: 'dispatch requires tasks array' }));
         break;
       }
-      msg.tasks.forEach((t) => sessions.start(t.taskUrl, t.projectContextUrl));
+      msg.tasks.forEach((t) => sessions.start(t.taskUrl, t.projectContextUrl, t.taskType));
       break;
     case 'approve':
       // The claude CLI --print mode does not support mid-session permission approval.
