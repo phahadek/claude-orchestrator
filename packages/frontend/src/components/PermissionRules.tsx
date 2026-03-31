@@ -24,26 +24,62 @@ interface RuleRowProps {
 }
 
 function RuleRow({ rule, onChange }: RuleRowProps) {
+  const [deleting, setDeleting] = useState(false);
+  const [toggling, setToggling] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function showError(msg: string) {
+    setError(msg);
+    setTimeout(() => setError(null), 3000);
+  }
+
   async function handleToggle() {
+    if (toggling || deleting) return;
+    const newEnabled = rule.enabled ? 0 : 1;
+    // Optimistic update
+    setToggling(true);
+    onChange((prev) => prev.map((r) => (r.id === rule.id ? { ...r, enabled: newEnabled } : r)));
     const res = await fetch(`/api/rules/${rule.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: rule.enabled ? 0 : 1 }),
+      body: JSON.stringify({ enabled: newEnabled }),
     });
-    if (!res.ok) return;
-    const updated: PermissionRule = await res.json();
-    onChange((prev) => prev.map((r) => (r.id === rule.id ? updated : r)));
+    if (!res.ok) {
+      // Revert
+      onChange((prev) => prev.map((r) => (r.id === rule.id ? { ...r, enabled: rule.enabled } : r)));
+      showError('Failed to update');
+    } else {
+      const updated: PermissionRule = await res.json();
+      onChange((prev) => prev.map((r) => (r.id === rule.id ? updated : r)));
+    }
+    setToggling(false);
   }
 
   async function handleDelete() {
+    if (deleting) return;
     if (!confirm(`Delete rule "${rule.pattern}"?`)) return;
+    setDeleting(true);
     const res = await fetch(`/api/rules/${rule.id}`, { method: 'DELETE' });
-    if (!res.ok) return;
-    onChange((prev) => prev.filter((r) => r.id !== rule.id));
+    if (!res.ok) {
+      setDeleting(false);
+      showError('Failed to delete');
+      return;
+    }
+    // Let the CSS fade-out play then remove from state
+    setTimeout(() => {
+      onChange((prev) => prev.filter((r) => r.id !== rule.id));
+    }, 300);
   }
 
+  const rowClass = [
+    rule.enabled ? '' : styles.disabled,
+    deleting ? styles.deleting : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
   return (
-    <tr className={rule.enabled ? '' : styles.disabled}>
+    <tr className={rowClass}>
       <td>{rule.order_index}</td>
       <td className={styles.patternCell}>{rule.pattern}</td>
       <td>{rule.match_type}</td>
@@ -56,13 +92,21 @@ function RuleRow({ rule, onChange }: RuleRowProps) {
           type="checkbox"
           checked={rule.enabled === 1}
           onChange={handleToggle}
+          disabled={toggling || deleting}
           aria-label="Enabled"
+          className={toggling ? styles.checkboxLoading : ''}
         />
       </td>
-      <td>
-        <button className={styles.deleteBtn} onClick={handleDelete} type="button">
-          Delete
+      <td className={styles.actionsCell}>
+        <button
+          className={styles.deleteBtn}
+          onClick={handleDelete}
+          disabled={deleting || toggling}
+          type="button"
+        >
+          {deleting ? '…' : 'Delete'}
         </button>
+        {error && <span className={styles.rowError}>{error}</span>}
       </td>
     </tr>
   );
@@ -78,9 +122,13 @@ function AddRuleForm({ onSave, onCancel }: AddRuleFormProps) {
   const [matchType, setMatchType] = useState<'glob' | 'regex'>('glob');
   const [decision, setDecision] = useState<'allow' | 'deny'>('allow');
   const [label, setLabel] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setSubmitting(true);
+    setError(null);
     const res = await fetch('/api/rules', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -91,7 +139,11 @@ function AddRuleForm({ onSave, onCancel }: AddRuleFormProps) {
         label: label.trim() || null,
       }),
     });
-    if (!res.ok) return;
+    if (!res.ok) {
+      setError('Failed to add rule');
+      setSubmitting(false);
+      return;
+    }
     const created: PermissionRule = await res.json();
     onSave(created);
   }
@@ -104,10 +156,12 @@ function AddRuleForm({ onSave, onCancel }: AddRuleFormProps) {
         value={pattern}
         onChange={(e) => setPattern(e.target.value)}
         required
+        disabled={submitting}
       />
       <select
         value={matchType}
         onChange={(e) => setMatchType(e.target.value as 'glob' | 'regex')}
+        disabled={submitting}
       >
         <option value="glob">glob</option>
         <option value="regex">regex</option>
@@ -115,6 +169,7 @@ function AddRuleForm({ onSave, onCancel }: AddRuleFormProps) {
       <select
         value={decision}
         onChange={(e) => setDecision(e.target.value as 'allow' | 'deny')}
+        disabled={submitting}
       >
         <option value="allow">allow</option>
         <option value="deny">deny</option>
@@ -124,11 +179,15 @@ function AddRuleForm({ onSave, onCancel }: AddRuleFormProps) {
         placeholder="Label (optional)"
         value={label}
         onChange={(e) => setLabel(e.target.value)}
+        disabled={submitting}
       />
-      <button type="submit">Save</button>
-      <button type="button" onClick={onCancel}>
+      <button type="submit" disabled={submitting}>
+        {submitting ? 'Saving…' : 'Save'}
+      </button>
+      <button type="button" onClick={onCancel} disabled={submitting}>
         Cancel
       </button>
+      {error && <span className={styles.formError}>{error}</span>}
     </form>
   );
 }
