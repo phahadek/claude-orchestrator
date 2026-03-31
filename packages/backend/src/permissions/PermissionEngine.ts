@@ -94,6 +94,29 @@ export class PermissionEngine {
     return 'escalate';
   }
 
+  /**
+   * Extract tool names from HARD_ALLOW patterns and user "allow" rules.
+   * Used by AgentSession to compute the --allowedTools flag for the CLI.
+   */
+  getAllowedToolNames(): string[] {
+    const tools = new Set<string>();
+
+    // Extract tool names from HARD_ALLOW patterns (first word before space)
+    for (const p of HARD_ALLOW) {
+      const name = p.split(' ')[0];
+      if (name) tools.add(name);
+    }
+
+    // Extract tool names from user allow rules
+    const rules = getRules().filter((r) => r.enabled === 1 && r.decision === 'allow');
+    for (const rule of rules) {
+      const name = rule.pattern.split(' ')[0];
+      if (name) tools.add(name);
+    }
+
+    return [...tools];
+  }
+
   private record(
     toolName: string,
     toolArgs: string,
