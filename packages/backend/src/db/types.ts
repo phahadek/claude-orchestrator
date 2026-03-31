@@ -17,11 +17,13 @@ export interface Session {
   started_at: number;
   ended_at: number | null;
   pr_url: string | null;
+  worktree_path: string | null;
 }
 
-export type NewSession = Omit<Session, 'ended_at' | 'pr_url'> & {
+export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path'> & {
   ended_at?: number | null;
   pr_url?: string | null;
+  worktree_path?: string | null;
 };
 
 // ─── session_events ────────────────────────────────────────────────────────

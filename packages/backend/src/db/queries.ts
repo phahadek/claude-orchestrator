@@ -16,10 +16,10 @@ import type {
 const stmtInsertSession = db.prepare<NewSession>(`
   INSERT INTO sessions
     (session_id, notion_task_id, notion_task_url, project_context_url,
-     status, started_at, ended_at, pr_url)
+     status, started_at, ended_at, pr_url, worktree_path)
   VALUES
     (@session_id, @notion_task_id, @notion_task_url, @project_context_url,
-     @status, @started_at, @ended_at, @pr_url)
+     @status, @started_at, @ended_at, @pr_url, @worktree_path)
 `);
 
 const stmtUpdateSessionStatus = db.prepare<{
@@ -55,14 +55,14 @@ const stmtDeleteSession = db.prepare<{ session_id: string }>(`
 const stmtInsertSessionOrIgnore = db.prepare<NewSession>(`
   INSERT OR IGNORE INTO sessions
     (session_id, notion_task_id, notion_task_url, project_context_url,
-     status, started_at, ended_at, pr_url)
+     status, started_at, ended_at, pr_url, worktree_path)
   VALUES
     (@session_id, @notion_task_id, @notion_task_url, @project_context_url,
-     @status, @started_at, @ended_at, @pr_url)
+     @status, @started_at, @ended_at, @pr_url, @worktree_path)
 `);
 
 export function insertSession(s: NewSession): void {
-  stmtInsertSession.run({ ended_at: null, pr_url: null, ...s });
+  stmtInsertSession.run({ ended_at: null, pr_url: null, worktree_path: null, ...s });
 }
 
 export function updateSessionStatus(
@@ -90,7 +90,7 @@ export function getAllSessionIds(): string[] {
 }
 
 export function insertSessionOrIgnore(s: NewSession): void {
-  stmtInsertSessionOrIgnore.run({ ended_at: null, pr_url: null, ...s });
+  stmtInsertSessionOrIgnore.run({ ended_at: null, pr_url: null, worktree_path: null, ...s });
 }
 
 export function deleteSession(sessionId: string): boolean {
