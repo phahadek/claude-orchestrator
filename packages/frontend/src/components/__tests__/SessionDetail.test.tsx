@@ -1,5 +1,5 @@
 import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { SessionDetail, EventRow } from '../SessionDetail';
 import type { SessionState } from '../../hooks/useSessionStore';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
@@ -180,17 +180,35 @@ describe('SessionDetail', () => {
 });
 
 describe('EventRow', () => {
-  it('renders text event as a paragraph', () => {
+  it('renders text event as a paragraph (plain string)', () => {
     render(<EventRow event={makeEvent('text', 'Hello from Claude')} />);
     const el = screen.getByText('Hello from Claude');
     expect(el.tagName).toBe('P');
   });
 
-  it('renders tool_use event with tool name header and args', () => {
+  it('renders text event from full assistant event payload', () => {
+    const content = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: 'Hello from assistant' }],
+      },
+    });
+    render(<EventRow event={makeEvent('text', content)} />);
+    expect(screen.getByText('Hello from assistant')).toBeTruthy();
+  });
+
+  it('renders tool_use event with tool name header and args (legacy format)', () => {
     const content = JSON.stringify({ toolName: 'Bash', input: { command: 'ls' } });
     render(<EventRow event={makeEvent('tool_use', content)} />);
     expect(screen.getByText(/Bash/)).toBeTruthy();
     expect(screen.getByText(/\"command\": \"ls\"/)).toBeTruthy();
+  });
+
+  it('renders tool_use event with Claude CLI name/input format', () => {
+    const content = JSON.stringify({ type: 'tool_use', name: 'Read', input: { file_path: '/foo' } });
+    render(<EventRow event={makeEvent('tool_use', content)} />);
+    expect(screen.getByText(/Read/)).toBeTruthy();
+    expect(screen.getByText(/\"file_path\": \"\/foo\"/)).toBeTruthy();
   });
 
   it('renders tool_use event with raw content when JSON is invalid', () => {
@@ -198,19 +216,52 @@ describe('EventRow', () => {
     expect(screen.getByText('not-json')).toBeTruthy();
   });
 
-  it('renders tool_result event as indented muted block', () => {
+  it('renders tool_result event as indented muted block (plain string)', () => {
     render(<EventRow event={makeEvent('tool_result', 'result output')} />);
     expect(screen.getByText('result output')).toBeTruthy();
   });
 
-  it('renders system event as italic text', () => {
+  it('renders tool_result extracting content field from payload', () => {
+    const content = JSON.stringify({ type: 'tool_result', content: 'command output here' });
+    render(<EventRow event={makeEvent('tool_result', content)} />);
+    expect(screen.getByText('command output here')).toBeTruthy();
+  });
+
+  it('renders system event as italic text (plain string)', () => {
     render(<EventRow event={makeEvent('system', 'Session started')} />);
     expect(screen.getByText('Session started')).toBeTruthy();
   });
 
-  it('renders error event in red block', () => {
+  it('renders system event extracting subtype from payload', () => {
+    const content = JSON.stringify({ type: 'system', subtype: 'init' });
+    render(<EventRow event={makeEvent('system', content)} />);
+    expect(screen.getByText('[system: init]')).toBeTruthy();
+  });
+
+  it('renders user event with XML tags stripped', () => {
+    const content = JSON.stringify({
+      type: 'user',
+      message: { content: 'Hello user<local-command-caveat>some caveat</local-command-caveat>' },
+    });
+    render(<EventRow event={makeEvent('system', content)} />);
+    expect(screen.getByText('Hello usersome caveat')).toBeTruthy();
+  });
+
+  it('renders file-history-snapshot as summary line', () => {
+    const content = JSON.stringify({ type: 'file-history-snapshot', snapshot: {} });
+    render(<EventRow event={makeEvent('system', content)} />);
+    expect(screen.getByText(/File history snapshot/)).toBeTruthy();
+  });
+
+  it('renders error event in red block (plain string)', () => {
     render(<EventRow event={makeEvent('error', 'Something broke')} />);
     expect(screen.getByText('Something broke')).toBeTruthy();
+  });
+
+  it('renders error event extracting message field from payload', () => {
+    const content = JSON.stringify({ type: 'error', message: 'Spawn failed' });
+    render(<EventRow event={makeEvent('error', content)} />);
+    expect(screen.getByText('Spawn failed')).toBeTruthy();
   });
 
   it('uses timestamp-eventType as key (tests via stable rendering)', () => {
