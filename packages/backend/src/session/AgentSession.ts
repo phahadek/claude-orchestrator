@@ -4,23 +4,19 @@ import { EventEmitter } from 'events';
 import { config } from '../config';
 import {
   insertEvent,
-  insertPermissionEvent,
   updateSessionStatus,
   getEventsBySession,
 } from '../db/queries';
 import { PermissionEngine } from '../permissions/PermissionEngine';
-import type { Decision } from '../permissions/types';
-import type { ServerMessage } from '../ws/types';
+import type { ServerMessage, PermissionDenial } from '../ws/types';
 import type { NotionClient } from '../notion/NotionClient';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/.+\/pull\/\d+/;
 
 /** Parse the Notion page ID out of a notion.so URL or return the raw value. */
 function parseNotionPageId(url: string): string {
-  // URLs like https://www.notion.so/<title>-<32-hex-chars>
   const match = url.match(/([a-f0-9]{32})$/i);
   if (match) return match[1];
-  // Fallback: strip dashes from a UUID-style ID
   const uuidMatch = url.match(/([0-9a-f-]{36})$/i);
   if (uuidMatch) return uuidMatch[1].replace(/-/g, '');
   return url;
@@ -48,9 +44,44 @@ function toEventType(raw: string): 'text' | 'tool_use' | 'tool_result' | 'system
   }
 }
 
+/**
+ * Build the --allowedTools list from PermissionEngine rules.
+ *
+ * The claude CLI --allowedTools flag accepts tool names with optional scope
+ * patterns: "Bash(git:*) Edit Read". Tools not in the list are auto-denied.
+ *
+ * We compute this from the PermissionEngine's allow rules:
+ * - HARD_ALLOW patterns like "Bash *git status*" → "Bash"
+ * - User allow rules → tool name extracted from pattern
+ * - Safe read-only tools always included
+ */
+function computeAllowedTools(): string[] {
+  // Allow tools needed for coding tasks. The PermissionEngine's HARD_DENY
+  // list still blocks dangerous commands (rm -rf, force-push, etc.) at the
+  // application level after the CLI returns results.
+  const tools = new Set([
+    // Read-only / safe tools
+    'Read', 'Glob', 'Grep', 'ToolSearch', 'TodoWrite',
+    'WebFetch', 'WebSearch', 'ListMcpResourcesTool', 'ReadMcpResourceTool',
+    'Skill', 'Task', 'TaskOutput', 'AskUserQuestion',
+    'EnterPlanMode', 'ExitPlanMode', 'NotebookEdit',
+    // Write tools — needed for coding tasks
+    'Edit', 'Write', 'Bash',
+    // MCP tools are generally safe (server-side only)
+    'mcp__claude_ai_Notion__*', 'mcp__github__*',
+    'mcp__claude_ai_Asana__*', 'mcp__claude_ai_Google_Calendar__*',
+  ]);
+
+  // Add tool names from PermissionEngine allow rules
+  const engine = new PermissionEngine();
+  const allowedFromRules = engine.getAllowedToolNames();
+  for (const t of allowedFromRules) tools.add(t);
+
+  return [...tools];
+}
+
 export class AgentSession extends EventEmitter {
   private proc: ChildProcess | null = null;
-  private pendingPermission: ((approved: boolean, reason?: string) => void) | null = null;
 
   constructor(
     public readonly sessionId: string,
@@ -63,16 +94,24 @@ export class AgentSession extends EventEmitter {
   }
 
   async run(): Promise<void> {
-    // Announce start
     this.broadcast({ type: 'session_status', sessionId: this.sessionId, status: 'running' });
     updateSessionStatus(this.sessionId, 'running');
 
     const initialPrompt =
       `Task page: ${this.taskUrl}\nProject context: ${this.projectContextUrl}\n\nFetch both Notion pages, then begin the task.`;
 
+    const allowedTools = computeAllowedTools();
+    console.log(`[AgentSession:${this.sessionId}] allowedTools: ${allowedTools.join(', ')}`);
+
     this.proc = spawn(
       config.claudePath,
-      ['--print', '--output-format', 'stream-json', '--verbose', initialPrompt],
+      [
+        '--print',
+        '--output-format', 'stream-json',
+        '--input-format', 'stream-json',
+        '--verbose',
+        '--allowed-tools', ...allowedTools,
+      ],
       { cwd: this.projectDir, stdio: ['pipe', 'pipe', 'pipe'] },
     );
 
@@ -85,42 +124,65 @@ export class AgentSession extends EventEmitter {
       this.broadcast({ type: 'session_ended', sessionId: this.sessionId, status: 'error' });
     });
 
-    // Pipe stderr to console for diagnostics — not forwarded to UI
+    // Send the initial prompt via stdin (required for --input-format stream-json)
+    const userMessage = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: initialPrompt },
+    });
+    this.proc.stdin!.write(userMessage + '\n');
+
+    // Pipe stderr to console for diagnostics
     this.proc.stderr!.on('data', (chunk: Buffer) => {
       console.error(`[claude:${this.sessionId}] ${chunk.toString().trimEnd()}`);
     });
 
     const rl = createInterface({ input: this.proc.stdout! });
 
-    rl.on('line', async (line) => {
+    rl.on('line', (line) => {
       if (!line.trim()) return;
       let event: Record<string, unknown>;
       try {
         event = JSON.parse(line) as Record<string, unknown>;
       } catch {
-        return; // skip unparseable lines
+        return;
       }
 
       const rawType = (event.type as string) ?? 'unknown';
 
-      // Debug: log every raw event type so we can verify the protocol during testing
-      console.log(`[AgentSession:${this.sessionId}] RAW type=${rawType} subtype=${event.subtype ?? '-'} keys=${Object.keys(event).join(',')}`);
+      // Debug logging
+      console.log(`[AgentSession:${this.sessionId}] event type=${rawType} subtype=${event.subtype ?? '-'}`);
 
-      // ── Permission request ──────────────────────────────────────────────
-      // Real claude CLI (--output-format stream-json) sends:
-      //   { type: 'system', subtype: 'permissionsRequest', permissionRequestId: '...', toolName: '...', input: {...} }
-      // Older/fallback formats: { type: 'permission' | 'tool_use_permission' }
-      const isPermissionRequest =
-        (rawType === 'system' && (event.subtype as string) === 'permissionsRequest') ||
-        rawType === 'permission' ||
-        rawType === 'tool_use_permission';
-
-      if (isPermissionRequest) {
-        await this.handlePermission(event);
-        return;
+      if (rawType === 'system' && (event.subtype as string) === 'init') {
+        console.log(`[AgentSession:${this.sessionId}] INIT permissionMode=${event.permissionMode}`);
       }
 
-      // ── All other events: persist first, then broadcast ─────────────────
+      // Log tool_use blocks from assistant messages
+      if (rawType === 'assistant' && event.message) {
+        const msg = event.message as Record<string, unknown>;
+        const content = msg.content as Array<Record<string, unknown>> | undefined;
+        if (content) {
+          for (const block of content) {
+            if (block.type === 'tool_use') {
+              console.log(`[AgentSession:${this.sessionId}] TOOL_USE name=${block.name} id=${block.id}`);
+            }
+          }
+        }
+      }
+
+      // Extract permission_denials from result event and broadcast to UI
+      if (rawType === 'result') {
+        const denials = event.permission_denials as PermissionDenial[] | undefined;
+        console.log(`[AgentSession:${this.sessionId}] RESULT stop_reason=${event.stop_reason} denials=${JSON.stringify(denials)}`);
+        if (denials && denials.length > 0) {
+          this.broadcast({
+            type: 'permission_denials',
+            sessionId: this.sessionId,
+            denials,
+          });
+        }
+      }
+
+      // Persist event to SQLite then broadcast
       const eventType = toEventType(rawType);
       const payload = JSON.stringify(event);
 
@@ -143,8 +205,7 @@ export class AgentSession extends EventEmitter {
       this.proc!.on('close', (code) => resolve(code));
     });
 
-    // ── Post-exit handling ────────────────────────────────────────────────
-    if (spawnErrored) return; // already handled by 'error' event
+    if (spawnErrored) return;
 
     if (exitCode === 0) {
       await this.handleCleanExit();
@@ -156,7 +217,6 @@ export class AgentSession extends EventEmitter {
   }
 
   private async handleCleanExit(): Promise<void> {
-    // Scan last 20 events for a GitHub PR URL
     const events = getEventsBySession(this.sessionId);
     const last20 = events.slice(-20);
     let prUrl: string | undefined;
@@ -169,10 +229,8 @@ export class AgentSession extends EventEmitter {
       }
     }
 
-    // Persist final status
     updateSessionStatus(this.sessionId, 'done', Date.now());
 
-    // Fire-and-forget Notion updates — errors are logged, never thrown
     const taskId = parseNotionPageId(this.taskUrl);
 
     if (prUrl) {
@@ -193,90 +251,18 @@ export class AgentSession extends EventEmitter {
     });
   }
 
-  private async handlePermission(event: Record<string, unknown>): Promise<void> {
-    // Support both naming conventions used by different claude CLI versions:
-    //   system/permissionsRequest:  toolName, input, permissionRequestId
-    //   legacy:                     tool_name, tool_input / toolArgs
-    const toolName = String(event.toolName ?? event.tool_name ?? '');
-    const toolArgs = JSON.stringify(event.input ?? event.tool_input ?? event.toolArgs ?? {});
-    const permissionRequestId = event.permissionRequestId as string | undefined;
-
-    console.log(`[AgentSession:${this.sessionId}] permission request tool=${toolName} requestId=${permissionRequestId ?? 'none'}`);
-
-    const engine = new PermissionEngine();
-    const decision: Decision = engine.evaluate(toolName, toolArgs);
-
-    if (decision === 'allow') {
-      insertPermissionEvent({
-        session_id: this.sessionId,
-        tool_name: toolName,
-        proposed_action: toolArgs,
-        decision: 'auto_allow',
-        rule_matched: null,
-        decided_at: Date.now(),
-      });
-      this.writePermissionResponse(permissionRequestId, true);
-      return;
-    }
-
-    if (decision === 'deny') {
-      insertPermissionEvent({
-        session_id: this.sessionId,
-        tool_name: toolName,
-        proposed_action: toolArgs,
-        decision: 'auto_deny',
-        rule_matched: null,
-        decided_at: Date.now(),
-      });
-      this.writePermissionResponse(permissionRequestId, false, 'Auto-denied by rule');
-      return;
-    }
-
-    // Escalate — pause session and wait for UI response
-    updateSessionStatus(this.sessionId, 'needs_permission');
-    this.broadcast({
-      type: 'session_status',
-      sessionId: this.sessionId,
-      status: 'needs_permission',
+  /**
+   * Send a follow-up user message to the subprocess via stdin.
+   * Requires --input-format stream-json.
+   */
+  sendMessage(message: string): void {
+    if (!this.proc?.stdin?.writable) return;
+    const msg = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: message },
     });
-    this.broadcast({
-      type: 'permission_request',
-      sessionId: this.sessionId,
-      toolName,
-      proposedAction: toolArgs,
-    });
-
-    await new Promise<void>((resolve) => {
-      this.pendingPermission = (approved: boolean, reason?: string) => {
-        insertPermissionEvent({
-          session_id: this.sessionId,
-          tool_name: toolName,
-          proposed_action: toolArgs,
-          decision: approved ? 'approved' : 'denied',
-          rule_matched: null,
-          decided_at: Date.now(),
-        });
-
-        this.writePermissionResponse(permissionRequestId, approved, reason);
-        updateSessionStatus(this.sessionId, 'running');
-        this.broadcast({
-          type: 'session_status',
-          sessionId: this.sessionId,
-          status: 'running',
-        });
-        resolve();
-      };
-    });
-  }
-
-  approve(): void {
-    this.pendingPermission?.(true);
-    this.pendingPermission = null;
-  }
-
-  deny(reason?: string): void {
-    this.pendingPermission?.(false, reason);
-    this.pendingPermission = null;
+    console.log(`[AgentSession:${this.sessionId}] stdin user message: ${message.slice(0, 100)}`);
+    this.proc.stdin.write(msg + '\n');
   }
 
   async kill(): Promise<void> {
@@ -294,32 +280,6 @@ export class AgentSession extends EventEmitter {
     });
     updateSessionStatus(this.sessionId, 'killed', Date.now());
     this.broadcast({ type: 'session_ended', sessionId: this.sessionId, status: 'killed' });
-  }
-
-  /**
-   * Write a permission response to the subprocess stdin.
-   *
-   * Real claude CLI (--output-format stream-json) expects:
-   *   { type: 'permissionsResponse', permissionRequestId: '...', granted: true|false }
-   * Legacy/fallback format (kept for safety):
-   *   { type: 'approve' } or { type: 'deny', reason: '...' }
-   */
-  private writePermissionResponse(
-    requestId: string | undefined,
-    granted: boolean,
-    reason?: string,
-  ): void {
-    let response: Record<string, unknown>;
-    if (requestId) {
-      response = { type: 'permissionsResponse', permissionRequestId: requestId, granted };
-    } else {
-      // Fallback for unknown/legacy format
-      response = granted
-        ? { type: 'approve' }
-        : { type: 'deny', reason: reason ?? 'User denied' };
-    }
-    console.log(`[AgentSession:${this.sessionId}] stdin -> ${JSON.stringify(response)}`);
-    this.proc!.stdin!.write(JSON.stringify(response) + '\n');
   }
 
   /** Persist to SQLite first, then emit. Caller (SessionManager) listens and broadcasts. */

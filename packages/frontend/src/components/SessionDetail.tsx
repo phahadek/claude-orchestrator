@@ -74,26 +74,17 @@ export function SessionDetail({ session, send, onClose }: Props) {
         )}
       </div>
 
-      {session.pendingPermission && (
+      {session.permissionDenials && session.permissionDenials.length > 0 && (
         <div className={styles.permissionRequest}>
           <p className={styles.permissionTitle}>
-            <strong>Tool:</strong> {session.pendingPermission.toolName}
+            <strong>Permission Denials</strong> — add rules in Settings to allow these tools next time
           </p>
-          <pre className={styles.proposedAction}>{session.pendingPermission.proposedAction}</pre>
-          <div className={styles.permissionButtons}>
-            <button
-              className={styles.approveButton}
-              onClick={() => send({ type: 'approve', sessionId: session.sessionId })}
-            >
-              ✅ Approve
-            </button>
-            <button
-              className={styles.denyButton}
-              onClick={() => send({ type: 'deny', sessionId: session.sessionId, reason: 'User denied' })}
-            >
-              ❌ Deny
-            </button>
-          </div>
+          {session.permissionDenials.map((d, i) => (
+            <div key={i} className={styles.proposedAction}>
+              <strong>{d.tool_name}</strong>
+              <pre>{JSON.stringify(d.tool_input, null, 2)}</pre>
+            </div>
+          ))}
         </div>
       )}
 

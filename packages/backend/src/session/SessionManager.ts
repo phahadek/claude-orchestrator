@@ -56,17 +56,12 @@ export class SessionManager extends EventEmitter {
     }
   }
 
-  approve(sessionId: string): void {
-    this.sessions.get(sessionId)?.approve();
-  }
-
-  deny(sessionId: string, reason?: string): void {
-    this.sessions.get(sessionId)?.deny(reason);
-  }
-
-  // send() is reserved for future resume/fork prompt injection
-  send(_sessionId: string, _message: string): void {
-    // TODO: pipe message to proc.stdin when session resume is implemented
+  /**
+   * Send a follow-up user message to a running session.
+   * Uses --input-format stream-json stdin protocol.
+   */
+  send(sessionId: string, message: string): void {
+    this.sessions.get(sessionId)?.sendMessage(message);
   }
 
   async shutdownAll(): Promise<void> {
