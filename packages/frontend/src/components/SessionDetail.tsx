@@ -66,8 +66,8 @@ export function SessionDetail({ session, send, onClose }: Props) {
       </div>
 
       <div className={styles.transcript} ref={transcriptRef}>
-        {session.events.map((e) => (
-          <EventRow key={`${e.timestamp}-${e.eventType}`} event={e} />
+        {session.events.map((e, i) => (
+          <EventRow key={`${i}-${e.timestamp}-${e.eventType}`} event={e} />
         ))}
         {session.events.length === 0 && (
           <p className={styles.emptyTranscript}>No events yet.</p>
