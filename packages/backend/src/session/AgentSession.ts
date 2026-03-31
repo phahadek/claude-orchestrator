@@ -103,8 +103,19 @@ export class AgentSession extends EventEmitter {
 
       const rawType = (event.type as string) ?? 'unknown';
 
+      // Debug: log every raw event type so we can verify the protocol during testing
+      console.log(`[AgentSession:${this.sessionId}] RAW type=${rawType} subtype=${event.subtype ?? '-'} keys=${Object.keys(event).join(',')}`);
+
       // ── Permission request ──────────────────────────────────────────────
-      if (rawType === 'permission' || rawType === 'tool_use_permission') {
+      // Real claude CLI (--output-format stream-json) sends:
+      //   { type: 'system', subtype: 'permissionsRequest', permissionRequestId: '...', toolName: '...', input: {...} }
+      // Older/fallback formats: { type: 'permission' | 'tool_use_permission' }
+      const isPermissionRequest =
+        (rawType === 'system' && (event.subtype as string) === 'permissionsRequest') ||
+        rawType === 'permission' ||
+        rawType === 'tool_use_permission';
+
+      if (isPermissionRequest) {
         await this.handlePermission(event);
         return;
       }
@@ -183,8 +194,14 @@ export class AgentSession extends EventEmitter {
   }
 
   private async handlePermission(event: Record<string, unknown>): Promise<void> {
-    const toolName = String(event.tool_name ?? event.toolName ?? '');
-    const toolArgs = JSON.stringify(event.tool_input ?? event.toolArgs ?? {});
+    // Support both naming conventions used by different claude CLI versions:
+    //   system/permissionsRequest:  toolName, input, permissionRequestId
+    //   legacy:                     tool_name, tool_input / toolArgs
+    const toolName = String(event.toolName ?? event.tool_name ?? '');
+    const toolArgs = JSON.stringify(event.input ?? event.tool_input ?? event.toolArgs ?? {});
+    const permissionRequestId = event.permissionRequestId as string | undefined;
+
+    console.log(`[AgentSession:${this.sessionId}] permission request tool=${toolName} requestId=${permissionRequestId ?? 'none'}`);
 
     const engine = new PermissionEngine();
     const decision: Decision = engine.evaluate(toolName, toolArgs);
@@ -198,7 +215,7 @@ export class AgentSession extends EventEmitter {
         rule_matched: null,
         decided_at: Date.now(),
       });
-      this.proc!.stdin!.write(JSON.stringify({ type: 'approve' }) + '\n');
+      this.writePermissionResponse(permissionRequestId, true);
       return;
     }
 
@@ -211,7 +228,7 @@ export class AgentSession extends EventEmitter {
         rule_matched: null,
         decided_at: Date.now(),
       });
-      this.proc!.stdin!.write(JSON.stringify({ type: 'deny', reason: 'Auto-denied by rule' }) + '\n');
+      this.writePermissionResponse(permissionRequestId, false, 'Auto-denied by rule');
       return;
     }
 
@@ -231,21 +248,16 @@ export class AgentSession extends EventEmitter {
 
     await new Promise<void>((resolve) => {
       this.pendingPermission = (approved: boolean, reason?: string) => {
-        const approved_ = approved;
-        const response = approved_
-          ? { type: 'approve' }
-          : { type: 'deny', reason: reason ?? 'User denied' };
-
         insertPermissionEvent({
           session_id: this.sessionId,
           tool_name: toolName,
           proposed_action: toolArgs,
-          decision: approved_ ? 'approved' : 'denied',
+          decision: approved ? 'approved' : 'denied',
           rule_matched: null,
           decided_at: Date.now(),
         });
 
-        this.proc!.stdin!.write(JSON.stringify(response) + '\n');
+        this.writePermissionResponse(permissionRequestId, approved, reason);
         updateSessionStatus(this.sessionId, 'running');
         this.broadcast({
           type: 'session_status',
@@ -282,6 +294,32 @@ export class AgentSession extends EventEmitter {
     });
     updateSessionStatus(this.sessionId, 'killed', Date.now());
     this.broadcast({ type: 'session_ended', sessionId: this.sessionId, status: 'killed' });
+  }
+
+  /**
+   * Write a permission response to the subprocess stdin.
+   *
+   * Real claude CLI (--output-format stream-json) expects:
+   *   { type: 'permissionsResponse', permissionRequestId: '...', granted: true|false }
+   * Legacy/fallback format (kept for safety):
+   *   { type: 'approve' } or { type: 'deny', reason: '...' }
+   */
+  private writePermissionResponse(
+    requestId: string | undefined,
+    granted: boolean,
+    reason?: string,
+  ): void {
+    let response: Record<string, unknown>;
+    if (requestId) {
+      response = { type: 'permissionsResponse', permissionRequestId: requestId, granted };
+    } else {
+      // Fallback for unknown/legacy format
+      response = granted
+        ? { type: 'approve' }
+        : { type: 'deny', reason: reason ?? 'User denied' };
+    }
+    console.log(`[AgentSession:${this.sessionId}] stdin -> ${JSON.stringify(response)}`);
+    this.proc!.stdin!.write(JSON.stringify(response) + '\n');
   }
 
   /** Persist to SQLite first, then emit. Caller (SessionManager) listens and broadcasts. */
