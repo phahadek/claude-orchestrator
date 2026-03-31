@@ -7,10 +7,17 @@ import { DispatchModal } from './components/DispatchModal';
 import { PermissionRules } from './components/PermissionRules';
 import { Notifications } from './components/Notifications';
 import type { NotificationItem } from './components/Notifications';
+import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
 
 export default function App() {
   const { sessions, tasks, tasksReady, dispatch, deleteSession } = useSessionStore();
-  const { send } = useWebSocket(dispatch);
+  const boardIdRef = useRef('');
+  const { send } = useWebSocket(dispatch, (sendNow: (msg: ClientMessage) => void) => {
+    // Called each time the WS (re)connects — fetch tasks if boardId is already known
+    if (boardIdRef.current) {
+      sendNow({ type: 'fetch_tasks', boardId: boardIdRef.current });
+    }
+  });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [showRules, setShowRules] = useState(false);
@@ -26,7 +33,12 @@ export default function App() {
     fetch('/api/config')
       .then((r) => r.json())
       .then((projects: { boardId: string }[]) => {
-        if (projects.length > 0) setBoardId(projects[0].boardId);
+        if (projects.length > 0) {
+          boardIdRef.current = projects[0].boardId;
+          setBoardId(projects[0].boardId);
+          // If WS is already open by the time config arrives, send immediately
+          send({ type: 'fetch_tasks', boardId: projects[0].boardId });
+        }
       })
       .catch(() => {/* leave boardId empty — DispatchModal handles the empty case */});
   }, []);
