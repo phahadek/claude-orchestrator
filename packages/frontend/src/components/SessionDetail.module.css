@@ -157,6 +157,17 @@
   word-break: break-word;
 }
 
+.bashCommand {
+  margin: 0;
+  padding: 8px 10px;
+  color: #f9e2af;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
 .eventToolResult {
   border-left: 3px solid #45475a;
   padding-left: 10px;
@@ -171,6 +182,23 @@
   white-space: pre-wrap;
   word-break: break-word;
   overflow-x: auto;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.expandButton {
+  background: transparent;
+  border: none;
+  color: #585b70;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 4px 0 2px;
+  display: block;
+  transition: color 0.15s;
+}
+
+.expandButton:hover {
+  color: #89b4fa;
 }
 
 .eventSystem {
