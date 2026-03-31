@@ -8,7 +8,7 @@ export interface PermissionDenial {
 }
 
 export type ServerMessage =
-  | { type: 'session_started';       sessionId: string; taskName: string; notionTaskUrl: string; started_at?: number; ended_at?: number }
+  | { type: 'session_started';       sessionId: string; taskName: string; notionTaskUrl: string; taskType?: string; started_at?: number; ended_at?: number }
   | { type: 'session_event';         sessionId: string; eventType: 'text' | 'tool_use' | 'tool_result' | 'system'; content: string }
   | { type: 'session_status';        sessionId: string; status: 'starting' | 'running' | 'needs_permission' | 'done' | 'error' | 'killed' }
   | { type: 'permission_request';    sessionId: string; toolName: string; proposedAction: string }
@@ -19,7 +19,7 @@ export type ServerMessage =
 
 // ── Client → Server ──────────────────────────────────────────────
 export type ClientMessage =
-  | { type: 'dispatch';     tasks: { taskUrl: string; projectContextUrl: string }[] }
+  | { type: 'dispatch';     tasks: { taskUrl: string; projectContextUrl: string; taskType?: string }[] }
   | { type: 'approve';      sessionId: string }
   | { type: 'deny';         sessionId: string; reason?: string }
   | { type: 'send_message'; sessionId: string; message: string }

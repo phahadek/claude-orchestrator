@@ -91,6 +91,11 @@
   margin: 0;
 }
 
+.type-icon {
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
 .modal-footer {
   display: flex;
   justify-content: flex-end;
