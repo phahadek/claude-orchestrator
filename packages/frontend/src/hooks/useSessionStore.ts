@@ -32,6 +32,8 @@ export function useSessionStore() {
             notionTaskUrl: msg.notionTaskUrl,
             status: 'starting',
             events: [],
+            started_at: msg.started_at,
+            ended_at: msg.ended_at,
           });
           break;
         case 'session_event': {

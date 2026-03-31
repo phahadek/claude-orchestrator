@@ -1,13 +1,27 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useSessionStore } from './hooks/useSessionStore';
 import { useWebSocket } from './hooks/useWebSocket';
 import { SessionGrid } from './components/SessionGrid';
 import { SessionDetail } from './components/SessionDetail';
+import { DispatchModal } from './components/DispatchModal';
+import { PermissionRules } from './components/PermissionRules';
 
 export default function App() {
-  const { sessions, tasks, dispatch } = useSessionStore();
+  const { sessions, tasks, tasksReady, dispatch } = useSessionStore();
   const { send } = useWebSocket(dispatch);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showModal, setShowModal] = useState(false);
+  const [showRules, setShowRules] = useState(false);
+  const [boardId, setBoardId] = useState('');
+
+  useEffect(() => {
+    fetch('/api/config')
+      .then((r) => r.json())
+      .then((projects: { boardId: string }[]) => {
+        if (projects.length > 0) setBoardId(projects[0].boardId);
+      })
+      .catch(() => {/* leave boardId empty — DispatchModal handles the empty case */});
+  }, []);
 
   const selectedSession = selectedId != null
     ? (sessions.find((s) => s.sessionId === selectedId) ?? null)
@@ -16,18 +30,29 @@ export default function App() {
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
       <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
-        <h1>Claude Code Dashboard</h1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+          <h1 style={{ margin: 0, flex: 1 }}>Claude Code Dashboard</h1>
+          <button type="button" onClick={() => setShowRules((v) => !v)}>
+            {showRules ? 'Hide Rules' : '⚙️ Rules'}
+          </button>
+          <button type="button" onClick={() => setShowModal(true)}>
+            + New Session
+          </button>
+        </div>
         <p>{sessions.length} sessions · {tasks.length} tasks ready</p>
-        <button type="button" onClick={() => send({ type: 'fetch_tasks', boardId: '' })}>
-          Fetch tasks
-        </button>
-        <SessionGrid
-          sessions={sessions}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
-        />
+
+        {showRules ? (
+          <PermissionRules />
+        ) : (
+          <SessionGrid
+            sessions={sessions}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+          />
+        )}
       </div>
-      {selectedSession && (
+
+      {selectedSession && !showRules && (
         <div style={{ width: '480px', flexShrink: 0 }}>
           <SessionDetail
             session={selectedSession}
@@ -35,6 +60,16 @@ export default function App() {
             onClose={() => setSelectedId(null)}
           />
         </div>
+      )}
+
+      {showModal && (
+        <DispatchModal
+          tasks={tasks}
+          tasksReady={tasksReady}
+          send={send}
+          boardId={boardId}
+          onClose={() => setShowModal(false)}
+        />
       )}
     </div>
   );

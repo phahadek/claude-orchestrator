@@ -44,14 +44,16 @@ export function SessionDetail({ session, send, onClose }: Props) {
       <div className={styles.header}>
         <span className={styles.taskName}>{session.taskName}</span>
         <StatusBadge status={session.status} />
-        <a
-          href={session.notionTaskUrl}
-          target="_blank"
-          rel="noreferrer"
-          className={styles.notionLink}
-        >
-          Notion ↗
-        </a>
+        {session.notionTaskUrl && (
+          <a
+            href={session.notionTaskUrl}
+            target="_blank"
+            rel="noreferrer"
+            className={styles.notionLink}
+          >
+            Notion ↗
+          </a>
+        )}
         <ElapsedTime session={session} />
         {isActive && (
           <button className={styles.killButton} onClick={handleKill}>

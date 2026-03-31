@@ -55,6 +55,8 @@ wss.on('connection', (ws) => {
       sessionId: s.session_id,
       taskName: s.notion_task_url ?? s.session_id.slice(0, 8),
       notionTaskUrl: s.notion_task_url ?? '',
+      ...(s.started_at != null && { started_at: s.started_at }),
+      ...(s.ended_at != null && { ended_at: s.ended_at }),
     } satisfies ServerMessage));
     ws.send(JSON.stringify({
       type: 'session_status',
