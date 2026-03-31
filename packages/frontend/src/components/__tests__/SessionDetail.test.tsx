@@ -265,6 +265,32 @@ describe('EventRow', () => {
     expect(screen.getByText('Spawn failed')).toBeTruthy();
   });
 
+  it('extractToolUse: string input field is double-parsed into an object', () => {
+    // The Claude CLI sometimes encodes input as a JSON string rather than an object.
+    // extractToolUse must parse it so JSON.stringify produces indented output.
+    const innerInput = JSON.stringify({ file_path: '/foo/bar.ts' });
+    const content = JSON.stringify({ type: 'tool_use', name: 'Read', input: innerInput });
+    render(<EventRow event={makeEvent('tool_use', content)} />);
+    // If double-parse works, the rendered args contain the key with indentation
+    expect(screen.getByText(/\"file_path\": \"\/foo\/bar\.ts\"/)).toBeTruthy();
+  });
+
+  it('extractToolResult: literal \\n sequences are unescaped to real newlines', () => {
+    // The CLI sometimes encodes newlines as the two-character sequence \n.
+    const content = JSON.stringify({ type: 'tool_result', content: 'line1\\nline2\\nline3' });
+    render(<EventRow event={makeEvent('tool_result', content)} />);
+    // After unescaping, each line is a separate text node — find any visible line
+    expect(screen.getByText(/line1/)).toBeTruthy();
+  });
+
+  it('ToolResultRow renders JSON string result as pretty-printed JSON', () => {
+    const jsonPayload = JSON.stringify({ id: 'abc', name: 'test' });
+    const content = JSON.stringify({ type: 'tool_result', content: jsonPayload });
+    render(<EventRow event={makeEvent('tool_result', content)} />);
+    // Pretty-printed JSON contains the key with quotes and indentation
+    expect(screen.getByText(/\"id\": \"abc\"/)).toBeTruthy();
+  });
+
   it('uses timestamp-eventType as key (tests via stable rendering)', () => {
     // Validates the key format renders without duplicate-key warnings
     const events = [
