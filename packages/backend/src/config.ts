@@ -51,4 +51,5 @@ export const config = {
   projectDir: normalizePath(process.env.PROJECT_DIR ?? process.cwd()),
   projects: parseProjects(),
   claudePath: resolveClaudePath(),
+  maxConcurrentSessions: Number(process.env.MAX_CONCURRENT_SESSIONS ?? 20),
 };
