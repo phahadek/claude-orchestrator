@@ -19,6 +19,10 @@ export function handleMessage(
 
   switch (msg.type) {
     case 'dispatch':
+      if (!Array.isArray(msg.tasks)) {
+        ws.send(JSON.stringify({ type: 'error', message: 'dispatch requires tasks array' }));
+        break;
+      }
       msg.tasks.forEach((t) => sessions.start(t.taskUrl, t.projectContextUrl));
       break;
     case 'approve':
