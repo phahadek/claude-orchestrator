@@ -12,7 +12,7 @@ import { JsonlReader, DEFAULT_SESSIONS_DIR } from './session/JsonlReader';
 import type { ServerMessage } from './ws/types';
 import { rulesRouter } from './routes/rules';
 import configRouter from './routes/config';
-import { getAllSessions } from './db/queries';
+import { getAllSessions, getEventsBySession } from './db/queries';
 
 runMigrations();
 
@@ -63,6 +63,16 @@ wss.on('connection', (ws) => {
       sessionId: s.session_id,
       status: s.status,
     } satisfies ServerMessage));
+
+    // Send stored events so the transcript populates
+    for (const ev of getEventsBySession(s.session_id)) {
+      ws.send(JSON.stringify({
+        type: 'session_event',
+        sessionId: s.session_id,
+        eventType: ev.event_type as 'text' | 'tool_use' | 'tool_result' | 'system',
+        content: ev.payload,
+      } satisfies ServerMessage));
+    }
   }
 
   ws.on('message', (data) => handleMessage(ws, data.toString(), sessionManager, notionClient));

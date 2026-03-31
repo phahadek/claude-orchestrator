@@ -51,7 +51,7 @@ export function DispatchModal({ tasks, tasksReady, send, boardId, onClose }: Pro
       <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
         <h2>Launch Sessions</h2>
         {loading ? (
-          <p>Fetching tasks from Notion…</p>
+          <p className={styles.loading}>Fetching tasks from Notion…</p>
         ) : (
           <>
             <section>
