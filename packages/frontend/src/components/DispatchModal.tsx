@@ -5,6 +5,13 @@ import styles from './DispatchModal.module.css';
 
 const PROJECT_CONTEXT_URL = import.meta.env.VITE_PROJECT_CONTEXT_URL as string;
 
+function taskTypeIcon(type: string): string {
+  if (type.includes('💻')) return '💻';
+  if (type.includes('📋')) return '📋';
+  if (type.includes('🧪')) return '🧪';
+  return '';
+}
+
 interface Props {
   tasks: ResolvedTask[];
   tasksReady: boolean;
@@ -41,7 +48,7 @@ export function DispatchModal({ tasks, tasksReady, send, boardId, onClose }: Pro
   const launch = () => {
     const toDispatch = ready
       .filter((t) => selected.has(t.task.id))
-      .map((t) => ({ taskUrl: t.task.notionUrl, projectContextUrl: PROJECT_CONTEXT_URL }));
+      .map((t) => ({ taskUrl: t.task.notionUrl, projectContextUrl: PROJECT_CONTEXT_URL, taskType: t.task.type }));
     if (toDispatch.length > 0) {
       send({ type: 'dispatch', tasks: toDispatch });
       onClose();
@@ -65,6 +72,7 @@ export function DispatchModal({ tasks, tasksReady, send, boardId, onClose }: Pro
                     checked={selected.has(t.task.id)}
                     onChange={() => toggle(t.task.id)}
                   />
+                  <span className={styles['type-icon']} title={t.task.type}>{taskTypeIcon(t.task.type)}</span>
                   {t.task.title}
                 </label>
               ))}
@@ -75,6 +83,7 @@ export function DispatchModal({ tasks, tasksReady, send, boardId, onClose }: Pro
                 <h3>🔄 In Progress ({inProgress.length})</h3>
                 {inProgress.map((t) => (
                   <div key={t.task.id} className={styles['blocked-task']}>
+                    <span className={styles['type-icon']} title={t.task.type}>{taskTypeIcon(t.task.type)}</span>
                     {t.task.title}
                   </div>
                 ))}
@@ -85,6 +94,7 @@ export function DispatchModal({ tasks, tasksReady, send, boardId, onClose }: Pro
                 <h3>👀 In Review ({inReview.length})</h3>
                 {inReview.map((t) => (
                   <div key={t.task.id} className={styles['blocked-task']}>
+                    <span className={styles['type-icon']} title={t.task.type}>{taskTypeIcon(t.task.type)}</span>
                     {t.task.title}
                   </div>
                 ))}
@@ -94,6 +104,7 @@ export function DispatchModal({ tasks, tasksReady, send, boardId, onClose }: Pro
               <h3>🚫 Blocked ({blocked.length})</h3>
               {blocked.map((t) => (
                 <div key={t.task.id} className={styles['blocked-task']}>
+                  <span className={styles['type-icon']} title={t.task.type}>{taskTypeIcon(t.task.type)}</span>
                   {t.task.title}
                   {t.nonCode && <span className={styles.tag}>non-code</span>}
                   {t.blocked && (
