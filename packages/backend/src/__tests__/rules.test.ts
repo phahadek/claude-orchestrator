@@ -111,6 +111,22 @@ describe('PUT /api/rules/:id', () => {
     expect(queries.updateRule).toHaveBeenCalledWith(1, expect.objectContaining({ enabled: 0 }));
   });
 
+  it('merges partial body with existing record so all SQL named parameters are present', async () => {
+    const updated = { ...mockRule, enabled: 0 };
+    vi.mocked(queries.getRuleById)
+      .mockReturnValueOnce(mockRule as never)
+      .mockReturnValueOnce(updated as never);
+    await supertest(buildApp()).put('/api/rules/1').send({ enabled: 0 });
+    expect(queries.updateRule).toHaveBeenCalledWith(1, {
+      order_index: mockRule.order_index,
+      pattern:     mockRule.pattern,
+      match_type:  mockRule.match_type,
+      decision:    mockRule.decision,
+      label:       mockRule.label,
+      enabled:     0,
+    });
+  });
+
   it('returns 404 when rule does not exist', async () => {
     vi.mocked(queries.getRuleById).mockReturnValue(undefined as never);
     const res = await supertest(buildApp()).put('/api/rules/999').send({ enabled: 0 });
