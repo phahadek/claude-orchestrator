@@ -9,7 +9,12 @@ interface Props {
 }
 
 export function SessionGrid({ sessions, onSelect, selectedId }: Props) {
-  const sorted = [...sessions].sort((a, b) => statusRank(a.status) - statusRank(b.status));
+  const sorted = [...sessions].sort((a, b) => {
+    const rank = statusRank(a.status) - statusRank(b.status);
+    if (rank !== 0) return rank;
+    // Within the same status group, newest first
+    return (b.started_at ?? 0) - (a.started_at ?? 0);
+  });
 
   if (sorted.length === 0) {
     return (
