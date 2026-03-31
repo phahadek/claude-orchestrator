@@ -1,8 +1,9 @@
+import './bootstrap';
 import express from 'express';
 import { WebSocket, WebSocketServer } from 'ws';
 import http from 'http';
 import path from 'path';
-import dotenv from 'dotenv';
+import os from 'os';
 import { runMigrations } from './db/schema';
 import { SessionManager } from './session/SessionManager';
 import { NotionClient } from './notion/NotionClient';
@@ -12,10 +13,10 @@ import type { ServerMessage } from './ws/types';
 import { rulesRouter } from './routes/rules';
 import configRouter from './routes/config';
 
-dotenv.config();
 runMigrations();
 
-const sessionsDir = process.env.SESSIONS_DIR ?? DEFAULT_SESSIONS_DIR;
+const rawSessionsDir = process.env.SESSIONS_DIR ?? DEFAULT_SESSIONS_DIR;
+const sessionsDir = rawSessionsDir.replace(/^~/, os.homedir());
 const jsonlReader = new JsonlReader(sessionsDir);
 
 const notionClient = new NotionClient();
