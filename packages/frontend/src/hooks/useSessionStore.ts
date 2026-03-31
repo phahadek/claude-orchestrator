@@ -100,5 +100,13 @@ export function useSessionStore() {
     }
   }, []);
 
-  return { sessions: [...sessions.values()], tasks, tasksReady, dispatch };
+  const deleteSession = useCallback((sessionId: string) => {
+    setSessions((prev) => {
+      const next = new Map(prev);
+      next.delete(sessionId);
+      return next;
+    });
+  }, []);
+
+  return { sessions: [...sessions.values()], tasks, tasksReady, dispatch, deleteSession };
 }

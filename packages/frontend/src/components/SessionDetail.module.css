@@ -66,6 +66,27 @@
   background: rgba(243, 139, 168, 0.25);
 }
 
+.deleteButton {
+  background: rgba(243, 139, 168, 0.1);
+  border: 1px solid rgba(243, 139, 168, 0.3);
+  border-radius: 4px;
+  color: #f38ba8;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.deleteButton:hover:not(:disabled) {
+  background: rgba(243, 139, 168, 0.2);
+}
+
+.deleteButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .closeButton {
   background: transparent;
   border: none;
