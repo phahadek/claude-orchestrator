@@ -1,14 +1,21 @@
 import type { ResolvedTask } from '../notion/types';
 
 // ── Server → Client ──────────────────────────────────────────────
+export interface PermissionDenial {
+  tool_name: string;
+  tool_use_id: string;
+  tool_input: Record<string, unknown>;
+}
+
 export type ServerMessage =
-  | { type: 'session_started';    sessionId: string; taskName: string; notionTaskUrl: string; started_at?: number; ended_at?: number }
-  | { type: 'session_event';      sessionId: string; eventType: 'text' | 'tool_use' | 'tool_result' | 'system'; content: string }
-  | { type: 'session_status';     sessionId: string; status: 'starting' | 'running' | 'needs_permission' | 'done' | 'error' | 'killed' }
-  | { type: 'permission_request'; sessionId: string; toolName: string; proposedAction: string }
-  | { type: 'session_ended';      sessionId: string; status: string; prUrl?: string }
-  | { type: 'tasks_ready';        tasks: ResolvedTask[] }
-  | { type: 'error';              message: string };
+  | { type: 'session_started';       sessionId: string; taskName: string; notionTaskUrl: string; started_at?: number; ended_at?: number }
+  | { type: 'session_event';         sessionId: string; eventType: 'text' | 'tool_use' | 'tool_result' | 'system'; content: string }
+  | { type: 'session_status';        sessionId: string; status: 'starting' | 'running' | 'needs_permission' | 'done' | 'error' | 'killed' }
+  | { type: 'permission_request';    sessionId: string; toolName: string; proposedAction: string }
+  | { type: 'permission_denials';    sessionId: string; denials: PermissionDenial[] }
+  | { type: 'session_ended';         sessionId: string; status: string; prUrl?: string }
+  | { type: 'tasks_ready';           tasks: ResolvedTask[] }
+  | { type: 'error';                 message: string };
 
 // ── Client → Server ──────────────────────────────────────────────
 export type ClientMessage =

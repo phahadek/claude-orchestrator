@@ -26,10 +26,12 @@ export function handleMessage(
       msg.tasks.forEach((t) => sessions.start(t.taskUrl, t.projectContextUrl));
       break;
     case 'approve':
-      sessions.approve(msg.sessionId);
+      // The claude CLI --print mode does not support mid-session permission approval.
+      // Tools are pre-approved via --allowedTools at spawn time. This is a no-op.
+      console.log(`[router] approve ignored — CLI does not support mid-session approval`);
       break;
     case 'deny':
-      sessions.deny(msg.sessionId, msg.reason);
+      console.log(`[router] deny ignored — CLI does not support mid-session denial`);
       break;
     case 'send_message':
       sessions.send(msg.sessionId, msg.message);

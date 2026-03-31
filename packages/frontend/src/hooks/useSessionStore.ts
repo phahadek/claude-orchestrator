@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import type { ServerMessage } from '@claude-dashboard/backend/src/ws/types';
+import type { ServerMessage, PermissionDenial } from '@claude-dashboard/backend/src/ws/types';
 import type { ResolvedTask } from '@claude-dashboard/backend/src/notion/types';
 
 export interface SessionState {
@@ -9,6 +9,7 @@ export interface SessionState {
   status: string;
   events: { eventType: string; content: string; timestamp: number }[];
   pendingPermission?: { toolName: string; proposedAction: string };
+  permissionDenials?: PermissionDenial[];
   prUrl?: string;
   /** Unix ms — set from SQLite sessions.started_at for JSONL-imported sessions */
   started_at?: number;
@@ -61,6 +62,16 @@ export function useSessionStore() {
               ...s,
               status: 'needs_permission',
               pendingPermission: { toolName: msg.toolName, proposedAction: msg.proposedAction },
+            });
+          }
+          break;
+        }
+        case 'permission_denials': {
+          const s = next.get(msg.sessionId);
+          if (s) {
+            next.set(msg.sessionId, {
+              ...s,
+              permissionDenials: msg.denials,
             });
           }
           break;
