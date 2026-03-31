@@ -137,7 +137,7 @@ export class JsonlReader {
 
       events.push({
         type: toEventType(obj.type),
-        content: obj.content,
+        content: obj.content ?? obj.message ?? obj,
         timestamp:
           typeof obj.timestamp === 'number' ? obj.timestamp : undefined,
       });
