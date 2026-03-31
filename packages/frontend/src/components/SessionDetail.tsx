@@ -234,13 +234,21 @@ export function EventRow({ event }: EventRowProps) {
 const TOOL_RESULT_COLLAPSE_LINES = 20;
 
 function ToolResultRow({ result }: { result: string }) {
-  const lines = result.split('\n');
+  let display = result;
+  try {
+    const parsed = JSON.parse(result);
+    if (typeof parsed === 'object' && parsed !== null) {
+      display = JSON.stringify(parsed, null, 2);
+    }
+  } catch { /* not JSON, use raw string */ }
+
+  const lines = display.split('\n');
   const shouldCollapse = lines.length > TOOL_RESULT_COLLAPSE_LINES;
   const [expanded, setExpanded] = useState(false);
   const toggle = useCallback(() => setExpanded((e) => !e), []);
 
   const displayed =
-    shouldCollapse && !expanded ? lines.slice(0, TOOL_RESULT_COLLAPSE_LINES).join('\n') : result;
+    shouldCollapse && !expanded ? lines.slice(0, TOOL_RESULT_COLLAPSE_LINES).join('\n') : display;
 
   return (
     <div className={styles.eventToolResult}>
@@ -305,27 +313,43 @@ function extractToolUse(payload: unknown): { toolName: string; input: unknown } 
   if (typeof payload !== 'object' || payload === null) return null;
   const p = payload as Record<string, unknown>;
 
+  let rawInput: unknown;
+  let toolName: string;
+
   // Claude CLI format: {type:'tool_use', name:'...', input:{...}}
   if (typeof p.name === 'string' && 'input' in p) {
-    return { toolName: p.name, input: p.input };
+    toolName = p.name;
+    rawInput = p.input;
+  } else if (typeof p.toolName === 'string') {
+    // Legacy format: {toolName:'...', input:{...}}
+    toolName = p.toolName;
+    rawInput = p.input;
+  } else {
+    return null;
   }
-  // Legacy format: {toolName:'...', input:{...}}
-  if (typeof p.toolName === 'string') {
-    return { toolName: p.toolName, input: p.input };
+
+  // If input arrived as a JSON-encoded string, parse it into an object so
+  // JSON.stringify can produce indented output instead of a single escaped line.
+  let input = rawInput;
+  if (typeof input === 'string') {
+    try { input = JSON.parse(input); } catch { /* leave as string */ }
   }
-  return null;
+
+  return { toolName, input };
 }
 
 /** Extract displayable content from a tool_result event payload. */
 function extractToolResult(payload: unknown, rawContent: string): string {
-  if (typeof payload === 'string') return payload;
+  if (typeof payload === 'string') return payload.replace(/\\n/g, '\n');
   if (payload === null || typeof payload !== 'object') return rawContent;
 
   const p = payload as Record<string, unknown>;
 
-  if (typeof p.content === 'string') return p.content;
-  if (Array.isArray(p.content)) {
-    return p.content
+  let result: string | null = null;
+  if (typeof p.content === 'string') {
+    result = p.content;
+  } else if (Array.isArray(p.content)) {
+    result = p.content
       .map((b): string => {
         if (typeof b === 'object' && b !== null) {
           const block = b as Record<string, unknown>;
@@ -334,6 +358,11 @@ function extractToolResult(payload: unknown, rawContent: string): string {
         return String(b);
       })
       .join('\n');
+  }
+
+  if (result !== null) {
+    // Unescape literal \n sequences that the CLI encodes as \\n
+    return result.replace(/\\n/g, '\n');
   }
 
   return rawContent;
