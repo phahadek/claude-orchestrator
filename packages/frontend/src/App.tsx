@@ -7,7 +7,7 @@ import { DispatchModal } from './components/DispatchModal';
 import { PermissionRules } from './components/PermissionRules';
 
 export default function App() {
-  const { sessions, tasks, tasksReady, dispatch } = useSessionStore();
+  const { sessions, tasks, tasksReady, dispatch, deleteSession } = useSessionStore();
   const { send } = useWebSocket(dispatch);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
@@ -58,6 +58,10 @@ export default function App() {
             session={selectedSession}
             send={send}
             onClose={() => setSelectedId(null)}
+            onDelete={(sessionId) => {
+              deleteSession(sessionId);
+              setSelectedId(null);
+            }}
           />
         </div>
       )}
