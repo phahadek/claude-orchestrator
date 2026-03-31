@@ -80,8 +80,14 @@
 }
 
 .empty {
-  color: #666;
+  color: #888;
   font-size: 0.85rem;
+  margin: 0;
+}
+
+.loading {
+  color: #ccc;
+  font-size: 0.9rem;
   margin: 0;
 }
 
