@@ -4,23 +4,18 @@ import { EventEmitter } from 'events';
 import { config } from '../config';
 import {
   insertEvent,
-  insertPermissionEvent,
   updateSessionStatus,
   getEventsBySession,
 } from '../db/queries';
-import { PermissionEngine } from '../permissions/PermissionEngine';
-import type { Decision } from '../permissions/types';
-import type { ServerMessage } from '../ws/types';
+import type { ServerMessage, PermissionDenial } from '../ws/types';
 import type { NotionClient } from '../notion/NotionClient';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/.+\/pull\/\d+/;
 
 /** Parse the Notion page ID out of a notion.so URL or return the raw value. */
 function parseNotionPageId(url: string): string {
-  // URLs like https://www.notion.so/<title>-<32-hex-chars>
   const match = url.match(/([a-f0-9]{32})$/i);
   if (match) return match[1];
-  // Fallback: strip dashes from a UUID-style ID
   const uuidMatch = url.match(/([0-9a-f-]{36})$/i);
   if (uuidMatch) return uuidMatch[1].replace(/-/g, '');
   return url;
@@ -50,7 +45,6 @@ function toEventType(raw: string): 'text' | 'tool_use' | 'tool_result' | 'system
 
 export class AgentSession extends EventEmitter {
   private proc: ChildProcess | null = null;
-  private pendingPermission: ((approved: boolean, reason?: string) => void) | null = null;
 
   constructor(
     public readonly sessionId: string,
@@ -63,17 +57,30 @@ export class AgentSession extends EventEmitter {
   }
 
   async run(): Promise<void> {
-    // Announce start
     this.broadcast({ type: 'session_status', sessionId: this.sessionId, status: 'running' });
     updateSessionStatus(this.sessionId, 'running');
 
     const initialPrompt =
       `Task page: ${this.taskUrl}\nProject context: ${this.projectContextUrl}\n\nFetch both Notion pages, then begin the task.`;
 
+    // Use --input-format stream-json for bidirectional JSON communication.
+    // Use --permission-mode acceptEdits to auto-approve in-project Edit/Write/Bash
+    // without a TUI prompt (the CLI does not emit permission events over stdout).
     this.proc = spawn(
       config.claudePath,
-      ['--print', '--output-format', 'stream-json', '--verbose', initialPrompt],
+      [
+        '--print',
+        '--output-format', 'stream-json',
+        '--input-format', 'stream-json',
+        '--verbose',
+        '--permission-mode', 'acceptEdits',
+      ],
       { cwd: this.projectDir, stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+
+    // Send the initial prompt via stdin (required by --input-format stream-json)
+    this.proc.stdin!.write(
+      JSON.stringify({ type: 'user', message: { role: 'user', content: initialPrompt } }) + '\n',
     );
 
     let spawnErrored = false;
@@ -85,31 +92,58 @@ export class AgentSession extends EventEmitter {
       this.broadcast({ type: 'session_ended', sessionId: this.sessionId, status: 'error' });
     });
 
-    // Pipe stderr to console for diagnostics — not forwarded to UI
+    // Pipe stderr to console for diagnostics
     this.proc.stderr!.on('data', (chunk: Buffer) => {
       console.error(`[claude:${this.sessionId}] ${chunk.toString().trimEnd()}`);
     });
 
     const rl = createInterface({ input: this.proc.stdout! });
 
-    rl.on('line', async (line) => {
+    rl.on('line', (line) => {
       if (!line.trim()) return;
       let event: Record<string, unknown>;
       try {
         event = JSON.parse(line) as Record<string, unknown>;
       } catch {
-        return; // skip unparseable lines
+        return;
       }
 
       const rawType = (event.type as string) ?? 'unknown';
 
-      // ── Permission request ──────────────────────────────────────────────
-      if (rawType === 'permission' || rawType === 'tool_use_permission') {
-        await this.handlePermission(event);
-        return;
+      // Debug logging
+      console.log(`[AgentSession:${this.sessionId}] event type=${rawType} subtype=${event.subtype ?? '-'}`);
+
+      if (rawType === 'system' && (event.subtype as string) === 'init') {
+        console.log(`[AgentSession:${this.sessionId}] INIT permissionMode=${event.permissionMode}`);
       }
 
-      // ── All other events: persist first, then broadcast ─────────────────
+      // Log tool_use blocks from assistant messages
+      if (rawType === 'assistant' && event.message) {
+        const msg = event.message as Record<string, unknown>;
+        const content = msg.content as Array<Record<string, unknown>> | undefined;
+        if (content) {
+          for (const block of content) {
+            if (block.type === 'tool_use') {
+              console.log(`[AgentSession:${this.sessionId}] TOOL_USE name=${block.name} id=${block.id}`);
+            }
+          }
+        }
+      }
+
+      // Extract permission_denials from result event and broadcast to UI
+      if (rawType === 'result') {
+        const denials = event.permission_denials as PermissionDenial[] | undefined;
+        console.log(`[AgentSession:${this.sessionId}] RESULT stop_reason=${event.stop_reason} denials=${JSON.stringify(denials)}`);
+        if (denials && denials.length > 0) {
+          this.broadcast({
+            type: 'permission_denials',
+            sessionId: this.sessionId,
+            denials,
+          });
+        }
+      }
+
+      // Persist event to SQLite then broadcast
       const eventType = toEventType(rawType);
       const payload = JSON.stringify(event);
 
@@ -132,8 +166,7 @@ export class AgentSession extends EventEmitter {
       this.proc!.on('close', (code) => resolve(code));
     });
 
-    // ── Post-exit handling ────────────────────────────────────────────────
-    if (spawnErrored) return; // already handled by 'error' event
+    if (spawnErrored) return;
 
     if (exitCode === 0) {
       await this.handleCleanExit();
@@ -145,7 +178,6 @@ export class AgentSession extends EventEmitter {
   }
 
   private async handleCleanExit(): Promise<void> {
-    // Scan last 20 events for a GitHub PR URL
     const events = getEventsBySession(this.sessionId);
     const last20 = events.slice(-20);
     let prUrl: string | undefined;
@@ -158,10 +190,8 @@ export class AgentSession extends EventEmitter {
       }
     }
 
-    // Persist final status
     updateSessionStatus(this.sessionId, 'done', Date.now());
 
-    // Fire-and-forget Notion updates — errors are logged, never thrown
     const taskId = parseNotionPageId(this.taskUrl);
 
     if (prUrl) {
@@ -182,89 +212,21 @@ export class AgentSession extends EventEmitter {
     });
   }
 
-  private async handlePermission(event: Record<string, unknown>): Promise<void> {
-    const toolName = String(event.tool_name ?? event.toolName ?? '');
-    const toolArgs = JSON.stringify(event.tool_input ?? event.toolArgs ?? {});
+  /** No-op — CLI does not support mid-session permission approval. */
+  approve(): void {}
 
-    const engine = new PermissionEngine();
-    const decision: Decision = engine.evaluate(toolName, toolArgs);
+  /** No-op — CLI does not support mid-session permission denial. */
+  deny(_reason?: string): void {}
 
-    if (decision === 'allow') {
-      insertPermissionEvent({
-        session_id: this.sessionId,
-        tool_name: toolName,
-        proposed_action: toolArgs,
-        decision: 'auto_allow',
-        rule_matched: null,
-        decided_at: Date.now(),
-      });
-      this.proc!.stdin!.write(JSON.stringify({ type: 'approve' }) + '\n');
-      return;
-    }
-
-    if (decision === 'deny') {
-      insertPermissionEvent({
-        session_id: this.sessionId,
-        tool_name: toolName,
-        proposed_action: toolArgs,
-        decision: 'auto_deny',
-        rule_matched: null,
-        decided_at: Date.now(),
-      });
-      this.proc!.stdin!.write(JSON.stringify({ type: 'deny', reason: 'Auto-denied by rule' }) + '\n');
-      return;
-    }
-
-    // Escalate — pause session and wait for UI response
-    updateSessionStatus(this.sessionId, 'needs_permission');
-    this.broadcast({
-      type: 'session_status',
-      sessionId: this.sessionId,
-      status: 'needs_permission',
-    });
-    this.broadcast({
-      type: 'permission_request',
-      sessionId: this.sessionId,
-      toolName,
-      proposedAction: toolArgs,
-    });
-
-    await new Promise<void>((resolve) => {
-      this.pendingPermission = (approved: boolean, reason?: string) => {
-        const approved_ = approved;
-        const response = approved_
-          ? { type: 'approve' }
-          : { type: 'deny', reason: reason ?? 'User denied' };
-
-        insertPermissionEvent({
-          session_id: this.sessionId,
-          tool_name: toolName,
-          proposed_action: toolArgs,
-          decision: approved_ ? 'approved' : 'denied',
-          rule_matched: null,
-          decided_at: Date.now(),
-        });
-
-        this.proc!.stdin!.write(JSON.stringify(response) + '\n');
-        updateSessionStatus(this.sessionId, 'running');
-        this.broadcast({
-          type: 'session_status',
-          sessionId: this.sessionId,
-          status: 'running',
-        });
-        resolve();
-      };
-    });
-  }
-
-  approve(): void {
-    this.pendingPermission?.(true);
-    this.pendingPermission = null;
-  }
-
-  deny(reason?: string): void {
-    this.pendingPermission?.(false, reason);
-    this.pendingPermission = null;
+  /**
+   * Send a follow-up user message to the subprocess via stdin.
+   * Requires --input-format stream-json.
+   */
+  sendMessage(message: string): void {
+    if (!this.proc?.stdin?.writable) return;
+    this.proc.stdin.write(
+      JSON.stringify({ type: 'user', message: { role: 'user', content: message } }) + '\n',
+    );
   }
 
   async kill(): Promise<void> {
