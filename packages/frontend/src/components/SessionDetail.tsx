@@ -8,10 +8,12 @@ interface Props {
   session: SessionState | null;
   send: (msg: ClientMessage) => void;
   onClose: () => void;
+  onDelete: (sessionId: string) => void;
 }
 
-export function SessionDetail({ session, send, onClose }: Props) {
+export function SessionDetail({ session, send, onClose, onDelete }: Props) {
   const [draftMessage, setDraftMessage] = useState('');
+  const [deleting, setDeleting] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -30,6 +32,18 @@ export function SessionDetail({ session, send, onClose }: Props) {
     if (confirm('Kill this session? It will have 15 seconds to wrap up.')) {
       send({ type: 'kill', sessionId: session.sessionId });
       onClose();
+    }
+  }
+
+  async function handleDelete() {
+    if (!session) return;
+    if (!confirm('Delete this session? This cannot be undone.')) return;
+    setDeleting(true);
+    try {
+      await fetch(`/api/sessions/${session.sessionId}`, { method: 'DELETE' });
+      onDelete(session.sessionId);
+    } catch {
+      setDeleting(false);
     }
   }
 
@@ -58,6 +72,11 @@ export function SessionDetail({ session, send, onClose }: Props) {
         {isActive && (
           <button className={styles.killButton} onClick={handleKill}>
             Kill
+          </button>
+        )}
+        {!isActive && (
+          <button className={styles.deleteButton} onClick={handleDelete} disabled={deleting}>
+            {deleting ? '…' : 'Delete'}
           </button>
         )}
         <button className={styles.closeButton} onClick={onClose} aria-label="Close panel">

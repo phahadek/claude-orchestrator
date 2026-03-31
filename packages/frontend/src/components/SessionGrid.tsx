@@ -1,6 +1,19 @@
+import { useState } from 'react';
 import type { SessionState } from '../hooks/useSessionStore';
 import { SessionCard } from './SessionCard';
 import styles from './SessionGrid.module.css';
+
+const ALL_STATUSES = ['running', 'starting', 'needs_permission', 'done', 'error', 'killed'] as const;
+type Status = typeof ALL_STATUSES[number];
+
+const STATUS_LABELS: Record<Status, string> = {
+  running: 'Running',
+  starting: 'Starting',
+  needs_permission: 'Permission',
+  done: 'Done',
+  error: 'Error',
+  killed: 'Killed',
+};
 
 interface Props {
   sessions: SessionState[];
@@ -9,31 +22,83 @@ interface Props {
 }
 
 export function SessionGrid({ sessions, onSelect, selectedId }: Props) {
-  const sorted = [...sessions].sort((a, b) => {
+  const [activeFilters, setActiveFilters] = useState<Set<Status>>(new Set());
+
+  function toggleFilter(status: Status) {
+    setActiveFilters((prev) => {
+      const next = new Set(prev);
+      if (next.has(status)) {
+        next.delete(status);
+      } else {
+        next.add(status);
+      }
+      return next;
+    });
+  }
+
+  const filtered = activeFilters.size === 0
+    ? sessions
+    : sessions.filter((s) => activeFilters.has(s.status as Status));
+
+  const sorted = [...filtered].sort((a, b) => {
     const rank = statusRank(a.status) - statusRank(b.status);
     if (rank !== 0) return rank;
-    // Within the same status group, newest first
     return (b.started_at ?? 0) - (a.started_at ?? 0);
   });
 
-  if (sorted.length === 0) {
-    return (
-      <div className={styles['session-grid-empty']}>
-        <p>No sessions yet. Dispatch a task to get started.</p>
-      </div>
-    );
-  }
+  const statusesInUse = new Set(sessions.map((s) => s.status as Status));
 
   return (
-    <div className={styles['session-grid']}>
-      {sorted.map((s) => (
-        <SessionCard
-          key={s.sessionId}
-          session={s}
-          selected={s.sessionId === selectedId}
-          onClick={() => onSelect(s.sessionId)}
-        />
-      ))}
+    <div>
+      {sessions.length > 0 && (
+        <div className={styles['filter-bar']}>
+          {ALL_STATUSES.filter((s) => statusesInUse.has(s)).map((status) => (
+            <button
+              key={status}
+              className={[
+                styles['filter-toggle'],
+                activeFilters.has(status) ? styles['filter-toggle--active'] : '',
+              ].join(' ')}
+              onClick={() => toggleFilter(status)}
+            >
+              {STATUS_LABELS[status]}
+            </button>
+          ))}
+          {activeFilters.size > 0 && (
+            <button
+              className={styles['filter-clear']}
+              onClick={() => setActiveFilters(new Set())}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
+
+      {sorted.length === 0 && sessions.length === 0 && (
+        <div className={styles['session-grid-empty']}>
+          <p>No sessions yet. Dispatch a task to get started.</p>
+        </div>
+      )}
+
+      {sorted.length === 0 && sessions.length > 0 && (
+        <div className={styles['session-grid-empty']}>
+          <p>No sessions match the selected filters.</p>
+        </div>
+      )}
+
+      {sorted.length > 0 && (
+        <div className={styles['session-grid']}>
+          {sorted.map((s) => (
+            <SessionCard
+              key={s.sessionId}
+              session={s}
+              selected={s.sessionId === selectedId}
+              onClick={() => onSelect(s.sessionId)}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
