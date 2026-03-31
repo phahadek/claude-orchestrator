@@ -4,6 +4,9 @@ packages/backend/.env
 packages/frontend/dist/
 packages/frontend/.env
 *.db
+*.db-shm
+*.db-wal
+*.db-journal
 
 # Claude Code / tool-generated directories
 .claude/
