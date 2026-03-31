@@ -159,6 +159,17 @@
   font-size: 0.85rem;
 }
 
+.eventUser {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: #cba6f7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-left: 3px solid #cba6f7;
+  padding-left: 10px;
+}
+
 .eventError {
   background: rgba(243, 139, 168, 0.1);
   border: 1px solid rgba(243, 139, 168, 0.3);
