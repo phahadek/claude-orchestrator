@@ -118,7 +118,7 @@ describe('DispatchModal', () => {
     const launchBtn = screen.getByRole('button', { name: /launch/i });
     fireEvent.click(launchBtn);
 
-    const dispatchCall = send.mock.calls.find(([msg]: [ClientMessage]) => msg.type === 'dispatch');
+    const dispatchCall = send.mock.calls.find((call) => (call[0] as ClientMessage).type === 'dispatch');
     expect(dispatchCall).toBeDefined();
     const dispatchMsg = dispatchCall![0] as Extract<ClientMessage, { type: 'dispatch' }>;
     expect(dispatchMsg.tasks).toHaveLength(2);
@@ -132,7 +132,7 @@ describe('DispatchModal', () => {
     renderModal([makeTask('t1', 'Task One')], true, send, onClose);
     const launchBtn = screen.getByRole('button', { name: /launch/i });
     fireEvent.click(launchBtn);
-    const dispatchCalls = send.mock.calls.filter(([msg]: [ClientMessage]) => msg.type === 'dispatch');
+    const dispatchCalls = send.mock.calls.filter((call) => (call[0] as ClientMessage).type === 'dispatch');
     expect(dispatchCalls).toHaveLength(0);
     expect(onClose).not.toHaveBeenCalled();
   });
