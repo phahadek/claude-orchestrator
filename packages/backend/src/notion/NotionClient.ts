@@ -129,7 +129,13 @@ export class NotionClient {
     let startCursor: string | undefined;
 
     do {
-      const body: Record<string, unknown> = { page_size: 100 };
+      const body: Record<string, unknown> = {
+        page_size: 100,
+        filter: {
+          property: 'Status',
+          select: { equals: '🗂️ Ready' },
+        },
+      };
       if (startCursor) body.start_cursor = startCursor;
 
       const response = await notionRequest<NotionQueryResponse>(
