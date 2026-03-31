@@ -132,8 +132,11 @@ export class NotionClient {
       const body: Record<string, unknown> = {
         page_size: 100,
         filter: {
-          property: 'Status',
-          select: { equals: '🗂️ Ready' },
+          or: [
+            { property: 'Status', select: { equals: '🗂️ Ready' } },
+            { property: 'Status', select: { equals: '🔄 In Progress' } },
+            { property: 'Status', select: { equals: '👀 In Review' } },
+          ],
         },
       };
       if (startCursor) body.start_cursor = startCursor;
