@@ -36,11 +36,19 @@ function resolveClaudePath(): string {
   }
 }
 
+/** Convert Git Bash paths like /c/Users/... to C:/Users/... for Windows Node. */
+function normalizePath(p: string): string {
+  if (process.platform === 'win32' && /^\/[a-zA-Z]\//.test(p)) {
+    return p[1].toUpperCase() + ':' + p.slice(2);
+  }
+  return p;
+}
+
 export const config = {
   notionApiKey: requireEnv('NOTION_API_KEY'),
   sqlitePath: process.env.DB_PATH ?? './dashboard.db',
   port: Number(process.env.PORT ?? 3000),
-  projectDir: process.env.PROJECT_DIR ?? process.cwd(),
+  projectDir: normalizePath(process.env.PROJECT_DIR ?? process.cwd()),
   projects: parseProjects(),
   claudePath: resolveClaudePath(),
 };

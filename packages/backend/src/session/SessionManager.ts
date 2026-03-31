@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { AgentSession } from './AgentSession';
 import { config } from '../config';
+import { insertSession } from '../db/queries';
 import type { NotionClient } from '../notion/NotionClient';
 import type { ServerMessage } from '../ws/types';
 
@@ -21,6 +22,18 @@ export class SessionManager extends EventEmitter {
       this.notionClient,
       config.projectDir,
     );
+
+    // Insert session into SQLite before anything writes events
+    insertSession({
+      session_id: sessionId,
+      notion_task_id: null,
+      notion_task_url: taskUrl,
+      project_context_url: projectContextUrl,
+      status: 'starting',
+      started_at: Date.now(),
+      ended_at: null,
+      pr_url: null,
+    });
 
     this.sessions.set(sessionId, session);
 
