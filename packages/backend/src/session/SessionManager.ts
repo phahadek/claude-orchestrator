@@ -13,6 +13,7 @@ export class SessionManager extends EventEmitter {
 
   start(taskUrl: string, projectContextUrl: string): string {
     const sessionId = crypto.randomUUID();
+    console.log(`[SessionManager] start ${sessionId}`);
     const session = new AgentSession(
       sessionId,
       taskUrl,
