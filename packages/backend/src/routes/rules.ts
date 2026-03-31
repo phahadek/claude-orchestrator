@@ -72,7 +72,14 @@ rulesRouter.put('/:id', (req: Request, res: Response) => {
     enabled?: number;
   };
 
-  updateRule(id, { pattern, match_type, decision, label, enabled });
+  updateRule(id, {
+    order_index: existing.order_index,
+    pattern:     pattern    ?? existing.pattern,
+    match_type:  match_type ?? existing.match_type,
+    decision:    decision   ?? existing.decision,
+    label:       label      !== undefined ? label : existing.label,
+    enabled:     enabled    !== undefined ? enabled : existing.enabled,
+  });
   const updated = getRuleById(id)!;
   res.json(updated);
 });
