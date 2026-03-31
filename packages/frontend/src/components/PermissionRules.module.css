@@ -64,6 +64,36 @@
   background: #f443361a;
 }
 
+.deleteBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.actionsCell {
+  white-space: nowrap;
+}
+
+.rowError {
+  margin-left: 8px;
+  color: #f44336;
+  font-size: 0.75rem;
+}
+
+.checkboxLoading {
+  opacity: 0.5;
+}
+
+.deleting {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.formError {
+  color: #f44336;
+  font-size: 0.8125rem;
+  align-self: center;
+}
+
 .addBtn {
   margin-top: 16px;
   background: none;
