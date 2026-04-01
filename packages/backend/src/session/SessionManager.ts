@@ -49,6 +49,12 @@ export class SessionManager extends EventEmitter {
       throw err;
     }
 
+    const isUnixStylePath = worktreePath.startsWith('/c/') || worktreePath.startsWith('/C/');
+    console.log(
+      `[SessionManager] worktree created: path=${worktreePath} branch=${branchName}` +
+      (isUnixStylePath ? ' [WARNING: Unix-style path detected — may not resolve correctly on Windows]' : ''),
+    );
+
     const notionTaskId = parseNotionPageId(taskUrl);
 
     const session = new AgentSession(
@@ -125,6 +131,20 @@ export class SessionManager extends EventEmitter {
     projectDir: string,
   ): void {
     this.sessions.delete(sessionId);
+
+    // Check if the main repo has unexpected modifications after session ends.
+    // This catches worktree-escape bugs where a session edited the main repo
+    // instead of its assigned worktree.
+    try {
+      const dirty = execSync('git status --porcelain', { cwd: projectDir, encoding: 'utf8' }).trim();
+      if (dirty) {
+        console.warn(
+          `[SessionManager] [WARNING] Main repo has uncommitted changes after session ${sessionId.slice(0, 8)} ended — possible worktree escape:\n${dirty}`,
+        );
+      }
+    } catch (err) {
+      console.error(`[SessionManager] failed to check main repo status after session ${sessionId.slice(0, 8)}: ${err}`);
+    }
 
     try {
       execSync(`git worktree remove --force "${worktreePath}"`, {
@@ -227,6 +247,12 @@ export class SessionManager extends EventEmitter {
       console.error(`[SessionManager] sendOrResume: failed to create worktree: ${err}`);
       throw err;
     }
+
+    const isUnixStylePathResume = worktreePath.startsWith('/c/') || worktreePath.startsWith('/C/');
+    console.log(
+      `[SessionManager] sendOrResume worktree created: path=${worktreePath} branch=${branchName}` +
+      (isUnixStylePathResume ? ' [WARNING: Unix-style path detected — may not resolve correctly on Windows]' : ''),
+    );
 
     const taskUrl = row.notion_task_url ?? '';
     const projectContextUrl = row.project_context_url ?? '';
