@@ -293,7 +293,7 @@ export default function App() {
           </div>
 
           {activeView === 'history' ? (
-            <HistoryGrid />
+            <HistoryGrid onSelect={setSelectedId} />
           ) : activeView === 'denials' ? (
             <PermissionEventLog />
           ) : activeView === 'prs' ? (
