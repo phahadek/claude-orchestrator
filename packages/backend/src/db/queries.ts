@@ -8,6 +8,8 @@ import type {
   NewPermissionEvent,
   PermissionRule,
   NewPermissionRule,
+  PermissionDenialRow,
+  NewPermissionDenialRow,
   TaskCache,
 } from './types';
 
@@ -228,6 +230,25 @@ export function updateRule(id: number, patch: Partial<PermissionRule>): void {
 
 export function deleteRule(id: number): void {
   stmtDeleteRule.run({ id });
+}
+
+// ─── permission_denials ─────────────────────────────────────────────────────
+
+const stmtInsertPermissionDenial = db.prepare<NewPermissionDenialRow>(`
+  INSERT INTO permission_denials (session_id, tool_name, tool_use_id, tool_input, timestamp)
+  VALUES (@session_id, @tool_name, @tool_use_id, @tool_input, @timestamp)
+`);
+
+const stmtGetDenialsBySession = db.prepare<{ session_id: string }>(`
+  SELECT * FROM permission_denials WHERE session_id = @session_id ORDER BY id ASC
+`);
+
+export function insertPermissionDenial(d: NewPermissionDenialRow): void {
+  stmtInsertPermissionDenial.run(d);
+}
+
+export function getDenialsBySession(sessionId: string): PermissionDenialRow[] {
+  return stmtGetDenialsBySession.all({ session_id: sessionId }) as PermissionDenialRow[];
 }
 
 // ─── task_cache ────────────────────────────────────────────────────────────
