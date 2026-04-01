@@ -1,7 +1,7 @@
 import { spawn, ChildProcess, execSync } from 'child_process';
 import { createInterface } from 'readline';
 import { EventEmitter } from 'events';
-import { config } from '../config';
+import { config, ALLOWED_TOOLS } from '../config';
 import {
   insertEvent,
   updateSessionStatus,
@@ -86,31 +86,7 @@ export class AgentSession extends EventEmitter {
         '--verbose',
         '--permission-mode', 'acceptEdits',
         '--allowed-tools',
-        'Bash(git:*)',
-        'Bash(npm:*)',
-        'Bash(npx:*)',
-        'Bash(node:*)',
-        'Bash(gh:*)',
-        'Bash(cd:*)',        // compound: cd <dir> && git ... / npm ...
-        'Bash(which:*)',     // command lookup (Unix)
-        'Bash(where:*)',     // command lookup (Windows)
-        'Bash(ls:*)',
-        'Bash(cat:*)',
-        'Bash(echo:*)',
-        'Bash(mkdir:*)',
-        'Bash(cp:*)',
-        'Bash(mv:*)',
-        'Bash(head:*)',
-        'Bash(tail:*)',
-        'Bash(wc:*)',
-        'Bash(find:*)',
-        'Bash(grep:*)',
-        'Bash(sort:*)',
-        'Bash(pwd:*)',
-        'mcp__claude_ai_Notion__*',
-        'mcp__github__*',
-        'mcp__claude_ai_Asana__*',
-        'mcp__claude_ai_Google_Calendar__*',
+        ...ALLOWED_TOOLS,
       ],
       {
         cwd: this.worktreePath,

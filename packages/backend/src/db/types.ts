@@ -13,6 +13,7 @@ export interface Session {
   notion_task_id: string | null;
   notion_task_url: string | null;
   project_context_url: string | null;
+  project_id: string | null;
   status: SessionStatus;
   started_at: number;
   ended_at: number | null;
@@ -21,11 +22,12 @@ export interface Session {
   archived: number; // 0 | 1 (SQLite boolean)
 }
 
-export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path' | 'archived'> & {
+export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path' | 'archived' | 'project_id'> & {
   ended_at?: number | null;
   pr_url?: string | null;
   worktree_path?: string | null;
   archived?: number;
+  project_id?: string | null;
 };
 
 // ─── session_events ────────────────────────────────────────────────────────
