@@ -11,6 +11,7 @@ import {
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import type { NotionClient } from '../notion/NotionClient';
+import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/.+\/pull\/\d+/;
 
@@ -223,6 +224,13 @@ export class AgentSession extends EventEmitter {
       );
       if (messageId != null) {
         this.messageIdMap.set(messageId, rowId);
+      }
+
+      // Skip broadcasting user events that contain only system-injected content
+      // (CLAUDE.md bootstrap, system reminders). They are stored in DB for debugging
+      // but are noise in the transcript UI.
+      if (rawType === 'user' && isSystemOnlyUserEvent(payload)) {
+        return;
       }
 
       this.broadcast({
