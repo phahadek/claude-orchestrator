@@ -16,6 +16,8 @@ export function SessionDetail({ session, send, onClose, onDelete }: Props) {
   const [draftMessage, setDraftMessage] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [dismissedDenials, setDismissedDenials] = useState<Set<string>>(new Set());
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [isAtBottom, setIsAtBottom] = useState(true);
   const transcriptRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -27,7 +29,19 @@ export function SessionDetail({ session, send, onClose, onDelete }: Props) {
 
   useEffect(() => {
     setDismissedDenials(new Set());
+    setIsAtBottom(true);
   }, [session?.sessionId]);
+
+  useEffect(() => {
+    const el = transcriptRef.current;
+    if (!el) return;
+    function onScroll() {
+      if (!el) return;
+      setIsAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 40);
+    }
+    el.addEventListener('scroll', onScroll);
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
 
   if (!session) return null;
 
@@ -57,6 +71,42 @@ export function SessionDetail({ session, send, onClose, onDelete }: Props) {
     if (!session || !draftMessage.trim()) return;
     send({ type: 'send_message', sessionId: session.sessionId, message: draftMessage });
     setDraftMessage('');
+  }
+
+  async function handleCopy() {
+    if (!session) return;
+    const text = session.events.map((e) => {
+      const payload = tryParseJson(e.content);
+      switch (e.eventType) {
+        case 'text': return extractText(payload, e.content);
+        case 'tool_use': {
+          const parsed = extractToolUse(payload);
+          if (!parsed) return e.content;
+          const bashCmd = parsed.toolName === 'Bash' ? extractBashCommand(parsed.input) : null;
+          if (bashCmd != null) return `🔧 ${parsed.toolName}\n$ ${bashCmd}`;
+          return `🔧 ${parsed.toolName}\n${JSON.stringify(parsed.input, null, 2)}`;
+        }
+        case 'tool_result': return extractToolResult(payload, e.content);
+        case 'system': return extractSystem(payload, e.content).display;
+        case 'error': {
+          const p = typeof payload === 'object' && payload !== null ? payload as Record<string, unknown> : null;
+          return p ? String(p.message ?? e.content) : e.content;
+        }
+        default: return e.content;
+      }
+    }).join('\n---\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyState('copied');
+      setTimeout(() => setCopyState('idle'), 1500);
+    } catch {
+      setCopyState('failed');
+      setTimeout(() => setCopyState('idle'), 1500);
+    }
+  }
+
+  function handleGoToEnd() {
+    transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: 'smooth' });
   }
 
   return (
@@ -90,13 +140,29 @@ export function SessionDetail({ session, send, onClose, onDelete }: Props) {
         </button>
       </div>
 
-      <div className={styles.transcript} ref={transcriptRef}>
-        {session.events.map((e, i) => (
-          <EventRow key={`${i}-${e.timestamp}-${e.eventType}`} event={e} />
-        ))}
-        {session.events.length === 0 && (
-          <p className={styles.emptyTranscript}>No events yet.</p>
-        )}
+      <div className={styles.transcriptSection}>
+        <div className={styles.transcriptHeader}>
+          {!isAtBottom && (
+            <button className={styles.goToEndButton} onClick={handleGoToEnd}>
+              Go to End ↓
+            </button>
+          )}
+          <button
+            className={styles.copyButton}
+            onClick={handleCopy}
+            disabled={session.events.length === 0}
+          >
+            {copyState === 'copied' ? '✓ Copied' : copyState === 'failed' ? '✗ Failed' : 'Copy'}
+          </button>
+        </div>
+        <div className={styles.transcript} ref={transcriptRef}>
+          {session.events.map((e, i) => (
+            <EventRow key={`${i}-${e.timestamp}-${e.eventType}`} event={e} />
+          ))}
+          {session.events.length === 0 && (
+            <p className={styles.emptyTranscript}>No events yet.</p>
+          )}
+        </div>
       </div>
 
       {(() => {
