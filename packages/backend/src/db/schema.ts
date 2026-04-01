@@ -66,4 +66,6 @@ export function runMigrations(): void {
   try { db.exec(`ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE sessions ADD COLUMN project_id TEXT`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'standard'`); } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE sessions ADD COLUMN note TEXT`); } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE sessions ADD COLUMN tags TEXT`); } catch { /* already exists */ }
 }

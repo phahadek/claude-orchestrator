@@ -21,15 +21,19 @@ export interface Session {
   worktree_path: string | null;
   archived: number; // 0 | 1 (SQLite boolean)
   session_type: string; // 'standard' | 'review'
+  note: string | null;
+  tags: string | null; // JSON array of strings, e.g. '["bugfix","auth"]'
 }
 
-export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path' | 'archived' | 'project_id' | 'session_type'> & {
+export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path' | 'archived' | 'project_id' | 'session_type' | 'note' | 'tags'> & {
   ended_at?: number | null;
   pr_url?: string | null;
   worktree_path?: string | null;
   archived?: number;
   project_id?: string | null;
   session_type?: string;
+  note?: string | null;
+  tags?: string | null;
 };
 
 // ─── session_events ────────────────────────────────────────────────────────

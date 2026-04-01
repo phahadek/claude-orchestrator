@@ -44,16 +44,28 @@ export function SessionCard({ session, selected, onClick, projectColor, projectN
       {session.status === 'needs_permission' && (
         <div className={styles['attention-badge']}>⚠️ Needs permission</div>
       )}
+      {session.tags && session.tags.length > 0 && (
+        <div className={styles['tag-pills']}>
+          {session.tags.map((tag) => (
+            <span key={tag} className={styles['tag-pill']}>{tag}</span>
+          ))}
+        </div>
+      )}
       {lastEvent && (
         <div className={styles['last-event']}>{truncate(lastEvent.content, 120)}</div>
       )}
       <div className={styles['card-footer']}>
         <span className={styles.elapsed}>{elapsed}</span>
-        {session.prUrl && (
-          <a href={session.prUrl} target="_blank" rel="noreferrer" className={styles['pr-link']}>
-            PR ↗
-          </a>
-        )}
+        <span className={styles['footer-right']}>
+          {session.note && (
+            <span className={styles['note-icon']} title={session.note}>📝</span>
+          )}
+          {session.prUrl && (
+            <a href={session.prUrl} target="_blank" rel="noreferrer" className={styles['pr-link']}>
+              PR ↗
+            </a>
+          )}
+        </span>
       </div>
     </div>
   );
