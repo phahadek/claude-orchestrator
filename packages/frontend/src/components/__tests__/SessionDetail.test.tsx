@@ -172,6 +172,45 @@ describe('SessionDetail', () => {
     vi.unstubAllGlobals();
   });
 
+  it('clicking ✕ on a denial card removes it from the rendered list', () => {
+    const session = makeSession({
+      permissionDenials: [
+        { tool_name: 'Bash', tool_use_id: 'id-1', tool_input: { command: 'rm -rf' } },
+        { tool_name: 'Write', tool_use_id: 'id-2', tool_input: { file_path: '/etc/passwd' } },
+      ],
+    });
+    render(<SessionDetail session={session} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} />);
+    expect(screen.getByText('Bash')).toBeTruthy();
+    const dismissBtns = screen.getAllByLabelText('Dismiss');
+    fireEvent.click(dismissBtns[0]);
+    expect(screen.queryByText('Bash')).toBeNull();
+    expect(screen.getByText('Write')).toBeTruthy();
+  });
+
+  it('"Clear all" button is visible when ≥ 2 denial cards are present', () => {
+    const session = makeSession({
+      permissionDenials: [
+        { tool_name: 'Bash', tool_use_id: 'id-1', tool_input: {} },
+        { tool_name: 'Write', tool_use_id: 'id-2', tool_input: {} },
+      ],
+    });
+    render(<SessionDetail session={session} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} />);
+    expect(screen.getByText('Clear all')).toBeTruthy();
+  });
+
+  it('"Clear all" removes all denial cards', () => {
+    const session = makeSession({
+      permissionDenials: [
+        { tool_name: 'Bash', tool_use_id: 'id-1', tool_input: {} },
+        { tool_name: 'Write', tool_use_id: 'id-2', tool_input: {} },
+      ],
+    });
+    render(<SessionDetail session={session} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} />);
+    fireEvent.click(screen.getByText('Clear all'));
+    expect(screen.queryByText('Bash')).toBeNull();
+    expect(screen.queryByText('Write')).toBeNull();
+  });
+
   it('onClose is called when close button is clicked', () => {
     const onClose = vi.fn();
     render(<SessionDetail session={makeSession()} send={vi.fn()} onClose={onClose} onDelete={vi.fn()} />);

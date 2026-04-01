@@ -14,6 +14,7 @@ interface Props {
 export function SessionDetail({ session, send, onClose, onDelete }: Props) {
   const [draftMessage, setDraftMessage] = useState('');
   const [deleting, setDeleting] = useState(false);
+  const [dismissedDenials, setDismissedDenials] = useState<Set<string>>(new Set());
   const transcriptRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -22,6 +23,10 @@ export function SessionDetail({ session, send, onClose, onDelete }: Props) {
       el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
     }
   }, [session?.events.length]);
+
+  useEffect(() => {
+    setDismissedDenials(new Set());
+  }, [session?.sessionId]);
 
   if (!session) return null;
 
@@ -93,19 +98,41 @@ export function SessionDetail({ session, send, onClose, onDelete }: Props) {
         )}
       </div>
 
-      {session.permissionDenials && session.permissionDenials.length > 0 && (
-        <div className={styles.permissionRequest}>
-          <p className={styles.permissionTitle}>
-            <strong>Permission Denials</strong> — add rules in Settings to allow these tools next time
-          </p>
-          {session.permissionDenials.map((d, i) => (
-            <div key={i} className={styles.proposedAction}>
-              <strong>{d.tool_name}</strong>
-              <pre>{JSON.stringify(d.tool_input, null, 2)}</pre>
+      {(() => {
+        const allDenials = session.permissionDenials ?? [];
+        const visibleDenials = allDenials.filter((d) => !dismissedDenials.has(d.tool_use_id));
+        if (visibleDenials.length === 0) return null;
+        return (
+          <div className={styles.permissionRequest}>
+            <div className={styles.permissionTitleRow}>
+              <p className={styles.permissionTitle}>
+                <strong>Permission Denials</strong> — add rules in Settings to allow these tools next time
+              </p>
+              {visibleDenials.length >= 2 && (
+                <button
+                  className={styles.clearAllBtn}
+                  onClick={() => setDismissedDenials(new Set(allDenials.map((d) => d.tool_use_id)))}
+                >
+                  Clear all
+                </button>
+              )}
             </div>
-          ))}
-        </div>
-      )}
+            {visibleDenials.map((d) => (
+              <div key={d.tool_use_id} className={styles.proposedAction}>
+                <button
+                  className={styles.denialCloseBtn}
+                  onClick={() => setDismissedDenials((prev) => new Set([...prev, d.tool_use_id]))}
+                  aria-label="Dismiss"
+                >
+                  ✕
+                </button>
+                <strong>{d.tool_name}</strong>
+                <pre>{JSON.stringify(d.tool_input, null, 2)}</pre>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
 
       {isActive && (
         <div className={styles.composer}>
