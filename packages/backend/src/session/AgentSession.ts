@@ -47,6 +47,8 @@ function toEventType(raw: string): 'text' | 'tool_use' | 'tool_result' | 'system
 export class AgentSession extends EventEmitter {
   private proc: ChildProcess | null = null;
   public prUrl: string | undefined;
+  /** True once a session_ended message has been broadcast. */
+  public hasEnded = false;
 
   constructor(
     public readonly sessionId: string,
@@ -111,9 +113,12 @@ export class AgentSession extends EventEmitter {
     );
 
     // Send the initial prompt via stdin (required by --input-format stream-json)
+    // then close stdin to signal EOF — without this the process waits for more
+    // input indefinitely and the 'close' event never fires.
     this.proc.stdin!.write(
       JSON.stringify({ type: 'user', message: { role: 'user', content: initialPrompt } }) + '\n',
     );
+    this.proc.stdin!.end();
 
     let spawnErrored = false;
 
@@ -291,6 +296,7 @@ export class AgentSession extends EventEmitter {
 
   /** Persist to SQLite first, then emit. Caller (SessionManager) listens and broadcasts. */
   private broadcast(msg: ServerMessage): void {
+    if (msg.type === 'session_ended') this.hasEnded = true;
     this.emit('message', msg);
   }
 }
