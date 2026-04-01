@@ -14,6 +14,10 @@ import type { NotionClient } from '../notion/NotionClient';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/.+\/pull\/\d+/;
 
+function sessionLog(sessionId: string, ...args: unknown[]) {
+  console.log(`[Session ${sessionId.slice(0, 8)}]`, ...args);
+}
+
 /** Parse the Notion page ID out of a notion.so URL or return the raw value. */
 export function parseNotionPageId(url: string): string {
   const match = url.match(/([a-f0-9]{32})$/i);
@@ -82,18 +86,28 @@ export class AgentSession extends EventEmitter {
     // Use Bash(<prefix>:*) patterns for granular Bash access — only commands
     // starting with the given prefix are allowed. Unmatched Bash commands are
     // silently denied in --print mode.
+    const spawnArgs = [
+      ...(this.resumeSessionId ? ['--resume', this.resumeSessionId] : []),
+      '--print',
+      '--output-format', 'stream-json',
+      '--input-format', 'stream-json',
+      '--verbose',
+      '--permission-mode', 'acceptEdits',
+      '--allowed-tools',
+      ...ALLOWED_TOOLS,
+    ];
+    const envKeys = ['PROJECT_DIR', 'SESSIONS_DIR', 'DB_PATH'] as const;
+    const envStr = envKeys
+      .filter((k) => process.env[k] !== undefined)
+      .map((k) => `${k}=${process.env[k]}`)
+      .join(', ');
+    sessionLog(
+      this.sessionId,
+      `spawning: cwd=${this.worktreePath} cmd=${config.claudePath} ${spawnArgs.join(' ')} env={${envStr}}`,
+    );
     this.proc = spawn(
       config.claudePath,
-      [
-        ...(this.resumeSessionId ? ['--resume', this.resumeSessionId] : []),
-        '--print',
-        '--output-format', 'stream-json',
-        '--input-format', 'stream-json',
-        '--verbose',
-        '--permission-mode', 'acceptEdits',
-        '--allowed-tools',
-        ...ALLOWED_TOOLS,
-      ],
+      spawnArgs,
       {
         cwd: this.worktreePath,
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -124,7 +138,7 @@ export class AgentSession extends EventEmitter {
 
     // Pipe stderr to console for diagnostics
     this.proc.stderr!.on('data', (chunk: Buffer) => {
-      console.error(`[claude:${this.sessionId}] ${chunk.toString().trimEnd()}`);
+      sessionLog(this.sessionId, `stderr: ${chunk.toString().trimEnd()}`);
     });
 
     const rl = createInterface({ input: this.proc.stdout! });
@@ -145,10 +159,10 @@ export class AgentSession extends EventEmitter {
       const rawType = (event.type as string) ?? 'unknown';
 
       // Debug logging
-      console.log(`[AgentSession:${this.sessionId}] event type=${rawType} subtype=${event.subtype ?? '-'}`);
+      sessionLog(this.sessionId, `event type=${rawType} subtype=${event.subtype ?? '-'}`);
 
       if (rawType === 'system' && (event.subtype as string) === 'init') {
-        console.log(`[AgentSession:${this.sessionId}] INIT permissionMode=${event.permissionMode}`);
+        sessionLog(this.sessionId, `INIT permissionMode=${event.permissionMode}`);
       }
 
       // Log tool_use blocks from assistant messages
@@ -158,7 +172,7 @@ export class AgentSession extends EventEmitter {
         if (content) {
           for (const block of content) {
             if (block.type === 'tool_use') {
-              console.log(`[AgentSession:${this.sessionId}] TOOL_USE name=${block.name} id=${block.id}`);
+              sessionLog(this.sessionId, `TOOL_USE name=${block.name} id=${block.id}`);
             }
           }
         }
@@ -167,7 +181,7 @@ export class AgentSession extends EventEmitter {
       // Extract permission_denials from result event and broadcast to UI
       if (rawType === 'result') {
         const denials = event.permission_denials as PermissionDenial[] | undefined;
-        console.log(`[AgentSession:${this.sessionId}] RESULT stop_reason=${event.stop_reason} denials=${JSON.stringify(denials)}`);
+        sessionLog(this.sessionId, `RESULT stop_reason=${event.stop_reason} denials=${JSON.stringify(denials)}`);
         if (denials && denials.length > 0) {
           const ts = Date.now();
           for (const d of denials) {
