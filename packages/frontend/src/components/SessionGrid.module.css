@@ -62,3 +62,27 @@
 .filter-clear:hover {
   color: #cdd6f4;
 }
+
+/* Loading skeleton */
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position:  400px 0; }
+}
+
+.skeleton-card {
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 8px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.skeleton-line {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #313244 25%, #45475a 50%, #313244 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s infinite linear;
+}
