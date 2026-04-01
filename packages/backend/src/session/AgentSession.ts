@@ -112,13 +112,13 @@ export class AgentSession extends EventEmitter {
       { cwd: this.worktreePath, stdio: ['pipe', 'pipe', 'pipe'] },
     );
 
-    // Send the initial prompt via stdin (required by --input-format stream-json)
-    // then close stdin to signal EOF — without this the process waits for more
-    // input indefinitely and the 'close' event never fires.
+    // Send the initial prompt via stdin (required by --input-format stream-json).
+    // Do NOT call stdin.end() here — keeping stdin open allows sendMessage() to
+    // deliver follow-up prompts and lets the CLI remain alive after completing
+    // its initial task. Call endSession() to close stdin and exit cleanly.
     this.proc.stdin!.write(
       JSON.stringify({ type: 'user', message: { role: 'user', content: initialPrompt } }) + '\n',
     );
-    this.proc.stdin!.end();
 
     let spawnErrored = false;
 
@@ -289,6 +289,17 @@ export class AgentSession extends EventEmitter {
     this.proc.stdin.write(
       JSON.stringify({ type: 'user', message: { role: 'user', content: message } }) + '\n',
     );
+  }
+
+  /**
+   * Close stdin to signal EOF, allowing the CLI to exit cleanly once it
+   * finishes any in-progress work. The existing `exit` handler takes over
+   * from there and transitions the session to `done` or `error`.
+   */
+  endSession(): void {
+    if (this.proc?.stdin?.writable) {
+      this.proc.stdin.end();
+    }
   }
 
   async kill(): Promise<void> {
