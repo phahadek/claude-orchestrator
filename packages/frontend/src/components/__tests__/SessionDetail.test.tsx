@@ -434,6 +434,32 @@ describe('EventRow', () => {
     expect(container.firstChild).toBeNull();
   });
 
+  it('renders user event with array content showing the message text, not [user]', () => {
+    const content = JSON.stringify({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'Please fix the bug in foo.ts' }],
+      },
+    });
+    render(<EventRow event={makeEvent('system', content)} />);
+    expect(screen.getByText('Please fix the bug in foo.ts')).toBeTruthy();
+    expect(screen.queryByText('[user]')).toBeNull();
+  });
+
+  it('returns null for user event with array content that is only a system-reminder block', () => {
+    // The entire text block is wrapped in a system tag — after stripping tag+content, nothing remains
+    const content = JSON.stringify({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: '<system-reminder>Do not do X</system-reminder>' }],
+      },
+    });
+    const { container } = render(<EventRow event={makeEvent('system', content)} />);
+    expect(container.firstChild).toBeNull();
+  });
+
   it('assistant message with both text and tool_use blocks renders both', () => {
     const content = JSON.stringify({
       type: 'assistant',
