@@ -28,7 +28,7 @@
   flex: 1;
   overflow-y: auto;
   padding: 16px;
-  min-width: 0;
+  min-width: 300px;
 }
 
 .resizeHandle {
@@ -46,6 +46,7 @@
 .rightPanel {
   flex-shrink: 0;
   overflow: hidden;
+  min-width: 300px;
 }
 
 .detailPlaceholder {
