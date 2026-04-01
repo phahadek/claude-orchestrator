@@ -22,6 +22,10 @@ const DEFAULT_DETAIL_WIDTH = 40;
 const MIN_DETAIL_WIDTH = 20;
 const MAX_DETAIL_WIDTH = 80;
 
+const DEFAULT_PR_PANEL_HEIGHT = 30;
+const MIN_PR_PANEL_HEIGHT = 20;
+const MAX_PR_PANEL_HEIGHT = 60;
+
 const ACTIVE_PROJECT_KEY = 'activeProjectId';
 
 export default function App() {
@@ -42,7 +46,7 @@ export default function App() {
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
-  const [activeView, setActiveView] = useState<'sessions' | 'history' | 'denials' | 'prs'>('sessions');
+  const [activeView, setActiveView] = useState<'sessions' | 'history' | 'denials'>('sessions');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const notifiedRef = useRef<Set<string>>(new Set());
   const [showReconnected, setShowReconnected] = useState(false);
@@ -60,9 +64,29 @@ export default function App() {
   const [isDragging, setIsDragging] = useState(false);
   const detailWidthRef = useRef(detailWidthPct);
 
+  const [prPanelVisible, setPrPanelVisible] = useState<boolean>(() => {
+    const saved = localStorage.getItem('prPanelVisible');
+    return saved !== null ? saved === 'true' : true;
+  });
+
+  const [prPanelHeightPct, setPrPanelHeightPct] = useState<number>(() => {
+    const saved = localStorage.getItem('prPanelHeightPct');
+    if (saved) {
+      const n = Number(saved);
+      if (n >= MIN_PR_PANEL_HEIGHT && n <= MAX_PR_PANEL_HEIGHT) return n;
+    }
+    return DEFAULT_PR_PANEL_HEIGHT;
+  });
+  const [isPrDragging, setIsPrDragging] = useState(false);
+  const prPanelHeightRef = useRef(prPanelHeightPct);
+
   useEffect(() => {
     detailWidthRef.current = detailWidthPct;
   }, [detailWidthPct]);
+
+  useEffect(() => {
+    prPanelHeightRef.current = prPanelHeightPct;
+  }, [prPanelHeightPct]);
 
   useEffect(() => {
     if (connectionState === 'connected') {
@@ -173,6 +197,36 @@ export default function App() {
     window.addEventListener('mouseup', onUp);
   }, []);
 
+  const handlePrResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsPrDragging(true);
+
+    const onMove = (ev: MouseEvent) => {
+      const pct = ((window.innerHeight - ev.clientY) / window.innerHeight) * 100;
+      const clamped = Math.min(MAX_PR_PANEL_HEIGHT, Math.max(MIN_PR_PANEL_HEIGHT, pct));
+      prPanelHeightRef.current = clamped;
+      setPrPanelHeightPct(clamped);
+    };
+
+    const onUp = () => {
+      setIsPrDragging(false);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      localStorage.setItem('prPanelHeightPct', String(Math.round(prPanelHeightRef.current)));
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, []);
+
+  const togglePrPanel = useCallback(() => {
+    setPrPanelVisible((v) => {
+      const next = !v;
+      localStorage.setItem('prPanelVisible', String(next));
+      return next;
+    });
+  }, []);
+
   const [selectedSessionIndex, setSelectedSessionIndex] = useState(-1);
 
   // Reset keyboard selection index when active project changes
@@ -225,6 +279,8 @@ export default function App() {
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
 
+  const anyDragging = isDragging || isPrDragging;
+
   useKeyboardShortcuts({
     onOpenDispatch: () => setShowModal(true),
     onDismiss: () => {
@@ -254,7 +310,7 @@ export default function App() {
     },
     onSwitchView: (view) => {
       if (view === 'sessions') setActiveView('sessions');
-      else if (view === 'prs') setActiveView('prs');
+      else if (view === 'prs') togglePrPanel();
     },
     onFocusSearch: () => {
       searchInputRef.current?.focus();
@@ -262,109 +318,125 @@ export default function App() {
   });
 
   return (
-    <div className={`${styles.appContainer}${isDragging ? ` ${styles.dragging}` : ''}`}>
+    <div className={`${styles.appContainer}${anyDragging ? ` ${styles.dragging}` : ''}`}>
       <Header
         projects={projects}
         activeProjectId={activeProjectId}
         onProjectChange={handleProjectChange}
-        activeView={activeView === 'prs' ? 'prs' : 'sessions'}
-        onViewChange={(view) => setActiveView(view)}
+        prPanelVisible={prPanelVisible}
+        onTogglePrPanel={togglePrPanel}
       />
-      <div className={styles.contentArea}>
-        <div className={styles.leftPanel}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-            <span style={{ flex: 1 }}>
-              {runningCount > 0 && <span>{runningCount} running</span>}
-              {runningCount > 0 && doneCount > 0 && <span> · </span>}
-              {doneCount > 0 && <span>{doneCount} done</span>}
-              {runningCount === 0 && doneCount === 0 && <span>0 sessions</span>}
-              {readyCount > 0 && <span> · {readyCount} ready</span>}
-              {blockedCount > 0 && <span style={{ color: 'var(--color-subtext0, #a6adc8)' }}> · {blockedCount} blocked</span>}
-            </span>
-            <button type="button" onClick={() => setActiveView((v) => v === 'history' ? 'sessions' : 'history')}>
-              {activeView === 'history' ? 'Hide History' : '🕑 History'}
-            </button>
-            <button type="button" onClick={() => setActiveView((v) => v === 'denials' ? 'sessions' : 'denials')}>
-              {activeView === 'denials' ? 'Hide Denials' : '📋 Denials'}
-            </button>
-            <button type="button" onClick={() => setShowModal(true)}>
-              + New Session
-            </button>
+      <div className={styles.mainArea}>
+        <div className={styles.contentArea}>
+          <div className={styles.leftPanel}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+              <span style={{ flex: 1 }}>
+                {runningCount > 0 && <span>{runningCount} running</span>}
+                {runningCount > 0 && doneCount > 0 && <span> · </span>}
+                {doneCount > 0 && <span>{doneCount} done</span>}
+                {runningCount === 0 && doneCount === 0 && <span>0 sessions</span>}
+                {readyCount > 0 && <span> · {readyCount} ready</span>}
+                {blockedCount > 0 && <span style={{ color: 'var(--color-subtext0, #a6adc8)' }}> · {blockedCount} blocked</span>}
+              </span>
+              <button type="button" onClick={() => setActiveView((v) => v === 'history' ? 'sessions' : 'history')}>
+                {activeView === 'history' ? 'Hide History' : '🕑 History'}
+              </button>
+              <button type="button" onClick={() => setActiveView((v) => v === 'denials' ? 'sessions' : 'denials')}>
+                {activeView === 'denials' ? 'Hide Denials' : '📋 Denials'}
+              </button>
+              <button type="button" onClick={() => setShowModal(true)}>
+                + New Session
+              </button>
+            </div>
+
+            {activeView === 'history' ? (
+              <HistoryGrid onSelect={setSelectedId} />
+            ) : activeView === 'denials' ? (
+              <PermissionEventLog />
+            ) : (
+              <>
+                <SessionFilterBar
+                  searchText={searchText}
+                  onSearchChange={setSearchText}
+                  statusFilter={statusFilter}
+                  onStatusChange={setStatusFilter}
+                  tagFilter={tagFilter}
+                  onTagChange={setTagFilter}
+                  availableTags={availableTags}
+                  resultCount={filteredSessions.length}
+                  searchInputRef={searchInputRef}
+                />
+                <SessionGrid
+                  sessions={filteredSessions}
+                  projects={projects}
+                  selectedId={selectedId}
+                  keyboardSelectedId={keyboardHighlightedId}
+                  onSelect={setSelectedId}
+                  synced={synced}
+                  onArchiveAll={handleArchiveAll}
+                  filtersActive={filtersActive}
+                  onClearFilters={clearFilters}
+                  onResumeAll={handleResumeAll}
+                  onResume={handleResume}
+                  onToggleFavorite={(sessionId, favorited) => setSessionFavorited(sessionId, favorited)}
+                />
+              </>
+            )}
           </div>
 
-          {activeView === 'history' ? (
-            <HistoryGrid onSelect={setSelectedId} />
-          ) : activeView === 'denials' ? (
-            <PermissionEventLog />
-          ) : activeView === 'prs' ? (
-            <PRPanel
-              activeProjectId={activeProjectId}
-              onFixSession={(sessionId) => {
-                setActiveView('sessions');
-                setSelectedId(sessionId);
-              }}
-            />
-          ) : (
-            <>
-              <SessionFilterBar
-                searchText={searchText}
-                onSearchChange={setSearchText}
-                statusFilter={statusFilter}
-                onStatusChange={setStatusFilter}
-                tagFilter={tagFilter}
-                onTagChange={setTagFilter}
-                availableTags={availableTags}
-                resultCount={filteredSessions.length}
-                searchInputRef={searchInputRef}
-              />
-              <SessionGrid
-                sessions={filteredSessions}
-                projects={projects}
-                selectedId={selectedId}
-                keyboardSelectedId={keyboardHighlightedId}
-                onSelect={setSelectedId}
-                synced={synced}
-                onArchiveAll={handleArchiveAll}
-                filtersActive={filtersActive}
-                onClearFilters={clearFilters}
-                onResumeAll={handleResumeAll}
+          <div
+            className={styles.resizeHandle}
+            onMouseDown={handleResizeMouseDown}
+          />
+
+          <div className={styles.rightPanel} style={{ width: `${detailWidthPct}%` }}>
+            {selectedSession ? (
+              <SessionDetail
+                session={selectedSession}
+                send={send}
+                onClose={() => setSelectedId(null)}
+                onDelete={(sessionId) => {
+                  deleteSession(sessionId);
+                  setSelectedId(null);
+                }}
+                onArchive={(sessionId) => setSessionArchived(sessionId, true)}
+                onUnarchive={(sessionId) => setSessionArchived(sessionId, false)}
+                onFavorite={(sessionId) => setSessionFavorited(sessionId, true)}
+                onUnfavorite={(sessionId) => setSessionFavorited(sessionId, false)}
                 onResume={handleResume}
-                onToggleFavorite={(sessionId, favorited) => setSessionFavorited(sessionId, favorited)}
+                dismissedDenials={dismissedDenialIds.get(selectedSession.sessionId) ?? new Set()}
+                onDismissDenial={(toolUseId) => dismissDenial(selectedSession.sessionId, toolUseId)}
+                onDismissAllDenials={(toolUseIds) => dismissAllDenials(selectedSession.sessionId, toolUseIds)}
               />
-            </>
-          )}
+            ) : (
+              <div className={styles.detailPlaceholder}>
+                <p>Select a session to view details</p>
+              </div>
+            )}
+          </div>
         </div>
 
-        <div
-          className={styles.resizeHandle}
-          onMouseDown={handleResizeMouseDown}
-        />
-
-        <div className={styles.rightPanel} style={{ width: `${detailWidthPct}%` }}>
-          {selectedSession ? (
-            <SessionDetail
-              session={selectedSession}
-              send={send}
-              onClose={() => setSelectedId(null)}
-              onDelete={(sessionId) => {
-                deleteSession(sessionId);
-                setSelectedId(null);
-              }}
-              onArchive={(sessionId) => setSessionArchived(sessionId, true)}
-              onUnarchive={(sessionId) => setSessionArchived(sessionId, false)}
-              onFavorite={(sessionId) => setSessionFavorited(sessionId, true)}
-              onUnfavorite={(sessionId) => setSessionFavorited(sessionId, false)}
-              onResume={handleResume}
-              dismissedDenials={dismissedDenialIds.get(selectedSession.sessionId) ?? new Set()}
-              onDismissDenial={(toolUseId) => dismissDenial(selectedSession.sessionId, toolUseId)}
-              onDismissAllDenials={(toolUseIds) => dismissAllDenials(selectedSession.sessionId, toolUseIds)}
+        {prPanelVisible && (
+          <>
+            <div
+              className={styles.horizontalResizeHandle}
+              onMouseDown={handlePrResizeMouseDown}
             />
-          ) : (
-            <div className={styles.detailPlaceholder}>
-              <p>Select a session to view details</p>
+            <div
+              className={styles.prPanelSection}
+              style={{ height: `${prPanelHeightPct}vh` }}
+            >
+              <PRPanel
+                activeProjectId={activeProjectId}
+                onFixSession={(sessionId) => {
+                  setActiveView('sessions');
+                  setSelectedId(sessionId);
+                }}
+                onCollapse={togglePrPanel}
+              />
             </div>
-          )}
-        </div>
+          </>
+        )}
       </div>
 
       {showModal && activeProject && (
