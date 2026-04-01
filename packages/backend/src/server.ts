@@ -13,6 +13,10 @@ import type { ServerMessage } from './ws/types';
 import { rulesRouter, permissionEventsRouter } from './routes/rules';
 import configRouter from './routes/config';
 import { sessionsRouter } from './routes/sessions';
+import { createPrsRouter } from './routes/prs';
+import { GitHubClient } from './github/GitHubClient';
+import { PRReviewService } from './github/PRReviewService';
+import { PRSyncJob } from './github/PRSyncJob';
 import { getActiveSessions, getEventsBySession, getDenialsBySession } from './db/queries';
 
 runMigrations();
@@ -23,6 +27,8 @@ const jsonlReader = new JsonlReader(sessionsDir);
 
 const notionClient = new NotionClient();
 const sessionManager = new SessionManager(notionClient);
+const githubClient = new GitHubClient();
+const prReviewService = new PRReviewService(githubClient, notionClient);
 
 const PORT = parseInt(process.env.PORT ?? '3000');
 
@@ -31,6 +37,7 @@ app.use(express.json());
 app.use('/api/rules', rulesRouter);
 app.use('/api/permission-events', permissionEventsRouter);
 app.use('/api/sessions', sessionsRouter);
+app.use('/api', createPrsRouter(githubClient, prReviewService, sessionManager));
 app.use('/api', configRouter);
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>
@@ -98,7 +105,12 @@ wss.on('connection', (ws) => {
   ws.on('close', () => console.log('[WS] client disconnected'));
 });
 
-jsonlReader.importAll().then(() => {
+jsonlReader.importAll().then(async () => {
+  const prSyncJob = new PRSyncJob(githubClient);
+  await prSyncJob.run().catch((err: unknown) =>
+    console.warn('[server] PR sync failed (check GITHUB_TOKEN):', (err as Error).message)
+  );
+
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[server] listening on port ${PORT}`);
     console.log('[server] LAN access enabled — no authentication');

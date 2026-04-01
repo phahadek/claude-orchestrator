@@ -337,6 +337,17 @@ export function getCacheAge(taskId: string): number {
   return Date.now() - row.fetched_at;
 }
 
+export function getTaskTitleFromCache(taskId: string): string | null {
+  const row = getTaskCache(taskId);
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.raw_json) as { title?: unknown };
+    return typeof parsed.title === 'string' ? parsed.title : null;
+  } catch {
+    return null;
+  }
+}
+
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
 export function upsertPullRequest(pr: Omit<PullRequestRow, 'id'>): PullRequestRow {
