@@ -277,7 +277,7 @@ describe('EventRow', () => {
   it('renders system event extracting subtype from payload', () => {
     const content = JSON.stringify({ type: 'system', subtype: 'init' });
     render(<EventRow event={makeEvent('system', content)} />);
-    expect(screen.getByText('[system: init]')).toBeTruthy();
+    expect(screen.getByText('[init]')).toBeTruthy();
   });
 
   it('renders user event with XML tags stripped', () => {
@@ -352,5 +352,80 @@ describe('EventRow', () => {
       </>
     );
     expect(container.querySelectorAll('p').length).toBe(2);
+  });
+
+  it('tool_use content block inside assistant message renders tool name and input, not raw JSON', () => {
+    const content = JSON.stringify({
+      type: 'assistant',
+      message: {
+        id: 'msg_01',
+        model: 'claude-sonnet-4-5',
+        stop_reason: 'tool_use',
+        usage: { input_tokens: 100, output_tokens: 50 },
+        content: [
+          { type: 'tool_use', id: 'toolu_01', name: 'Read', input: { file_path: '/src/foo.ts' } },
+        ],
+      },
+    });
+    render(<EventRow event={makeEvent('text', content)} />);
+    expect(screen.getByText(/Read/)).toBeTruthy();
+    expect(screen.getByText(/\"file_path\": \"\/src\/foo\.ts\"/)).toBeTruthy();
+    expect(screen.queryByText(/input_tokens/)).toBeNull();
+    expect(screen.queryByText(/stop_reason/)).toBeNull();
+  });
+
+  it('internal metadata fields (model, usage, stop_reason) are not rendered for assistant messages', () => {
+    const content = JSON.stringify({
+      type: 'assistant',
+      message: {
+        model: 'claude-opus-4-6',
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 200, output_tokens: 80, cache_read_input_tokens: 50 },
+        content: [{ type: 'text', text: 'Done.' }],
+      },
+    });
+    render(<EventRow event={makeEvent('text', content)} />);
+    expect(screen.getByText('Done.')).toBeTruthy();
+    expect(screen.queryByText(/claude-opus/)).toBeNull();
+    expect(screen.queryByText(/end_turn/)).toBeNull();
+    expect(screen.queryByText(/input_tokens/)).toBeNull();
+    expect(screen.queryByText(/cache_read_input_tokens/)).toBeNull();
+  });
+
+  it('result system events are hidden from transcript', () => {
+    const content = JSON.stringify({ type: 'result', subtype: 'success', result: 'Task complete' });
+    const { container } = render(<EventRow event={makeEvent('system', content)} />);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('assistant message with both text and tool_use blocks renders both', () => {
+    const content = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'text', text: 'I will run a command.' },
+          { type: 'tool_use', id: 'toolu_02', name: 'Bash', input: { command: 'echo hello' } },
+        ],
+      },
+    });
+    render(<EventRow event={makeEvent('text', content)} />);
+    expect(screen.getByText('I will run a command.')).toBeTruthy();
+    expect(screen.getByText(/Bash/)).toBeTruthy();
+    expect(screen.getByText(/\$ echo hello/)).toBeTruthy();
+  });
+
+  it('assistant message with only tool_use blocks renders nothing raw', () => {
+    const content = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'tool_use', id: 'toolu_03', name: 'Glob', input: { pattern: '**/*.ts' } },
+        ],
+      },
+    });
+    render(<EventRow event={makeEvent('text', content)} />);
+    expect(screen.queryByText(/"type": "tool_use"/)).toBeNull();
+    expect(screen.queryByText(/toolu_03/)).toBeNull();
+    expect(screen.getByText(/Glob/)).toBeTruthy();
   });
 });
