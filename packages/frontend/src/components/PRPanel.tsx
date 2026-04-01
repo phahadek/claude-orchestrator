@@ -6,9 +6,10 @@ import styles from './PRPanel.module.css';
 interface Props {
   activeProjectId: string | null;
   onFixSession: (sessionId: string) => void;
+  onCollapse?: () => void;
 }
 
-export function PRPanel({ activeProjectId, onFixSession }: Props) {
+export function PRPanel({ activeProjectId, onFixSession, onCollapse }: Props) {
   const [prs, setPRs] = useState<PRListItem[]>([]);
   const [networkError, setNetworkError] = useState(false);
   const [noRepo, setNoRepo] = useState(false);
@@ -163,14 +164,6 @@ export function PRPanel({ activeProjectId, onFixSession }: Props) {
     }
   };
 
-  if (noRepo) {
-    return (
-      <div className={styles.emptyState}>
-        No GitHub repo configured for this project.
-      </div>
-    );
-  }
-
   return (
     <div className={styles.panel}>
       <div className={styles.headerBar}>
@@ -178,15 +171,26 @@ export function PRPanel({ activeProjectId, onFixSession }: Props) {
         <button type="button" className={styles.refreshButton} onClick={fetchPRs}>
           ↻ Refresh
         </button>
+        {onCollapse && (
+          <button type="button" className={styles.collapseButton} onClick={onCollapse} title="Collapse PR panel">
+            ✕
+          </button>
+        )}
       </div>
 
-      {networkError && (
+      {noRepo && (
+        <div className={styles.emptyState}>
+          No GitHub repo configured for this project.
+        </div>
+      )}
+
+      {!noRepo && networkError && (
         <div className={styles.networkBanner}>
           ⚠️ Could not reach server — retrying...
         </div>
       )}
 
-      {prs.length === 0 && !networkError ? (
+      {!noRepo && (prs.length === 0 && !networkError ? (
         <div className={styles.emptyState}>No open pull requests.</div>
       ) : (
         <div className={styles.prList}>
@@ -205,7 +209,7 @@ export function PRPanel({ activeProjectId, onFixSession }: Props) {
             />
           ))}
         </div>
-      )}
+      ))}
     </div>
   );
 }
