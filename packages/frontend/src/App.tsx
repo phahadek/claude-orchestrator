@@ -9,6 +9,7 @@ import { HistoryGrid } from './components/HistoryGrid';
 import { SessionDetail } from './components/SessionDetail';
 import { DispatchModal } from './components/DispatchModal';
 import { PermissionRules } from './components/PermissionRules';
+import { PermissionEventLog } from './components/PermissionEventLog';
 import { Notifications } from './components/Notifications';
 import { ShortcutHint } from './components/ShortcutHint';
 import { SessionFilterBar } from './components/SessionFilterBar';
@@ -41,7 +42,7 @@ export default function App() {
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
-  const [activeView, setActiveView] = useState<'sessions' | 'rules' | 'history'>('sessions');
+  const [activeView, setActiveView] = useState<'sessions' | 'rules' | 'history' | 'denials'>('sessions');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const notifiedRef = useRef<Set<string>>(new Set());
   const [showReconnected, setShowReconnected] = useState(false);
@@ -266,6 +267,9 @@ export default function App() {
             <button type="button" onClick={() => setActiveView((v) => v === 'rules' ? 'sessions' : 'rules')}>
               {activeView === 'rules' ? 'Hide Rules' : '⚙️ Rules'}
             </button>
+            <button type="button" onClick={() => setActiveView((v) => v === 'denials' ? 'sessions' : 'denials')}>
+              {activeView === 'denials' ? 'Hide Denials' : '📋 Denials'}
+            </button>
             <button type="button" onClick={() => setShowModal(true)}>
               + New Session
             </button>
@@ -275,6 +279,8 @@ export default function App() {
             <PermissionRules />
           ) : activeView === 'history' ? (
             <HistoryGrid />
+          ) : activeView === 'denials' ? (
+            <PermissionEventLog />
           ) : (
             <>
               <SessionFilterBar
