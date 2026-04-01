@@ -2,12 +2,14 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import type { ConnectionState } from './hooks/useWebSocket';
 import { useSessionStore } from './hooks/useSessionStore';
 import { useWebSocket } from './hooks/useWebSocket';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { SessionGrid } from './components/SessionGrid';
 import { HistoryGrid } from './components/HistoryGrid';
 import { SessionDetail } from './components/SessionDetail';
 import { DispatchModal } from './components/DispatchModal';
 import { PermissionRules } from './components/PermissionRules';
 import { Notifications } from './components/Notifications';
+import { ShortcutHint } from './components/ShortcutHint';
 import type { NotificationItem } from './components/Notifications';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
 import styles from './App.module.css';
@@ -134,6 +136,13 @@ export default function App() {
     window.addEventListener('mouseup', onUp);
   }, []);
 
+  const [selectedSessionIndex, setSelectedSessionIndex] = useState(0);
+
+  // Reset keyboard selection index when active project changes
+  useEffect(() => {
+    setSelectedSessionIndex(0);
+  }, [projectId]);
+
   const selectedSession = selectedId != null
     ? (sessions.find((s) => s.sessionId === selectedId) ?? null)
     : null;
@@ -141,6 +150,49 @@ export default function App() {
   const activeSessions = sessions.filter((s) => !s.archived);
   const runningCount = activeSessions.filter((s) => ['running', 'starting', 'needs_permission'].includes(s.status)).length;
   const doneCount = activeSessions.filter((s) => ['done', 'error', 'killed'].includes(s.status)).length;
+
+  // Keyboard navigation: sorted active sessions (same order as SessionGrid)
+  const kbSortedSessions = [...activeSessions].sort((a, b) => {
+    const statusOrder: Record<string, number> = {
+      needs_permission: 0, running: 1, starting: 2, done: 3, error: 3, killed: 3,
+    };
+    const rank = (statusOrder[a.status] ?? 99) - (statusOrder[b.status] ?? 99);
+    if (rank !== 0) return rank;
+    return (b.started_at ?? 0) - (a.started_at ?? 0);
+  });
+  const keyboardHighlightedId = kbSortedSessions[selectedSessionIndex]?.sessionId ?? null;
+
+  useKeyboardShortcuts({
+    onOpenDispatch: () => setShowModal(true),
+    onDismiss: () => {
+      if (showModal) {
+        setShowModal(false);
+      } else if (selectedId) {
+        setSelectedId(null);
+      }
+    },
+    onSelectNext: () =>
+      setSelectedSessionIndex((i) =>
+        kbSortedSessions.length > 0 ? (i + 1) % kbSortedSessions.length : 0,
+      ),
+    onSelectPrev: () =>
+      setSelectedSessionIndex((i) =>
+        kbSortedSessions.length > 0
+          ? (i - 1 + kbSortedSessions.length) % kbSortedSessions.length
+          : 0,
+      ),
+    onConfirmSelection: () => {
+      if (keyboardHighlightedId) setSelectedId(keyboardHighlightedId);
+    },
+    onSwitchView: (view) => {
+      if (view === 'sessions') setActiveView('sessions');
+      else if (view === 'rules') setActiveView('rules');
+      // 'prs' view not yet implemented
+    },
+    onFocusSearch: () => {
+      // search input not yet implemented
+    },
+  });
 
   return (
     <div className={`${styles.appContainer}${isDragging ? ` ${styles.dragging}` : ''}`}>
@@ -174,6 +226,7 @@ export default function App() {
           <SessionGrid
             sessions={sessions}
             selectedId={selectedId}
+            keyboardSelectedId={keyboardHighlightedId}
             onSelect={setSelectedId}
             synced={synced}
             onArchiveAll={handleArchiveAll}
@@ -217,6 +270,7 @@ export default function App() {
       )}
 
       <Notifications notifications={notifications} onDismiss={dismissNotification} />
+      <ShortcutHint />
 
       {(hasConnectedOnce.current && connectionState !== 'connected') && (
         <div className={styles.connectionBanner}>
