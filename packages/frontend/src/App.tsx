@@ -232,6 +232,11 @@ export default function App() {
         setShowModal(false);
       } else if (selectedId) {
         setSelectedId(null);
+      } else if (filtersActive) {
+        clearFilters();
+        searchInputRef.current?.blur();
+      } else if (activeView !== 'sessions') {
+        setActiveView('sessions');
       }
     },
     onSelectNext: () =>

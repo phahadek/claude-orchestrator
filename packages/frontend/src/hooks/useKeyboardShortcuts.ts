@@ -18,24 +18,26 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): void {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (
+      const isInputField =
         event.target instanceof HTMLInputElement ||
         event.target instanceof HTMLTextAreaElement ||
-        (event.target instanceof HTMLElement && event.target.isContentEditable)
-      ) {
+        (event.target instanceof HTMLElement && event.target.isContentEditable);
+
+      const h = handlersRef.current;
+
+      // ESC fires even from input fields (e.g. to clear search and blur)
+      if (event.key === 'Escape') {
+        h.onDismiss();
         return;
       }
 
-      const h = handlersRef.current;
+      if (isInputField) return;
 
       switch (event.key) {
         case 'n':
         case 'N':
           event.preventDefault();
           h.onOpenDispatch();
-          break;
-        case 'Escape':
-          h.onDismiss();
           break;
         case 'j':
         case 'J':
