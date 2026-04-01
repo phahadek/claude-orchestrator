@@ -1,0 +1,75 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 16px 16px;
+}
+
+.row {
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 6px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rowMain {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.taskName {
+  flex: 1;
+  font-size: 0.875rem;
+  color: #cdd6f4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rowMeta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.75rem;
+  color: #6c7086;
+}
+
+.prLink {
+  color: #89b4fa;
+  text-decoration: none;
+  font-size: 0.75rem;
+}
+
+.prLink:hover {
+  text-decoration: underline;
+}
+
+.loading,
+.empty,
+.error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 16px;
+  font-size: 0.9rem;
+}
+
+.loading {
+  color: #6c7086;
+}
+
+.empty {
+  color: #6c7086;
+}
+
+.empty p {
+  margin: 0;
+}
+
+.error {
+  color: #f38ba8;
+}
