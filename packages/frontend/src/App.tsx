@@ -10,7 +10,7 @@ import type { NotificationItem } from './components/Notifications';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
 
 export default function App() {
-  const { sessions, tasks, tasksReady, synced, dispatch, deleteSession } = useSessionStore();
+  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, deleteSession } = useSessionStore();
   const boardIdRef = useRef('');
   const { send } = useWebSocket(dispatch, (sendNow: (msg: ClientMessage) => void) => {
     // Called each time the WS (re)connects — fetch tasks if boardId is already known
@@ -81,7 +81,11 @@ export default function App() {
             + New Session
           </button>
         </div>
-        <p>{sessions.length} sessions · {tasks.length} tasks ready</p>
+        <p>
+          {sessions.length} sessions ·{' '}
+          {readyCount} ready
+          {blockedCount > 0 && <span style={{ color: 'var(--color-subtext0, #a6adc8)' }}> · {blockedCount} blocked</span>}
+        </p>
 
         {showRules ? (
           <PermissionRules />

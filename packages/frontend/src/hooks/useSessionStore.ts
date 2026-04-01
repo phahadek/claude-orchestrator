@@ -112,5 +112,8 @@ export function useSessionStore() {
     });
   }, []);
 
-  return { sessions: [...sessions.values()], tasks, tasksReady, synced, dispatch, deleteSession };
+  const readyCount = tasks.filter((t) => !t.blocked && t.task.status === '🗂️ Ready').length;
+  const blockedCount = tasks.filter((t) => t.blocked).length;
+
+  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, deleteSession };
 }
