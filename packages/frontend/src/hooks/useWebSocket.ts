@@ -1,5 +1,7 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import type { ServerMessage, ClientMessage } from '@claude-dashboard/backend/src/ws/types';
+
+export type ConnectionState = 'connected' | 'disconnected' | 'reconnecting';
 
 export function useWebSocket(
   onMessage: (msg: ServerMessage) => void,
@@ -12,6 +14,7 @@ export function useWebSocket(
   onMessageRef.current = onMessage;
   const onOpenRef = useRef(onOpen);
   onOpenRef.current = onOpen;
+  const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
 
   const connect = useCallback(() => {
     const socket = new WebSocket(`ws://${window.location.host}/ws`);
@@ -26,6 +29,7 @@ export function useWebSocket(
     };
 
     socket.onclose = () => {
+      setConnectionState('reconnecting');
       setTimeout(() => {
         reconnectDelay.current = Math.min(reconnectDelay.current * 2, 30_000);
         connect();
@@ -34,6 +38,7 @@ export function useWebSocket(
 
     socket.onopen = () => {
       reconnectDelay.current = 1000;
+      setConnectionState('connected');
       onOpenRef.current?.((msg) => socket.send(JSON.stringify(msg)));
     };
   }, []);
@@ -49,5 +54,5 @@ export function useWebSocket(
     }
   }, []);
 
-  return { send };
+  return { send, connectionState };
 }

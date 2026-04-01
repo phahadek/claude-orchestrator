@@ -40,3 +40,22 @@
   color: #6c7086;
   font-size: 0.875rem;
 }
+
+.connectionBanner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  padding: 6px 16px;
+  text-align: center;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  background: #f9e2af;
+  color: #1e1e2e;
+}
+
+.connectionBannerReconnected {
+  background: #a6e3a1;
+  color: #1e1e2e;
+}
