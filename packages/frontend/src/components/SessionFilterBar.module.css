@@ -18,7 +18,7 @@
 }
 
 .searchInput::placeholder {
-  color: #6c7086;
+  color: var(--text-muted);
 }
 
 .searchInput:focus {
@@ -43,12 +43,12 @@
 }
 
 .dropdown:disabled {
-  opacity: 0.4;
+  opacity: 0.6;
   cursor: not-allowed;
 }
 
 .resultCount {
-  color: #6c7086;
+  color: var(--text-muted);
   font-size: 0.8rem;
   white-space: nowrap;
 }
