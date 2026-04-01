@@ -1,6 +1,7 @@
 import type { SessionState } from '../hooks/useSessionStore';
 import { taskNameFromNotionUrl } from '../utils/notionUrl';
 import { formatElapsed } from '../utils/sessionTimer';
+import { summarizeEvent } from '../utils/eventParsing';
 import { StatusBadge } from './StatusBadge';
 import styles from './SessionCard.module.css';
 
@@ -52,7 +53,7 @@ export function SessionCard({ session, selected, onClick, projectColor, projectN
         </div>
       )}
       {lastEvent && (
-        <div className={styles['last-event']}>{truncate(lastEvent.content, 120)}</div>
+        <div className={styles['last-event']}>{summarizeEvent(lastEvent)}</div>
       )}
       <div className={styles['card-footer']}>
         <span className={styles.elapsed}>{elapsed}</span>

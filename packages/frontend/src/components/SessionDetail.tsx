@@ -3,6 +3,14 @@ import type { SessionState } from '../hooks/useSessionStore';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
 import { taskNameFromNotionUrl } from '../utils/notionUrl';
 import { calcElapsedMs, formatDuration } from '../utils/sessionTimer';
+import {
+  tryParseJson,
+  extractText,
+  extractBashCommand,
+  extractToolUse,
+  extractToolResult,
+  extractSystem,
+} from '../utils/eventParsing';
 import { StatusBadge } from './StatusBadge';
 import styles from './SessionDetail.module.css';
 
@@ -565,161 +573,4 @@ function ToolResultRow({ result }: { result: string }) {
 }
 
 // ── Payload extraction helpers ────────────────────────────────────
-
-function tryParseJson(s: string): unknown {
-  try {
-    return JSON.parse(s);
-  } catch {
-    return null;
-  }
-}
-
-/** Extract displayable text from a text/assistant event payload. */
-function extractText(payload: unknown, rawContent: string): string {
-  if (typeof payload === 'string') return payload;
-  if (payload === null || typeof payload !== 'object') return rawContent;
-
-  const p = payload as Record<string, unknown>;
-
-  // Full assistant event: {type:'assistant', message:{content:[{type:'text',text:'...'}]}}
-  if (p.type === 'assistant' || p.type === 'message') {
-    const msg = p.message as Record<string, unknown> | undefined;
-    if (msg) {
-      const content = msg.content;
-      if (Array.isArray(content)) {
-        const texts = content
-          .filter((b): b is Record<string, unknown> => typeof b === 'object' && b !== null)
-          .filter((b) => b.type === 'text')
-          .map((b) => String(b.text ?? ''));
-        if (texts.length > 0) return texts.join('\n');
-        // No text blocks — content (e.g. tool_use blocks) handled by EventRow directly
-        return '';
-      }
-      if (typeof content === 'string') return content;
-    }
-    return ''; // assistant/message type but no extractable text
-  }
-
-  if (typeof p.text === 'string') return p.text;
-  if (typeof p.content === 'string') return p.content;
-
-  return rawContent;
-}
-
-/** Extract the command string from a Bash tool input object. */
-function extractBashCommand(input: unknown): string | null {
-  if (typeof input !== 'object' || input === null) return null;
-  const cmd = (input as Record<string, unknown>).command;
-  return typeof cmd === 'string' ? cmd : null;
-}
-
-/** Extract tool name and input from a tool_use event payload. */
-function extractToolUse(payload: unknown): { toolName: string; input: unknown } | null {
-  if (typeof payload !== 'object' || payload === null) return null;
-  const p = payload as Record<string, unknown>;
-
-  let rawInput: unknown;
-  let toolName: string;
-
-  // Claude CLI format: {type:'tool_use', name:'...', input:{...}}
-  if (typeof p.name === 'string' && 'input' in p) {
-    toolName = p.name;
-    rawInput = p.input;
-  } else if (typeof p.toolName === 'string') {
-    // Legacy format: {toolName:'...', input:{...}}
-    toolName = p.toolName;
-    rawInput = p.input;
-  } else {
-    return null;
-  }
-
-  // If input arrived as a JSON-encoded string, parse it into an object so
-  // JSON.stringify can produce indented output instead of a single escaped line.
-  let input = rawInput;
-  if (typeof input === 'string') {
-    try { input = JSON.parse(input); } catch { /* leave as string */ }
-  }
-
-  return { toolName, input };
-}
-
-/** Extract displayable content from a tool_result event payload. */
-function extractToolResult(payload: unknown, rawContent: string): string {
-  if (typeof payload === 'string') return payload.replace(/\\n/g, '\n');
-  if (payload === null || typeof payload !== 'object') return rawContent;
-
-  const p = payload as Record<string, unknown>;
-
-  let result: string | null = null;
-  if (typeof p.content === 'string') {
-    result = p.content;
-  } else if (Array.isArray(p.content)) {
-    result = p.content
-      .map((b): string => {
-        if (typeof b === 'object' && b !== null) {
-          const block = b as Record<string, unknown>;
-          return String(block.text ?? block.content ?? JSON.stringify(b));
-        }
-        return String(b);
-      })
-      .join('\n');
-  }
-
-  if (result !== null) {
-    // Unescape literal \n sequences that the CLI encodes as \\n
-    return result.replace(/\\n/g, '\n');
-  }
-
-  return rawContent;
-}
-
-const SYSTEM_SUBTYPE_LABELS: Record<string, string> = {
-  init: '[init]',
-  rate_limit: '[rate limit]',
-  rate_limited: '[rate limit]',
-  thinking: '[thinking]',
-  success: '[done]',
-  error_during_execution: '[execution error]',
-};
-
-/** Extract displayable content from a system/user/file-history-snapshot event payload. */
-function extractSystem(
-  payload: unknown,
-  rawContent: string,
-): { rawType: string; display: string } {
-  if (typeof payload !== 'object' || payload === null) {
-    return { rawType: 'system', display: typeof payload === 'string' ? payload : rawContent };
-  }
-
-  const p = payload as Record<string, unknown>;
-  const rawType = typeof p.type === 'string' ? p.type : 'system';
-
-  if (rawType === 'file-history-snapshot') {
-    return { rawType, display: 'File history snapshot' };
-  }
-
-  if (rawType === 'user') {
-    const msg = p.message as Record<string, unknown> | undefined;
-    const content = msg?.content ?? p.content;
-    if (typeof content === 'string') {
-      const stripped = content.replace(/<[^>]+>/g, '').trim();
-      return { rawType, display: stripped };
-    }
-  }
-
-  if (rawType === 'result') {
-    const subtype = typeof p.subtype === 'string' ? p.subtype : '';
-    const label = SYSTEM_SUBTYPE_LABELS[subtype] ?? `[result: ${subtype || 'unknown'}]`;
-    return { rawType, display: label };
-  }
-
-  if (typeof p.subtype === 'string') {
-    const label = SYSTEM_SUBTYPE_LABELS[p.subtype] ?? `[system: ${p.subtype}]`;
-    return { rawType, display: label };
-  }
-
-  if (typeof p.content === 'string') return { rawType, display: p.content };
-
-  // Avoid dumping raw JSON — show a generic label instead
-  return { rawType, display: `[${rawType}]` };
-}
+// (helpers are imported from utils/eventParsing.ts)
