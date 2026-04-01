@@ -336,6 +336,18 @@ export function getDenialsBySession(sessionId: string): PermissionDenialRow[] {
   return stmtGetDenialsBySession.all({ session_id: sessionId }) as PermissionDenialRow[];
 }
 
+export function getRecentPermissionDenials(
+  limit: number,
+): Array<PermissionDenialRow & { notion_task_url: string | null }> {
+  return db
+    .prepare(
+      `SELECT d.*, s.notion_task_url FROM permission_denials d
+       LEFT JOIN sessions s ON d.session_id = s.session_id
+       ORDER BY d.id DESC LIMIT ?`,
+    )
+    .all(limit) as Array<PermissionDenialRow & { notion_task_url: string | null }>;
+}
+
 // ─── task_cache ────────────────────────────────────────────────────────────
 
 const stmtUpsertTaskCache = db.prepare<{
