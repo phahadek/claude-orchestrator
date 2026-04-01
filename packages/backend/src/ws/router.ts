@@ -26,7 +26,7 @@ export function handleMessage(
       }
       msg.tasks.forEach((t) => {
         try {
-          sessions.start(t.taskUrl, t.projectContextUrl, t.taskType, t.projectId);
+          sessions.start(t.taskUrl, t.projectContextUrl, { taskType: t.taskType, projectId: t.projectId });
         } catch (e) {
           ws.send(JSON.stringify({ type: 'error', message: String(e) }));
         }

@@ -39,13 +39,15 @@ vi.mock('../db/queries', () => ({
   updateSessionStatus: vi.fn(),
   getEventsBySession: vi.fn(() => []),
   getRules: vi.fn(() => []),
+  insertPermissionDenial: vi.fn(),
+  upsertPullRequest: vi.fn(),
 }));
 
 import { AgentSession } from '../session/AgentSession';
 import { spawn } from 'child_process';
 import type { NotionClient } from '../notion/NotionClient';
 import type { ServerMessage } from '../ws/types';
-import { getRules } from '../db/queries';
+import { getRules, getEventsBySession, updateSessionStatus } from '../db/queries';
 import type { PermissionRule } from '../db/types';
 
 function fakeNotionClient(): NotionClient {
@@ -231,5 +233,95 @@ describe('AgentSession', () => {
     expect(PR_URL_REGEX.test('https://github.com/owner/repo/issues/123')).toBe(false);
     expect(PR_URL_REGEX.test('https://gitlab.com/owner/repo/pull/123')).toBe(false);
     expect(PR_URL_REGEX.test('not a url')).toBe(false);
+  });
+
+  // ── AC: customPrompt is used instead of generated prompt ─────────────────
+  it('sends customPrompt to stdin instead of the generated Notion prompt', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+
+    const customPrompt = 'My custom review prompt content';
+    // Pass customPrompt as 8th arg, sessionType as 9th
+    const session = new AgentSession(
+      'custom-prompt-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+      undefined,
+      customPrompt,
+    );
+
+    session.run();
+
+    // The custom prompt should be sent to stdin, not the generated "Fetch both Notion pages" text
+    expect(mockProc.stdinChunks.some((c) => c.includes(customPrompt))).toBe(true);
+    expect(mockProc.stdinChunks.some((c) => c.includes('Fetch both Notion pages'))).toBe(false);
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+  });
+
+  // ── AC: sessionType=review skips Notion calls in handleCleanExit ──────────
+  it('skips notionClient.updateStatus and attachPR when sessionType is review', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    // Return an event with no PR URL so we focus on updateStatus
+    vi.mocked(getEventsBySession).mockReturnValue([]);
+
+    const session = new AgentSession(
+      'review-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+      undefined,
+      undefined,
+      'review',
+    );
+
+    const messages: ServerMessage[] = [];
+    session.on('message', (msg: ServerMessage) => messages.push(msg));
+
+    const runPromise = session.run();
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    expect(notion.updateStatus).not.toHaveBeenCalled();
+    expect(notion.attachPR).not.toHaveBeenCalled();
+
+    const ended = messages.find((m) => m.type === 'session_ended');
+    expect(ended).toBeDefined();
+  });
+
+  // ── AC: sessionType=standard still calls notionClient.updateStatus ────────
+  it('calls notionClient.updateStatus on clean exit when sessionType is standard', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockReturnValue([]);
+
+    const session = new AgentSession(
+      'standard-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const runPromise = session.run();
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    expect(notion.updateStatus).toHaveBeenCalledWith('task-id', '👀 In Review');
   });
 });
