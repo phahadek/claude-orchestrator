@@ -398,6 +398,23 @@ describe('EventRow', () => {
     expect(container.firstChild).toBeNull();
   });
 
+  it('returns null for system event with empty extracted content', () => {
+    // A system payload whose content field is an empty string — extractSystem returns ''
+    const content = JSON.stringify({ type: 'system', content: '' });
+    const { container } = render(<EventRow event={makeEvent('system', content)} />);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('returns null for user system event where content is entirely XML tags', () => {
+    // After stripping XML, content is empty — should not render anything
+    const content = JSON.stringify({
+      type: 'user',
+      message: { content: '<caveat></caveat>' },
+    });
+    const { container } = render(<EventRow event={makeEvent('system', content)} />);
+    expect(container.firstChild).toBeNull();
+  });
+
   it('assistant message with both text and tool_use blocks renders both', () => {
     const content = JSON.stringify({
       type: 'assistant',
