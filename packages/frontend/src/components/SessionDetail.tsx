@@ -513,6 +513,7 @@ export function EventRow({ event }: EventRowProps) {
     case 'system': {
       const { rawType, display } = extractSystem(payload, event.content);
       if (rawType === 'result') return null;
+      if (!display.trim()) return null;
       if (rawType === 'file-history-snapshot') {
         return <p className={styles.eventSystem}>📄 {display}</p>;
       }

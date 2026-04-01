@@ -3,7 +3,7 @@ import { createInterface } from 'readline';
 import { EventEmitter } from 'events';
 import { config, ALLOWED_TOOLS } from '../config';
 import {
-  insertEvent,
+  upsertSessionEvent,
   updateSessionStatus,
   getEventsBySession,
   insertPermissionDenial,
@@ -51,6 +51,8 @@ export class AgentSession extends EventEmitter {
   public prUrl: string | undefined;
   /** True once a session_ended message has been broadcast. */
   public hasEnded = false;
+  /** Maps message_id → DB row id for deduplicating streaming assistant events. */
+  private messageIdMap = new Map<string, number>();
 
   constructor(
     public readonly sessionId: string,
@@ -189,12 +191,25 @@ export class AgentSession extends EventEmitter {
       const eventType = toEventType(rawType);
       const payload = JSON.stringify(event);
 
-      insertEvent({
-        session_id: this.sessionId,
-        event_type: eventType,
-        payload,
-        timestamp: Date.now(),
-      });
+      // Extract message ID from assistant/message events for deduplication.
+      // The Claude CLI emits multiple incremental streaming events per message,
+      // all sharing the same message.id. We keep only the latest payload.
+      let messageId: string | undefined;
+      if (rawType === 'assistant' || rawType === 'message') {
+        const msg = event.message as Record<string, unknown> | undefined;
+        if (msg?.id && typeof msg.id === 'string') {
+          messageId = msg.id;
+        }
+      }
+
+      const existingRowId = messageId != null ? this.messageIdMap.get(messageId) : undefined;
+      const rowId = upsertSessionEvent(
+        { session_id: this.sessionId, event_type: eventType, payload, timestamp: Date.now(), message_id: messageId ?? null },
+        existingRowId,
+      );
+      if (messageId != null) {
+        this.messageIdMap.set(messageId, rowId);
+      }
 
       this.broadcast({
         type: 'session_event',
