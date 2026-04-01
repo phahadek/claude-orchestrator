@@ -60,6 +60,7 @@ wss.on('connection', (ws) => {
       notionTaskUrl: s.notion_task_url ?? '',
       ...(s.started_at != null && { started_at: s.started_at }),
       ...(s.ended_at != null && { ended_at: s.ended_at }),
+      archived: s.archived === 1,
     } satisfies ServerMessage));
     ws.send(JSON.stringify({
       type: 'session_status',

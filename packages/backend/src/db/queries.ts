@@ -108,6 +108,27 @@ export function getSessionsByStatus(statuses: string[]): Session[] {
   `).all(...statuses) as Session[];
 }
 
+export function getActiveSessions(): Session[] {
+  return db.prepare('SELECT * FROM sessions WHERE archived = 0 ORDER BY started_at DESC').all() as Session[];
+}
+
+export function archiveSession(sessionId: string): boolean {
+  const result = db.prepare('UPDATE sessions SET archived = 1 WHERE session_id = ?').run(sessionId);
+  return result.changes > 0;
+}
+
+export function unarchiveSession(sessionId: string): boolean {
+  const result = db.prepare('UPDATE sessions SET archived = 0 WHERE session_id = ?').run(sessionId);
+  return result.changes > 0;
+}
+
+export function archiveFinishedSessions(): number {
+  const result = db.prepare(
+    `UPDATE sessions SET archived = 1 WHERE status IN ('done', 'error', 'killed')`
+  ).run();
+  return result.changes;
+}
+
 // ─── session_events ────────────────────────────────────────────────────────
 
 const stmtInsertEvent = db.prepare<NewSessionEvent>(`

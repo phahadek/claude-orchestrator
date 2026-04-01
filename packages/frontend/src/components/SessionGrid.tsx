@@ -20,10 +20,12 @@ interface Props {
   onSelect: (sessionId: string) => void;
   selectedId: string | null;
   synced: boolean;
+  onArchiveAll: () => void;
 }
 
-export function SessionGrid({ sessions, onSelect, selectedId, synced }: Props) {
+export function SessionGrid({ sessions, onSelect, selectedId, synced, onArchiveAll }: Props) {
   const [activeFilters, setActiveFilters] = useState<Set<Status>>(new Set());
+  const [showArchived, setShowArchived] = useState(false);
 
   function toggleFilter(status: Status) {
     setActiveFilters((prev) => {
@@ -37,9 +39,13 @@ export function SessionGrid({ sessions, onSelect, selectedId, synced }: Props) {
     });
   }
 
+  const visibleSessions = showArchived ? sessions : sessions.filter((s) => !s.archived);
+  const archivedCount = sessions.filter((s) => s.archived).length;
+  const archivableCount = sessions.filter((s) => !s.archived && ['done', 'error', 'killed'].includes(s.status)).length;
+
   const filtered = activeFilters.size === 0
-    ? sessions
-    : sessions.filter((s) => activeFilters.has(s.status as Status));
+    ? visibleSessions
+    : visibleSessions.filter((s) => activeFilters.has(s.status as Status));
 
   const sorted = [...filtered].sort((a, b) => {
     const rank = statusRank(a.status) - statusRank(b.status);
@@ -47,7 +53,7 @@ export function SessionGrid({ sessions, onSelect, selectedId, synced }: Props) {
     return (b.started_at ?? 0) - (a.started_at ?? 0);
   });
 
-  const statusesInUse = new Set(sessions.map((s) => s.status as Status));
+  const statusesInUse = new Set(visibleSessions.map((s) => s.status as Status));
 
   return (
     <div>
@@ -71,6 +77,14 @@ export function SessionGrid({ sessions, onSelect, selectedId, synced }: Props) {
               onClick={() => setActiveFilters(new Set())}
             >
               Clear
+            </button>
+          )}
+          {archivableCount > 0 && (
+            <button
+              className={styles['archive-all-button']}
+              onClick={onArchiveAll}
+            >
+              Archive done/error/killed
             </button>
           )}
         </div>
@@ -110,6 +124,17 @@ export function SessionGrid({ sessions, onSelect, selectedId, synced }: Props) {
               onClick={() => onSelect(s.sessionId)}
             />
           ))}
+        </div>
+      )}
+
+      {archivedCount > 0 && (
+        <div className={styles['archived-toggle']}>
+          <button
+            className={styles['archived-toggle-button']}
+            onClick={() => setShowArchived((v) => !v)}
+          >
+            {showArchived ? `Hide archived (${archivedCount})` : `Show archived (${archivedCount})`}
+          </button>
         </div>
       )}
     </div>
