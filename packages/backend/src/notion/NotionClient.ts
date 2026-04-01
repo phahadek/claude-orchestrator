@@ -22,6 +22,7 @@ interface NotionPage {
     Type: { type: 'select'; select: { name: string } | null };
     'Depends On': { type: 'rich_text'; rich_text: NotionRichTextItem[] };
     Notes: { type: 'rich_text'; rich_text: NotionRichTextItem[] };
+    PR?: { type: 'url'; url: string | null };
     [key: string]: unknown;
   };
 }
@@ -107,7 +108,9 @@ function mapPageToTask(page: NotionPage): NotionTask {
     ? dependsOnRaw.split('|').map((id) => id.trim()).filter(Boolean)
     : [];
 
-  return { id: page.id, title, status, type, dependsOn, notionUrl: page.url };
+  const prUrl = page.properties['PR']?.url ?? undefined;
+
+  return { id: page.id, title, status, type, dependsOn, notionUrl: page.url, prUrl };
 }
 
 // ─── NotionClient ───────────────────────────────────────────────────────────

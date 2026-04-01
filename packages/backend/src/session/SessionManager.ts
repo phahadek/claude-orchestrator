@@ -1,7 +1,7 @@
 import path from 'path';
 import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
-import { AgentSession } from './AgentSession';
+import { AgentSession, parseNotionPageId } from './AgentSession';
 import { config } from '../config';
 import { insertSession, updateSessionStatus, insertEvent } from '../db/queries';
 import type { NotionClient } from '../notion/NotionClient';
@@ -34,19 +34,22 @@ export class SessionManager extends EventEmitter {
       throw err;
     }
 
+    const notionTaskId = parseNotionPageId(taskUrl);
+
     const session = new AgentSession(
       sessionId,
       taskUrl,
       projectContextUrl,
       this.notionClient,
       worktreePath,
+      notionTaskId,
     );
 
     // Insert session into SQLite before anything writes events
     const startedAt = Date.now();
     insertSession({
       session_id: sessionId,
-      notion_task_id: null,
+      notion_task_id: notionTaskId,
       notion_task_url: taskUrl,
       project_context_url: projectContextUrl,
       status: 'starting',

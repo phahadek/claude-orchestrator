@@ -11,6 +11,7 @@ import type {
   PermissionDenialRow,
   NewPermissionDenialRow,
   TaskCache,
+  PullRequestRow,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -328,4 +329,58 @@ export function getCacheAge(taskId: string): number {
   const row = getTaskCache(taskId);
   if (!row) return Infinity;
   return Date.now() - row.fetched_at;
+}
+
+// ─── pull_requests ──────────────────────────────────────────────────────────
+
+export function upsertPullRequest(pr: Omit<PullRequestRow, 'id'>): PullRequestRow {
+  db.prepare<Omit<PullRequestRow, 'id'>>(`
+    INSERT INTO pull_requests
+      (pr_number, pr_url, notion_task_id, session_id, repo, title, body,
+       head_branch, base_branch, state, review_result, review_at,
+       created_at, updated_at, synced_at)
+    VALUES
+      (@pr_number, @pr_url, @notion_task_id, @session_id, @repo, @title, @body,
+       @head_branch, @base_branch, @state, @review_result, @review_at,
+       @created_at, @updated_at, @synced_at)
+    ON CONFLICT(pr_url) DO UPDATE SET
+      synced_at      = excluded.synced_at,
+      state          = excluded.state,
+      title          = COALESCE(excluded.title, title),
+      body           = COALESCE(excluded.body, body),
+      head_branch    = COALESCE(excluded.head_branch, head_branch),
+      base_branch    = COALESCE(excluded.base_branch, base_branch),
+      notion_task_id = COALESCE(excluded.notion_task_id, notion_task_id),
+      session_id     = COALESCE(excluded.session_id, session_id),
+      updated_at     = excluded.updated_at
+  `).run(pr);
+  return db.prepare<{ pr_url: string }>(`
+    SELECT * FROM pull_requests WHERE pr_url = @pr_url
+  `).get({ pr_url: pr.pr_url }) as PullRequestRow;
+}
+
+export function getOpenPRs(repo: string): PullRequestRow[] {
+  return db.prepare<{ repo: string }>(`
+    SELECT * FROM pull_requests WHERE repo = @repo AND state = 'open' ORDER BY pr_number DESC
+  `).all({ repo }) as PullRequestRow[];
+}
+
+export function getPRByNumber(prNumber: number, repo: string): PullRequestRow | null {
+  return db.prepare<{ pr_number: number; repo: string }>(`
+    SELECT * FROM pull_requests WHERE pr_number = @pr_number AND repo = @repo
+  `).get({ pr_number: prNumber, repo }) as PullRequestRow | null;
+}
+
+export function setPRReviewResult(prNumber: number, repo: string, result: string): void {
+  db.prepare<{ pr_number: number; repo: string; review_result: string; review_at: string }>(`
+    UPDATE pull_requests
+    SET review_result = @review_result, review_at = @review_at
+    WHERE pr_number = @pr_number AND repo = @repo
+  `).run({ pr_number: prNumber, repo, review_result: result, review_at: new Date().toISOString() });
+}
+
+export function updatePRState(prNumber: number, repo: string, state: string): void {
+  db.prepare<{ pr_number: number; repo: string; state: string }>(`
+    UPDATE pull_requests SET state = @state WHERE pr_number = @pr_number AND repo = @repo
+  `).run({ pr_number: prNumber, repo, state });
 }
