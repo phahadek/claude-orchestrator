@@ -1,0 +1,124 @@
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal {
+  background: #1e1e1e;
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 24px;
+  width: 520px;
+  max-width: 90vw;
+  max-height: 80vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.modal h2 {
+  margin: 0;
+  font-size: 1.2rem;
+  color: #e0e0e0;
+}
+
+.modal section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.modal h3 {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #aaa;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.ready-task {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #e0e0e0;
+  font-size: 0.9rem;
+}
+
+.ready-task:hover {
+  background: #2a2a2a;
+}
+
+.ready-task input[type='checkbox'] {
+  cursor: pointer;
+}
+
+.blocked-task {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  color: #888;
+  font-size: 0.9rem;
+}
+
+.tag {
+  font-size: 0.75rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #2a2a2a;
+  color: #aaa;
+  white-space: nowrap;
+}
+
+.empty {
+  color: #888;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.loading {
+  color: #ccc;
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.type-icon {
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #333;
+}
+
+.modal-footer button {
+  padding: 8px 16px;
+  border-radius: 4px;
+  border: 1px solid #444;
+  background: #2a2a2a;
+  color: #e0e0e0;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.modal-footer button:hover:not(:disabled) {
+  background: #333;
+}
+
+.modal-footer button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

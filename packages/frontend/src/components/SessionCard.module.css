@@ -1,0 +1,127 @@
+.session-card {
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 8px;
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.session-card:hover {
+  border-color: #585b70;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.session-card.selected {
+  border-color: #89b4fa;
+  box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.2);
+}
+
+/* Status-tinted left border */
+.session-card.needs_permission {
+  border-left: 3px solid #f38ba8;
+}
+
+.session-card.running {
+  border-left: 3px solid #a6e3a1;
+}
+
+.session-card.starting {
+  border-left: 3px solid #fab387;
+}
+
+.session-card.done {
+  border-left: 3px solid #6c7086;
+}
+
+.session-card.error {
+  border-left: 3px solid #f38ba8;
+}
+
+.session-card.killed {
+  border-left: 3px solid #6c7086;
+}
+
+/* Card header */
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.type-icon {
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
+.task-name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #cdd6f4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+/* Status badge */
+.badge {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.badge-starting  { background: #45475a; color: #fab387; }
+.badge-running   { background: #45475a; color: #a6e3a1; }
+.badge-waiting   { background: #45475a; color: #f38ba8; }
+.badge-done      { background: #45475a; color: #a6e3a1; }
+.badge-error     { background: #45475a; color: #f38ba8; }
+.badge-killed    { background: #45475a; color: #6c7086; }
+.badge-unknown   { background: #45475a; color: #cdd6f4; }
+
+/* Attention banner */
+.attention-badge {
+  background: rgba(243, 139, 168, 0.15);
+  border: 1px solid rgba(243, 139, 168, 0.4);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 0.8rem;
+  color: #f38ba8;
+}
+
+/* Last event preview */
+.last-event {
+  font-size: 0.8rem;
+  color: #9399b2;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+/* Card footer */
+.card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: auto;
+}
+
+.elapsed {
+  font-size: 0.75rem;
+  color: #6c7086;
+}
+
+.pr-link {
+  font-size: 0.75rem;
+  color: #89b4fa;
+  text-decoration: none;
+}
+
+.pr-link:hover {
+  text-decoration: underline;
+}

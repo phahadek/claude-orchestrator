@@ -1,0 +1,126 @@
+.session-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+  padding: 16px;
+}
+
+.session-grid-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 16px;
+  color: #6c7086;
+  font-size: 0.9rem;
+}
+
+.session-grid-empty p {
+  margin: 0;
+}
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 16px 12px;
+  align-items: center;
+}
+
+.filter-toggle {
+  background: transparent;
+  border: 1px solid #45475a;
+  border-radius: 16px;
+  color: #9399b2;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 3px 10px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.filter-toggle:hover {
+  border-color: #585b70;
+  color: #cdd6f4;
+}
+
+.filter-toggle--active {
+  background: #313244;
+  border-color: #89b4fa;
+  color: #89b4fa;
+}
+
+.filter-clear {
+  background: transparent;
+  border: none;
+  color: #6c7086;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 3px 6px;
+  text-decoration: underline;
+  transition: color 0.15s;
+}
+
+.filter-clear:hover {
+  color: #cdd6f4;
+}
+
+.archive-all-button {
+  background: transparent;
+  border: 1px solid #45475a;
+  border-radius: 16px;
+  color: #9399b2;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 3px 10px;
+  margin-left: auto;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.archive-all-button:hover {
+  border-color: #fab387;
+  color: #fab387;
+}
+
+.archived-toggle {
+  display: flex;
+  justify-content: center;
+  padding: 8px 16px 4px;
+}
+
+.archived-toggle-button {
+  background: transparent;
+  border: none;
+  color: #6c7086;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 3px 8px;
+  text-decoration: underline;
+  transition: color 0.15s;
+}
+
+.archived-toggle-button:hover {
+  color: #cdd6f4;
+}
+
+/* Loading skeleton */
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position:  400px 0; }
+}
+
+.skeleton-card {
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 8px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.skeleton-line {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #313244 25%, #45475a 50%, #313244 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s infinite linear;
+}

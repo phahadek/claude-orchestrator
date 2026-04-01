@@ -1,0 +1,494 @@
+/* ── Panel container ─────────────────────────────────────────────── */
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #1e1e2e;
+  border-left: 1px solid #313244;
+  color: #cdd6f4;
+  font-family: inherit;
+  overflow: hidden;
+}
+
+/* ── Header ──────────────────────────────────────────────────────── */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #313244;
+  background: #181825;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.taskName {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: #cdd6f4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.notionLink {
+  font-size: 0.8rem;
+  color: #89b4fa;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+
+.notionLink:hover {
+  text-decoration: underline;
+}
+
+.elapsed {
+  font-size: 0.8rem;
+  color: #6c7086;
+  flex-shrink: 0;
+}
+
+.killButton {
+  background: rgba(243, 139, 168, 0.15);
+  border: 1px solid rgba(243, 139, 168, 0.4);
+  border-radius: 4px;
+  color: #f38ba8;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.killButton:hover {
+  background: rgba(243, 139, 168, 0.25);
+}
+
+.archiveButton {
+  background: rgba(166, 173, 200, 0.1);
+  border: 1px solid rgba(166, 173, 200, 0.3);
+  border-radius: 4px;
+  color: #a6adc8;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.archiveButton:hover:not(:disabled) {
+  background: rgba(166, 173, 200, 0.2);
+}
+
+.archiveButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.deleteButton {
+  background: rgba(243, 139, 168, 0.1);
+  border: 1px solid rgba(243, 139, 168, 0.3);
+  border-radius: 4px;
+  color: #f38ba8;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.deleteButton:hover:not(:disabled) {
+  background: rgba(243, 139, 168, 0.2);
+}
+
+.deleteButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.closeButton {
+  background: transparent;
+  border: none;
+  color: #6c7086;
+  cursor: pointer;
+  font-size: 1rem;
+  padding: 4px 6px;
+  flex-shrink: 0;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.closeButton:hover {
+  color: #cdd6f4;
+}
+
+/* ── Transcript ──────────────────────────────────────────────────── */
+.transcriptSection {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.transcriptHeader {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 4px 12px;
+  border-bottom: 1px solid #313244;
+  flex-shrink: 0;
+}
+
+.copyButton {
+  background: transparent;
+  border: 1px solid #45475a;
+  border-radius: 4px;
+  color: #6c7086;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 3px 8px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.copyButton:hover:not(:disabled) {
+  color: #cdd6f4;
+  border-color: #6c7086;
+}
+
+.copyButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.goToEndButton {
+  background: transparent;
+  border: 1px solid #45475a;
+  border-radius: 4px;
+  color: #6c7086;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 3px 8px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.goToEndButton:hover {
+  color: #cdd6f4;
+  border-color: #6c7086;
+}
+
+.transcript {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.emptyTranscript {
+  color: #6c7086;
+  font-style: italic;
+  font-size: 0.875rem;
+  margin: 0;
+}
+
+/* ── Event rows ──────────────────────────────────────────────────── */
+.eventText {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: #cdd6f4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.eventToolUse {
+  background: #181825;
+  border: 1px solid #313244;
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 0.85rem;
+}
+
+.toolHeader {
+  background: #313244;
+  color: #89b4fa;
+  font-weight: 600;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+}
+
+.toolArgs {
+  margin: 0;
+  padding: 8px 10px;
+  color: #a6e3a1;
+  overflow-x: auto;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bashCommand {
+  margin: 0;
+  padding: 8px 10px;
+  color: #f9e2af;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
+.eventToolResult {
+  border-left: 3px solid #45475a;
+  padding-left: 10px;
+  margin-left: 8px;
+}
+
+.toolResultContent {
+  margin: 0;
+  color: #9399b2;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.expandButton {
+  background: transparent;
+  border: none;
+  color: #585b70;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 4px 0 2px;
+  display: block;
+  transition: color 0.15s;
+}
+
+.expandButton:hover {
+  color: #89b4fa;
+}
+
+.eventSystem {
+  margin: 0;
+  font-style: italic;
+  color: #6c7086;
+  font-size: 0.85rem;
+}
+
+.eventUser {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: #cba6f7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-left: 3px solid #cba6f7;
+  padding-left: 10px;
+}
+
+.eventUserMessage {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.userMessageLabel {
+  font-size: 0.75rem;
+  color: #89b4fa;
+  font-weight: 600;
+}
+
+.eventUserMessage p {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: #cdd6f4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(137, 180, 250, 0.08);
+  border: 1px solid rgba(137, 180, 250, 0.25);
+  border-radius: 8px;
+  border-bottom-right-radius: 2px;
+  padding: 8px 12px;
+  max-width: 85%;
+}
+
+.eventError {
+  background: rgba(243, 139, 168, 0.1);
+  border: 1px solid rgba(243, 139, 168, 0.3);
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+
+.eventError pre {
+  margin: 0;
+  color: #f38ba8;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Permission request ──────────────────────────────────────────── */
+.permissionRequest {
+  border-top: 1px solid #313244;
+  background: rgba(243, 139, 168, 0.05);
+  padding: 12px 16px;
+  flex-shrink: 0;
+}
+
+.permissionTitleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 8px;
+}
+
+.permissionTitle {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #cdd6f4;
+}
+
+.clearAllBtn {
+  background: transparent;
+  border: none;
+  color: #6c7086;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+
+.clearAllBtn:hover {
+  color: #cdd6f4;
+}
+
+.proposedAction {
+  background: #181825;
+  border: 1px solid #313244;
+  border-radius: 4px;
+  color: #f38ba8;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  margin: 0 0 10px;
+  overflow-x: auto;
+  padding: 8px 10px;
+  padding-right: 28px;
+  position: relative;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.denialCloseBtn {
+  background: transparent;
+  border: none;
+  color: #6c7086;
+  cursor: pointer;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 2px 4px;
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  transition: color 0.15s;
+}
+
+.denialCloseBtn:hover {
+  color: #f38ba8;
+}
+
+.permissionButtons {
+  display: flex;
+  gap: 8px;
+}
+
+.approveButton {
+  background: rgba(166, 227, 161, 0.15);
+  border: 1px solid rgba(166, 227, 161, 0.4);
+  border-radius: 4px;
+  color: #a6e3a1;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 6px 14px;
+  transition: background 0.15s;
+}
+
+.approveButton:hover {
+  background: rgba(166, 227, 161, 0.25);
+}
+
+.denyButton {
+  background: rgba(243, 139, 168, 0.15);
+  border: 1px solid rgba(243, 139, 168, 0.4);
+  border-radius: 4px;
+  color: #f38ba8;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 6px 14px;
+  transition: background 0.15s;
+}
+
+.denyButton:hover {
+  background: rgba(243, 139, 168, 0.25);
+}
+
+/* ── Message composer ────────────────────────────────────────────── */
+.composer {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #313244;
+  background: #181825;
+  flex-shrink: 0;
+}
+
+.composerInput {
+  flex: 1;
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 6px;
+  color: #cdd6f4;
+  font-size: 0.875rem;
+  padding: 8px 12px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.composerInput::placeholder {
+  color: #6c7086;
+}
+
+.composerInput:focus {
+  border-color: #585b70;
+}
+
+.sendButton {
+  background: #313244;
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  color: #cdd6f4;
+  cursor: pointer;
+  font-size: 0.875rem;
+  padding: 8px 16px;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+
+.sendButton:hover:not(:disabled) {
+  background: #45475a;
+}
+
+.sendButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
