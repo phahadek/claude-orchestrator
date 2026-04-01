@@ -6,6 +6,8 @@ import {
   insertRuleReturning,
   updateRule,
   deleteRule,
+  getRecentPermissionEvents,
+  clearPermissionEvents,
 } from '../db/queries';
 import type { MatchType, RuleDecision } from '../db/types';
 
@@ -100,4 +102,20 @@ rulesRouter.delete('/:id', (req: Request, res: Response) => {
 
   deleteRule(id);
   res.status(204).send();
+});
+
+// ─── Permission events router ───────────────────────────────────────────────
+
+export const permissionEventsRouter = Router();
+
+// GET /api/permission-events
+permissionEventsRouter.get('/', (_req: Request, res: Response) => {
+  const rows = getRecentPermissionEvents(200);
+  res.json(rows);
+});
+
+// DELETE /api/permission-events
+permissionEventsRouter.delete('/', (_req: Request, res: Response) => {
+  clearPermissionEvents();
+  res.status(200).json({ cleared: true });
 });
