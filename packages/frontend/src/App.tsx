@@ -9,7 +9,6 @@ import { HistoryGrid } from './components/HistoryGrid';
 import { SessionDetail } from './components/SessionDetail';
 import { PRPanel } from './components/PRPanel';
 import { DispatchModal } from './components/DispatchModal';
-import { PermissionRules } from './components/PermissionRules';
 import { PermissionEventLog } from './components/PermissionEventLog';
 import { Notifications } from './components/Notifications';
 import { ShortcutHint } from './components/ShortcutHint';
@@ -43,7 +42,7 @@ export default function App() {
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
-  const [activeView, setActiveView] = useState<'sessions' | 'rules' | 'history' | 'denials' | 'prs'>('sessions');
+  const [activeView, setActiveView] = useState<'sessions' | 'history' | 'denials' | 'prs'>('sessions');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const notifiedRef = useRef<Set<string>>(new Set());
   const [showReconnected, setShowReconnected] = useState(false);
@@ -250,7 +249,6 @@ export default function App() {
     },
     onSwitchView: (view) => {
       if (view === 'sessions') setActiveView('sessions');
-      else if (view === 'rules') setActiveView('rules');
       else if (view === 'prs') setActiveView('prs');
     },
     onFocusSearch: () => {
@@ -281,9 +279,6 @@ export default function App() {
             <button type="button" onClick={() => setActiveView((v) => v === 'history' ? 'sessions' : 'history')}>
               {activeView === 'history' ? 'Hide History' : '🕑 History'}
             </button>
-            <button type="button" onClick={() => setActiveView((v) => v === 'rules' ? 'sessions' : 'rules')}>
-              {activeView === 'rules' ? 'Hide Rules' : '⚙️ Rules'}
-            </button>
             <button type="button" onClick={() => setActiveView((v) => v === 'denials' ? 'sessions' : 'denials')}>
               {activeView === 'denials' ? 'Hide Denials' : '📋 Denials'}
             </button>
@@ -292,9 +287,7 @@ export default function App() {
             </button>
           </div>
 
-          {activeView === 'rules' ? (
-            <PermissionRules />
-          ) : activeView === 'history' ? (
+          {activeView === 'history' ? (
             <HistoryGrid />
           ) : activeView === 'denials' ? (
             <PermissionEventLog />
