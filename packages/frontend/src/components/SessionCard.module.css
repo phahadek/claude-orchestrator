@@ -101,6 +101,21 @@
   overflow: hidden;
 }
 
+/* Tag pills */
+.tag-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.tag-pill {
+  font-size: 10px;
+  color: var(--ctp-text, #cdd6f4);
+  background: rgba(203, 166, 247, 0.5); /* --ctp-mauve at 50% opacity */
+  border-radius: var(--radius-sm, 4px);
+  padding: 1px 6px;
+}
+
 /* Card footer */
 .card-footer {
   display: flex;
@@ -112,6 +127,17 @@
 .elapsed {
   font-size: 11px;
   color: var(--text-faint);
+}
+
+.footer-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.note-icon {
+  font-size: 0.75rem;
+  cursor: default;
 }
 
 .pr-link {

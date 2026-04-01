@@ -19,6 +19,8 @@ export interface SessionState {
   ended_at?: number;
   archived?: boolean;
   project_id?: string | null;
+  note?: string | null;
+  tags?: string[];
 }
 
 export function useSessionStore() {
@@ -45,6 +47,8 @@ export function useSessionStore() {
             ended_at: msg.ended_at,
             archived: msg.archived ?? false,
             project_id: msg.project_id,
+            note: msg.note,
+            tags: msg.tags,
           });
           break;
         case 'session_event': {
@@ -94,6 +98,17 @@ export function useSessionStore() {
               status: msg.status,
               prUrl: msg.prUrl,
               pendingPermission: undefined,
+            });
+          }
+          break;
+        }
+        case 'session_updated': {
+          const s = next.get(msg.sessionId);
+          if (s) {
+            next.set(msg.sessionId, {
+              ...s,
+              ...(Object.prototype.hasOwnProperty.call(msg, 'note') && { note: msg.note }),
+              ...(Object.prototype.hasOwnProperty.call(msg, 'tags') && { tags: msg.tags }),
             });
           }
           break;

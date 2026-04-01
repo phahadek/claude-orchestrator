@@ -1,6 +1,12 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { getSession, getActiveSessions, getArchivedSessions, getSessionsByStatus, getSessionsByProject, deleteSession, archiveSession, unarchiveSession, archiveFinishedSessions } from '../db/queries';
+import { getSession, getActiveSessions, getArchivedSessions, getSessionsByStatus, getSessionsByProject, deleteSession, archiveSession, unarchiveSession, archiveFinishedSessions, setSessionNote, setSessionTags } from '../db/queries';
+import type { ServerMessage } from '../ws/types';
+
+let _broadcast: ((msg: ServerMessage) => void) = () => {};
+export function setBroadcast(fn: (msg: ServerMessage) => void): void {
+  _broadcast = fn;
+}
 
 export const sessionsRouter = Router();
 
@@ -65,5 +71,33 @@ sessionsRouter.patch('/:id/unarchive', (req: Request, res: Response) => {
     return;
   }
   unarchiveSession(sessionId);
+  res.json({ ok: true });
+});
+
+// PATCH /api/sessions/:id/note
+sessionsRouter.patch('/:id/note', (req: Request, res: Response) => {
+  const sessionId = String(req.params.id);
+  const existing = getSession(sessionId);
+  if (!existing) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+  const note: string | null = req.body.note ?? null;
+  setSessionNote(sessionId, note);
+  _broadcast({ type: 'session_updated', sessionId, note });
+  res.json({ ok: true });
+});
+
+// PATCH /api/sessions/:id/tags
+sessionsRouter.patch('/:id/tags', (req: Request, res: Response) => {
+  const sessionId = String(req.params.id);
+  const existing = getSession(sessionId);
+  if (!existing) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+  const tags: string[] = Array.isArray(req.body.tags) ? req.body.tags.map(String) : [];
+  setSessionTags(sessionId, tags);
+  _broadcast({ type: 'session_updated', sessionId, tags });
   res.json({ ok: true });
 });

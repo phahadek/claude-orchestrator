@@ -174,9 +174,17 @@ export default function App() {
       .filter((s) => !s.archived)
       .filter((s) => !searchText || s.taskName.toLowerCase().includes(searchText.toLowerCase()))
       .filter((s) => !statusFilter || s.status === statusFilter)
-      .filter((s) => !tagFilter || (s as { tags?: string[] }).tags?.includes(tagFilter))
+      .filter((s) => !tagFilter || s.tags?.includes(tagFilter))
       .filter((s) => !activeProjectId || s.project_id === activeProjectId);
   }, [sessions, searchText, statusFilter, tagFilter, activeProjectId]);
+
+  const availableTags = useMemo(() => {
+    const tagSet = new Set<string>();
+    for (const s of sessions) {
+      for (const tag of s.tags ?? []) tagSet.add(tag);
+    }
+    return [...tagSet].sort();
+  }, [sessions]);
 
   const filtersActive = Boolean(searchText || statusFilter || tagFilter);
 
@@ -276,6 +284,7 @@ export default function App() {
                 onStatusChange={setStatusFilter}
                 tagFilter={tagFilter}
                 onTagChange={setTagFilter}
+                availableTags={availableTags}
                 resultCount={filteredSessions.length}
                 searchInputRef={searchInputRef}
               />
