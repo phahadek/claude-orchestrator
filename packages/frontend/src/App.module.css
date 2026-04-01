@@ -1,0 +1,42 @@
+.appContainer {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.appContainer.dragging {
+  user-select: none;
+}
+
+.leftPanel {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  min-width: 0;
+}
+
+.resizeHandle {
+  width: 4px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.resizeHandle:hover {
+  background: #89b4fa;
+}
+
+.rightPanel {
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.detailPlaceholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #6c7086;
+  font-size: 0.875rem;
+}
