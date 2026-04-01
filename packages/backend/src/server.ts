@@ -19,6 +19,7 @@ import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
 import { PRSyncJob } from './github/PRSyncJob';
 import { getActiveSessions, getEventsBySession, getDenialsBySession } from './db/queries';
+import { isSystemOnlyUserEvent } from './utils/eventFilters';
 
 runMigrations();
 
@@ -87,8 +88,11 @@ wss.on('connection', (ws) => {
       status: s.status,
     } satisfies ServerMessage));
 
-    // Send stored events so the transcript populates
+    // Send stored events so the transcript populates.
+    // Skip user events that contain only system-injected content — they are
+    // stored in the DB for debugging but are noise in the transcript UI.
     for (const ev of getEventsBySession(s.session_id)) {
+      if (isSystemOnlyUserEvent(ev.payload)) continue;
       ws.send(JSON.stringify({
         type: 'session_event',
         sessionId: s.session_id,
