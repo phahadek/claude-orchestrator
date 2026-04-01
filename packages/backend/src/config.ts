@@ -5,7 +5,9 @@ function requireEnv(name: string): string {
 }
 
 export interface ProjectConfig {
+  id: string;          // unique key, e.g. "claude-dashboard"
   name: string;
+  projectDir: string;  // absolute path to the repo root
   contextUrl: string;
   boardId: string;
 }
@@ -67,3 +69,7 @@ export const ALLOWED_TOOLS = [
   'mcp__claude_ai_Notion__*', 'mcp__github__*',
   'mcp__claude_ai_Asana__*', 'mcp__claude_ai_Google_Calendar__*',
 ];
+
+export function getProjectById(id: string): ProjectConfig | undefined {
+  return config.projects.find((p) => p.id === id);
+}

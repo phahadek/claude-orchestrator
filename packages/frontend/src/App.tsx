@@ -18,17 +18,17 @@ const MAX_DETAIL_WIDTH = 80;
 
 export default function App() {
   const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, deleteSession, setSessionArchived } = useSessionStore();
-  const boardIdRef = useRef('');
+  const projectIdRef = useRef('');
   const { send, connectionState } = useWebSocket(dispatch, (sendNow: (msg: ClientMessage) => void) => {
-    // Called each time the WS (re)connects — fetch tasks if boardId is already known
-    if (boardIdRef.current) {
-      sendNow({ type: 'fetch_tasks', boardId: boardIdRef.current });
+    // Called each time the WS (re)connects — fetch tasks if projectId is already known
+    if (projectIdRef.current) {
+      sendNow({ type: 'fetch_tasks', projectId: projectIdRef.current });
     }
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [activeView, setActiveView] = useState<'sessions' | 'rules' | 'history'>('sessions');
-  const [boardId, setBoardId] = useState('');
+  const [projectId, setProjectId] = useState('');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const notifiedRef = useRef<Set<string>>(new Set());
   const [showReconnected, setShowReconnected] = useState(false);
@@ -78,15 +78,15 @@ export default function App() {
   useEffect(() => {
     fetch('/api/config')
       .then((r) => r.json())
-      .then((projects: { boardId: string }[]) => {
+      .then((projects: { id: string }[]) => {
         if (projects.length > 0) {
-          boardIdRef.current = projects[0].boardId;
-          setBoardId(projects[0].boardId);
+          projectIdRef.current = projects[0].id;
+          setProjectId(projects[0].id);
           // If WS is already open by the time config arrives, send immediately
-          send({ type: 'fetch_tasks', boardId: projects[0].boardId });
+          send({ type: 'fetch_tasks', projectId: projects[0].id });
         }
       })
-      .catch(() => {/* leave boardId empty — DispatchModal handles the empty case */});
+      .catch(() => {/* leave projectId empty — DispatchModal handles the empty case */});
   }, []);
 
   useEffect(() => {
@@ -211,7 +211,7 @@ export default function App() {
           tasks={tasks}
           tasksReady={tasksReady}
           send={send}
-          boardId={boardId}
+          projectId={projectId}
           onClose={() => setShowModal(false)}
         />
       )}
