@@ -74,6 +74,7 @@ wss.on('connection', (ws) => {
       ...(s.started_at != null && { started_at: s.started_at }),
       ...(s.ended_at != null && { ended_at: s.ended_at }),
       archived: s.archived === 1,
+      favorited: s.favorited === 1,
       project_id: s.project_id,
       sessionType: s.session_type,
       note: s.note ?? null,

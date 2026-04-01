@@ -81,6 +81,20 @@ describe('SessionGrid', () => {
     expect(onClearFilters).toHaveBeenCalledOnce();
   });
 
+  it('sorts favorited sessions before non-favorited regardless of status rank', () => {
+    const sessions = [
+      makeSession({ sessionId: 's1', taskName: 'Running Task',   status: 'running',           favorited: false }),
+      makeSession({ sessionId: 's2', taskName: 'Favorited Done', status: 'done',              favorited: true }),
+      makeSession({ sessionId: 's3', taskName: 'Permission Task', status: 'needs_permission', favorited: false }),
+    ];
+    render(<SessionGrid sessions={sessions} projects={[]} onSelect={vi.fn()} selectedId={null} keyboardSelectedId={null} synced={true} onArchiveAll={vi.fn()} />);
+    const cards = screen.getAllByRole('generic').filter(
+      (el) => el.className?.includes('session-card')
+    );
+    // Favorited session should come first regardless of its status rank
+    expect(cards[0].textContent).toContain('Favorited Done');
+  });
+
   it('calls onSelect with the correct sessionId when a card is clicked', () => {
     const onSelect = vi.fn();
     const sessions = [makeSession({ sessionId: 'abc123', taskName: 'Clickable Task', status: 'running' })];

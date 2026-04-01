@@ -1,5 +1,6 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
+import { useState } from 'react';
 import { SessionDetail, EventRow } from '../SessionDetail';
 import type { SessionState } from '../../hooks/useSessionStore';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
@@ -21,6 +22,24 @@ function makeEvent(
   timestamp = 1000
 ): SessionState['events'][number] {
   return { eventType, content, timestamp };
+}
+
+/** Wrapper that manages dismissedDenials state so dismissal tests can verify UI updates. */
+function DismissalWrapper({ session }: { session: SessionState }) {
+  const [dismissed, setDismissed] = useState(new Set<string>());
+  return (
+    <SessionDetail
+      session={session}
+      send={vi.fn()}
+      onClose={vi.fn()}
+      onDelete={vi.fn()}
+      onArchive={vi.fn()}
+      onUnarchive={vi.fn()}
+      dismissedDenials={dismissed}
+      onDismissDenial={(id) => setDismissed((prev) => new Set([...prev, id]))}
+      onDismissAllDenials={(ids) => setDismissed(new Set(ids))}
+    />
+  );
 }
 
 describe('SessionDetail', () => {
@@ -181,7 +200,7 @@ describe('SessionDetail', () => {
         { tool_name: 'Write', tool_use_id: 'id-2', tool_input: { file_path: '/etc/passwd' } },
       ],
     });
-    render(<SessionDetail session={session} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    render(<DismissalWrapper session={session} />);
     expect(screen.getByText('Bash')).toBeTruthy();
     const dismissBtns = screen.getAllByLabelText('Dismiss');
     fireEvent.click(dismissBtns[0]);
@@ -196,7 +215,7 @@ describe('SessionDetail', () => {
         { tool_name: 'Write', tool_use_id: 'id-2', tool_input: {} },
       ],
     });
-    render(<SessionDetail session={session} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    render(<DismissalWrapper session={session} />);
     expect(screen.getByText('Clear all')).toBeTruthy();
   });
 
@@ -207,7 +226,7 @@ describe('SessionDetail', () => {
         { tool_name: 'Write', tool_use_id: 'id-2', tool_input: {} },
       ],
     });
-    render(<SessionDetail session={session} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    render(<DismissalWrapper session={session} />);
     fireEvent.click(screen.getByText('Clear all'));
     expect(screen.queryByText('Bash')).toBeNull();
     expect(screen.queryByText('Write')).toBeNull();

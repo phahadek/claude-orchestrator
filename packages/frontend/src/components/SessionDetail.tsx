@@ -22,13 +22,17 @@ interface Props {
   onArchive: (sessionId: string) => void;
   onUnarchive: (sessionId: string) => void;
   onResume?: (sessionId: string) => void;
+  onFavorite?: (sessionId: string) => void;
+  onUnfavorite?: (sessionId: string) => void;
+  dismissedDenials?: Set<string>;
+  onDismissDenial?: (toolUseId: string) => void;
+  onDismissAllDenials?: (toolUseIds: string[]) => void;
 }
 
-export function SessionDetail({ session, send, onClose, onDelete, onArchive, onUnarchive, onResume }: Props) {
+export function SessionDetail({ session, send, onClose, onDelete, onArchive, onUnarchive, onResume, onFavorite, onUnfavorite, dismissedDenials = new Set(), onDismissDenial = () => {}, onDismissAllDenials = () => {} }: Props) {
   const [draftMessage, setDraftMessage] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [archiving, setArchiving] = useState(false);
-  const [dismissedDenials, setDismissedDenials] = useState<Set<string>>(new Set());
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [isAtBottom, setIsAtBottom] = useState(true);
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -44,7 +48,6 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
   }, [session?.events.length]);
 
   useEffect(() => {
-    setDismissedDenials(new Set());
     setIsAtBottom(true);
     setEditingNote(false);
     setNoteValue(session?.note ?? '');
@@ -112,6 +115,17 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
       onUnarchive(session.sessionId);
     } finally {
       setArchiving(false);
+    }
+  }
+
+  async function handleToggleFavorite() {
+    if (!session) return;
+    if (session.favorited) {
+      await fetch(`/api/sessions/${session.sessionId}/unfavorite`, { method: 'PATCH' });
+      onUnfavorite?.(session.sessionId);
+    } else {
+      await fetch(`/api/sessions/${session.sessionId}/favorite`, { method: 'PATCH' });
+      onFavorite?.(session.sessionId);
     }
   }
 
@@ -242,6 +256,14 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
         <span className={styles.taskName}>{taskNameFromNotionUrl(session.taskName)}</span>
         <div className={styles.headerControls}>
           <StatusBadge status={session.status} isRateLimited={session.isRateLimited} />
+          <button
+            className={`${styles.favoriteButton} ${session.favorited ? styles['favoriteButton--active'] : ''}`}
+            onClick={() => void handleToggleFavorite()}
+            aria-label={session.favorited ? 'Unfavorite session' : 'Favorite session'}
+            title={session.favorited ? 'Unfavorite' : 'Favorite'}
+          >
+            {session.favorited ? '★' : '☆'}
+          </button>
           {session.isRateLimited && onResume && (
             <button className={styles.resumeButton} onClick={() => onResume(session.sessionId)}>
               Resume
@@ -371,7 +393,7 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
               {visibleDenials.length >= 2 && (
                 <button
                   className={styles.clearAllBtn}
-                  onClick={() => setDismissedDenials(new Set(allDenials.map((d) => d.tool_use_id)))}
+                  onClick={() => onDismissAllDenials(allDenials.map((d) => d.tool_use_id))}
                 >
                   Clear all
                 </button>
@@ -381,7 +403,7 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
               <div key={d.tool_use_id} className={styles.proposedAction}>
                 <button
                   className={styles.denialCloseBtn}
-                  onClick={() => setDismissedDenials((prev) => new Set([...prev, d.tool_use_id]))}
+                  onClick={() => onDismissDenial(d.tool_use_id)}
                   aria-label="Dismiss"
                 >
                   ✕
