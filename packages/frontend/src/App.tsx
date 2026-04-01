@@ -89,6 +89,20 @@ export default function App() {
     }
   }, [sessions, setSessionArchived]);
 
+  const RESUME_MESSAGE = "Limits have reset. Continue where you left off.";
+
+  const handleResume = useCallback((sessionId: string) => {
+    send({ type: 'send_message', sessionId, message: RESUME_MESSAGE });
+  }, [send]);
+
+  const handleResumeAll = useCallback(() => {
+    for (const s of sessions) {
+      if (!s.archived && s.isRateLimited) {
+        send({ type: 'send_message', sessionId: s.sessionId, message: RESUME_MESSAGE });
+      }
+    }
+  }, [sessions, send]);
+
   useEffect(() => {
     fetch('/api/config')
       .then((r) => r.json())
@@ -304,6 +318,8 @@ export default function App() {
                 onArchiveAll={handleArchiveAll}
                 filtersActive={filtersActive}
                 onClearFilters={clearFilters}
+                onResumeAll={handleResumeAll}
+                onResume={handleResume}
               />
             </>
           )}
@@ -326,6 +342,7 @@ export default function App() {
               }}
               onArchive={(sessionId) => setSessionArchived(sessionId, true)}
               onUnarchive={(sessionId) => setSessionArchived(sessionId, false)}
+              onResume={handleResume}
             />
           ) : (
             <div className={styles.detailPlaceholder}>

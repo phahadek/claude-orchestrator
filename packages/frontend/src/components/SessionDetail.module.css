@@ -54,6 +54,22 @@
   flex-shrink: 0;
 }
 
+.resumeButton {
+  background: rgba(249, 226, 175, 0.15);
+  border: 1px solid rgba(249, 226, 175, 0.4);
+  border-radius: var(--radius-sm);
+  color: var(--ctp-yellow);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.resumeButton:hover {
+  background: rgba(249, 226, 175, 0.25);
+}
+
 .endSessionButton {
   background: rgba(250, 179, 135, 0.15);
   border: 1px solid rgba(250, 179, 135, 0.4);

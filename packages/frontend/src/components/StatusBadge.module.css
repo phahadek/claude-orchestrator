@@ -15,3 +15,4 @@
 .badge-error            { background: rgba(243,139,168,0.15); color: var(--ctp-red); }
 .badge-killed           { background: rgba(250,179,135,0.15); color: var(--ctp-peach); }
 .badge-unknown          { background: rgba(108,112,134,0.15); color: var(--ctp-overlay0); }
+.badge-rate-limited     { background: rgba(249,226,175,0.20); color: var(--ctp-yellow); }

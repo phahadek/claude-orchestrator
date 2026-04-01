@@ -50,9 +50,11 @@ interface Props {
   onArchiveAll: () => void;
   filtersActive?: boolean;
   onClearFilters?: () => void;
+  onResumeAll?: () => void;
+  onResume?: (sessionId: string) => void;
 }
 
-export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboardSelectedId, synced, onArchiveAll, filtersActive, onClearFilters }: Props) {
+export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboardSelectedId, synced, onArchiveAll, filtersActive, onClearFilters, onResumeAll, onResume }: Props) {
   const [activeFilters, setActiveFilters] = useState<Set<Status>>(new Set());
 
   function toggleFilter(status: Status) {
@@ -69,6 +71,7 @@ export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboard
 
   const visibleSessions = sessions.filter((s) => !s.archived);
   const archivableCount = visibleSessions.filter((s) => ['done', 'error', 'killed'].includes(s.status)).length;
+  const rateLimitedCount = visibleSessions.filter((s) => s.isRateLimited).length;
 
   const filtered = activeFilters.size === 0
     ? visibleSessions
@@ -116,6 +119,14 @@ export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboard
               onClick={onArchiveAll}
             >
               Archive done/error/killed
+            </button>
+          )}
+          {rateLimitedCount > 0 && onResumeAll && (
+            <button
+              className={styles['resume-all-button']}
+              onClick={onResumeAll}
+            >
+              ▶ Resume All ({rateLimitedCount})
             </button>
           )}
         </div>
@@ -169,6 +180,7 @@ export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboard
                   onClick={() => onSelect(s.sessionId)}
                   projectColor={proj?.color}
                   projectName={multiProject ? proj?.name : undefined}
+                  onResume={onResume ? () => onResume(s.sessionId) : undefined}
                 />
               </div>
             );

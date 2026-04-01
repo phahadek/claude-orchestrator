@@ -165,4 +165,40 @@ describe('useSessionStore', () => {
     expect(result.current.sessions).not.toBe(before);
     expect(result.current.sessions[0].events).not.toBe(before[0]?.events);
   });
+
+  it('isRateLimited is true when last event has error === "rate_limit" in payload', () => {
+    const { result } = renderHook(() => useSessionStore());
+    act(() => result.current.dispatch(msg.session_started()));
+    const rateLimitEvent: ServerMessage = {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'text',
+      content: JSON.stringify({ type: 'assistant', error: 'rate_limit', isApiErrorMessage: true }),
+    };
+    act(() => result.current.dispatch(rateLimitEvent));
+    expect(result.current.sessions[0].isRateLimited).toBe(true);
+  });
+
+  it('isRateLimited is false after a non-rate-limit event arrives (user resumed)', () => {
+    const { result } = renderHook(() => useSessionStore());
+    act(() => result.current.dispatch(msg.session_started()));
+    const rateLimitEvent: ServerMessage = {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'text',
+      content: JSON.stringify({ type: 'assistant', error: 'rate_limit', isApiErrorMessage: true }),
+    };
+    act(() => result.current.dispatch(rateLimitEvent));
+    expect(result.current.sessions[0].isRateLimited).toBe(true);
+    // Normal event arrives after resuming
+    act(() => result.current.dispatch(msg.session_event()));
+    expect(result.current.sessions[0].isRateLimited).toBe(false);
+  });
+
+  it('isRateLimited is false for normal events without rate_limit error', () => {
+    const { result } = renderHook(() => useSessionStore());
+    act(() => result.current.dispatch(msg.session_started()));
+    act(() => result.current.dispatch(msg.session_event()));
+    expect(result.current.sessions[0].isRateLimited).toBe(false);
+  });
 });

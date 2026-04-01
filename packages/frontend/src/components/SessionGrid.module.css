@@ -87,6 +87,21 @@
   color: var(--ctp-peach);
 }
 
+.resume-all-button {
+  background: rgba(249, 226, 175, 0.10);
+  border: 1px solid rgba(249, 226, 175, 0.40);
+  border-radius: 16px;
+  color: var(--ctp-yellow);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 3px 10px;
+  transition: background 0.15s;
+}
+
+.resume-all-button:hover {
+  background: rgba(249, 226, 175, 0.20);
+}
+
 .archived-toggle {
   display: flex;
   justify-content: center;
