@@ -13,7 +13,7 @@ import type { ServerMessage } from './ws/types';
 import { rulesRouter, permissionEventsRouter } from './routes/rules';
 import configRouter from './routes/config';
 import { sessionsRouter } from './routes/sessions';
-import { getAllSessions, getEventsBySession, getDenialsBySession } from './db/queries';
+import { getActiveSessions, getEventsBySession, getDenialsBySession } from './db/queries';
 
 runMigrations();
 
@@ -51,8 +51,8 @@ sessionManager.on('message', (msg: ServerMessage) => {
 wss.on('connection', (ws) => {
   console.log('[WS] client connected');
 
-  // Send existing sessions to the new client so the UI populates on load
-  for (const s of getAllSessions()) {
+  // Send existing active (non-archived) sessions to the new client so the UI populates on load
+  for (const s of getActiveSessions()) {
     ws.send(JSON.stringify({
       type: 'session_started',
       sessionId: s.session_id,

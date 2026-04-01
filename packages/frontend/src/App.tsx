@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSessionStore } from './hooks/useSessionStore';
 import { useWebSocket } from './hooks/useWebSocket';
 import { SessionGrid } from './components/SessionGrid';
+import { HistoryGrid } from './components/HistoryGrid';
 import { SessionDetail } from './components/SessionDetail';
 import { DispatchModal } from './components/DispatchModal';
 import { PermissionRules } from './components/PermissionRules';
@@ -25,7 +26,7 @@ export default function App() {
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
-  const [showRules, setShowRules] = useState(false);
+  const [activeView, setActiveView] = useState<'sessions' | 'rules' | 'history'>('sessions');
   const [boardId, setBoardId] = useState('');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const notifiedRef = useRef<Set<string>>(new Set());
@@ -76,6 +77,7 @@ export default function App() {
     for (const session of sessions) {
       if (
         (session.status === 'done' || session.status === 'error') &&
+        !session.archived &&
         !notifiedRef.current.has(session.sessionId)
       ) {
         notifiedRef.current.add(session.sessionId);
@@ -120,26 +122,38 @@ export default function App() {
     ? (sessions.find((s) => s.sessionId === selectedId) ?? null)
     : null;
 
+  const activeSessions = sessions.filter((s) => !s.archived);
+  const runningCount = activeSessions.filter((s) => ['running', 'starting', 'needs_permission'].includes(s.status)).length;
+  const doneCount = activeSessions.filter((s) => ['done', 'error', 'killed'].includes(s.status)).length;
+
   return (
     <div className={`${styles.appContainer}${isDragging ? ` ${styles.dragging}` : ''}`}>
       <div className={styles.leftPanel}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
           <h1 style={{ margin: 0, flex: 1 }}>Claude Code Dashboard</h1>
-          <button type="button" onClick={() => setShowRules((v) => !v)}>
-            {showRules ? 'Hide Rules' : '⚙️ Rules'}
+          <button type="button" onClick={() => setActiveView((v) => v === 'history' ? 'sessions' : 'history')}>
+            {activeView === 'history' ? 'Hide History' : '🕑 History'}
+          </button>
+          <button type="button" onClick={() => setActiveView((v) => v === 'rules' ? 'sessions' : 'rules')}>
+            {activeView === 'rules' ? 'Hide Rules' : '⚙️ Rules'}
           </button>
           <button type="button" onClick={() => setShowModal(true)}>
             + New Session
           </button>
         </div>
         <p>
-          {sessions.length} sessions ·{' '}
-          {readyCount} ready
+          {runningCount > 0 && <span>{runningCount} running</span>}
+          {runningCount > 0 && doneCount > 0 && <span> · </span>}
+          {doneCount > 0 && <span>{doneCount} done</span>}
+          {runningCount === 0 && doneCount === 0 && <span>0 sessions</span>}
+          {readyCount > 0 && <span> · {readyCount} ready</span>}
           {blockedCount > 0 && <span style={{ color: 'var(--color-subtext0, #a6adc8)' }}> · {blockedCount} blocked</span>}
         </p>
 
-        {showRules ? (
+        {activeView === 'rules' ? (
           <PermissionRules />
+        ) : activeView === 'history' ? (
+          <HistoryGrid />
         ) : (
           <SessionGrid
             sessions={sessions}
