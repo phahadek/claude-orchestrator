@@ -133,6 +133,24 @@ export function extractSystem(
       const stripped = content.replace(/<[^>]+>/g, '').trim();
       return { rawType, display: stripped };
     }
+    if (Array.isArray(content)) {
+      const parts: string[] = [];
+      for (const block of content) {
+        if (typeof block !== 'object' || block === null) continue;
+        const b = block as Record<string, unknown>;
+        if (b.type === 'text' && typeof b.text === 'string') {
+          // Strip entire tag+content blocks (e.g. <system-reminder>...</system-reminder>),
+          // then strip any remaining standalone tags, to remove system-injected content.
+          const stripped = b.text
+            .replace(/<([a-zA-Z][a-zA-Z0-9_-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g, '')
+            .replace(/<[^>]+>/g, '')
+            .trim();
+          if (stripped) parts.push(stripped);
+        }
+      }
+      return { rawType, display: parts.join('\n') };
+    }
+    return { rawType, display: '' };
   }
 
   if (rawType === 'result') {
