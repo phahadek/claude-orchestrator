@@ -15,15 +15,17 @@ interface Props {
   tasks: ResolvedTask[];
   tasksReady: boolean;
   send: (msg: ClientMessage) => void;
+  resetTasks: () => void;
   project: ProjectConfig;
   onClose: () => void;
 }
 
-export function DispatchModal({ tasks, tasksReady, send, project, onClose }: Props) {
+export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, onClose }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    resetTasks();
     send({ type: 'fetch_tasks', projectId: project.id });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
