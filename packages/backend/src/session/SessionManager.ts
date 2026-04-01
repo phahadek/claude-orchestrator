@@ -3,7 +3,7 @@ import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
 import { AgentSession } from './AgentSession';
 import { config } from '../config';
-import { insertSession } from '../db/queries';
+import { insertSession, updateSessionStatus } from '../db/queries';
 import type { NotionClient } from '../notion/NotionClient';
 import type { ServerMessage } from '../ws/types';
 
@@ -75,6 +75,16 @@ export class SessionManager extends EventEmitter {
       .then(() => this.cleanupWorktree(sessionId, worktreePath, branchName, session.prUrl))
       .catch((err) => {
         console.error(`[SessionManager] session ${sessionId} error: ${err}`);
+        // If run() threw before broadcasting session_ended, update SQLite and
+        // notify the frontend so the session doesn't stay stuck at 'running'.
+        if (!session.hasEnded) {
+          updateSessionStatus(sessionId, 'error', Date.now());
+          this.emit('message', {
+            type: 'session_ended',
+            sessionId,
+            status: 'error',
+          } satisfies ServerMessage);
+        }
         return this.cleanupWorktree(sessionId, worktreePath, branchName, undefined);
       });
 
