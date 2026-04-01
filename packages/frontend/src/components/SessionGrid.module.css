@@ -63,6 +63,44 @@
   color: #cdd6f4;
 }
 
+.archive-all-button {
+  background: transparent;
+  border: 1px solid #45475a;
+  border-radius: 16px;
+  color: #9399b2;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 3px 10px;
+  margin-left: auto;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.archive-all-button:hover {
+  border-color: #fab387;
+  color: #fab387;
+}
+
+.archived-toggle {
+  display: flex;
+  justify-content: center;
+  padding: 8px 16px 4px;
+}
+
+.archived-toggle-button {
+  background: transparent;
+  border: none;
+  color: #6c7086;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 3px 8px;
+  text-decoration: underline;
+  transition: color 0.15s;
+}
+
+.archived-toggle-button:hover {
+  color: #cdd6f4;
+}
+
 /* Loading skeleton */
 @keyframes shimmer {
   0%   { background-position: -400px 0; }
