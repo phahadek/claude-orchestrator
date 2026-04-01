@@ -1,18 +1,18 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { getProjectById } from '../config.js';
+import { getProjectById } from '../config';
 import {
   getOpenPRs,
   getPRByNumber,
   updatePRState,
   getTaskTitleFromCache,
-} from '../db/queries.js';
-import { PRSyncJob } from '../github/PRSyncJob.js';
-import { GitHubApiError } from '../github/types.js';
-import type { GitHubClient } from '../github/GitHubClient.js';
-import type { PRReviewService } from '../github/PRReviewService.js';
-import type { PRReviewResult } from '../github/PRReviewService.js';
-import type { SessionManager } from '../session/SessionManager.js';
+} from '../db/queries';
+import { PRSyncJob } from '../github/PRSyncJob';
+import { GitHubApiError } from '../github/types';
+import type { GitHubClient } from '../github/GitHubClient';
+import type { PRReviewService } from '../github/PRReviewService';
+import type { PRReviewResult } from '../github/PRReviewService';
+import type { SessionManager } from '../session/SessionManager';
 
 export function createPrsRouter(
   github: GitHubClient,

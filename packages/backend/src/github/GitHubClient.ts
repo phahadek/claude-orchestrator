@@ -1,5 +1,5 @@
-import { GITHUB_TOKEN, GITHUB_REPO } from '../config.js';
-import { GitHubApiError, PullRequest, PRDiff, MergeResult } from './types.js';
+import { GITHUB_TOKEN, GITHUB_REPO } from '../config';
+import { GitHubApiError, PullRequest, PRDiff, MergeResult } from './types';
 
 export class GitHubClient {
   private readonly base = 'https://api.github.com';
