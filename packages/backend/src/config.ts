@@ -10,6 +10,7 @@ export interface ProjectConfig {
   projectDir: string;  // absolute path to the repo root
   contextUrl: string;
   boardId: string;
+  githubRepo?: string; // "owner/repo" — optional; enables PR features
 }
 
 function parseProjects(): ProjectConfig[] {
