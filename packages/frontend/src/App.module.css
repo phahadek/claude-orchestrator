@@ -9,6 +9,14 @@
   user-select: none;
 }
 
+.mainArea {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
 .contentArea {
   display: flex;
   flex: 1;
@@ -47,6 +55,24 @@
   height: 100%;
   color: #6c7086;
   font-size: 0.875rem;
+}
+
+.horizontalResizeHandle {
+  height: 4px;
+  flex-shrink: 0;
+  cursor: row-resize;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.horizontalResizeHandle:hover {
+  background: #89b4fa;
+}
+
+.prPanelSection {
+  flex-shrink: 0;
+  overflow: hidden;
+  border-top: 1px solid #313244;
 }
 
 .connectionBanner {
