@@ -48,9 +48,11 @@ interface Props {
   keyboardSelectedId: string | null;
   synced: boolean;
   onArchiveAll: () => void;
+  filtersActive?: boolean;
+  onClearFilters?: () => void;
 }
 
-export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboardSelectedId, synced, onArchiveAll }: Props) {
+export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboardSelectedId, synced, onArchiveAll, filtersActive, onClearFilters }: Props) {
   const [activeFilters, setActiveFilters] = useState<Set<Status>>(new Set());
 
   function toggleFilter(status: Status) {
@@ -131,9 +133,18 @@ export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboard
         </div>
       )}
 
-      {synced && sorted.length === 0 && visibleSessions.length === 0 && (
+      {synced && sorted.length === 0 && visibleSessions.length === 0 && !filtersActive && (
         <div className={styles['session-grid-empty']}>
           <p>No sessions yet. Dispatch a task to get started.</p>
+        </div>
+      )}
+
+      {synced && visibleSessions.length === 0 && filtersActive && (
+        <div className={styles['session-grid-empty']}>
+          <p>No sessions match your filters.</p>
+          {onClearFilters && (
+            <button type="button" onClick={onClearFilters}>Clear filters</button>
+          )}
         </div>
       )}
 
