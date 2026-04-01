@@ -19,9 +19,10 @@ interface Props {
   sessions: SessionState[];
   onSelect: (sessionId: string) => void;
   selectedId: string | null;
+  synced: boolean;
 }
 
-export function SessionGrid({ sessions, onSelect, selectedId }: Props) {
+export function SessionGrid({ sessions, onSelect, selectedId, synced }: Props) {
   const [activeFilters, setActiveFilters] = useState<Set<Status>>(new Set());
 
   function toggleFilter(status: Status) {
@@ -75,7 +76,19 @@ export function SessionGrid({ sessions, onSelect, selectedId }: Props) {
         </div>
       )}
 
-      {sorted.length === 0 && sessions.length === 0 && (
+      {!synced && sessions.length === 0 && (
+        <div className={styles['session-grid']}>
+          {[0, 1, 2].map((i) => (
+            <div key={i} className={styles['skeleton-card']}>
+              <div className={styles['skeleton-line']} style={{ width: '60%' }} />
+              <div className={styles['skeleton-line']} style={{ width: '40%' }} />
+              <div className={styles['skeleton-line']} style={{ width: '80%' }} />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {synced && sorted.length === 0 && sessions.length === 0 && (
         <div className={styles['session-grid-empty']}>
           <p>No sessions yet. Dispatch a task to get started.</p>
         </div>
