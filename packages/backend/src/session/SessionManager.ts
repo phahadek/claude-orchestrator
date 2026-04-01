@@ -2,7 +2,7 @@ import path from 'path';
 import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
 import { AgentSession, parseNotionPageId } from './AgentSession';
-import { config } from '../config';
+import { config, getProjectById } from '../config';
 import { insertSession, updateSessionStatus, insertEvent } from '../db/queries';
 import type { NotionClient } from '../notion/NotionClient';
 import type { ServerMessage } from '../ws/types';
@@ -14,20 +14,25 @@ export class SessionManager extends EventEmitter {
     super();
   }
 
-  start(taskUrl: string, projectContextUrl: string, taskType?: string): string {
+  start(taskUrl: string, projectContextUrl: string, taskType: string | undefined, projectId: string): string {
     if (this.sessions.size >= config.maxConcurrentSessions) {
       throw new Error(`Max concurrent sessions (${config.maxConcurrentSessions}) reached`);
     }
 
-    const sessionId = crypto.randomUUID();
-    console.log(`[SessionManager] start ${sessionId}`);
+    const project = getProjectById(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
 
-    const worktreePath = path.join(config.projectDir, '.claude', 'worktrees', sessionId);
+    const sessionId = crypto.randomUUID();
+    console.log(`[SessionManager] start ${sessionId} project=${projectId}`);
+
+    const worktreePath = path.join(project.projectDir, '.claude', 'worktrees', sessionId);
     const branchName = `session/${sessionId}`;
 
     try {
       execSync(`git worktree add "${worktreePath}" -b "${branchName}"`, {
-        cwd: config.projectDir,
+        cwd: project.projectDir,
       });
     } catch (err) {
       console.error(`[SessionManager] failed to create worktree for ${sessionId}: ${err}`);
@@ -52,6 +57,7 @@ export class SessionManager extends EventEmitter {
       notion_task_id: notionTaskId,
       notion_task_url: taskUrl,
       project_context_url: projectContextUrl,
+      project_id: projectId,
       status: 'starting',
       started_at: startedAt,
       ended_at: null,
@@ -76,7 +82,7 @@ export class SessionManager extends EventEmitter {
 
     // Fire-and-forget — run() blocks until the subprocess exits, then clean up
     session.run()
-      .then(() => this.cleanupWorktree(sessionId, worktreePath, branchName, session.prUrl))
+      .then(() => this.cleanupWorktree(sessionId, worktreePath, branchName, session.prUrl, project.projectDir))
       .catch((err) => {
         console.error(`[SessionManager] session ${sessionId} error: ${err}`);
         // If run() threw before broadcasting session_ended, update SQLite and
@@ -89,7 +95,7 @@ export class SessionManager extends EventEmitter {
             status: 'error',
           } satisfies ServerMessage);
         }
-        return this.cleanupWorktree(sessionId, worktreePath, branchName, undefined);
+        return this.cleanupWorktree(sessionId, worktreePath, branchName, undefined, project.projectDir);
       });
 
     return sessionId;
@@ -100,12 +106,13 @@ export class SessionManager extends EventEmitter {
     worktreePath: string,
     branchName: string,
     prUrl: string | undefined,
+    projectDir: string,
   ): void {
     this.sessions.delete(sessionId);
 
     try {
       execSync(`git worktree remove --force "${worktreePath}"`, {
-        cwd: config.projectDir,
+        cwd: projectDir,
       });
     } catch (err) {
       console.error(`[SessionManager] failed to remove worktree for ${sessionId}: ${err}`);
@@ -114,7 +121,7 @@ export class SessionManager extends EventEmitter {
     if (!prUrl) {
       try {
         execSync(`git branch -D "${branchName}"`, {
-          cwd: config.projectDir,
+          cwd: projectDir,
         });
       } catch (err) {
         console.error(`[SessionManager] failed to delete branch ${branchName}: ${err}`);
