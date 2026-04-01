@@ -7,6 +7,7 @@ import { Header } from './components/Header';
 import { SessionGrid } from './components/SessionGrid';
 import { HistoryGrid } from './components/HistoryGrid';
 import { SessionDetail } from './components/SessionDetail';
+import { PRPanel } from './components/PRPanel';
 import { DispatchModal } from './components/DispatchModal';
 import { PermissionRules } from './components/PermissionRules';
 import { PermissionEventLog } from './components/PermissionEventLog';
@@ -42,7 +43,7 @@ export default function App() {
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
-  const [activeView, setActiveView] = useState<'sessions' | 'rules' | 'history' | 'denials'>('sessions');
+  const [activeView, setActiveView] = useState<'sessions' | 'rules' | 'history' | 'denials' | 'prs'>('sessions');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const notifiedRef = useRef<Set<string>>(new Set());
   const [showReconnected, setShowReconnected] = useState(false);
@@ -250,7 +251,7 @@ export default function App() {
     onSwitchView: (view) => {
       if (view === 'sessions') setActiveView('sessions');
       else if (view === 'rules') setActiveView('rules');
-      // 'prs' view not yet implemented
+      else if (view === 'prs') setActiveView('prs');
     },
     onFocusSearch: () => {
       searchInputRef.current?.focus();
@@ -263,6 +264,8 @@ export default function App() {
         projects={projects}
         activeProjectId={activeProjectId}
         onProjectChange={handleProjectChange}
+        activeView={activeView === 'prs' ? 'prs' : 'sessions'}
+        onViewChange={(view) => setActiveView(view)}
       />
       <div className={styles.contentArea}>
         <div className={styles.leftPanel}>
@@ -295,6 +298,14 @@ export default function App() {
             <HistoryGrid />
           ) : activeView === 'denials' ? (
             <PermissionEventLog />
+          ) : activeView === 'prs' ? (
+            <PRPanel
+              activeProjectId={activeProjectId}
+              onFixSession={(sessionId) => {
+                setActiveView('sessions');
+                setSelectedId(sessionId);
+              }}
+            />
           ) : (
             <>
               <SessionFilterBar
