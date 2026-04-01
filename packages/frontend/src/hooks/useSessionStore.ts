@@ -22,8 +22,10 @@ export function useSessionStore() {
   const [sessions, setSessions] = useState<Map<string, SessionState>>(new Map());
   const [tasks, setTasks] = useState<ResolvedTask[]>([]);
   const [tasksReady, setTasksReady] = useState(false);
+  const [synced, setSynced] = useState(false);
 
   const dispatch = useCallback((msg: ServerMessage) => {
+    setSynced(true);
     setSessions((prev) => {
       const next = new Map(prev);
       switch (msg.type) {
@@ -110,5 +112,5 @@ export function useSessionStore() {
     });
   }, []);
 
-  return { sessions: [...sessions.values()], tasks, tasksReady, dispatch, deleteSession };
+  return { sessions: [...sessions.values()], tasks, tasksReady, synced, dispatch, deleteSession };
 }
