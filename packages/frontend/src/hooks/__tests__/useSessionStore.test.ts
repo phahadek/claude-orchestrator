@@ -123,6 +123,40 @@ describe('useSessionStore', () => {
     expect(after).not.toBe(before);
   });
 
+  it('readyCount counts only tasks with status Ready and blocked false', () => {
+    const { result } = renderHook(() => useSessionStore());
+    const tasksMsg: ServerMessage = {
+      type: 'tasks_ready',
+      tasks: [
+        { task: { id: 't1', title: 'Task 1', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false },
+        { task: { id: 't2', title: 'Task 2', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: true, blockers: [], nonCode: false },
+        { task: { id: 't3', title: 'Task 3', status: '🔄 In Progress', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false },
+      ],
+    };
+    act(() => result.current.dispatch(tasksMsg));
+    expect(result.current.readyCount).toBe(1);
+  });
+
+  it('blockedCount counts only tasks with blocked true', () => {
+    const { result } = renderHook(() => useSessionStore());
+    const tasksMsg: ServerMessage = {
+      type: 'tasks_ready',
+      tasks: [
+        { task: { id: 't1', title: 'Task 1', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false },
+        { task: { id: 't2', title: 'Task 2', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: true, blockers: [], nonCode: false },
+        { task: { id: 't3', title: 'Task 3', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: true, blockers: [], nonCode: false },
+      ],
+    };
+    act(() => result.current.dispatch(tasksMsg));
+    expect(result.current.blockedCount).toBe(2);
+  });
+
+  it('readyCount and blockedCount are both 0 when tasks is empty', () => {
+    const { result } = renderHook(() => useSessionStore());
+    expect(result.current.readyCount).toBe(0);
+    expect(result.current.blockedCount).toBe(0);
+  });
+
   it('each session_event dispatch produces a new array reference', () => {
     const { result } = renderHook(() => useSessionStore());
     act(() => result.current.dispatch(msg.session_started()));
