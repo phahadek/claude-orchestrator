@@ -11,9 +11,10 @@ interface Props {
   onClick: () => void;
   projectColor?: string;
   projectName?: string;
+  onResume?: () => void;
 }
 
-export function SessionCard({ session, selected, onClick, projectColor, projectName }: Props) {
+export function SessionCard({ session, selected, onClick, projectColor, projectName, onResume }: Props) {
   const lastEvent = session.events.at(-1);
   const elapsed = formatElapsed(session);
 
@@ -37,13 +38,26 @@ export function SessionCard({ session, selected, onClick, projectColor, projectN
           </span>
         )}
         <span className={styles['task-name']}>{taskNameFromNotionUrl(session.taskName)}</span>
-        <StatusBadge status={session.status} sessionType={session.sessionType} />
+        <StatusBadge status={session.status} sessionType={session.sessionType} isRateLimited={session.isRateLimited} />
       </div>
       {projectName && (
         <div className={styles['project-tag']}>{projectName}</div>
       )}
       {session.status === 'needs_permission' && (
         <div className={styles['attention-badge']}>⚠️ Needs permission</div>
+      )}
+      {session.isRateLimited && (
+        <div className={styles['rate-limited-row']}>
+          <span className={styles['rate-limited-badge']}>⏸️ Rate limited — waiting for reset</span>
+          {onResume && (
+            <button
+              className={styles['resume-button']}
+              onClick={(e) => { e.stopPropagation(); onResume(); }}
+            >
+              Resume
+            </button>
+          )}
+        </div>
       )}
       {session.tags && session.tags.length > 0 && (
         <div className={styles['tag-pills']}>
