@@ -16,16 +16,16 @@ interface Props {
   tasks: ResolvedTask[];
   tasksReady: boolean;
   send: (msg: ClientMessage) => void;
-  boardId: string;
+  projectId: string;
   onClose: () => void;
 }
 
-export function DispatchModal({ tasks, tasksReady, send, boardId, onClose }: Props) {
+export function DispatchModal({ tasks, tasksReady, send, projectId, onClose }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    send({ type: 'fetch_tasks', boardId });
+    send({ type: 'fetch_tasks', projectId });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -48,7 +48,7 @@ export function DispatchModal({ tasks, tasksReady, send, boardId, onClose }: Pro
   const launch = () => {
     const toDispatch = ready
       .filter((t) => selected.has(t.task.id))
-      .map((t) => ({ taskUrl: t.task.notionUrl, projectContextUrl: PROJECT_CONTEXT_URL, taskType: t.task.type }));
+      .map((t) => ({ taskUrl: t.task.notionUrl, projectContextUrl: PROJECT_CONTEXT_URL, taskType: t.task.type, projectId }));
     if (toDispatch.length > 0) {
       send({ type: 'dispatch', tasks: toDispatch });
       onClose();
