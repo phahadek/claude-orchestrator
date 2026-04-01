@@ -58,6 +58,13 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
     }
   }
 
+  function handleEndSession() {
+    if (!session) return;
+    if (confirm('End this session? The CLI will finish its current step then exit cleanly.')) {
+      send({ type: 'end_session', sessionId: session.sessionId });
+    }
+  }
+
   async function handleDelete() {
     if (!session) return;
     if (!confirm('Delete this session? This cannot be undone.')) return;
@@ -151,6 +158,11 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
             </a>
           )}
           <ElapsedTime session={session} />
+          {isActive && (
+            <button className={styles.endSessionButton} onClick={handleEndSession}>
+              End Session
+            </button>
+          )}
           {isActive && (
             <button className={styles.killButton} onClick={handleKill}>
               Kill
