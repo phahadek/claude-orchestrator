@@ -1,4 +1,4 @@
-import styles from './SessionCard.module.css';
+import styles from './StatusBadge.module.css';
 
 const BADGE_CONFIG: Record<string, { label: string; className: string }> = {
   starting:          { label: '⏳ Starting', className: styles['badge-starting'] },
