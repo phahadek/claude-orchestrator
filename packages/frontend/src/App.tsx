@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type { ConnectionState } from './hooks/useWebSocket';
 import { useSessionStore } from './hooks/useSessionStore';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -11,6 +11,7 @@ import { DispatchModal } from './components/DispatchModal';
 import { PermissionRules } from './components/PermissionRules';
 import { Notifications } from './components/Notifications';
 import { ShortcutHint } from './components/ShortcutHint';
+import { SessionFilterBar } from './components/SessionFilterBar';
 import type { NotificationItem } from './components/Notifications';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
@@ -27,6 +28,10 @@ export default function App() {
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const activeProjectIdRef = useRef<string | null>(null);
+  const [searchText, setSearchText] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string | null>(null);
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const { send, connectionState } = useWebSocket(dispatch, (sendNow: (msg: ClientMessage) => void) => {
     // Called each time the WS (re)connects — fetch tasks if projectId is already known
@@ -164,18 +169,28 @@ export default function App() {
     ? (sessions.find((s) => s.sessionId === selectedId) ?? null)
     : null;
 
-  const activeSessions = sessions.filter((s) => !s.archived);
+  const filteredSessions = useMemo(() => {
+    return sessions
+      .filter((s) => !s.archived)
+      .filter((s) => !searchText || s.taskName.toLowerCase().includes(searchText.toLowerCase()))
+      .filter((s) => !statusFilter || s.status === statusFilter)
+      .filter((s) => !tagFilter || (s as { tags?: string[] }).tags?.includes(tagFilter))
+      .filter((s) => !activeProjectId || s.project_id === activeProjectId);
+  }, [sessions, searchText, statusFilter, tagFilter, activeProjectId]);
 
-  // Filter visible sessions to the active project
-  const projectSessions = activeProjectId
-    ? activeSessions.filter((s) => s.project_id === activeProjectId)
-    : activeSessions;
+  const filtersActive = Boolean(searchText || statusFilter || tagFilter);
 
-  const runningCount = projectSessions.filter((s) => ['running', 'starting', 'needs_permission'].includes(s.status)).length;
-  const doneCount = projectSessions.filter((s) => ['done', 'error', 'killed'].includes(s.status)).length;
+  function clearFilters() {
+    setSearchText('');
+    setStatusFilter(null);
+    setTagFilter(null);
+  }
+
+  const runningCount = filteredSessions.filter((s) => ['running', 'starting', 'needs_permission'].includes(s.status)).length;
+  const doneCount = filteredSessions.filter((s) => ['done', 'error', 'killed'].includes(s.status)).length;
 
   // Keyboard navigation: sorted active sessions (same order as SessionGrid)
-  const kbSortedSessions = [...projectSessions].sort((a, b) => {
+  const kbSortedSessions = [...filteredSessions].sort((a, b) => {
     const statusOrder: Record<string, number> = {
       needs_permission: 0, running: 1, starting: 2, done: 3, error: 3, killed: 3,
     };
@@ -215,7 +230,7 @@ export default function App() {
       // 'prs' view not yet implemented
     },
     onFocusSearch: () => {
-      // search input not yet implemented
+      searchInputRef.current?.focus();
     },
   });
 
@@ -253,15 +268,29 @@ export default function App() {
           ) : activeView === 'history' ? (
             <HistoryGrid />
           ) : (
-            <SessionGrid
-              sessions={projectSessions}
-              projects={projects}
-              selectedId={selectedId}
-              keyboardSelectedId={keyboardHighlightedId}
-              onSelect={setSelectedId}
-              synced={synced}
-              onArchiveAll={handleArchiveAll}
-            />
+            <>
+              <SessionFilterBar
+                searchText={searchText}
+                onSearchChange={setSearchText}
+                statusFilter={statusFilter}
+                onStatusChange={setStatusFilter}
+                tagFilter={tagFilter}
+                onTagChange={setTagFilter}
+                resultCount={filteredSessions.length}
+                searchInputRef={searchInputRef}
+              />
+              <SessionGrid
+                sessions={filteredSessions}
+                projects={projects}
+                selectedId={selectedId}
+                keyboardSelectedId={keyboardHighlightedId}
+                onSelect={setSelectedId}
+                synced={synced}
+                onArchiveAll={handleArchiveAll}
+                filtersActive={filtersActive}
+                onClearFilters={clearFilters}
+              />
+            </>
           )}
         </div>
 
