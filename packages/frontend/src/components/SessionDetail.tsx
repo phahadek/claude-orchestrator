@@ -55,7 +55,7 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
     if (!session) return;
     if (confirm('Kill this session? It will have 15 seconds to wrap up.')) {
       send({ type: 'kill', sessionId: session.sessionId });
-      onClose();
+      // Don't close — let session_ended WS message update the status badge to 'killed'
     }
   }
 
