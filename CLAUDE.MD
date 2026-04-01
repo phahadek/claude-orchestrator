@@ -48,12 +48,30 @@ or 🗂️ Ready. Work only on the task you have been assigned.
 2. **Create a feature branch from `dev`** — named `feature/<task-name>`.
 3. **Implement the task** per the acceptance criteria in the Notion task page.
 4. **Pass the pre-PR gate** (rebase onto `dev`, `tsc --noEmit`, `vite build`).
-5. **Open a draft PR targeting `dev`** — include the Notion task URL in the PR body.
+5. **Open a draft PR targeting `dev`** — use the required PR body template below.
 6. **Move task to `👀 In Review`** in Notion.
 7. **Stop.** Never merge your own PR. Never move the task to `✅ Done`. Wait for the human.
 
 > ⚠️ Steps 6 and 7 are hard stops. The human merges the PR and marks the task Done.
 > Appending to the Session Log and updating the Master File Index are also the human's responsibility after merge.
+
+### Required PR Body Template
+
+Every draft PR **must** use this exact structure — no omissions, no reordering:
+
+```markdown
+## Summary
+<1-3 sentences: what changed and why>
+
+## Notion Task
+<link to the Notion task page>
+
+## Automated Tests
+<list tests added/modified, or "No test changes">
+
+## Files Changed
+<bulleted list of files with brief description of each change>
+```
 
 ---
 
