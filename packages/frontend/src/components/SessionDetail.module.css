@@ -160,6 +160,26 @@
   color: var(--text-primary);
 }
 
+.favoriteButton {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1rem;
+  color: var(--text-faint);
+  padding: 2px 4px;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+  transition: color 0.15s;
+}
+
+.favoriteButton:hover {
+  color: #f9e2af;
+}
+
+.favoriteButton--active {
+  color: #f9e2af;
+}
+
 /* ── Transcript ──────────────────────────────────────────────────── */
 .transcriptSection {
   flex: 1;

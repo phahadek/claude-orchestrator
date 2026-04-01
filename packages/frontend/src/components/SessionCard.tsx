@@ -12,14 +12,18 @@ interface Props {
   projectColor?: string;
   projectName?: string;
   onResume?: () => void;
+  onToggleFavorite?: () => void;
 }
 
-export function SessionCard({ session, selected, onClick, projectColor, projectName, onResume }: Props) {
+export function SessionCard({ session, selected, onClick, projectColor, projectName, onResume, onToggleFavorite }: Props) {
   const lastEvent = session.events.at(-1);
   const elapsed = formatElapsed(session);
 
   const isReview = session.sessionType === 'review';
-  const borderStyle = isReview
+  const isFavorited = session.favorited ?? false;
+  const borderStyle = isFavorited
+    ? { borderLeft: '3px solid #f9e2af' }
+    : isReview
     ? undefined
     : projectColor
     ? { borderLeft: `3px solid ${projectColor}` }
@@ -27,7 +31,7 @@ export function SessionCard({ session, selected, onClick, projectColor, projectN
 
   return (
     <div
-      className={`${styles['session-card']} ${selected ? styles.selected : ''} ${isReview ? styles.review : ''}`}
+      className={`${styles['session-card']} ${selected ? styles.selected : ''} ${isReview ? styles.review : ''} ${isFavorited ? styles.favorited : ''}`}
       style={borderStyle}
       onClick={onClick}
     >
@@ -39,6 +43,16 @@ export function SessionCard({ session, selected, onClick, projectColor, projectN
         )}
         <span className={styles['task-name']}>{taskNameFromNotionUrl(session.taskName)}</span>
         <StatusBadge status={session.status} sessionType={session.sessionType} isRateLimited={session.isRateLimited} />
+        {onToggleFavorite && (
+          <button
+            className={`${styles['favorite-btn']} ${isFavorited ? styles['favorite-btn--active'] : ''}`}
+            onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
+            aria-label={isFavorited ? 'Unfavorite session' : 'Favorite session'}
+            title={isFavorited ? 'Unfavorite' : 'Favorite'}
+          >
+            {isFavorited ? '★' : '☆'}
+          </button>
+        )}
       </div>
       {projectName && (
         <div className={styles['project-tag']}>{projectName}</div>

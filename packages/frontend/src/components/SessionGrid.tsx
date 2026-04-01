@@ -52,9 +52,10 @@ interface Props {
   onClearFilters?: () => void;
   onResumeAll?: () => void;
   onResume?: (sessionId: string) => void;
+  onToggleFavorite?: (sessionId: string, favorited: boolean) => void;
 }
 
-export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboardSelectedId, synced, onArchiveAll, filtersActive, onClearFilters, onResumeAll, onResume }: Props) {
+export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboardSelectedId, synced, onArchiveAll, filtersActive, onClearFilters, onResumeAll, onResume, onToggleFavorite }: Props) {
   const [activeFilters, setActiveFilters] = useState<Set<Status>>(new Set());
 
   function toggleFilter(status: Status) {
@@ -78,6 +79,8 @@ export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboard
     : visibleSessions.filter((s) => activeFilters.has(s.status as Status));
 
   const sorted = [...filtered].sort((a, b) => {
+    const favoritedDiff = (b.favorited ? 1 : 0) - (a.favorited ? 1 : 0);
+    if (favoritedDiff !== 0) return favoritedDiff;
     const rank = statusRank(a.status) - statusRank(b.status);
     if (rank !== 0) return rank;
     return (b.started_at ?? 0) - (a.started_at ?? 0);
@@ -86,7 +89,7 @@ export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboard
   const statusesInUse = new Set(visibleSessions.map((s) => s.status as Status));
 
   // Build a map from project_id → { color, name } for card rendering
-  const projectMap = new Map(projects.map((p) => [p.id, { color: projectColor(p.id), name: p.name }]));
+  const projectMap = new Map(projects.filter((p) => p.id).map((p) => [p.id, { color: projectColor(p.id), name: p.name }]));
   const multiProject = projects.length > 1;
 
   return (
@@ -181,6 +184,7 @@ export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboard
                   projectColor={proj?.color}
                   projectName={multiProject ? proj?.name : undefined}
                   onResume={onResume ? () => onResume(s.sessionId) : undefined}
+                  onToggleFavorite={onToggleFavorite ? () => onToggleFavorite(s.sessionId, !s.favorited) : undefined}
                 />
               </div>
             );
