@@ -95,3 +95,24 @@ export interface TaskCache {
   fetched_at: number;
   raw_json: string;
 }
+
+// ─── pull_requests ──────────────────────────────────────────────────────────
+
+export interface PullRequestRow {
+  id: number;
+  pr_number: number;
+  pr_url: string;
+  notion_task_id: string | null;
+  session_id: string | null;
+  repo: string;
+  title: string | null;
+  body: string | null;
+  head_branch: string | null;
+  base_branch: string | null;
+  state: string;
+  review_result: string | null; // JSON
+  review_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+  synced_at: string;
+}

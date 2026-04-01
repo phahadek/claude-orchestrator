@@ -64,4 +64,5 @@ export function runMigrations(): void {
   // Idempotent column additions for existing databases
   try { db.exec(`ALTER TABLE sessions ADD COLUMN worktree_path TEXT`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE sessions ADD COLUMN project_id TEXT`); } catch { /* already exists */ }
 }
