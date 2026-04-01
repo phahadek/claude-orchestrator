@@ -486,14 +486,13 @@ export function EventRow({ event }: EventRowProps) {
                 const isBash = toolName === 'Bash';
                 const bashCmd = isBash ? extractBashCommand(input) : null;
                 nodes.push(
-                  <div key={idx} className={styles.eventToolUse}>
-                    <div className={styles.toolHeader}>🔧 {toolName}</div>
+                  <CollapsibleToolUse key={idx} toolName={toolName}>
                     {isBash && bashCmd != null ? (
                       <pre className={styles.bashCommand}>$ {bashCmd}</pre>
                     ) : (
                       <pre className={styles.toolArgs}>{JSON.stringify(input, null, 2)}</pre>
                     )}
-                  </div>
+                  </CollapsibleToolUse>
                 );
               }
             });
@@ -511,11 +510,9 @@ export function EventRow({ event }: EventRowProps) {
       const parsed = extractToolUse(payload);
       const isBash = parsed?.toolName === 'Bash';
       const bashCmd = isBash ? extractBashCommand(parsed?.input) : null;
+      const toolName = parsed?.toolName ?? 'tool_use';
       return (
-        <div className={styles.eventToolUse}>
-          <div className={styles.toolHeader}>
-            🔧 {parsed?.toolName ?? 'tool_use'}
-          </div>
+        <CollapsibleToolUse toolName={toolName}>
           {isBash && bashCmd != null ? (
             <pre className={styles.bashCommand}>$ {bashCmd}</pre>
           ) : (
@@ -523,7 +520,7 @@ export function EventRow({ event }: EventRowProps) {
               {parsed ? JSON.stringify(parsed.input, null, 2) : event.content}
             </pre>
           )}
-        </div>
+        </CollapsibleToolUse>
       );
     }
 
@@ -573,6 +570,28 @@ export function EventRow({ event }: EventRowProps) {
   }
 }
 
+function CollapsibleToolUse({ toolName, children }: { toolName: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={styles.eventToolUse}>
+      <div
+        className={styles.toolHeader}
+        role="button"
+        tabIndex={0}
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setOpen((o) => !o); }}
+        aria-expanded={open}
+      >
+        <span className={styles.toolChevron}>{open ? '▼' : '▶'}</span>
+        🔧 {toolName}
+      </div>
+      <div className={open ? styles.toolBody : styles.toolBodyHidden}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 const TOOL_RESULT_COLLAPSE_LINES = 20;
 
 function ToolResultRow({ result }: { result: string }) {
@@ -594,7 +613,7 @@ function ToolResultRow({ result }: { result: string }) {
 
   return (
     <div className={styles.eventToolResult}>
-      <pre className={styles.toolResultContent}>{displayed}</pre>
+      <pre className={`${styles.toolResultContent} ${expanded ? styles.toolResultExpanded : ''}`}>{displayed}</pre>
       {shouldCollapse && (
         <button className={styles.expandButton} onClick={toggle}>
           {expanded ? '▲ Collapse' : `▼ Show all ${lines.length} lines`}
