@@ -149,6 +149,24 @@ export function insertPermissionEvent(e: NewPermissionEvent): void {
   stmtInsertPermissionEvent.run(e);
 }
 
+export function getRecentPermissionEvents(
+  limit: number,
+): Array<PermissionEvent & { notion_task_url: string | null }> {
+  return db
+    .prepare(
+      `SELECT pe.*, s.notion_task_url FROM permission_events pe
+       LEFT JOIN sessions s ON pe.session_id = s.session_id
+       ORDER BY pe.decided_at DESC LIMIT ?`,
+    )
+    .all(limit) as Array<PermissionEvent & { notion_task_url: string | null }>;
+}
+
+const stmtClearPermissionEvents = db.prepare(`DELETE FROM permission_events`);
+
+export function clearPermissionEvents(): void {
+  stmtClearPermissionEvents.run();
+}
+
 // ─── permission_rules ──────────────────────────────────────────────────────
 
 const stmtGetRules = db.prepare(`
