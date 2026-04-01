@@ -102,13 +102,29 @@ export function extractToolResult(payload: unknown, rawContent: string): string 
 }
 
 export const SYSTEM_SUBTYPE_LABELS: Record<string, string> = {
-  init: '[init]',
-  rate_limit: '[rate limit]',
-  rate_limited: '[rate limit]',
-  thinking: '[thinking]',
-  success: '[done]',
-  error_during_execution: '[execution error]',
+  thinking: 'Thinking…',
+  success: 'Session complete',
+  error_during_execution: 'Execution error',
 };
+
+/** System event subtypes that are not meaningful to users and should be hidden from the UI. */
+const HIDDEN_SYSTEM_SUBTYPES = new Set(['init', 'rate_limit', 'rate_limited']);
+
+/** System event raw payload types that should be hidden from the UI. */
+const HIDDEN_SYSTEM_RAW_TYPES = new Set(['rate_limit_event']);
+
+/**
+ * Returns true if a system event should be filtered out of the transcript and card preview.
+ * Events are still stored in SQLite; this is purely a display-layer filter.
+ */
+export function isHiddenSystemEvent(payload: unknown): boolean {
+  if (typeof payload !== 'object' || payload === null) return false;
+  const p = payload as Record<string, unknown>;
+  const rawType = typeof p.type === 'string' ? p.type : '';
+  if (HIDDEN_SYSTEM_RAW_TYPES.has(rawType)) return true;
+  if (typeof p.subtype === 'string' && HIDDEN_SYSTEM_SUBTYPES.has(p.subtype)) return true;
+  return false;
+}
 
 /** Extract displayable content from a system/user/file-history-snapshot event payload. */
 export function extractSystem(
@@ -155,18 +171,18 @@ export function extractSystem(
 
   if (rawType === 'result') {
     const subtype = typeof p.subtype === 'string' ? p.subtype : '';
-    const label = SYSTEM_SUBTYPE_LABELS[subtype] ?? `[result: ${subtype || 'unknown'}]`;
+    const label = SYSTEM_SUBTYPE_LABELS[subtype] ?? '';
     return { rawType, display: label };
   }
 
   if (typeof p.subtype === 'string') {
-    const label = SYSTEM_SUBTYPE_LABELS[p.subtype] ?? `[system: ${p.subtype}]`;
+    const label = SYSTEM_SUBTYPE_LABELS[p.subtype] ?? '';
     return { rawType, display: label };
   }
 
   if (typeof p.content === 'string') return { rawType, display: p.content };
 
-  return { rawType, display: `[${rawType}]` };
+  return { rawType, display: '' };
 }
 
 /** Produce a human-readable one-line summary of an event for use in SessionCard preview. */
@@ -229,6 +245,7 @@ export function summarizeEvent(
     }
 
     case 'system': {
+      if (isHiddenSystemEvent(payload)) return '';
       const { display } = extractSystem(payload, event.content);
       return display;
     }
