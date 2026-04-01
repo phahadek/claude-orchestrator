@@ -46,6 +46,7 @@ export interface SessionEvent {
   event_type: EventType;
   payload: string; // JSON string
   timestamp: number;
+  message_id?: string | null;
 }
 
 export type NewSessionEvent = Omit<SessionEvent, 'id'>;
