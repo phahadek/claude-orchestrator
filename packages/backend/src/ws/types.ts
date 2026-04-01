@@ -8,7 +8,7 @@ export interface PermissionDenial {
 }
 
 export type ServerMessage =
-  | { type: 'session_started';       sessionId: string; taskName: string; notionTaskUrl: string; taskType?: string; started_at?: number; ended_at?: number; archived?: boolean }
+  | { type: 'session_started';       sessionId: string; taskName: string; notionTaskUrl: string; taskType?: string; started_at?: number; ended_at?: number; archived?: boolean; project_id?: string | null }
   | { type: 'session_event';         sessionId: string; eventType: 'text' | 'tool_use' | 'tool_result' | 'system' | 'user_message'; content: string }
   | { type: 'session_status';        sessionId: string; status: 'starting' | 'running' | 'needs_permission' | 'done' | 'error' | 'killed' }
   | { type: 'permission_request';    sessionId: string; toolName: string; proposedAction: string }
