@@ -365,6 +365,72 @@ describe('AgentSession', () => {
     await runPromise;
   });
 
+  // ── AC: system-only user events — stored in DB but NOT broadcast ────────────
+  it('stores system-only user event in DB but does NOT broadcast it', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(upsertSessionEvent).mockReturnValue(1);
+
+    const session = new AgentSession('s-filter', 'https://notion.so/task', 'https://notion.so/ctx', notion, '/tmp', 'task-id');
+    const messages: ServerMessage[] = [];
+    session.on('message', (msg: ServerMessage) => messages.push(msg));
+
+    const runPromise = session.run();
+
+    const systemOnlyEvent = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: '<system-reminder>CLAUDE.md bootstrap content</system-reminder>' },
+    });
+    mockProc.stdout.push(systemOnlyEvent + '\n');
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Must be stored in DB
+    expect(vi.mocked(upsertSessionEvent)).toHaveBeenCalled();
+    const storedPayload = vi.mocked(upsertSessionEvent).mock.calls[0][0].payload;
+    expect(storedPayload).toBe(systemOnlyEvent);
+
+    // Must NOT be broadcast as session_event
+    const sessionEvents = messages.filter((m) => m.type === 'session_event');
+    expect(sessionEvents).toHaveLength(0);
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+  });
+
+  it('stores AND broadcasts user event with real human message', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(upsertSessionEvent).mockReturnValue(1);
+
+    const session = new AgentSession('s-real-msg', 'https://notion.so/task', 'https://notion.so/ctx', notion, '/tmp', 'task-id');
+    const messages: ServerMessage[] = [];
+    session.on('message', (msg: ServerMessage) => messages.push(msg));
+
+    const runPromise = session.run();
+
+    const realUserEvent = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: 'Please implement the feature.' },
+    });
+    mockProc.stdout.push(realUserEvent + '\n');
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Must be stored in DB
+    expect(vi.mocked(upsertSessionEvent)).toHaveBeenCalled();
+
+    // Must be broadcast as session_event
+    const sessionEvents = messages.filter((m) => m.type === 'session_event');
+    expect(sessionEvents).toHaveLength(1);
+    expect((sessionEvents[0] as { content: string }).content).toBe(realUserEvent);
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+  });
+
   // ── AC: sessionType=standard still calls notionClient.updateStatus ────────
   it('calls notionClient.updateStatus on clean exit when sessionType is standard', async () => {
     const notion = fakeNotionClient();
