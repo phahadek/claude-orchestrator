@@ -7,13 +7,16 @@ const BADGE_CONFIG: Record<string, { label: string; className: string }> = {
   done:              { label: '✅ Done',      className: styles['badge-done'] },
   error:             { label: '❌ Error',     className: styles['badge-error'] },
   killed:            { label: '🛑 Killed',   className: styles['badge-killed'] },
+  review:            { label: '🔍 Review',   className: styles['badge-review'] },
 };
 
 interface Props {
   status: string;
+  sessionType?: string;
 }
 
-export function StatusBadge({ status }: Props) {
-  const config = BADGE_CONFIG[status] ?? { label: status, className: styles['badge-unknown'] };
+export function StatusBadge({ status, sessionType }: Props) {
+  const key = sessionType === 'review' ? 'review' : status;
+  const config = BADGE_CONFIG[key] ?? { label: status, className: styles['badge-unknown'] };
   return <span className={`${styles.badge} ${config.className}`}>{config.label}</span>;
 }

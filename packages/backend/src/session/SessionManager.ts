@@ -7,6 +7,13 @@ import { insertSession, updateSessionStatus, insertEvent, getSession } from '../
 import type { NotionClient } from '../notion/NotionClient';
 import type { ServerMessage } from '../ws/types';
 
+export interface StartOptions {
+  taskType?: string;
+  sessionType?: 'standard' | 'review';
+  customPrompt?: string;
+  projectId?: string;
+}
+
 export class SessionManager extends EventEmitter {
   private sessions = new Map<string, AgentSession>();
 
@@ -14,7 +21,9 @@ export class SessionManager extends EventEmitter {
     super();
   }
 
-  start(taskUrl: string, projectContextUrl: string, taskType: string | undefined, projectId: string): string {
+  start(taskUrl: string, projectContextUrl: string, options?: StartOptions): string {
+    const { taskType, sessionType = 'standard', customPrompt, projectId = '' } = options ?? {};
+
     if (this.sessions.size >= config.maxConcurrentSessions) {
       throw new Error(`Max concurrent sessions (${config.maxConcurrentSessions}) reached`);
     }
@@ -25,7 +34,7 @@ export class SessionManager extends EventEmitter {
     }
 
     const sessionId = crypto.randomUUID();
-    console.log(`[SessionManager] start ${sessionId} project=${projectId}`);
+    console.log(`[SessionManager] start ${sessionId} project=${projectId} sessionType=${sessionType}`);
 
     const worktreePath = path.join(project.projectDir, '.claude', 'worktrees', sessionId);
     const branchName = `session/${sessionId}`;
@@ -48,6 +57,9 @@ export class SessionManager extends EventEmitter {
       this.notionClient,
       worktreePath,
       notionTaskId,
+      undefined,
+      customPrompt,
+      sessionType,
     );
 
     // Insert session into SQLite before anything writes events
@@ -63,6 +75,7 @@ export class SessionManager extends EventEmitter {
       ended_at: null,
       pr_url: null,
       worktree_path: worktreePath,
+      session_type: sessionType,
     });
 
     // Broadcast session_started so connected frontends see the card immediately
@@ -72,6 +85,7 @@ export class SessionManager extends EventEmitter {
       taskName: taskUrl,
       notionTaskUrl: taskUrl,
       ...(taskType != null && { taskType }),
+      ...(sessionType !== 'standard' && { sessionType }),
       started_at: startedAt,
       project_id: projectId,
     } satisfies ServerMessage);

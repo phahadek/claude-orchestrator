@@ -92,3 +92,50 @@ describe('config.projectDir', () => {
     expect(source).toContain('process.cwd()');
   });
 });
+
+// ── AC: SessionManager.start() accepts sessionType and customPrompt options ─
+describe('SessionManager.start() — StartOptions', () => {
+  it('accepts sessionType and customPrompt in options', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+      'utf-8',
+    );
+
+    expect(source).toMatch(/StartOptions/);
+    expect(source).toMatch(/sessionType/);
+    expect(source).toMatch(/customPrompt/);
+  });
+
+  it('passes session_type to insertSession', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+      'utf-8',
+    );
+
+    expect(source).toMatch(/session_type.*sessionType|sessionType.*session_type/);
+    expect(source).toMatch(/insertSession/);
+  });
+
+  it('includes sessionType in session_started broadcast', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+      'utf-8',
+    );
+
+    expect(source).toMatch(/sessionType/);
+    expect(source).toMatch(/session_started/);
+  });
+});
+
+// ── AC: runMigrations() adds session_type column idempotently ───────────────
+describe('runMigrations() — session_type column', () => {
+  it('adds session_type column via idempotent try/catch pattern', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'db', 'schema.ts'),
+      'utf-8',
+    );
+
+    expect(source).toContain('session_type');
+    expect(source).toMatch(/try\s*\{[^}]*session_type[^}]*\}\s*catch/s);
+  });
+});

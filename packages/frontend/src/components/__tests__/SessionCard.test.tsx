@@ -1,6 +1,7 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { SessionCard, truncate } from '../SessionCard';
+import { StatusBadge } from '../StatusBadge';
 import type { SessionState } from '../../hooks/useSessionStore';
 
 function makeSession(overrides?: Partial<SessionState>): SessionState {
@@ -111,5 +112,24 @@ describe('SessionCard', () => {
     const session = makeSession({ status: 'running', started_at: undefined, events: [] });
     render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
     expect(screen.getByText('—')).toBeDefined();
+  });
+});
+
+// ── StatusBadge — review sessionType ─────────────────────────────────────────
+describe('StatusBadge', () => {
+  it('renders 🔍 Review badge when sessionType is review', () => {
+    render(<StatusBadge status="running" sessionType="review" />);
+    expect(screen.getByText('🔍 Review')).toBeDefined();
+  });
+
+  it('renders normal status badge when sessionType is not review', () => {
+    render(<StatusBadge status="running" />);
+    expect(screen.getByText('🔄 Running')).toBeDefined();
+    expect(screen.queryByText('🔍 Review')).toBeNull();
+  });
+
+  it('renders 🔍 Review badge for a done review session', () => {
+    render(<StatusBadge status="done" sessionType="review" />);
+    expect(screen.getByText('🔍 Review')).toBeDefined();
   });
 });
