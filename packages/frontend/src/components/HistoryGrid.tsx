@@ -12,7 +12,11 @@ interface ArchivedSession {
   pr_url: string | null;
 }
 
-export function HistoryGrid() {
+interface HistoryGridProps {
+  onSelect: (sessionId: string) => void;
+}
+
+export function HistoryGrid({ onSelect }: HistoryGridProps) {
   const [sessions, setSessions] = useState<ArchivedSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +67,7 @@ export function HistoryGrid() {
           : null;
 
         return (
-          <div key={s.session_id} className={styles.row}>
+          <div key={s.session_id} className={styles.row} onClick={() => onSelect(s.session_id)}>
             <div className={styles.rowMain}>
               <span className={styles.taskName}>{taskName}</span>
               <StatusBadge status={s.status} />
