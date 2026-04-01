@@ -19,11 +19,12 @@ interface Props {
   sessions: SessionState[];
   onSelect: (sessionId: string) => void;
   selectedId: string | null;
+  keyboardSelectedId: string | null;
   synced: boolean;
   onArchiveAll: () => void;
 }
 
-export function SessionGrid({ sessions, onSelect, selectedId, synced, onArchiveAll }: Props) {
+export function SessionGrid({ sessions, onSelect, selectedId, keyboardSelectedId, synced, onArchiveAll }: Props) {
   const [activeFilters, setActiveFilters] = useState<Set<Status>>(new Set());
 
   function toggleFilter(status: Status) {
@@ -115,12 +116,16 @@ export function SessionGrid({ sessions, onSelect, selectedId, synced, onArchiveA
       {sorted.length > 0 && (
         <div className={styles['session-grid']}>
           {sorted.map((s) => (
-            <SessionCard
+            <div
               key={s.sessionId}
-              session={s}
-              selected={s.sessionId === selectedId}
-              onClick={() => onSelect(s.sessionId)}
-            />
+              className={s.sessionId === keyboardSelectedId ? styles['card-keyboard-selected'] : undefined}
+            >
+              <SessionCard
+                session={s}
+                selected={s.sessionId === selectedId}
+                onClick={() => onSelect(s.sessionId)}
+              />
+            </div>
           ))}
         </div>
       )}
