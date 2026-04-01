@@ -24,4 +24,5 @@ export type ClientMessage =
   | { type: 'deny';         sessionId: string; reason?: string }
   | { type: 'send_message'; sessionId: string; message: string }
   | { type: 'kill';         sessionId: string }
+  | { type: 'end_session';  sessionId: string }
   | { type: 'fetch_tasks';  boardId: string };

@@ -53,6 +53,22 @@
   flex-shrink: 0;
 }
 
+.endSessionButton {
+  background: rgba(250, 179, 135, 0.15);
+  border: 1px solid rgba(250, 179, 135, 0.4);
+  border-radius: 4px;
+  color: #fab387;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.endSessionButton:hover {
+  background: rgba(250, 179, 135, 0.25);
+}
+
 .killButton {
   background: rgba(243, 139, 168, 0.15);
   border: 1px solid rgba(243, 139, 168, 0.4);
