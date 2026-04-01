@@ -60,6 +60,8 @@ export class AgentSession extends EventEmitter {
     private readonly worktreePath: string,
     public readonly taskId: string,
     private readonly resumeSessionId?: string,
+    private readonly customPrompt?: string,
+    public readonly sessionType: string = 'standard',
   ) {
     super();
   }
@@ -68,7 +70,7 @@ export class AgentSession extends EventEmitter {
     this.broadcast({ type: 'session_status', sessionId: this.sessionId, status: 'running' });
     updateSessionStatus(this.sessionId, 'running');
 
-    const initialPrompt =
+    const initialPrompt = this.customPrompt ??
       `Task page: ${this.taskUrl}\nProject context: ${this.projectContextUrl}\n\nFetch both Notion pages, then begin the task.`;
 
     // Use --input-format stream-json for bidirectional JSON communication.
@@ -243,40 +245,42 @@ export class AgentSession extends EventEmitter {
     this.prUrl = prUrl;
     updateSessionStatus(this.sessionId, 'done', Date.now());
 
-    if (prUrl) {
-      this.notionClient.attachPR(this.taskId, prUrl).catch((e) =>
-        console.error(`[AgentSession] attachPR failed: ${e}`),
-      );
+    if (this.sessionType === 'standard') {
+      if (prUrl) {
+        this.notionClient.attachPR(this.taskId, prUrl).catch((e) =>
+          console.error(`[AgentSession] attachPR failed: ${e}`),
+        );
 
-      // Parse repo ("owner/repo") and pr_number from the GitHub PR URL
-      const prMatch = prUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
-      if (prMatch) {
-        const repo = prMatch[1];
-        const prNumber = parseInt(prMatch[2], 10);
-        const now = new Date().toISOString();
-        upsertPullRequest({
-          pr_number: prNumber,
-          pr_url: prUrl,
-          notion_task_id: this.taskId,
-          session_id: this.sessionId,
-          repo,
-          title: null,
-          body: null,
-          head_branch: null,
-          base_branch: null,
-          state: 'open',
-          review_result: null,
-          review_at: null,
-          created_at: now,
-          updated_at: now,
-          synced_at: now,
-        });
+        // Parse repo ("owner/repo") and pr_number from the GitHub PR URL
+        const prMatch = prUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
+        if (prMatch) {
+          const repo = prMatch[1];
+          const prNumber = parseInt(prMatch[2], 10);
+          const now = new Date().toISOString();
+          upsertPullRequest({
+            pr_number: prNumber,
+            pr_url: prUrl,
+            notion_task_id: this.taskId,
+            session_id: this.sessionId,
+            repo,
+            title: null,
+            body: null,
+            head_branch: null,
+            base_branch: null,
+            state: 'open',
+            review_result: null,
+            review_at: null,
+            created_at: now,
+            updated_at: now,
+            synced_at: now,
+          });
+        }
       }
-    }
 
-    this.notionClient.updateStatus(this.taskId, '👀 In Review').catch((e) =>
-      console.error(`[AgentSession] updateStatus failed: ${e}`),
-    );
+      this.notionClient.updateStatus(this.taskId, '👀 In Review').catch((e) =>
+        console.error(`[AgentSession] updateStatus failed: ${e}`),
+      );
+    }
 
     this.broadcast({
       type: 'session_ended',
