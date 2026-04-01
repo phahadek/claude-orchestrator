@@ -8,6 +8,11 @@ import { PermissionRules } from './components/PermissionRules';
 import { Notifications } from './components/Notifications';
 import type { NotificationItem } from './components/Notifications';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
+import styles from './App.module.css';
+
+const DEFAULT_DETAIL_WIDTH = 40;
+const MIN_DETAIL_WIDTH = 20;
+const MAX_DETAIL_WIDTH = 80;
 
 export default function App() {
   const { sessions, tasks, tasksReady, synced, dispatch, deleteSession } = useSessionStore();
@@ -24,6 +29,21 @@ export default function App() {
   const [boardId, setBoardId] = useState('');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const notifiedRef = useRef<Set<string>>(new Set());
+
+  const [detailWidthPct, setDetailWidthPct] = useState<number>(() => {
+    const saved = localStorage.getItem('sessionDetailWidth');
+    if (saved) {
+      const n = Number(saved);
+      if (n >= MIN_DETAIL_WIDTH && n <= MAX_DETAIL_WIDTH) return n;
+    }
+    return DEFAULT_DETAIL_WIDTH;
+  });
+  const [isDragging, setIsDragging] = useState(false);
+  const detailWidthRef = useRef(detailWidthPct);
+
+  useEffect(() => {
+    detailWidthRef.current = detailWidthPct;
+  }, [detailWidthPct]);
 
   const dismissNotification = useCallback((id: string) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
@@ -65,13 +85,35 @@ export default function App() {
     }
   }, [sessions, dismissNotification]);
 
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+
+    const onMove = (ev: MouseEvent) => {
+      const pct = 100 - ((ev.clientX / window.innerWidth) * 100);
+      const clamped = Math.min(MAX_DETAIL_WIDTH, Math.max(MIN_DETAIL_WIDTH, pct));
+      detailWidthRef.current = clamped;
+      setDetailWidthPct(clamped);
+    };
+
+    const onUp = () => {
+      setIsDragging(false);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      localStorage.setItem('sessionDetailWidth', String(Math.round(detailWidthRef.current)));
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, []);
+
   const selectedSession = selectedId != null
     ? (sessions.find((s) => s.sessionId === selectedId) ?? null)
     : null;
 
   return (
-    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-      <div style={{ flex: 1, overflowY: 'auto', padding: '16px' }}>
+    <div className={`${styles.appContainer}${isDragging ? ` ${styles.dragging}` : ''}`}>
+      <div className={styles.leftPanel}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
           <h1 style={{ margin: 0, flex: 1 }}>Claude Code Dashboard</h1>
           <button type="button" onClick={() => setShowRules((v) => !v)}>
@@ -95,8 +137,13 @@ export default function App() {
         )}
       </div>
 
-      {selectedSession && !showRules && (
-        <div style={{ width: '480px', flexShrink: 0 }}>
+      <div
+        className={styles.resizeHandle}
+        onMouseDown={handleResizeMouseDown}
+      />
+
+      <div className={styles.rightPanel} style={{ width: `${detailWidthPct}%` }}>
+        {selectedSession ? (
           <SessionDetail
             session={selectedSession}
             send={send}
@@ -106,8 +153,12 @@ export default function App() {
               setSelectedId(null);
             }}
           />
-        </div>
-      )}
+        ) : (
+          <div className={styles.detailPlaceholder}>
+            <p>Select a session to view details</p>
+          </div>
+        )}
+      </div>
 
       {showModal && (
         <DispatchModal
