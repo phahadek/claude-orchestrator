@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import styles from './PermissionRules.module.css';
+import { PermissionEventLog } from './PermissionEventLog';
 
 // Matches the db/types.ts PermissionRule shape returned by the REST API
 interface PermissionRule {
@@ -192,7 +193,10 @@ function AddRuleForm({ onSave, onCancel }: AddRuleFormProps) {
   );
 }
 
+type Tab = 'rules' | 'event-log';
+
 export function PermissionRules() {
+  const [tab, setTab] = useState<Tab>('rules');
   const [rules, setRules] = useState<PermissionRule[]>([]);
   const [adding, setAdding] = useState(false);
 
@@ -207,40 +211,64 @@ export function PermissionRules() {
   return (
     <div className={styles.container}>
       <h2>Permission Rules</h2>
-      <p>Hard-coded deny and allow lists are not shown. These are your custom pattern rules.</p>
 
-      <table className={styles.table}>
-        <thead>
-          <tr>
-            <th>#</th>
-            <th>Pattern</th>
-            <th>Type</th>
-            <th>Decision</th>
-            <th>Label</th>
-            <th>Enabled</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {patternRules.map((rule) => (
-            <RuleRow key={rule.id} rule={rule} onChange={setRules} />
-          ))}
-        </tbody>
-      </table>
-
-      {adding ? (
-        <AddRuleForm
-          onSave={(r) => {
-            setRules((p) => [...p, r]);
-            setAdding(false);
-          }}
-          onCancel={() => setAdding(false)}
-        />
-      ) : (
-        <button className={styles.addBtn} onClick={() => setAdding(true)} type="button">
-          + Add rule
+      <div className={styles.tabs}>
+        <button
+          type="button"
+          className={tab === 'rules' ? styles.tabActive : styles.tab}
+          onClick={() => setTab('rules')}
+        >
+          Rules
         </button>
+        <button
+          type="button"
+          className={tab === 'event-log' ? styles.tabActive : styles.tab}
+          onClick={() => setTab('event-log')}
+        >
+          Event Log
+        </button>
+      </div>
+
+      {tab === 'rules' && (
+        <>
+          <p>Hard-coded deny and allow lists are not shown. These are your custom pattern rules.</p>
+
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Pattern</th>
+                <th>Type</th>
+                <th>Decision</th>
+                <th>Label</th>
+                <th>Enabled</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {patternRules.map((rule) => (
+                <RuleRow key={rule.id} rule={rule} onChange={setRules} />
+              ))}
+            </tbody>
+          </table>
+
+          {adding ? (
+            <AddRuleForm
+              onSave={(r) => {
+                setRules((p) => [...p, r]);
+                setAdding(false);
+              }}
+              onCancel={() => setAdding(false)}
+            />
+          ) : (
+            <button className={styles.addBtn} onClick={() => setAdding(true)} type="button">
+              + Add rule
+            </button>
+          )}
+        </>
       )}
+
+      {tab === 'event-log' && <PermissionEventLog />}
     </div>
   );
 }
