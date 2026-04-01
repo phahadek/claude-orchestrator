@@ -120,14 +120,28 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
         default: return e.content;
       }
     }).join('\n---\n');
+
+    let success = false;
     try {
       await navigator.clipboard.writeText(text);
-      setCopyState('copied');
-      setTimeout(() => setCopyState('idle'), 1500);
+      success = true;
     } catch {
-      setCopyState('failed');
-      setTimeout(() => setCopyState('idle'), 1500);
+      // Fallback for cases where the Clipboard API fails (focus/permission issues)
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      try {
+        success = document.execCommand('copy');
+      } finally {
+        document.body.removeChild(textarea);
+      }
     }
+
+    setCopyState(success ? 'copied' : 'failed');
+    setTimeout(() => setCopyState('idle'), 1500);
   }
 
   function handleGoToEnd() {
