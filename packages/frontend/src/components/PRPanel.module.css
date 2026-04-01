@@ -1,0 +1,64 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.headerBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0 10px 0;
+  flex-shrink: 0;
+}
+
+.panelTitle {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #a6adc8;
+  flex: 1;
+}
+
+.refreshButton {
+  font-size: 0.8rem;
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid #45475a;
+  background: #313244;
+  color: #cdd6f4;
+  cursor: pointer;
+}
+
+.refreshButton:hover {
+  background: #45475a;
+  border-color: #585b70;
+}
+
+.networkBanner {
+  background: rgba(249, 226, 175, 0.1);
+  border: 1px solid rgba(249, 226, 175, 0.3);
+  color: #f9e2af;
+  font-size: 0.82rem;
+  padding: 6px 10px;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+
+.emptyState {
+  color: #6c7086;
+  font-size: 0.88rem;
+  padding: 24px 0;
+  text-align: center;
+}
+
+.prList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  flex: 1;
+  padding-right: 4px;
+}

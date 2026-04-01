@@ -19,11 +19,19 @@
   flex: 1;
 }
 
+.nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 /* Nav links (pill-shaped active/inactive states) */
 .navLink {
+  background: none;
+  border: none;
+  cursor: pointer;
   font-size: 0.875rem;
   color: var(--text-muted);
-  text-decoration: none;
   padding: 4px 12px;
   border-radius: 999px;
   transition: background 0.15s, color 0.15s;
@@ -36,4 +44,10 @@
 .navLinkActive {
   background: var(--accent-dim);
   color: var(--accent);
+}
+
+.divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
 }
