@@ -25,7 +25,7 @@ const MAX_DETAIL_WIDTH = 80;
 const ACTIVE_PROJECT_KEY = 'activeProjectId';
 
 export default function App() {
-  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived } = useSessionStore();
+  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const activeProjectIdRef = useRef<string | null>(null);
@@ -329,6 +329,7 @@ export default function App() {
                 onClearFilters={clearFilters}
                 onResumeAll={handleResumeAll}
                 onResume={handleResume}
+                onToggleFavorite={(sessionId, favorited) => setSessionFavorited(sessionId, favorited)}
               />
             </>
           )}
@@ -351,7 +352,12 @@ export default function App() {
               }}
               onArchive={(sessionId) => setSessionArchived(sessionId, true)}
               onUnarchive={(sessionId) => setSessionArchived(sessionId, false)}
+              onFavorite={(sessionId) => setSessionFavorited(sessionId, true)}
+              onUnfavorite={(sessionId) => setSessionFavorited(sessionId, false)}
               onResume={handleResume}
+              dismissedDenials={dismissedDenialIds.get(selectedSession.sessionId) ?? new Set()}
+              onDismissDenial={(toolUseId) => dismissDenial(selectedSession.sessionId, toolUseId)}
+              onDismissAllDenials={(toolUseIds) => dismissAllDenials(selectedSession.sessionId, toolUseIds)}
             />
           ) : (
             <div className={styles.detailPlaceholder}>

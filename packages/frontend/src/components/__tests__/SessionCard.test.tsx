@@ -172,6 +172,32 @@ describe('SessionCard', () => {
     fireEvent.click(screen.getByText('Resume'));
     expect(onResume).toHaveBeenCalledTimes(1);
   });
+
+  it('renders ☆ star button when onToggleFavorite is provided', () => {
+    render(<SessionCard session={makeSession()} selected={false} onClick={vi.fn()} onToggleFavorite={vi.fn()} />);
+    expect(screen.getByLabelText('Favorite session')).toBeDefined();
+    expect(screen.getByText('☆')).toBeDefined();
+  });
+
+  it('renders ★ when session is favorited', () => {
+    render(<SessionCard session={makeSession({ favorited: true })} selected={false} onClick={vi.fn()} onToggleFavorite={vi.fn()} />);
+    expect(screen.getByLabelText('Unfavorite session')).toBeDefined();
+    expect(screen.getByText('★')).toBeDefined();
+  });
+
+  it('calls onToggleFavorite and does not bubble to onClick when star is clicked', () => {
+    const onToggleFavorite = vi.fn();
+    const onClick = vi.fn();
+    render(<SessionCard session={makeSession()} selected={false} onClick={onClick} onToggleFavorite={onToggleFavorite} />);
+    fireEvent.click(screen.getByLabelText('Favorite session'));
+    expect(onToggleFavorite).toHaveBeenCalledTimes(1);
+    expect(onClick).not.toHaveBeenCalled();
+  });
+
+  it('does not render star button when onToggleFavorite is not provided', () => {
+    render(<SessionCard session={makeSession()} selected={false} onClick={vi.fn()} />);
+    expect(screen.queryByLabelText('Favorite session')).toBeNull();
+  });
 });
 
 // ── StatusBadge — review sessionType ─────────────────────────────────────────
