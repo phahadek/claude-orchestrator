@@ -6,7 +6,13 @@
   "main": "index.js",
   "workspaces": ["packages/backend", "packages/frontend"],
   "scripts": {
+    "dev": "concurrently \"npm run dev -w packages/backend\" \"npm run dev -w packages/frontend\"",
+    "build": "npm run build -w packages/frontend && npm run build -w packages/backend",
+    "start": "node packages/backend/dist/server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "devDependencies": {
+    "concurrently": "^8.0.0"
   },
   "repository": {
     "type": "git",
