@@ -56,3 +56,14 @@ export const config = {
 
 export const GITHUB_TOKEN = process.env.GITHUB_TOKEN ?? '';
 export const GITHUB_REPO  = process.env.GITHUB_REPO  ?? '';  // "owner/repo"
+
+export const ALLOWED_TOOLS = [
+  'Bash(git:*)', 'Bash(npm:*)', 'Bash(npx:*)', 'Bash(node:*)',
+  'Bash(gh:*)', 'Bash(cd:*)', 'Bash(which:*)', 'Bash(where:*)',
+  'Bash(ls:*)', 'Bash(cat:*)', 'Bash(echo:*)', 'Bash(mkdir:*)',
+  'Bash(cp:*)', 'Bash(mv:*)', 'Bash(head:*)', 'Bash(tail:*)',
+  'Bash(wc:*)', 'Bash(find:*)', 'Bash(grep:*)', 'Bash(sort:*)',
+  'Bash(pwd:*)',
+  'mcp__claude_ai_Notion__*', 'mcp__github__*',
+  'mcp__claude_ai_Asana__*', 'mcp__claude_ai_Google_Calendar__*',
+];
