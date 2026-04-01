@@ -88,7 +88,7 @@ export function createPrsRouter(
       return;
     }
     try {
-      const result = await prReviewService.reviewPR(prNumber, repo);
+      const result = await prReviewService.reviewPR(prNumber, repo, projectId, project.contextUrl);
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
