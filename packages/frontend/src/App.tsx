@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import type { ConnectionState } from './hooks/useWebSocket';
 import { useSessionStore } from './hooks/useSessionStore';
 import { useWebSocket } from './hooks/useWebSocket';
 import { SessionGrid } from './components/SessionGrid';
@@ -18,7 +19,7 @@ const MAX_DETAIL_WIDTH = 80;
 export default function App() {
   const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, deleteSession, setSessionArchived } = useSessionStore();
   const boardIdRef = useRef('');
-  const { send } = useWebSocket(dispatch, (sendNow: (msg: ClientMessage) => void) => {
+  const { send, connectionState } = useWebSocket(dispatch, (sendNow: (msg: ClientMessage) => void) => {
     // Called each time the WS (re)connects — fetch tasks if boardId is already known
     if (boardIdRef.current) {
       sendNow({ type: 'fetch_tasks', boardId: boardIdRef.current });
@@ -30,6 +31,9 @@ export default function App() {
   const [boardId, setBoardId] = useState('');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const notifiedRef = useRef<Set<string>>(new Set());
+  const [showReconnected, setShowReconnected] = useState(false);
+  const hasConnectedOnce = useRef(false);
+  const prevConnectionState = useRef<ConnectionState>('disconnected');
 
   const [detailWidthPct, setDetailWidthPct] = useState<number>(() => {
     const saved = localStorage.getItem('sessionDetailWidth');
@@ -45,6 +49,18 @@ export default function App() {
   useEffect(() => {
     detailWidthRef.current = detailWidthPct;
   }, [detailWidthPct]);
+
+  useEffect(() => {
+    if (connectionState === 'connected') {
+      if (hasConnectedOnce.current) {
+        setShowReconnected(true);
+        const timer = setTimeout(() => setShowReconnected(false), 3000);
+        return () => clearTimeout(timer);
+      }
+      hasConnectedOnce.current = true;
+    }
+    prevConnectionState.current = connectionState;
+  }, [connectionState]);
 
   const dismissNotification = useCallback((id: string) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
@@ -201,6 +217,17 @@ export default function App() {
       )}
 
       <Notifications notifications={notifications} onDismiss={dismissNotification} />
+
+      {(hasConnectedOnce.current && connectionState !== 'connected') && (
+        <div className={styles.connectionBanner}>
+          Reconnecting...
+        </div>
+      )}
+      {showReconnected && (
+        <div className={`${styles.connectionBanner} ${styles.connectionBannerReconnected}`}>
+          Reconnected
+        </div>
+      )}
     </div>
   );
 }
