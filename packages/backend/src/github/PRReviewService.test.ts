@@ -9,13 +9,13 @@ vi.mock('../db/queries.js', () => ({
   getEventsBySession: vi.fn(),
 }));
 
-import { PRReviewService } from './PRReviewService.js';
-import { getPRByNumber, setPRReviewResult, getEventsBySession } from '../db/queries.js';
-import type { GitHubClient } from './GitHubClient.js';
-import type { NotionClient } from '../notion/NotionClient.js';
-import type { PullRequest, PRDiff } from './types.js';
-import type { NotionTaskPage } from '../notion/NotionClient.js';
-import type { SessionEvent } from '../db/types.js';
+import { PRReviewService } from './PRReviewService';
+import { getPRByNumber, setPRReviewResult, getEventsBySession } from '../db/queries';
+import type { GitHubClient } from './GitHubClient';
+import type { NotionClient } from '../notion/NotionClient';
+import type { PullRequest, PRDiff } from './types';
+import type { NotionTaskPage } from '../notion/NotionClient';
+import type { SessionEvent } from '../db/types';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
