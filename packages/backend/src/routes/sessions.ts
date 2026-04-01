@@ -1,8 +1,13 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { getSession, getAllSessions, getSessionsByStatus, deleteSession, archiveSession, unarchiveSession, archiveFinishedSessions } from '../db/queries';
+import { getSession, getActiveSessions, getArchivedSessions, getSessionsByStatus, deleteSession, archiveSession, unarchiveSession, archiveFinishedSessions } from '../db/queries';
 
 export const sessionsRouter = Router();
+
+// GET /api/sessions/archived
+sessionsRouter.get('/archived', (_req: Request, res: Response) => {
+  res.json(getArchivedSessions());
+});
 
 // GET /api/sessions?status=running,done
 sessionsRouter.get('/', (req: Request, res: Response) => {
@@ -11,7 +16,7 @@ sessionsRouter.get('/', (req: Request, res: Response) => {
     const statuses = statusParam.split(',').map((s) => s.trim()).filter(Boolean);
     res.json(getSessionsByStatus(statuses));
   } else {
-    res.json(getAllSessions());
+    res.json(getActiveSessions());
   }
 });
 
