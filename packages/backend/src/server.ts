@@ -5,6 +5,7 @@ import http from 'http';
 import path from 'path';
 import os from 'os';
 import { runMigrations } from './db/schema';
+import { db } from './db/db';
 import { SessionManager } from './session/SessionManager';
 import { NotionClient } from './notion/NotionClient';
 import { handleMessage } from './ws/router';
@@ -136,8 +137,22 @@ jsonlReader.importAll().then(async () => {
   process.exit(1);
 });
 
-process.on('SIGTERM', async () => {
-  console.log('[server] SIGTERM received — shutting down');
+async function gracefulShutdown(signal: string) {
+  console.log(`[server] ${signal} received — shutting down`);
+  wss.close();
   await sessionManager.shutdownAll();
-  server.close(() => process.exit(0));
-});
+  server.close();
+  db.close();
+  process.exit(0);
+}
+
+function shutdownWithTimeout(signal: string) {
+  gracefulShutdown(signal).catch(console.error);
+  setTimeout(() => {
+    console.error('[server] Graceful shutdown timed out — forcing exit');
+    process.exit(1);
+  }, 15_000).unref();
+}
+
+process.on('SIGTERM', () => shutdownWithTimeout('SIGTERM'));
+process.on('SIGINT', () => shutdownWithTimeout('SIGINT'));
