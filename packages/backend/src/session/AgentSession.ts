@@ -7,6 +7,7 @@ import {
   updateSessionStatus,
   getEventsBySession,
   insertPermissionDenial,
+  upsertPullRequest,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import type { NotionClient } from '../notion/NotionClient';
@@ -14,7 +15,7 @@ import type { NotionClient } from '../notion/NotionClient';
 const PR_URL_REGEX = /https:\/\/github\.com\/.+\/pull\/\d+/;
 
 /** Parse the Notion page ID out of a notion.so URL or return the raw value. */
-function parseNotionPageId(url: string): string {
+export function parseNotionPageId(url: string): string {
   const match = url.match(/([a-f0-9]{32})$/i);
   if (match) return match[1];
   const uuidMatch = url.match(/([0-9a-f-]{36})$/i);
@@ -56,6 +57,7 @@ export class AgentSession extends EventEmitter {
     public readonly projectContextUrl: string,
     private readonly notionClient: NotionClient,
     private readonly worktreePath: string,
+    public readonly taskId: string,
   ) {
     super();
   }
@@ -254,15 +256,38 @@ export class AgentSession extends EventEmitter {
     this.prUrl = prUrl;
     updateSessionStatus(this.sessionId, 'done', Date.now());
 
-    const taskId = parseNotionPageId(this.taskUrl);
-
     if (prUrl) {
-      this.notionClient.attachPR(taskId, prUrl).catch((e) =>
+      this.notionClient.attachPR(this.taskId, prUrl).catch((e) =>
         console.error(`[AgentSession] attachPR failed: ${e}`),
       );
+
+      // Parse repo ("owner/repo") and pr_number from the GitHub PR URL
+      const prMatch = prUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
+      if (prMatch) {
+        const repo = prMatch[1];
+        const prNumber = parseInt(prMatch[2], 10);
+        const now = new Date().toISOString();
+        upsertPullRequest({
+          pr_number: prNumber,
+          pr_url: prUrl,
+          notion_task_id: this.taskId,
+          session_id: this.sessionId,
+          repo,
+          title: null,
+          body: null,
+          head_branch: null,
+          base_branch: null,
+          state: 'open',
+          review_result: null,
+          review_at: null,
+          created_at: now,
+          updated_at: now,
+          synced_at: now,
+        });
+      }
     }
 
-    this.notionClient.updateStatus(taskId, '👀 In Review').catch((e) =>
+    this.notionClient.updateStatus(this.taskId, '👀 In Review').catch((e) =>
       console.error(`[AgentSession] updateStatus failed: ${e}`),
     );
 
