@@ -151,6 +151,32 @@ describe('useSessionStore', () => {
     expect(result.current.blockedCount).toBe(2);
   });
 
+  it('resetTasks sets tasksReady to false', () => {
+    const { result } = renderHook(() => useSessionStore());
+    act(() => result.current.dispatch(msg.tasks_ready()));
+    expect(result.current.tasksReady).toBe(true);
+    act(() => result.current.resetTasks());
+    expect(result.current.tasksReady).toBe(false);
+  });
+
+  it('resetTasks clears tasks array', () => {
+    const { result } = renderHook(() => useSessionStore());
+    act(() => result.current.dispatch(msg.tasks_ready()));
+    expect(result.current.tasks).toHaveLength(1);
+    act(() => result.current.resetTasks());
+    expect(result.current.tasks).toHaveLength(0);
+  });
+
+  it('after resetTasks, a subsequent tasks_ready message sets tasksReady back to true', () => {
+    const { result } = renderHook(() => useSessionStore());
+    act(() => result.current.dispatch(msg.tasks_ready()));
+    act(() => result.current.resetTasks());
+    expect(result.current.tasksReady).toBe(false);
+    act(() => result.current.dispatch(msg.tasks_ready()));
+    expect(result.current.tasksReady).toBe(true);
+    expect(result.current.tasks).toHaveLength(1);
+  });
+
   it('readyCount and blockedCount are both 0 when tasks is empty', () => {
     const { result } = renderHook(() => useSessionStore());
     expect(result.current.readyCount).toBe(0);
