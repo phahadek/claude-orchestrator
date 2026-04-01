@@ -13,9 +13,10 @@ interface Props {
   onDelete: (sessionId: string) => void;
   onArchive: (sessionId: string) => void;
   onUnarchive: (sessionId: string) => void;
+  onResume?: (sessionId: string) => void;
 }
 
-export function SessionDetail({ session, send, onClose, onDelete, onArchive, onUnarchive }: Props) {
+export function SessionDetail({ session, send, onClose, onDelete, onArchive, onUnarchive, onResume }: Props) {
   const [draftMessage, setDraftMessage] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [archiving, setArchiving] = useState(false);
@@ -232,7 +233,12 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
       <div className={styles.header}>
         <span className={styles.taskName}>{taskNameFromNotionUrl(session.taskName)}</span>
         <div className={styles.headerControls}>
-          <StatusBadge status={session.status} />
+          <StatusBadge status={session.status} isRateLimited={session.isRateLimited} />
+          {session.isRateLimited && onResume && (
+            <button className={styles.resumeButton} onClick={() => onResume(session.sessionId)}>
+              Resume
+            </button>
+          )}
           {session.notionTaskUrl && (
             <a
               href={session.notionTaskUrl}
