@@ -6,6 +6,7 @@ import {
   insertEvent,
   updateSessionStatus,
   getEventsBySession,
+  insertPermissionDenial,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import type { NotionClient } from '../notion/NotionClient';
@@ -166,6 +167,16 @@ export class AgentSession extends EventEmitter {
         const denials = event.permission_denials as PermissionDenial[] | undefined;
         console.log(`[AgentSession:${this.sessionId}] RESULT stop_reason=${event.stop_reason} denials=${JSON.stringify(denials)}`);
         if (denials && denials.length > 0) {
+          const ts = Date.now();
+          for (const d of denials) {
+            insertPermissionDenial({
+              session_id: this.sessionId,
+              tool_name: d.tool_name,
+              tool_use_id: d.tool_use_id,
+              tool_input: JSON.stringify(d.tool_input),
+              timestamp: ts,
+            });
+          }
           this.broadcast({
             type: 'permission_denials',
             sessionId: this.sessionId,
