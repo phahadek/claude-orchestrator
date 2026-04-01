@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, ChildProcess, execSync } from 'child_process';
 import { createInterface } from 'readline';
 import { EventEmitter } from 'events';
 import { config, ALLOWED_TOOLS } from '../config';
@@ -47,6 +47,7 @@ function toEventType(raw: string): 'text' | 'tool_use' | 'tool_result' | 'system
 
 export class AgentSession extends EventEmitter {
   private proc: ChildProcess | null = null;
+  private isKilling = false;
   public prUrl: string | undefined;
   /** True once a session_ended message has been broadcast. */
   public hasEnded = false;
@@ -87,7 +88,11 @@ export class AgentSession extends EventEmitter {
         '--allowed-tools',
         ...ALLOWED_TOOLS,
       ],
-      { cwd: this.worktreePath, stdio: ['pipe', 'pipe', 'pipe'] },
+      {
+        cwd: this.worktreePath,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        ...(process.platform !== 'win32' && { detached: true }),
+      },
     );
 
     // Send the initial prompt via stdin (required by --input-format stream-json).
@@ -205,7 +210,7 @@ export class AgentSession extends EventEmitter {
       new Promise<void>((resolve) => setTimeout(() => { rl.close(); resolve(); }, 5_000)),
     ]);
 
-    if (spawnErrored) return;
+    if (spawnErrored || this.isKilling) return;
 
     if (exitCode === 0) {
       await this.handleCleanExit();
@@ -304,20 +309,45 @@ export class AgentSession extends EventEmitter {
   }
 
   async kill(): Promise<void> {
-    if (!this.proc) return;
-    this.proc.kill('SIGTERM');
+    if (!this.proc || this.proc.exitCode !== null) return;
+    this.isKilling = true;
+    try {
+      this.killProcessTree(this.proc.pid!);
+    } catch {
+      // Process may have exited between guard check and here — ignore
+    }
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
-        this.proc?.kill('SIGKILL');
+        try {
+          this.killProcessTree(this.proc!.pid!);
+        } catch {
+          // Already gone
+        }
         resolve();
       }, 15_000);
-      this.proc!.on('close', () => {
+      this.proc!.once('exit', () => {
         clearTimeout(timeout);
         resolve();
       });
     });
     updateSessionStatus(this.sessionId, 'killed', Date.now());
     this.broadcast({ type: 'session_ended', sessionId: this.sessionId, status: 'killed' });
+  }
+
+  private killProcessTree(pid: number): void {
+    if (process.platform === 'win32') {
+      try {
+        execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' });
+      } catch {
+        // Process may have already exited — ignore
+      }
+    } else {
+      try {
+        process.kill(-pid, 'SIGTERM');
+      } catch {
+        // ESRCH = process already gone
+      }
+    }
   }
 
   /** Persist to SQLite first, then emit. Caller (SessionManager) listens and broadcasts. */
