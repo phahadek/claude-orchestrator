@@ -36,7 +36,7 @@ describe('SessionCard', () => {
     expect(screen.getByText('🔄 Running')).toBeDefined();
   });
 
-  it('truncates last event content to 120 characters', () => {
+  it('truncates last event plain-text content to 120 characters (fallback)', () => {
     const longContent = 'x'.repeat(130);
     const session = makeSession({
       events: [{ eventType: 'text', content: longContent, timestamp: Date.now() }],
@@ -44,6 +44,38 @@ describe('SessionCard', () => {
     render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
     const preview = screen.getByText(/x+…/);
     expect(preview.textContent?.length).toBe(121); // 120 + ellipsis
+  });
+
+  it('shows extracted text for assistant event payload, not raw JSON', () => {
+    const payload = {
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: 'I have completed the analysis.' }],
+      },
+    };
+    const session = makeSession({
+      events: [{ eventType: 'text', content: JSON.stringify(payload), timestamp: Date.now() }],
+    });
+    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    expect(screen.getByText('I have completed the analysis.')).toBeDefined();
+    expect(screen.queryByText(/^\{/)).toBeNull();
+  });
+
+  it('shows 🔧 ToolName summary for tool_use event payload', () => {
+    const payload = { type: 'tool_use', name: 'Read', input: { file_path: '/src/main.ts' } };
+    const session = makeSession({
+      events: [{ eventType: 'tool_use', content: JSON.stringify(payload), timestamp: Date.now() }],
+    });
+    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    expect(screen.getByText('🔧 Read')).toBeDefined();
+  });
+
+  it('falls back to raw content when last event content is not parseable JSON', () => {
+    const session = makeSession({
+      events: [{ eventType: 'tool_use', content: 'not valid json', timestamp: Date.now() }],
+    });
+    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    expect(screen.getByText('not valid json')).toBeDefined();
   });
 
   it('renders attention indicator for needs_permission sessions', () => {
