@@ -34,7 +34,7 @@ vi.mock('child_process', () => ({
 
 // Mock DB queries — these would hit a real SQLite db otherwise
 vi.mock('../db/queries', () => ({
-  insertEvent: vi.fn(),
+  upsertSessionEvent: vi.fn(() => 1),
   insertPermissionEvent: vi.fn(),
   updateSessionStatus: vi.fn(),
   getEventsBySession: vi.fn(() => []),
@@ -47,7 +47,7 @@ import { AgentSession } from '../session/AgentSession';
 import { spawn } from 'child_process';
 import type { NotionClient } from '../notion/NotionClient';
 import type { ServerMessage } from '../ws/types';
-import { getRules, getEventsBySession, updateSessionStatus } from '../db/queries';
+import { getRules, getEventsBySession, updateSessionStatus, upsertSessionEvent } from '../db/queries';
 import type { PermissionRule } from '../db/types';
 
 function fakeNotionClient(): NotionClient {
@@ -298,6 +298,71 @@ describe('AgentSession', () => {
 
     const ended = messages.find((m) => m.type === 'session_ended');
     expect(ended).toBeDefined();
+  });
+
+  // ── AC: dedup — two assistant events with same message.id update existing row ──
+  it('when two assistant events share the same message.id, upserts (updates) existing row', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    // First upsert returns row ID 42; subsequent calls return 1 (not reached for second call)
+    vi.mocked(upsertSessionEvent).mockReturnValueOnce(42).mockReturnValue(1);
+
+    const session = new AgentSession('s-dedup', 'https://notion.so/task', 'https://notion.so/ctx', notion, '/tmp', 'task-id');
+    const runPromise = session.run();
+
+    const msgA1 = JSON.stringify({
+      type: 'assistant',
+      message: { id: 'msg-A', content: [{ type: 'text', text: 'partial' }] },
+    });
+    const msgA2 = JSON.stringify({
+      type: 'assistant',
+      message: { id: 'msg-A', content: [{ type: 'text', text: 'full text' }] },
+    });
+
+    mockProc.stdout.push(msgA1 + '\n');
+    mockProc.stdout.push(msgA2 + '\n');
+    await new Promise((r) => setTimeout(r, 50));
+
+    const calls = vi.mocked(upsertSessionEvent).mock.calls;
+    // First call: no existingId — insert
+    expect(calls[0][1]).toBeUndefined();
+    expect(calls[0][0].message_id).toBe('msg-A');
+    // Second call: existingId = 42 — update
+    expect(calls[1][1]).toBe(42);
+    expect(calls[1][0].message_id).toBe('msg-A');
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+  });
+
+  // ── AC: dedup — events without message.id are always inserted as new rows ──
+  it('events without a message.id are always inserted as new rows', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(upsertSessionEvent).mockReturnValue(1);
+
+    const session = new AgentSession('s-no-id', 'https://notion.so/task', 'https://notion.so/ctx', notion, '/tmp', 'task-id');
+    const runPromise = session.run();
+
+    // Two system events (no message.id)
+    mockProc.stdout.push(JSON.stringify({ type: 'system', subtype: 'init' }) + '\n');
+    mockProc.stdout.push(JSON.stringify({ type: 'system', subtype: 'success' }) + '\n');
+    await new Promise((r) => setTimeout(r, 50));
+
+    const calls = vi.mocked(upsertSessionEvent).mock.calls;
+    // Both calls must have existingId = undefined (always insert)
+    expect(calls[0][1]).toBeUndefined();
+    expect(calls[1][1]).toBeUndefined();
+    // Neither should have a message_id
+    expect(calls[0][0].message_id).toBeNull();
+    expect(calls[1][0].message_id).toBeNull();
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
   });
 
   // ── AC: sessionType=standard still calls notionClient.updateStatus ────────
