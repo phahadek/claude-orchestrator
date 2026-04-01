@@ -104,6 +104,60 @@
 }
 
 /* ── Transcript ──────────────────────────────────────────────────── */
+.transcriptSection {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.transcriptHeader {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 4px 12px;
+  border-bottom: 1px solid #313244;
+  flex-shrink: 0;
+}
+
+.copyButton {
+  background: transparent;
+  border: 1px solid #45475a;
+  border-radius: 4px;
+  color: #6c7086;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 3px 8px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.copyButton:hover:not(:disabled) {
+  color: #cdd6f4;
+  border-color: #6c7086;
+}
+
+.copyButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.goToEndButton {
+  background: transparent;
+  border: 1px solid #45475a;
+  border-radius: 4px;
+  color: #6c7086;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 3px 8px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.goToEndButton:hover {
+  color: #cdd6f4;
+  border-color: #6c7086;
+}
+
 .transcript {
   flex: 1;
   overflow-y: auto;
