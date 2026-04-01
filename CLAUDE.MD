@@ -39,8 +39,21 @@ or 🗂️ Ready. Work only on the task you have been assigned.
 | **Scope** | One task per session. No scope creep. |
 | **Branch naming** | `feature/<task-name>` from `dev` |
 | **Commit to `dev` or `main` directly?** | Never |
-| **When done** | Mark task ✅ Done, append to Session Log, update Master File Index if pages changed |
+| **When done** | Open draft PR → mark task 👀 In Review → stop. Human merges and marks ✅ Done. |
 | **Pre-PR gate (hard — in order)** | 1. Merge/rebase `dev` → resolve conflicts. 2. `tsc --noEmit` passes (both packages). 3. `vite build` passes. |
+
+### Task Lifecycle — follow this end-to-end, every session
+
+1. **Move task to `🔄 In Progress`** in Notion as soon as you begin work.
+2. **Create a feature branch from `dev`** — named `feature/<task-name>`.
+3. **Implement the task** per the acceptance criteria in the Notion task page.
+4. **Pass the pre-PR gate** (rebase onto `dev`, `tsc --noEmit`, `vite build`).
+5. **Open a draft PR targeting `dev`** — include the Notion task URL in the PR body.
+6. **Move task to `👀 In Review`** in Notion.
+7. **Stop.** Never merge your own PR. Never move the task to `✅ Done`. Wait for the human.
+
+> ⚠️ Steps 6 and 7 are hard stops. The human merges the PR and marks the task Done.
+> Appending to the Session Log and updating the Master File Index are also the human's responsibility after merge.
 
 ---
 
