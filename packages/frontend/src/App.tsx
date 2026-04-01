@@ -3,6 +3,7 @@ import type { ConnectionState } from './hooks/useWebSocket';
 import { useSessionStore } from './hooks/useSessionStore';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { Header } from './components/Header';
 import { SessionGrid } from './components/SessionGrid';
 import { HistoryGrid } from './components/HistoryGrid';
 import { SessionDetail } from './components/SessionDetail';
@@ -12,25 +13,30 @@ import { Notifications } from './components/Notifications';
 import { ShortcutHint } from './components/ShortcutHint';
 import type { NotificationItem } from './components/Notifications';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
+import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
 import styles from './App.module.css';
 
 const DEFAULT_DETAIL_WIDTH = 40;
 const MIN_DETAIL_WIDTH = 20;
 const MAX_DETAIL_WIDTH = 80;
 
+const ACTIVE_PROJECT_KEY = 'activeProjectId';
+
 export default function App() {
   const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, deleteSession, setSessionArchived } = useSessionStore();
-  const projectIdRef = useRef('');
+  const [projects, setProjects] = useState<ProjectConfig[]>([]);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const activeProjectIdRef = useRef<string | null>(null);
+
   const { send, connectionState } = useWebSocket(dispatch, (sendNow: (msg: ClientMessage) => void) => {
     // Called each time the WS (re)connects — fetch tasks if projectId is already known
-    if (projectIdRef.current) {
-      sendNow({ type: 'fetch_tasks', projectId: projectIdRef.current });
+    if (activeProjectIdRef.current) {
+      sendNow({ type: 'fetch_tasks', projectId: activeProjectIdRef.current });
     }
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [activeView, setActiveView] = useState<'sessions' | 'rules' | 'history'>('sessions');
-  const [projectId, setProjectId] = useState('');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const notifiedRef = useRef<Set<string>>(new Set());
   const [showReconnected, setShowReconnected] = useState(false);
@@ -80,16 +86,27 @@ export default function App() {
   useEffect(() => {
     fetch('/api/config')
       .then((r) => r.json())
-      .then((projects: { id: string }[]) => {
-        if (projects.length > 0) {
-          projectIdRef.current = projects[0].id;
-          setProjectId(projects[0].id);
-          // If WS is already open by the time config arrives, send immediately
-          send({ type: 'fetch_tasks', projectId: projects[0].id });
-        }
+      .then((loaded: ProjectConfig[]) => {
+        if (loaded.length === 0) return;
+        setProjects(loaded);
+
+        // Restore from localStorage, validate against current project list
+        const stored = localStorage.getItem(ACTIVE_PROJECT_KEY);
+        const valid = stored && loaded.some((p) => p.id === stored) ? stored : loaded[0].id;
+
+        activeProjectIdRef.current = valid;
+        setActiveProjectId(valid);
+        send({ type: 'fetch_tasks', projectId: valid });
       })
-      .catch(() => {/* leave projectId empty — DispatchModal handles the empty case */});
+      .catch(() => {/* leave projects empty — DispatchModal handles the empty case */});
   }, []);
+
+  const handleProjectChange = useCallback((id: string) => {
+    localStorage.setItem(ACTIVE_PROJECT_KEY, id);
+    activeProjectIdRef.current = id;
+    setActiveProjectId(id);
+    send({ type: 'fetch_tasks', projectId: id });
+  }, [send]);
 
   useEffect(() => {
     for (const session of sessions) {
@@ -141,18 +158,24 @@ export default function App() {
   // Reset keyboard selection index when active project changes
   useEffect(() => {
     setSelectedSessionIndex(0);
-  }, [projectId]);
+  }, [activeProjectId]);
 
   const selectedSession = selectedId != null
     ? (sessions.find((s) => s.sessionId === selectedId) ?? null)
     : null;
 
   const activeSessions = sessions.filter((s) => !s.archived);
-  const runningCount = activeSessions.filter((s) => ['running', 'starting', 'needs_permission'].includes(s.status)).length;
-  const doneCount = activeSessions.filter((s) => ['done', 'error', 'killed'].includes(s.status)).length;
+
+  // Filter visible sessions to the active project
+  const projectSessions = activeProjectId
+    ? activeSessions.filter((s) => s.project_id === activeProjectId)
+    : activeSessions;
+
+  const runningCount = projectSessions.filter((s) => ['running', 'starting', 'needs_permission'].includes(s.status)).length;
+  const doneCount = projectSessions.filter((s) => ['done', 'error', 'killed'].includes(s.status)).length;
 
   // Keyboard navigation: sorted active sessions (same order as SessionGrid)
-  const kbSortedSessions = [...activeSessions].sort((a, b) => {
+  const kbSortedSessions = [...projectSessions].sort((a, b) => {
     const statusOrder: Record<string, number> = {
       needs_permission: 0, running: 1, starting: 2, done: 3, error: 3, killed: 3,
     };
@@ -161,6 +184,8 @@ export default function App() {
     return (b.started_at ?? 0) - (a.started_at ?? 0);
   });
   const keyboardHighlightedId = kbSortedSessions[selectedSessionIndex]?.sessionId ?? null;
+
+  const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
 
   useKeyboardShortcuts({
     onOpenDispatch: () => setShowModal(true),
@@ -196,75 +221,82 @@ export default function App() {
 
   return (
     <div className={`${styles.appContainer}${isDragging ? ` ${styles.dragging}` : ''}`}>
-      <div className={styles.leftPanel}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-          <h1 style={{ margin: 0, flex: 1 }}>Claude Code Dashboard</h1>
-          <button type="button" onClick={() => setActiveView((v) => v === 'history' ? 'sessions' : 'history')}>
-            {activeView === 'history' ? 'Hide History' : '🕑 History'}
-          </button>
-          <button type="button" onClick={() => setActiveView((v) => v === 'rules' ? 'sessions' : 'rules')}>
-            {activeView === 'rules' ? 'Hide Rules' : '⚙️ Rules'}
-          </button>
-          <button type="button" onClick={() => setShowModal(true)}>
-            + New Session
-          </button>
-        </div>
-        <p>
-          {runningCount > 0 && <span>{runningCount} running</span>}
-          {runningCount > 0 && doneCount > 0 && <span> · </span>}
-          {doneCount > 0 && <span>{doneCount} done</span>}
-          {runningCount === 0 && doneCount === 0 && <span>0 sessions</span>}
-          {readyCount > 0 && <span> · {readyCount} ready</span>}
-          {blockedCount > 0 && <span style={{ color: 'var(--color-subtext0, #a6adc8)' }}> · {blockedCount} blocked</span>}
-        </p>
-
-        {activeView === 'rules' ? (
-          <PermissionRules />
-        ) : activeView === 'history' ? (
-          <HistoryGrid />
-        ) : (
-          <SessionGrid
-            sessions={sessions}
-            selectedId={selectedId}
-            keyboardSelectedId={keyboardHighlightedId}
-            onSelect={setSelectedId}
-            synced={synced}
-            onArchiveAll={handleArchiveAll}
-          />
-        )}
-      </div>
-
-      <div
-        className={styles.resizeHandle}
-        onMouseDown={handleResizeMouseDown}
+      <Header
+        projects={projects}
+        activeProjectId={activeProjectId}
+        onProjectChange={handleProjectChange}
       />
-
-      <div className={styles.rightPanel} style={{ width: `${detailWidthPct}%` }}>
-        {selectedSession ? (
-          <SessionDetail
-            session={selectedSession}
-            send={send}
-            onClose={() => setSelectedId(null)}
-            onDelete={(sessionId) => {
-              deleteSession(sessionId);
-              setSelectedId(null);
-            }}
-            onArchive={(sessionId) => setSessionArchived(sessionId, true)}
-            onUnarchive={(sessionId) => setSessionArchived(sessionId, false)}
-          />
-        ) : (
-          <div className={styles.detailPlaceholder}>
-            <p>Select a session to view details</p>
+      <div className={styles.contentArea}>
+        <div className={styles.leftPanel}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+            <span style={{ flex: 1 }}>
+              {runningCount > 0 && <span>{runningCount} running</span>}
+              {runningCount > 0 && doneCount > 0 && <span> · </span>}
+              {doneCount > 0 && <span>{doneCount} done</span>}
+              {runningCount === 0 && doneCount === 0 && <span>0 sessions</span>}
+              {readyCount > 0 && <span> · {readyCount} ready</span>}
+              {blockedCount > 0 && <span style={{ color: 'var(--color-subtext0, #a6adc8)' }}> · {blockedCount} blocked</span>}
+            </span>
+            <button type="button" onClick={() => setActiveView((v) => v === 'history' ? 'sessions' : 'history')}>
+              {activeView === 'history' ? 'Hide History' : '🕑 History'}
+            </button>
+            <button type="button" onClick={() => setActiveView((v) => v === 'rules' ? 'sessions' : 'rules')}>
+              {activeView === 'rules' ? 'Hide Rules' : '⚙️ Rules'}
+            </button>
+            <button type="button" onClick={() => setShowModal(true)}>
+              + New Session
+            </button>
           </div>
-        )}
+
+          {activeView === 'rules' ? (
+            <PermissionRules />
+          ) : activeView === 'history' ? (
+            <HistoryGrid />
+          ) : (
+            <SessionGrid
+              sessions={projectSessions}
+              projects={projects}
+              selectedId={selectedId}
+              keyboardSelectedId={keyboardHighlightedId}
+              onSelect={setSelectedId}
+              synced={synced}
+              onArchiveAll={handleArchiveAll}
+            />
+          )}
+        </div>
+
+        <div
+          className={styles.resizeHandle}
+          onMouseDown={handleResizeMouseDown}
+        />
+
+        <div className={styles.rightPanel} style={{ width: `${detailWidthPct}%` }}>
+          {selectedSession ? (
+            <SessionDetail
+              session={selectedSession}
+              send={send}
+              onClose={() => setSelectedId(null)}
+              onDelete={(sessionId) => {
+                deleteSession(sessionId);
+                setSelectedId(null);
+              }}
+              onArchive={(sessionId) => setSessionArchived(sessionId, true)}
+              onUnarchive={(sessionId) => setSessionArchived(sessionId, false)}
+            />
+          ) : (
+            <div className={styles.detailPlaceholder}>
+              <p>Select a session to view details</p>
+            </div>
+          )}
+        </div>
       </div>
 
-      {showModal && (
+      {showModal && activeProject && (
         <DispatchModal
           tasks={tasks}
           tasksReady={tasksReady}
           send={send}
-          projectId={projectId}
+          project={activeProject}
           onClose={() => setShowModal(false)}
         />
       )}

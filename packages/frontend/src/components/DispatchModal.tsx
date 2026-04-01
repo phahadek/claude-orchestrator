@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
 import type { ResolvedTask } from '@claude-dashboard/backend/src/notion/types';
+import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
 import styles from './DispatchModal.module.css';
-
-const PROJECT_CONTEXT_URL = import.meta.env.VITE_PROJECT_CONTEXT_URL as string;
 
 function taskTypeIcon(type: string): string {
   if (type.includes('💻')) return '💻';
@@ -16,16 +15,16 @@ interface Props {
   tasks: ResolvedTask[];
   tasksReady: boolean;
   send: (msg: ClientMessage) => void;
-  projectId: string;
+  project: ProjectConfig;
   onClose: () => void;
 }
 
-export function DispatchModal({ tasks, tasksReady, send, projectId, onClose }: Props) {
+export function DispatchModal({ tasks, tasksReady, send, project, onClose }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    send({ type: 'fetch_tasks', projectId });
+    send({ type: 'fetch_tasks', projectId: project.id });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -48,7 +47,7 @@ export function DispatchModal({ tasks, tasksReady, send, projectId, onClose }: P
   const launch = () => {
     const toDispatch = ready
       .filter((t) => selected.has(t.task.id))
-      .map((t) => ({ taskUrl: t.task.notionUrl, projectContextUrl: PROJECT_CONTEXT_URL, taskType: t.task.type, projectId }));
+      .map((t) => ({ taskUrl: t.task.notionUrl, projectContextUrl: project.contextUrl, taskType: t.task.type, projectId: project.id }));
     if (toDispatch.length > 0) {
       send({ type: 'dispatch', tasks: toDispatch });
       onClose();
