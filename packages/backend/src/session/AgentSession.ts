@@ -136,6 +136,10 @@ export class AgentSession extends EventEmitter {
 
     const rl = createInterface({ input: this.proc.stdout! });
 
+    // Capture readline completion early so we can drain after exit,
+    // even if 'close' fires before or during the exit await below.
+    const rlDone = new Promise<void>((resolve) => rl.once('close', resolve));
+
     rl.on('line', (line) => {
       if (!line.trim()) return;
       let event: Record<string, unknown>;
@@ -209,9 +213,19 @@ export class AgentSession extends EventEmitter {
       });
     });
 
+    // Use 'exit' rather than 'close': the 'close' event can be indefinitely
+    // delayed if readline holds stdout open after the subprocess has exited,
+    // which would leave the session stuck at 'running' forever.
     const exitCode = await new Promise<number | null>((resolve) => {
-      this.proc!.on('close', (code) => resolve(code));
+      this.proc!.once('exit', (code) => resolve(code));
     });
+
+    // Drain any remaining buffered lines from stdout before proceeding.
+    // Guard with a 5 s timeout in case the stream is stuck.
+    await Promise.race([
+      rlDone,
+      new Promise<void>((resolve) => setTimeout(() => { rl.close(); resolve(); }, 5_000)),
+    ]);
 
     if (spawnErrored) return;
 
