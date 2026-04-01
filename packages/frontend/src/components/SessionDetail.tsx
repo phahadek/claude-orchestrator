@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import type { SessionState } from '../hooks/useSessionStore';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
 import { taskNameFromNotionUrl } from '../utils/notionUrl';
@@ -104,7 +104,36 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
     const text = session.events.map((e) => {
       const payload = tryParseJson(e.content);
       switch (e.eventType) {
-        case 'text': return extractText(payload, e.content);
+        case 'text': {
+          if (typeof payload === 'object' && payload !== null) {
+            const p = payload as Record<string, unknown>;
+            if (p.type === 'assistant' || p.type === 'message') {
+              const msg = p.message as Record<string, unknown> | undefined;
+              const blocks = msg ? msg.content : p.content;
+              if (Array.isArray(blocks)) {
+                const parts: string[] = [];
+                for (const block of blocks) {
+                  if (typeof block !== 'object' || block === null) continue;
+                  const b = block as Record<string, unknown>;
+                  if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+                    parts.push(b.text);
+                  } else if (b.type === 'tool_use') {
+                    const toolName = typeof b.name === 'string' ? b.name : 'tool_use';
+                    let input: unknown = b.input;
+                    if (typeof input === 'string') {
+                      try { input = JSON.parse(input); } catch { /* leave as string */ }
+                    }
+                    const bashCmd = toolName === 'Bash' ? extractBashCommand(input) : null;
+                    if (bashCmd != null) parts.push(`🔧 ${toolName}\n$ ${bashCmd}`);
+                    else parts.push(`🔧 ${toolName}\n${JSON.stringify(input, null, 2)}`);
+                  }
+                }
+                return parts.join('\n');
+              }
+            }
+          }
+          return extractText(payload, e.content);
+        }
         case 'tool_use': {
           const parsed = extractToolUse(payload);
           if (!parsed) return e.content;
@@ -302,7 +331,46 @@ export function EventRow({ event }: EventRowProps) {
 
   switch (event.eventType) {
     case 'text': {
+      // Handle structured assistant message payloads — extract text and tool_use blocks
+      if (typeof payload === 'object' && payload !== null) {
+        const p = payload as Record<string, unknown>;
+        if (p.type === 'assistant' || p.type === 'message') {
+          const msg = p.message as Record<string, unknown> | undefined;
+          const blocks = msg ? msg.content : p.content;
+          if (Array.isArray(blocks)) {
+            const nodes: React.ReactNode[] = [];
+            blocks.forEach((block: unknown, idx: number) => {
+              if (typeof block !== 'object' || block === null) return;
+              const b = block as Record<string, unknown>;
+              if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+                nodes.push(<p key={idx} className={styles.eventText}>{b.text}</p>);
+              } else if (b.type === 'tool_use') {
+                const toolName = typeof b.name === 'string' ? b.name : 'tool_use';
+                let input: unknown = b.input;
+                if (typeof input === 'string') {
+                  try { input = JSON.parse(input); } catch { /* leave as string */ }
+                }
+                const isBash = toolName === 'Bash';
+                const bashCmd = isBash ? extractBashCommand(input) : null;
+                nodes.push(
+                  <div key={idx} className={styles.eventToolUse}>
+                    <div className={styles.toolHeader}>🔧 {toolName}</div>
+                    {isBash && bashCmd != null ? (
+                      <pre className={styles.bashCommand}>$ {bashCmd}</pre>
+                    ) : (
+                      <pre className={styles.toolArgs}>{JSON.stringify(input, null, 2)}</pre>
+                    )}
+                  </div>
+                );
+              }
+            });
+            if (nodes.length === 0) return null;
+            return <>{nodes}</>;
+          }
+        }
+      }
       const text = extractText(payload, event.content);
+      if (!text.trim()) return null;
       return <p className={styles.eventText}>{text}</p>;
     }
 
@@ -333,6 +401,7 @@ export function EventRow({ event }: EventRowProps) {
 
     case 'system': {
       const { rawType, display } = extractSystem(payload, event.content);
+      if (rawType === 'result') return null;
       if (rawType === 'file-history-snapshot') {
         return <p className={styles.eventSystem}>📄 {display}</p>;
       }
@@ -426,9 +495,12 @@ function extractText(payload: unknown, rawContent: string): string {
           .filter((b) => b.type === 'text')
           .map((b) => String(b.text ?? ''));
         if (texts.length > 0) return texts.join('\n');
+        // No text blocks — content (e.g. tool_use blocks) handled by EventRow directly
+        return '';
       }
       if (typeof content === 'string') return content;
     }
+    return ''; // assistant/message type but no extractable text
   }
 
   if (typeof p.text === 'string') return p.text;
