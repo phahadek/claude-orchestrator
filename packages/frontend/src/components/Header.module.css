@@ -4,8 +4,8 @@
   gap: 12px;
   height: 52px;
   padding: 0 16px;
-  background: #181825;
-  border-bottom: 1px solid #313244;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   position: sticky;
   top: 0;
@@ -13,8 +13,27 @@
 }
 
 .appName {
-  font-size: 0.9375rem;
-  font-weight: 600;
-  color: #cdd6f4;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ctp-lavender);
   flex: 1;
+}
+
+/* Nav links (pill-shaped active/inactive states) */
+.navLink {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 4px 12px;
+  border-radius: 999px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.navLink:hover {
+  color: var(--text-primary);
+}
+
+.navLinkActive {
+  background: var(--accent-dim);
+  color: var(--accent);
 }

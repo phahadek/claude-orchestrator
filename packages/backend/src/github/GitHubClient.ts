@@ -13,27 +13,30 @@ export class GitHubClient {
     };
   }
 
-  async listOpenPRs(): Promise<PullRequest[]> {
+  async listOpenPRs(repo?: string): Promise<PullRequest[]> {
+    const r = repo ?? GITHUB_REPO;
     const data = await this.request<GitHubRawPR[]>(
-      `/repos/${GITHUB_REPO}/pulls?state=open&per_page=100`
+      `/repos/${r}/pulls?state=open&per_page=100`
     );
     return data
       .filter(pr => !pr.draft)
       .map(pr => mapPR(pr));
   }
 
-  async fetchDiff(prId: number): Promise<PRDiff> {
+  async fetchDiff(prId: number, repo?: string): Promise<PRDiff> {
+    const r = repo ?? GITHUB_REPO;
     const diff = await this.request<string>(
-      `/repos/${GITHUB_REPO}/pulls/${prId}`,
+      `/repos/${r}/pulls/${prId}`,
       { headers: { ...this.headers, 'Accept': 'application/vnd.github.diff' } }
     );
     const filesChanged = parseDiffFiles(diff);
     return { prId, diff, filesChanged };
   }
 
-  async mergePR(prId: number, commitTitle: string): Promise<MergeResult> {
+  async mergePR(prId: number, commitTitle: string, repo?: string): Promise<MergeResult> {
+    const r = repo ?? GITHUB_REPO;
     const data = await this.request<{ merged: boolean; message: string; sha: string | null }>(
-      `/repos/${GITHUB_REPO}/pulls/${prId}/merge`,
+      `/repos/${r}/pulls/${prId}/merge`,
       {
         method: 'PUT',
         headers: { ...this.headers, 'Content-Type': 'application/json' },
