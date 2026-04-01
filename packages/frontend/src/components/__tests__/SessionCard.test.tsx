@@ -1,6 +1,6 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
-import { SessionCard, truncate } from '../SessionCard';
+import { SessionCard, truncate, CARD_PREVIEW_LINES } from '../SessionCard';
 import { StatusBadge } from '../StatusBadge';
 import type { SessionState } from '../../hooks/useSessionStore';
 
@@ -113,6 +113,36 @@ describe('SessionCard', () => {
     render(<SessionCard session={makeSession({ events: [] })} selected={false} onClick={vi.fn()} />);
     // No text from an event content — just task name, badge, elapsed
     expect(screen.queryByText(/^x/)).toBeNull();
+  });
+
+  it('shows up to CARD_PREVIEW_LINES event summaries in the preview', () => {
+    const events = Array.from({ length: CARD_PREVIEW_LINES + 2 }, (_, i) => ({
+      eventType: 'text',
+      content: `event-${i}`,
+      timestamp: Date.now() + i,
+    }));
+    const session = makeSession({ events });
+    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    // Only the last CARD_PREVIEW_LINES events should be visible
+    for (let i = events.length - CARD_PREVIEW_LINES; i < events.length; i++) {
+      expect(screen.getByText(`event-${i}`)).toBeDefined();
+    }
+    // Earlier events should not appear
+    expect(screen.queryByText('event-0')).toBeNull();
+  });
+
+  it('shows all events when session has fewer events than CARD_PREVIEW_LINES', () => {
+    const count = CARD_PREVIEW_LINES - 1;
+    const events = Array.from({ length: count }, (_, i) => ({
+      eventType: 'text',
+      content: `evt-${i}`,
+      timestamp: Date.now() + i,
+    }));
+    const session = makeSession({ events });
+    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    for (let i = 0; i < count; i++) {
+      expect(screen.getByText(`evt-${i}`)).toBeDefined();
+    }
   });
 
   it('shows total duration for done session using started_at/ended_at', () => {
