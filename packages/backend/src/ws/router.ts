@@ -39,6 +39,9 @@ export function handleMessage(
     case 'kill':
       sessions.kill(msg.sessionId);
       break;
+    case 'end_session':
+      sessions.endSession(msg.sessionId);
+      break;
     case 'fetch_tasks':
       notion
         .fetchReadyTasks(msg.boardId)

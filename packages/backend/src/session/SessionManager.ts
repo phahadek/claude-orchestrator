@@ -127,6 +127,11 @@ export class SessionManager extends EventEmitter {
     }
   }
 
+  /** Close stdin on the session process so the CLI can exit cleanly. */
+  endSession(sessionId: string): void {
+    this.sessions.get(sessionId)?.endSession();
+  }
+
   approve(sessionId: string): void {
     this.sessions.get(sessionId)?.approve();
   }
