@@ -18,6 +18,7 @@ interface SessionFilterBarProps {
   onStatusChange: (status: string | null) => void;
   tagFilter: string | null;
   onTagChange: (tag: string | null) => void;
+  availableTags: string[];
   resultCount: number;
   searchInputRef?: React.RefObject<HTMLInputElement | null>;
 }
@@ -27,8 +28,9 @@ export function SessionFilterBar({
   onSearchChange,
   statusFilter,
   onStatusChange,
-  tagFilter: _tagFilter,
-  onTagChange: _onTagChange,
+  tagFilter,
+  onTagChange,
+  availableTags,
   resultCount,
   searchInputRef,
 }: SessionFilterBarProps) {
@@ -74,8 +76,16 @@ export function SessionFilterBar({
         ))}
       </select>
 
-      <select className={styles.dropdown} disabled value="">
-        <option value="">No tags yet</option>
+      <select
+        className={styles.dropdown}
+        value={tagFilter ?? ''}
+        onChange={(e) => onTagChange(e.target.value === '' ? null : e.target.value)}
+        disabled={availableTags.length === 0}
+      >
+        <option value="">{availableTags.length === 0 ? 'No tags yet' : 'All tags'}</option>
+        {availableTags.map((tag) => (
+          <option key={tag} value={tag}>{tag}</option>
+        ))}
       </select>
 
       <span className={styles.resultCount}>

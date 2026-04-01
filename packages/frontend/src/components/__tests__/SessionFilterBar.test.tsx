@@ -21,6 +21,7 @@ describe('SessionFilterBar', () => {
         onStatusChange={vi.fn()}
         tagFilter={null}
         onTagChange={vi.fn()}
+        availableTags={[]}
         resultCount={5}
       />
     );
@@ -43,6 +44,7 @@ describe('SessionFilterBar', () => {
         onStatusChange={onStatusChange}
         tagFilter={null}
         onTagChange={vi.fn()}
+        availableTags={[]}
         resultCount={3}
       />
     );
@@ -62,6 +64,7 @@ describe('SessionFilterBar', () => {
         onStatusChange={onStatusChange}
         tagFilter={null}
         onTagChange={vi.fn()}
+        availableTags={[]}
         resultCount={0}
       />
     );
@@ -80,6 +83,7 @@ describe('SessionFilterBar', () => {
         onStatusChange={vi.fn()}
         tagFilter={null}
         onTagChange={vi.fn()}
+        availableTags={[]}
         resultCount={7}
       />
     );
@@ -95,16 +99,73 @@ describe('SessionFilterBar', () => {
         onStatusChange={vi.fn()}
         tagFilter={null}
         onTagChange={vi.fn()}
+        availableTags={[]}
         resultCount={1}
       />
     );
     expect(screen.getByText('1 session')).toBeDefined();
   });
+
+  it('tag dropdown is populated from availableTags', () => {
+    render(
+      <SessionFilterBar
+        searchText=""
+        onSearchChange={vi.fn()}
+        statusFilter={null}
+        onStatusChange={vi.fn()}
+        tagFilter={null}
+        onTagChange={vi.fn()}
+        availableTags={['bugfix', 'auth', 'refactor']}
+        resultCount={3}
+      />
+    );
+    expect(screen.getByText('bugfix')).toBeDefined();
+    expect(screen.getByText('auth')).toBeDefined();
+    expect(screen.getByText('refactor')).toBeDefined();
+  });
+
+  it('calls onTagChange when a tag is selected', () => {
+    const onTagChange = vi.fn();
+    render(
+      <SessionFilterBar
+        searchText=""
+        onSearchChange={vi.fn()}
+        statusFilter={null}
+        onStatusChange={vi.fn()}
+        tagFilter={null}
+        onTagChange={onTagChange}
+        availableTags={['bugfix', 'auth']}
+        resultCount={2}
+      />
+    );
+    const selects = screen.getAllByRole('combobox');
+    fireEvent.change(selects[1], { target: { value: 'bugfix' } });
+    expect(onTagChange).toHaveBeenCalledWith('bugfix');
+  });
+
+  it('calls onTagChange with null when "All tags" is selected', () => {
+    const onTagChange = vi.fn();
+    render(
+      <SessionFilterBar
+        searchText=""
+        onSearchChange={vi.fn()}
+        statusFilter={null}
+        onStatusChange={vi.fn()}
+        tagFilter="bugfix"
+        onTagChange={onTagChange}
+        availableTags={['bugfix']}
+        resultCount={1}
+      />
+    );
+    const selects = screen.getAllByRole('combobox');
+    fireEvent.change(selects[1], { target: { value: '' } });
+    expect(onTagChange).toHaveBeenCalledWith(null);
+  });
 });
 
 // Filter logic tests — these validate the filtering algorithm used in App.tsx
 describe('session filtering logic', () => {
-  type MinSession = { taskName: string; status: string; project_id?: string | null; archived?: boolean };
+  type MinSession = { taskName: string; status: string; project_id?: string | null; archived?: boolean; tags?: string[] };
 
   function applyFilters(
     sessions: MinSession[],
@@ -117,7 +178,7 @@ describe('session filtering logic', () => {
       .filter((s) => !s.archived)
       .filter((s) => !searchText || s.taskName.toLowerCase().includes(searchText.toLowerCase()))
       .filter((s) => !statusFilter || s.status === statusFilter)
-      .filter((s) => !tagFilter)
+      .filter((s) => !tagFilter || s.tags?.includes(tagFilter))
       .filter((s) => !activeProjectId || s.project_id === activeProjectId);
   }
 
@@ -169,5 +230,25 @@ describe('session filtering logic', () => {
     const result = applyFilters(sessions, '', null, null, null);
     expect(result).toHaveLength(1);
     expect(result[0].taskName).toBe('Active Task');
+  });
+
+  it('filters by tagFilter — returns only sessions with the given tag', () => {
+    const sessions = [
+      { taskName: 'Task A', status: 'running', tags: ['bugfix', 'auth'] },
+      { taskName: 'Task B', status: 'done', tags: ['refactor'] },
+      { taskName: 'Task C', status: 'running', tags: [] },
+    ];
+    const result = applyFilters(sessions, '', null, 'bugfix', null);
+    expect(result).toHaveLength(1);
+    expect(result[0].taskName).toBe('Task A');
+  });
+
+  it('returns all sessions when tagFilter is null', () => {
+    const sessions = [
+      { taskName: 'Task A', status: 'running', tags: ['bugfix'] },
+      { taskName: 'Task B', status: 'done', tags: [] },
+    ];
+    const result = applyFilters(sessions, '', null, null, null);
+    expect(result).toHaveLength(2);
   });
 });

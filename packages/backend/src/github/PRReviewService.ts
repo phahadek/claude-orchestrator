@@ -27,11 +27,9 @@ export class PRReviewService {
     private github: GitHubClient,
     private notion: NotionClient,
     private sessionManager: SessionManager,
-    private projectId: string,
-    private projectContextUrl: string,
   ) {}
 
-  async reviewPR(prNumber: number, repo: string): Promise<PRReviewResult> {
+  async reviewPR(prNumber: number, repo: string, projectId: string, projectContextUrl: string): Promise<PRReviewResult> {
     const prRow = getPRByNumber(prNumber, repo);
     if (!prRow) {
       throw new Error(`PR #${prNumber} in ${repo} not found in database`);
@@ -54,10 +52,10 @@ export class PRReviewService {
     const taskUrl = `https://www.notion.so/${prRow.notion_task_id}`;
     const prompt = this.buildPrompt(prData, diffData, taskPage);
 
-    const sessionId = this.sessionManager.start(taskUrl, this.projectContextUrl, {
+    const sessionId = this.sessionManager.start(taskUrl, projectContextUrl, {
       sessionType: 'review',
       customPrompt: prompt,
-      projectId: this.projectId,
+      projectId,
     });
 
     // Wait for session completion via EventEmitter
