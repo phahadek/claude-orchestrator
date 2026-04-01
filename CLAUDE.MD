@@ -105,6 +105,48 @@ array in `AgentSession.ts`. Only add commands that are safe for automated use.
 
 ---
 
+## Querying Notion Databases
+
+> **The Notion MCP search tool caps results at 25.** Use the script below
+> instead when you need a complete task list from any Notion database.
+
+```bash
+node scripts/notion-query.mjs <database-id> --env packages/backend/.env [options]
+```
+
+| Flag | Purpose |
+|---|---|
+| `--no-done` | Exclude ✅ Done tasks |
+| `--status "🗂️ Ready"` | Filter to a single status |
+| `--json` | Raw JSON output |
+
+**Global location:** `~/.claude/scripts/notion-query.mjs` (symlink).
+**Source:** `scripts/notion-query.mjs` in this repo.
+
+## Moving Tasks Between Notion Databases
+
+> **The Notion API does not support changing a page's parent.** Use the
+> move script to copy pages to a target database and archive the originals.
+
+```bash
+node scripts/notion-move-tasks.mjs --target <database-id> --tasks <id1,id2,...> --env packages/backend/.env [options]
+```
+
+| Flag | Purpose |
+|---|---|
+| `--dry-run` | Preview without making changes |
+| `--no-archive` | Copy but keep the source page |
+| `--status "🔲 Backlog"` | Override status on moved tasks |
+
+Known limitation: table blocks with children may fail to copy (Notion API
+rejects null child arrays). The page is created without content and a
+warning is logged — copy content manually if needed.
+
+**Global location:** `~/.claude/scripts/notion-move-tasks.mjs` (symlink).
+**Source:** `scripts/notion-move-tasks.mjs` in this repo.
+
+---
+
 ## Stack
 
 | Layer | Tech | Path |
