@@ -10,7 +10,7 @@ import { NotionClient } from './notion/NotionClient';
 import { handleMessage } from './ws/router';
 import { JsonlReader, DEFAULT_SESSIONS_DIR } from './session/JsonlReader';
 import type { ServerMessage } from './ws/types';
-import { rulesRouter, permissionEventsRouter } from './routes/rules';
+import { permissionEventsRouter } from './routes/rules';
 import configRouter from './routes/config';
 import { sessionsRouter, setBroadcast } from './routes/sessions';
 import { createPrsRouter } from './routes/prs';
@@ -34,7 +34,6 @@ const PORT = parseInt(process.env.PORT ?? '3000');
 
 const app = express();
 app.use(express.json());
-app.use('/api/rules', rulesRouter);
 app.use('/api/permission-events', permissionEventsRouter);
 app.use('/api/sessions', sessionsRouter);
 app.use('/api', createPrsRouter(githubClient, prReviewService, sessionManager));
