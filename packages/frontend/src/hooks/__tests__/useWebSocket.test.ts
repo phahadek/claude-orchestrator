@@ -48,7 +48,7 @@ describe('useWebSocket', () => {
     if (mockInstance) mockInstance.readyState = 0; // CONNECTING
 
     expect(() => {
-      ws.send({ type: 'fetch_tasks', boardId: 'board-1' });
+      ws.send({ type: 'fetch_tasks', projectId: 'board-1' });
     }).not.toThrow();
   });
 
@@ -84,10 +84,10 @@ describe('useWebSocket', () => {
     vi.stubGlobal('WebSocket', TrackingWS);
 
     const { result } = renderHook(() => useWebSocket(onMessage));
-    result.current.send({ type: 'fetch_tasks', boardId: 'b1' });
+    result.current.send({ type: 'fetch_tasks', projectId: 'b1' });
 
     expect(instances[0]?.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: 'fetch_tasks', boardId: 'b1' })
+      JSON.stringify({ type: 'fetch_tasks', projectId: 'b1' })
     );
   });
 
