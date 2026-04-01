@@ -5,6 +5,7 @@ export interface NotionTask {
   type: string; // '📋 Planning' | '💻 Code' | '🧪 Testing'
   dependsOn: string[]; // array of Notion page IDs
   notionUrl: string;
+  prUrl?: string; // value of the "PR" URL property on the Notion page, if present
 }
 
 export interface ResolvedTask {
