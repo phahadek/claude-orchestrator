@@ -13,7 +13,7 @@ import type { ServerMessage } from './ws/types';
 import { rulesRouter } from './routes/rules';
 import configRouter from './routes/config';
 import { sessionsRouter } from './routes/sessions';
-import { getAllSessions, getEventsBySession } from './db/queries';
+import { getAllSessions, getEventsBySession, getDenialsBySession } from './db/queries';
 
 runMigrations();
 
@@ -73,6 +73,20 @@ wss.on('connection', (ws) => {
         sessionId: s.session_id,
         eventType: ev.event_type as 'text' | 'tool_use' | 'tool_result' | 'system',
         content: ev.payload,
+      } satisfies ServerMessage));
+    }
+
+    // Send stored permission denials so SessionDetail shows them after reconnect
+    const denials = getDenialsBySession(s.session_id);
+    if (denials.length > 0) {
+      ws.send(JSON.stringify({
+        type: 'permission_denials',
+        sessionId: s.session_id,
+        denials: denials.map((d) => ({
+          tool_name: d.tool_name,
+          tool_use_id: d.tool_use_id,
+          tool_input: JSON.parse(d.tool_input) as Record<string, unknown>,
+        })),
       } satisfies ServerMessage));
     }
   }

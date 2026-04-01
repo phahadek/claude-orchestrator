@@ -44,6 +44,16 @@ export function runMigrations(): void {
       enabled     INTEGER NOT NULL DEFAULT 1
     );
 
+    CREATE TABLE IF NOT EXISTS permission_denials (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id  TEXT    NOT NULL,
+      tool_name   TEXT    NOT NULL,
+      tool_use_id TEXT    NOT NULL,
+      tool_input  TEXT    NOT NULL,
+      timestamp   INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+    );
+
     CREATE TABLE IF NOT EXISTS task_cache (
       notion_task_id TEXT    PRIMARY KEY,
       fetched_at     INTEGER NOT NULL,
