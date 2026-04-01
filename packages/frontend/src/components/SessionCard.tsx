@@ -1,5 +1,6 @@
 import type { SessionState } from '../hooks/useSessionStore';
 import { taskNameFromNotionUrl } from '../utils/notionUrl';
+import { formatElapsed } from '../utils/sessionTimer';
 import { StatusBadge } from './StatusBadge';
 import styles from './SessionCard.module.css';
 
@@ -50,32 +51,6 @@ function taskTypeIcon(type: string): string {
   if (type.includes('📋')) return '📋';
   if (type.includes('🧪')) return '🧪';
   return '';
-}
-
-const TERMINAL_STATUSES = new Set(['done', 'error', 'killed']);
-
-function formatElapsed(session: SessionState): string {
-  const isTerminal = TERMINAL_STATUSES.has(session.status);
-  // Prefer server-side timestamps — event timestamps are unreliable (client Date.now() on receipt)
-  if (session.started_at != null) {
-    const endTs = isTerminal ? (session.ended_at ?? Date.now()) : Date.now();
-    return formatDuration(endTs - session.started_at);
-  }
-  if (session.events.length > 0) {
-    const startTs = session.events[0].timestamp;
-    const endTs = isTerminal ? session.events[session.events.length - 1].timestamp : Date.now();
-    return formatDuration(endTs - startTs);
-  }
-  return '—';
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return '< 1s';
-  const totalSeconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes === 0) return `${seconds}s`;
-  return `${minutes}m ${seconds}s`;
 }
 
 export function truncate(text: string, maxLen: number): string {
