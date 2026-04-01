@@ -28,7 +28,7 @@ const jsonlReader = new JsonlReader(sessionsDir);
 const notionClient = new NotionClient();
 const sessionManager = new SessionManager(notionClient);
 const githubClient = new GitHubClient();
-const prReviewService = new PRReviewService(githubClient, notionClient);
+const prReviewService = new PRReviewService(githubClient, notionClient, sessionManager);
 
 const PORT = parseInt(process.env.PORT ?? '3000');
 
