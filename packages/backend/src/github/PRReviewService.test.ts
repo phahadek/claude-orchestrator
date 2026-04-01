@@ -1,31 +1,21 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
-import { Readable } from 'stream';
 
 // ── Mocks (must come before imports of the modules under test) ──────────────
-
-vi.mock('../config.js', () => ({
-  config: { claudePath: 'claude', projectDir: '/test/project' },
-  ALLOWED_TOOLS: ['Bash(git:*)', 'Bash(npm:*)', 'mcp__github__*'],
-}));
 
 vi.mock('../db/queries.js', () => ({
   getPRByNumber: vi.fn(),
   setPRReviewResult: vi.fn(),
-}));
-
-vi.mock('child_process', () => ({
-  spawn: vi.fn(),
+  getEventsBySession: vi.fn(),
 }));
 
 import { PRReviewService } from './PRReviewService.js';
-import { ALLOWED_TOOLS } from '../config.js';
-import { getPRByNumber, setPRReviewResult } from '../db/queries.js';
-import { spawn } from 'child_process';
+import { getPRByNumber, setPRReviewResult, getEventsBySession } from '../db/queries.js';
 import type { GitHubClient } from './GitHubClient.js';
 import type { NotionClient } from '../notion/NotionClient.js';
 import type { PullRequest, PRDiff } from './types.js';
 import type { NotionTaskPage } from '../notion/NotionClient.js';
+import type { SessionEvent } from '../db/types.js';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -98,32 +88,24 @@ function makeMockNotion(): NotionClient {
   } as unknown as NotionClient;
 }
 
-function createMockProc() {
-  const stdout = new Readable({ read() {} });
-  const stderr = new Readable({ read() {} });
-  const proc = Object.assign(new EventEmitter(), {
-    stdout,
-    stderr,
-    stdin: { write: vi.fn(), end: vi.fn(), writable: true },
-    kill: vi.fn(),
+function makeMockSessionManager() {
+  const emitter = new EventEmitter();
+  return Object.assign(emitter, {
+    start: vi.fn().mockReturnValue('review-session-id'),
   });
-  return { proc, stdout };
 }
 
-/** Push an assistant event with the given text content, then signal EOF + exit. */
-function emitClaudeText(stdout: Readable, proc: EventEmitter, text: string): void {
-  const line = JSON.stringify({
-    type: 'assistant',
-    message: { content: [{ type: 'text', text }] },
-  });
-  stdout.push(line + '\n');
-  stdout.push(null);
-  proc.emit('exit', 0);
-}
-
-/** Flush pending microtasks by yielding the event loop multiple times. */
-async function flushMicrotasks(rounds = 20): Promise<void> {
-  for (let i = 0; i < rounds; i++) await Promise.resolve();
+function makeAssistantEvent(text: string): SessionEvent {
+  return {
+    id: 1,
+    session_id: 'review-session-id',
+    event_type: 'text',
+    payload: JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text }] },
+    }),
+    timestamp: Date.now(),
+  };
 }
 
 beforeEach(() => {
@@ -134,20 +116,21 @@ beforeEach(() => {
 
 describe('PRReviewService.buildPrompt()', () => {
   it('includes PR diff, all four Notion spec sections, and the JSON schema instruction', () => {
-    const service = new PRReviewService(makeMockGitHub(), makeMockNotion());
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
     const prompt = service.buildPrompt(mockPR, mockDiff, mockTask);
 
-    // PR data
     expect(prompt).toContain(mockPR.title);
     expect(prompt).toContain(mockDiff.diff);
-
-    // All four Notion spec sections
     expect(prompt).toContain(mockTask.summarySection);
     expect(prompt).toContain(mockTask.contextSection);
     expect(prompt).toContain(mockTask.acceptanceCriteria);
     expect(prompt).toContain(mockTask.filesSection);
-
-    // JSON schema instruction with the four named dimensions
     expect(prompt).toContain('"verdict"');
     expect(prompt).toContain('"dimensions"');
     expect(prompt).toContain('Title and description vs task Summary');
@@ -158,25 +141,73 @@ describe('PRReviewService.buildPrompt()', () => {
 
   it('truncates diffs longer than 12000 characters and appends a truncation notice', () => {
     const longDiff: PRDiff = { ...mockDiff, diff: 'A'.repeat(13000) };
-    const service = new PRReviewService(makeMockGitHub(), makeMockNotion());
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
     const prompt = service.buildPrompt(mockPR, longDiff, mockTask);
 
     expect(prompt).toContain('[diff truncated');
-    // The full 13000-char diff must NOT appear verbatim
     expect(prompt).not.toContain('A'.repeat(13000));
   });
 });
 
-// ── reviewPR() success path ───────────────────────────────────────────────────
+// ── parseReviewResult() ───────────────────────────────────────────────────────
 
-describe('PRReviewService.reviewPR() — success', () => {
-  it('calls setPRReviewResult with prNumber and repo after a successful run', async () => {
+describe('PRReviewService.parseReviewResult()', () => {
+  it('extracts verdict and dimensions from assistant event text', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const payload = {
+      verdict: 'approved',
+      dimensions: [
+        { name: 'Title and description vs task Summary', passed: true, notes: 'Good.' },
+        { name: 'Diff vs Context spec', passed: true, notes: 'Good.' },
+        { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'Good.' },
+        { name: 'Changed files vs Files/paths affected list', passed: true, notes: 'Good.' },
+      ],
+      summary: 'All four dimensions passed.',
+    };
+
+    const events = [makeAssistantEvent(JSON.stringify(payload))];
+    const result = service.parseReviewResult(events, 42, 'owner/repo');
+
+    expect(result.verdict).toBe('approved');
+    expect(result.dimensions).toHaveLength(4);
+    expect(result.summary).toBe('All four dimensions passed.');
+  });
+
+  it('returns incomplete verdict when event text is not valid JSON', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const events = [makeAssistantEvent('this is not JSON at all')];
+    const result = service.parseReviewResult(events, 42, 'owner/repo');
+
+    expect(result.verdict).toBe('incomplete');
+    expect(result.summary).toContain('Failed to parse');
+  });
+});
+
+// ── reviewPR() — uses SessionManager ─────────────────────────────────────────
+
+describe('PRReviewService.reviewPR() — SessionManager integration', () => {
+  it('calls sessionManager.start() with sessionType=review and customPrompt', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
-    const { proc, stdout } = createMockProc();
-    vi.mocked(spawn).mockReturnValue(proc as any);
-
-    const service = new PRReviewService(makeMockGitHub(), makeMockNotion());
-    const resultPromise = service.reviewPR(42, 'owner/repo');
 
     const claudePayload = {
       verdict: 'approved',
@@ -188,82 +219,48 @@ describe('PRReviewService.reviewPR() — success', () => {
       ],
       summary: 'All four dimensions passed.',
     };
+    vi.mocked(getEventsBySession).mockReturnValue([makeAssistantEvent(JSON.stringify(claudePayload))]);
 
-    setImmediate(() => emitClaudeText(stdout, proc, JSON.stringify(claudePayload)));
+    const mockSM = makeMockSessionManager();
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
 
-    const result = await resultPromise;
+    // Trigger session_ended after start() is called
+    const startMock = mockSM.start as ReturnType<typeof vi.fn>;
+    startMock.mockImplementationOnce((taskUrl: string, ctxUrl: string, opts: any) => {
+      const id = 'review-session-id';
+      setImmediate(() => mockSM.emit('message', { type: 'session_ended', sessionId: id, status: 'done' }));
+      return id;
+    });
+
+    const result = await service.reviewPR(42, 'owner/repo');
+
+    expect(startMock).toHaveBeenCalledOnce();
+    const [, , opts] = startMock.mock.calls[0];
+    expect(opts.sessionType).toBe('review');
+    expect(typeof opts.customPrompt).toBe('string');
+    expect(opts.customPrompt.length).toBeGreaterThan(0);
 
     expect(result.verdict).toBe('approved');
-    expect(result.dimensions).toHaveLength(4);
     expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledOnce();
-    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledWith(
-      42,
-      'owner/repo',
-      expect.any(String),
+  });
+
+  it('throws when PR is not found in database', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(null);
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
     );
-  });
-});
 
-// ── runClaude() — invalid JSON ────────────────────────────────────────────────
-
-describe('PRReviewService.runClaude() — invalid JSON output', () => {
-  it('stores a parse-error result (does not throw) when Claude output is not valid JSON', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
-    const { proc, stdout } = createMockProc();
-    vi.mocked(spawn).mockReturnValue(proc as any);
-
-    const service = new PRReviewService(makeMockGitHub(), makeMockNotion());
-    const resultPromise = service.reviewPR(42, 'owner/repo');
-
-    setImmediate(() => emitClaudeText(stdout, proc, 'this is definitely not JSON'));
-
-    const result = await resultPromise;
-
-    expect(result.verdict).toBe('incomplete');
-    expect(result.summary).toContain('Failed to parse');
-    // Must still persist — not throw
-    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledOnce();
-  });
-});
-
-// ── runClaude() — timeout ─────────────────────────────────────────────────────
-
-describe('PRReviewService.runClaude() — 120-second timeout', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it('kills the subprocess and returns a timeout result after 120 seconds', async () => {
-    vi.useFakeTimers();
-    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
-    const { proc } = createMockProc();
-    vi.mocked(spawn).mockReturnValue(proc as any);
-
-    const service = new PRReviewService(makeMockGitHub(), makeMockNotion());
-    const resultPromise = service.reviewPR(42, 'owner/repo');
-
-    // Drain all pending microtasks so the Promise chain inside reviewPR
-    // progresses until spawn() is called and setTimeout is registered.
-    // All mock functions return pre-resolved Promises, so a fixed number
-    // of microtask cycles is sufficient.
-    await flushMicrotasks();
-
-    // Advance fake clock by 120 s to fire the timeout callback
-    vi.advanceTimersByTime(120_000);
-
-    const result = await resultPromise;
-
-    expect(vi.mocked(proc.kill)).toHaveBeenCalledWith('SIGTERM');
-    expect(result.verdict).toBe('incomplete');
-    expect(result.summary).toContain('timed out');
-  });
-});
-
-// ── ALLOWED_TOOLS export ──────────────────────────────────────────────────────
-
-describe('ALLOWED_TOOLS constant', () => {
-  it('is exported from config.ts as a non-empty array', () => {
-    expect(Array.isArray(ALLOWED_TOOLS)).toBe(true);
-    expect(ALLOWED_TOOLS.length).toBeGreaterThan(0);
+    await expect(service.reviewPR(99, 'owner/repo')).rejects.toThrow('not found in database');
   });
 });

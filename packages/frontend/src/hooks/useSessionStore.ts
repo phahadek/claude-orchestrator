@@ -7,6 +7,7 @@ export interface SessionState {
   taskName: string;
   notionTaskUrl: string;
   taskType?: string;
+  sessionType?: string;
   status: string;
   events: { eventType: string; content: string; timestamp: number }[];
   pendingPermission?: { toolName: string; proposedAction: string };
@@ -37,6 +38,7 @@ export function useSessionStore() {
             taskName: msg.taskName,
             notionTaskUrl: msg.notionTaskUrl,
             taskType: msg.taskType,
+            sessionType: msg.sessionType,
             status: 'starting',
             events: [],
             started_at: msg.started_at,

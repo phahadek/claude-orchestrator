@@ -45,6 +45,29 @@
   flex: 1;
 }
 
+/* Status badge */
+.badge {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 12px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.badge-starting  { background: #45475a; color: #fab387; }
+.badge-running   { background: #45475a; color: #a6e3a1; }
+.badge-waiting   { background: #45475a; color: #f38ba8; }
+.badge-done      { background: #45475a; color: #a6e3a1; }
+.badge-error     { background: #45475a; color: #f38ba8; }
+.badge-killed    { background: #45475a; color: #6c7086; }
+.badge-unknown   { background: #45475a; color: #cdd6f4; }
+.badge-review    { background: #45475a; color: #b4befe; }
+
+/* Review session — lavender left border */
+.session-card.review {
+  border-left: 3px solid #b4befe;
+}
+
 /* Project tag */
 .project-tag {
   display: inline-block;

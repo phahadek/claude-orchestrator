@@ -16,10 +16,17 @@ export function SessionCard({ session, selected, onClick, projectColor, projectN
   const lastEvent = session.events.at(-1);
   const elapsed = formatElapsed(session);
 
+  const isReview = session.sessionType === 'review';
+  const borderStyle = isReview
+    ? undefined
+    : projectColor
+    ? { borderLeft: `3px solid ${projectColor}` }
+    : undefined;
+
   return (
     <div
-      className={`${styles['session-card']} ${selected ? styles.selected : ''}`}
-      style={projectColor ? { borderLeft: `3px solid ${projectColor}` } : undefined}
+      className={`${styles['session-card']} ${selected ? styles.selected : ''} ${isReview ? styles.review : ''}`}
+      style={borderStyle}
       onClick={onClick}
     >
       <div className={styles['card-header']}>
@@ -29,7 +36,7 @@ export function SessionCard({ session, selected, onClick, projectColor, projectN
           </span>
         )}
         <span className={styles['task-name']}>{taskNameFromNotionUrl(session.taskName)}</span>
-        <StatusBadge status={session.status} />
+        <StatusBadge status={session.status} sessionType={session.sessionType} />
       </div>
       {projectName && (
         <div className={styles['project-tag']}>{projectName}</div>

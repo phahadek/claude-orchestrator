@@ -20,14 +20,16 @@ export interface Session {
   pr_url: string | null;
   worktree_path: string | null;
   archived: number; // 0 | 1 (SQLite boolean)
+  session_type: string; // 'standard' | 'review'
 }
 
-export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path' | 'archived' | 'project_id'> & {
+export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path' | 'archived' | 'project_id' | 'session_type'> & {
   ended_at?: number | null;
   pr_url?: string | null;
   worktree_path?: string | null;
   archived?: number;
   project_id?: string | null;
+  session_type?: string;
 };
 
 // ─── session_events ────────────────────────────────────────────────────────
