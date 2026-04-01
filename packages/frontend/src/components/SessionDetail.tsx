@@ -10,6 +10,7 @@ import {
   extractToolUse,
   extractToolResult,
   extractSystem,
+  isHiddenSystemEvent,
 } from '../utils/eventParsing';
 import { StatusBadge } from './StatusBadge';
 import styles from './SessionDetail.module.css';
@@ -137,8 +138,10 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
 
   async function handleCopy() {
     if (!session) return;
-    const text = session.events.map((e) => {
+    const lines: string[] = [];
+    for (const e of session.events) {
       const payload = tryParseJson(e.content);
+      let line: string | null = null;
       switch (e.eventType) {
         case 'text': {
           if (typeof payload === 'object' && payload !== null) {
@@ -164,28 +167,42 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
                     else parts.push(`🔧 ${toolName}\n${JSON.stringify(input, null, 2)}`);
                   }
                 }
-                return parts.join('\n');
+                line = parts.join('\n');
               }
             }
           }
-          return extractText(payload, e.content);
+          if (line === null) line = extractText(payload, e.content);
+          break;
         }
         case 'tool_use': {
           const parsed = extractToolUse(payload);
-          if (!parsed) return e.content;
+          if (!parsed) { line = e.content; break; }
           const bashCmd = parsed.toolName === 'Bash' ? extractBashCommand(parsed.input) : null;
-          if (bashCmd != null) return `🔧 ${parsed.toolName}\n$ ${bashCmd}`;
-          return `🔧 ${parsed.toolName}\n${JSON.stringify(parsed.input, null, 2)}`;
+          line = bashCmd != null
+            ? `🔧 ${parsed.toolName}\n$ ${bashCmd}`
+            : `🔧 ${parsed.toolName}\n${JSON.stringify(parsed.input, null, 2)}`;
+          break;
         }
-        case 'tool_result': return extractToolResult(payload, e.content);
-        case 'system': return extractSystem(payload, e.content).display;
+        case 'tool_result':
+          line = extractToolResult(payload, e.content);
+          break;
+        case 'system': {
+          if (isHiddenSystemEvent(payload)) break;
+          const display = extractSystem(payload, e.content).display;
+          if (display.trim()) line = display;
+          break;
+        }
         case 'error': {
           const p = typeof payload === 'object' && payload !== null ? payload as Record<string, unknown> : null;
-          return p ? String(p.message ?? e.content) : e.content;
+          line = p ? String(p.message ?? e.content) : e.content;
+          break;
         }
-        default: return e.content;
+        default:
+          line = e.content;
       }
-    }).join('\n---\n');
+      if (line !== null) lines.push(line);
+    }
+    const text = lines.join('\n---\n');
 
     let success = false;
     try {
@@ -533,6 +550,7 @@ export function EventRow({ event }: EventRowProps) {
     }
 
     case 'system': {
+      if (isHiddenSystemEvent(payload)) return null;
       const { rawType, display } = extractSystem(payload, event.content);
       if (rawType === 'result') return null;
       // Safety net: system-only user events (CLAUDE.md bootstrap, system reminders)

@@ -1,7 +1,7 @@
 import type { SessionState } from '../hooks/useSessionStore';
 import { taskNameFromNotionUrl } from '../utils/notionUrl';
 import { formatElapsed } from '../utils/sessionTimer';
-import { summarizeEvent } from '../utils/eventParsing';
+import { summarizeEvent, isHiddenSystemEvent, tryParseJson } from '../utils/eventParsing';
 import { StatusBadge } from './StatusBadge';
 import styles from './SessionCard.module.css';
 
@@ -18,7 +18,9 @@ interface Props {
 }
 
 export function SessionCard({ session, selected, onClick, projectColor, projectName, onResume, onToggleFavorite }: Props) {
-  const previewEvents = session.events.slice(-CARD_PREVIEW_LINES);
+  const previewEvents = session.events
+    .filter((e) => !(e.eventType === 'system' && isHiddenSystemEvent(tryParseJson(e.content))))
+    .slice(-CARD_PREVIEW_LINES);
   const elapsed = formatElapsed(session);
 
   const isReview = session.sessionType === 'review';
