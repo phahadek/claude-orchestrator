@@ -140,6 +140,20 @@ export function getSessionsByProject(projectId: string): Session[] {
   ).all(projectId) as Session[];
 }
 
+export function setSessionNote(sessionId: string, note: string | null): void {
+  db.prepare('UPDATE sessions SET note = ? WHERE session_id = ?').run(note, sessionId);
+}
+
+export function setSessionTags(sessionId: string, tags: string[]): void {
+  db.prepare('UPDATE sessions SET tags = ? WHERE session_id = ?').run(JSON.stringify(tags), sessionId);
+}
+
+export function getSessionTags(sessionId: string): string[] {
+  const row = db.prepare('SELECT tags FROM sessions WHERE session_id = ?').get(sessionId) as { tags: string | null } | undefined;
+  if (!row?.tags) return [];
+  try { return JSON.parse(row.tags) as string[]; } catch { return []; }
+}
+
 // ─── session_events ────────────────────────────────────────────────────────
 
 const stmtInsertEvent = db.prepare<NewSessionEvent>(`
