@@ -42,16 +42,16 @@ export function SessionCard({ session, selected, onClick }: Props) {
 const TERMINAL_STATUSES = new Set(['done', 'error', 'killed']);
 
 function formatElapsed(session: SessionState): string {
+  const isTerminal = TERMINAL_STATUSES.has(session.status);
+  // Prefer server-side timestamps — event timestamps are unreliable (client Date.now() on receipt)
+  if (session.started_at != null) {
+    const endTs = isTerminal ? (session.ended_at ?? Date.now()) : Date.now();
+    return formatDuration(endTs - session.started_at);
+  }
   if (session.events.length > 0) {
     const startTs = session.events[0].timestamp;
-    const isTerminal = TERMINAL_STATUSES.has(session.status);
     const endTs = isTerminal ? session.events[session.events.length - 1].timestamp : Date.now();
     return formatDuration(endTs - startTs);
-  }
-  if (session.started_at != null) {
-    const isTerminal = TERMINAL_STATUSES.has(session.status);
-    const endTs = isTerminal ? (session.ended_at ?? Date.now()) : Date.now();
-    return '~' + formatDuration(endTs - session.started_at);
   }
   return '—';
 }
