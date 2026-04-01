@@ -42,6 +42,7 @@ vi.mock('../db/queries', () => ({
 }));
 
 import { AgentSession } from '../session/AgentSession';
+import { spawn } from 'child_process';
 import type { NotionClient } from '../notion/NotionClient';
 import type { ServerMessage } from '../ws/types';
 import { getRules } from '../db/queries';
@@ -164,6 +165,60 @@ describe('AgentSession', () => {
 
     mockProc.proc.emit('close', 0);
     await runPromise;
+  });
+
+  // ── AC: resumeSessionId prepends --resume to spawn args ─────────────────
+  it('prepends --resume <id> to spawn args when resumeSessionId is set', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+
+    const session = new AgentSession(
+      'new-id',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+      'orig-session-id',
+    );
+
+    const runPromise = session.run();
+
+    // spawn is called synchronously at the start of run(), so args are available now
+    const spawnArgs = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const resumeIdx = spawnArgs.indexOf('--resume');
+    expect(resumeIdx).toBeGreaterThan(-1);
+    expect(spawnArgs[resumeIdx + 1]).toBe('orig-session-id');
+
+    // Clean up — push null to close readline, then emit exit
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+  });
+
+  it('does not send initial prompt to stdin when resumeSessionId is set', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+
+    const session = new AgentSession(
+      'new-id',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+      'orig-session-id',
+    );
+
+    session.run();
+
+    // Resumed sessions skip the initial prompt — stdin should be empty at start
+    expect(mockProc.stdinChunks).toHaveLength(0);
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
   });
 
   // ── AC: PR URL regex matches GitHub PR URLs ──────────────────────────────

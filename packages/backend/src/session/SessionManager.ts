@@ -3,7 +3,7 @@ import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
 import { AgentSession, parseNotionPageId } from './AgentSession';
 import { config, getProjectById } from '../config';
-import { insertSession, updateSessionStatus, insertEvent } from '../db/queries';
+import { insertSession, updateSessionStatus, insertEvent, getSession } from '../db/queries';
 import type { NotionClient } from '../notion/NotionClient';
 import type { ServerMessage } from '../ws/types';
 
@@ -168,6 +168,112 @@ export class SessionManager extends EventEmitter {
       eventType: 'user_message',
       content: message,
     } satisfies ServerMessage);
+  }
+
+  /**
+   * Send a message to a session, resuming it first if it is no longer live.
+   *
+   * If the session is still in the sessions map (running), the message is
+   * delivered via send() directly. Otherwise, a new AgentSession is spawned
+   * with --resume <sessionId> so the CLI restores the conversation history,
+   * and the message is sent once the session emits its first event.
+   */
+  async sendOrResume(sessionId: string, text: string): Promise<void> {
+    // Live session — deliver directly
+    if (this.sessions.has(sessionId)) {
+      this.send(sessionId, text);
+      return;
+    }
+
+    // Session not live — look up details from DB and re-launch with --resume
+    const row = getSession(sessionId);
+    if (!row) {
+      console.error(`[SessionManager] sendOrResume: session ${sessionId} not found in DB`);
+      return;
+    }
+
+    const project = getProjectById(row.project_id ?? '');
+    if (!project) {
+      console.error(`[SessionManager] sendOrResume: project not found for session ${sessionId}`);
+      return;
+    }
+
+    const newSessionId = crypto.randomUUID();
+    const worktreePath = path.join(project.projectDir, '.claude', 'worktrees', newSessionId);
+    const branchName = `session/${newSessionId}`;
+
+    try {
+      execSync(`git worktree add "${worktreePath}" -b "${branchName}"`, {
+        cwd: project.projectDir,
+      });
+    } catch (err) {
+      console.error(`[SessionManager] sendOrResume: failed to create worktree: ${err}`);
+      throw err;
+    }
+
+    const taskUrl = row.notion_task_url ?? '';
+    const projectContextUrl = row.project_context_url ?? '';
+    const taskId = row.notion_task_id ?? '';
+
+    const session = new AgentSession(
+      newSessionId,
+      taskUrl,
+      projectContextUrl,
+      this.notionClient,
+      worktreePath,
+      taskId,
+      sessionId, // resumeSessionId — restores conversation history via --resume
+    );
+
+    const startedAt = Date.now();
+    insertSession({
+      session_id: newSessionId,
+      notion_task_id: taskId,
+      notion_task_url: taskUrl,
+      project_context_url: projectContextUrl,
+      project_id: row.project_id,
+      status: 'starting',
+      started_at: startedAt,
+      ended_at: null,
+      pr_url: null,
+      worktree_path: worktreePath,
+    });
+
+    this.emit('message', {
+      type: 'session_started',
+      sessionId: newSessionId,
+      taskName: taskUrl,
+      notionTaskUrl: taskUrl,
+      started_at: startedAt,
+    } satisfies ServerMessage);
+
+    this.sessions.set(newSessionId, session);
+    session.on('message', (msg: ServerMessage) => this.emit('message', msg));
+
+    // Wait for the first event from the resumed session, then deliver the message
+    const firstEvent = new Promise<void>((resolve) => {
+      session.once('message', () => {
+        this.send(newSessionId, text);
+        resolve();
+      });
+    });
+
+    session.run()
+      .then(() => this.cleanupWorktree(newSessionId, worktreePath, branchName, session.prUrl, project.projectDir))
+      .catch((err) => {
+        console.error(`[SessionManager] resumed session ${newSessionId} error: ${err}`);
+        if (!session.hasEnded) {
+          updateSessionStatus(newSessionId, 'error', Date.now());
+          this.emit('message', {
+            type: 'session_ended',
+            sessionId: newSessionId,
+            status: 'error',
+          } satisfies ServerMessage);
+        }
+        return this.cleanupWorktree(newSessionId, worktreePath, branchName, undefined, project.projectDir);
+      });
+
+    await firstEvent;
   }
 
   async shutdownAll(): Promise<void> {

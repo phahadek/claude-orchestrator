@@ -59,6 +59,7 @@ export class AgentSession extends EventEmitter {
     private readonly notionClient: NotionClient,
     private readonly worktreePath: string,
     public readonly taskId: string,
+    private readonly resumeSessionId?: string,
   ) {
     super();
   }
@@ -80,6 +81,7 @@ export class AgentSession extends EventEmitter {
     this.proc = spawn(
       config.claudePath,
       [
+        ...(this.resumeSessionId ? ['--resume', this.resumeSessionId] : []),
         '--print',
         '--output-format', 'stream-json',
         '--input-format', 'stream-json',
@@ -99,9 +101,13 @@ export class AgentSession extends EventEmitter {
     // Do NOT call stdin.end() here — keeping stdin open allows sendMessage() to
     // deliver follow-up prompts and lets the CLI remain alive after completing
     // its initial task. Call endSession() to close stdin and exit cleanly.
-    this.proc.stdin!.write(
-      JSON.stringify({ type: 'user', message: { role: 'user', content: initialPrompt } }) + '\n',
-    );
+    // Resumed sessions skip the initial prompt — --resume restores conversation
+    // history and the caller delivers its message via sendOrResume() instead.
+    if (!this.resumeSessionId) {
+      this.proc.stdin!.write(
+        JSON.stringify({ type: 'user', message: { role: 'user', content: initialPrompt } }) + '\n',
+      );
+    }
 
     let spawnErrored = false;
 
