@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { SessionState } from '../hooks/useSessionStore';
+import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
 import { SessionCard } from './SessionCard';
 import styles from './SessionGrid.module.css';
 
@@ -15,8 +16,33 @@ const STATUS_LABELS: Record<Status, string> = {
   killed: 'Killed',
 };
 
+// Catppuccin Mocha palette for project color-coding
+const PROJECT_PALETTE = [
+  '#89b4fa', // blue
+  '#cba6f7', // mauve
+  '#a6e3a1', // green
+  '#fab387', // peach
+  '#f38ba8', // pink
+  '#74c7ec', // sapphire
+  '#f9e2af', // yellow
+  '#b4befe', // lavender
+];
+
+function hashProjectId(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) {
+    h = (Math.imul(h, 31) + id.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h);
+}
+
+export function projectColor(projectId: string): string {
+  return PROJECT_PALETTE[hashProjectId(projectId) % PROJECT_PALETTE.length];
+}
+
 interface Props {
   sessions: SessionState[];
+  projects: ProjectConfig[];
   onSelect: (sessionId: string) => void;
   selectedId: string | null;
   keyboardSelectedId: string | null;
@@ -24,7 +50,7 @@ interface Props {
   onArchiveAll: () => void;
 }
 
-export function SessionGrid({ sessions, onSelect, selectedId, keyboardSelectedId, synced, onArchiveAll }: Props) {
+export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboardSelectedId, synced, onArchiveAll }: Props) {
   const [activeFilters, setActiveFilters] = useState<Set<Status>>(new Set());
 
   function toggleFilter(status: Status) {
@@ -53,6 +79,10 @@ export function SessionGrid({ sessions, onSelect, selectedId, keyboardSelectedId
   });
 
   const statusesInUse = new Set(visibleSessions.map((s) => s.status as Status));
+
+  // Build a map from project_id → { color, name } for card rendering
+  const projectMap = new Map(projects.map((p) => [p.id, { color: projectColor(p.id), name: p.name }]));
+  const multiProject = projects.length > 1;
 
   return (
     <div>
@@ -115,18 +145,23 @@ export function SessionGrid({ sessions, onSelect, selectedId, keyboardSelectedId
 
       {sorted.length > 0 && (
         <div className={styles['session-grid']}>
-          {sorted.map((s) => (
-            <div
-              key={s.sessionId}
-              className={s.sessionId === keyboardSelectedId ? styles['card-keyboard-selected'] : undefined}
-            >
-              <SessionCard
-                session={s}
-                selected={s.sessionId === selectedId}
-                onClick={() => onSelect(s.sessionId)}
-              />
-            </div>
-          ))}
+          {sorted.map((s) => {
+            const proj = s.project_id ? projectMap.get(s.project_id) : undefined;
+            return (
+              <div
+                key={s.sessionId}
+                className={s.sessionId === keyboardSelectedId ? styles['card-keyboard-selected'] : undefined}
+              >
+                <SessionCard
+                  session={s}
+                  selected={s.sessionId === selectedId}
+                  onClick={() => onSelect(s.sessionId)}
+                  projectColor={proj?.color}
+                  projectName={multiProject ? proj?.name : undefined}
+                />
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
