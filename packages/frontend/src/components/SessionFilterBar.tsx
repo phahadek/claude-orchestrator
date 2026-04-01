@@ -8,7 +8,6 @@ const STATUS_OPTIONS: { label: string; value: string | null }[] = [
   { label: 'Error', value: 'error' },
   { label: 'Killed', value: 'killed' },
   { label: 'Pending', value: 'pending' },
-  { label: 'Historical', value: 'historical' },
 ];
 
 interface SessionFilterBarProps {
