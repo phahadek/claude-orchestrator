@@ -8,15 +8,18 @@ interface Props {
   session: SessionState;
   selected: boolean;
   onClick: () => void;
+  projectColor?: string;
+  projectName?: string;
 }
 
-export function SessionCard({ session, selected, onClick }: Props) {
+export function SessionCard({ session, selected, onClick, projectColor, projectName }: Props) {
   const lastEvent = session.events.at(-1);
   const elapsed = formatElapsed(session);
 
   return (
     <div
-      className={`${styles['session-card']} ${styles[session.status] ?? ''} ${selected ? styles.selected : ''}`}
+      className={`${styles['session-card']} ${selected ? styles.selected : ''}`}
+      style={projectColor ? { borderLeft: `3px solid ${projectColor}` } : undefined}
       onClick={onClick}
     >
       <div className={styles['card-header']}>
@@ -28,6 +31,9 @@ export function SessionCard({ session, selected, onClick }: Props) {
         <span className={styles['task-name']}>{taskNameFromNotionUrl(session.taskName)}</span>
         <StatusBadge status={session.status} />
       </div>
+      {projectName && (
+        <div className={styles['project-tag']}>{projectName}</div>
+      )}
       {session.status === 'needs_permission' && (
         <div className={styles['attention-badge']}>⚠️ Needs permission</div>
       )}

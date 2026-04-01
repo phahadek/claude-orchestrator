@@ -17,6 +17,7 @@ export interface SessionState {
   /** Unix ms — set from SQLite sessions.ended_at for JSONL-imported sessions */
   ended_at?: number;
   archived?: boolean;
+  project_id?: string | null;
 }
 
 export function useSessionStore() {
@@ -41,6 +42,7 @@ export function useSessionStore() {
             started_at: msg.started_at,
             ended_at: msg.ended_at,
             archived: msg.archived ?? false,
+            project_id: msg.project_id,
           });
           break;
         case 'session_event': {
