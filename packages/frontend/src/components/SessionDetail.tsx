@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import type { SessionState } from '../hooks/useSessionStore';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
 import { taskNameFromNotionUrl } from '../utils/notionUrl';
+import { calcElapsedMs, formatDuration } from '../utils/sessionTimer';
 import { StatusBadge } from './StatusBadge';
 import styles from './SessionDetail.module.css';
 
@@ -268,31 +269,12 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
 
 // ── Elapsed time display ──────────────────────────────────────────
 
-const TERMINAL_STATUSES = new Set(['done', 'error', 'killed']);
-
 function ElapsedTime({ session }: { session: SessionState }) {
-  const startTs = session.events[0]?.timestamp ?? session.started_at;
-  if (startTs == null) return null;
+  const ms = calcElapsedMs(session);
+  if (ms == null) return null;
 
-  const isTerminal = TERMINAL_STATUSES.has(session.status);
-  const endTs = isTerminal
-    ? (session.events.at(-1)?.timestamp ?? session.ended_at ?? Date.now())
-    : Date.now();
-
-  const ms = endTs - startTs;
-  const label = formatDuration(ms);
   const prefix = session.started_at != null && session.events.length === 0 ? '~' : '';
-
-  return <span className={styles.elapsed}>{prefix}{label}</span>;
-}
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return '< 1s';
-  const totalSeconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes === 0) return `${seconds}s`;
-  return `${minutes}m ${seconds}s`;
+  return <span className={styles.elapsed}>{prefix}{formatDuration(ms)}</span>;
 }
 
 // ── EventRow ──────────────────────────────────────────────────────
