@@ -2,6 +2,7 @@ import { WebSocket } from 'ws';
 import { ClientMessage } from './types';
 import { SessionManager } from '../session/SessionManager';
 import { NotionClient } from '../notion/NotionClient';
+import { getProjectById } from '../config';
 
 export function handleMessage(
   ws: WebSocket,
@@ -23,7 +24,13 @@ export function handleMessage(
         ws.send(JSON.stringify({ type: 'error', message: 'dispatch requires tasks array' }));
         break;
       }
-      msg.tasks.forEach((t) => sessions.start(t.taskUrl, t.projectContextUrl, t.taskType));
+      msg.tasks.forEach((t) => {
+        try {
+          sessions.start(t.taskUrl, t.projectContextUrl, t.taskType, t.projectId);
+        } catch (e) {
+          ws.send(JSON.stringify({ type: 'error', message: String(e) }));
+        }
+      });
       break;
     case 'approve':
       // The claude CLI --print mode does not support mid-session permission approval.
@@ -42,12 +49,18 @@ export function handleMessage(
     case 'end_session':
       sessions.endSession(msg.sessionId);
       break;
-    case 'fetch_tasks':
+    case 'fetch_tasks': {
+      const project = getProjectById(msg.projectId);
+      if (!project) {
+        ws.send(JSON.stringify({ type: 'error', message: `Project not found: ${msg.projectId}` }));
+        break;
+      }
       notion
-        .fetchReadyTasks(msg.boardId)
+        .fetchReadyTasks(project.boardId)
         .then((tasks) => ws.send(JSON.stringify({ type: 'tasks_ready', tasks })))
         .catch((e) => ws.send(JSON.stringify({ type: 'error', message: String(e) })));
       break;
+    }
     default: {
       const _exhaustive: never = msg;
       void _exhaustive;
