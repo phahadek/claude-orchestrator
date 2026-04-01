@@ -19,10 +19,10 @@ export type ServerMessage =
 
 // ── Client → Server ──────────────────────────────────────────────
 export type ClientMessage =
-  | { type: 'dispatch';     tasks: { taskUrl: string; projectContextUrl: string; taskType?: string }[] }
+  | { type: 'dispatch';     tasks: { taskUrl: string; projectContextUrl: string; taskType?: string; projectId: string }[] }
   | { type: 'approve';      sessionId: string }
   | { type: 'deny';         sessionId: string; reason?: string }
   | { type: 'send_message'; sessionId: string; message: string }
   | { type: 'kill';         sessionId: string }
   | { type: 'end_session';  sessionId: string }
-  | { type: 'fetch_tasks';  boardId: string };
+  | { type: 'fetch_tasks';  projectId: string };
