@@ -1,11 +1,19 @@
 .appContainer {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   overflow: hidden;
 }
 
 .appContainer.dragging {
   user-select: none;
+}
+
+.contentArea {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
 }
 
 .leftPanel {

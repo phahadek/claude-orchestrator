@@ -73,6 +73,7 @@ export class SessionManager extends EventEmitter {
       notionTaskUrl: taskUrl,
       ...(taskType != null && { taskType }),
       started_at: startedAt,
+      project_id: projectId,
     } satisfies ServerMessage);
 
     this.sessions.set(sessionId, session);
