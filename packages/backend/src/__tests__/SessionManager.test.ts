@@ -49,6 +49,37 @@ describe('SessionManager.send() user_message echo', () => {
   });
 });
 
+// ── AC: sendOrResume() calls send() directly when session is live ────────────
+describe('SessionManager.sendOrResume()', () => {
+  it('calls send() directly when session is live in the sessions map', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+      'utf-8',
+    );
+
+    // Must contain sendOrResume method
+    expect(source).toMatch(/sendOrResume\s*\(/);
+
+    // When live: delegates to send()
+    expect(source).toMatch(/this\.sessions\.has\(sessionId\)/);
+    expect(source).toMatch(/this\.send\(sessionId,\s*text\)/);
+  });
+
+  it('creates a new AgentSession with resumeSessionId when session is not live', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+      'utf-8',
+    );
+
+    // Must look up original session from DB
+    expect(source).toMatch(/getSession\(sessionId\)/);
+
+    // Must create AgentSession with sessionId as resumeSessionId
+    expect(source).toMatch(/new AgentSession/);
+    expect(source).toMatch(/resumeSessionId|sessionId,\s*\/\/\s*resumeSessionId/);
+  });
+});
+
 // ── AC: PROJECT_DIR read from env with fallback to process.cwd() ───────────
 describe('config.projectDir', () => {
   it('config.ts reads PROJECT_DIR with cwd fallback', () => {
