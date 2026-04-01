@@ -15,7 +15,7 @@ const MIN_DETAIL_WIDTH = 20;
 const MAX_DETAIL_WIDTH = 80;
 
 export default function App() {
-  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, deleteSession } = useSessionStore();
+  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, deleteSession, setSessionArchived } = useSessionStore();
   const boardIdRef = useRef('');
   const { send } = useWebSocket(dispatch, (sendNow: (msg: ClientMessage) => void) => {
     // Called each time the WS (re)connects — fetch tasks if boardId is already known
@@ -48,6 +48,15 @@ export default function App() {
   const dismissNotification = useCallback((id: string) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
   }, []);
+
+  const handleArchiveAll = useCallback(async () => {
+    await fetch('/api/sessions/archive-finished', { method: 'POST' });
+    for (const s of sessions) {
+      if (!s.archived && ['done', 'error', 'killed'].includes(s.status)) {
+        setSessionArchived(s.sessionId, true);
+      }
+    }
+  }, [sessions, setSessionArchived]);
 
   useEffect(() => {
     fetch('/api/config')
@@ -137,6 +146,7 @@ export default function App() {
             selectedId={selectedId}
             onSelect={setSelectedId}
             synced={synced}
+            onArchiveAll={handleArchiveAll}
           />
         )}
       </div>
@@ -156,6 +166,8 @@ export default function App() {
               deleteSession(sessionId);
               setSelectedId(null);
             }}
+            onArchive={(sessionId) => setSessionArchived(sessionId, true)}
+            onUnarchive={(sessionId) => setSessionArchived(sessionId, false)}
           />
         ) : (
           <div className={styles.detailPlaceholder}>

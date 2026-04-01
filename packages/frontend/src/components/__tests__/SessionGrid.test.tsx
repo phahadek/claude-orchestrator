@@ -19,7 +19,7 @@ describe('SessionGrid', () => {
       makeSession({ sessionId: 's1', taskName: 'Task One', status: 'running' }),
       makeSession({ sessionId: 's2', taskName: 'Task Two', status: 'done' }),
     ];
-    render(<SessionGrid sessions={sessions} onSelect={vi.fn()} selectedId={null} synced={true} />);
+    render(<SessionGrid sessions={sessions} onSelect={vi.fn()} selectedId={null} synced={true} onArchiveAll={vi.fn()} />);
     expect(screen.getByText('Task One')).toBeDefined();
     expect(screen.getByText('Task Two')).toBeDefined();
   });
@@ -31,7 +31,7 @@ describe('SessionGrid', () => {
       makeSession({ sessionId: 's3', taskName: 'Permission Task',  status: 'needs_permission' }),
       makeSession({ sessionId: 's4', taskName: 'Starting Task',    status: 'starting' }),
     ];
-    render(<SessionGrid sessions={sessions} onSelect={vi.fn()} selectedId={null} synced={true} />);
+    render(<SessionGrid sessions={sessions} onSelect={vi.fn()} selectedId={null} synced={true} onArchiveAll={vi.fn()} />);
     const cards = screen.getAllByRole('generic').filter(
       (el) => el.className?.includes('session-card')
     );
@@ -40,14 +40,14 @@ describe('SessionGrid', () => {
   });
 
   it('renders empty state placeholder when sessions list is empty', () => {
-    render(<SessionGrid sessions={[]} onSelect={vi.fn()} selectedId={null} synced={true} />);
+    render(<SessionGrid sessions={[]} onSelect={vi.fn()} selectedId={null} synced={true} onArchiveAll={vi.fn()} />);
     expect(screen.getByText(/no sessions yet/i)).toBeDefined();
   });
 
   it('calls onSelect with the correct sessionId when a card is clicked', () => {
     const onSelect = vi.fn();
     const sessions = [makeSession({ sessionId: 'abc123', taskName: 'Clickable Task', status: 'running' })];
-    render(<SessionGrid sessions={sessions} onSelect={onSelect} selectedId={null} synced={true} />);
+    render(<SessionGrid sessions={sessions} onSelect={onSelect} selectedId={null} synced={true} onArchiveAll={vi.fn()} />);
     fireEvent.click(screen.getByText('Clickable Task'));
     expect(onSelect).toHaveBeenCalledWith('abc123');
   });
