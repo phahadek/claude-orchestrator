@@ -21,6 +21,8 @@ export interface SessionState {
   project_id?: string | null;
   note?: string | null;
   tags?: string[];
+  /** True when the latest event indicates an API rate-limit interruption */
+  isRateLimited?: boolean;
 }
 
 export function useSessionStore() {
@@ -54,8 +56,16 @@ export function useSessionStore() {
         case 'session_event': {
           const s = next.get(msg.sessionId);
           if (s) {
+            let isRateLimited = false;
+            try {
+              const payload = JSON.parse(msg.content) as Record<string, unknown>;
+              if (payload && typeof payload === 'object' && payload.error === 'rate_limit') {
+                isRateLimited = true;
+              }
+            } catch { /* not JSON */ }
             next.set(msg.sessionId, {
               ...s,
+              isRateLimited,
               events: [
                 ...s.events,
                 { eventType: msg.eventType, content: msg.content, timestamp: Date.now() },

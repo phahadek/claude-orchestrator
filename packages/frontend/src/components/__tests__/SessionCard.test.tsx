@@ -145,6 +145,33 @@ describe('SessionCard', () => {
     render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
     expect(screen.getByText('—')).toBeDefined();
   });
+
+  it('shows Resume button on rate-limited session when onResume is provided', () => {
+    const session = makeSession({ status: 'running', isRateLimited: true });
+    render(<SessionCard session={session} selected={false} onClick={vi.fn()} onResume={vi.fn()} />);
+    expect(screen.getByText('Resume')).toBeDefined();
+  });
+
+  it('does not show Resume button on non-rate-limited running session', () => {
+    const session = makeSession({ status: 'running', isRateLimited: false });
+    render(<SessionCard session={session} selected={false} onClick={vi.fn()} onResume={vi.fn()} />);
+    expect(screen.queryByText('Resume')).toBeNull();
+  });
+
+  it('does not show Resume button on done session', () => {
+    const session = makeSession({ status: 'done', isRateLimited: false });
+    render(<SessionCard session={session} selected={false} onClick={vi.fn()} onResume={vi.fn()} />);
+    expect(screen.queryByText('Resume')).toBeNull();
+  });
+
+  it('calls onResume when Resume button is clicked and does not bubble to onClick', () => {
+    const onResume = vi.fn();
+    const onClick = vi.fn();
+    const session = makeSession({ status: 'running', isRateLimited: true });
+    render(<SessionCard session={session} selected={false} onClick={onClick} onResume={onResume} />);
+    fireEvent.click(screen.getByText('Resume'));
+    expect(onResume).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ── StatusBadge — review sessionType ─────────────────────────────────────────
