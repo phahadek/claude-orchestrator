@@ -5,6 +5,8 @@ import { summarizeEvent } from '../utils/eventParsing';
 import { StatusBadge } from './StatusBadge';
 import styles from './SessionCard.module.css';
 
+export const CARD_PREVIEW_LINES = 3;
+
 interface Props {
   session: SessionState;
   selected: boolean;
@@ -16,7 +18,7 @@ interface Props {
 }
 
 export function SessionCard({ session, selected, onClick, projectColor, projectName, onResume, onToggleFavorite }: Props) {
-  const lastEvent = session.events.at(-1);
+  const previewEvents = session.events.slice(-CARD_PREVIEW_LINES);
   const elapsed = formatElapsed(session);
 
   const isReview = session.sessionType === 'review';
@@ -80,8 +82,12 @@ export function SessionCard({ session, selected, onClick, projectColor, projectN
           ))}
         </div>
       )}
-      {lastEvent && (
-        <div className={styles['last-event']}>{summarizeEvent(lastEvent)}</div>
+      {previewEvents.length > 0 && (
+        <div className={styles['last-event']}>
+          {previewEvents.map((event, i) => (
+            <div key={i} className={styles['preview-line']}>{summarizeEvent(event)}</div>
+          ))}
+        </div>
       )}
       <div className={styles['card-footer']}>
         <span className={styles.elapsed}>{elapsed}</span>
