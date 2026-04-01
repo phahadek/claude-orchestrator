@@ -27,12 +27,14 @@ function renderModal(
   tasksReady: boolean,
   send: (msg: ClientMessage) => void,
   onClose = vi.fn(),
+  resetTasks = vi.fn(),
 ) {
   return render(
     <DispatchModal
       tasks={tasks}
       tasksReady={tasksReady}
       send={send}
+      resetTasks={resetTasks}
       project={TEST_PROJECT}
       onClose={onClose}
     />,
@@ -42,16 +44,27 @@ function renderModal(
 describe('DispatchModal', () => {
   let send: ReturnType<typeof vi.fn>;
   let onClose: ReturnType<typeof vi.fn>;
+  let resetTasks: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     send = vi.fn();
     onClose = vi.fn();
+    resetTasks = vi.fn();
   });
 
   it('fires fetch_tasks on mount with the provided projectId', () => {
-    renderModal([], false, send, onClose);
+    renderModal([], false, send, onClose, resetTasks);
     expect(send).toHaveBeenCalledOnce();
     expect(send).toHaveBeenCalledWith({ type: 'fetch_tasks', projectId: PROJECT_ID });
+  });
+
+  it('calls resetTasks before fetch_tasks on mount', () => {
+    const callOrder: string[] = [];
+    const orderedResetTasks = vi.fn(() => { callOrder.push('resetTasks'); });
+    const orderedSend = vi.fn(() => { callOrder.push('send'); });
+    renderModal([], false, orderedSend, onClose, orderedResetTasks);
+    expect(orderedResetTasks).toHaveBeenCalledOnce();
+    expect(callOrder).toEqual(['resetTasks', 'send']);
   });
 
   it('shows loading state before tasksReady', () => {
@@ -60,10 +73,10 @@ describe('DispatchModal', () => {
   });
 
   it('clears loading when tasksReady becomes true (even with empty task list)', () => {
-    const { rerender } = renderModal([], false, send, onClose);
+    const { rerender } = renderModal([], false, send, onClose, resetTasks);
     expect(screen.getByText('Fetching tasks from Notion…')).toBeTruthy();
     rerender(
-      <DispatchModal tasks={[]} tasksReady={true} send={send} project={TEST_PROJECT} onClose={onClose} />,
+      <DispatchModal tasks={[]} tasksReady={true} send={send} resetTasks={resetTasks} project={TEST_PROJECT} onClose={onClose} />,
     );
     expect(screen.queryByText('Fetching tasks from Notion…')).toBeNull();
     expect(screen.getByText('No unblocked tasks.')).toBeTruthy();
