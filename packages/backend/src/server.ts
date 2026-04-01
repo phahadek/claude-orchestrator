@@ -12,7 +12,7 @@ import { JsonlReader, DEFAULT_SESSIONS_DIR } from './session/JsonlReader';
 import type { ServerMessage } from './ws/types';
 import { rulesRouter, permissionEventsRouter } from './routes/rules';
 import configRouter from './routes/config';
-import { sessionsRouter } from './routes/sessions';
+import { sessionsRouter, setBroadcast } from './routes/sessions';
 import { createPrsRouter } from './routes/prs';
 import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
@@ -47,19 +47,25 @@ app.get('*', (_req, res) =>
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-// Broadcast all session events to every connected WS client
-sessionManager.on('message', (msg: ServerMessage) => {
+function broadcast(msg: ServerMessage) {
   const json = JSON.stringify(msg);
   wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) client.send(json);
   });
-});
+}
+
+// Wire broadcast into the sessions router (for PATCH note/tags)
+setBroadcast(broadcast);
+
+// Broadcast all session events to every connected WS client
+sessionManager.on('message', broadcast);
 
 wss.on('connection', (ws) => {
   console.log('[WS] client connected');
 
   // Send existing active (non-archived) sessions to the new client so the UI populates on load
   for (const s of getActiveSessions()) {
+    const tags = s.tags ? (() => { try { return JSON.parse(s.tags) as string[]; } catch { return undefined; } })() : undefined;
     ws.send(JSON.stringify({
       type: 'session_started',
       sessionId: s.session_id,
@@ -69,6 +75,9 @@ wss.on('connection', (ws) => {
       ...(s.ended_at != null && { ended_at: s.ended_at }),
       archived: s.archived === 1,
       project_id: s.project_id,
+      sessionType: s.session_type,
+      note: s.note ?? null,
+      tags,
     } satisfies ServerMessage));
     ws.send(JSON.stringify({
       type: 'session_status',

@@ -23,6 +23,9 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [isAtBottom, setIsAtBottom] = useState(true);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const [editingNote, setEditingNote] = useState(false);
+  const [noteValue, setNoteValue] = useState('');
+  const [tagInput, setTagInput] = useState('');
 
   useEffect(() => {
     const el = transcriptRef.current;
@@ -34,6 +37,9 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
   useEffect(() => {
     setDismissedDenials(new Set());
     setIsAtBottom(true);
+    setEditingNote(false);
+    setNoteValue(session?.note ?? '');
+    setTagInput('');
   }, [session?.sessionId]);
 
   useEffect(() => {
@@ -185,6 +191,42 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
     transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: 'smooth' });
   }
 
+  async function handleNoteCommit() {
+    if (!session) return;
+    setEditingNote(false);
+    const trimmed = noteValue.trim() || null;
+    await fetch(`/api/sessions/${session.sessionId}/note`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note: trimmed }),
+    });
+  }
+
+  async function handleAddTag() {
+    if (!session) return;
+    const tag = tagInput.trim();
+    if (!tag) return;
+    const existing = session.tags ?? [];
+    if (existing.includes(tag)) { setTagInput(''); return; }
+    const tags = [...existing, tag];
+    setTagInput('');
+    await fetch(`/api/sessions/${session.sessionId}/tags`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags }),
+    });
+  }
+
+  async function handleRemoveTag(tag: string) {
+    if (!session) return;
+    const tags = (session.tags ?? []).filter((t) => t !== tag);
+    await fetch(`/api/sessions/${session.sessionId}/tags`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags }),
+    });
+  }
+
   return (
     <div className={styles.panel}>
       <div className={styles.header}>
@@ -231,6 +273,49 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
           <button className={styles.closeButton} onClick={onClose} aria-label="Close panel">
             ✕
           </button>
+        </div>
+      </div>
+
+      <div className={styles.noteTagArea}>
+        <div className={styles.noteRow}>
+          {editingNote ? (
+            <input
+              className={styles.noteInput}
+              autoFocus
+              value={noteValue}
+              onChange={(e) => setNoteValue(e.target.value)}
+              onBlur={handleNoteCommit}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void handleNoteCommit(); } if (e.key === 'Escape') { setEditingNote(false); setNoteValue(session.note ?? ''); } }}
+              placeholder="Add a note..."
+            />
+          ) : (
+            <button
+              className={styles.notePlaceholder}
+              onClick={() => { setNoteValue(session.note ?? ''); setEditingNote(true); }}
+            >
+              {session.note ? session.note : '+ Add a note...'}
+            </button>
+          )}
+        </div>
+
+        <div className={styles.tagRow}>
+          {(session.tags ?? []).map((tag) => (
+            <span key={tag} className={styles.tagPill}>
+              {tag}
+              <button
+                className={styles.tagRemove}
+                onClick={() => void handleRemoveTag(tag)}
+                aria-label={`Remove tag ${tag}`}
+              >×</button>
+            </span>
+          ))}
+          <input
+            className={styles.tagInput}
+            value={tagInput}
+            onChange={(e) => setTagInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void handleAddTag(); } }}
+            placeholder="Add tag..."
+          />
         </div>
       </div>
 
