@@ -141,7 +141,7 @@ export default function App() {
   // Reset keyboard selection index when active project changes
   useEffect(() => {
     setSelectedSessionIndex(0);
-  }, [boardId]);
+  }, [projectId]);
 
   const selectedSession = selectedId != null
     ? (sessions.find((s) => s.sessionId === selectedId) ?? null)
