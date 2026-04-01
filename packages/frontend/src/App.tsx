@@ -173,11 +173,11 @@ export default function App() {
     window.addEventListener('mouseup', onUp);
   }, []);
 
-  const [selectedSessionIndex, setSelectedSessionIndex] = useState(0);
+  const [selectedSessionIndex, setSelectedSessionIndex] = useState(-1);
 
   // Reset keyboard selection index when active project changes
   useEffect(() => {
-    setSelectedSessionIndex(0);
+    setSelectedSessionIndex(-1);
   }, [activeProjectId]);
 
   const selectedSession = selectedId != null
@@ -221,7 +221,7 @@ export default function App() {
     if (rank !== 0) return rank;
     return (b.started_at ?? 0) - (a.started_at ?? 0);
   });
-  const keyboardHighlightedId = kbSortedSessions[selectedSessionIndex]?.sessionId ?? null;
+  const keyboardHighlightedId = selectedSessionIndex >= 0 ? kbSortedSessions[selectedSessionIndex]?.sessionId ?? null : null;
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
 
@@ -241,13 +241,13 @@ export default function App() {
     },
     onSelectNext: () =>
       setSelectedSessionIndex((i) =>
-        kbSortedSessions.length > 0 ? (i + 1) % kbSortedSessions.length : 0,
+        kbSortedSessions.length > 0 ? (i < 0 ? 0 : (i + 1) % kbSortedSessions.length) : -1,
       ),
     onSelectPrev: () =>
       setSelectedSessionIndex((i) =>
         kbSortedSessions.length > 0
-          ? (i - 1 + kbSortedSessions.length) % kbSortedSessions.length
-          : 0,
+          ? (i < 0 ? kbSortedSessions.length - 1 : (i - 1 + kbSortedSessions.length) % kbSortedSessions.length)
+          : -1,
       ),
     onConfirmSelection: () => {
       if (keyboardHighlightedId) setSelectedId(keyboardHighlightedId);
