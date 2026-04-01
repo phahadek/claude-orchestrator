@@ -59,6 +59,12 @@
 .badge-error     { background: #45475a; color: #f38ba8; }
 .badge-killed    { background: #45475a; color: #6c7086; }
 .badge-unknown   { background: #45475a; color: #cdd6f4; }
+.badge-review    { background: #45475a; color: #b4befe; }
+
+/* Review session — lavender left border */
+.session-card.review {
+  border-left: 3px solid #b4befe;
+}
 
 /* Project tag */
 .project-tag {
