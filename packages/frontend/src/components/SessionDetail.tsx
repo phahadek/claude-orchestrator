@@ -138,42 +138,44 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
     <div className={styles.panel}>
       <div className={styles.header}>
         <span className={styles.taskName}>{taskNameFromNotionUrl(session.taskName)}</span>
-        <StatusBadge status={session.status} />
-        {session.notionTaskUrl && (
-          <a
-            href={session.notionTaskUrl}
-            target="_blank"
-            rel="noreferrer"
-            className={styles.notionLink}
-          >
-            Notion ↗
-          </a>
-        )}
-        <ElapsedTime session={session} />
-        {isActive && (
-          <button className={styles.killButton} onClick={handleKill}>
-            Kill
-          </button>
-        )}
-        {!isActive && (
-          session.archived ? (
-            <button className={styles.archiveButton} onClick={handleUnarchive} disabled={archiving}>
-              {archiving ? '…' : 'Unarchive'}
+        <div className={styles.headerControls}>
+          <StatusBadge status={session.status} />
+          {session.notionTaskUrl && (
+            <a
+              href={session.notionTaskUrl}
+              target="_blank"
+              rel="noreferrer"
+              className={styles.notionLink}
+            >
+              Notion ↗
+            </a>
+          )}
+          <ElapsedTime session={session} />
+          {isActive && (
+            <button className={styles.killButton} onClick={handleKill}>
+              Kill
             </button>
-          ) : (
-            <button className={styles.archiveButton} onClick={handleArchive} disabled={archiving}>
-              {archiving ? '…' : 'Archive'}
+          )}
+          {!isActive && (
+            session.archived ? (
+              <button className={styles.archiveButton} onClick={handleUnarchive} disabled={archiving}>
+                {archiving ? '…' : 'Unarchive'}
+              </button>
+            ) : (
+              <button className={styles.archiveButton} onClick={handleArchive} disabled={archiving}>
+                {archiving ? '…' : 'Archive'}
+              </button>
+            )
+          )}
+          {!isActive && (
+            <button className={styles.deleteButton} onClick={handleDelete} disabled={deleting}>
+              {deleting ? '…' : 'Delete'}
             </button>
-          )
-        )}
-        {!isActive && (
-          <button className={styles.deleteButton} onClick={handleDelete} disabled={deleting}>
-            {deleting ? '…' : 'Delete'}
+          )}
+          <button className={styles.closeButton} onClick={onClose} aria-label="Close panel">
+            ✕
           </button>
-        )}
-        <button className={styles.closeButton} onClick={onClose} aria-label="Close panel">
-          ✕
-        </button>
+        </div>
       </div>
 
       <div className={styles.transcriptSection}>
