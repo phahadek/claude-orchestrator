@@ -25,7 +25,6 @@ interface Props {
 
 export function SessionGrid({ sessions, onSelect, selectedId, synced, onArchiveAll }: Props) {
   const [activeFilters, setActiveFilters] = useState<Set<Status>>(new Set());
-  const [showArchived, setShowArchived] = useState(false);
 
   function toggleFilter(status: Status) {
     setActiveFilters((prev) => {
@@ -39,9 +38,8 @@ export function SessionGrid({ sessions, onSelect, selectedId, synced, onArchiveA
     });
   }
 
-  const visibleSessions = showArchived ? sessions : sessions.filter((s) => !s.archived);
-  const archivedCount = sessions.filter((s) => s.archived).length;
-  const archivableCount = sessions.filter((s) => !s.archived && ['done', 'error', 'killed'].includes(s.status)).length;
+  const visibleSessions = sessions.filter((s) => !s.archived);
+  const archivableCount = visibleSessions.filter((s) => ['done', 'error', 'killed'].includes(s.status)).length;
 
   const filtered = activeFilters.size === 0
     ? visibleSessions
@@ -57,7 +55,7 @@ export function SessionGrid({ sessions, onSelect, selectedId, synced, onArchiveA
 
   return (
     <div>
-      {sessions.length > 0 && (
+      {visibleSessions.length > 0 && (
         <div className={styles['filter-bar']}>
           {ALL_STATUSES.filter((s) => statusesInUse.has(s)).map((status) => (
             <button
@@ -90,7 +88,7 @@ export function SessionGrid({ sessions, onSelect, selectedId, synced, onArchiveA
         </div>
       )}
 
-      {!synced && sessions.length === 0 && (
+      {!synced && visibleSessions.length === 0 && (
         <div className={styles['session-grid']}>
           {[0, 1, 2].map((i) => (
             <div key={i} className={styles['skeleton-card']}>
@@ -102,13 +100,13 @@ export function SessionGrid({ sessions, onSelect, selectedId, synced, onArchiveA
         </div>
       )}
 
-      {synced && sorted.length === 0 && sessions.length === 0 && (
+      {synced && sorted.length === 0 && visibleSessions.length === 0 && (
         <div className={styles['session-grid-empty']}>
           <p>No sessions yet. Dispatch a task to get started.</p>
         </div>
       )}
 
-      {sorted.length === 0 && sessions.length > 0 && (
+      {sorted.length === 0 && visibleSessions.length > 0 && (
         <div className={styles['session-grid-empty']}>
           <p>No sessions match the selected filters.</p>
         </div>
@@ -124,17 +122,6 @@ export function SessionGrid({ sessions, onSelect, selectedId, synced, onArchiveA
               onClick={() => onSelect(s.sessionId)}
             />
           ))}
-        </div>
-      )}
-
-      {archivedCount > 0 && (
-        <div className={styles['archived-toggle']}>
-          <button
-            className={styles['archived-toggle-button']}
-            onClick={() => setShowArchived((v) => !v)}
-          >
-            {showArchived ? `Hide archived (${archivedCount})` : `Show archived (${archivedCount})`}
-          </button>
         </div>
       )}
     </div>

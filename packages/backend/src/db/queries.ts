@@ -112,6 +112,10 @@ export function getActiveSessions(): Session[] {
   return db.prepare('SELECT * FROM sessions WHERE archived = 0 ORDER BY started_at DESC').all() as Session[];
 }
 
+export function getArchivedSessions(): Session[] {
+  return db.prepare('SELECT * FROM sessions WHERE archived = 1 ORDER BY started_at DESC').all() as Session[];
+}
+
 export function archiveSession(sessionId: string): boolean {
   const result = db.prepare('UPDATE sessions SET archived = 1 WHERE session_id = ?').run(sessionId);
   return result.changes > 0;
