@@ -73,6 +73,19 @@ export interface PermissionRule {
 
 export type NewPermissionRule = Omit<PermissionRule, 'id'>;
 
+// ─── permission_denials ─────────────────────────────────────────────────────
+
+export interface PermissionDenialRow {
+  id: number;
+  session_id: string;
+  tool_name: string;
+  tool_use_id: string;
+  tool_input: string; // JSON string
+  timestamp: number;
+}
+
+export type NewPermissionDenialRow = Omit<PermissionDenialRow, 'id'>;
+
 // ─── task_cache ────────────────────────────────────────────────────────────
 
 export interface TaskCache {
