@@ -81,4 +81,35 @@ describe('SessionCard', () => {
     // No text from an event content — just task name, badge, elapsed
     expect(screen.queryByText(/^x/)).toBeNull();
   });
+
+  it('shows total duration for done session using started_at/ended_at', () => {
+    const started_at = Date.now() - 125_000; // 2m 5s ago
+    const ended_at = Date.now() - 5_000;     // ended 5s ago → 2m 0s duration
+    const session = makeSession({ status: 'done', started_at, ended_at });
+    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    expect(screen.getByText('2m 0s')).toBeDefined();
+  });
+
+  it('uses started_at for running session rather than event timestamp', () => {
+    // All events arrive with the same timestamp (simulating a sync burst)
+    const burstTs = Date.now() - 1;
+    const started_at = Date.now() - 61_000; // session started 61s ago
+    const session = makeSession({
+      status: 'running',
+      started_at,
+      events: [
+        { eventType: 'text', content: 'a', timestamp: burstTs },
+        { eventType: 'text', content: 'b', timestamp: burstTs },
+      ],
+    });
+    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    // Should show ~61s from started_at, not < 1s from event timestamps
+    expect(screen.getByText(/1m \d+s/)).toBeDefined();
+  });
+
+  it('shows — when no started_at and no events', () => {
+    const session = makeSession({ status: 'running', started_at: undefined, events: [] });
+    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    expect(screen.getByText('—')).toBeDefined();
+  });
 });
