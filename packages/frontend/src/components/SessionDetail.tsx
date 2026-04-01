@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import type { SessionState } from '../hooks/useSessionStore';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
+import { taskNameFromNotionUrl } from '../utils/notionUrl';
 import { StatusBadge } from './StatusBadge';
 import styles from './SessionDetail.module.css';
 
@@ -56,7 +57,7 @@ export function SessionDetail({ session, send, onClose, onDelete }: Props) {
   return (
     <div className={styles.panel}>
       <div className={styles.header}>
-        <span className={styles.taskName}>{session.taskName}</span>
+        <span className={styles.taskName}>{taskNameFromNotionUrl(session.taskName)}</span>
         <StatusBadge status={session.status} />
         {session.notionTaskUrl && (
           <a

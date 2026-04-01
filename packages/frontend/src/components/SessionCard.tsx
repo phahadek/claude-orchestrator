@@ -1,4 +1,5 @@
 import type { SessionState } from '../hooks/useSessionStore';
+import { taskNameFromNotionUrl } from '../utils/notionUrl';
 import { StatusBadge } from './StatusBadge';
 import styles from './SessionCard.module.css';
 
@@ -23,7 +24,7 @@ export function SessionCard({ session, selected, onClick }: Props) {
             {taskTypeIcon(session.taskType)}
           </span>
         )}
-        <span className={styles['task-name']}>{session.taskName}</span>
+        <span className={styles['task-name']}>{taskNameFromNotionUrl(session.taskName)}</span>
         <StatusBadge status={session.status} />
       </div>
       {session.status === 'needs_permission' && (
