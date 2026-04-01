@@ -125,6 +125,11 @@ export function useSessionStore() {
     }
   }, []);
 
+  const resetTasks = useCallback(() => {
+    setTasksReady(false);
+    setTasks([]);
+  }, []);
+
   const deleteSession = useCallback((sessionId: string) => {
     setSessions((prev) => {
       const next = new Map(prev);
@@ -146,5 +151,5 @@ export function useSessionStore() {
   const readyCount = tasks.filter((t) => !t.blocked && t.task.status === '🗂️ Ready').length;
   const blockedCount = tasks.filter((t) => t.blocked).length;
 
-  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, deleteSession, setSessionArchived };
+  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived };
 }
