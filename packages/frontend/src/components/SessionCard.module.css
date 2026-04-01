@@ -200,3 +200,26 @@
 .badge-error            { background: rgba(243,139,168,0.15); color: var(--ctp-red); }
 .badge-killed           { background: rgba(250,179,135,0.15); color: var(--ctp-peach); }
 .badge-unknown          { background: rgba(108,112,134,0.15); color: var(--ctp-overlay0); }
+
+/* Favorite button */
+.favorite-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1rem;
+  color: var(--text-faint);
+  padding: 0 2px;
+  line-height: 1;
+  flex-shrink: 0;
+  opacity: 0.4;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.session-card:hover .favorite-btn,
+.favorite-btn--active {
+  opacity: 1;
+}
+
+.favorite-btn--active {
+  color: #f9e2af;
+}
