@@ -16,6 +16,7 @@ export interface SessionState {
   started_at?: number;
   /** Unix ms — set from SQLite sessions.ended_at for JSONL-imported sessions */
   ended_at?: number;
+  archived?: boolean;
 }
 
 export function useSessionStore() {
@@ -39,6 +40,7 @@ export function useSessionStore() {
             events: [],
             started_at: msg.started_at,
             ended_at: msg.ended_at,
+            archived: msg.archived ?? false,
           });
           break;
         case 'session_event': {
@@ -112,8 +114,18 @@ export function useSessionStore() {
     });
   }, []);
 
+  const setSessionArchived = useCallback((sessionId: string, archived: boolean) => {
+    setSessions((prev) => {
+      const s = prev.get(sessionId);
+      if (!s) return prev;
+      const next = new Map(prev);
+      next.set(sessionId, { ...s, archived });
+      return next;
+    });
+  }, []);
+
   const readyCount = tasks.filter((t) => !t.blocked && t.task.status === '🗂️ Ready').length;
   const blockedCount = tasks.filter((t) => t.blocked).length;
 
-  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, deleteSession };
+  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, deleteSession, setSessionArchived };
 }

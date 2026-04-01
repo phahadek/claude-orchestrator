@@ -10,11 +10,14 @@ interface Props {
   send: (msg: ClientMessage) => void;
   onClose: () => void;
   onDelete: (sessionId: string) => void;
+  onArchive: (sessionId: string) => void;
+  onUnarchive: (sessionId: string) => void;
 }
 
-export function SessionDetail({ session, send, onClose, onDelete }: Props) {
+export function SessionDetail({ session, send, onClose, onDelete, onArchive, onUnarchive }: Props) {
   const [draftMessage, setDraftMessage] = useState('');
   const [deleting, setDeleting] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   const [dismissedDenials, setDismissedDenials] = useState<Set<string>>(new Set());
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [isAtBottom, setIsAtBottom] = useState(true);
@@ -64,6 +67,28 @@ export function SessionDetail({ session, send, onClose, onDelete }: Props) {
       onDelete(session.sessionId);
     } catch {
       setDeleting(false);
+    }
+  }
+
+  async function handleArchive() {
+    if (!session) return;
+    setArchiving(true);
+    try {
+      await fetch(`/api/sessions/${session.sessionId}/archive`, { method: 'PATCH' });
+      onArchive(session.sessionId);
+    } finally {
+      setArchiving(false);
+    }
+  }
+
+  async function handleUnarchive() {
+    if (!session) return;
+    setArchiving(true);
+    try {
+      await fetch(`/api/sessions/${session.sessionId}/unarchive`, { method: 'PATCH' });
+      onUnarchive(session.sessionId);
+    } finally {
+      setArchiving(false);
     }
   }
 
@@ -129,6 +154,17 @@ export function SessionDetail({ session, send, onClose, onDelete }: Props) {
           <button className={styles.killButton} onClick={handleKill}>
             Kill
           </button>
+        )}
+        {!isActive && (
+          session.archived ? (
+            <button className={styles.archiveButton} onClick={handleUnarchive} disabled={archiving}>
+              {archiving ? '…' : 'Unarchive'}
+            </button>
+          ) : (
+            <button className={styles.archiveButton} onClick={handleArchive} disabled={archiving}>
+              {archiving ? '…' : 'Archive'}
+            </button>
+          )
         )}
         {!isActive && (
           <button className={styles.deleteButton} onClick={handleDelete} disabled={deleting}>

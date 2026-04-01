@@ -18,12 +18,14 @@ export interface Session {
   ended_at: number | null;
   pr_url: string | null;
   worktree_path: string | null;
+  archived: number; // 0 | 1 (SQLite boolean)
 }
 
-export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path'> & {
+export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path' | 'archived'> & {
   ended_at?: number | null;
   pr_url?: string | null;
   worktree_path?: string | null;
+  archived?: number;
 };
 
 // ─── session_events ────────────────────────────────────────────────────────
