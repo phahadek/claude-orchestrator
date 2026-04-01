@@ -535,6 +535,9 @@ export function EventRow({ event }: EventRowProps) {
     case 'system': {
       const { rawType, display } = extractSystem(payload, event.content);
       if (rawType === 'result') return null;
+      // Safety net: system-only user events (CLAUDE.md bootstrap, system reminders)
+      // are filtered on the backend before broadcast, but return null here in case
+      // any slip through (extractSystem strips tags and returns empty display for them).
       if (!display.trim()) return null;
       if (rawType === 'file-history-snapshot') {
         return <p className={styles.eventSystem}>📄 {display}</p>;
