@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { getSession, getActiveSessions, getArchivedSessions, getSessionsByStatus, getSessionsByProject, deleteSession, archiveSession, unarchiveSession, archiveFinishedSessions, setSessionNote, setSessionTags } from '../db/queries';
+import { getSession, getActiveSessions, getArchivedSessions, getSessionsByStatus, getSessionsByProject, deleteSession, archiveSession, unarchiveSession, archiveFinishedSessions, setSessionNote, setSessionTags, favoriteSession, unfavoriteSession } from '../db/queries';
 import type { ServerMessage } from '../ws/types';
 
 let _broadcast: ((msg: ServerMessage) => void) = () => {};
@@ -71,6 +71,30 @@ sessionsRouter.patch('/:id/unarchive', (req: Request, res: Response) => {
     return;
   }
   unarchiveSession(sessionId);
+  res.json({ ok: true });
+});
+
+// PATCH /api/sessions/:id/favorite
+sessionsRouter.patch('/:id/favorite', (req: Request, res: Response) => {
+  const sessionId = String(req.params.id);
+  const existing = getSession(sessionId);
+  if (!existing) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+  favoriteSession(sessionId);
+  res.json({ ok: true });
+});
+
+// PATCH /api/sessions/:id/unfavorite
+sessionsRouter.patch('/:id/unfavorite', (req: Request, res: Response) => {
+  const sessionId = String(req.params.id);
+  const existing = getSession(sessionId);
+  if (!existing) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+  unfavoriteSession(sessionId);
   res.json({ ok: true });
 });
 

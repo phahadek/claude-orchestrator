@@ -127,6 +127,16 @@ export function unarchiveSession(sessionId: string): boolean {
   return result.changes > 0;
 }
 
+export function favoriteSession(sessionId: string): boolean {
+  const result = db.prepare('UPDATE sessions SET favorited = 1 WHERE session_id = ?').run(sessionId);
+  return result.changes > 0;
+}
+
+export function unfavoriteSession(sessionId: string): boolean {
+  const result = db.prepare('UPDATE sessions SET favorited = 0 WHERE session_id = ?').run(sessionId);
+  return result.changes > 0;
+}
+
 export function archiveFinishedSessions(): number {
   const result = db.prepare(
     `UPDATE sessions SET archived = 1 WHERE status IN ('done', 'error', 'killed')`
