@@ -19,8 +19,10 @@ import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
 import styles from './App.module.css';
 
 const DEFAULT_DETAIL_WIDTH = 40;
-const MIN_DETAIL_WIDTH = 20;
-const MAX_DETAIL_WIDTH = 80;
+const MIN_DETAIL_WIDTH_PCT = 20;
+const MAX_DETAIL_WIDTH_PCT = 80;
+const MIN_LEFT_PANEL_PX = 300;
+const MIN_RIGHT_PANEL_PX = 300;
 
 const DEFAULT_PR_PANEL_HEIGHT = 30;
 const MIN_PR_PANEL_HEIGHT = 20;
@@ -57,7 +59,7 @@ export default function App() {
     const saved = localStorage.getItem('sessionDetailWidth');
     if (saved) {
       const n = Number(saved);
-      if (n >= MIN_DETAIL_WIDTH && n <= MAX_DETAIL_WIDTH) return n;
+      if (n >= MIN_DETAIL_WIDTH_PCT && n <= MAX_DETAIL_WIDTH_PCT) return n;
     }
     return DEFAULT_DETAIL_WIDTH;
   });
@@ -180,8 +182,14 @@ export default function App() {
     setIsDragging(true);
 
     const onMove = (ev: MouseEvent) => {
-      const pct = 100 - ((ev.clientX / window.innerWidth) * 100);
-      const clamped = Math.min(MAX_DETAIL_WIDTH, Math.max(MIN_DETAIL_WIDTH, pct));
+      const w = window.innerWidth;
+      const pct = 100 - ((ev.clientX / w) * 100);
+      // Left panel must be at least 300px or 25%, whichever is larger
+      const leftMinPct = Math.max(25, (MIN_LEFT_PANEL_PX / w) * 100);
+      // Right panel must be at least 300px or 20%, whichever is larger
+      const rightMinPct = Math.max(MIN_DETAIL_WIDTH_PCT, (MIN_RIGHT_PANEL_PX / w) * 100);
+      const maxDetailPct = Math.min(MAX_DETAIL_WIDTH_PCT, 100 - leftMinPct);
+      const clamped = Math.min(maxDetailPct, Math.max(rightMinPct, pct));
       detailWidthRef.current = clamped;
       setDetailWidthPct(clamped);
     };
