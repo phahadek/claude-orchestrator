@@ -28,7 +28,7 @@ export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path'> 
 
 // ─── session_events ────────────────────────────────────────────────────────
 
-export type EventType = 'text' | 'tool_use' | 'tool_result' | 'system' | 'error';
+export type EventType = 'text' | 'tool_use' | 'tool_result' | 'system' | 'error' | 'user_message';
 
 export interface SessionEvent {
   id: number;

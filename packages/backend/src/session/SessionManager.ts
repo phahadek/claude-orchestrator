@@ -3,7 +3,7 @@ import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
 import { AgentSession } from './AgentSession';
 import { config } from '../config';
-import { insertSession, updateSessionStatus } from '../db/queries';
+import { insertSession, updateSessionStatus, insertEvent } from '../db/queries';
 import type { NotionClient } from '../notion/NotionClient';
 import type { ServerMessage } from '../ws/types';
 
@@ -137,7 +137,22 @@ export class SessionManager extends EventEmitter {
 
   /** Send a follow-up user message to a running session via stdin. */
   send(sessionId: string, message: string): void {
-    this.sessions.get(sessionId)?.sendMessage(message);
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.sendMessage(message);
+    const ts = Date.now();
+    insertEvent({
+      session_id: sessionId,
+      event_type: 'user_message',
+      payload: message,
+      timestamp: ts,
+    });
+    this.emit('message', {
+      type: 'session_event',
+      sessionId,
+      eventType: 'user_message',
+      content: message,
+    } satisfies ServerMessage);
   }
 
   async shutdownAll(): Promise<void> {

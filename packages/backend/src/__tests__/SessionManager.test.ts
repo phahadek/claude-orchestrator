@@ -28,6 +28,27 @@ describe('SessionManager.start() structural check', () => {
   });
 });
 
+// ── AC: send() echoes user message as session_event ────────────────────────
+describe('SessionManager.send() user_message echo', () => {
+  it('calls insertEvent with event_type user_message after sending', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+      'utf-8',
+    );
+    expect(source).toMatch(/insertEvent/);
+    expect(source).toMatch(/event_type.*user_message|user_message.*event_type/);
+  });
+
+  it('emits a session_event with eventType user_message', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+      'utf-8',
+    );
+    expect(source).toMatch(/eventType.*user_message|user_message/);
+    expect(source).toMatch(/this\.emit\('message'/);
+  });
+});
+
 // ── AC: PROJECT_DIR read from env with fallback to process.cwd() ───────────
 describe('config.projectDir', () => {
   it('config.ts reads PROJECT_DIR with cwd fallback', () => {

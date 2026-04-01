@@ -72,7 +72,7 @@ wss.on('connection', (ws) => {
       ws.send(JSON.stringify({
         type: 'session_event',
         sessionId: s.session_id,
-        eventType: ev.event_type as 'text' | 'tool_use' | 'tool_result' | 'system',
+        eventType: ev.event_type as 'text' | 'tool_use' | 'tool_result' | 'system' | 'user_message',
         content: ev.payload,
       } satisfies ServerMessage));
     }
