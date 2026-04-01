@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { getSession, getActiveSessions, getArchivedSessions, getSessionsByStatus, deleteSession, archiveSession, unarchiveSession, archiveFinishedSessions } from '../db/queries';
+import { getSession, getActiveSessions, getArchivedSessions, getSessionsByStatus, getSessionsByProject, deleteSession, archiveSession, unarchiveSession, archiveFinishedSessions } from '../db/queries';
 
 export const sessionsRouter = Router();
 
@@ -9,9 +9,15 @@ sessionsRouter.get('/archived', (_req: Request, res: Response) => {
   res.json(getArchivedSessions());
 });
 
-// GET /api/sessions?status=running,done
+// GET /api/sessions?status=running,done&projectId=claude-dashboard
 sessionsRouter.get('/', (req: Request, res: Response) => {
+  const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : '';
   const statusParam = typeof req.query.status === 'string' ? req.query.status : '';
+
+  if (projectId) {
+    res.json(getSessionsByProject(projectId));
+    return;
+  }
   if (statusParam) {
     const statuses = statusParam.split(',').map((s) => s.trim()).filter(Boolean);
     res.json(getSessionsByStatus(statuses));

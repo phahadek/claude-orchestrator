@@ -12,7 +12,7 @@ const makeTask = (id: string, title: string, overrides: Partial<ResolvedTask> = 
   ...overrides,
 });
 
-const BOARD_ID = 'test-board-id';
+const PROJECT_ID = 'test-project-id';
 
 function renderModal(
   tasks: ResolvedTask[],
@@ -25,7 +25,7 @@ function renderModal(
       tasks={tasks}
       tasksReady={tasksReady}
       send={send}
-      boardId={BOARD_ID}
+      projectId={PROJECT_ID}
       onClose={onClose}
     />,
   );
@@ -40,10 +40,10 @@ describe('DispatchModal', () => {
     onClose = vi.fn();
   });
 
-  it('fires fetch_tasks on mount with the provided boardId', () => {
+  it('fires fetch_tasks on mount with the provided projectId', () => {
     renderModal([], false, send, onClose);
     expect(send).toHaveBeenCalledOnce();
-    expect(send).toHaveBeenCalledWith({ type: 'fetch_tasks', boardId: BOARD_ID });
+    expect(send).toHaveBeenCalledWith({ type: 'fetch_tasks', projectId: PROJECT_ID });
   });
 
   it('shows loading state before tasksReady', () => {
@@ -55,7 +55,7 @@ describe('DispatchModal', () => {
     const { rerender } = renderModal([], false, send, onClose);
     expect(screen.getByText('Fetching tasks from Notion…')).toBeTruthy();
     rerender(
-      <DispatchModal tasks={[]} tasksReady={true} send={send} boardId={BOARD_ID} onClose={onClose} />,
+      <DispatchModal tasks={[]} tasksReady={true} send={send} projectId={PROJECT_ID} onClose={onClose} />,
     );
     expect(screen.queryByText('Fetching tasks from Notion…')).toBeNull();
     expect(screen.getByText('No unblocked tasks.')).toBeTruthy();
@@ -125,6 +125,7 @@ describe('DispatchModal', () => {
     expect(dispatchMsg.tasks[0].taskUrl).toBe('https://notion.so/t1');
     expect(dispatchMsg.tasks[1].taskUrl).toBe('https://notion.so/t2');
     expect(typeof dispatchMsg.tasks[0].projectContextUrl).toBe('string');
+    expect(dispatchMsg.tasks[0].projectId).toBe(PROJECT_ID);
     expect(onClose).toHaveBeenCalledOnce();
   });
 
