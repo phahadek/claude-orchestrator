@@ -227,4 +227,55 @@ describe('useSessionStore', () => {
     act(() => result.current.dispatch(msg.session_event()));
     expect(result.current.sessions[0].isRateLimited).toBe(false);
   });
+
+  describe('dismissDenial / dismissAllDenials', () => {
+    const SESSION_A = 'session-a';
+    const SESSION_B = 'session-b';
+
+    it('dismissing a denial for session A persists when switching to session B and back to A', () => {
+      const { result } = renderHook(() => useSessionStore());
+
+      act(() => result.current.dismissDenial(SESSION_A, 'tool-use-1'));
+
+      // Session A has the dismissed ID
+      expect(result.current.dismissedDenialIds.get(SESSION_A)?.has('tool-use-1')).toBe(true);
+
+      // "Switch" to session B — no dismissals there yet
+      expect(result.current.dismissedDenialIds.get(SESSION_B)).toBeUndefined();
+
+      // "Switch back" to session A — dismissal still present
+      expect(result.current.dismissedDenialIds.get(SESSION_A)?.has('tool-use-1')).toBe(true);
+    });
+
+    it('dismissing denials for session A does not affect session B', () => {
+      const { result } = renderHook(() => useSessionStore());
+
+      act(() => result.current.dismissDenial(SESSION_A, 'tool-use-1'));
+      act(() => result.current.dismissDenial(SESSION_A, 'tool-use-2'));
+
+      expect(result.current.dismissedDenialIds.get(SESSION_A)?.size).toBe(2);
+      expect(result.current.dismissedDenialIds.get(SESSION_B)).toBeUndefined();
+    });
+
+    it('dismissAllDenials sets all provided IDs as dismissed for the session', () => {
+      const { result } = renderHook(() => useSessionStore());
+
+      act(() => result.current.dismissAllDenials(SESSION_A, ['tool-use-1', 'tool-use-2', 'tool-use-3']));
+
+      const dismissed = result.current.dismissedDenialIds.get(SESSION_A);
+      expect(dismissed?.has('tool-use-1')).toBe(true);
+      expect(dismissed?.has('tool-use-2')).toBe(true);
+      expect(dismissed?.has('tool-use-3')).toBe(true);
+    });
+
+    it('dismissAllDenials for session A does not affect session B', () => {
+      const { result } = renderHook(() => useSessionStore());
+
+      act(() => result.current.dismissDenial(SESSION_B, 'tool-use-b'));
+      act(() => result.current.dismissAllDenials(SESSION_A, ['tool-use-1', 'tool-use-2']));
+
+      expect(result.current.dismissedDenialIds.get(SESSION_B)?.has('tool-use-b')).toBe(true);
+      expect(result.current.dismissedDenialIds.get(SESSION_A)?.has('tool-use-b')).toBe(false);
+    });
+  });
 });
