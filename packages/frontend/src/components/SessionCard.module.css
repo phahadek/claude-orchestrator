@@ -20,31 +20,6 @@
   box-shadow: 0 0 0 2px rgba(137, 180, 250, 0.2);
 }
 
-/* Status-tinted left border */
-.session-card.needs_permission {
-  border-left: 3px solid #f38ba8;
-}
-
-.session-card.running {
-  border-left: 3px solid #a6e3a1;
-}
-
-.session-card.starting {
-  border-left: 3px solid #fab387;
-}
-
-.session-card.done {
-  border-left: 3px solid #6c7086;
-}
-
-.session-card.error {
-  border-left: 3px solid #f38ba8;
-}
-
-.session-card.killed {
-  border-left: 3px solid #6c7086;
-}
-
 /* Card header */
 .card-header {
   display: flex;
@@ -84,6 +59,17 @@
 .badge-error     { background: #45475a; color: #f38ba8; }
 .badge-killed    { background: #45475a; color: #6c7086; }
 .badge-unknown   { background: #45475a; color: #cdd6f4; }
+
+/* Project tag */
+.project-tag {
+  display: inline-block;
+  font-size: 10px;
+  color: #6c7086;
+  background: #313244;
+  border-radius: 4px;
+  padding: 1px 6px;
+  align-self: flex-start;
+}
 
 /* Attention banner */
 .attention-badge {

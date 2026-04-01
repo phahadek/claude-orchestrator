@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DispatchModal } from '../DispatchModal';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
 import type { ResolvedTask } from '@claude-dashboard/backend/src/notion/types';
+import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
 
 const makeTask = (id: string, title: string, overrides: Partial<ResolvedTask> = {}): ResolvedTask => ({
   task: { id, title, status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: `https://notion.so/${id}` },
@@ -13,6 +14,13 @@ const makeTask = (id: string, title: string, overrides: Partial<ResolvedTask> = 
 });
 
 const PROJECT_ID = 'test-project-id';
+const TEST_PROJECT: ProjectConfig = {
+  id: PROJECT_ID,
+  name: 'Test Project',
+  projectDir: '/test/project',
+  contextUrl: 'https://notion.so/context',
+  boardId: 'test-board-id',
+};
 
 function renderModal(
   tasks: ResolvedTask[],
@@ -25,7 +33,7 @@ function renderModal(
       tasks={tasks}
       tasksReady={tasksReady}
       send={send}
-      projectId={PROJECT_ID}
+      project={TEST_PROJECT}
       onClose={onClose}
     />,
   );
@@ -55,7 +63,7 @@ describe('DispatchModal', () => {
     const { rerender } = renderModal([], false, send, onClose);
     expect(screen.getByText('Fetching tasks from Notion…')).toBeTruthy();
     rerender(
-      <DispatchModal tasks={[]} tasksReady={true} send={send} projectId={PROJECT_ID} onClose={onClose} />,
+      <DispatchModal tasks={[]} tasksReady={true} send={send} project={TEST_PROJECT} onClose={onClose} />,
     );
     expect(screen.queryByText('Fetching tasks from Notion…')).toBeNull();
     expect(screen.getByText('No unblocked tasks.')).toBeTruthy();
