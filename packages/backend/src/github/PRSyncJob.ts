@@ -1,6 +1,6 @@
-import { config } from '../config.js';
-import { upsertPullRequest } from '../db/queries.js';
-import type { GitHubClient } from './GitHubClient.js';
+import { config } from '../config';
+import { upsertPullRequest } from '../db/queries';
+import type { GitHubClient } from './GitHubClient';
 
 export class PRSyncJob {
   constructor(private github: GitHubClient) {}

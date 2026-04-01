@@ -1,11 +1,11 @@
-import { getEventsBySession, setPRReviewResult, getPRByNumber } from '../db/queries.js';
-import type { GitHubClient } from './GitHubClient.js';
-import type { NotionClient } from '../notion/NotionClient.js';
-import type { SessionManager } from '../session/SessionManager.js';
-import type { PullRequest, PRDiff } from './types.js';
-import type { NotionTaskPage } from '../notion/NotionClient.js';
-import type { ServerMessage } from '../ws/types.js';
-import type { SessionEvent } from '../db/types.js';
+import { getEventsBySession, setPRReviewResult, getPRByNumber } from '../db/queries';
+import type { GitHubClient } from './GitHubClient';
+import type { NotionClient } from '../notion/NotionClient';
+import type { SessionManager } from '../session/SessionManager';
+import type { PullRequest, PRDiff } from './types';
+import type { NotionTaskPage } from '../notion/NotionClient';
+import type { ServerMessage } from '../ws/types';
+import type { SessionEvent } from '../db/types';
 
 export interface ReviewDimension {
   name: string;

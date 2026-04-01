@@ -7,8 +7,8 @@ vi.mock('../config.js', () => ({
   config: {},
 }));
 
-import { GitHubClient } from './GitHubClient.js';
-import { GitHubApiError } from './types.js';
+import { GitHubClient } from './GitHubClient';
+import { GitHubApiError } from './types';
 
 // Sample unified diff fixture
 const SAMPLE_DIFF = `diff --git a/src/foo.ts b/src/foo.ts
