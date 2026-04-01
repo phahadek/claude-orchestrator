@@ -89,6 +89,39 @@
   color: var(--ctp-red);
 }
 
+/* Rate-limited row */
+.rate-limited-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: rgba(249,226,175,0.10);
+  border: 1px solid rgba(249,226,175,0.30);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+}
+
+.rate-limited-badge {
+  font-size: 0.8rem;
+  color: var(--ctp-yellow);
+  flex: 1;
+}
+
+.resume-button {
+  font-size: 0.75rem;
+  padding: 2px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--ctp-yellow);
+  background: rgba(249,226,175,0.15);
+  color: var(--ctp-yellow);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.resume-button:hover {
+  background: rgba(249,226,175,0.25);
+}
+
 /* Last event preview */
 .last-event {
   font-size: 12px;
