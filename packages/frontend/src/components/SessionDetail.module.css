@@ -242,9 +242,31 @@
   flex-shrink: 0;
 }
 
-.permissionTitle {
+.permissionTitleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin: 0 0 8px;
+}
+
+.permissionTitle {
+  margin: 0;
   font-size: 0.875rem;
+  color: #cdd6f4;
+}
+
+.clearAllBtn {
+  background: transparent;
+  border: none;
+  color: #6c7086;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 0;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+
+.clearAllBtn:hover {
   color: #cdd6f4;
 }
 
@@ -258,8 +280,28 @@
   margin: 0 0 10px;
   overflow-x: auto;
   padding: 8px 10px;
+  padding-right: 28px;
+  position: relative;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.denialCloseBtn {
+  background: transparent;
+  border: none;
+  color: #6c7086;
+  cursor: pointer;
+  font-size: 0.75rem;
+  line-height: 1;
+  padding: 2px 4px;
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  transition: color 0.15s;
+}
+
+.denialCloseBtn:hover {
+  color: #f38ba8;
 }
 
 .permissionButtons {
