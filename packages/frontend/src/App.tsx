@@ -25,7 +25,7 @@ const MAX_DETAIL_WIDTH = 80;
 const ACTIVE_PROJECT_KEY = 'activeProjectId';
 
 export default function App() {
-  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, deleteSession, setSessionArchived } = useSessionStore();
+  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const activeProjectIdRef = useRef<string | null>(null);
@@ -340,6 +340,7 @@ export default function App() {
           tasks={tasks}
           tasksReady={tasksReady}
           send={send}
+          resetTasks={resetTasks}
           project={activeProject}
           onClose={() => setShowModal(false)}
         />
