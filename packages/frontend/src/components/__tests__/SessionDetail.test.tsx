@@ -330,6 +330,12 @@ describe('EventRow', () => {
     expect(screen.getByText(/\"id\": \"abc\"/)).toBeTruthy();
   });
 
+  it('renders user_message event with "You" label and message content', () => {
+    render(<EventRow event={makeEvent('user_message', 'Hello from the user')} />);
+    expect(screen.getByText('You')).toBeTruthy();
+    expect(screen.getByText('Hello from the user')).toBeTruthy();
+  });
+
   it('uses timestamp-eventType as key (tests via stable rendering)', () => {
     // Validates the key format renders without duplicate-key warnings
     const events = [
