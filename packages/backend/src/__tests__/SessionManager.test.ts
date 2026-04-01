@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import { normalizePath } from '../config';
 
 // ── AC: run() is called fire-and-forget in SessionManager.start() ──────────
 // This is a structural check — verify the source code does NOT await run().
@@ -124,6 +125,46 @@ describe('SessionManager.start() — StartOptions', () => {
 
     expect(source).toMatch(/sessionType/);
     expect(source).toMatch(/session_started/);
+  });
+});
+
+// ── AC: normalizePath converts Git Bash paths to Windows-native ─────────────
+describe('normalizePath()', () => {
+  it('converts /c/Users/... to C:/Users/... on Windows, no-op on other platforms', () => {
+    if (process.platform === 'win32') {
+      expect(normalizePath('/c/Users/phadek/foo')).toBe('C:/Users/phadek/foo');
+      expect(normalizePath('/D/projects/bar')).toBe('D:/projects/bar');
+      expect(normalizePath('C:/Users/phadek/foo')).toBe('C:/Users/phadek/foo');
+      expect(normalizePath('/usr/local/bin')).toBe('/usr/local/bin');
+    } else {
+      expect(normalizePath('/c/Users/phadek/foo')).toBe('/c/Users/phadek/foo');
+      expect(normalizePath('/usr/local/bin')).toBe('/usr/local/bin');
+    }
+  });
+
+  it('SessionManager uses normalizePath on project.projectDir before constructing worktreePath', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+      'utf-8',
+    );
+
+    expect(source).toContain('normalizePath');
+    // normalizePath is applied to project.projectDir to produce a local projectDir variable
+    expect(source).toMatch(/normalizePath\s*\(\s*project\.projectDir\s*\)/);
+    // worktreePath is constructed from the normalized projectDir
+    expect(source).toMatch(/path\.join\s*\(\s*projectDir\s*,/);
+  });
+
+  it('worktreePath passed to AgentSession is built from a Windows-native projectDir', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+      'utf-8',
+    );
+
+    // Must NOT pass project.projectDir directly to path.join
+    expect(source).not.toMatch(/path\.join\s*\(\s*project\.projectDir\s*,/);
+    // Must pass normalized projectDir instead
+    expect(source).toMatch(/const\s+projectDir\s*=\s*normalizePath\s*\(\s*project\.projectDir\s*\)/);
   });
 });
 
