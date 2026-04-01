@@ -18,6 +18,7 @@ export interface SessionState {
   /** Unix ms — set from SQLite sessions.ended_at for JSONL-imported sessions */
   ended_at?: number;
   archived?: boolean;
+  favorited?: boolean;
   project_id?: string | null;
   note?: string | null;
   tags?: string[];
@@ -30,6 +31,7 @@ export function useSessionStore() {
   const [tasks, setTasks] = useState<ResolvedTask[]>([]);
   const [tasksReady, setTasksReady] = useState(false);
   const [synced, setSynced] = useState(false);
+  const [dismissedDenialIds, setDismissedDenialIds] = useState<Map<string, Set<string>>>(new Map());
 
   const dispatch = useCallback((msg: ServerMessage) => {
     setSynced(true);
@@ -48,6 +50,7 @@ export function useSessionStore() {
             started_at: msg.started_at,
             ended_at: msg.ended_at,
             archived: msg.archived ?? false,
+            favorited: msg.favorited ?? false,
             project_id: msg.project_id,
             note: msg.note,
             tags: msg.tags,
@@ -158,8 +161,35 @@ export function useSessionStore() {
     });
   }, []);
 
+  const setSessionFavorited = useCallback((sessionId: string, favorited: boolean) => {
+    setSessions((prev) => {
+      const s = prev.get(sessionId);
+      if (!s) return prev;
+      const next = new Map(prev);
+      next.set(sessionId, { ...s, favorited });
+      return next;
+    });
+  }, []);
+
+  const dismissDenial = useCallback((sessionId: string, toolUseId: string) => {
+    setDismissedDenialIds((prev) => {
+      const next = new Map(prev);
+      const existing = next.get(sessionId) ?? new Set<string>();
+      next.set(sessionId, new Set([...existing, toolUseId]));
+      return next;
+    });
+  }, []);
+
+  const dismissAllDenials = useCallback((sessionId: string, toolUseIds: string[]) => {
+    setDismissedDenialIds((prev) => {
+      const next = new Map(prev);
+      next.set(sessionId, new Set(toolUseIds));
+      return next;
+    });
+  }, []);
+
   const readyCount = tasks.filter((t) => !t.blocked && t.task.status === '🗂️ Ready').length;
   const blockedCount = tasks.filter((t) => t.blocked).length;
 
-  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived };
+  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials };
 }

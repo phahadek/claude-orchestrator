@@ -11,7 +11,8 @@ export function runMigrations(): void {
       started_at          INTEGER NOT NULL,
       ended_at            INTEGER,
       pr_url              TEXT,
-      worktree_path       TEXT
+      worktree_path       TEXT,
+      favorited           INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS session_events (
@@ -69,4 +70,5 @@ export function runMigrations(): void {
   try { db.exec(`ALTER TABLE sessions ADD COLUMN note TEXT`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE sessions ADD COLUMN tags TEXT`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE session_events ADD COLUMN message_id TEXT`); } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE sessions ADD COLUMN favorited INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
 }

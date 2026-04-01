@@ -18,7 +18,8 @@ db.exec(`
     started_at          INTEGER NOT NULL,
     ended_at            INTEGER,
     pr_url              TEXT,
-    worktree_path       TEXT
+    worktree_path       TEXT,
+    favorited           INTEGER NOT NULL DEFAULT 0
   );
   CREATE TABLE IF NOT EXISTS session_events (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
