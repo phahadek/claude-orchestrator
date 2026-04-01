@@ -308,6 +308,14 @@ export function EventRow({ event }: EventRowProps) {
       return <p className={styles.eventSystem}>{display}</p>;
     }
 
+    case 'user_message':
+      return (
+        <div className={styles.eventUserMessage}>
+          <span className={styles.userMessageLabel}>You</span>
+          <p>{event.content}</p>
+        </div>
+      );
+
     case 'error': {
       const errMsg =
         typeof payload === 'object' && payload !== null
