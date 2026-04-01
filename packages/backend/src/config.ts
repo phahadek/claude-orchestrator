@@ -53,3 +53,6 @@ export const config = {
   claudePath: resolveClaudePath(),
   maxConcurrentSessions: Number(process.env.MAX_CONCURRENT_SESSIONS ?? 20),
 };
+
+export const GITHUB_TOKEN = process.env.GITHUB_TOKEN ?? '';
+export const GITHUB_REPO  = process.env.GITHUB_REPO  ?? '';  // "owner/repo"
