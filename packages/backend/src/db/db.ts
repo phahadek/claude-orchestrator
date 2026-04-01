@@ -19,6 +19,9 @@ db.exec(`
     ended_at            INTEGER,
     pr_url              TEXT,
     worktree_path       TEXT,
+    archived            INTEGER NOT NULL DEFAULT 0,
+    project_id          TEXT,
+    session_type        TEXT    NOT NULL DEFAULT 'standard',
     favorited           INTEGER NOT NULL DEFAULT 0
   );
   CREATE TABLE IF NOT EXISTS session_events (
@@ -27,6 +30,16 @@ db.exec(`
     event_type   TEXT    NOT NULL,
     payload      TEXT    NOT NULL,
     timestamp    INTEGER NOT NULL,
+    message_id   TEXT,
+    FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+  );
+  CREATE TABLE IF NOT EXISTS permission_denials (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  TEXT    NOT NULL,
+    tool_name   TEXT    NOT NULL,
+    tool_use_id TEXT    NOT NULL,
+    tool_input  TEXT    NOT NULL,
+    timestamp   INTEGER NOT NULL,
     FOREIGN KEY (session_id) REFERENCES sessions(session_id)
   );
   CREATE TABLE IF NOT EXISTS permission_events (
@@ -52,5 +65,23 @@ db.exec(`
     notion_task_id TEXT    PRIMARY KEY,
     fetched_at     INTEGER NOT NULL,
     raw_json       TEXT    NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS pull_requests (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    pr_number       INTEGER NOT NULL,
+    pr_url          TEXT    NOT NULL UNIQUE,
+    notion_task_id  TEXT,
+    session_id      TEXT,
+    repo            TEXT    NOT NULL,
+    title           TEXT,
+    body            TEXT,
+    head_branch     TEXT,
+    base_branch     TEXT,
+    state           TEXT    NOT NULL DEFAULT 'open',
+    review_result   TEXT,
+    review_at       TEXT,
+    created_at      TEXT    NOT NULL,
+    updated_at      TEXT    NOT NULL,
+    synced_at       TEXT    NOT NULL
   );
 `);
