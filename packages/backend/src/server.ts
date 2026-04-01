@@ -121,6 +121,12 @@ jsonlReader.importAll().then(async () => {
     console.warn('[server] PR sync failed (check GITHUB_TOKEN):', (err as Error).message)
   );
 
+  setInterval(() => {
+    prSyncJob.run().catch((err: unknown) =>
+      console.warn('[server] PR sync failed:', (err as Error).message)
+    );
+  }, 5 * 60 * 1000);
+
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[server] listening on port ${PORT}`);
     console.log('[server] LAN access enabled — no authentication');
