@@ -44,6 +44,43 @@ describe('SessionGrid', () => {
     expect(screen.getByText(/no sessions yet/i)).toBeDefined();
   });
 
+  it('renders filter empty state when sessions is empty and filtersActive is true', () => {
+    render(
+      <SessionGrid
+        sessions={[]}
+        projects={[]}
+        onSelect={vi.fn()}
+        selectedId={null}
+        keyboardSelectedId={null}
+        synced={true}
+        onArchiveAll={vi.fn()}
+        filtersActive={true}
+        onClearFilters={vi.fn()}
+      />
+    );
+    expect(screen.getByText(/no sessions match your filters/i)).toBeDefined();
+    expect(screen.getByRole('button', { name: /clear filters/i })).toBeDefined();
+  });
+
+  it('calls onClearFilters when Clear filters button is clicked', () => {
+    const onClearFilters = vi.fn();
+    render(
+      <SessionGrid
+        sessions={[]}
+        projects={[]}
+        onSelect={vi.fn()}
+        selectedId={null}
+        keyboardSelectedId={null}
+        synced={true}
+        onArchiveAll={vi.fn()}
+        filtersActive={true}
+        onClearFilters={onClearFilters}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: /clear filters/i }));
+    expect(onClearFilters).toHaveBeenCalledOnce();
+  });
+
   it('calls onSelect with the correct sessionId when a card is clicked', () => {
     const onSelect = vi.fn();
     const sessions = [makeSession({ sessionId: 'abc123', taskName: 'Clickable Task', status: 'running' })];

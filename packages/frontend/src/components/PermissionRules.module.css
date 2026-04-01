@@ -5,18 +5,19 @@
 
 .container h2 {
   margin: 0 0 12px;
+  color: var(--text-primary);
 }
 
 .container p {
   margin: 0 0 16px;
-  color: #888;
+  color: var(--text-muted);
   font-size: 0.875rem;
 }
 
 .tabs {
   display: flex;
   gap: 0;
-  border-bottom: 1px solid #2a2a2a;
+  border-bottom: 1px solid var(--border-subtle);
   margin-bottom: 20px;
 }
 
@@ -25,20 +26,21 @@
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
-  color: #888;
+  color: var(--text-faint);
   cursor: pointer;
   font-size: 0.875rem;
   margin-bottom: -1px;
   padding: 6px 16px;
+  transition: color 0.15s;
 }
 
 .tabActive {
-  border-bottom-color: #1976d2;
-  color: #eee;
+  border-bottom-color: var(--accent);
+  color: var(--text-primary);
 }
 
 .tab:hover {
-  color: #ccc;
+  color: var(--text-muted);
 }
 
 .table {
@@ -50,28 +52,57 @@
 .table th,
 .table td {
   padding: 8px 12px;
-  border-bottom: 1px solid #2a2a2a;
+  border-bottom: 1px solid var(--border-subtle);
   text-align: left;
 }
 
 .table th {
-  color: #888;
+  background: var(--bg-secondary);
+  color: var(--text-muted);
   font-weight: 500;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.table tr:hover td {
+  background: var(--bg-hover);
 }
 
 .patternCell {
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 0.8125rem;
 }
 
+/* Decision badges */
 .allow {
-  color: #4caf50;
-  font-weight: 600;
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(166,227,161,0.15);
+  color: var(--ctp-green);
 }
 
 .deny {
-  color: #f44336;
-  font-weight: 600;
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(243,139,168,0.15);
+  color: var(--ctp-red);
+}
+
+.escalate {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(249,226,175,0.15);
+  color: var(--ctp-yellow);
 }
 
 .disabled td {
@@ -80,16 +111,17 @@
 
 .deleteBtn {
   background: none;
-  border: 1px solid #444;
-  border-radius: 4px;
-  color: #f44336;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--ctp-red);
   cursor: pointer;
   font-size: 0.75rem;
   padding: 2px 8px;
+  transition: background 0.15s;
 }
 
 .deleteBtn:hover {
-  background: #f443361a;
+  background: rgba(243,139,168,0.1);
 }
 
 .deleteBtn:disabled {
@@ -103,7 +135,7 @@
 
 .rowError {
   margin-left: 8px;
-  color: #f44336;
+  color: var(--ctp-red);
   font-size: 0.75rem;
 }
 
@@ -117,24 +149,27 @@
 }
 
 .formError {
-  color: #f44336;
+  color: var(--ctp-red);
   font-size: 0.8125rem;
   align-self: center;
 }
 
+/* Add rule form card */
 .addBtn {
   margin-top: 16px;
   background: none;
-  border: 1px solid #444;
-  border-radius: 4px;
-  color: #ccc;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
   cursor: pointer;
   font-size: 0.875rem;
   padding: 6px 14px;
+  transition: background 0.15s, color 0.15s;
 }
 
 .addBtn:hover {
-  background: #2a2a2a;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
 }
 
 .addForm {
@@ -143,16 +178,27 @@
   gap: 8px;
   flex-wrap: wrap;
   align-items: center;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px;
 }
 
 .addForm input,
 .addForm select {
-  background: #1a1a1a;
-  border: 1px solid #444;
-  border-radius: 4px;
-  color: #eee;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
   font-size: 0.875rem;
   padding: 5px 8px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.addForm input:focus,
+.addForm select:focus {
+  border-color: var(--accent);
 }
 
 .addForm input[type='text'] {
@@ -160,28 +206,30 @@
 }
 
 .addForm button {
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 0.875rem;
   padding: 5px 12px;
+  transition: background 0.15s;
 }
 
 .addForm button[type='submit'] {
-  background: #1565c0;
+  background: var(--accent);
   border: none;
-  color: #fff;
+  color: var(--ctp-base);
+  font-weight: 600;
 }
 
 .addForm button[type='submit']:hover {
-  background: #1976d2;
+  background: var(--ctp-sapphire);
 }
 
 .addForm button[type='button'] {
   background: none;
-  border: 1px solid #444;
-  color: #ccc;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
 }
 
 .addForm button[type='button']:hover {
-  background: #2a2a2a;
+  background: var(--bg-elevated);
 }
