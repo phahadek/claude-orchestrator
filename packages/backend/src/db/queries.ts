@@ -156,14 +156,18 @@ export function getSessionTags(sessionId: string): string[] {
 
 // ─── session_events ────────────────────────────────────────────────────────
 
-const stmtInsertEvent = db.prepare<NewSessionEvent>(`
-  INSERT INTO session_events (session_id, event_type, payload, timestamp)
-  VALUES (@session_id, @event_type, @payload, @timestamp)
+const stmtInsertEvent = db.prepare<NewSessionEvent & { message_id: string | null }>(`
+  INSERT INTO session_events (session_id, event_type, payload, timestamp, message_id)
+  VALUES (@session_id, @event_type, @payload, @timestamp, @message_id)
 `);
 
-const stmtInsertEventOrIgnore = db.prepare<NewSessionEvent>(`
-  INSERT OR IGNORE INTO session_events (session_id, event_type, payload, timestamp)
-  VALUES (@session_id, @event_type, @payload, @timestamp)
+const stmtInsertEventOrIgnore = db.prepare<NewSessionEvent & { message_id: string | null }>(`
+  INSERT OR IGNORE INTO session_events (session_id, event_type, payload, timestamp, message_id)
+  VALUES (@session_id, @event_type, @payload, @timestamp, @message_id)
+`);
+
+const stmtUpdateEventPayload = db.prepare<{ id: number; payload: string; timestamp: number }>(`
+  UPDATE session_events SET payload = @payload, timestamp = @timestamp WHERE id = @id
 `);
 
 const stmtGetEventsBySession = db.prepare<{ session_id: string }>(`
@@ -171,11 +175,28 @@ const stmtGetEventsBySession = db.prepare<{ session_id: string }>(`
 `);
 
 export function insertEvent(e: NewSessionEvent): void {
-  stmtInsertEvent.run(e);
+  stmtInsertEvent.run({ message_id: null, ...e });
 }
 
 export function insertEventOrIgnore(e: NewSessionEvent): void {
-  stmtInsertEventOrIgnore.run(e);
+  stmtInsertEventOrIgnore.run({ message_id: null, ...e });
+}
+
+/**
+ * Upsert a session event keyed on session_id + message_id.
+ * If `existingId` is provided, updates the existing row's payload in-place.
+ * Otherwise inserts a new row. Returns the row ID in both cases.
+ */
+export function upsertSessionEvent(
+  e: NewSessionEvent & { message_id?: string | null },
+  existingId?: number,
+): number {
+  if (existingId != null) {
+    stmtUpdateEventPayload.run({ id: existingId, payload: e.payload, timestamp: e.timestamp });
+    return existingId;
+  }
+  const result = stmtInsertEvent.run({ message_id: null, ...e });
+  return result.lastInsertRowid as number;
 }
 
 export function getEventsBySession(sessionId: string): SessionEvent[] {

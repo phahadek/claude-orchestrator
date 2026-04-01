@@ -68,4 +68,5 @@ export function runMigrations(): void {
   try { db.exec(`ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'standard'`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE sessions ADD COLUMN note TEXT`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE sessions ADD COLUMN tags TEXT`); } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE session_events ADD COLUMN message_id TEXT`); } catch { /* already exists */ }
 }
