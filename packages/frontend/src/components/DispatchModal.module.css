@@ -1,7 +1,8 @@
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -9,9 +10,10 @@
 }
 
 .modal {
-  background: #1e1e1e;
-  border: 1px solid #333;
-  border-radius: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
   padding: 24px;
   width: 520px;
   max-width: 90vw;
@@ -25,7 +27,7 @@
 .modal h2 {
   margin: 0;
   font-size: 1.2rem;
-  color: #e0e0e0;
+  color: var(--text-primary);
 }
 
 .modal section {
@@ -37,7 +39,7 @@
 .modal h3 {
   margin: 0;
   font-size: 0.9rem;
-  color: #aaa;
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -47,14 +49,15 @@
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  color: #e0e0e0;
+  color: var(--text-primary);
   font-size: 0.9rem;
+  transition: background 0.15s;
 }
 
 .ready-task:hover {
-  background: #2a2a2a;
+  background: var(--bg-hover);
 }
 
 .ready-task input[type='checkbox'] {
@@ -66,27 +69,28 @@
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
-  color: #888;
+  color: var(--text-faint);
   font-size: 0.9rem;
+  opacity: 0.5;
 }
 
 .tag {
   font-size: 0.75rem;
   padding: 2px 6px;
-  border-radius: 4px;
-  background: #2a2a2a;
-  color: #aaa;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
   white-space: nowrap;
 }
 
 .empty {
-  color: #888;
+  color: var(--text-faint);
   font-size: 0.85rem;
   margin: 0;
 }
 
 .loading {
-  color: #ccc;
+  color: var(--text-muted);
   font-size: 0.9rem;
   margin: 0;
 }
@@ -101,24 +105,37 @@
   justify-content: flex-end;
   gap: 8px;
   padding-top: 8px;
-  border-top: 1px solid #333;
+  border-top: 1px solid var(--border);
 }
 
 .modal-footer button {
   padding: 8px 16px;
-  border-radius: 4px;
-  border: 1px solid #444;
-  background: #2a2a2a;
-  color: #e0e0e0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
   cursor: pointer;
   font-size: 0.9rem;
+  transition: background 0.15s;
 }
 
 .modal-footer button:hover:not(:disabled) {
-  background: #333;
+  background: var(--bg-hover);
 }
 
 .modal-footer button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.launch-button {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: var(--ctp-base) !important;
+  font-weight: 600 !important;
+}
+
+.launch-button:hover:not(:disabled) {
+  background: var(--ctp-sapphire) !important;
+  border-color: var(--ctp-sapphire) !important;
 }
