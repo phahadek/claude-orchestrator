@@ -219,6 +219,34 @@
   padding-left: 10px;
 }
 
+.eventUserMessage {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.userMessageLabel {
+  font-size: 0.75rem;
+  color: #89b4fa;
+  font-weight: 600;
+}
+
+.eventUserMessage p {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: #cdd6f4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(137, 180, 250, 0.08);
+  border: 1px solid rgba(137, 180, 250, 0.25);
+  border-radius: 8px;
+  border-bottom-right-radius: 2px;
+  padding: 8px 12px;
+  max-width: 85%;
+}
+
 .eventError {
   background: rgba(243, 139, 168, 0.1);
   border: 1px solid rgba(243, 139, 168, 0.3);
