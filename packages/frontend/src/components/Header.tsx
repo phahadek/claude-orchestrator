@@ -6,26 +6,19 @@ interface Props {
   projects: ProjectConfig[];
   activeProjectId: string | null;
   onProjectChange: (projectId: string) => void;
-  activeView: 'sessions' | 'prs';
-  onViewChange: (view: 'sessions' | 'prs') => void;
+  prPanelVisible: boolean;
+  onTogglePrPanel: () => void;
 }
 
-export function Header({ projects, activeProjectId, onProjectChange, activeView, onViewChange }: Props) {
+export function Header({ projects, activeProjectId, onProjectChange, prPanelVisible, onTogglePrPanel }: Props) {
   return (
     <header className={styles.header}>
       <span className={styles.appName}>Claude Code Dashboard</span>
       <nav className={styles.nav}>
         <button
           type="button"
-          className={`${styles.navLink}${activeView === 'sessions' ? ` ${styles.navLinkActive}` : ''}`}
-          onClick={() => onViewChange('sessions')}
-        >
-          Sessions
-        </button>
-        <button
-          type="button"
-          className={`${styles.navLink}${activeView === 'prs' ? ` ${styles.navLinkActive}` : ''}`}
-          onClick={() => onViewChange('prs')}
+          className={`${styles.navLink}${prPanelVisible ? ` ${styles.navLinkActive}` : ''}`}
+          onClick={onTogglePrPanel}
         >
           PRs
         </button>
