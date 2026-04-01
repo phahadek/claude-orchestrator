@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { summarizeEvent } from '../eventParsing';
+import { summarizeEvent, extractSystem } from '../eventParsing';
 
 // Helper to make an event object
 function ev(eventType: string, content: string) {
@@ -141,5 +141,56 @@ describe('summarizeEvent', () => {
       const result = summarizeEvent(ev('unknown_type', 'some content'));
       expect(result).toBe('some content');
     });
+  });
+});
+
+describe('extractSystem — user events with array content', () => {
+  it('returns readable text from user event with array content', () => {
+    const payload = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'Please fix the bug in foo.ts' }],
+      },
+    };
+    const { rawType, display } = extractSystem(payload, '');
+    expect(rawType).toBe('user');
+    expect(display).toBe('Please fix the bug in foo.ts');
+  });
+
+  it('returns empty string for user event with array content that is entirely a system-reminder block', () => {
+    // Entire text is wrapped in a system tag — strip tag+content → nothing remains
+    const payload = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'text', text: '<system-reminder>Do not do X</system-reminder>' },
+        ],
+      },
+    };
+    const { rawType, display } = extractSystem(payload, '');
+    expect(rawType).toBe('user');
+    expect(display).toBe('');
+  });
+
+  it('strips tag+content blocks but retains bare text in array content', () => {
+    const payload = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Hello<local-command-caveat>some caveat</local-command-caveat>' },
+        ],
+      },
+    };
+    const { display } = extractSystem(payload, '');
+    expect(display).toBe('Hello');
+  });
+
+  it('returns empty string for user event with unknown content shape', () => {
+    const payload = { type: 'user', message: { role: 'user', content: 42 } };
+    const { display } = extractSystem(payload, '');
+    expect(display).toBe('');
   });
 });
