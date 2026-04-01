@@ -66,6 +66,27 @@
   background: rgba(243, 139, 168, 0.25);
 }
 
+.archiveButton {
+  background: rgba(166, 173, 200, 0.1);
+  border: 1px solid rgba(166, 173, 200, 0.3);
+  border-radius: 4px;
+  color: #a6adc8;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.archiveButton:hover:not(:disabled) {
+  background: rgba(166, 173, 200, 0.2);
+}
+
+.archiveButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .deleteButton {
   background: rgba(243, 139, 168, 0.1);
   border: 1px solid rgba(243, 139, 168, 0.3);
