@@ -13,6 +13,7 @@ import {
   isHiddenSystemEvent,
 } from '../utils/eventParsing';
 import { StatusBadge } from './StatusBadge';
+import { formatModelName } from './SessionCard';
 import { ToolCallGroup } from './ToolCallGroup';
 import type { CallPair } from './ToolCallGroup';
 import styles from './SessionDetail.module.css';
@@ -370,6 +371,9 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
         <span className={styles.taskName}>{taskNameFromNotionUrl(session.taskName)}</span>
         <div className={styles.headerControls}>
           <StatusBadge status={session.status} isRateLimited={session.isRateLimited} />
+          {session.model && (
+            <span className={styles.modelBadge}>{formatModelName(session.model)}</span>
+          )}
           <button
             className={`${styles.favoriteButton} ${session.favorited ? styles['favoriteButton--active'] : ''}`}
             onClick={() => void handleToggleFavorite()}

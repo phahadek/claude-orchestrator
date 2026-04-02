@@ -167,6 +167,10 @@ export function setSessionNote(sessionId: string, note: string | null): void {
   db.prepare('UPDATE sessions SET note = ? WHERE session_id = ?').run(note, sessionId);
 }
 
+export function setSessionModel(sessionId: string, model: string): void {
+  db.prepare('UPDATE sessions SET model = ? WHERE session_id = ?').run(model, sessionId);
+}
+
 export function setSessionTags(sessionId: string, tags: string[]): void {
   db.prepare('UPDATE sessions SET tags = ? WHERE session_id = ?').run(JSON.stringify(tags), sessionId);
 }

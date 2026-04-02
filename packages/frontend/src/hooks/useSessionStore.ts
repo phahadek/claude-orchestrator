@@ -49,6 +49,7 @@ export interface SessionState {
   totalOutputTokens?: number;
   /** PR number this review session is reviewing (review sessions only) */
   prNumber?: number;
+  model?: string | null;
 }
 
 export function useSessionStore() {
@@ -83,6 +84,7 @@ export function useSessionStore() {
             totalInputTokens: msg.totalInputTokens ?? 0,
             totalOutputTokens: msg.totalOutputTokens ?? 0,
             prNumber: msg.prNumber,
+            model: msg.model ?? null,
           });
           break;
         case 'session_event': {
@@ -163,6 +165,7 @@ export function useSessionStore() {
               ...(Object.prototype.hasOwnProperty.call(msg, 'tags') && { tags: msg.tags }),
               ...(msg.totalInputTokens != null && { totalInputTokens: msg.totalInputTokens }),
               ...(msg.totalOutputTokens != null && { totalOutputTokens: msg.totalOutputTokens }),
+              ...(msg.model != null && { model: msg.model }),
             });
           }
           break;
