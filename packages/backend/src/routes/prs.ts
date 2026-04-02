@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { getProjectById } from '../config';
+import { getProjectById, config } from '../config';
 import {
   getPRs,
   getPRByNumber,
@@ -74,6 +74,7 @@ export function createPrsRouter(
       notionTaskId: pr.notion_task_id,
       notionTaskTitle: pr.notion_task_id ? getTaskTitleFromCache(pr.notion_task_id) : null,
       sessionId: pr.session_id ?? null,
+      repo: pr.repo,
       reviewResult: pr.review_result
         ? (JSON.parse(pr.review_result) as PRReviewResult)
         : null,
@@ -166,20 +167,10 @@ export function createPrsRouter(
     }
   });
 
-  // ── POST /api/prs/:prNumber/merge ────────────────────────────────────────────
-  router.post('/prs/:prNumber/merge', async (req: Request, res: Response) => {
+  // ── POST /api/prs/:owner/:repoName/:prNumber/merge ───────────────────────────
+  router.post('/prs/:owner/:repoName/:prNumber/merge', async (req: Request, res: Response) => {
+    const repo = `${req.params.owner}/${req.params.repoName}`;
     const prNumber = parseInt(String(req.params.prNumber), 10);
-    const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : '';
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId query param is required' });
-      return;
-    }
-    const project = getProjectById(projectId);
-    if (!project?.githubRepo) {
-      res.status(422).json({ error: 'Project has no githubRepo configured' });
-      return;
-    }
-    const repo = project.githubRepo;
     const prRow = getPRByNumber(prNumber, repo);
     const commitTitle =
       typeof (req.body as { commitTitle?: string }).commitTitle === 'string'
@@ -227,20 +218,10 @@ export function createPrsRouter(
     }
   });
 
-  // ── POST /api/prs/:prNumber/re-review ─────────────────────────────────────────
-  router.post('/prs/:prNumber/re-review', async (req: Request, res: Response) => {
+  // ── POST /api/prs/:owner/:repoName/:prNumber/re-review ───────────────────────
+  router.post('/prs/:owner/:repoName/:prNumber/re-review', async (req: Request, res: Response) => {
+    const repo = `${req.params.owner}/${req.params.repoName}`;
     const prNumber = parseInt(String(req.params.prNumber), 10);
-    const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : '';
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId query param is required' });
-      return;
-    }
-    const project = getProjectById(projectId);
-    if (!project?.githubRepo) {
-      res.status(422).json({ error: 'Project has no githubRepo configured' });
-      return;
-    }
-    const repo = project.githubRepo;
     const prRow = getPRByNumber(prNumber, repo);
     if (!prRow) {
       res.status(404).json({ error: `PR #${prNumber} not found` });
@@ -250,10 +231,14 @@ export function createPrsRouter(
     // Reset iteration counter so the orchestrator won't block on the cap
     resetReviewIteration(prNumber, repo);
 
-    const contextUrl = project.contextUrl;
+    const project = config.projects.find((p) => p.githubRepo === repo);
+    if (!project) {
+      res.status(422).json({ error: `No project configured for repo ${repo}` });
+      return;
+    }
     try {
       const result = await Promise.race([
-        prReviewService.reviewPR(prNumber, repo, projectId, contextUrl),
+        prReviewService.reviewPR(prNumber, repo, project.id, project.contextUrl),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('Review timed out')), 120_000),
         ),

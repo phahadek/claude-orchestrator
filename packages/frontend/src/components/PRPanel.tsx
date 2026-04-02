@@ -129,12 +129,14 @@ export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollap
   };
 
   const handleMerge = async (prNumber: number) => {
-    if (!activeProjectId) return;
+    const pr = prs.find((p) => p.prNumber === prNumber);
+    if (!pr) return;
+    const [owner, repoName] = pr.repo.split('/');
     setMergeInFlight((prev) => new Set(prev).add(prNumber));
     setError(prNumber, null);
     try {
       const res = await fetch(
-        `/api/prs/${prNumber}/merge?projectId=${encodeURIComponent(activeProjectId)}`,
+        `/api/prs/${owner}/${repoName}/${prNumber}/merge`,
         { method: 'POST' },
       );
       if (!res.ok) {
@@ -182,12 +184,14 @@ export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollap
   };
 
   const handleReReview = async (prNumber: number) => {
-    if (!activeProjectId) return;
+    const pr = prs.find((p) => p.prNumber === prNumber);
+    if (!pr) return;
+    const [owner, repoName] = pr.repo.split('/');
     setReReviewInFlight((prev) => new Set(prev).add(prNumber));
     setError(prNumber, null);
     try {
       const res = await fetch(
-        `/api/prs/${prNumber}/re-review?projectId=${encodeURIComponent(activeProjectId)}`,
+        `/api/prs/${owner}/${repoName}/${prNumber}/re-review`,
         { method: 'POST' },
       );
       if (res.status === 504) {
