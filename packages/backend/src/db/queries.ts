@@ -404,7 +404,14 @@ export function upsertTaskCache(taskId: string, rawJson: string): void {
 }
 
 export function getTaskCache(taskId: string): TaskCache | undefined {
-  return stmtGetTaskCache.get({ notion_task_id: taskId }) as TaskCache | undefined;
+  const row = stmtGetTaskCache.get({ notion_task_id: taskId }) as TaskCache | undefined;
+  if (row) return row;
+  // Sessions store IDs without hyphens; cache stores UUID format — try the other form
+  const alt = taskId.includes('-')
+    ? taskId.replace(/-/g, '')
+    : taskId.replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5');
+  if (alt === taskId) return undefined;
+  return stmtGetTaskCache.get({ notion_task_id: alt }) as TaskCache | undefined;
 }
 
 export function getCacheAge(taskId: string): number {
