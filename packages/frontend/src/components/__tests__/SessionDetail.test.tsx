@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { useState } from 'react';
 import { SessionDetail, EventRow } from '../SessionDetail';
@@ -25,7 +25,8 @@ function makeEvent(
 }
 
 /** Wrapper that manages dismissedDenials state so dismissal tests can verify UI updates. */
-function DismissalWrapper({ session }: { session: SessionState }) {
+function DismissalWrapper({ session: initialSession }: { session: SessionState }) {
+  const [session, setSession] = useState(initialSession);
   const [dismissed, setDismissed] = useState(new Set<string>());
   return (
     <SessionDetail
@@ -37,7 +38,7 @@ function DismissalWrapper({ session }: { session: SessionState }) {
       onUnarchive={vi.fn()}
       dismissedDenials={dismissed}
       onDismissDenial={(id) => setDismissed((prev) => new Set([...prev, id]))}
-      onDismissAllDenials={(ids) => setDismissed(new Set(ids))}
+      onClearAllDenials={() => setSession((prev) => ({ ...prev, permissionDenials: [] }))}
     />
   );
 }
@@ -208,6 +209,16 @@ describe('SessionDetail', () => {
     expect(screen.getByText('Write')).toBeTruthy();
   });
 
+  it('"Clear all" button is visible when there is 1 denial card', () => {
+    const session = makeSession({
+      permissionDenials: [
+        { tool_name: 'Bash', tool_use_id: 'id-1', tool_input: {} },
+      ],
+    });
+    render(<DismissalWrapper session={session} />);
+    expect(screen.getByText('Clear all')).toBeTruthy();
+  });
+
   it('"Clear all" button is visible when ≥ 2 denial cards are present', () => {
     const session = makeSession({
       permissionDenials: [
@@ -219,7 +230,9 @@ describe('SessionDetail', () => {
     expect(screen.getByText('Clear all')).toBeTruthy();
   });
 
-  it('"Clear all" removes all denial cards', () => {
+  it('"Clear all" shows confirmation and removes all denial cards on confirm', async () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
     const session = makeSession({
       permissionDenials: [
         { tool_name: 'Bash', tool_use_id: 'id-1', tool_input: {} },
@@ -228,8 +241,28 @@ describe('SessionDetail', () => {
     });
     render(<DismissalWrapper session={session} />);
     fireEvent.click(screen.getByText('Clear all'));
-    expect(screen.queryByText('Bash')).toBeNull();
-    expect(screen.queryByText('Write')).toBeNull();
+    expect(window.confirm).toHaveBeenCalledWith('Clear 2 denial(s)?');
+    await waitFor(() => {
+      expect(screen.queryByText('Bash')).toBeNull();
+      expect(screen.queryByText('Write')).toBeNull();
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it('"Clear all" does nothing when confirmation is cancelled', async () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(false));
+    vi.stubGlobal('fetch', vi.fn());
+    const session = makeSession({
+      permissionDenials: [
+        { tool_name: 'Bash', tool_use_id: 'id-1', tool_input: {} },
+        { tool_name: 'Write', tool_use_id: 'id-2', tool_input: {} },
+      ],
+    });
+    render(<DismissalWrapper session={session} />);
+    fireEvent.click(screen.getByText('Clear all'));
+    expect(window.fetch).not.toHaveBeenCalled();
+    expect(screen.getByText('Bash')).toBeTruthy();
+    vi.unstubAllGlobals();
   });
 
   it('onClose is called when close button is clicked', () => {

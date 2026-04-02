@@ -27,10 +27,10 @@ interface Props {
   onUnfavorite?: (sessionId: string) => void;
   dismissedDenials?: Set<string>;
   onDismissDenial?: (toolUseId: string) => void;
-  onDismissAllDenials?: (toolUseIds: string[]) => void;
+  onClearAllDenials?: () => void;
 }
 
-export function SessionDetail({ session, send, onClose, onDelete, onArchive, onUnarchive, onResume, onFavorite, onUnfavorite, dismissedDenials = new Set(), onDismissDenial = () => {}, onDismissAllDenials = () => {} }: Props) {
+export function SessionDetail({ session, send, onClose, onDelete, onArchive, onUnarchive, onResume, onFavorite, onUnfavorite, dismissedDenials = new Set(), onDismissDenial = () => {}, onClearAllDenials }: Props) {
   const [draftMessage, setDraftMessage] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [archiving, setArchiving] = useState(false);
@@ -242,6 +242,12 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
     });
   }
 
+  async function handleClearAllDenials(count: number) {
+    if (!window.confirm(`Clear ${count} denial(s)?`)) return;
+    await fetch(`/api/sessions/${session!.sessionId}/denials`, { method: 'DELETE' });
+    onClearAllDenials?.();
+  }
+
   async function handleAddTag() {
     if (!session) return;
     const tag = tagInput.trim();
@@ -407,10 +413,10 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
               <p className={styles.permissionTitle}>
                 <strong>Permission Denials</strong> — add rules in Settings to allow these tools next time
               </p>
-              {visibleDenials.length >= 2 && (
+              {visibleDenials.length >= 1 && (
                 <button
                   className={styles.clearAllBtn}
-                  onClick={() => onDismissAllDenials(allDenials.map((d) => d.tool_use_id))}
+                  onClick={() => void handleClearAllDenials(visibleDenials.length)}
                 >
                   Clear all
                 </button>

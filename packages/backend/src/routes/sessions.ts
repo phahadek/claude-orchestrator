@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { getSession, getActiveSessions, getArchivedSessions, getSessionsByStatus, getSessionsByProject, deleteSession, archiveSession, unarchiveSession, archiveFinishedSessions, setSessionNote, setSessionTags, favoriteSession, unfavoriteSession } from '../db/queries';
+import { getSession, getActiveSessions, getArchivedSessions, getSessionsByStatus, getSessionsByProject, deleteSession, archiveSession, unarchiveSession, archiveFinishedSessions, setSessionNote, setSessionTags, favoriteSession, unfavoriteSession, deleteDenialsBySession } from '../db/queries';
 import type { ServerMessage } from '../ws/types';
 
 let _broadcast: ((msg: ServerMessage) => void) = () => {};
@@ -30,6 +30,18 @@ sessionsRouter.get('/', (req: Request, res: Response) => {
   } else {
     res.json(getActiveSessions());
   }
+});
+
+// DELETE /api/sessions/:id/denials
+sessionsRouter.delete('/:id/denials', (req: Request, res: Response) => {
+  const sessionId = String(req.params.id);
+  const existing = getSession(sessionId);
+  if (!existing) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+  deleteDenialsBySession(sessionId);
+  res.status(200).json({ ok: true });
 });
 
 // DELETE /api/sessions/:id
