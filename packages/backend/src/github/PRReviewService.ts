@@ -230,7 +230,9 @@ Evaluate the PR across exactly these 4 dimensions and respond with this JSON sch
   ],
   "summary": "2–4 sentence overall assessment"
 }
-verdict rules: "approved" = all 4 passed. "needs_changes" = 1–3 passed. "incomplete" = 0 passed.`;
+verdict rules: "approved" = all 4 passed. "needs_changes" = 1–3 passed. "incomplete" = 0 passed.
+
+For the "Changed files vs Files/paths affected list" dimension: Pass if all changed files are either listed in the task OR are necessary downstream updates caused by the listed changes (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports). Fail only if the PR touches files unrelated to the task's intent.`;
   }
 
   parseReviewResult(events: SessionEvent[], prNumber: number, repo: string): PRReviewResult {
