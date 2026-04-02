@@ -247,6 +247,14 @@
   font-size: 13px;
 }
 
+/* Prevent flex children from shrinking below their content height.
+   Without this, items with overflow:hidden (e.g. .eventToolUse) collapse
+   to ~1px when the flex column has many children, because the browser
+   shrinks them to fit and overflow:hidden clips the content.  */
+.transcript > * {
+  flex-shrink: 0;
+}
+
 .emptyTranscript {
   color: var(--text-faint);
   font-style: italic;
@@ -265,6 +273,9 @@
   word-break: break-word;
 }
 
+/* overflow:hidden clips the collapsible body animation. It relies on
+   .transcript > * { flex-shrink: 0 } to prevent the parent flex column
+   from crushing this element to ~1px height when there are many items. */
 .eventToolUse {
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
@@ -296,7 +307,7 @@
 }
 
 .toolBody {
-  overflow: hidden;
+  overflow: auto;
   max-height: 800px;
   transition: max-height 0.25s ease, opacity 0.2s ease;
   opacity: 1;

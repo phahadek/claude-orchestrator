@@ -103,6 +103,7 @@ wss.on('connection', (ws) => {
         sessionId: s.session_id,
         eventType: ev.event_type as 'text' | 'tool_use' | 'tool_result' | 'system' | 'user_message',
         content: ev.payload,
+        ...(ev.message_id != null && { messageId: ev.message_id }),
       } satisfies ServerMessage));
     }
 
