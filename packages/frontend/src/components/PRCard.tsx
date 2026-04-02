@@ -39,11 +39,13 @@ export interface PRCardProps {
   onRemove: (prNumber: number) => void;
   onViewSession?: (sessionId: string) => void;
   onReReview: (prNumber: number) => void;
+  onApprove: (prNumber: number) => void;
   reviewInFlight: boolean;
   mergeInFlight: boolean;
   fixInFlight: boolean;
   removeInFlight: boolean;
   reReviewInFlight: boolean;
+  approveInFlight: boolean;
   reviewElapsed: number;
   error: string | null;
 }
@@ -63,11 +65,13 @@ export function PRCard({
   onRemove,
   onViewSession,
   onReReview,
+  onApprove,
   reviewInFlight,
   mergeInFlight,
   fixInFlight,
   removeInFlight,
   reReviewInFlight,
+  approveInFlight,
   reviewElapsed,
   error,
 }: PRCardProps) {
@@ -78,6 +82,7 @@ export function PRCard({
   const canMerge = pr.state === 'open' && verdict === 'approved';
   const showFixButton = !isFinished && (verdict === 'needs_changes' || verdict === 'incomplete');
   const showReReviewButton = !isFinished && verdict !== null;
+  const showApproveButton = !isFinished && verdict !== 'approved';
 
   const verdictClass = isFinished
     ? styles[`state-${pr.state}`]
@@ -193,6 +198,18 @@ export function PRCard({
               title="Reset iteration counter and run a fresh review"
             >
               {reReviewInFlight ? 'Reviewing...' : '↺ Re-review'}
+            </button>
+          )}
+
+          {showApproveButton && (
+            <button
+              type="button"
+              className={styles.approveButton}
+              disabled={approveInFlight}
+              onClick={() => onApprove(pr.prNumber)}
+              title="Manually approve this PR"
+            >
+              {approveInFlight ? 'Approving...' : '✓ Approve'}
             </button>
           )}
 
