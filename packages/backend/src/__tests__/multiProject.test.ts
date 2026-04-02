@@ -123,13 +123,13 @@ describe('WS ClientMessage types', () => {
     expect(source).toMatch(/dispatch.*projectId:\s*string/s);
   });
 
-  it('fetch_tasks uses projectId instead of boardId', () => {
+  it('fetch_tasks has required projectId and optional boardId', () => {
     const source = fs.readFileSync(
       path.join(__dirname, '..', 'ws', 'types.ts'),
       'utf-8',
     );
     expect(source).toMatch(/fetch_tasks.*projectId:\s*string/s);
-    // boardId should no longer be in fetch_tasks
-    expect(source).not.toMatch(/fetch_tasks.*boardId/s);
+    // boardId is optional — used by milestone switcher to override the default board
+    expect(source).toMatch(/fetch_tasks.*boardId\?:\s*string/s);
   });
 });
