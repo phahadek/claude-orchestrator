@@ -343,6 +343,7 @@ export default function App() {
         activeView={topView}
         onViewChange={handleViewChange}
         totalTokens={totalTokens}
+        tasks={tasks}
       />
       <div className={styles.mainArea}>
         {topView === 'sessions' && (
