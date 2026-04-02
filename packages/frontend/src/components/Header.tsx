@@ -1,6 +1,8 @@
 import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
 import { formatTokenCount } from '@claude-dashboard/backend/src/utils/usage';
+import type { ResolvedTask } from '@claude-dashboard/backend/src/notion/types';
 import { ProjectSwitcher } from './ProjectSwitcher';
+import { MilestoneProgress } from './MilestoneProgress';
 import styles from './Header.module.css';
 
 export type TopView = 'sessions' | 'prs' | 'settings';
@@ -14,9 +16,10 @@ interface Props {
   activeView: TopView;
   onViewChange: (view: TopView) => void;
   totalTokens?: number;
+  tasks?: ResolvedTask[];
 }
 
-export function Header({ projects, activeProjectId, onProjectChange, activeBoardId, onBoardChange, activeView, onViewChange, totalTokens }: Props) {
+export function Header({ projects, activeProjectId, onProjectChange, activeBoardId, onBoardChange, activeView, onViewChange, totalTokens, tasks }: Props) {
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
   const boards = activeProject?.boards ?? [];
 
@@ -64,6 +67,12 @@ export function Header({ projects, activeProjectId, onProjectChange, activeBoard
               <option key={b.id} value={b.id}>{b.name}</option>
             ))}
           </select>
+        </>
+      )}
+      {tasks && tasks.length > 0 && (
+        <>
+          <div className={styles.divider} />
+          <MilestoneProgress tasks={tasks} />
         </>
       )}
       {totalTokens != null && totalTokens > 0 && (
