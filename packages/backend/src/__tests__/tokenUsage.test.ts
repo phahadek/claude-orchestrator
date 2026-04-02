@@ -123,22 +123,26 @@ vi.mock('../db/db.js', async () => {
       raw_json       TEXT    NOT NULL
     );
     CREATE TABLE IF NOT EXISTS pull_requests (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      pr_number       INTEGER NOT NULL,
-      pr_url          TEXT    NOT NULL UNIQUE,
-      notion_task_id  TEXT,
-      session_id      TEXT,
-      repo            TEXT    NOT NULL,
-      title           TEXT,
-      body            TEXT,
-      head_branch     TEXT,
-      base_branch     TEXT,
-      state           TEXT    NOT NULL DEFAULT 'open',
-      review_result   TEXT,
-      review_at       TEXT,
-      created_at      TEXT    NOT NULL,
-      updated_at      TEXT    NOT NULL,
-      synced_at       TEXT    NOT NULL
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      pr_number         INTEGER NOT NULL,
+      pr_url            TEXT    NOT NULL UNIQUE,
+      notion_task_id    TEXT,
+      session_id        TEXT,
+      repo              TEXT    NOT NULL,
+      title             TEXT,
+      body              TEXT,
+      head_branch       TEXT,
+      base_branch       TEXT,
+      state             TEXT    NOT NULL DEFAULT 'open',
+      draft             INTEGER NOT NULL DEFAULT 0,
+      review_result     TEXT,
+      review_at         TEXT,
+      created_at        TEXT    NOT NULL,
+      updated_at        TEXT    NOT NULL,
+      synced_at         TEXT    NOT NULL,
+      review_session_id TEXT,
+      review_iteration  INTEGER NOT NULL DEFAULT 0,
+      head_sha          TEXT
     );
   `);
   return { db };

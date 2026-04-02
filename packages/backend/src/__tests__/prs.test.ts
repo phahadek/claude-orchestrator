@@ -83,11 +83,15 @@ const mockPRRow: PullRequestRow = {
   head_branch: 'feature/add-something',
   base_branch: 'dev',
   state: 'open',
+  draft: 0,
   review_result: null,
   review_at: null,
   created_at: '2024-01-01T00:00:00Z',
   updated_at: '2024-01-01T01:00:00Z',
   synced_at: '2024-01-01T01:00:00Z',
+  review_session_id: null,
+  review_iteration: 0,
+  head_sha: null,
 };
 
 const mockPRRowNoTask: PullRequestRow = {
@@ -235,24 +239,24 @@ describe('GET /api/prs', () => {
 // ── POST /api/prs/:prNumber/review ────────────────────────────────────────────
 
 describe('POST /api/prs/:prNumber/review', () => {
-  it('returns stub response when PR exists with notion_task_id', async () => {
+  it('calls reviewPR and returns review result when PR exists', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
     const res = await supertest(buildApp())
       .post('/api/prs/42/review?projectId=proj-1');
     expect(res.status).toBe(200);
-    expect(res.body.verdict).toBeNull();
-    expect(res.body.message).toBe('PR review not yet implemented');
+    expect(res.body.verdict).toBe('approved');
+    expect(res.body.summary).toBe('Looks good');
   });
 
-  it('returns stub response when PR exists without notion_task_id', async () => {
+  it('calls reviewPR even when PR has no notion_task_id (service handles error)', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRowNoTask);
     const res = await supertest(buildApp())
       .post('/api/prs/43/review?projectId=proj-1');
     expect(res.status).toBe(200);
-    expect(res.body.verdict).toBeNull();
+    expect(res.body.verdict).toBe('approved');
   });
 
-  it('performs on-demand sync and returns stub when PR is not in DB', async () => {
+  it('performs on-demand sync and calls reviewPR when PR is not in DB initially', async () => {
     vi.mocked(queries.getPRByNumber)
       .mockReturnValueOnce(null)           // first call — not found
       .mockReturnValueOnce(mockPRRow);     // second call — after upsert
@@ -260,7 +264,7 @@ describe('POST /api/prs/:prNumber/review', () => {
     const res = await supertest(buildApp(github))
       .post('/api/prs/42/review?projectId=proj-1');
     expect(res.status).toBe(200);
-    expect(res.body.verdict).toBeNull();
+    expect(res.body.verdict).toBe('approved');
     expect(vi.mocked(github.fetchPR)).toHaveBeenCalledWith('owner/repo', 42);
     expect(vi.mocked(queries.upsertPullRequest)).toHaveBeenCalledOnce();
   });

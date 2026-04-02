@@ -442,8 +442,8 @@ export function getTaskTitleFromCache(taskId: string): string | null {
 
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
-export function upsertPullRequest(pr: Omit<PullRequestRow, 'id'>): PullRequestRow {
-  db.prepare<Omit<PullRequestRow, 'id'>>(`
+export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_session_id' | 'review_iteration' | 'head_sha'>): PullRequestRow {
+  db.prepare<Omit<PullRequestRow, 'id' | 'review_session_id' | 'review_iteration' | 'head_sha'>>(`
     INSERT INTO pull_requests
       (pr_number, pr_url, notion_task_id, session_id, repo, title, body,
        head_branch, base_branch, state, draft, review_result, review_at,
@@ -467,6 +467,32 @@ export function upsertPullRequest(pr: Omit<PullRequestRow, 'id'>): PullRequestRo
   return db.prepare<{ pr_url: string }>(`
     SELECT * FROM pull_requests WHERE pr_url = @pr_url
   `).get({ pr_url: pr.pr_url }) as PullRequestRow;
+}
+
+export function setReviewSessionId(prNumber: number, repo: string, reviewSessionId: string): void {
+  db.prepare<{ pr_number: number; repo: string; review_session_id: string }>(`
+    UPDATE pull_requests
+    SET review_session_id = @review_session_id
+    WHERE pr_number = @pr_number AND repo = @repo
+  `).run({ pr_number: prNumber, repo, review_session_id: reviewSessionId });
+}
+
+export function incrementReviewIteration(prNumber: number, repo: string): number {
+  db.prepare<{ pr_number: number; repo: string }>(`
+    UPDATE pull_requests
+    SET review_iteration = review_iteration + 1
+    WHERE pr_number = @pr_number AND repo = @repo
+  `).run({ pr_number: prNumber, repo });
+  const row = db.prepare<{ pr_number: number; repo: string }>(`
+    SELECT review_iteration FROM pull_requests WHERE pr_number = @pr_number AND repo = @repo
+  `).get({ pr_number: prNumber, repo }) as { review_iteration: number } | undefined;
+  return row?.review_iteration ?? 1;
+}
+
+export function getPRBySessionId(sessionId: string): PullRequestRow | null {
+  return db.prepare<{ session_id: string }>(`
+    SELECT * FROM pull_requests WHERE session_id = @session_id LIMIT 1
+  `).get({ session_id: sessionId }) as PullRequestRow | null;
 }
 
 export function getOpenPRs(repo: string): PullRequestRow[] {
