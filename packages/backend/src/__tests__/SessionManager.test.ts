@@ -3,6 +3,32 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { normalizePath } from '../config';
 
+// ── AC: SessionManager.start() calls notionClient.updateStatus In Progress ──
+describe('SessionManager.start() — In Progress status', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('calls notionClient.updateStatus with In Progress after insertSession()', () => {
+    // Must contain the updateStatus call for In Progress
+    expect(source).toMatch(/notionClient\.updateStatus\s*\(\s*notionTaskId\s*,\s*'🔄 In Progress'\s*\)/);
+  });
+
+  it('In Progress call is fire-and-forget with .catch() error handler', () => {
+    expect(source).toMatch(/notionClient\.updateStatus\s*\(\s*notionTaskId\s*,\s*'🔄 In Progress'\s*\)\.catch/);
+  });
+
+  it('In Progress call is gated on sessionType === standard', () => {
+    // Must be inside a sessionType === 'standard' check
+    expect(source).toMatch(/sessionType\s*===\s*'standard'/);
+    // The updateStatus In Progress call must appear after the sessionType check in the source
+    const gateIdx = source.indexOf("sessionType === 'standard'");
+    const inProgressIdx = source.indexOf("notionClient.updateStatus(notionTaskId, '🔄 In Progress')");
+    expect(inProgressIdx).toBeGreaterThan(gateIdx);
+  });
+});
+
 // ── AC: run() is called fire-and-forget in SessionManager.start() ──────────
 // This is a structural check — verify the source code does NOT await run().
 

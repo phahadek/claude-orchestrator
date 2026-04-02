@@ -467,9 +467,11 @@ export class AgentSession extends EventEmitter {
         }
       }
 
-      this.notionClient.updateStatus(this.taskId, '👀 In Review').catch((e) =>
-        console.error(`[AgentSession] updateStatus failed: ${e}`),
-      );
+      if (prUrl) {
+        this.notionClient.updateStatus(this.taskId, '👀 In Review').catch((e) =>
+          console.error(`[AgentSession] updateStatus failed: ${e}`),
+        );
+      }
     }
 
     this.broadcast({
