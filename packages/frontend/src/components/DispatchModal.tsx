@@ -27,7 +27,7 @@ export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, bo
 
   useEffect(() => {
     resetTasks();
-    send({ type: 'fetch_tasks', projectId: project.id, boardId });
+    send({ type: 'fetch_tasks', projectId: project.id, boardId, skipCache: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
