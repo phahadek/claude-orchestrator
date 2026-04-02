@@ -1,6 +1,5 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
-import { useState } from 'react';
 import { SessionDetail, EventRow } from '../SessionDetail';
 import type { SessionState } from '../../hooks/useSessionStore';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
@@ -24,24 +23,6 @@ function makeEvent(
   return { eventType, content, timestamp };
 }
 
-/** Wrapper that manages dismissedDenials state so dismissal tests can verify UI updates. */
-function DismissalWrapper({ session: initialSession }: { session: SessionState }) {
-  const [session, setSession] = useState(initialSession);
-  const [dismissed, setDismissed] = useState(new Set<string>());
-  return (
-    <SessionDetail
-      session={session}
-      send={vi.fn()}
-      onClose={vi.fn()}
-      onDelete={vi.fn()}
-      onArchive={vi.fn()}
-      onUnarchive={vi.fn()}
-      dismissedDenials={dismissed}
-      onDismissDenial={(id) => setDismissed((prev) => new Set([...prev, id]))}
-      onClearAllDenials={() => setSession((prev) => ({ ...prev, permissionDenials: [] }))}
-    />
-  );
-}
 
 describe('SessionDetail', () => {
   it('renders null when session is null', () => {
@@ -194,75 +175,53 @@ describe('SessionDetail', () => {
     vi.unstubAllGlobals();
   });
 
-  it('clicking ✕ on a denial card removes it from the rendered list', () => {
+  it('renders inline denial toggle when permissionDenials are present', () => {
     const session = makeSession({
       permissionDenials: [
-        { tool_name: 'Bash', tool_use_id: 'id-1', tool_input: { command: 'rm -rf' } },
+        { tool_name: 'Bash', tool_use_id: 'id-1', tool_input: { command: 'curl https://example.com' } },
         { tool_name: 'Write', tool_use_id: 'id-2', tool_input: { file_path: '/etc/passwd' } },
       ],
     });
-    render(<DismissalWrapper session={session} />);
-    expect(screen.getByText('Bash')).toBeTruthy();
-    const dismissBtns = screen.getAllByLabelText('Dismiss');
-    fireEvent.click(dismissBtns[0]);
-    expect(screen.queryByText('Bash')).toBeNull();
-    expect(screen.getByText('Write')).toBeTruthy();
+    render(<SessionDetail session={session} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    expect(screen.getByText(/2 permission denials/)).toBeTruthy();
   });
 
-  it('"Clear all" button is visible when there is 1 denial card', () => {
+  it('inline denial section is collapsed by default and expands on click', () => {
     const session = makeSession({
       permissionDenials: [
-        { tool_name: 'Bash', tool_use_id: 'id-1', tool_input: {} },
+        { tool_name: 'Bash', tool_use_id: 'id-1', tool_input: { command: 'curl https://example.com' } },
       ],
     });
-    render(<DismissalWrapper session={session} />);
-    expect(screen.getByText('Clear all')).toBeTruthy();
+    render(<SessionDetail session={session} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    expect(screen.queryByText(/Denied: Bash/)).toBeNull();
+    fireEvent.click(screen.getByLabelText('Toggle permission denials'));
+    expect(screen.getByText(/Denied: Bash/)).toBeTruthy();
   });
 
-  it('"Clear all" button is visible when ≥ 2 denial cards are present', () => {
-    const session = makeSession({
-      permissionDenials: [
-        { tool_name: 'Bash', tool_use_id: 'id-1', tool_input: {} },
-        { tool_name: 'Write', tool_use_id: 'id-2', tool_input: {} },
-      ],
-    });
-    render(<DismissalWrapper session={session} />);
-    expect(screen.getByText('Clear all')).toBeTruthy();
+  it('inline denial section is not rendered when permissionDenials is empty', () => {
+    render(<SessionDetail session={makeSession({ permissionDenials: [] })} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    expect(screen.queryByText(/permission denial/)).toBeNull();
   });
 
-  it('"Clear all" shows confirmation and removes all denial cards on confirm', async () => {
-    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+  it('inline denial shows tool name and truncated Bash command after expand', () => {
     const session = makeSession({
       permissionDenials: [
-        { tool_name: 'Bash', tool_use_id: 'id-1', tool_input: {} },
-        { tool_name: 'Write', tool_use_id: 'id-2', tool_input: {} },
+        { tool_name: 'Bash', tool_use_id: 'id-1', tool_input: { command: 'curl https://example.com' } },
       ],
     });
-    render(<DismissalWrapper session={session} />);
-    fireEvent.click(screen.getByText('Clear all'));
-    expect(window.confirm).toHaveBeenCalledWith('Clear 2 denial(s)?');
-    await waitFor(() => {
-      expect(screen.queryByText('Bash')).toBeNull();
-      expect(screen.queryByText('Write')).toBeNull();
-    });
-    vi.unstubAllGlobals();
+    render(<SessionDetail session={session} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText('Toggle permission denials'));
+    expect(screen.getByText(/🚫 Denied: Bash\(curl https:\/\/example\.com\)/)).toBeTruthy();
   });
 
-  it('"Clear all" does nothing when confirmation is cancelled', async () => {
-    vi.stubGlobal('confirm', vi.fn().mockReturnValue(false));
-    vi.stubGlobal('fetch', vi.fn());
+  it('inline denial shows singular label for exactly 1 denial', () => {
     const session = makeSession({
       permissionDenials: [
-        { tool_name: 'Bash', tool_use_id: 'id-1', tool_input: {} },
-        { tool_name: 'Write', tool_use_id: 'id-2', tool_input: {} },
+        { tool_name: 'Read', tool_use_id: 'id-1', tool_input: { file_path: '/foo' } },
       ],
     });
-    render(<DismissalWrapper session={session} />);
-    fireEvent.click(screen.getByText('Clear all'));
-    expect(window.fetch).not.toHaveBeenCalled();
-    expect(screen.getByText('Bash')).toBeTruthy();
-    vi.unstubAllGlobals();
+    render(<SessionDetail session={session} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    expect(screen.getByText(/1 permission denial(?!s)/)).toBeTruthy();
   });
 
   it('onClose is called when close button is clicked', () => {
