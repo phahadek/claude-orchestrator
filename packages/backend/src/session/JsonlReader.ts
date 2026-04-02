@@ -79,6 +79,9 @@ export class JsonlReader {
       const stat = fs.statSync(filePath);
       const startedAt = stat.birthtimeMs || stat.mtimeMs;
 
+      const events = this.parseFile(filePath);
+      if (events.length === 0) continue; // Skip empty JSONL files — they produce ghost sessions
+
       const session: NewSession = {
         session_id: sessionId,
         notion_task_id: null,
@@ -91,7 +94,6 @@ export class JsonlReader {
       };
       insertSessionOrIgnore(session);
 
-      const events = this.parseFile(filePath);
       for (const ev of events) {
         insertEventOrIgnore({
           session_id: sessionId,
