@@ -116,6 +116,22 @@
   border-color: var(--accent);
 }
 
+.select {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  padding: 5px 8px;
+  cursor: pointer;
+  min-width: 140px;
+}
+
+.select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .toggle {
   min-width: 52px;
   padding: 5px 12px;
