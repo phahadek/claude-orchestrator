@@ -117,6 +117,7 @@ export function createPrsRouter(
           head_branch: pr.headBranch,
           base_branch: pr.baseBranch,
           state: pr.state,
+          draft: pr.draft ? 1 : 0,
           review_result: null,
           review_at: null,
           created_at: pr.createdAt,

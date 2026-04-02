@@ -18,9 +18,7 @@ export class GitHubClient {
     const data = await this.request<GitHubRawPR[]>(
       `/repos/${r}/pulls?state=open&per_page=100`
     );
-    return data
-      .filter(pr => !pr.draft)
-      .map(pr => mapPR(pr));
+    return data.map(pr => mapPR(pr));
   }
 
   async getPRState(prNumber: number, repo?: string): Promise<'open' | 'merged' | 'closed'> {
