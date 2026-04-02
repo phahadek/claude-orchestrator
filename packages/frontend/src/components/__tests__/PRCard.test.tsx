@@ -107,4 +107,36 @@ describe('PRCard', () => {
     render(<PRCard pr={makePR()} {...defaultProps} error="Review failed: timeout" />);
     expect(screen.getByText('Review failed: timeout')).toBeDefined();
   });
+
+  it('shows "Merged" badge when state is merged, regardless of reviewResult', () => {
+    const pr = makePR({ state: 'merged' });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    expect(screen.getByText('✓ Merged')).toBeDefined();
+  });
+
+  it('shows "Merged" badge when state is merged even if reviewResult is set', () => {
+    const pr = makePR({ state: 'merged', reviewResult: { verdict: 'approved', dimensions: [], summary: '' } });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    expect(screen.getByText('✓ Merged')).toBeDefined();
+    expect(screen.queryByText('✅ Approved')).toBeNull();
+  });
+
+  it('shows "Closed" badge when state is closed', () => {
+    const pr = makePR({ state: 'closed' });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    expect(screen.getByText('✕ Closed')).toBeDefined();
+  });
+
+  it('hides Run Review button when state is merged', () => {
+    const pr = makePR({ state: 'merged' });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    expect(screen.queryByRole('button', { name: /run review/i })).toBeNull();
+  });
+
+  it('disables Merge button when state is merged', () => {
+    const pr = makePR({ state: 'merged', reviewResult: { verdict: 'approved', dimensions: [], summary: '' } });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    const mergeBtn = screen.getByRole('button', { name: /merge/i });
+    expect(mergeBtn.hasAttribute('disabled')).toBe(true);
+  });
 });
