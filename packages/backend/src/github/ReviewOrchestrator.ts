@@ -1,9 +1,10 @@
 import { config } from '../config';
-import { setPRReviewResult, getSetting, getPRByNumber, getPRBySessionId, incrementReviewIteration, setLastReviewedSha } from '../db/queries';
+import { setPRReviewResult, getSetting, getPRByNumber, getPRBySessionId, incrementReviewIteration, setLastReviewedSha, updatePRDraftStatus } from '../db/queries';
 import type { PRReviewService, PRReviewResult } from './PRReviewService';
 import type { SessionManager } from '../session/SessionManager';
 import type { ReviewJob } from './types';
 import { shouldAutoReview } from './reviewUtils';
+import type { GitHubClient } from './GitHubClient';
 
 const REVIEW_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_ITERATIONS = 3;
@@ -24,6 +25,7 @@ export class ReviewOrchestrator {
   constructor(
     private reviewService: PRReviewService,
     private sessionManager: SessionManager,
+    private githubClient: GitHubClient,
     private maxConcurrency: number = 1,
     private enabled: boolean = true,
     private maxIterations: number = DEFAULT_MAX_ITERATIONS,
@@ -107,12 +109,28 @@ export class ReviewOrchestrator {
       return;
     }
 
+    // Transition draft PR to ready for review if verdict is approved
+    let draftTransitioned = false;
+    if (result.verdict === 'approved') {
+      const pr = getPRByNumber(job.prNumber, job.repo);
+      if (pr?.draft === 1) {
+        try {
+          await this.githubClient.markPRReady(job.repo, job.prNumber);
+          updatePRDraftStatus(job.prNumber, job.repo, 0);
+          draftTransitioned = true;
+        } catch (e) {
+          console.error(`[ReviewOrchestrator] markPRReady failed for PR #${job.prNumber}:`, e);
+        }
+      }
+    }
+
     this.sessionManager.emit('message', {
       type: 'pr_review_complete',
       prNumber: job.prNumber,
       repo: job.repo,
       verdict: result.verdict,
       summary: result.summary,
+      ...(draftTransitioned && { draft: false }),
     });
 
     // Route feedback to coding session if verdict requires changes

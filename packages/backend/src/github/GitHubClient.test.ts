@@ -100,6 +100,27 @@ describe('GitHubClient.fetchDiff()', () => {
   });
 });
 
+describe('GitHubClient.markPRReady()', () => {
+  it('calls PATCH /repos/{repo}/pulls/{prNumber} with draft: false', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'application/json' },
+      json: async () => ({}),
+      text: async () => '',
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const client = new GitHubClient();
+    await client.markPRReady('owner/repo', 42);
+
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    const [url, options] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('https://api.github.com/repos/owner/repo/pulls/42');
+    expect(options.method).toBe('PATCH');
+    expect(JSON.parse(options.body as string)).toEqual({ draft: false });
+  });
+});
+
 describe('GitHubClient request error handling', () => {
   it('throws GitHubApiError with correct status when response.ok is false', async () => {
     mockFetch({
