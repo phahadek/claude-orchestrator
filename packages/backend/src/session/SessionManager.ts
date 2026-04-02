@@ -132,6 +132,8 @@ export class SessionManager extends EventEmitter {
   ): void {
     // Forward all session events to the WS layer via EventEmitter
     session.on('message', (msg: ServerMessage) => this.emit('message', msg));
+    // Forward pr_opened so ReviewOrchestrator can subscribe at the SessionManager level
+    session.on('pr_opened', (job: unknown) => this.emit('pr_opened', job));
 
     // Fire-and-forget — run() blocks until the subprocess exits, then clean up
     session.run()

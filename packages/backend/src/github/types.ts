@@ -28,3 +28,11 @@ export interface MergeResult {
   message: string;
   sha: string | null;
 }
+
+export interface ReviewJob {
+  prNumber: number;
+  repo: string;
+  taskId: string;
+  taskUrl: string;
+  contextUrl: string;
+}
