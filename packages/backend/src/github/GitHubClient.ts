@@ -23,6 +23,16 @@ export class GitHubClient {
       .map(pr => mapPR(pr));
   }
 
+  async getPRState(prNumber: number, repo?: string): Promise<'open' | 'merged' | 'closed'> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<{ state: string; merged: boolean }>(
+      `/repos/${r}/pulls/${prNumber}`,
+    );
+    if (data.merged) return 'merged';
+    if (data.state === 'closed') return 'closed';
+    return 'open';
+  }
+
   async fetchDiff(prId: number, repo?: string): Promise<PRDiff> {
     const r = repo ?? GITHUB_REPO;
     const diff = await this.request<string>(
