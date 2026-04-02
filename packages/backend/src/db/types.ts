@@ -134,4 +134,5 @@ export interface PullRequestRow {
   review_session_id: string | null;
   review_iteration: number;
   head_sha: string | null;
+  last_reviewed_sha: string | null;
 }

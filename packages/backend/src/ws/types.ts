@@ -20,6 +20,9 @@ export type ServerMessage =
   | { type: 'pr_review_complete';    prNumber: number; repo: string; verdict: string; summary: string }
   | { type: 'push_detected';         sessionId: string }
   | { type: 'review_verdict';        prNumber: number; repo: string; verdict: string; summary: string; iteration: number }
+  | { type: 'pr_merged';             prNumber: number; repo: string; sha: string }
+  | { type: 'pr_closed';             prNumber: number; repo: string }
+  | { type: 'review_escalated';      prNumber: number; repo: string; message: string }
   | { type: 'session_audit';         sessionId: string; prOpened: boolean; prTargetsBranch: string | null; violations: string[]; specMismatch: string | null; auditedAt: string }
   | { type: 'error';                 message: string };
 
