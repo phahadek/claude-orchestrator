@@ -291,6 +291,52 @@ describe('useSessionStore', () => {
     });
   });
 
+  describe('task_status_changed handling', () => {
+    it('patches matching task status in the tasks array', () => {
+      const { result } = renderHook(() => useSessionStore());
+      const tasksMsg: ServerMessage = {
+        type: 'tasks_ready',
+        tasks: [
+          { task: { id: 'abc123', title: 'Task A', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false },
+        ],
+      };
+      act(() => result.current.dispatch(tasksMsg));
+      const changed: ServerMessage = { type: 'task_status_changed', notionTaskId: 'abc123', newStatus: '🔄 In Progress' };
+      act(() => result.current.dispatch(changed));
+      expect(result.current.tasks[0].task.status).toBe('🔄 In Progress');
+    });
+
+    it('is a no-op for unknown task ID', () => {
+      const { result } = renderHook(() => useSessionStore());
+      const tasksMsg: ServerMessage = {
+        type: 'tasks_ready',
+        tasks: [
+          { task: { id: 'abc123', title: 'Task A', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false },
+        ],
+      };
+      act(() => result.current.dispatch(tasksMsg));
+      const changed: ServerMessage = { type: 'task_status_changed', notionTaskId: 'unknown-id', newStatus: '🔄 In Progress' };
+      act(() => result.current.dispatch(changed));
+      expect(result.current.tasks[0].task.status).toBe('🗂️ Ready');
+    });
+
+    it('only patches the matching task, leaving others unchanged', () => {
+      const { result } = renderHook(() => useSessionStore());
+      const tasksMsg: ServerMessage = {
+        type: 'tasks_ready',
+        tasks: [
+          { task: { id: 'task-1', title: 'Task 1', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false },
+          { task: { id: 'task-2', title: 'Task 2', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false },
+        ],
+      };
+      act(() => result.current.dispatch(tasksMsg));
+      const changed: ServerMessage = { type: 'task_status_changed', notionTaskId: 'task-1', newStatus: '👀 In Review' };
+      act(() => result.current.dispatch(changed));
+      expect(result.current.tasks[0].task.status).toBe('👀 In Review');
+      expect(result.current.tasks[1].task.status).toBe('🗂️ Ready');
+    });
+  });
+
   describe('dismissDenial / dismissAllDenials', () => {
     const SESSION_A = 'session-a';
     const SESSION_B = 'session-b';
