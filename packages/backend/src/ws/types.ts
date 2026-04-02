@@ -18,6 +18,8 @@ export type ServerMessage =
   | { type: 'session_updated';       sessionId: string; note?: string | null; tags?: string[]; totalInputTokens?: number; totalOutputTokens?: number }
   | { type: 'tasks_ready';           tasks: ResolvedTask[] }
   | { type: 'pr_review_complete';    prNumber: number; repo: string; verdict: string; summary: string }
+  | { type: 'push_detected';         sessionId: string }
+  | { type: 'review_verdict';        prNumber: number; repo: string; verdict: string; summary: string; iteration: number }
   | { type: 'session_audit';         sessionId: string; prOpened: boolean; prTargetsBranch: string | null; violations: string[]; specMismatch: string | null; auditedAt: string }
   | { type: 'error';                 message: string };
 
