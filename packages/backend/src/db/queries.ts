@@ -442,7 +442,12 @@ export function getTaskTitleFromCache(taskId: string): string | null {
 
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
-export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_session_id' | 'review_iteration' | 'head_sha' | 'last_reviewed_sha'>): PullRequestRow {
+export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_session_id' | 'review_iteration' | 'head_sha' | 'last_reviewed_sha'> & {
+  review_session_id?: string | null;
+  review_iteration?: number;
+  head_sha?: string | null;
+  last_reviewed_sha?: string | null;
+}): PullRequestRow {
   db.prepare(`
     INSERT INTO pull_requests
       (pr_number, pr_url, notion_task_id, session_id, repo, title, body,

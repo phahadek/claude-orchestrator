@@ -3,7 +3,6 @@ import { setPRReviewResult, getSetting, getPRByNumber, getPRBySessionId, increme
 import type { PRReviewService, PRReviewResult } from './PRReviewService';
 import type { SessionManager } from '../session/SessionManager';
 import type { ReviewJob } from './types';
-import { shouldAutoReview } from './reviewUtils';
 
 const REVIEW_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_ITERATIONS = 3;
@@ -69,24 +68,15 @@ export class ReviewOrchestrator {
     // Check iteration cap before starting a review
     const prRow = getPRByNumber(job.prNumber, job.repo);
     const maxIterations = getMaxReviewIterations();
-    if (prRow && !shouldAutoReview(
-      {
-        reviewIteration: prRow.review_iteration,
-        headSha: prRow.head_sha,
-        lastReviewedSha: prRow.last_reviewed_sha,
-      },
-      maxIterations,
-    )) {
-      if (prRow.review_iteration >= maxIterations) {
-        const message = `Review loop for PR #${job.prNumber} reached ${maxIterations} iterations without approval. Manual intervention needed.`;
-        console.warn(`[ReviewOrchestrator] ${message}`);
-        this.sessionManager.emit('message', {
-          type: 'review_escalated',
-          prNumber: job.prNumber,
-          repo: job.repo,
-          message,
-        });
-      }
+    if (prRow && prRow.review_iteration >= maxIterations) {
+      const message = `Review loop for PR #${job.prNumber} reached ${maxIterations} iterations without approval. Manual intervention needed.`;
+      console.warn(`[ReviewOrchestrator] ${message}`);
+      this.sessionManager.emit('message', {
+        type: 'review_escalated',
+        prNumber: job.prNumber,
+        repo: job.repo,
+        message,
+      });
       return;
     }
 
