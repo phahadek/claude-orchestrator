@@ -78,6 +78,9 @@ export function SessionCard({ session, selected, onClick, projectColor, projectN
           )}
         </div>
       )}
+      {isReview && session.prNumber != null && (
+        <div className={styles['review-pr-tag']}>Review of #{session.prNumber}</div>
+      )}
       {session.tags && session.tags.length > 0 && (
         <div className={styles['tag-pills']}>
           {session.tags.map((tag) => (

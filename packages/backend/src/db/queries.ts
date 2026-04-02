@@ -514,6 +514,12 @@ export function getPRBySessionId(sessionId: string): PullRequestRow | null {
   `).get({ session_id: sessionId }) as PullRequestRow | null;
 }
 
+export function getPRByNotionTaskId(notionTaskId: string): PullRequestRow | null {
+  return db.prepare<{ notion_task_id: string }>(`
+    SELECT * FROM pull_requests WHERE notion_task_id = @notion_task_id ORDER BY pr_number DESC LIMIT 1
+  `).get({ notion_task_id: notionTaskId }) as PullRequestRow | null;
+}
+
 export function getOpenPRs(repo: string): PullRequestRow[] {
   return db.prepare<{ repo: string }>(`
     SELECT * FROM pull_requests WHERE repo = @repo AND state = 'open' ORDER BY pr_number DESC
