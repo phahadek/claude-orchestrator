@@ -53,9 +53,10 @@ interface Props {
   onResumeAll?: () => void;
   onResume?: (sessionId: string) => void;
   onToggleFavorite?: (sessionId: string, favorited: boolean) => void;
+  cardPreviewLines?: number;
 }
 
-export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboardSelectedId, synced, onArchiveAll, filtersActive, onClearFilters, onResumeAll, onResume, onToggleFavorite }: Props) {
+export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboardSelectedId, synced, onArchiveAll, filtersActive, onClearFilters, onResumeAll, onResume, onToggleFavorite, cardPreviewLines }: Props) {
   const [activeFilters, setActiveFilters] = useState<Set<Status>>(new Set());
 
   function toggleFilter(status: Status) {
@@ -185,6 +186,7 @@ export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboard
                   projectName={multiProject ? proj?.name : undefined}
                   onResume={onResume ? () => onResume(s.sessionId) : undefined}
                   onToggleFavorite={onToggleFavorite ? () => onToggleFavorite(s.sessionId, !s.favorited) : undefined}
+                  previewLines={cardPreviewLines}
                 />
               </div>
             );
