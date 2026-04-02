@@ -455,4 +455,45 @@ describe('AgentSession', () => {
 
     expect(notion.updateStatus).toHaveBeenCalledWith('task-id', '👀 In Review');
   });
+
+  // ── AC: pr_opened emitted in handleCleanExit() after upsertPullRequest() ──
+  it('emits pr_opened event in handleCleanExit() when a PR URL is found at exit', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'pr-session',
+        event_type: 'text',
+        payload: JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Done! PR: https://github.com/owner/repo/pull/42' }] } }),
+        timestamp: Date.now(),
+        message_id: null,
+      },
+    ]);
+
+    const session = new AgentSession(
+      'pr-session',
+      'https://notion.so/task-abc',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'taskabc123',
+    );
+
+    const prOpenedEvents: unknown[] = [];
+    session.on('pr_opened', (job: unknown) => prOpenedEvents.push(job));
+
+    const runPromise = session.run();
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    expect(prOpenedEvents).toHaveLength(1);
+    const job = prOpenedEvents[0] as { prNumber: number; repo: string; taskId: string };
+    expect(job.prNumber).toBe(42);
+    expect(job.repo).toBe('owner/repo');
+    expect(job.taskId).toBe('taskabc123');
+  });
 });

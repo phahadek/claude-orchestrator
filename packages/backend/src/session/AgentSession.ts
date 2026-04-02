@@ -432,6 +432,13 @@ export class AgentSession extends EventEmitter {
             updated_at: now,
             synced_at: now,
           });
+          this.emit('pr_opened', {
+            prNumber,
+            repo,
+            taskId: this.taskId,
+            taskUrl: this.taskUrl,
+            contextUrl: this.projectContextUrl,
+          });
         }
       }
 
