@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { getSession, getActiveSessions, getArchivedSessions, getSessionsByStatus, getSessionsByProject, deleteSession, archiveSession, unarchiveSession, archiveFinishedSessions, setSessionNote, setSessionTags, favoriteSession, unfavoriteSession, deleteDenialsBySession } from '../db/queries';
+import { getSession, getActiveSessions, getArchivedSessions, getSessionsByStatus, getSessionsByProject, deleteSession, archiveSession, unarchiveSession, archiveFinishedSessions, setSessionNote, setSessionTags, favoriteSession, unfavoriteSession, deleteDenialsBySession, getEventsBySession } from '../db/queries';
+import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import type { ServerMessage } from '../ws/types';
 
 let _broadcast: ((msg: ServerMessage) => void) = () => {};
@@ -30,6 +31,25 @@ sessionsRouter.get('/', (req: Request, res: Response) => {
   } else {
     res.json(getActiveSessions());
   }
+});
+
+// GET /api/sessions/:id/events
+sessionsRouter.get('/:id/events', (req: Request, res: Response) => {
+  const sessionId = String(req.params.id);
+  const session = getSession(sessionId);
+  if (!session) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+  const events = getEventsBySession(sessionId)
+    .filter((ev) => !isSystemOnlyUserEvent(ev.payload))
+    .map((ev) => ({
+      eventType: ev.event_type,
+      content: ev.payload,
+      timestamp: ev.timestamp,
+      ...(ev.message_id != null && { messageId: ev.message_id }),
+    }));
+  res.json({ session, events });
 });
 
 // DELETE /api/sessions/:id/denials
