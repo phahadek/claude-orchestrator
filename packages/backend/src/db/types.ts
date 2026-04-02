@@ -24,9 +24,11 @@ export interface Session {
   session_type: string; // 'standard' | 'review'
   note: string | null;
   tags: string | null; // JSON array of strings, e.g. '["bugfix","auth"]'
+  total_input_tokens: number;
+  total_output_tokens: number;
 }
 
-export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path' | 'archived' | 'favorited' | 'project_id' | 'session_type' | 'note' | 'tags'> & {
+export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path' | 'archived' | 'favorited' | 'project_id' | 'session_type' | 'note' | 'tags' | 'total_input_tokens' | 'total_output_tokens'> & {
   ended_at?: number | null;
   pr_url?: string | null;
   worktree_path?: string | null;
@@ -36,6 +38,8 @@ export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path' |
   session_type?: string;
   note?: string | null;
   tags?: string | null;
+  total_input_tokens?: number;
+  total_output_tokens?: number;
 };
 
 // ─── session_events ────────────────────────────────────────────────────────

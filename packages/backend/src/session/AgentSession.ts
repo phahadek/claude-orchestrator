@@ -8,6 +8,7 @@ import {
   getEventsBySession,
   insertPermissionDenial,
   upsertPullRequest,
+  incrementTokens,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import type { NotionClient } from '../notion/NotionClient';
@@ -62,6 +63,9 @@ export class AgentSession extends EventEmitter {
   private pendingGHToolUseIds = new Map<string, string>();
   /** True once a PR was detected and inserted during the live session. */
   private prDetectedLive = false;
+  /** Accumulated token counts for this session (in-memory, synced to SQLite). */
+  private totalInputTokens = 0;
+  private totalOutputTokens = 0;
 
   constructor(
     public readonly sessionId: string,
@@ -259,6 +263,24 @@ export class AgentSession extends EventEmitter {
       );
       if (messageId != null) {
         this.messageIdMap.set(messageId, rowId);
+      }
+
+      // Accumulate token usage from result events (emitted once per turn in --verbose mode)
+      const usageData = event.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+      if (usageData?.input_tokens != null || usageData?.output_tokens != null) {
+        const inputTokens = usageData.input_tokens ?? 0;
+        const outputTokens = usageData.output_tokens ?? 0;
+        if (inputTokens > 0 || outputTokens > 0) {
+          this.totalInputTokens += inputTokens;
+          this.totalOutputTokens += outputTokens;
+          incrementTokens(this.sessionId, inputTokens, outputTokens);
+          this.broadcast({
+            type: 'session_updated',
+            sessionId: this.sessionId,
+            totalInputTokens: this.totalInputTokens,
+            totalOutputTokens: this.totalOutputTokens,
+          });
+        }
       }
 
       // Skip broadcasting user events that contain only system-injected content

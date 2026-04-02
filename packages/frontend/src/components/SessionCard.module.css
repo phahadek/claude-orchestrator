@@ -164,6 +164,11 @@
   color: var(--text-faint);
 }
 
+.token-count {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
 .footer-right {
   display: flex;
   align-items: center;

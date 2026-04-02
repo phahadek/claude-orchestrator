@@ -270,6 +270,12 @@ export default function App() {
   const runningCount = filteredSessions.filter((s) => ['running', 'starting', 'needs_permission'].includes(s.status)).length;
   const doneCount = filteredSessions.filter((s) => ['done', 'error', 'killed'].includes(s.status)).length;
 
+  const totalTokens = useMemo(() => {
+    return sessions
+      .filter((s) => !s.archived && (!activeProjectId || s.project_id === activeProjectId))
+      .reduce((sum, s) => sum + (s.totalInputTokens ?? 0) + (s.totalOutputTokens ?? 0), 0);
+  }, [sessions, activeProjectId]);
+
   // Keyboard navigation: sorted active sessions (same order as SessionGrid)
   const kbSortedSessions = [...filteredSessions].sort((a, b) => {
     const statusOrder: Record<string, number> = {
@@ -336,6 +342,7 @@ export default function App() {
         onBoardChange={handleBoardChange}
         activeView={topView}
         onViewChange={handleViewChange}
+        totalTokens={totalTokens}
       />
       <div className={styles.mainArea}>
         {topView === 'sessions' && (
