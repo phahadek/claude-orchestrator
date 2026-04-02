@@ -17,7 +17,7 @@ export type ServerMessage =
   | { type: 'pr_created';            sessionId: string; prUrl: string }
   | { type: 'session_updated';       sessionId: string; note?: string | null; tags?: string[]; totalInputTokens?: number; totalOutputTokens?: number }
   | { type: 'tasks_ready';           tasks: ResolvedTask[] }
-  | { type: 'pr_review_complete';    prNumber: number; repo: string; verdict: string; summary: string }
+  | { type: 'pr_review_complete';    prNumber: number; repo: string; verdict: string; summary: string; draft?: boolean }
   | { type: 'push_detected';         sessionId: string }
   | { type: 'review_verdict';        prNumber: number; repo: string; verdict: string; summary: string; iteration: number }
   | { type: 'pr_merged';             prNumber: number; repo: string; sha: string }

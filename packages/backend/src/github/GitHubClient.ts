@@ -46,6 +46,17 @@ export class GitHubClient {
     return { prId, diff, filesChanged };
   }
 
+  async markPRReady(repo: string, prNumber: number): Promise<void> {
+    await this.request<unknown>(
+      `/repos/${repo}/pulls/${prNumber}`,
+      {
+        method: 'PATCH',
+        headers: { ...this.headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ draft: false }),
+      }
+    );
+  }
+
   async mergePR(prId: number, commitTitle: string, repo?: string): Promise<MergeResult> {
     const r = repo ?? GITHUB_REPO;
     const data = await this.request<{ merged: boolean; message: string; sha: string | null }>(

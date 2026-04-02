@@ -546,6 +546,12 @@ export function setPRReviewResult(prNumber: number, repo: string, result: string
   `).run({ pr_number: prNumber, repo, review_result: result, review_at: new Date().toISOString() });
 }
 
+export function updatePRDraftStatus(prNumber: number, repo: string, draft: number): void {
+  db.prepare<{ pr_number: number; repo: string; draft: number }>(`
+    UPDATE pull_requests SET draft = @draft WHERE pr_number = @pr_number AND repo = @repo
+  `).run({ pr_number: prNumber, repo, draft });
+}
+
 export function updatePRState(prNumber: number, repo: string, state: string): void {
   db.prepare<{ pr_number: number; repo: string; state: string }>(`
     UPDATE pull_requests SET state = @state WHERE pr_number = @pr_number AND repo = @repo
