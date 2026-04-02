@@ -5,6 +5,7 @@ import supertest from 'supertest';
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
 vi.mock('../db/queries.js', () => ({
+  getPRs: vi.fn(),
   getOpenPRs: vi.fn(),
   getPRByNumber: vi.fn(),
   updatePRState: vi.fn(),
@@ -58,6 +59,7 @@ vi.mock('../config.js', () => ({
 
 import { createPrsRouter } from '../routes/prs.js';
 import * as queries from '../db/queries.js';
+import type { PullRequest } from '../github/types.js';
 import { GitHubApiError } from '../github/types.js';
 import type { GitHubClient } from '../github/GitHubClient.js';
 import type { PRReviewService } from '../github/PRReviewService.js';
@@ -93,9 +95,25 @@ const mockPRRowNoTask: PullRequestRow = {
   session_id: null,
 };
 
+const openGitHubPR: PullRequest = {
+  id: 1,
+  title: 'PR title',
+  body: null,
+  url: 'https://github.com/owner/repo/pull/1',
+  apiUrl: 'https://api.github.com/repos/owner/repo/pulls/1',
+  headBranch: 'feature/foo',
+  baseBranch: 'dev',
+  state: 'open',
+  createdAt: '2024-01-01T00:00:00Z',
+  updatedAt: '2024-01-01T00:00:00Z',
+  mergeableState: 'clean',
+  draft: false,
+};
+
 function makeMockGitHub(): GitHubClient {
   return {
     listOpenPRs: vi.fn().mockResolvedValue([]),
+    getPRState: vi.fn().mockResolvedValue('merged'),
     fetchDiff: vi.fn(),
     mergePR: vi.fn().mockResolvedValue({ merged: true, message: 'Merged', sha: 'abc123' }),
   } as unknown as GitHubClient;
@@ -139,7 +157,7 @@ beforeEach(() => {
 
 describe('GET /api/prs', () => {
   it('returns 200 with an array when no PRs in DB', async () => {
-    vi.mocked(queries.getOpenPRs).mockReturnValue([]);
+    vi.mocked(queries.getPRs).mockReturnValue([]);
     const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
@@ -147,13 +165,40 @@ describe('GET /api/prs', () => {
   });
 
   it('returns mapped PR items including notionTaskTitle from cache', async () => {
-    vi.mocked(queries.getOpenPRs).mockReturnValue([mockPRRow]);
+    vi.mocked(queries.getPRs).mockReturnValue([mockPRRow]);
     vi.mocked(queries.getTaskTitleFromCache).mockReturnValue('My Task Title');
     const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(1);
     expect(res.body[0].prNumber).toBe(42);
     expect(res.body[0].notionTaskTitle).toBe('My Task Title');
+  });
+
+  it('returns PRs with all states (open, merged, closed), not just open', async () => {
+    const mergedRow: PullRequestRow = { ...mockPRRow, pr_number: 50, state: 'merged' };
+    const closedRow: PullRequestRow = { ...mockPRRow, pr_number: 51, state: 'closed' };
+    vi.mocked(queries.getPRs).mockReturnValue([mockPRRow, mergedRow, closedRow]);
+    const github = makeMockGitHub();
+    // PR 42 is still open on GitHub — no reconciliation should occur for it
+    vi.mocked(github.listOpenPRs).mockResolvedValue([{ ...openGitHubPR, id: 42 }]);
+    const res = await supertest(buildApp(github)).get('/api/prs?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(3);
+    expect(res.body.map((p: { state: string }) => p.state)).toEqual(['open', 'merged', 'closed']);
+  });
+
+  it('updates local state to merged when GitHub no longer lists the PR as open', async () => {
+    const staleRow: PullRequestRow = { ...mockPRRow, pr_number: 99, state: 'open' };
+    vi.mocked(queries.getPRs).mockReturnValue([staleRow]);
+    const github = makeMockGitHub();
+    // GitHub returns no open PRs → PR 99 is stale
+    vi.mocked(github.listOpenPRs).mockResolvedValue([]);
+    vi.mocked(github.getPRState).mockResolvedValue('merged');
+
+    const res = await supertest(buildApp(github)).get('/api/prs?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(vi.mocked(queries.updatePRState)).toHaveBeenCalledWith(99, 'owner/repo', 'merged');
+    expect(res.body[0].state).toBe('merged');
   });
 
   it('returns 400 when projectId is missing', async () => {
@@ -235,25 +280,26 @@ describe('PRSyncJob.run()', () => {
   it('upserts PRs from GitHub into the DB', async () => {
     const { PRSyncJob } = await import('../github/PRSyncJob.js');
     const github = makeMockGitHub();
-    vi.mocked(github.listOpenPRs).mockResolvedValue([
-      {
-        id: 1,
-        title: 'PR title',
-        body: null,
-        url: 'https://github.com/owner/repo/pull/1',
-        apiUrl: 'https://api.github.com/repos/owner/repo/pulls/1',
-        headBranch: 'feature/foo',
-        baseBranch: 'dev',
-        state: 'open',
-        createdAt: '2024-01-01T00:00:00Z',
-        updatedAt: '2024-01-01T00:00:00Z',
-        mergeableState: 'clean',
-        draft: false,
-      },
-    ]);
+    vi.mocked(github.listOpenPRs).mockResolvedValue([openGitHubPR]);
+    vi.mocked(queries.getOpenPRs).mockReturnValue([]);
 
     const job = new PRSyncJob(github);
     await job.run();
     expect(vi.mocked(queries.upsertPullRequest)).toHaveBeenCalledOnce();
+  });
+
+  it('updates state to merged for a locally-open PR no longer open on GitHub', async () => {
+    const { PRSyncJob } = await import('../github/PRSyncJob.js');
+    const github = makeMockGitHub();
+    // GitHub reports PR 1 as open; locally PR 99 is also "open" but absent from GitHub
+    vi.mocked(github.listOpenPRs).mockResolvedValue([openGitHubPR]);
+    vi.mocked(github.getPRState).mockResolvedValue('merged');
+    const staleRow: PullRequestRow = { ...mockPRRow, pr_number: 99, state: 'open' };
+    vi.mocked(queries.getOpenPRs).mockReturnValue([staleRow]);
+
+    const job = new PRSyncJob(github);
+    await job.run();
+    expect(vi.mocked(github.getPRState)).toHaveBeenCalledWith(99, 'owner/repo');
+    expect(vi.mocked(queries.updatePRState)).toHaveBeenCalledWith(99, 'owner/repo', 'merged');
   });
 });

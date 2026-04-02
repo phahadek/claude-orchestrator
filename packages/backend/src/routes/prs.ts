@@ -2,7 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { getProjectById } from '../config';
 import {
-  getOpenPRs,
+  getPRs,
   getPRByNumber,
   updatePRState,
   getTaskTitleFromCache,
@@ -22,7 +22,7 @@ export function createPrsRouter(
   const router = Router();
 
   // ── GET /api/prs?projectId=<id> ─────────────────────────────────────────────
-  router.get('/prs', (req: Request, res: Response) => {
+  router.get('/prs', async (req: Request, res: Response) => {
     const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : '';
     if (!projectId) {
       res.status(400).json({ error: 'projectId query param is required' });
@@ -33,14 +33,31 @@ export function createPrsRouter(
       res.status(422).json({ error: 'Project has no githubRepo configured' });
       return;
     }
-    const rows = getOpenPRs(project.githubRepo);
+    const repo = project.githubRepo;
+    const rows = getPRs(repo);
+
+    // Reconcile stale open PRs against GitHub state (best-effort)
+    const reconciledStates = new Map<number, string>();
+    try {
+      const openOnGitHub = await github.listOpenPRs(repo);
+      const openNumbers = new Set(openOnGitHub.map((p) => p.id));
+      const stale = rows.filter((r) => r.state === 'open' && !openNumbers.has(r.pr_number));
+      for (const pr of stale) {
+        const state = await github.getPRState(pr.pr_number, repo);
+        updatePRState(pr.pr_number, repo, state);
+        reconciledStates.set(pr.pr_number, state);
+      }
+    } catch {
+      // reconciliation is best-effort; return cached data on GitHub error
+    }
+
     const items = rows.map((pr) => ({
       prNumber: pr.pr_number,
       prUrl: pr.pr_url,
       title: pr.title,
       headBranch: pr.head_branch,
       baseBranch: pr.base_branch,
-      state: pr.state,
+      state: reconciledStates.get(pr.pr_number) ?? pr.state,
       notionTaskId: pr.notion_task_id,
       notionTaskTitle: pr.notion_task_id ? getTaskTitleFromCache(pr.notion_task_id) : null,
       reviewResult: pr.review_result

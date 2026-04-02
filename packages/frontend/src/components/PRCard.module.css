@@ -112,6 +112,18 @@
   border: 1px solid #45475a;
 }
 
+.state-merged {
+  background: rgba(203, 166, 247, 0.15);
+  color: #cba6f7;
+  border: 1px solid rgba(203, 166, 247, 0.3);
+}
+
+.state-closed {
+  background: rgba(108, 112, 134, 0.15);
+  color: #9399b2;
+  border: 1px solid rgba(108, 112, 134, 0.3);
+}
+
 /* Buttons */
 .buttons {
   display: flex;
