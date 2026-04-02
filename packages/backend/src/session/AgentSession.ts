@@ -610,9 +610,15 @@ Fetch both Notion pages, then begin the task.
       }
 
       if (prUrl) {
-        this.notionClient.updateStatus(this.taskId, '👀 In Review').catch((e) =>
-          console.error(`[AgentSession] updateStatus failed: ${e}`),
-        );
+        this.notionClient.updateStatus(this.taskId, '👀 In Review')
+          .then(() => {
+            this.broadcast({
+              type: 'task_status_changed',
+              notionTaskId: this.taskId,
+              newStatus: '👀 In Review',
+            });
+          })
+          .catch((e) => console.error(`[AgentSession] updateStatus failed: ${e}`));
       }
     }
 

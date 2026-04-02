@@ -194,6 +194,13 @@ export function useSessionStore() {
       setTasks(msg.tasks);
       setTasksReady(true);
     }
+    if (msg.type === 'task_status_changed') {
+      setTasks((prev) => prev.map((t) =>
+        t.task.id === msg.notionTaskId
+          ? { ...t, task: { ...t.task, status: msg.newStatus } }
+          : t,
+      ));
+    }
     if (msg.type === 'pr_created') {
       setPrRefreshTrigger((n) => n + 1);
     }

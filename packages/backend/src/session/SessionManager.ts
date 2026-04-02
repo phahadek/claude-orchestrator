@@ -110,9 +110,15 @@ export class SessionManager extends EventEmitter {
     });
 
     if (sessionType === 'standard') {
-      this.notionClient.updateStatus(notionTaskId, '🔄 In Progress').catch((e) =>
-        console.error(`[SessionManager] failed to set In Progress: ${e}`),
-      );
+      this.notionClient.updateStatus(notionTaskId, '🔄 In Progress')
+        .then(() => {
+          this.emit('message', {
+            type: 'task_status_changed',
+            notionTaskId,
+            newStatus: '🔄 In Progress',
+          } satisfies ServerMessage);
+        })
+        .catch((e) => console.error(`[SessionManager] failed to set In Progress: ${e}`));
     }
 
     // Look up the PR number for review sessions so the card can display "Review of #N"
