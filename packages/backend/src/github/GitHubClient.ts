@@ -33,6 +33,11 @@ export class GitHubClient {
     return 'open';
   }
 
+  async fetchPR(repo: string, prNumber: number): Promise<PullRequest> {
+    const data = await this.request<GitHubRawPR>(`/repos/${repo}/pulls/${prNumber}`);
+    return mapPR(data);
+  }
+
   async fetchDiff(prId: number, repo?: string): Promise<PRDiff> {
     const r = repo ?? GITHUB_REPO;
     const diff = await this.request<string>(
