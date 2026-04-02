@@ -23,6 +23,7 @@ export interface PRListItem {
   notionTaskId: string | null;
   notionTaskTitle: string | null;
   sessionId: string | null;
+  repo: string;
   reviewResult: PRReviewResult | null;
   reviewedAt: string | null;
   createdAt: string;

@@ -398,6 +398,51 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
   });
 });
 
+// ── Iteration cap escalation ──────────────────────────────────────────────────
+
+describe('ReviewOrchestrator — iteration cap escalation', () => {
+  it('emits review_escalated and skips review when iteration cap is hit', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, review_iteration: 3 } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      type: 'review_escalated',
+      prNumber: 1,
+      repo: 'owner/repo',
+    });
+  });
+
+  it('does not escalate when iteration is below cap', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, review_iteration: 2 } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+    expect(messages.find((m: any) => m.type === 'review_escalated')).toBeUndefined();
+  });
+});
+
 // ── Timeout handling ──────────────────────────────────────────────────────────
 
 describe('ReviewOrchestrator — timeout', () => {
