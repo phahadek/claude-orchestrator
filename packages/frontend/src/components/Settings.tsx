@@ -9,9 +9,19 @@ interface SettingsValues {
   max_concurrent_sessions: string;
   auto_review_concurrency: string;
   auto_review: string;
+  plan_tier: string;
   plan_token_cap: string;
   card_preview_lines: string;
 }
+
+const PLAN_TIERS: { label: string; cap: number | null }[] = [
+  { label: 'Free', cap: 0 },
+  { label: 'Pro', cap: 5_000_000 },
+  { label: 'Team', cap: 5_000_000 },
+  { label: 'Max (5x)', cap: 25_000_000 },
+  { label: 'Max (20x)', cap: 100_000_000 },
+  { label: 'Custom', cap: null },
+];
 
 interface Props {
   initialTab?: Tab;
@@ -122,10 +132,28 @@ export function Settings({ initialTab = 'general', projects }: Props) {
                 {numInput('auto_review_concurrency', 'Max concurrent review sessions', 1, 20)}
 
                 <h3 className={styles.sectionTitle}>Token Usage</h3>
-                {numInput('plan_token_cap', 'Plan token cap (0 = unset)', 0, 10_000_000)}
-                <p className={styles.hint}>
-                  Used to compute % of plan utilisation. Set to the monthly token budget on your Claude plan.
-                </p>
+                <div className={styles.field}>
+                  <label className={styles.label}>Plan tier</label>
+                  <select
+                    className={styles.select}
+                    value={settings?.plan_tier ?? 'Max (5x)'}
+                    onChange={(e) => {
+                      const tier = e.target.value;
+                      const match = PLAN_TIERS.find((t) => t.label === tier);
+                      void handleChange('plan_tier', tier);
+                      if (match && match.cap !== null) {
+                        void handleChange('plan_token_cap', String(match.cap));
+                      }
+                    }}
+                  >
+                    {PLAN_TIERS.map((t) => (
+                      <option key={t.label} value={t.label}>{t.label}</option>
+                    ))}
+                  </select>
+                </div>
+                {settings?.plan_tier === 'Custom' &&
+                  numInput('plan_token_cap', 'Custom token cap', 0, 1_000_000_000)
+                }
 
                 <h3 className={styles.sectionTitle}>Display</h3>
                 {numInput('card_preview_lines', 'Session card preview lines', 1, 10)}
