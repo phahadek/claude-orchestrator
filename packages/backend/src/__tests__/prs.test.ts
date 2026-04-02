@@ -15,6 +15,7 @@ vi.mock('../db/queries.js', () => ({
   deleteMergedAndClosedPRs: vi.fn(),
   countMergedAndClosedPRs: vi.fn().mockReturnValue(0),
   resetReviewIteration: vi.fn(),
+  setPRReviewResult: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
@@ -428,6 +429,32 @@ describe('GET /api/prs/clear/count', () => {
       .get('/api/prs/clear/count?projectId=proj-1');
     expect(res.status).toBe(200);
     expect(res.body.count).toBe(2);
+  });
+});
+
+// ── POST /api/prs/:owner/:repo/:prNumber/approve ──────────────────────────────
+
+describe('POST /api/prs/:owner/:repo/:prNumber/approve', () => {
+  it('returns 200 and stores approved verdict when PR exists', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const res = await supertest(buildApp())
+      .post('/api/prs/owner/repo/42/approve');
+    expect(res.status).toBe(200);
+    expect(res.body.verdict).toBe('approved');
+    expect(res.body.summary).toBe('Manually approved via dashboard');
+    expect(vi.mocked(queries.setPRReviewResult)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      expect.stringContaining('"verdict":"approved"'),
+    );
+  });
+
+  it('returns 404 for unknown PR', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(null);
+    const res = await supertest(buildApp())
+      .post('/api/prs/owner/repo/99/approve');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/PR #99 not found/);
   });
 });
 
