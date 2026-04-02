@@ -100,6 +100,61 @@ allows only commands starting with `git`. Unmatched Bash commands are silently
 denied in `--print` mode (no prompt, no error event — just a permission denial
 in the `result` event's `permission_denials` array).
 
+### Bash command formatting rules (MUST follow)
+
+These rules exist because `Bash(prefix:*)` matching evaluates only the **first token**
+of the command string. Compound commands are silently denied even when every prefix
+is individually allowed.
+
+**Rule 1 — One command per Bash call. Never chain with `&&` or `;`.**
+
+```bash
+# DENIED — prefix is "cd", chained git commit cannot be authorized
+cd /path && git add . && git commit -m "msg"
+
+# CORRECT — Split into separate Bash calls:
+#   Call 1: git -C /path add .
+#   Call 2: git -C /path commit -m "msg"
+```
+
+**Rule 2 — Never prefix a command with `cd path &&`. Use alternatives:**
+
+- **git:** Use `git -C <path>` instead of `cd path && git ...`
+- **npm:** Use `npm --prefix <path>` or the `-w` workspace flag with an absolute path
+- **Other:** Use separate Bash calls
+
+```bash
+# DENIED — starts with "cd"
+cd /path/to/repo && git checkout -b feature/my-task dev
+
+# CORRECT — Use git -C
+git -C /path/to/repo checkout -b feature/my-task dev
+
+# DENIED — starts with "cd"
+cd /path && npm run -w packages/frontend tsc
+
+# CORRECT — Use npm --prefix (or run from correct cwd)
+npm --prefix /path run -w packages/frontend tsc
+```
+
+**Rule 3 — Use `npx tsc` instead of bare `tsc`.**
+
+`tsc` is not guaranteed to be on PATH. Always invoke via `npx`.
+
+```bash
+# AVOID
+tsc --noEmit
+./node_modules/.bin/tsc --noEmit
+
+# CORRECT
+npx tsc --noEmit
+```
+
+**Rule 4 — Avoid pipes (`|`) with write commands.**
+
+Pipes may interfere with prefix matching. Keep write commands simple. If you need
+to limit output, let the Bash tool handle truncation.
+
 ### Auto-accepted (will execute without prompting)
 
 | Tool | Why |
