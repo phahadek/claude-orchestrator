@@ -54,7 +54,10 @@ app.use('/api/permission-denials', permissionDenialsRouter);
 app.use('/api/permission-rules', permissionRulesRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/sessions', sessionsRouter);
-app.use('/api', createPrsRouter(githubClient, prReviewService, sessionManager, notionClient));
+// PRMergeWatcher created early so routes and sync jobs can delegate lifecycle to it.
+// .start() is called later after server boots.
+const prMergeWatcher = new PRMergeWatcher(githubClient, sessionManager, notionClient, broadcast);
+app.use('/api', createPrsRouter(githubClient, prReviewService, sessionManager, notionClient, prMergeWatcher));
 app.use('/api', configRouter);
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>
@@ -150,6 +153,7 @@ jsonlReader.importAll().then(async () => {
   );
 
   const prSyncJob = new PRSyncJob(githubClient);
+  prSyncJob.setMergeWatcher(prMergeWatcher);
   await prSyncJob.run().catch((err: unknown) =>
     console.warn('[server] PR sync failed (check GITHUB_TOKEN):', (err as Error).message)
   );
@@ -160,7 +164,6 @@ jsonlReader.importAll().then(async () => {
     );
   }, 5 * 60 * 1000);
 
-  const prMergeWatcher = new PRMergeWatcher(githubClient, sessionManager, notionClient, broadcast);
   prMergeWatcher.start();
 
   server.listen(PORT, '0.0.0.0', () => {
