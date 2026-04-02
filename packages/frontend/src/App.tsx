@@ -31,7 +31,7 @@ const MAX_PR_PANEL_HEIGHT = 60;
 const ACTIVE_PROJECT_KEY = 'activeProjectId';
 
 export default function App() {
-  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials } = useSessionStore();
+  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials, prRefreshTrigger } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const activeProjectIdRef = useRef<string | null>(null);
@@ -441,6 +441,7 @@ export default function App() {
                   setSelectedId(sessionId);
                 }}
                 onCollapse={togglePrPanel}
+                refreshTrigger={prRefreshTrigger}
               />
             </div>
           </>
