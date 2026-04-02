@@ -37,8 +37,9 @@ interface SessionSnapshot {
   pendingPermissionKey: string | null;
 }
 
-export function useNotifications(sessions: SessionState[]): void {
+export function useNotifications(sessions: SessionState[], prReviewEvent?: { prNumber: number; verdict: string; summary: string } | null): void {
   const prevRef = useRef<Map<string, SessionSnapshot>>(new Map());
+  const prevReviewEventRef = useRef<typeof prReviewEvent>(null);
 
   useEffect(() => {
     requestPermissionOnce();
@@ -82,4 +83,32 @@ export function useNotifications(sessions: SessionState[]): void {
 
     prevRef.current = next;
   }, [sessions]);
+
+  useEffect(() => {
+    if (!prReviewEvent) return;
+    if (prevReviewEventRef.current === prReviewEvent) return;
+    prevReviewEventRef.current = prReviewEvent;
+
+    const { prNumber, verdict, summary } = prReviewEvent;
+    let title: string;
+    let body: string;
+    if (verdict === 'approved') {
+      title = '✅ PR approved';
+      body = `PR #${prNumber} approved`;
+    } else if (verdict === 'needs_changes') {
+      title = '⚠️ PR needs changes';
+      body = `PR #${prNumber}: ${summary.slice(0, 80)}`;
+    } else if (verdict === 'incomplete') {
+      title = '❌ PR incomplete';
+      body = `PR #${prNumber}: ${summary}`;
+    } else {
+      title = '⏰ Review failed';
+      body = `Review failed for PR #${prNumber}`;
+    }
+
+    fireNotification(title, body, () => {
+      window.focus();
+      window.dispatchEvent(new CustomEvent('navigateToPRs'));
+    });
+  }, [prReviewEvent]);
 }
