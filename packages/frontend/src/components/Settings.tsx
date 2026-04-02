@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
 import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
-import { PermissionRules } from './PermissionRules';
 import styles from './Settings.module.css';
 
-type Tab = 'general' | 'projects' | 'rules';
+type Tab = 'general' | 'projects';
 
 interface SettingsValues {
   max_concurrent_sessions: string;
@@ -106,14 +105,14 @@ export function Settings({ initialTab = 'general', projects }: Props) {
   return (
     <div className={styles.settings}>
       <div className={styles.tabs}>
-        {(['general', 'projects', 'rules'] as Tab[]).map((t) => (
+        {(['general', 'projects'] as Tab[]).map((t) => (
           <button
             key={t}
             type="button"
             className={`${styles.tab}${activeTab === t ? ` ${styles.tabActive}` : ''}`}
             onClick={() => setActiveTab(t)}
           >
-            {t === 'general' ? 'General' : t === 'projects' ? 'Projects' : 'Permission Rules'}
+            {t === 'general' ? 'General' : 'Projects'}
           </button>
         ))}
       </div>
@@ -204,14 +203,6 @@ export function Settings({ initialTab = 'general', projects }: Props) {
                 </tbody>
               </table>
             )}
-          </div>
-        )}
-
-        {activeTab === 'rules' && (
-          <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Permission Rules</h3>
-            <p className={styles.hint}>Rules are evaluated in order. First match wins.</p>
-            <PermissionRules />
           </div>
         )}
       </div>
