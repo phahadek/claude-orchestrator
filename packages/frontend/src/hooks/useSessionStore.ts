@@ -2,6 +2,27 @@ import { useState, useCallback } from 'react';
 import type { ServerMessage, PermissionDenial } from '@claude-dashboard/backend/src/ws/types';
 import type { ResolvedTask } from '@claude-dashboard/backend/src/notion/types';
 
+const DISMISSED_DENIALS_KEY = 'permission_denials_dismissed';
+
+function loadDismissedFromStorage(): Map<string, Set<string>> {
+  try {
+    const raw = localStorage.getItem(DISMISSED_DENIALS_KEY);
+    if (!raw) return new Map();
+    const parsed = JSON.parse(raw) as Record<string, string[]>;
+    return new Map(Object.entries(parsed).map(([k, v]) => [k, new Set(v)]));
+  } catch {
+    return new Map();
+  }
+}
+
+function saveDismissedToStorage(map: Map<string, Set<string>>): void {
+  try {
+    const obj: Record<string, string[]> = {};
+    for (const [k, v] of map) obj[k] = [...v];
+    localStorage.setItem(DISMISSED_DENIALS_KEY, JSON.stringify(obj));
+  } catch { /* quota or private browsing */ }
+}
+
 export interface SessionState {
   sessionId: string;
   taskName: string;
@@ -31,8 +52,7 @@ export function useSessionStore() {
   const [tasks, setTasks] = useState<ResolvedTask[]>([]);
   const [tasksReady, setTasksReady] = useState(false);
   const [synced, setSynced] = useState(false);
-  const [dismissedDenialIds, setDismissedDenialIds] = useState<Map<string, Set<string>>>(new Map());
-  const [prRefreshTrigger, setPrRefreshTrigger] = useState(0);
+  const [dismissedDenialIds, setDismissedDenialIds] = useState<Map<string, Set<string>>>(loadDismissedFromStorage);
 
   const dispatch = useCallback((msg: ServerMessage) => {
     setSynced(true);
@@ -180,6 +200,7 @@ export function useSessionStore() {
       const next = new Map(prev);
       const existing = next.get(sessionId) ?? new Set<string>();
       next.set(sessionId, new Set([...existing, toolUseId]));
+      saveDismissedToStorage(next);
       return next;
     });
   }, []);
@@ -188,6 +209,7 @@ export function useSessionStore() {
     setDismissedDenialIds((prev) => {
       const next = new Map(prev);
       next.set(sessionId, new Set(toolUseIds));
+      saveDismissedToStorage(next);
       return next;
     });
   }, []);
