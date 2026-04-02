@@ -85,11 +85,13 @@ export function useSessionStore() {
         case 'session_event': {
           const s = next.get(msg.sessionId);
           if (s) {
-            let isRateLimited = false;
+            let isRateLimited = s.isRateLimited;
             try {
               const payload = JSON.parse(msg.content) as Record<string, unknown>;
-              if (payload && typeof payload === 'object' && payload.error === 'rate_limit') {
-                isRateLimited = true;
+              if (payload && typeof payload === 'object' && payload.type === 'rate_limit_event') {
+                const info = payload.rate_limit_info as Record<string, unknown> | undefined;
+                if (info?.status === 'rate_limited') isRateLimited = true;
+                else if (info?.status === 'resumed') isRateLimited = false;
               }
             } catch { /* not JSON */ }
             const newEvent = { eventType: msg.eventType, content: msg.content, timestamp: Date.now(), messageId: msg.messageId };

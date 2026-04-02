@@ -42,6 +42,7 @@ export function PermissionEventLog() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copyFeedback, setCopyFeedback] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [showClearModal, setShowClearModal] = useState(false);
 
   async function fetchDenials() {
     try {
@@ -61,6 +62,18 @@ export function PermissionEventLog() {
     const interval = setInterval(fetchDenials, 30_000);
     return () => clearInterval(interval);
   }, []);
+
+  async function handleClear() {
+    try {
+      const res = await fetch('/api/permission-denials', { method: 'DELETE' });
+      if (!res.ok) throw new Error(`${res.status}`);
+      setRows([]);
+    } catch {
+      setError('Failed to clear denials');
+    } finally {
+      setShowClearModal(false);
+    }
+  }
 
   function handleCopy() {
     const text = formatRowsForClipboard(rows);
@@ -89,6 +102,14 @@ export function PermissionEventLog() {
           >
             {copyFeedback === 'copied' ? '✓ Copied' : copyFeedback === 'failed' ? '✗ Failed' : 'Copy'}
           </button>
+          <button
+            type="button"
+            className={styles.clearBtn}
+            onClick={() => setShowClearModal(true)}
+            disabled={rows.length === 0}
+          >
+            Clear
+          </button>
         </div>
       </div>
 
@@ -115,6 +136,24 @@ export function PermissionEventLog() {
             ))}
           </tbody>
         </table>
+      )}
+
+      {showClearModal && (
+        <div className={styles.modalOverlay} onClick={() => setShowClearModal(false)}>
+          <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <p className={styles.modalMessage}>
+              Clear {rows.length} denial{rows.length !== 1 ? 's' : ''}? This cannot be undone.
+            </p>
+            <div className={styles.modalActions}>
+              <button type="button" className={styles.modalCancel} onClick={() => setShowClearModal(false)}>
+                Cancel
+              </button>
+              <button type="button" className={styles.modalDelete} onClick={() => void handleClear()}>
+                Clear all
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
