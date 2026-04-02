@@ -23,10 +23,12 @@ export interface PRListItem {
   notionTaskId: string | null;
   notionTaskTitle: string | null;
   sessionId: string | null;
+  repo: string;
   reviewResult: PRReviewResult | null;
   reviewedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  reviewIteration?: number;
 }
 
 export interface PRCardProps {
@@ -36,10 +38,12 @@ export interface PRCardProps {
   onFix: (prNumber: number) => void;
   onRemove: (prNumber: number) => void;
   onViewSession?: (sessionId: string) => void;
+  onReReview: (prNumber: number) => void;
   reviewInFlight: boolean;
   mergeInFlight: boolean;
   fixInFlight: boolean;
   removeInFlight: boolean;
+  reReviewInFlight: boolean;
   reviewElapsed: number;
   error: string | null;
 }
@@ -57,10 +61,12 @@ export function PRCard({
   onFix,
   onRemove,
   onViewSession,
+  onReReview,
   reviewInFlight,
   mergeInFlight,
   fixInFlight,
   removeInFlight,
+  reReviewInFlight,
   reviewElapsed,
   error,
 }: PRCardProps) {
@@ -70,6 +76,7 @@ export function PRCard({
   const verdict = pr.reviewResult?.verdict ?? null;
   const canMerge = pr.state === 'open' && verdict === 'approved';
   const showFixButton = !isFinished && (verdict === 'needs_changes' || verdict === 'incomplete');
+  const showReReviewButton = !isFinished && verdict !== null;
 
   const verdictClass = isFinished
     ? styles[`state-${pr.state}`]
@@ -173,6 +180,18 @@ export function PRCard({
               onClick={() => onFix(pr.prNumber)}
             >
               {fixInFlight ? 'Sending...' : '🔁 Send to Session'}
+            </button>
+          )}
+
+          {showReReviewButton && (
+            <button
+              type="button"
+              className={styles.reReviewButton}
+              disabled={reReviewInFlight}
+              onClick={() => onReReview(pr.prNumber)}
+              title="Reset iteration counter and run a fresh review"
+            >
+              {reReviewInFlight ? 'Reviewing...' : '↺ Re-review'}
             </button>
           )}
 

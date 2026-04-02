@@ -7,7 +7,9 @@ vi.mock('../db/queries.js', () => ({
   setPRReviewResult: vi.fn(),
   getPRByNumber: vi.fn(),
   getPRBySessionId: vi.fn(),
+  getSetting: vi.fn().mockReturnValue(undefined),
   incrementReviewIteration: vi.fn(),
+  setLastReviewedSha: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
@@ -19,7 +21,7 @@ vi.mock('../config.js', () => ({
 }));
 
 import { ReviewOrchestrator } from './ReviewOrchestrator';
-import { setPRReviewResult, getPRByNumber, getPRBySessionId, incrementReviewIteration } from '../db/queries';
+import { setPRReviewResult, getPRByNumber, getPRBySessionId, incrementReviewIteration, setLastReviewedSha } from '../db/queries';
 import type { PRReviewService } from './PRReviewService';
 import type { ReviewJob } from './types';
 
@@ -83,7 +85,8 @@ const basePRRow = {
   synced_at: '2024-01-01T00:00:00Z',
   review_session_id: 'review-session-id',
   review_iteration: 0,
-  head_sha: null,
+  head_sha: 'sha-abc',
+  last_reviewed_sha: null,
 };
 
 beforeEach(() => {
@@ -363,6 +366,37 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
     expect(vi.mocked(rs.sendReReview)).not.toHaveBeenCalled();
   });
 
+  it('skips re-review when headSha === lastReviewedSha (no new commits since last review)', async () => {
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      ...basePRRow,
+      head_sha: 'same-sha',
+      last_reviewed_sha: 'same-sha',
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('push_detected', { sessionId: 'coding-session-id' });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.sendReReview)).not.toHaveBeenCalled();
+  });
+
+  it('calls setLastReviewedSha with prRow.head_sha after a successful re-review', async () => {
+    vi.mocked(getPRBySessionId).mockReturnValue({ ...basePRRow, head_sha: 'sha-abc', last_reviewed_sha: null } as any);
+    vi.mocked(incrementReviewIteration).mockReturnValue(1);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('push_detected', { sessionId: 'coding-session-id' });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setLastReviewedSha)).toHaveBeenCalledWith(1, 'owner/repo', 'sha-abc');
+  });
+
   it('deduplicates concurrent push_detected for the same coding session', async () => {
     vi.mocked(getPRBySessionId).mockReturnValue(basePRRow as any);
     vi.mocked(incrementReviewIteration).mockReturnValue(1);
@@ -394,6 +428,51 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
 
     completeReview();
     await new Promise((r) => setTimeout(r, 20));
+  });
+});
+
+// ── Iteration cap escalation ──────────────────────────────────────────────────
+
+describe('ReviewOrchestrator — iteration cap escalation', () => {
+  it('emits review_escalated and skips review when iteration cap is hit', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, review_iteration: 3 } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      type: 'review_escalated',
+      prNumber: 1,
+      repo: 'owner/repo',
+    });
+  });
+
+  it('does not escalate when iteration is below cap', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, review_iteration: 2 } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+    expect(messages.find((m: any) => m.type === 'review_escalated')).toBeUndefined();
   });
 });
 

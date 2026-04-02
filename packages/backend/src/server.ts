@@ -15,11 +15,12 @@ import { permissionEventsRouter, permissionDenialsRouter, permissionRulesRouter 
 import configRouter from './routes/config';
 import settingsRouter, { loadRuntimeSettingsFromDb } from './routes/settings';
 import { sessionsRouter, setBroadcast } from './routes/sessions';
-import { createPrsRouter } from './routes/prs';
+import { createPrsRouter, setPRBroadcast } from './routes/prs';
 import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
 import { PRSyncJob } from './github/PRSyncJob';
 import { ReviewOrchestrator } from './github/ReviewOrchestrator';
+import { PRMergeWatcher } from './github/PRMergeWatcher';
 import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
 import { getActiveSessions, getEventsBySession, getDenialsBySession, deleteGhostSessions } from './db/queries';
 import { isSystemOnlyUserEvent } from './utils/eventFilters';
@@ -53,7 +54,7 @@ app.use('/api/permission-denials', permissionDenialsRouter);
 app.use('/api/permission-rules', permissionRulesRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/sessions', sessionsRouter);
-app.use('/api', createPrsRouter(githubClient, prReviewService, sessionManager));
+app.use('/api', createPrsRouter(githubClient, prReviewService, sessionManager, notionClient));
 app.use('/api', configRouter);
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>
@@ -72,6 +73,8 @@ function broadcast(msg: ServerMessage) {
 
 // Wire broadcast into the sessions router (for PATCH note/tags)
 setBroadcast(broadcast);
+// Wire broadcast into the prs router (for merge/close events)
+setPRBroadcast(broadcast);
 
 // Broadcast all session events to every connected WS client
 sessionManager.on('message', broadcast);
@@ -152,6 +155,9 @@ jsonlReader.importAll().then(async () => {
       console.warn('[server] PR sync failed:', (err as Error).message)
     );
   }, 5 * 60 * 1000);
+
+  const prMergeWatcher = new PRMergeWatcher(githubClient, sessionManager, notionClient, broadcast);
+  prMergeWatcher.start();
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[server] listening on port ${PORT}`);
