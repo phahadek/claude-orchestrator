@@ -1,9 +1,16 @@
 import { config } from '../config';
 import { upsertPullRequest, getOpenPRs, updatePRState } from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
+import type { PRMergeWatcher } from './PRMergeWatcher';
 
 export class PRSyncJob {
+  private mergeWatcher: PRMergeWatcher | null = null;
+
   constructor(private github: GitHubClient) {}
+
+  setMergeWatcher(watcher: PRMergeWatcher): void {
+    this.mergeWatcher = watcher;
+  }
 
   async run(): Promise<void> {
     for (const project of config.projects) {
@@ -38,7 +45,12 @@ export class PRSyncJob {
         for (const pr of localOpenPRs) {
           if (!openNumbers.has(pr.pr_number)) {
             const state = await this.github.getPRState(pr.pr_number, repo);
-            updatePRState(pr.pr_number, repo, state);
+            if (state === 'merged' && this.mergeWatcher) {
+              // Delegate to PRMergeWatcher for full lifecycle (kill sessions, update Notion, broadcast)
+              await this.mergeWatcher.handleMerged(pr, null);
+            } else {
+              updatePRState(pr.pr_number, repo, state);
+            }
           }
         }
       } catch (err) {

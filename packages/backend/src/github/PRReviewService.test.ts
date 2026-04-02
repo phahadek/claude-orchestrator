@@ -157,6 +157,20 @@ describe('PRReviewService.buildPrompt()', () => {
     expect(prompt).toContain('Changed files vs Files/paths affected list');
   });
 
+  it('instructs reviewer to pass downstream file changes for the Changed files dimension', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    const prompt = service.buildPrompt(mockPR, mockDiff, mockTask);
+
+    expect(prompt).toContain('necessary downstream updates caused by the listed changes');
+    expect(prompt).toContain('Fail only if the PR touches files unrelated to the task');
+  });
+
   it('truncates diffs longer than 12000 characters and appends a truncation notice', () => {
     const longDiff: PRDiff = { ...mockDiff, diff: 'A'.repeat(13000) };
     const service = new PRReviewService(

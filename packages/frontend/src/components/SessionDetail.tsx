@@ -14,7 +14,98 @@ import {
 } from '../utils/eventParsing';
 import { StatusBadge } from './StatusBadge';
 import { formatModelName } from './SessionCard';
+import { ToolCallGroup } from './ToolCallGroup';
+import type { CallPair } from './ToolCallGroup';
 import styles from './SessionDetail.module.css';
+
+// ── Event grouping ────────────────────────────────────────────────
+
+type SessionEvent = SessionState['events'][number];
+
+type RenderItem =
+  | { kind: 'event'; event: SessionEvent }
+  | { kind: 'group'; toolName: string; calls: CallPair[] };
+
+/** Extract the first tool_use block's name from a text event, or null if none. */
+function getToolNameFromTextEvent(event: SessionEvent): string | null {
+  if (event.eventType !== 'text') return null;
+  const payload = tryParseJson(event.content);
+  if (typeof payload !== 'object' || payload === null) return null;
+  const p = payload as Record<string, unknown>;
+  if (p.type !== 'assistant' && p.type !== 'message') return null;
+  const msg = p.message as Record<string, unknown> | undefined;
+  const blocks = msg ? msg.content : p.content;
+  if (!Array.isArray(blocks)) return null;
+  for (const block of blocks) {
+    if (typeof block !== 'object' || block === null) continue;
+    const b = block as Record<string, unknown>;
+    if (b.type === 'tool_use' && typeof b.name === 'string') return b.name;
+  }
+  return null;
+}
+
+/**
+ * Group consecutive same-tool call pairs in the event list.
+ * A "call pair" is a text event containing a tool_use block followed by a tool_result event.
+ * When 2+ consecutive pairs share the same tool name they become a single group.
+ * Single calls and non-tool events pass through unchanged.
+ */
+export function groupSessionEvents(events: SessionEvent[]): RenderItem[] {
+  const items: RenderItem[] = [];
+  let i = 0;
+
+  while (i < events.length) {
+    const toolName = getToolNameFromTextEvent(events[i]);
+
+    if (toolName !== null) {
+      const startIdx = i;
+      // Skip any standalone tool_use events between text and tool_result
+      let j = i + 1;
+      while (j < events.length && events[j].eventType === 'tool_use') j++;
+
+      if (j < events.length && events[j].eventType === 'tool_result') {
+        const firstEndIdx = j;
+        const calls: CallPair[] = [{ textEvent: events[startIdx], resultEvent: events[firstEndIdx] }];
+        i = firstEndIdx + 1;
+
+        // Accumulate consecutive same-tool pairs
+        while (i < events.length) {
+          const nextToolName = getToolNameFromTextEvent(events[i]);
+          if (nextToolName !== toolName) break;
+
+          let k = i + 1;
+          while (k < events.length && events[k].eventType === 'tool_use') k++;
+
+          if (k < events.length && events[k].eventType === 'tool_result') {
+            calls.push({ textEvent: events[i], resultEvent: events[k] });
+            i = k + 1;
+          } else {
+            break;
+          }
+        }
+
+        if (calls.length >= 2) {
+          items.push({ kind: 'group', toolName, calls });
+        } else {
+          // Single call — emit all events individually (preserves null tool_use events)
+          for (let k = startIdx; k <= firstEndIdx; k++) {
+            items.push({ kind: 'event', event: events[k] });
+          }
+        }
+      } else {
+        items.push({ kind: 'event', event: events[i] });
+        i++;
+      }
+    } else {
+      items.push({ kind: 'event', event: events[i] });
+      i++;
+    }
+  }
+
+  return items;
+}
+
+// ── Props & component ─────────────────────────────────────────────
 
 interface Props {
   session: SessionState | null;
@@ -398,9 +489,19 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
           </button>
         </div>
         <div className={styles.transcript} ref={transcriptRef}>
-          {session.events.map((e, i) => (
-            <EventRow key={`${i}-${e.timestamp}-${e.eventType}`} event={e} />
-          ))}
+          {groupSessionEvents(session.events).map((item, i) => {
+            if (item.kind === 'group') {
+              return (
+                <ToolCallGroup key={`group-${i}`} toolName={item.toolName} calls={item.calls} />
+              );
+            }
+            return (
+              <EventRow
+                key={`${i}-${item.event.timestamp}-${item.event.eventType}`}
+                event={item.event}
+              />
+            );
+          })}
           {session.events.length === 0 && (
             <p className={styles.emptyTranscript}>No events yet.</p>
           )}
