@@ -1,8 +1,9 @@
 import { config } from '../config';
-import { setPRReviewResult, getSetting, getPRByNumber, getPRBySessionId, incrementReviewIteration } from '../db/queries';
+import { setPRReviewResult, getSetting, getPRByNumber, getPRBySessionId, incrementReviewIteration, setLastReviewedSha } from '../db/queries';
 import type { PRReviewService, PRReviewResult } from './PRReviewService';
 import type { SessionManager } from '../session/SessionManager';
 import type { ReviewJob } from './types';
+import { shouldAutoReview } from './reviewUtils';
 
 const REVIEW_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_ITERATIONS = 3;
@@ -131,6 +132,12 @@ export class ReviewOrchestrator {
     if (!prRow || prRow.state !== 'open') return;
     if (!prRow.review_session_id) return;
 
+    const maxIter = getMaxReviewIterations();
+    if (!shouldAutoReview(
+      { reviewIteration: prRow.review_iteration, headSha: prRow.head_sha, lastReviewedSha: prRow.last_reviewed_sha },
+      maxIter,
+    )) return;
+
     this.pendingReReviews.add(codingSessionId);
     try {
       const iteration = incrementReviewIteration(prRow.pr_number, prRow.repo);
@@ -163,6 +170,9 @@ export class ReviewOrchestrator {
         });
         return;
       }
+
+      // Mark this SHA as reviewed so duplicate pushes don't re-trigger the same review
+      setLastReviewedSha(prRow.pr_number, prRow.repo, prRow.head_sha);
 
       this.sessionManager.emit('message', {
         type: 'review_verdict',
