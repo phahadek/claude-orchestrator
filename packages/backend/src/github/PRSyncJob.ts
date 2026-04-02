@@ -1,5 +1,5 @@
 import { config } from '../config';
-import { upsertPullRequest } from '../db/queries';
+import { upsertPullRequest, getOpenPRs, updatePRState } from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
 
 export class PRSyncJob {
@@ -29,6 +29,16 @@ export class PRSyncJob {
             updated_at: pr.updatedAt,
             synced_at: new Date().toISOString(),
           });
+        }
+
+        // Reconcile stale local open PRs against GitHub
+        const openNumbers = new Set(prs.map((p) => p.id));
+        const localOpenPRs = getOpenPRs(repo);
+        for (const pr of localOpenPRs) {
+          if (!openNumbers.has(pr.pr_number)) {
+            const state = await this.github.getPRState(pr.pr_number, repo);
+            updatePRState(pr.pr_number, repo, state);
+          }
         }
       } catch (err) {
         console.warn(`[PRSyncJob] sync failed for ${repo}:`, (err as Error).message);
