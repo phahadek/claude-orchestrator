@@ -13,10 +13,11 @@ describe('SessionManager.start() structural check', () => {
       'utf-8',
     );
 
-    // Must contain run().catch(...) pattern (fire-and-forget)
-    expect(source).toMatch(/session\.run\(\)\.catch/);
+    // Must contain a .catch() handler (directly or via .then().catch()) to guard against unhandled rejections
+    expect(source).toMatch(/session\.run\(\)/);
+    expect(source).toMatch(/\.catch\s*\(\s*\(err\)/);
 
-    // Must NOT contain "await session.run()" or "await.*\.run()"
+    // Must NOT contain "await session.run()"
     expect(source).not.toMatch(/await\s+session\.run\(\)/);
   });
 
@@ -178,5 +179,111 @@ describe('runMigrations() — session_type column', () => {
 
     expect(source).toContain('session_type');
     expect(source).toMatch(/try\s*\{[^}]*session_type[^}]*\}\s*catch/s);
+  });
+});
+
+// ── AC: resumeOrphanSessions() — structural checks ──────────────────────────
+describe('SessionManager.resumeOrphanSessions()', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('queries DB for sessions with status "running"', () => {
+    expect(source).toMatch(/getSessionsByStatus\s*\(\s*\[['"]running['"]\]\s*\)/);
+  });
+
+  it('calls resumeSession() for each orphan in a loop', () => {
+    // Must iterate over orphans and call resumeSession
+    expect(source).toMatch(/resumeSession\s*\(\s*row\s*\)/);
+    expect(source).toMatch(/for\s*\(.*of\s+toResume/);
+  });
+
+  it('marks sessions as error when resume fails (catch block)', () => {
+    expect(source).toMatch(/updateSessionStatus\s*\(.*'error'.*Date\.now\(\)\)/s);
+  });
+
+  it('respects maxConcurrentSessions — slices orphans into toResume and toError', () => {
+    expect(source).toMatch(/config\.maxConcurrentSessions\s*-\s*this\.sessions\.size/);
+    expect(source).toMatch(/orphans\.slice\s*\(\s*0\s*,\s*available\s*\)/);
+    expect(source).toMatch(/orphans\.slice\s*\(\s*available\s*\)/);
+  });
+
+  it('logs a warning and marks excess orphans as error when limit is exceeded', () => {
+    expect(source).toMatch(/for\s*\(.*of\s+toError/);
+    expect(source).toMatch(/marking orphan.*as error/);
+  });
+});
+
+// ── AC: wireSession() is used by both start() and resumeSession() ─────────────
+describe('SessionManager.wireSession()', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('wireSession() method exists', () => {
+    expect(source).toMatch(/private\s+wireSession\s*\(/);
+  });
+
+  it('start() delegates to wireSession()', () => {
+    // The start() method must call this.wireSession(...)
+    expect(source).toMatch(/this\.wireSession\s*\(/);
+  });
+
+  it('resumeSession() delegates to wireSession()', () => {
+    // resumeSession must also call this.wireSession(...)
+    // Verified by checking wireSession appears at least twice as a call site
+    const callSites = [...source.matchAll(/this\.wireSession\s*\(/g)];
+    expect(callSites.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('wireSession() wires session.on("message") forwarding', () => {
+    expect(source).toMatch(/session\.on\s*\(\s*'message'/);
+  });
+
+  it('wireSession() calls session.run() fire-and-forget', () => {
+    // run() is called and has a .catch() handler (via .then().catch() chain)
+    expect(source).toMatch(/session\.run\(\)/);
+    expect(source).toMatch(/\.catch\s*\(\s*\(err\)/);
+    expect(source).not.toMatch(/await\s+session\.run\(\)/);
+  });
+});
+
+// ── AC: resumeSession() keeps original session_id ────────────────────────────
+describe('SessionManager.resumeSession()', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('passes row.session_id as both sessionId and resumeSessionId to AgentSession', () => {
+    // The first arg must be row.session_id and resumeSessionId must also be row.session_id
+    expect(source).toMatch(/row\.session_id,\s*\/\/\s*keep original ID|keep original ID.*row\.session_id/s);
+    expect(source).toMatch(/row\.session_id,\s*\/\/\s*resumeSessionId|resumeSessionId.*row\.session_id/s);
+  });
+
+  it('broadcasts session_status: running after re-attaching', () => {
+    expect(source).toMatch(/session_status.*running|running.*session_status/);
+    expect(source).toMatch(/row\.session_id.*status.*running|status.*running.*row\.session_id/s);
+  });
+
+  it('marks project-not-found orphans as error', () => {
+    expect(source).toMatch(/project not found.*marking error|orphan.*project not found/s);
+  });
+});
+
+// ── AC: server.ts calls resumeOrphanSessions() after jsonlReader.importAll() ──
+describe('server.ts startup sequence', () => {
+  it('calls sessionManager.resumeOrphanSessions() in the importAll().then() block', () => {
+    const serverSource = fs.readFileSync(
+      path.join(__dirname, '..', 'server.ts'),
+      'utf-8',
+    );
+    expect(serverSource).toMatch(/resumeOrphanSessions\s*\(\s*\)/);
+    // Must appear inside the importAll().then(...) callback (after importAll)
+    const importAllIdx = serverSource.indexOf('importAll()');
+    const resumeIdx = serverSource.indexOf('resumeOrphanSessions()');
+    expect(resumeIdx).toBeGreaterThan(importAllIdx);
   });
 });

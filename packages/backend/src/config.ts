@@ -4,12 +4,18 @@ function requireEnv(name: string): string {
   return val;
 }
 
+export interface Board {
+  id: string;
+  name: string;
+}
+
 export interface ProjectConfig {
   id: string;          // unique key, e.g. "claude-dashboard"
   name: string;
   projectDir: string;  // absolute path to the repo root
   contextUrl: string;
-  boardId: string;
+  boardId: string;     // default/active board (backwards compat)
+  boards?: Board[];    // optional multi-milestone support
   githubRepo?: string; // "owner/repo" — optional; enables PR features
 }
 

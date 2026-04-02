@@ -42,10 +42,19 @@ or 🗂️ Ready. Work only on the task you have been assigned.
 | **When done** | Open draft PR → mark task 👀 In Review → stop. Human merges and marks ✅ Done. |
 | **Pre-PR gate (hard — in order)** | 1. Merge/rebase `dev` → resolve conflicts. 2. `tsc --noEmit` passes (both packages). 3. `vite build` passes. |
 
+### Git isolation — critical
+
+**All git commands must run inside the worktree directory (`cwd` = worktree path).**
+Never use `git -C`, `--work-tree`, `--git-dir`, or any absolute path flag that
+points outside your worktree. Never run `git checkout`, `git switch`, or `git reset`
+targeting a branch that lives in the main repository directory. The backend records
+the main repo's branch before each session and will warn (and restore) if it drifts —
+but preventing drift is your responsibility.
+
 ### Task Lifecycle — follow this end-to-end, every session
 
 1. **Move task to `🔄 In Progress`** in Notion as soon as you begin work.
-2. **Create a feature branch from `dev`** — named `feature/<task-name>`.
+2. **Create a feature branch from `dev`** — named `feature/<task-name>` — **inside the worktree** (`git checkout -b feature/<name> dev` or `git switch -c feature/<name> dev`).
 3. **Implement the task** per the acceptance criteria in the Notion task page.
 4. **Pass the pre-PR gate** (rebase onto `dev`, `tsc --noEmit`, `vite build`).
 5. **Open a draft PR targeting `dev`** — use the required PR body template below.

@@ -157,6 +157,9 @@ export function useSessionStore() {
       setTasks(msg.tasks);
       setTasksReady(true);
     }
+    if (msg.type === 'pr_created') {
+      setPrRefreshTrigger((n) => n + 1);
+    }
   }, []);
 
   const resetTasks = useCallback(() => {
@@ -214,5 +217,5 @@ export function useSessionStore() {
   const readyCount = tasks.filter((t) => !t.blocked && t.task.status === '🗂️ Ready').length;
   const blockedCount = tasks.filter((t) => t.blocked).length;
 
-  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials };
+  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials, prRefreshTrigger };
 }

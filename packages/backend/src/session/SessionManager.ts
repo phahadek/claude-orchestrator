@@ -1,9 +1,11 @@
 import path from 'path';
+import fs from 'fs';
 import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
 import { AgentSession, parseNotionPageId } from './AgentSession';
 import { config, getProjectById, normalizePath } from '../config';
-import { insertSession, updateSessionStatus, insertEvent, getSession } from '../db/queries';
+import { insertSession, updateSessionStatus, insertEvent, getSession, getSessionsByStatus } from '../db/queries';
+import type { Session } from '../db/types';
 import type { NotionClient } from '../notion/NotionClient';
 import type { ServerMessage } from '../ws/types';
 
@@ -40,8 +42,21 @@ export class SessionManager extends EventEmitter {
     const worktreePath = path.join(projectDir, '.claude', 'worktrees', sessionId);
     const branchName = `session/${sessionId}`;
 
+    // Record the main repo's current branch before creating the worktree so we
+    // can detect and restore it if the session accidentally changes it.
+    let mainBranch: string | undefined;
     try {
-      execSync(`git worktree add "${worktreePath}" -b "${branchName}"`, {
+      mainBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: projectDir, encoding: 'utf8' }).trim();
+      console.log(`[SessionManager] main branch before session: ${mainBranch}`);
+    } catch (err) {
+      console.warn(`[SessionManager] could not determine main branch: ${err}`);
+    }
+
+    try {
+      // Pass HEAD explicitly so git never has to guess the start-point, which
+      // avoids an obscure git edge case where omitting the commit-ish can
+      // trigger unexpected branch resolution in some git versions.
+      execSync(`git worktree add "${worktreePath}" -b "${branchName}" HEAD`, {
         cwd: projectDir,
       });
     } catch (err) {
@@ -98,13 +113,29 @@ export class SessionManager extends EventEmitter {
     } satisfies ServerMessage);
 
     this.sessions.set(sessionId, session);
+    this.wireSession(sessionId, session, projectDir, branchName, worktreePath, mainBranch);
 
+    return sessionId;
+  }
+
+  /**
+   * Wire up event forwarding and fire-and-forget run() for a session.
+   * Used by both start() and resumeSession() to avoid duplicating this logic.
+   */
+  private wireSession(
+    sessionId: string,
+    session: AgentSession,
+    projectDir: string,
+    branchName: string,
+    worktreePath: string,
+    mainBranch?: string,
+  ): void {
     // Forward all session events to the WS layer via EventEmitter
     session.on('message', (msg: ServerMessage) => this.emit('message', msg));
 
     // Fire-and-forget — run() blocks until the subprocess exits, then clean up
     session.run()
-      .then(() => this.cleanupWorktree(sessionId, worktreePath, branchName, session.prUrl, projectDir))
+      .then(() => this.cleanupWorktree(sessionId, worktreePath, branchName, session.prUrl, projectDir, mainBranch))
       .catch((err) => {
         console.error(`[SessionManager] session ${sessionId} error: ${err}`);
         // If run() threw before broadcasting session_ended, update SQLite and
@@ -117,10 +148,93 @@ export class SessionManager extends EventEmitter {
             status: 'error',
           } satisfies ServerMessage);
         }
-        return this.cleanupWorktree(sessionId, worktreePath, branchName, undefined, projectDir);
+        return this.cleanupWorktree(sessionId, worktreePath, branchName, undefined, projectDir, mainBranch);
       });
+  }
 
-    return sessionId;
+  /**
+   * Re-attach to a session that was running when the server last shut down.
+   * Unlike sendOrResume(), this keeps the original session_id so the UI shows
+   * continuity — same card, same transcript.
+   */
+  private async resumeSession(row: Session): Promise<void> {
+    const project = getProjectById(row.project_id ?? '');
+    if (!project) {
+      console.warn(`[SessionManager] orphan ${row.session_id}: project not found, marking error`);
+      updateSessionStatus(row.session_id, 'error', Date.now());
+      return;
+    }
+
+    const projectDir = normalizePath(project.projectDir);
+    let worktreePath = row.worktree_path ?? '';
+    let branchName: string;
+
+    // Re-use the existing worktree if it is still on disk; otherwise create a fresh one.
+    if (worktreePath && fs.existsSync(worktreePath)) {
+      // Derive the branch from the worktree's HEAD so cleanupWorktree can delete it.
+      try {
+        branchName = execSync('git rev-parse --abbrev-ref HEAD', { cwd: worktreePath, encoding: 'utf8' }).trim();
+      } catch {
+        branchName = `session/${row.session_id}`;
+      }
+      console.log(`[SessionManager] resumeSession ${row.session_id}: re-using worktree ${worktreePath} (branch=${branchName})`);
+    } else {
+      branchName = `worktree-resume-${row.session_id.slice(0, 8)}`;
+      worktreePath = path.join(projectDir, '.claude', 'worktrees', row.session_id);
+      console.log(`[SessionManager] resumeSession ${row.session_id}: creating new worktree ${worktreePath} (branch=${branchName})`);
+      execSync(`git worktree add "${worktreePath}" -b "${branchName}" HEAD`, {
+        cwd: projectDir,
+      });
+    }
+
+    const session = new AgentSession(
+      row.session_id,           // keep original ID — same card, same transcript
+      row.notion_task_url ?? '',
+      row.project_context_url ?? '',
+      this.notionClient,
+      worktreePath,
+      row.notion_task_id ?? '',
+      row.session_id,           // resumeSessionId — passes --resume to CLI
+    );
+
+    this.sessions.set(row.session_id, session);
+
+    // Don't insert a new DB row — one already exists.
+    // Update status to running and broadcast so the frontend sees it come back.
+    updateSessionStatus(row.session_id, 'running');
+    this.emit('message', { type: 'session_status', sessionId: row.session_id, status: 'running' } satisfies ServerMessage);
+
+    this.wireSession(row.session_id, session, projectDir, branchName, worktreePath);
+  }
+
+  /**
+   * Detect sessions still marked 'running' in the DB after a server restart
+   * and resume them via --resume so they come back to life instead of lingering
+   * as unkillable ghosts. Called from server.ts after migrations and imports.
+   */
+  async resumeOrphanSessions(): Promise<void> {
+    const orphans = getSessionsByStatus(['running']);
+    if (orphans.length === 0) return;
+    console.log(`[SessionManager] found ${orphans.length} orphan session(s) — resuming`);
+
+    const available = config.maxConcurrentSessions - this.sessions.size;
+    const toResume = orphans.slice(0, available);
+    const toError = orphans.slice(available);
+
+    for (const row of toResume) {
+      try {
+        await this.resumeSession(row);
+      } catch (err) {
+        console.error(`[SessionManager] failed to resume ${row.session_id}: ${err}`);
+        // Mark as error so it doesn't retry forever on subsequent restarts.
+        updateSessionStatus(row.session_id, 'error', Date.now());
+      }
+    }
+
+    for (const row of toError) {
+      console.warn(`[SessionManager] max concurrent sessions reached — marking orphan ${row.session_id} as error`);
+      updateSessionStatus(row.session_id, 'error', Date.now());
+    }
   }
 
   private cleanupWorktree(
@@ -129,6 +243,7 @@ export class SessionManager extends EventEmitter {
     branchName: string,
     prUrl: string | undefined,
     projectDir: string,
+    mainBranch?: string,
   ): void {
     this.sessions.delete(sessionId);
 
@@ -144,6 +259,24 @@ export class SessionManager extends EventEmitter {
       }
     } catch (err) {
       console.error(`[SessionManager] failed to check main repo status after session ${sessionId.slice(0, 8)}: ${err}`);
+    }
+
+    // Restore the main repo's branch if the session inadvertently changed it.
+    // This guards against the Claude subprocess (or a git worktree edge case)
+    // switching the main directory's checked-out branch during the session.
+    if (mainBranch) {
+      try {
+        const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: projectDir, encoding: 'utf8' }).trim();
+        if (currentBranch !== mainBranch) {
+          console.warn(
+            `[SessionManager] [WARNING] Main repo branch changed from "${mainBranch}" to "${currentBranch}" during session ${sessionId.slice(0, 8)} — restoring`,
+          );
+          execSync(`git checkout "${mainBranch}"`, { cwd: projectDir });
+          console.log(`[SessionManager] main repo branch restored to "${mainBranch}"`);
+        }
+      } catch (err) {
+        console.error(`[SessionManager] failed to check/restore main repo branch after session ${sessionId.slice(0, 8)}: ${err}`);
+      }
     }
 
     try {
@@ -239,8 +372,17 @@ export class SessionManager extends EventEmitter {
     const worktreePath = path.join(projectDir, '.claude', 'worktrees', newSessionId);
     const branchName = `session/${newSessionId}`;
 
+    // Record the main repo's current branch before creating the worktree.
+    let mainBranchResume: string | undefined;
     try {
-      execSync(`git worktree add "${worktreePath}" -b "${branchName}"`, {
+      mainBranchResume = execSync('git rev-parse --abbrev-ref HEAD', { cwd: projectDir, encoding: 'utf8' }).trim();
+      console.log(`[SessionManager] sendOrResume main branch before session: ${mainBranchResume}`);
+    } catch (err) {
+      console.warn(`[SessionManager] sendOrResume: could not determine main branch: ${err}`);
+    }
+
+    try {
+      execSync(`git worktree add "${worktreePath}" -b "${branchName}" HEAD`, {
         cwd: projectDir,
       });
     } catch (err) {
@@ -302,7 +444,7 @@ export class SessionManager extends EventEmitter {
     });
 
     session.run()
-      .then(() => this.cleanupWorktree(newSessionId, worktreePath, branchName, session.prUrl, projectDir))
+      .then(() => this.cleanupWorktree(newSessionId, worktreePath, branchName, session.prUrl, projectDir, mainBranchResume))
       .catch((err) => {
         console.error(`[SessionManager] resumed session ${newSessionId} error: ${err}`);
         if (!session.hasEnded) {
@@ -313,7 +455,7 @@ export class SessionManager extends EventEmitter {
             status: 'error',
           } satisfies ServerMessage);
         }
-        return this.cleanupWorktree(newSessionId, worktreePath, branchName, undefined, projectDir);
+        return this.cleanupWorktree(newSessionId, worktreePath, branchName, undefined, projectDir, mainBranchResume);
       });
 
     await firstEvent;
