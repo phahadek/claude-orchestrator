@@ -64,7 +64,7 @@ export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, bo
         {loading ? (
           <p className={styles.loading}>Fetching tasks from Notion…</p>
         ) : (
-          <>
+          <div className={styles['modal-body']}>
             <section>
               <h3>✅ Ready ({ready.length})</h3>
               {ready.map((t) => (
@@ -117,7 +117,7 @@ export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, bo
                 </div>
               ))}
             </section>
-          </>
+          </div>
         )}
         <div className={styles['modal-footer']}>
           <button onClick={onClose}>Cancel</button>
