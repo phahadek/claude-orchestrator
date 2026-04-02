@@ -95,6 +95,8 @@ wss.on('connection', (ws) => {
       sessionType: s.session_type,
       note: s.note ?? null,
       tags,
+      totalInputTokens: s.total_input_tokens ?? 0,
+      totalOutputTokens: s.total_output_tokens ?? 0,
     } satisfies ServerMessage));
     ws.send(JSON.stringify({
       type: 'session_status',
