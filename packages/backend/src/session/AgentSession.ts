@@ -350,6 +350,7 @@ export class AgentSession extends EventEmitter {
       state?: string;
       created_at?: string;
       updated_at?: string;
+      draft?: boolean;
     }
     let prShape: GitHubPRShape = {};
     try {
@@ -391,6 +392,7 @@ export class AgentSession extends EventEmitter {
         head_branch: prShape.head?.ref ?? null,
         base_branch: prShape.base?.ref ?? null,
         state: prShape.state ?? 'open',
+        draft: prShape.draft ? 1 : 0,
         review_result: null,
         review_at: null,
         created_at: prShape.created_at ?? now,
@@ -448,6 +450,7 @@ export class AgentSession extends EventEmitter {
             head_branch: null,
             base_branch: null,
             state: 'open',
+            draft: 0,
             review_result: null,
             review_at: null,
             created_at: now,

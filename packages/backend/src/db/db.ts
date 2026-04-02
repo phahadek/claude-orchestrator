@@ -78,6 +78,7 @@ db.exec(`
     head_branch     TEXT,
     base_branch     TEXT,
     state           TEXT    NOT NULL DEFAULT 'open',
+    draft           INTEGER NOT NULL DEFAULT 0,
     review_result   TEXT,
     review_at       TEXT,
     created_at      TEXT    NOT NULL,
@@ -85,3 +86,6 @@ db.exec(`
     synced_at       TEXT    NOT NULL
   );
 `);
+
+// ── Migrations (idempotent column additions for existing databases) ──────────
+try { db.exec(`ALTER TABLE pull_requests ADD COLUMN draft INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
