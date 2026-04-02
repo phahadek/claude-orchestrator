@@ -68,6 +68,18 @@
   border-left: 3px solid #b4befe;
 }
 
+/* "Review of #N" tag shown on review session cards */
+.review-pr-tag {
+  display: inline-block;
+  font-size: 10px;
+  color: #b4befe;
+  background: rgba(180, 190, 254, 0.1);
+  border: 1px solid rgba(180, 190, 254, 0.25);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  align-self: flex-start;
+}
+
 /* Project tag */
 .project-tag {
   display: inline-block;

@@ -7,6 +7,7 @@ function makePR(overrides: Partial<PRListItem> = {}): PRListItem {
   return {
     prNumber: 1,
     prUrl: 'https://github.com/owner/repo/pull/1',
+    repo: 'owner/repo',
     title: 'My PR',
     headBranch: 'feature/foo',
     baseBranch: 'dev',

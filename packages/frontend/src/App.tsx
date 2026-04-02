@@ -3,6 +3,7 @@ import type { ConnectionState } from './hooks/useWebSocket';
 import { useSessionStore } from './hooks/useSessionStore';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { useNotifications } from './hooks/useNotifications';
 import { Header } from './components/Header';
 import type { TopView } from './components/Header';
 import { SessionGrid } from './components/SessionGrid';
@@ -290,6 +291,20 @@ export default function App() {
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
 
   const anyDragging = isDragging;
+
+  useNotifications(sessions);
+
+  useEffect(() => {
+    function onSelectSession(e: Event) {
+      const detail = (e as CustomEvent<{ sessionId: string }>).detail;
+      if (detail?.sessionId) {
+        setTopView('sessions');
+        setSelectedId(detail.sessionId);
+      }
+    }
+    window.addEventListener('selectSession', onSelectSession);
+    return () => window.removeEventListener('selectSession', onSelectSession);
+  }, []);
 
   useKeyboardShortcuts({
     onOpenDispatch: () => setShowModal(true),
