@@ -48,7 +48,7 @@ function resolveActiveBoardId(project: ProjectConfig): string {
 }
 
 export default function App() {
-  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, clearSessionDenials, prRefreshTrigger } = useSessionStore();
+  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, clearSessionDenials, prRefreshTrigger, lastPrReviewEvent } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const activeProjectIdRef = useRef<string | null>(null);
@@ -200,6 +200,27 @@ export default function App() {
     }
   }, [sessions, dismissNotification]);
 
+  useEffect(() => {
+    if (!lastPrReviewEvent) return;
+    const { prNumber, verdict, summary } = lastPrReviewEvent;
+    let message: string;
+    if (verdict === 'approved') {
+      message = `✅ PR #${prNumber} approved`;
+    } else if (verdict === 'needs_changes') {
+      message = `⚠️ PR #${prNumber} needs changes: ${summary.slice(0, 80)}`;
+    } else if (verdict === 'incomplete') {
+      message = `❌ PR #${prNumber} incomplete: ${summary}`;
+    } else {
+      message = `⏰ Review failed for PR #${prNumber} — click Run Review to retry`;
+    }
+    const notifId = `review-${prNumber}-${Date.now()}`;
+    setNotifications((prev) => [
+      ...prev,
+      { id: notifId, message, status: 'review', onClick: () => setTopView('prs') },
+    ]);
+    setTimeout(() => dismissNotification(notifId), 10000);
+  }, [lastPrReviewEvent, dismissNotification]);
+
   const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     setIsDragging(true);
@@ -292,7 +313,7 @@ export default function App() {
 
   const anyDragging = isDragging;
 
-  useNotifications(sessions);
+  useNotifications(sessions, lastPrReviewEvent);
 
   useEffect(() => {
     function onSelectSession(e: Event) {
@@ -302,8 +323,15 @@ export default function App() {
         setSelectedId(detail.sessionId);
       }
     }
+    function onNavigateToPRs() {
+      setTopView('prs');
+    }
     window.addEventListener('selectSession', onSelectSession);
-    return () => window.removeEventListener('selectSession', onSelectSession);
+    window.addEventListener('navigateToPRs', onNavigateToPRs);
+    return () => {
+      window.removeEventListener('selectSession', onSelectSession);
+      window.removeEventListener('navigateToPRs', onNavigateToPRs);
+    };
   }, []);
 
   useKeyboardShortcuts({
@@ -462,6 +490,7 @@ export default function App() {
               }}
               onCollapse={() => setTopView('sessions')}
               refreshTrigger={prRefreshTrigger}
+              prReviewEvent={lastPrReviewEvent}
             />
           </div>
         )}
