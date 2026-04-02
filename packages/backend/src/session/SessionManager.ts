@@ -4,7 +4,7 @@ import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
 import { AgentSession, parseNotionPageId } from './AgentSession';
 import { config, getProjectById, normalizePath } from '../config';
-import { insertSession, updateSessionStatus, insertEvent, getSession, getSessionsByStatus } from '../db/queries';
+import { insertSession, updateSessionStatus, insertEvent, getSession, getSessionsByStatus, getPRByNotionTaskId } from '../db/queries';
 import type { Session } from '../db/types';
 import type { NotionClient } from '../notion/NotionClient';
 import type { GitHubClient } from '../github/GitHubClient';
@@ -112,6 +112,11 @@ export class SessionManager extends EventEmitter {
       );
     }
 
+    // Look up the PR number for review sessions so the card can display "Review of #N"
+    const reviewPrNumber = sessionType === 'review' && notionTaskId
+      ? (getPRByNotionTaskId(notionTaskId)?.pr_number ?? undefined)
+      : undefined;
+
     // Broadcast session_started so connected frontends see the card immediately
     this.emit('message', {
       type: 'session_started',
@@ -120,6 +125,7 @@ export class SessionManager extends EventEmitter {
       notionTaskUrl: taskUrl,
       ...(taskType != null && { taskType }),
       ...(sessionType !== 'standard' && { sessionType }),
+      ...(reviewPrNumber != null && { prNumber: reviewPrNumber }),
       started_at: startedAt,
       project_id: projectId,
     } satisfies ServerMessage);
