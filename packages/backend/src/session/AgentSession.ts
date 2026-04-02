@@ -531,6 +531,7 @@ Fetch both Notion pages, then begin the task.
         created_at: prShape.created_at ?? now,
         updated_at: prShape.updated_at ?? now,
         synced_at: now,
+        node_id: null,
       });
     }
 
@@ -596,6 +597,7 @@ Fetch both Notion pages, then begin the task.
             created_at: now,
             updated_at: now,
             synced_at: now,
+            node_id: null,
           });
           if (!this.prDetectedLive) {
             this.emit('pr_opened', {
