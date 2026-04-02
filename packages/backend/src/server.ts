@@ -18,10 +18,15 @@ import { createPrsRouter } from './routes/prs';
 import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
 import { PRSyncJob } from './github/PRSyncJob';
-import { getActiveSessions, getEventsBySession, getDenialsBySession } from './db/queries';
+import { getActiveSessions, getEventsBySession, getDenialsBySession, deleteGhostSessions } from './db/queries';
 import { isSystemOnlyUserEvent } from './utils/eventFilters';
 
 runMigrations();
+
+const ghostsRemoved = deleteGhostSessions();
+if (ghostsRemoved > 0) {
+  console.log(`[server] cleaned up ${ghostsRemoved} ghost session(s) with no events`);
+}
 
 const rawSessionsDir = process.env.SESSIONS_DIR ?? DEFAULT_SESSIONS_DIR;
 const sessionsDir = rawSessionsDir.replace(/^~/, os.homedir());
