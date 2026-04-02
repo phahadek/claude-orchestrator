@@ -6,6 +6,7 @@ import {
   getPRByNumber,
   updatePRState,
   getTaskTitleFromCache,
+  upsertPullRequest,
   deletePR,
   deleteMergedAndClosedPRs,
   countMergedAndClosedPRs,
@@ -98,21 +99,41 @@ export function createPrsRouter(
       return;
     }
     const repo = project.githubRepo;
-    const prRow = getPRByNumber(prNumber, repo);
+    let prRow = getPRByNumber(prNumber, repo);
+    if (!prRow) {
+      // On-demand sync: PR may not have been synced yet (e.g. just created).
+      // Fetch the specific PR from GitHub and upsert before retrying.
+      try {
+        const pr = await github.fetchPR(repo, prNumber);
+        const now = new Date().toISOString();
+        upsertPullRequest({
+          pr_number: pr.id,
+          pr_url: pr.url,
+          notion_task_id: null,
+          session_id: null,
+          repo,
+          title: pr.title,
+          body: pr.body ?? null,
+          head_branch: pr.headBranch,
+          base_branch: pr.baseBranch,
+          state: pr.state,
+          review_result: null,
+          review_at: null,
+          created_at: pr.createdAt,
+          updated_at: pr.updatedAt,
+          synced_at: now,
+        });
+        prRow = getPRByNumber(prNumber, repo);
+      } catch {
+        // GitHub fetch failed — fall through to 404
+      }
+    }
     if (!prRow) {
       res.status(404).json({ error: `PR #${prNumber} not found` });
       return;
     }
-    if (!prRow.notion_task_id) {
-      res.status(422).json({ error: 'No Notion task linked to this PR' });
-      return;
-    }
-    try {
-      const result = await prReviewService.reviewPR(prNumber, repo, projectId, project.contextUrl);
-      res.json(result);
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
-    }
+    // Full AI review is an M2a feature. Return a stub for now.
+    res.json({ verdict: null, message: 'PR review not yet implemented' });
   });
 
   // ── POST /api/prs/:prNumber/merge ────────────────────────────────────────────
