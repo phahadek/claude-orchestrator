@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { PRCard } from './PRCard';
-import type { PRListItem } from './PRCard';
+import type { PRListItem, PRReviewResult } from './PRCard';
 import styles from './PRPanel.module.css';
 
 interface Props {
@@ -9,9 +9,10 @@ interface Props {
   onViewSession?: (sessionId: string) => void;
   onCollapse?: () => void;
   refreshTrigger?: number;
+  prReviewEvent?: { prNumber: number; verdict: string; summary: string } | null;
 }
 
-export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollapse, refreshTrigger }: Props) {
+export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollapse, refreshTrigger, prReviewEvent }: Props) {
   const [prs, setPRs] = useState<PRListItem[]>([]);
   const [networkError, setNetworkError] = useState(false);
   const [noRepo, setNoRepo] = useState(false);
@@ -66,6 +67,21 @@ export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollap
   useEffect(() => {
     if (refreshTrigger) fetchPRs();
   }, [refreshTrigger, fetchPRs]);
+
+  useEffect(() => {
+    if (!prReviewEvent) return;
+    setPRs((prev) =>
+      prev.map((pr) =>
+        pr.prNumber === prReviewEvent.prNumber
+          ? {
+              ...pr,
+              reviewResult: { verdict: prReviewEvent.verdict as PRReviewResult['verdict'], summary: prReviewEvent.summary },
+              reviewedAt: new Date().toISOString(),
+            }
+          : pr,
+      ),
+    );
+  }, [prReviewEvent]);
 
   const setError = (prNumber: number, msg: string | null) => {
     setCardErrors((prev) => {

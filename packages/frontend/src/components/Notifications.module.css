@@ -30,6 +30,26 @@
   border-color: #f38ba8;
 }
 
+.toastReview {
+  border-color: #89b4fa;
+}
+
+.reviewBody {
+  flex: 1;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  font-size: 0.85rem;
+  color: #cdd6f4;
+  cursor: pointer;
+  line-height: 1.4;
+}
+
+.reviewBody:hover {
+  color: #89b4fa;
+}
+
 .body {
   flex: 1;
   display: flex;
