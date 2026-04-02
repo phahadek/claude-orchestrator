@@ -6,7 +6,7 @@ export interface ShortcutHandlers {
   onSelectNext: () => void;
   onSelectPrev: () => void;
   onConfirmSelection: () => void;
-  onSwitchView: (view: 'sessions' | 'prs' | 'settings' | 'rules') => void;
+  onSwitchView: (view: 'sessions' | 'prs' | 'settings') => void;
   onFocusSearch: () => void;
 }
 
@@ -60,11 +60,6 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): void {
           break;
         case '3':
           h.onSwitchView('settings');
-          break;
-        case 'r':
-        case 'R':
-          event.preventDefault();
-          h.onSwitchView('rules');
           break;
         case '/':
           event.preventDefault();
