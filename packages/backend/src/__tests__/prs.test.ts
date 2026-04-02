@@ -14,6 +14,7 @@ vi.mock('../db/queries.js', () => ({
   deletePR: vi.fn(),
   deleteMergedAndClosedPRs: vi.fn(),
   countMergedAndClosedPRs: vi.fn().mockReturnValue(0),
+  resetReviewIteration: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
@@ -67,6 +68,7 @@ import { GitHubApiError } from '../github/types.js';
 import type { GitHubClient } from '../github/GitHubClient.js';
 import type { PRReviewService } from '../github/PRReviewService.js';
 import type { SessionManager } from '../session/SessionManager.js';
+import type { NotionClient } from '../notion/NotionClient.js';
 import type { PullRequestRow } from '../db/types.js';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -92,6 +94,7 @@ const mockPRRow: PullRequestRow = {
   review_session_id: null,
   review_iteration: 0,
   head_sha: null,
+  last_reviewed_sha: null,
 };
 
 const mockPRRowNoTask: PullRequestRow = {
@@ -158,17 +161,25 @@ function makeMockPRReviewService(): PRReviewService {
 function makeMockSessionManager(): SessionManager {
   return {
     sendOrResume: vi.fn().mockResolvedValue(undefined),
+    kill: vi.fn().mockResolvedValue(undefined),
   } as unknown as SessionManager;
+}
+
+function makeMockNotionClient(): NotionClient {
+  return {
+    updateStatus: vi.fn().mockResolvedValue(undefined),
+  } as unknown as NotionClient;
 }
 
 function buildApp(
   github = makeMockGitHub(),
   prReviewService = makeMockPRReviewService(),
   sessionManager = makeMockSessionManager(),
+  notionClient = makeMockNotionClient(),
 ) {
   const app = express();
   app.use(express.json());
-  app.use('/api', createPrsRouter(github, prReviewService, sessionManager));
+  app.use('/api', createPrsRouter(github, prReviewService, sessionManager, notionClient));
   return app;
 }
 
@@ -309,6 +320,57 @@ describe('POST /api/prs/:prNumber/merge', () => {
     expect(res.status).toBe(200);
     expect(res.body.merged).toBe(true);
     expect(vi.mocked(queries.updatePRState)).toHaveBeenCalledWith(42, 'owner/repo', 'merged');
+  });
+
+  it('kills coding session and review session on merge', async () => {
+    const prWithSessions: PullRequestRow = {
+      ...mockPRRow,
+      session_id: 'coding-session-id',
+      review_session_id: 'review-session-id',
+    };
+    vi.mocked(queries.getPRByNumber).mockReturnValue(prWithSessions);
+    const sessionManager = makeMockSessionManager();
+    const res = await supertest(buildApp(makeMockGitHub(), makeMockPRReviewService(), sessionManager))
+      .post('/api/prs/42/merge?projectId=proj-1')
+      .send({});
+    expect(res.status).toBe(200);
+    expect(vi.mocked(sessionManager.kill)).toHaveBeenCalledWith('coding-session-id');
+    expect(vi.mocked(sessionManager.kill)).toHaveBeenCalledWith('review-session-id');
+  });
+
+  it('calls NotionClient.updateStatus with Done on merge', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const notionClient = makeMockNotionClient();
+    const res = await supertest(buildApp(makeMockGitHub(), makeMockPRReviewService(), makeMockSessionManager(), notionClient))
+      .post('/api/prs/42/merge?projectId=proj-1')
+      .send({});
+    expect(res.status).toBe(200);
+    expect(vi.mocked(notionClient.updateStatus)).toHaveBeenCalledWith('notion-task-abc', '✅ Done');
+  });
+});
+
+// ── POST /api/prs/:prNumber/re-review ─────────────────────────────────────────
+
+describe('POST /api/prs/:prNumber/re-review', () => {
+  it('returns 404 when PR not found', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(null);
+    const res = await supertest(buildApp())
+      .post('/api/prs/42/re-review?projectId=proj-1');
+    expect(res.status).toBe(404);
+  });
+
+  it('resets review_iteration and runs review on success', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const res = await supertest(buildApp())
+      .post('/api/prs/42/re-review?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(vi.mocked(queries.resetReviewIteration)).toHaveBeenCalledWith(42, 'owner/repo');
+  });
+
+  it('returns 400 when projectId is missing', async () => {
+    const res = await supertest(buildApp())
+      .post('/api/prs/42/re-review');
+    expect(res.status).toBe(400);
   });
 });
 

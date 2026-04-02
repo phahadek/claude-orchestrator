@@ -10,6 +10,7 @@ import {
   deletePR,
   deleteMergedAndClosedPRs,
   countMergedAndClosedPRs,
+  resetReviewIteration,
 } from '../db/queries';
 import { PRSyncJob } from '../github/PRSyncJob';
 import { GitHubApiError } from '../github/types';
@@ -17,11 +18,19 @@ import type { GitHubClient } from '../github/GitHubClient';
 import type { PRReviewService } from '../github/PRReviewService';
 import type { PRReviewResult } from '../github/PRReviewService';
 import type { SessionManager } from '../session/SessionManager';
+import type { NotionClient } from '../notion/NotionClient';
+import type { ServerMessage } from '../ws/types';
+
+let _broadcast: (msg: ServerMessage) => void = () => {};
+export function setPRBroadcast(fn: (msg: ServerMessage) => void): void {
+  _broadcast = fn;
+}
 
 export function createPrsRouter(
   github: GitHubClient,
   prReviewService: PRReviewService,
   sessionManager: SessionManager,
+  notionClient: NotionClient,
 ): Router {
   const router = Router();
 
@@ -71,6 +80,7 @@ export function createPrsRouter(
       reviewedAt: pr.review_at,
       createdAt: pr.created_at,
       updatedAt: pr.updated_at,
+      reviewIteration: pr.review_iteration,
     }));
     res.json(items);
   });
@@ -124,6 +134,10 @@ export function createPrsRouter(
           created_at: pr.createdAt,
           updated_at: pr.updatedAt,
           synced_at: now,
+          review_iteration: 0,
+          review_session_id: null,
+          head_sha: null,
+          last_reviewed_sha: null,
         });
         prRow = getPRByNumber(prNumber, repo);
       } catch {
@@ -174,10 +188,80 @@ export function createPrsRouter(
     try {
       const result = await github.mergePR(prNumber, commitTitle, repo);
       updatePRState(prNumber, repo, 'merged');
+
+      // Kill coding session
+      if (prRow?.session_id) {
+        await sessionManager.kill(prRow.session_id).catch((err: unknown) =>
+          console.warn('[prs] kill coding session failed:', (err as Error).message),
+        );
+      }
+
+      // Kill review session
+      if (prRow?.review_session_id) {
+        await sessionManager.kill(prRow.review_session_id).catch((err: unknown) =>
+          console.warn('[prs] kill review session failed:', (err as Error).message),
+        );
+      }
+
+      // Update Notion task to Done
+      if (prRow?.notion_task_id) {
+        await notionClient.updateStatus(prRow.notion_task_id, '✅ Done').catch((err: unknown) =>
+          console.warn('[prs] Notion updateStatus failed:', (err as Error).message),
+        );
+      }
+
+      _broadcast({
+        type: 'pr_merged',
+        prNumber,
+        repo,
+        sha: (result as { sha?: string }).sha ?? '',
+      });
+
       res.json(result);
     } catch (err) {
       if (err instanceof GitHubApiError) {
         res.status(422).json({ error: err.message });
+        return;
+      }
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── POST /api/prs/:prNumber/re-review ─────────────────────────────────────────
+  router.post('/prs/:prNumber/re-review', async (req: Request, res: Response) => {
+    const prNumber = parseInt(String(req.params.prNumber), 10);
+    const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : '';
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId query param is required' });
+      return;
+    }
+    const project = getProjectById(projectId);
+    if (!project?.githubRepo) {
+      res.status(422).json({ error: 'Project has no githubRepo configured' });
+      return;
+    }
+    const repo = project.githubRepo;
+    const prRow = getPRByNumber(prNumber, repo);
+    if (!prRow) {
+      res.status(404).json({ error: `PR #${prNumber} not found` });
+      return;
+    }
+
+    // Reset iteration counter so the orchestrator won't block on the cap
+    resetReviewIteration(prNumber, repo);
+
+    const contextUrl = project.contextUrl;
+    try {
+      const result = await Promise.race([
+        prReviewService.reviewPR(prNumber, repo, projectId, contextUrl),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Review timed out')), 120_000),
+        ),
+      ]);
+      res.json(result);
+    } catch (err) {
+      if (err instanceof Error && err.message === 'Review timed out') {
+        res.status(504).json({ error: 'Review timed out' });
         return;
       }
       res.status(500).json({ error: (err as Error).message });

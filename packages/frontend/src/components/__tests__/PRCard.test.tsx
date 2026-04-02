@@ -27,10 +27,12 @@ const defaultProps = {
   onMerge: vi.fn(),
   onFix: vi.fn(),
   onRemove: vi.fn(),
+  onReReview: vi.fn(),
   reviewInFlight: false,
   mergeInFlight: false,
   fixInFlight: false,
   removeInFlight: false,
+  reReviewInFlight: false,
   reviewElapsed: 0,
   error: null,
 };
