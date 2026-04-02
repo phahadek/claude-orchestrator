@@ -85,7 +85,8 @@ vi.mock('../db/db.js', async () => {
       synced_at         TEXT    NOT NULL,
       review_session_id TEXT,
       review_iteration  INTEGER NOT NULL DEFAULT 0,
-      head_sha          TEXT
+      head_sha          TEXT,
+      last_reviewed_sha TEXT
     );
   `);
   return { db: memDb };
@@ -115,6 +116,10 @@ function makePR(overrides: Partial<{ pr_number: number; repo: string; state: str
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',
     synced_at: '2024-01-01T00:00:00Z',
+    review_iteration: 0,
+    review_session_id: null,
+    head_sha: null,
+    last_reviewed_sha: null,
   };
 }
 

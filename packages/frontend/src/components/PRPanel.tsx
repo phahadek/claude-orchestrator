@@ -20,6 +20,7 @@ export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollap
   const [reviewElapsed, setReviewElapsed] = useState<Map<number, number>>(new Map());
   const [mergeInFlight, setMergeInFlight] = useState<Set<number>>(new Set());
   const [fixInFlight, setFixInFlight] = useState<Set<number>>(new Set());
+  const [reReviewInFlight, setReReviewInFlight] = useState<Set<number>>(new Set());
   const [removeInFlight, setRemoveInFlight] = useState<Set<number>>(new Set());
   const [clearInFlight, setClearInFlight] = useState(false);
   const [clearableCount, setClearableCount] = useState(0);
@@ -180,6 +181,36 @@ export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollap
     }
   };
 
+  const handleReReview = async (prNumber: number) => {
+    if (!activeProjectId) return;
+    setReReviewInFlight((prev) => new Set(prev).add(prNumber));
+    setError(prNumber, null);
+    try {
+      const res = await fetch(
+        `/api/prs/${prNumber}/re-review?projectId=${encodeURIComponent(activeProjectId)}`,
+        { method: 'POST' },
+      );
+      if (res.status === 504) {
+        setError(prNumber, 'Re-review timed out — try again.');
+        return;
+      }
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: 'Unknown error' })) as { error?: string };
+        setError(prNumber, `Re-review failed: ${body.error ?? 'Unknown error'}`);
+        return;
+      }
+      await fetchPRs();
+    } catch {
+      setError(prNumber, 'Re-review failed: network error');
+    } finally {
+      setReReviewInFlight((prev) => {
+        const next = new Set(prev);
+        next.delete(prNumber);
+        return next;
+      });
+    }
+  };
+
   const handleRemovePR = async (prNumber: number) => {
     if (!activeProjectId) return;
     setRemoveInFlight((prev) => new Set(prev).add(prNumber));
@@ -272,10 +303,12 @@ export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollap
               onFix={handleFix}
               onRemove={handleRemovePR}
               onViewSession={onViewSession}
+              onReReview={handleReReview}
               reviewInFlight={reviewInFlight.has(pr.prNumber)}
               mergeInFlight={mergeInFlight.has(pr.prNumber)}
               fixInFlight={fixInFlight.has(pr.prNumber)}
               removeInFlight={removeInFlight.has(pr.prNumber)}
+              reReviewInFlight={reReviewInFlight.has(pr.prNumber)}
               reviewElapsed={reviewElapsed.get(pr.prNumber) ?? 0}
               error={cardErrors.get(pr.prNumber) ?? null}
             />

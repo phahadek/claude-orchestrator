@@ -7,6 +7,7 @@ vi.mock('../db/queries.js', () => ({
   setPRReviewResult: vi.fn(),
   getPRByNumber: vi.fn(),
   getPRBySessionId: vi.fn(),
+  getSetting: vi.fn().mockReturnValue(undefined),
   incrementReviewIteration: vi.fn(),
 }));
 
