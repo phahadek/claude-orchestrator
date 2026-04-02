@@ -7,6 +7,7 @@ import { config, getProjectById, normalizePath } from '../config';
 import { insertSession, updateSessionStatus, insertEvent, getSession, getSessionsByStatus } from '../db/queries';
 import type { Session } from '../db/types';
 import type { NotionClient } from '../notion/NotionClient';
+import type { GitHubClient } from '../github/GitHubClient';
 import type { ServerMessage } from '../ws/types';
 
 export interface StartOptions {
@@ -19,7 +20,10 @@ export interface StartOptions {
 export class SessionManager extends EventEmitter {
   private sessions = new Map<string, AgentSession>();
 
-  constructor(private readonly notionClient: NotionClient) {
+  constructor(
+    private readonly notionClient: NotionClient,
+    private readonly githubClient?: GitHubClient,
+  ) {
     super();
   }
 
@@ -82,6 +86,8 @@ export class SessionManager extends EventEmitter {
       undefined,
       customPrompt,
       sessionType,
+      this,
+      this.githubClient,
     );
 
     // Insert session into SQLite before anything writes events
@@ -197,6 +203,10 @@ export class SessionManager extends EventEmitter {
       worktreePath,
       row.notion_task_id ?? '',
       row.session_id,           // resumeSessionId — passes --resume to CLI
+      undefined,
+      'standard',
+      this,
+      this.githubClient,
     );
 
     this.sessions.set(row.session_id, session);
@@ -410,6 +420,10 @@ export class SessionManager extends EventEmitter {
       worktreePath,
       taskId,
       sessionId, // resumeSessionId — restores conversation history via --resume
+      undefined,
+      'standard',
+      this,
+      this.githubClient,
     );
 
     const startedAt = Date.now();
