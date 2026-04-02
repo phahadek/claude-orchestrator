@@ -17,9 +17,10 @@ interface Props {
   onViewChange: (view: TopView) => void;
   totalTokens?: number;
   tasks?: ResolvedTask[];
+  incompleteReviewCount?: number;
 }
 
-export function Header({ projects, activeProjectId, onProjectChange, activeBoardId, onBoardChange, activeView, onViewChange, totalTokens, tasks }: Props) {
+export function Header({ projects, activeProjectId, onProjectChange, activeBoardId, onBoardChange, activeView, onViewChange, totalTokens, tasks, incompleteReviewCount }: Props) {
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
   const boards = activeProject?.boards ?? [];
 
@@ -40,6 +41,9 @@ export function Header({ projects, activeProjectId, onProjectChange, activeBoard
           onClick={() => onViewChange('prs')}
         >
           PRs
+          {incompleteReviewCount != null && incompleteReviewCount > 0 && (
+            <span className={styles.incompleteBadge} title="Incomplete review — needs attention">{incompleteReviewCount}</span>
+          )}
         </button>
         <button
           type="button"

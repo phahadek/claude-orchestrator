@@ -249,6 +249,48 @@ describe('useSessionStore', () => {
     expect(result.current.sessions[0].isRateLimited).toBeFalsy();
   });
 
+  describe('review_incomplete handling', () => {
+    it('adds entry to incompleteReviews when review_incomplete message arrives', () => {
+      const { result } = renderHook(() => useSessionStore());
+      const reviewIncompleteMsg: ServerMessage = {
+        type: 'review_incomplete',
+        prNumber: 42,
+        repo: 'owner/repo',
+        message: 'Reviewer could not assess the PR.',
+      };
+      act(() => result.current.dispatch(reviewIncompleteMsg));
+      expect(result.current.incompleteReviews).toHaveLength(1);
+      expect(result.current.incompleteReviews[0]).toMatchObject({ prNumber: 42, repo: 'owner/repo' });
+    });
+
+    it('accumulates multiple review_incomplete messages', () => {
+      const { result } = renderHook(() => useSessionStore());
+      const makeMsg = (prNumber: number): ServerMessage => ({
+        type: 'review_incomplete',
+        prNumber,
+        repo: 'owner/repo',
+        message: 'Could not assess.',
+      });
+      act(() => result.current.dispatch(makeMsg(1)));
+      act(() => result.current.dispatch(makeMsg(2)));
+      expect(result.current.incompleteReviews).toHaveLength(2);
+    });
+
+    it('dismissIncompleteReviews clears the incompleteReviews array', () => {
+      const { result } = renderHook(() => useSessionStore());
+      const reviewIncompleteMsg: ServerMessage = {
+        type: 'review_incomplete',
+        prNumber: 42,
+        repo: 'owner/repo',
+        message: 'Could not assess.',
+      };
+      act(() => result.current.dispatch(reviewIncompleteMsg));
+      expect(result.current.incompleteReviews).toHaveLength(1);
+      act(() => result.current.dismissIncompleteReviews());
+      expect(result.current.incompleteReviews).toHaveLength(0);
+    });
+  });
+
   describe('dismissDenial / dismissAllDenials', () => {
     const SESSION_A = 'session-a';
     const SESSION_B = 'session-b';
