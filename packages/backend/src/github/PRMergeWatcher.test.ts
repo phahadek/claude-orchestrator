@@ -25,7 +25,7 @@ function makeMockGitHub(): GitHubClient {
 
 function makeMockSessions(): SessionManager {
   return {
-    kill: vi.fn().mockResolvedValue(undefined),
+    endSession: vi.fn(),
   } as unknown as SessionManager;
 }
 
@@ -135,12 +135,12 @@ describe('PRMergeWatcher.poll()', () => {
     await watcher.poll();
 
     expect(vi.mocked(updatePRState)).toHaveBeenCalledWith(42, 'owner/repo', 'merged');
-    expect(vi.mocked(sessions.kill)).toHaveBeenCalledWith('coding-session');
-    expect(vi.mocked(sessions.kill)).toHaveBeenCalledWith('review-session');
+    expect(vi.mocked(sessions.endSession)).toHaveBeenCalledWith('coding-session');
+    expect(vi.mocked(sessions.endSession)).toHaveBeenCalledWith('review-session');
     expect(vi.mocked(notion.updateStatus)).toHaveBeenCalledWith('task-abc', '✅ Done');
   });
 
-  it('merged PR with needs_changes verdict triggers session kill and Notion update', async () => {
+  it('merged PR with needs_changes verdict triggers session end and Notion update', async () => {
     const pr = makePRRow({ review_result: JSON.stringify({ verdict: 'needs_changes' }) });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeMockGitHub();
@@ -152,7 +152,7 @@ describe('PRMergeWatcher.poll()', () => {
     await watcher.poll();
 
     expect(vi.mocked(updatePRState)).toHaveBeenCalledWith(42, 'owner/repo', 'merged');
-    expect(vi.mocked(sessions.kill)).toHaveBeenCalledWith('coding-session');
+    expect(vi.mocked(sessions.endSession)).toHaveBeenCalledWith('coding-session');
     expect(vi.mocked(notion.updateStatus)).toHaveBeenCalledWith('task-abc', '✅ Done');
   });
 
@@ -167,8 +167,8 @@ describe('PRMergeWatcher.poll()', () => {
     await watcher.poll();
 
     expect(vi.mocked(updatePRState)).toHaveBeenCalledWith(42, 'owner/repo', 'merged');
-    expect(vi.mocked(sessions.kill)).toHaveBeenCalledWith('coding-session');
-    expect(vi.mocked(sessions.kill)).toHaveBeenCalledWith('review-session');
+    expect(vi.mocked(sessions.endSession)).toHaveBeenCalledWith('coding-session');
+    expect(vi.mocked(sessions.endSession)).toHaveBeenCalledWith('review-session');
   });
 
   it('broadcasts pr_closed and updates state when GitHub state is closed', async () => {
