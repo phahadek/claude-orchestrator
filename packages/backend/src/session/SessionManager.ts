@@ -16,6 +16,8 @@ export interface StartOptions {
   customPrompt?: string;
   projectId?: string;
   taskName?: string;
+  /** Pre-generated session ID. If omitted, a new UUID is generated internally. */
+  sessionId?: string;
 }
 
 export class SessionManager extends EventEmitter {
@@ -29,7 +31,7 @@ export class SessionManager extends EventEmitter {
   }
 
   start(taskUrl: string, projectContextUrl: string, options?: StartOptions): string {
-    const { taskType, sessionType = 'standard', customPrompt, projectId = '', taskName } = options ?? {};
+    const { taskType, sessionType = 'standard', customPrompt, projectId = '', taskName, sessionId: providedSessionId } = options ?? {};
 
     if (this.sessions.size >= config.maxConcurrentSessions) {
       throw new Error(`Max concurrent sessions (${config.maxConcurrentSessions}) reached`);
@@ -40,7 +42,7 @@ export class SessionManager extends EventEmitter {
       throw new Error(`Project not found: ${projectId}`);
     }
 
-    const sessionId = crypto.randomUUID();
+    const sessionId = providedSessionId ?? crypto.randomUUID();
     console.log(`[SessionManager] start ${sessionId} project=${projectId} sessionType=${sessionType}`);
 
     const projectDir = normalizePath(project.projectDir);
