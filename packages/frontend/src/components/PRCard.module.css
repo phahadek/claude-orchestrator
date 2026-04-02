@@ -20,6 +20,13 @@
   gap: 6px;
 }
 
+.prNumber {
+  font-size: 0.82rem;
+  color: #6c7086;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
 .title {
   font-weight: 600;
   font-size: 0.95rem;
@@ -47,6 +54,13 @@
   font-family: monospace;
 }
 
+.metaRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .notionRow {
   display: flex;
   align-items: center;
@@ -69,6 +83,20 @@
 
 .notionTitle {
   color: #9399b2;
+}
+
+.sessionLink {
+  font-size: 0.8rem;
+  color: #89b4fa;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.sessionLink:hover {
+  text-decoration: underline;
 }
 
 /* Actions row */
