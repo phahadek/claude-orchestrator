@@ -42,7 +42,7 @@ const githubClient = new GitHubClient();
 const sessionManager = new SessionManager(notionClient, githubClient);
 const prReviewService = new PRReviewService(githubClient, notionClient, sessionManager);
 const reviewOrchestrator = new ReviewOrchestrator(
-  prReviewService, sessionManager, githubClient, AUTO_REVIEW_CONCURRENCY, AUTO_REVIEW_ENABLED,
+  prReviewService, sessionManager, githubClient, notionClient, AUTO_REVIEW_CONCURRENCY, AUTO_REVIEW_ENABLED,
 );
 
 const PORT = parseInt(process.env.PORT ?? '3000');
