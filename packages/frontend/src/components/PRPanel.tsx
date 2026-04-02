@@ -29,10 +29,11 @@ export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollap
   const [cardErrors, setCardErrors] = useState<Map<number, string>>(new Map());
 
   const elapsedTimers = useRef<Map<number, ReturnType<typeof setInterval>>>(new Map());
+  const isInitialLoad = useRef(true);
 
   const fetchPRs = useCallback(async () => {
     if (!activeProjectId) return;
-    if (prs.length === 0) setIsLoading(true);
+    if (isInitialLoad.current) setIsLoading(true);
     try {
       const [prsRes, countRes] = await Promise.all([
         fetch(`/api/prs?projectId=${encodeURIComponent(activeProjectId)}`),
@@ -57,9 +58,10 @@ export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollap
     } catch {
       setNetworkError(true);
     } finally {
+      isInitialLoad.current = false;
       setIsLoading(false);
     }
-  }, [activeProjectId, prs.length]);
+  }, [activeProjectId]);
 
   useEffect(() => {
     fetchPRs();
