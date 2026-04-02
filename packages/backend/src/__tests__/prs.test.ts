@@ -162,7 +162,7 @@ function makeMockPRReviewService(): PRReviewService {
 function makeMockSessionManager(): SessionManager {
   return {
     sendOrResume: vi.fn().mockResolvedValue(undefined),
-    kill: vi.fn().mockResolvedValue(undefined),
+    endSession: vi.fn(),
   } as unknown as SessionManager;
 }
 
@@ -323,7 +323,7 @@ describe('POST /api/prs/:prNumber/merge', () => {
     expect(vi.mocked(queries.updatePRState)).toHaveBeenCalledWith(42, 'owner/repo', 'merged');
   });
 
-  it('kills coding session and review session on merge', async () => {
+  it('ends coding session and review session gracefully on merge', async () => {
     const prWithSessions: PullRequestRow = {
       ...mockPRRow,
       session_id: 'coding-session-id',
@@ -335,8 +335,8 @@ describe('POST /api/prs/:prNumber/merge', () => {
       .post('/api/prs/owner/repo/42/merge')
       .send({});
     expect(res.status).toBe(200);
-    expect(vi.mocked(sessionManager.kill)).toHaveBeenCalledWith('coding-session-id');
-    expect(vi.mocked(sessionManager.kill)).toHaveBeenCalledWith('review-session-id');
+    expect(vi.mocked(sessionManager.endSession)).toHaveBeenCalledWith('coding-session-id');
+    expect(vi.mocked(sessionManager.endSession)).toHaveBeenCalledWith('review-session-id');
   });
 
   it('calls NotionClient.updateStatus with Done on merge', async () => {

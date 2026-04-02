@@ -187,18 +187,14 @@ export function createPrsRouter(
       const result = await github.mergePR(prNumber, commitTitle, repo);
       updatePRState(prNumber, repo, 'merged');
 
-      // Kill coding session
+      // End coding session gracefully (stdin close → clean CLI exit)
       if (prRow?.session_id) {
-        await sessionManager.kill(prRow.session_id).catch((err: unknown) =>
-          console.warn('[prs] kill coding session failed:', (err as Error).message),
-        );
+        sessionManager.endSession(prRow.session_id);
       }
 
-      // Kill review session
+      // End review session gracefully (stdin close → clean CLI exit)
       if (prRow?.review_session_id) {
-        await sessionManager.kill(prRow.review_session_id).catch((err: unknown) =>
-          console.warn('[prs] kill review session failed:', (err as Error).message),
-        );
+        sessionManager.endSession(prRow.review_session_id);
       }
 
       // Update Notion task to Done
