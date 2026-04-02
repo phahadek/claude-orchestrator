@@ -61,7 +61,7 @@ export const GITHUB_TOKEN = process.env.GITHUB_TOKEN ?? '';
 export const GITHUB_REPO  = process.env.GITHUB_REPO  ?? '';  // "owner/repo"
 
 export const ALLOWED_TOOLS = [
-  'Bash(git:*)', 'Bash(npm:*)', 'Bash(npx:*)', 'Bash(node:*)',
+  'Bash(git:*)', 'Bash(npm:*)', 'Bash(npx:*)', 'Bash(node:*)', 'Bash(tsc:*)',
   'Bash(gh:*)', 'Bash(cd:*)', 'Bash(which:*)', 'Bash(where:*)',
   'Bash(ls:*)', 'Bash(cat:*)', 'Bash(echo:*)', 'Bash(mkdir:*)',
   'Bash(cp:*)', 'Bash(mv:*)', 'Bash(head:*)', 'Bash(tail:*)',
