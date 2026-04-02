@@ -359,6 +359,12 @@ export function getDenialsBySession(sessionId: string): PermissionDenialRow[] {
   return stmtGetDenialsBySession.all({ session_id: sessionId }) as PermissionDenialRow[];
 }
 
+export function deleteDenialsBySession(sessionId: string): void {
+  db.prepare<{ session_id: string }>(`
+    DELETE FROM permission_denials WHERE session_id = @session_id
+  `).run({ session_id: sessionId });
+}
+
 export function getRecentPermissionDenials(
   limit: number,
 ): Array<PermissionDenialRow & { notion_task_url: string | null }> {
