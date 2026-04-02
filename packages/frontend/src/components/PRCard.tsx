@@ -33,9 +33,11 @@ export interface PRCardProps {
   onReview: (prNumber: number) => void;
   onMerge: (prNumber: number) => void;
   onFix: (prNumber: number) => void;
+  onRemove: (prNumber: number) => void;
   reviewInFlight: boolean;
   mergeInFlight: boolean;
   fixInFlight: boolean;
+  removeInFlight: boolean;
   reviewElapsed: number;
   error: string | null;
 }
@@ -51,9 +53,11 @@ export function PRCard({
   onReview,
   onMerge,
   onFix,
+  onRemove,
   reviewInFlight,
   mergeInFlight,
   fixInFlight,
+  removeInFlight,
   reviewElapsed,
   error,
 }: PRCardProps) {
@@ -121,6 +125,16 @@ export function PRCard({
         <span className={`${styles.verdictBadge} ${verdictClass}`}>{verdictLabel}</span>
 
         <div className={styles.buttons}>
+          <button
+            type="button"
+            className={styles.removeButton}
+            disabled={removeInFlight}
+            onClick={() => onRemove(pr.prNumber)}
+            title="Remove from list"
+          >
+            {removeInFlight ? '…' : '✕'}
+          </button>
+
           {!isFinished && (
             <button
               type="button"
