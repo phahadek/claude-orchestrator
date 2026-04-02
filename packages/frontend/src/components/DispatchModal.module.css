@@ -18,6 +18,14 @@
   width: 520px;
   max-width: 90vw;
   max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.modal-body {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
