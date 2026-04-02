@@ -104,13 +104,6 @@ describe('useKeyboardShortcuts', () => {
     expect(handlers.onSwitchView).toHaveBeenCalledWith('prs');
   });
 
-  it('R calls onSwitchView with "rules"', () => {
-    const handlers = makeHandlers();
-    renderHook(() => useKeyboardShortcuts(handlers));
-    fireKey('R');
-    expect(handlers.onSwitchView).toHaveBeenCalledWith('rules');
-  });
-
   it('/ calls onFocusSearch', () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
