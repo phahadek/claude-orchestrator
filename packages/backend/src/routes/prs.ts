@@ -64,6 +64,7 @@ export function createPrsRouter(
       state: reconciledStates.get(pr.pr_number) ?? pr.state,
       notionTaskId: pr.notion_task_id,
       notionTaskTitle: pr.notion_task_id ? getTaskTitleFromCache(pr.notion_task_id) : null,
+      sessionId: pr.session_id ?? null,
       reviewResult: pr.review_result
         ? (JSON.parse(pr.review_result) as PRReviewResult)
         : null,

@@ -444,6 +444,10 @@ export default function App() {
                 setTopView('sessions');
                 setSelectedId(sessionId);
               }}
+              onViewSession={(sessionId) => {
+                setTopView('sessions');
+                setSelectedId(sessionId);
+              }}
               onCollapse={() => setTopView('sessions')}
               refreshTrigger={prRefreshTrigger}
             />
