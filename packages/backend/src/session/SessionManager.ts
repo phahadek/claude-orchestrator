@@ -33,8 +33,11 @@ export class SessionManager extends EventEmitter {
   start(taskUrl: string, projectContextUrl: string, options?: StartOptions): string {
     const { taskType, sessionType = 'standard', customPrompt, projectId = '', taskName, sessionId: providedSessionId } = options ?? {};
 
-    if (this.sessions.size >= config.maxConcurrentSessions) {
-      throw new Error(`Max concurrent sessions (${config.maxConcurrentSessions}) reached`);
+    if (sessionType !== 'review') {
+      const codeSessionCount = [...this.sessions.values()].filter((s) => s.sessionType !== 'review').length;
+      if (codeSessionCount >= config.maxConcurrentCodeSessions) {
+        throw new Error(`Max concurrent code sessions (${config.maxConcurrentCodeSessions}) reached`);
+      }
     }
 
     const project = getProjectById(projectId);
@@ -287,9 +290,12 @@ export class SessionManager extends EventEmitter {
     if (orphans.length === 0) return;
     console.log(`[SessionManager] found ${orphans.length} orphan session(s) — resuming`);
 
-    const available = config.maxConcurrentSessions - this.sessions.size;
-    const toResume = orphans.slice(0, available);
-    const toError = orphans.slice(available);
+    const codeSessionCount = [...this.sessions.values()].filter((s) => s.sessionType !== 'review').length;
+    const available = config.maxConcurrentCodeSessions - codeSessionCount;
+    const reviewOrphans = orphans.filter((row) => row.session_type === 'review');
+    const codeOrphans = orphans.filter((row) => row.session_type !== 'review');
+    const toResume = [...reviewOrphans, ...codeOrphans.slice(0, available)];
+    const toError = codeOrphans.slice(available);
 
     for (const row of toResume) {
       try {
@@ -302,7 +308,7 @@ export class SessionManager extends EventEmitter {
     }
 
     for (const row of toError) {
-      console.warn(`[SessionManager] max concurrent sessions reached — marking orphan ${row.session_id} as error`);
+      console.warn(`[SessionManager] max concurrent code sessions reached — marking orphan ${row.session_id} as error`);
       updateSessionStatus(row.session_id, 'error', Date.now());
     }
   }

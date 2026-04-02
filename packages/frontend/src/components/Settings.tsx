@@ -7,7 +7,7 @@ const NOTIFICATIONS_ENABLED_KEY = 'notificationsEnabled';
 type Tab = 'general' | 'projects';
 
 interface SettingsValues {
-  max_concurrent_sessions: string;
+  max_concurrent_code_sessions: string;
   auto_review_concurrency: string;
   auto_review: string;
   plan_tier: string;
@@ -142,7 +142,7 @@ export function Settings({ initialTab = 'general', projects }: Props) {
                 {saveError && <p className={styles.error}>{saveError}</p>}
 
                 <h3 className={styles.sectionTitle}>Session Limits</h3>
-                {numInput('max_concurrent_sessions', 'Max concurrent code sessions', 1, 100)}
+                {numInput('max_concurrent_code_sessions', 'Max concurrent code sessions', 1, 100)}
                 {numInput('auto_review_concurrency', 'Max concurrent review sessions', 1, 20)}
 
                 <h3 className={styles.sectionTitle}>Token Usage</h3>
