@@ -1,7 +1,7 @@
 import { spawn, ChildProcess, execSync } from 'child_process';
 import { createInterface } from 'readline';
 import { EventEmitter } from 'events';
-import { config, ALLOWED_TOOLS } from '../config';
+import { config, ALLOWED_TOOLS, runtimeSettings } from '../config';
 import {
   upsertSessionEvent,
   updateSessionStatus,
@@ -151,6 +151,9 @@ Fetch both Notion pages, then begin the task.
     // Use Bash(<prefix>:*) patterns for granular Bash access — only commands
     // starting with the given prefix are allowed. Unmatched Bash commands are
     // silently denied in --print mode.
+    const modelSetting = this.sessionType === 'review'
+      ? runtimeSettings.review_session_model
+      : runtimeSettings.code_session_model;
     const spawnArgs = [
       ...(this.resumeSessionId ? ['--resume', this.resumeSessionId] : []),
       '--print',
@@ -158,6 +161,7 @@ Fetch both Notion pages, then begin the task.
       '--input-format', 'stream-json',
       '--verbose',
       '--permission-mode', 'acceptEdits',
+      ...(modelSetting ? ['--model', modelSetting] : []),
       '--allowed-tools',
       ...ALLOWED_TOOLS,
     ];

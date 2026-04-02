@@ -91,6 +91,8 @@ export interface RuntimeSettings {
   plan_tier: string;
   plan_token_cap: number;
   card_preview_lines: number;
+  code_session_model: string;
+  review_session_model: string;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -101,4 +103,6 @@ export const runtimeSettings: RuntimeSettings = {
   plan_tier: process.env.PLAN_TIER ?? 'Max (5x)',
   plan_token_cap: Number(process.env.PLAN_TOKEN_CAP ?? 25_000_000),
   card_preview_lines: Number(process.env.CARD_PREVIEW_LINES ?? 3),
+  code_session_model: '',
+  review_session_model: '',
 };
