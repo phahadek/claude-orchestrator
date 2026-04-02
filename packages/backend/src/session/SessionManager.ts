@@ -4,7 +4,7 @@ import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
 import { AgentSession, parseNotionPageId } from './AgentSession';
 import { config, getProjectById, normalizePath } from '../config';
-import { insertSession, updateSessionStatus, insertEvent, getSession, getSessionsByStatus, getPRByNotionTaskId } from '../db/queries';
+import { insertSession, updateSessionStatus, insertEvent, getSession, getSessionsByStatus, getPRByNotionTaskId, getEventsBySession } from '../db/queries';
 import type { Session } from '../db/types';
 import type { NotionClient } from '../notion/NotionClient';
 import type { GitHubClient } from '../github/GitHubClient';
@@ -230,6 +230,47 @@ export class SessionManager extends EventEmitter {
     // Update status to running and broadcast so the frontend sees it come back.
     updateSessionStatus(row.session_id, 'running');
     this.emit('message', { type: 'session_status', sessionId: row.session_id, status: 'running' } satisfies ServerMessage);
+
+    // Detect mid-turn state: last event was a tool_result or tool_use with no
+    // subsequent assistant/result response. Log a warning to aid diagnosis.
+    const sessionEvents = getEventsBySession(row.session_id);
+    const lastEvent = sessionEvents[sessionEvents.length - 1];
+    if (lastEvent && (lastEvent.event_type === 'tool_result' || lastEvent.event_type === 'tool_use')) {
+      console.warn(
+        `[SessionManager] resumeSession ${row.session_id}: Resuming mid-turn session — sending continuation nudge`,
+      );
+    }
+
+    // Send a continuation nudge after the first event from the resumed CLI.
+    // --print mode requires input to produce output; without a message, the CLI
+    // either hangs waiting for stdin or exits immediately. This covers both
+    // mid-turn sessions (last event was a tool result) and idle sessions.
+    const NUDGE_MESSAGE =
+      'The dashboard was restarted while you were working. Please continue where you left off.';
+    const RESUME_TIMEOUT_MS = 30_000;
+
+    let nudgeSent = false;
+    const nudgeTimer = setTimeout(() => {
+      if (!nudgeSent && !session.hasEnded) {
+        console.warn(
+          `[SessionManager] resumeSession ${row.session_id}: no events within 30s after resume — marking as error`,
+        );
+        updateSessionStatus(row.session_id, 'error', Date.now());
+        this.emit('message', {
+          type: 'session_ended',
+          sessionId: row.session_id,
+          status: 'error',
+        } satisfies ServerMessage);
+        session.kill().catch(() => {});
+      }
+    }, RESUME_TIMEOUT_MS);
+    nudgeTimer.unref();
+
+    session.once('message', () => {
+      nudgeSent = true;
+      clearTimeout(nudgeTimer);
+      session.sendMessage(NUDGE_MESSAGE);
+    });
 
     this.wireSession(row.session_id, session, projectDir, branchName, worktreePath);
   }

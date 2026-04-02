@@ -299,6 +299,48 @@ describe('SessionManager.resumeSession()', () => {
   });
 });
 
+// ── AC: resumeSession() — continuation nudge, timeout, mid-turn detection ────
+describe('SessionManager.resumeSession() — nudge, timeout, mid-turn detection', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('sends a continuation nudge via sendMessage() after the first event from the resumed CLI', () => {
+    // Must use session.once('message', ...) to detect first event
+    expect(source).toMatch(/session\.once\s*\(\s*'message'/);
+    // Must call sendMessage with the continuation nudge
+    expect(source).toMatch(/session\.sendMessage\s*\(/);
+    expect(source).toMatch(/continue where you left off/);
+  });
+
+  it('sets a 30-second timeout and marks session as error if no events are received', () => {
+    // Must use setTimeout with 30s constant
+    expect(source).toMatch(/RESUME_TIMEOUT_MS\s*=\s*30[_]?000/);
+    expect(source).toMatch(/setTimeout\s*\(/);
+    // On timeout: must call updateSessionStatus with 'error'
+    expect(source).toMatch(/updateSessionStatus\s*\(.*'error'.*Date\.now\(\)\)/s);
+    // On timeout: must emit session_ended with status error
+    expect(source).toMatch(/session_ended/);
+    // Must clear the timer when nudge is sent (happy path)
+    expect(source).toMatch(/clearTimeout\s*\(\s*nudgeTimer\s*\)/);
+  });
+
+  it('guards timeout against sessions that end naturally before 30s', () => {
+    // Must check !session.hasEnded before marking error in the timeout callback
+    expect(source).toMatch(/!session\.hasEnded/);
+  });
+
+  it('detects mid-turn state and logs a warning when last event is tool_result or tool_use', () => {
+    // Must fetch events for the session
+    expect(source).toMatch(/getEventsBySession\s*\(\s*row\.session_id\s*\)/);
+    // Must check for tool_result or tool_use as last event type
+    expect(source).toMatch(/tool_result.*tool_use|tool_use.*tool_result/);
+    // Must log a warning mentioning continuation nudge
+    expect(source).toMatch(/Resuming mid-turn session.*continuation nudge|continuation nudge.*mid-turn session/s);
+  });
+});
+
 // ── AC: server.ts calls resumeOrphanSessions() after jsonlReader.importAll() ──
 describe('server.ts startup sequence', () => {
   it('calls sessionManager.resumeOrphanSessions() in the importAll().then() block', () => {
