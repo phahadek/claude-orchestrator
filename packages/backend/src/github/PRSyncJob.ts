@@ -36,6 +36,7 @@ export class PRSyncJob {
             created_at: pr.createdAt,
             updated_at: pr.updatedAt,
             synced_at: new Date().toISOString(),
+            node_id: pr.nodeId,
           });
         }
 
