@@ -22,6 +22,7 @@ export interface PRListItem {
   state: string;
   notionTaskId: string | null;
   notionTaskTitle: string | null;
+  sessionId: string | null;
   reviewResult: PRReviewResult | null;
   reviewedAt: string | null;
   createdAt: string;
@@ -34,6 +35,7 @@ export interface PRCardProps {
   onMerge: (prNumber: number) => void;
   onFix: (prNumber: number) => void;
   onRemove: (prNumber: number) => void;
+  onViewSession?: (sessionId: string) => void;
   reviewInFlight: boolean;
   mergeInFlight: boolean;
   fixInFlight: boolean;
@@ -54,6 +56,7 @@ export function PRCard({
   onMerge,
   onFix,
   onRemove,
+  onViewSession,
   reviewInFlight,
   mergeInFlight,
   fixInFlight,
@@ -88,6 +91,7 @@ export function PRCard({
     <div className={styles.card}>
       <div className={styles.cardHeader}>
         <div className={styles.titleRow}>
+          <span className={styles.prNumber}>#{pr.prNumber}</span>
           <span className={styles.title}>{pr.title}</span>
           <a
             href={pr.prUrl}
@@ -102,20 +106,33 @@ export function PRCard({
         <span className={styles.branch}>
           {pr.headBranch} → {pr.baseBranch}
         </span>
-        {pr.notionTaskTitle && (
-          <div className={styles.notionRow}>
-            <span className={styles.notionLabel}>Task:</span>
-            {pr.notionTaskId ? (
-              <a
-                href={`https://notion.so/${pr.notionTaskId.replace(/-/g, '')}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={styles.notionLink}
+        {(pr.notionTaskTitle || pr.sessionId) && (
+          <div className={styles.metaRow}>
+            {pr.notionTaskTitle && (
+              <div className={styles.notionRow}>
+                <span className={styles.notionLabel}>Task:</span>
+                {pr.notionTaskId ? (
+                  <a
+                    href={`https://notion.so/${pr.notionTaskId.replace(/-/g, '')}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={styles.notionLink}
+                  >
+                    {pr.notionTaskTitle} ↗
+                  </a>
+                ) : (
+                  <span className={styles.notionTitle}>{pr.notionTaskTitle}</span>
+                )}
+              </div>
+            )}
+            {pr.sessionId && onViewSession && (
+              <button
+                type="button"
+                className={styles.sessionLink}
+                onClick={() => onViewSession(pr.sessionId!)}
               >
-                {pr.notionTaskTitle} ↗
-              </a>
-            ) : (
-              <span className={styles.notionTitle}>{pr.notionTaskTitle}</span>
+                Session ⇗
+              </button>
             )}
           </div>
         )}
