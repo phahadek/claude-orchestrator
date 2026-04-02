@@ -3,6 +3,7 @@ import fs from 'fs';
 import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
 import { AgentSession, parseNotionPageId } from './AgentSession';
+import { buildOrchestratorClaudeMd } from './orchestrator-claudemd';
 import { config, getProjectById, normalizePath } from '../config';
 import { insertSession, updateSessionStatus, insertEvent, getSession, getSessionsByStatus, getPRByNotionTaskId, getEventsBySession } from '../db/queries';
 import type { Session } from '../db/types';
@@ -76,6 +77,26 @@ export class SessionManager extends EventEmitter {
       `[SessionManager] worktree created: path=${worktreePath} branch=${branchName}` +
       (isUnixStylePath ? ' [WARNING: Unix-style path detected — may not resolve correctly on Windows]' : ''),
     );
+
+    // Inject merged CLAUDE.md into the worktree: orchestrator rules first (authoritative),
+    // project CLAUDE.md appended below. The project's original file is never modified.
+    try {
+      const orchestratorMd = buildOrchestratorClaudeMd({
+        taskName: taskName ?? taskUrl,
+        taskUrl,
+        projectContextUrl,
+        targetBranch: 'dev',
+      });
+      const projectMdPath = path.join(projectDir, 'CLAUDE.md');
+      const projectMd = fs.existsSync(projectMdPath) ? fs.readFileSync(projectMdPath, 'utf-8') : '';
+      const merged = projectMd
+        ? `${orchestratorMd}\n\n---\n\n# Project Instructions\n\n${projectMd}`
+        : orchestratorMd;
+      fs.writeFileSync(path.join(worktreePath, 'CLAUDE.md'), merged, 'utf-8');
+      console.log(`[SessionManager] orchestrator CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`);
+    } catch (err) {
+      console.error(`[SessionManager] failed to write orchestrator CLAUDE.md for ${sessionId}: ${err}`);
+    }
 
     const notionTaskId = parseNotionPageId(taskUrl);
 
