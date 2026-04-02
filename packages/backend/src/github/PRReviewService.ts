@@ -63,6 +63,7 @@ export class PRReviewService {
       sessionType: 'review',
       customPrompt: prompt,
       projectId,
+      taskName: `#${prData.id} ${prData.title}`,
     });
 
     // Persist the review session pairing immediately
