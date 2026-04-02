@@ -1,0 +1,54 @@
+.rules {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.table th,
+.table td {
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.table th {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.pattern {
+  font-family: monospace;
+  font-size: 0.8125rem;
+}
+
+.allow {
+  color: #a6e3a1;
+}
+
+.deny {
+  color: #f38ba8;
+}
+
+.disabled {
+  opacity: 0.45;
+}
+
+.loading,
+.empty {
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  padding: 12px 0;
+}
+
+.error {
+  color: #f38ba8;
+  font-size: 0.875rem;
+  padding: 12px 0;
+}

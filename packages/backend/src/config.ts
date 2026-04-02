@@ -83,3 +83,20 @@ export const ALLOWED_TOOLS = [
 export function getProjectById(id: string): ProjectConfig | undefined {
   return config.projects.find((p) => p.id === id);
 }
+
+export interface RuntimeSettings {
+  max_concurrent_sessions: number;
+  auto_review_concurrency: number;
+  auto_review: boolean;
+  plan_token_cap: number;
+  card_preview_lines: number;
+}
+
+/** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
+export const runtimeSettings: RuntimeSettings = {
+  max_concurrent_sessions: Number(process.env.MAX_CONCURRENT_SESSIONS ?? 20),
+  auto_review_concurrency: Number(process.env.AUTO_REVIEW_CONCURRENCY ?? 1),
+  auto_review: (process.env.AUTO_REVIEW ?? 'true') !== 'false',
+  plan_token_cap: Number(process.env.PLAN_TOKEN_CAP ?? 0),
+  card_preview_lines: Number(process.env.CARD_PREVIEW_LINES ?? 3),
+};
