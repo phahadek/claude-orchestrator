@@ -10,6 +10,7 @@ import {
   upsertPullRequest,
   incrementTokens,
   insertSessionAudit,
+  setSessionModel,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import type { NotionClient } from '../notion/NotionClient';
@@ -72,6 +73,8 @@ export class AgentSession extends EventEmitter {
   /** Accumulated token counts for this session (in-memory, synced to SQLite). */
   private totalInputTokens = 0;
   private totalOutputTokens = 0;
+  /** Model name extracted from the first assistant event (e.g. 'claude-sonnet-4-6'). */
+  public model: string | null = null;
 
   constructor(
     public readonly sessionId: string,
@@ -225,6 +228,20 @@ Fetch both Notion pages, then begin the task.
 
       if (rawType === 'system' && (event.subtype as string) === 'init') {
         sessionLog(this.sessionId, `INIT permissionMode=${event.permissionMode}`);
+      }
+
+      // Extract model name from first assistant event
+      if (rawType === 'assistant' && this.model === null && event.message) {
+        const msgForModel = event.message as Record<string, unknown>;
+        if (typeof msgForModel.model === 'string' && msgForModel.model) {
+          this.model = msgForModel.model;
+          setSessionModel(this.sessionId, this.model);
+          this.broadcast({
+            type: 'session_updated',
+            sessionId: this.sessionId,
+            model: this.model,
+          });
+        }
       }
 
       // Log tool_use blocks from assistant messages and track PR creation tool calls
