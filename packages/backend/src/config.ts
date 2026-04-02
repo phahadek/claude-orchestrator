@@ -60,7 +60,7 @@ export const config = {
   projectDir: normalizePath(process.env.PROJECT_DIR ?? process.cwd()),
   projects: parseProjects(),
   claudePath: resolveClaudePath(),
-  maxConcurrentSessions: Number(process.env.MAX_CONCURRENT_SESSIONS ?? 20),
+  maxConcurrentCodeSessions: Number(process.env.MAX_CONCURRENT_CODE_SESSIONS ?? 20),
 };
 
 export const GITHUB_TOKEN = process.env.GITHUB_TOKEN ?? '';
@@ -85,7 +85,7 @@ export function getProjectById(id: string): ProjectConfig | undefined {
 }
 
 export interface RuntimeSettings {
-  max_concurrent_sessions: number;
+  max_concurrent_code_sessions: number;
   auto_review_concurrency: number;
   auto_review: boolean;
   plan_tier: string;
@@ -97,7 +97,7 @@ export interface RuntimeSettings {
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
 export const runtimeSettings: RuntimeSettings = {
-  max_concurrent_sessions: Number(process.env.MAX_CONCURRENT_SESSIONS ?? 20),
+  max_concurrent_code_sessions: Number(process.env.MAX_CONCURRENT_CODE_SESSIONS ?? 20),
   auto_review_concurrency: Number(process.env.AUTO_REVIEW_CONCURRENCY ?? 1),
   auto_review: (process.env.AUTO_REVIEW ?? 'true') !== 'false',
   plan_tier: process.env.PLAN_TIER ?? 'Max (5x)',
