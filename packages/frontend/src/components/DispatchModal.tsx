@@ -17,16 +17,17 @@ interface Props {
   send: (msg: ClientMessage) => void;
   resetTasks: () => void;
   project: ProjectConfig;
+  boardId?: string;
   onClose: () => void;
 }
 
-export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, onClose }: Props) {
+export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, boardId, onClose }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     resetTasks();
-    send({ type: 'fetch_tasks', projectId: project.id });
+    send({ type: 'fetch_tasks', projectId: project.id, boardId });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
