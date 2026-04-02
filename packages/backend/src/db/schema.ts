@@ -65,6 +65,17 @@ export function runMigrations(): void {
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS session_audits (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id    TEXT NOT NULL,
+      pr_opened     INTEGER NOT NULL DEFAULT 0,
+      pr_targets    TEXT,
+      task_status   TEXT,
+      violations    TEXT NOT NULL DEFAULT '[]',
+      spec_mismatch TEXT,
+      audited_at    TEXT NOT NULL
+    );
   `);
 
   // Idempotent column additions for existing databases

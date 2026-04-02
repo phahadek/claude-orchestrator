@@ -9,10 +9,14 @@ import {
   insertPermissionDenial,
   upsertPullRequest,
   incrementTokens,
+  insertSessionAudit,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import type { NotionClient } from '../notion/NotionClient';
+import type { GitHubClient } from '../github/GitHubClient';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
+import { SessionAuditor } from './SessionAuditor';
+import type { ISessionManager } from './SessionAuditor';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
 
@@ -77,6 +81,8 @@ export class AgentSession extends EventEmitter {
     private readonly resumeSessionId?: string,
     private readonly customPrompt?: string,
     public readonly sessionType: string = 'standard',
+    private readonly sessionManager?: ISessionManager,
+    private readonly githubClient?: GitHubClient,
   ) {
     super();
   }
@@ -489,6 +495,43 @@ export class AgentSession extends EventEmitter {
       status: 'done',
       ...(prUrl ? { prUrl } : {}),
     });
+
+    if (this.sessionType !== 'review') {
+      this.runAudit(0);
+    }
+  }
+
+  /**
+   * Run the post-session audit fire-and-forget.
+   * Stores the result in SQLite and broadcasts session_audit.
+   * Errors are logged but never thrown — the audit is always non-blocking.
+   */
+  private runAudit(exitCode: number | null): void {
+    const auditor = new SessionAuditor(this.notionClient, this.githubClient, this.sessionManager);
+    auditor.audit(this, exitCode)
+      .then((audit) => {
+        insertSessionAudit({
+          session_id: audit.sessionId,
+          pr_opened: audit.prOpened ? 1 : 0,
+          pr_targets: audit.prTargetsBranch,
+          task_status: audit.taskStatusAfter,
+          violations: JSON.stringify(audit.violations),
+          spec_mismatch: audit.specMismatch,
+          audited_at: audit.auditedAt,
+        });
+        this.broadcast({
+          type: 'session_audit',
+          sessionId: audit.sessionId,
+          prOpened: audit.prOpened,
+          prTargetsBranch: audit.prTargetsBranch,
+          violations: audit.violations,
+          specMismatch: audit.specMismatch,
+          auditedAt: audit.auditedAt,
+        });
+      })
+      .catch((err) => {
+        console.error(`[AgentSession] audit failed for ${this.sessionId}: ${err}`);
+      });
   }
 
   /** No-op — CLI does not support mid-session permission approval. */

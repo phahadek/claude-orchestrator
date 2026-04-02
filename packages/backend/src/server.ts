@@ -37,8 +37,8 @@ const sessionsDir = rawSessionsDir.replace(/^~/, os.homedir());
 const jsonlReader = new JsonlReader(sessionsDir);
 
 const notionClient = new NotionClient();
-const sessionManager = new SessionManager(notionClient);
 const githubClient = new GitHubClient();
+const sessionManager = new SessionManager(notionClient, githubClient);
 const prReviewService = new PRReviewService(githubClient, notionClient, sessionManager);
 const reviewOrchestrator = new ReviewOrchestrator(
   prReviewService, sessionManager, AUTO_REVIEW_CONCURRENCY, AUTO_REVIEW_ENABLED,
