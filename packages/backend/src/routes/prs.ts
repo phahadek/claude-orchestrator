@@ -334,7 +334,7 @@ export function createPrsRouter(
       return;
     }
     const reviewResult = JSON.parse(prRow.review_result) as PRReviewResult;
-    const failingDimensions = reviewResult.dimensions.filter((d) => !d.passed);
+    const failingDimensions = (reviewResult.dimensions ?? []).filter((d) => !d.passed);
     const lines = failingDimensions.map((d) => `❌ ${d.name}: ${d.notes}`).join('\n');
     const fixMessage =
       `PR #${prNumber} review findings — please address the following:\n\n${lines}\n\nOverall: ${reviewResult.summary}`;

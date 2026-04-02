@@ -145,4 +145,25 @@ describe('PRCard', () => {
     const mergeBtn = screen.getByRole('button', { name: /merge/i });
     expect(mergeBtn.hasAttribute('disabled')).toBe(true);
   });
+
+  it('renders without crash when reviewResult has no dimensions property', () => {
+    const pr = makePR({ reviewResult: { verdict: 'needs_changes', summary: 'Review timed out' } });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    fireEvent.click(screen.getByText(/review details/i));
+    expect(screen.getByText('Review timed out')).toBeDefined();
+  });
+
+  it('renders without crash when reviewResult.dimensions is an empty array', () => {
+    const pr = makePR({ reviewResult: { verdict: 'needs_changes', dimensions: [], summary: 'All good' } });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    fireEvent.click(screen.getByText(/review details/i));
+    expect(screen.getByText('All good')).toBeDefined();
+  });
+
+  it('shows error verdict summary instead of dimensions list', () => {
+    const pr = makePR({ reviewResult: { verdict: 'error', summary: 'Review timed out' } });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    fireEvent.click(screen.getByText(/review details/i));
+    expect(screen.getByText('Review failed: Review timed out')).toBeDefined();
+  });
 });

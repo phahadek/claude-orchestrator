@@ -8,8 +8,8 @@ export interface PRReviewDimension {
 }
 
 export interface PRReviewResult {
-  verdict: 'approved' | 'needs_changes' | 'incomplete';
-  dimensions: PRReviewDimension[];
+  verdict: 'approved' | 'needs_changes' | 'incomplete' | 'error';
+  dimensions?: PRReviewDimension[];
   summary: string;
 }
 
@@ -52,6 +52,7 @@ const VERDICT_LABELS: Record<string, string> = {
   approved: '✅ Approved',
   needs_changes: '⚠️ Needs Changes',
   incomplete: '❌ Incomplete',
+  error: '⚠️ Review Error',
 };
 
 export function PRCard({
@@ -219,14 +220,20 @@ export function PRCard({
           </button>
           {detailsOpen && (
             <div className={styles.detailsBody}>
-              {pr.reviewResult.dimensions.map((dim) => (
-                <div key={dim.name} className={styles.dimension}>
-                  <span className={styles.dimIcon}>{dim.passed ? '✅' : '⚠️'}</span>
-                  <span className={styles.dimName}>{dim.name}</span>
-                  <span className={styles.dimNotes}>{dim.notes}</span>
-                </div>
-              ))}
-              <div className={styles.reviewSummary}>{pr.reviewResult.summary}</div>
+              {pr.reviewResult.verdict === 'error' ? (
+                <div className={styles.reviewError}>Review failed: {pr.reviewResult.summary}</div>
+              ) : (
+                <>
+                  {(pr.reviewResult.dimensions ?? []).map((dim) => (
+                    <div key={dim.name} className={styles.dimension}>
+                      <span className={styles.dimIcon}>{dim.passed ? '✅' : '⚠️'}</span>
+                      <span className={styles.dimName}>{dim.name}</span>
+                      <span className={styles.dimNotes}>{dim.notes}</span>
+                    </div>
+                  ))}
+                  <div className={styles.reviewSummary}>{pr.reviewResult.summary}</div>
+                </>
+              )}
             </div>
           )}
         </div>
