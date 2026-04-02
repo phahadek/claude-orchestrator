@@ -130,6 +130,132 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+// ── tryParseVerdict() — fence stripping and JSON extraction ──────────────────
+
+describe('PRReviewService.tryParseVerdict() — hardened parsing', () => {
+  function makeService() {
+    return new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+  }
+
+  const validPayload = {
+    verdict: 'approved',
+    dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+    summary: 'All good.',
+  };
+
+  it('parses bare JSON without fences', () => {
+    const service = makeService();
+    // Access via parseReviewResult with a single event
+    const events = [makeAssistantEvent(JSON.stringify(validPayload))];
+    const result = service.parseReviewResult(events, 42, 'owner/repo');
+    expect(result.verdict).toBe('approved');
+  });
+
+  it('strips ```json ... ``` fences and parses inner JSON', () => {
+    const service = makeService();
+    const fenced = '```json\n' + JSON.stringify(validPayload) + '\n```';
+    const events = [makeAssistantEvent(fenced)];
+    const result = service.parseReviewResult(events, 42, 'owner/repo');
+    expect(result.verdict).toBe('approved');
+  });
+
+  it('strips ``` ... ``` fences without language specifier', () => {
+    const service = makeService();
+    const fenced = '```\n' + JSON.stringify(validPayload) + '\n```';
+    const events = [makeAssistantEvent(fenced)];
+    const result = service.parseReviewResult(events, 42, 'owner/repo');
+    expect(result.verdict).toBe('approved');
+  });
+
+  it('extracts JSON from text with preamble and trailing content', () => {
+    const service = makeService();
+    const withPreamble = 'Here is my review:\n' + JSON.stringify(validPayload) + '\nPlease let me know if you need changes.';
+    const events = [makeAssistantEvent(withPreamble)];
+    const result = service.parseReviewResult(events, 42, 'owner/repo');
+    expect(result.verdict).toBe('approved');
+  });
+
+  it('returns incomplete verdict when no JSON object is present', () => {
+    const service = makeService();
+    const events = [makeAssistantEvent('The PR looks good overall!')];
+    const result = service.parseReviewResult(events, 42, 'owner/repo');
+    expect(result.verdict).toBe('incomplete');
+  });
+});
+
+// ── parseReviewResult() — last assistant message filtering ───────────────────
+
+describe('PRReviewService.parseReviewResult() — last assistant message only', () => {
+  function makeService() {
+    return new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+  }
+
+  it('ignores text from earlier assistant messages (tool call pollution)', () => {
+    const service = makeService();
+
+    // First assistant message contains tool call output — not a verdict
+    const toolCallEvent = makeAssistantEvent('Fetching Notion context...');
+
+    // Last assistant message contains the verdict
+    const verdictPayload = {
+      verdict: 'needs_changes',
+      dimensions: [{ name: 'Diff vs Acceptance Criteria', passed: false, notes: 'Missing test.' }],
+      summary: 'One dimension failed.',
+    };
+    const verdictEvent = makeAssistantEvent(JSON.stringify(verdictPayload));
+
+    const result = service.parseReviewResult([toolCallEvent, verdictEvent], 42, 'owner/repo');
+    expect(result.verdict).toBe('needs_changes');
+    expect(result.summary).toBe('One dimension failed.');
+  });
+
+  it('succeeds when JSON is split across multiple text blocks in last assistant message', () => {
+    const service = makeService();
+
+    const fullPayload = {
+      verdict: 'approved',
+      dimensions: [{ name: 'Title and description vs task Summary', passed: true, notes: 'Matches.' }],
+      summary: 'Looks great.',
+    };
+    // Split JSON across two text blocks within the same assistant message
+    const jsonStr = JSON.stringify(fullPayload);
+    const half = Math.floor(jsonStr.length / 2);
+    const part1 = jsonStr.slice(0, half);
+    const part2 = jsonStr.slice(half);
+
+    const splitEvent: SessionEvent = {
+      id: 1,
+      session_id: 'review-session-id',
+      event_type: 'text',
+      payload: JSON.stringify({
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'text', text: part1 },
+            { type: 'text', text: part2 },
+          ],
+        },
+      }),
+      timestamp: Date.now(),
+    };
+
+    const result = service.parseReviewResult([splitEvent], 42, 'owner/repo');
+    expect(result.verdict).toBe('approved');
+  });
+});
+
 // ── buildPrompt() ─────────────────────────────────────────────────────────────
 
 describe('PRReviewService.buildPrompt()', () => {
