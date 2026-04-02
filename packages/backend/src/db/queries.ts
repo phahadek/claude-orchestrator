@@ -494,6 +494,14 @@ export function incrementReviewIteration(prNumber: number, repo: string): number
   return row?.review_iteration ?? 1;
 }
 
+export function setLastReviewedSha(prNumber: number, repo: string, sha: string | null): void {
+  db.prepare<{ pr_number: number; repo: string; last_reviewed_sha: string | null }>(`
+    UPDATE pull_requests
+    SET last_reviewed_sha = @last_reviewed_sha
+    WHERE pr_number = @pr_number AND repo = @repo
+  `).run({ pr_number: prNumber, repo, last_reviewed_sha: sha });
+}
+
 export function getPRBySessionId(sessionId: string): PullRequestRow | null {
   return db.prepare<{ session_id: string }>(`
     SELECT * FROM pull_requests WHERE session_id = @session_id LIMIT 1

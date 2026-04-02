@@ -9,6 +9,7 @@ vi.mock('../db/queries.js', () => ({
   getPRBySessionId: vi.fn(),
   getSetting: vi.fn().mockReturnValue(undefined),
   incrementReviewIteration: vi.fn(),
+  setLastReviewedSha: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
@@ -20,7 +21,7 @@ vi.mock('../config.js', () => ({
 }));
 
 import { ReviewOrchestrator } from './ReviewOrchestrator';
-import { setPRReviewResult, getPRByNumber, getPRBySessionId, incrementReviewIteration } from '../db/queries';
+import { setPRReviewResult, getPRByNumber, getPRBySessionId, incrementReviewIteration, setLastReviewedSha } from '../db/queries';
 import type { PRReviewService } from './PRReviewService';
 import type { ReviewJob } from './types';
 
@@ -84,7 +85,8 @@ const basePRRow = {
   synced_at: '2024-01-01T00:00:00Z',
   review_session_id: 'review-session-id',
   review_iteration: 0,
-  head_sha: null,
+  head_sha: 'sha-abc',
+  last_reviewed_sha: null,
 };
 
 beforeEach(() => {
@@ -362,6 +364,37 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(rs.sendReReview)).not.toHaveBeenCalled();
+  });
+
+  it('skips re-review when headSha === lastReviewedSha (no new commits since last review)', async () => {
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      ...basePRRow,
+      head_sha: 'same-sha',
+      last_reviewed_sha: 'same-sha',
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('push_detected', { sessionId: 'coding-session-id' });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.sendReReview)).not.toHaveBeenCalled();
+  });
+
+  it('calls setLastReviewedSha with prRow.head_sha after a successful re-review', async () => {
+    vi.mocked(getPRBySessionId).mockReturnValue({ ...basePRRow, head_sha: 'sha-abc', last_reviewed_sha: null } as any);
+    vi.mocked(incrementReviewIteration).mockReturnValue(1);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('push_detected', { sessionId: 'coding-session-id' });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setLastReviewedSha)).toHaveBeenCalledWith(1, 'owner/repo', 'sha-abc');
   });
 
   it('deduplicates concurrent push_detected for the same coding session', async () => {
