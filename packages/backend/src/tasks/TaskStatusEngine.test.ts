@@ -1,0 +1,159 @@
+import { describe, it, expect } from 'vitest';
+import { deriveDisplayStatus } from './TaskStatusEngine';
+import type { TaskStatusInput } from './TaskStatusEngine';
+
+function makeInput(overrides: Partial<TaskStatusInput> = {}): TaskStatusInput {
+  return {
+    notionStatus: '🗂️ Ready',
+    codeSessionStatus: null,
+    prState: null,
+    prDraft: false,
+    reviewVerdict: null,
+    reviewIterationCount: 0,
+    reviewIterationCap: 3,
+    ...overrides,
+  };
+}
+
+describe('deriveDisplayStatus', () => {
+  // ─── ready ─────────────────────────────────────────────────────────────────
+
+  it("returns 'ready' when notionStatus is '🗂️ Ready' and codeSessionStatus is null", () => {
+    expect(deriveDisplayStatus(makeInput())).toBe('ready');
+  });
+
+  it("returns 'ready' when all inputs indicate no active work", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({ notionStatus: '🗂️ Ready', codeSessionStatus: null, prState: null }),
+      ),
+    ).toBe('ready');
+  });
+
+  // ─── in_progress ───────────────────────────────────────────────────────────
+
+  it("returns 'in_progress' when codeSessionStatus is 'running' and prState is null", () => {
+    expect(deriveDisplayStatus(makeInput({ codeSessionStatus: 'running' }))).toBe('in_progress');
+  });
+
+  it("returns 'in_progress' when session is running regardless of notionStatus", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({ codeSessionStatus: 'running', notionStatus: '🔄 In Progress' }),
+      ),
+    ).toBe('in_progress');
+  });
+
+  // ─── in_review ─────────────────────────────────────────────────────────────
+
+  it("returns 'in_review' when prState is 'open' and reviewVerdict is null", () => {
+    expect(deriveDisplayStatus(makeInput({ prState: 'open' }))).toBe('in_review');
+  });
+
+  it("returns 'in_review' when reviewVerdict is 'needs_changes'", () => {
+    expect(
+      deriveDisplayStatus(makeInput({ prState: 'open', reviewVerdict: 'needs_changes' })),
+    ).toBe('in_review');
+  });
+
+  it("returns 'in_review' when reviewVerdict is 'incomplete'", () => {
+    expect(
+      deriveDisplayStatus(makeInput({ prState: 'open', reviewVerdict: 'incomplete' })),
+    ).toBe('in_review');
+  });
+
+  // ─── needs_attention ───────────────────────────────────────────────────────
+
+  it("returns 'needs_attention' when reviewIterationCount >= reviewIterationCap", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({ prState: 'open', reviewIterationCount: 3, reviewIterationCap: 3 }),
+      ),
+    ).toBe('needs_attention');
+  });
+
+  it("returns 'needs_attention' when count exceeds cap", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({ prState: 'open', reviewIterationCount: 5, reviewIterationCap: 3 }),
+      ),
+    ).toBe('needs_attention');
+  });
+
+  it("does NOT return 'needs_attention' when count is below cap", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({ prState: 'open', reviewIterationCount: 2, reviewIterationCap: 3 }),
+      ),
+    ).toBe('in_review');
+  });
+
+  // ─── ready_to_merge ────────────────────────────────────────────────────────
+
+  it("returns 'ready_to_merge' when reviewVerdict is 'approved' and prState is 'open'", () => {
+    expect(
+      deriveDisplayStatus(makeInput({ prState: 'open', reviewVerdict: 'approved' })),
+    ).toBe('ready_to_merge');
+  });
+
+  it("returns 'ready_to_merge' even when iteration cap is reached if verdict is approved", () => {
+    // ready_to_merge takes priority over needs_attention
+    expect(
+      deriveDisplayStatus(
+        makeInput({
+          prState: 'open',
+          reviewVerdict: 'approved',
+          reviewIterationCount: 5,
+          reviewIterationCap: 3,
+        }),
+      ),
+    ).toBe('ready_to_merge');
+  });
+
+  // ─── done ──────────────────────────────────────────────────────────────────
+
+  it("returns 'done' when prState is 'merged'", () => {
+    expect(deriveDisplayStatus(makeInput({ prState: 'merged' }))).toBe('done');
+  });
+
+  it("returns 'done' when prState is 'closed'", () => {
+    expect(deriveDisplayStatus(makeInput({ prState: 'closed' }))).toBe('done');
+  });
+
+  it("returns 'done' even when reviewVerdict is 'approved' if PR is merged", () => {
+    expect(
+      deriveDisplayStatus(makeInput({ prState: 'merged', reviewVerdict: 'approved' })),
+    ).toBe('done');
+  });
+
+  // ─── priority ordering ─────────────────────────────────────────────────────
+
+  it('done takes priority over ready_to_merge', () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({ prState: 'merged', reviewVerdict: 'approved' }),
+      ),
+    ).toBe('done');
+  });
+
+  it('ready_to_merge takes priority over needs_attention', () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({
+          prState: 'open',
+          reviewVerdict: 'approved',
+          reviewIterationCount: 10,
+          reviewIterationCap: 3,
+        }),
+      ),
+    ).toBe('ready_to_merge');
+  });
+
+  it('needs_attention takes priority over in_review', () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({ prState: 'open', reviewIterationCount: 3, reviewIterationCap: 3 }),
+      ),
+    ).toBe('needs_attention');
+  });
+});
