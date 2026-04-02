@@ -6,11 +6,12 @@ import styles from './PRPanel.module.css';
 interface Props {
   activeProjectId: string | null;
   onFixSession: (sessionId: string) => void;
+  onViewSession?: (sessionId: string) => void;
   onCollapse?: () => void;
   refreshTrigger?: number;
 }
 
-export function PRPanel({ activeProjectId, onFixSession, onCollapse, refreshTrigger }: Props) {
+export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollapse, refreshTrigger }: Props) {
   const [prs, setPRs] = useState<PRListItem[]>([]);
   const [networkError, setNetworkError] = useState(false);
   const [noRepo, setNoRepo] = useState(false);
@@ -270,6 +271,7 @@ export function PRPanel({ activeProjectId, onFixSession, onCollapse, refreshTrig
               onMerge={handleMerge}
               onFix={handleFix}
               onRemove={handleRemovePR}
+              onViewSession={onViewSession}
               reviewInFlight={reviewInFlight.has(pr.prNumber)}
               mergeInFlight={mergeInFlight.has(pr.prNumber)}
               fixInFlight={fixInFlight.has(pr.prNumber)}
