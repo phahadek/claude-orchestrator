@@ -13,6 +13,7 @@ interface Props {
 
 export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollapse, refreshTrigger }: Props) {
   const [prs, setPRs] = useState<PRListItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [networkError, setNetworkError] = useState(false);
   const [noRepo, setNoRepo] = useState(false);
 
@@ -31,6 +32,7 @@ export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollap
 
   const fetchPRs = useCallback(async () => {
     if (!activeProjectId) return;
+    if (prs.length === 0) setIsLoading(true);
     try {
       const [prsRes, countRes] = await Promise.all([
         fetch(`/api/prs?projectId=${encodeURIComponent(activeProjectId)}`),
@@ -54,8 +56,10 @@ export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollap
       }
     } catch {
       setNetworkError(true);
+    } finally {
+      setIsLoading(false);
     }
-  }, [activeProjectId]);
+  }, [activeProjectId, prs.length]);
 
   useEffect(() => {
     fetchPRs();
@@ -323,7 +327,11 @@ export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollap
         </div>
       )}
 
-      {!noRepo && (prs.length === 0 && !networkError ? (
+      {!noRepo && isLoading && prs.length === 0 && (
+        <div className={styles.loadingState}>Loading PRs…</div>
+      )}
+
+      {!noRepo && !isLoading && (prs.length === 0 && !networkError ? (
         <div className={styles.emptyState}>No open pull requests.</div>
       ) : (
         <div className={styles.prList}>
