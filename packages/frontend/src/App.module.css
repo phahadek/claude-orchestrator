@@ -76,6 +76,20 @@
   border-top: 1px solid #313244;
 }
 
+.prFullView {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.settingsView {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
 .connectionBanner {
   position: fixed;
   top: 0;
