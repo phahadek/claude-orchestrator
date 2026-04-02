@@ -242,3 +242,13 @@
 .favorite-btn--active {
   color: #f9e2af;
 }
+
+/* Model badge */
+.model-badge {
+  font-size: 10px;
+  color: var(--text-faint);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+  white-space: nowrap;
+}

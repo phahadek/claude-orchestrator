@@ -102,6 +102,9 @@ export function SessionCard({ session, selected, onClick, projectColor, projectN
             {formatTokenCount((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0))} tokens
           </span>
         )}
+        {session.model && (
+          <span className={styles['model-badge']}>{formatModelName(session.model)}</span>
+        )}
         <span className={styles['footer-right']}>
           {session.note && (
             <span className={styles['note-icon']} title={session.note}>📝</span>
@@ -122,6 +125,11 @@ function taskTypeIcon(type: string): string {
   if (type.includes('📋')) return '📋';
   if (type.includes('🧪')) return '🧪';
   return '';
+}
+
+/** Strip the 'claude-' prefix for compact display, e.g. 'claude-sonnet-4-6' → 'sonnet-4-6'. */
+export function formatModelName(model: string): string {
+  return model.replace(/^claude-/, '');
 }
 
 export function truncate(text: string, maxLen: number): string {
