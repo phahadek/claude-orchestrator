@@ -273,6 +273,7 @@ export class AgentSession extends EventEmitter {
         sessionId: this.sessionId,
         eventType: eventType as 'text' | 'tool_use' | 'tool_result' | 'system',
         content: payload,
+        ...(messageId != null && { messageId }),
       });
     });
 

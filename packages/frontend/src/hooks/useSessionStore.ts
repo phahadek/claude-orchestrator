@@ -30,7 +30,7 @@ export interface SessionState {
   taskType?: string;
   sessionType?: string;
   status: string;
-  events: { eventType: string; content: string; timestamp: number }[];
+  events: { eventType: string; content: string; timestamp: number; messageId?: string }[];
   pendingPermission?: { toolName: string; proposedAction: string };
   permissionDenials?: PermissionDenial[];
   prUrl?: string;
@@ -53,6 +53,7 @@ export function useSessionStore() {
   const [tasksReady, setTasksReady] = useState(false);
   const [synced, setSynced] = useState(false);
   const [dismissedDenialIds, setDismissedDenialIds] = useState<Map<string, Set<string>>>(loadDismissedFromStorage);
+  const [prRefreshTrigger, setPrRefreshTrigger] = useState(0);
 
   const dispatch = useCallback((msg: ServerMessage) => {
     setSynced(true);
@@ -87,14 +88,22 @@ export function useSessionStore() {
                 isRateLimited = true;
               }
             } catch { /* not JSON */ }
-            next.set(msg.sessionId, {
-              ...s,
-              isRateLimited,
-              events: [
-                ...s.events,
-                { eventType: msg.eventType, content: msg.content, timestamp: Date.now() },
-              ],
-            });
+            const newEvent = { eventType: msg.eventType, content: msg.content, timestamp: Date.now(), messageId: msg.messageId };
+            let events: typeof s.events;
+            // Upsert by messageId: if we already have an event with this messageId,
+            // replace it in-place instead of appending a duplicate.
+            if (msg.messageId) {
+              const idx = s.events.findIndex((e) => e.messageId === msg.messageId);
+              if (idx >= 0) {
+                events = [...s.events];
+                events[idx] = newEvent;
+              } else {
+                events = [...s.events, newEvent];
+              }
+            } else {
+              events = [...s.events, newEvent];
+            }
+            next.set(msg.sessionId, { ...s, isRateLimited, events });
           }
           break;
         }
