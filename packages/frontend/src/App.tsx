@@ -17,7 +17,7 @@ import { Notifications } from './components/Notifications';
 import { ShortcutHint } from './components/ShortcutHint';
 import { SessionFilterBar } from './components/SessionFilterBar';
 import type { NotificationItem } from './components/Notifications';
-import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
+import type { ClientMessage, ServerMessage } from '@claude-dashboard/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
 import styles from './App.module.css';
 
@@ -271,6 +271,49 @@ export default function App() {
   useEffect(() => {
     setSelectedSessionIndex(-1);
   }, [activeProjectId]);
+
+  const fetchedArchivedRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!selectedId) return;
+    if (fetchedArchivedRef.current.has(selectedId)) return;
+    const inStore = sessions.find((s) => s.sessionId === selectedId);
+    if (inStore) return;
+    fetchedArchivedRef.current.add(selectedId);
+    fetch(`/api/sessions/${selectedId}/events`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json() as Promise<{ session: any; events: any[] }>;
+      })
+      .then(({ session, events }) => {
+        dispatch({
+          type: 'session_started',
+          sessionId: session.session_id,
+          taskName: session.notion_task_url ?? session.session_id.slice(0, 8),
+          notionTaskUrl: session.notion_task_url ?? '',
+          started_at: session.started_at,
+          ended_at: session.ended_at,
+          archived: session.archived === 1,
+          favorited: session.favorited === 1,
+          project_id: session.project_id,
+        } as ServerMessage);
+        dispatch({
+          type: 'session_status',
+          sessionId: session.session_id,
+          status: session.status,
+        } as ServerMessage);
+        for (const ev of events) {
+          dispatch({
+            type: 'session_event',
+            sessionId: session.session_id,
+            eventType: ev.eventType,
+            content: ev.content,
+            ...(ev.messageId && { messageId: ev.messageId }),
+          } as ServerMessage);
+        }
+      })
+      .catch((err) => console.error('[App] failed to load archived session events:', err));
+  }, [selectedId]);
 
   const selectedSession = selectedId != null
     ? (sessions.find((s) => s.sessionId === selectedId) ?? null)
