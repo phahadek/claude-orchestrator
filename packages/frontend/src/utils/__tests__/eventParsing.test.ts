@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { summarizeEvent, extractSystem } from '../eventParsing';
+import { summarizeEvent, extractSystem, extractToolDetail } from '../eventParsing';
 
 // Helper to make an event object
 function ev(eventType: string, content: string) {
@@ -33,7 +33,7 @@ describe('summarizeEvent', () => {
       expect(result.endsWith('…')).toBe(true);
     });
 
-    it('returns tool summary when assistant message has only tool_use blocks', () => {
+    it('returns tool summary with filename when assistant message has only tool_use blocks', () => {
       const payload = {
         type: 'assistant',
         message: {
@@ -43,7 +43,7 @@ describe('summarizeEvent', () => {
         },
       };
       const result = summarizeEvent(ev('text', JSON.stringify(payload)));
-      expect(result).toBe('🔧 Read');
+      expect(result).toBe('🔧 Read (foo.ts)');
     });
 
     it('returns Bash tool summary with command for Bash tool_use in text event', () => {
@@ -73,10 +73,22 @@ describe('summarizeEvent', () => {
   });
 
   describe('tool_use events', () => {
-    it('renders 🔧 ToolName for a standard tool', () => {
+    it('renders 🔧 ToolName (pattern) for Glob tool', () => {
       const payload = { type: 'tool_use', name: 'Glob', input: { pattern: '**/*.ts' } };
       const result = summarizeEvent(ev('tool_use', JSON.stringify(payload)));
-      expect(result).toBe('🔧 Glob');
+      expect(result).toBe('🔧 Glob (**/*.ts)');
+    });
+
+    it('renders 🔧 Read (filename) for Read tool', () => {
+      const payload = { type: 'tool_use', name: 'Read', input: { file_path: '/src/config.ts' } };
+      const result = summarizeEvent(ev('tool_use', JSON.stringify(payload)));
+      expect(result).toBe('🔧 Read (config.ts)');
+    });
+
+    it('renders 🔧 ToolName for a tool with no extractable detail', () => {
+      const payload = { type: 'tool_use', name: 'WebFetch', input: {} };
+      const result = summarizeEvent(ev('tool_use', JSON.stringify(payload)));
+      expect(result).toBe('🔧 WebFetch');
     });
 
     it('renders 🔧 Bash $ <command> for Bash tool', () => {
@@ -141,6 +153,44 @@ describe('summarizeEvent', () => {
       const result = summarizeEvent(ev('unknown_type', 'some content'));
       expect(result).toBe('some content');
     });
+  });
+});
+
+describe('extractToolDetail', () => {
+  it('returns basename for Read with file_path', () => {
+    expect(extractToolDetail('Read', { file_path: '/src/config.ts' })).toBe('config.ts');
+  });
+
+  it('returns basename for Write with file_path', () => {
+    expect(extractToolDetail('Write', { file_path: 'C:\\project\\foo.ts' })).toBe('foo.ts');
+  });
+
+  it('returns basename for Edit with file_path', () => {
+    expect(extractToolDetail('Edit', { file_path: '/a/b/c.ts' })).toBe('c.ts');
+  });
+
+  it('returns pattern for Glob', () => {
+    expect(extractToolDetail('Glob', { pattern: '**/*.ts' })).toBe('**/*.ts');
+  });
+
+  it('returns pattern for Grep', () => {
+    expect(extractToolDetail('Grep', { pattern: 'foo.*bar' })).toBe('foo.*bar');
+  });
+
+  it('returns description for Agent', () => {
+    expect(extractToolDetail('Agent', { description: 'Explore codebase' })).toBe('Explore codebase');
+  });
+
+  it('returns null for unknown tool', () => {
+    expect(extractToolDetail('WebFetch', { url: 'https://example.com' })).toBeNull();
+  });
+
+  it('returns null when input is null', () => {
+    expect(extractToolDetail('Read', null)).toBeNull();
+  });
+
+  it('returns null when relevant field is missing', () => {
+    expect(extractToolDetail('Read', {})).toBeNull();
   });
 });
 
