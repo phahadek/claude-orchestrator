@@ -13,7 +13,7 @@ import type { ServerMessage, PermissionDenial } from '../ws/types';
 import type { NotionClient } from '../notion/NotionClient';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 
-const PR_URL_REGEX = /https:\/\/github\.com\/.+\/pull\/\d+/;
+const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
 
 function sessionLog(sessionId: string, ...args: unknown[]) {
   console.log(`[Session ${sessionId.slice(0, 8)}]`, ...args);
@@ -58,6 +58,10 @@ export class AgentSession extends EventEmitter {
   public hasEnded = false;
   /** Maps message_id → DB row id for deduplicating streaming assistant events. */
   private messageIdMap = new Map<string, number>();
+  /** Maps tool_use_id → tool_name for PR creation tools, for real-time detection. */
+  private pendingGHToolUseIds = new Map<string, string>();
+  /** True once a PR was detected and inserted during the live session. */
+  private prDetectedLive = false;
 
   constructor(
     public readonly sessionId: string,
@@ -166,7 +170,7 @@ export class AgentSession extends EventEmitter {
         sessionLog(this.sessionId, `INIT permissionMode=${event.permissionMode}`);
       }
 
-      // Log tool_use blocks from assistant messages
+      // Log tool_use blocks from assistant messages and track PR creation tool calls
       if (rawType === 'assistant' && event.message) {
         const msg = event.message as Record<string, unknown>;
         const content = msg.content as Array<Record<string, unknown>> | undefined;
@@ -174,6 +178,37 @@ export class AgentSession extends EventEmitter {
           for (const block of content) {
             if (block.type === 'tool_use') {
               sessionLog(this.sessionId, `TOOL_USE name=${block.name} id=${block.id}`);
+              if (block.name === 'mcp__github__create_pull_request' && typeof block.id === 'string') {
+                this.pendingGHToolUseIds.set(block.id, block.name as string);
+              }
+            }
+          }
+        }
+      }
+
+      // Real-time PR detection: handle tool_result events for mcp__github__create_pull_request
+      if (rawType === 'tool_result') {
+        const toolUseId = event.tool_use_id as string | undefined;
+        if (toolUseId && this.pendingGHToolUseIds.has(toolUseId)) {
+          this.pendingGHToolUseIds.delete(toolUseId);
+          const content = event.content as Array<Record<string, unknown>> | undefined;
+          this.handlePRCreatedFromContent(content ?? []);
+        }
+      }
+
+      // Also handle tool_result blocks embedded in user events
+      if (rawType === 'user' && !this.prDetectedLive) {
+        const msg = event.message as Record<string, unknown> | undefined;
+        const content = (msg?.content ?? event.content) as Array<Record<string, unknown>> | undefined;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === 'tool_result') {
+              const toolUseId = block.tool_use_id as string | undefined;
+              if (toolUseId && this.pendingGHToolUseIds.has(toolUseId)) {
+                this.pendingGHToolUseIds.delete(toolUseId);
+                const innerContent = block.content as Array<Record<string, unknown>> | undefined;
+                this.handlePRCreatedFromContent(innerContent ?? []);
+              }
             }
           }
         }
@@ -266,6 +301,85 @@ export class AgentSession extends EventEmitter {
     }
   }
 
+  /**
+   * Parse PR data from the content blocks of a mcp__github__create_pull_request tool_result,
+   * upsert the PR to SQLite with full metadata, and broadcast pr_created.
+   */
+  private handlePRCreatedFromContent(contentBlocks: Array<Record<string, unknown>>): void {
+    if (this.prDetectedLive) return;
+
+    // Extract text from content blocks
+    let text = '';
+    for (const block of contentBlocks) {
+      if (block.type === 'text' && typeof block.text === 'string') {
+        text += block.text;
+      }
+    }
+
+    // Try to parse as GitHub PR API JSON response
+    interface GitHubPRShape {
+      number?: number;
+      html_url?: string;
+      title?: string;
+      body?: string | null;
+      head?: { ref?: string };
+      base?: { ref?: string };
+      state?: string;
+      created_at?: string;
+      updated_at?: string;
+    }
+    let prShape: GitHubPRShape = {};
+    try {
+      const parsed = JSON.parse(text) as GitHubPRShape;
+      if (parsed && typeof parsed === 'object' && parsed.html_url) {
+        prShape = parsed;
+      }
+    } catch {
+      // Not JSON — fall back to regex extraction of URL only
+    }
+
+    // Determine the PR URL (from parsed JSON or regex match)
+    const prUrl = prShape.html_url ?? text.match(PR_URL_REGEX)?.[0];
+    if (!prUrl) return;
+
+    const repoMatch = prUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
+    if (!repoMatch) return;
+
+    const repo = repoMatch[1];
+    const prNumber = prShape.number ?? parseInt(repoMatch[2], 10);
+    const now = new Date().toISOString();
+
+    this.prUrl = prUrl;
+    this.prDetectedLive = true;
+
+    if (this.sessionType === 'standard') {
+      this.notionClient.attachPR(this.taskId, prUrl).catch((e) =>
+        console.error(`[AgentSession] attachPR failed: ${e}`),
+      );
+
+      upsertPullRequest({
+        pr_number: prNumber,
+        pr_url: prUrl,
+        notion_task_id: this.taskId,
+        session_id: this.sessionId,
+        repo,
+        title: prShape.title ?? null,
+        body: prShape.body ?? null,
+        head_branch: prShape.head?.ref ?? null,
+        base_branch: prShape.base?.ref ?? null,
+        state: prShape.state ?? 'open',
+        review_result: null,
+        review_at: null,
+        created_at: prShape.created_at ?? now,
+        updated_at: prShape.updated_at ?? now,
+        synced_at: now,
+      });
+    }
+
+    this.broadcast({ type: 'pr_created', sessionId: this.sessionId, prUrl });
+    sessionLog(this.sessionId, `PR detected live: ${prUrl}`);
+  }
+
   private async handleCleanExit(): Promise<void> {
     const events = getEventsBySession(this.sessionId);
     const last20 = events.slice(-20);
@@ -283,12 +397,13 @@ export class AgentSession extends EventEmitter {
     updateSessionStatus(this.sessionId, 'done', Date.now());
 
     if (this.sessionType === 'standard') {
-      if (prUrl) {
+      if (prUrl && !this.prDetectedLive) {
+        // Fallback: live detection didn't fire (e.g. gh pr create via Bash).
+        // Attach the PR to Notion and insert a stub row (metadata populated by PRSyncJob).
         this.notionClient.attachPR(this.taskId, prUrl).catch((e) =>
           console.error(`[AgentSession] attachPR failed: ${e}`),
         );
 
-        // Parse repo ("owner/repo") and pr_number from the GitHub PR URL
         const prMatch = prUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
         if (prMatch) {
           const repo = prMatch[1];
