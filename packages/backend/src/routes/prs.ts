@@ -132,8 +132,22 @@ export function createPrsRouter(
       res.status(404).json({ error: `PR #${prNumber} not found` });
       return;
     }
-    // Full AI review is an M2a feature. Return a stub for now.
-    res.json({ verdict: null, message: 'PR review not yet implemented' });
+    const contextUrl = project.contextUrl;
+    try {
+      const result = await Promise.race([
+        prReviewService.reviewPR(prNumber, repo, projectId, contextUrl),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Review timed out')), 120_000),
+        ),
+      ]);
+      res.json(result);
+    } catch (err) {
+      if (err instanceof Error && err.message === 'Review timed out') {
+        res.status(504).json({ error: 'Review timed out' });
+        return;
+      }
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   // ── POST /api/prs/:prNumber/merge ────────────────────────────────────────────
