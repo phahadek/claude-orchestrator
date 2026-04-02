@@ -9,19 +9,28 @@ describe('Header', () => {
     onProjectChange: vi.fn(),
     activeBoardId: null,
     onBoardChange: vi.fn(),
-    prPanelVisible: false,
-    onTogglePrPanel: vi.fn(),
+    activeView: 'sessions' as const,
+    onViewChange: vi.fn(),
   };
 
-  it('renders PRs nav button', () => {
+  it('renders Sessions, PRs, and Settings nav buttons', () => {
     render(<Header {...defaultProps} />);
+    expect(screen.getByRole('button', { name: 'Sessions' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'PRs' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Settings' })).toBeDefined();
   });
 
-  it('calls onTogglePrPanel when PRs button is clicked', () => {
-    const onTogglePrPanel = vi.fn();
-    render(<Header {...defaultProps} onTogglePrPanel={onTogglePrPanel} />);
+  it('calls onViewChange with "prs" when PRs button is clicked', () => {
+    const onViewChange = vi.fn();
+    render(<Header {...defaultProps} onViewChange={onViewChange} />);
     fireEvent.click(screen.getByRole('button', { name: 'PRs' }));
-    expect(onTogglePrPanel).toHaveBeenCalled();
+    expect(onViewChange).toHaveBeenCalledWith('prs');
+  });
+
+  it('calls onViewChange with "settings" when Settings button is clicked', () => {
+    const onViewChange = vi.fn();
+    render(<Header {...defaultProps} onViewChange={onViewChange} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(onViewChange).toHaveBeenCalledWith('settings');
   });
 });

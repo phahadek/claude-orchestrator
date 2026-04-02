@@ -4,6 +4,7 @@ import {
   getRecentPermissionEvents,
   clearPermissionEvents,
   getRecentPermissionDenials,
+  getAllRules,
 } from '../db/queries';
 
 // ─── Permission events router ───────────────────────────────────────────────
@@ -29,5 +30,15 @@ export const permissionDenialsRouter = Router();
 // GET /api/permission-denials
 permissionDenialsRouter.get('/', (_req: Request, res: Response) => {
   const rows = getRecentPermissionDenials(200);
+  res.json(rows);
+});
+
+// ─── Permission rules router ─────────────────────────────────────────────────
+
+export const permissionRulesRouter = Router();
+
+// GET /api/permission-rules
+permissionRulesRouter.get('/', (_req: Request, res: Response) => {
+  const rows = getAllRules();
   res.json(rows);
 });
