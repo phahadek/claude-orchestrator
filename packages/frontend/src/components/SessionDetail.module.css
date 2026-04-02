@@ -58,6 +58,16 @@
   text-decoration: underline;
 }
 
+.tokenCount {
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  padding: 1px 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .elapsed {
   font-size: 0.8rem;
   color: var(--text-faint);

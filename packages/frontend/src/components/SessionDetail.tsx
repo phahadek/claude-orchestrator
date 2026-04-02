@@ -14,6 +14,7 @@ import {
 } from '../utils/eventParsing';
 import { StatusBadge } from './StatusBadge';
 import { formatModelName } from './SessionCard';
+import { formatTokenCount } from '@claude-dashboard/backend/src/utils/usage';
 import { ToolCallGroup } from './ToolCallGroup';
 import type { CallPair } from './ToolCallGroup';
 import styles from './SessionDetail.module.css';
@@ -373,6 +374,11 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
           <StatusBadge status={session.status} isRateLimited={session.isRateLimited} />
           {session.model && (
             <span className={styles.modelBadge}>{formatModelName(session.model)}</span>
+          )}
+          {(session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0) > 0 && (
+            <span className={styles.tokenCount}>
+              {formatTokenCount((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0))} tokens
+            </span>
           )}
           <button
             className={`${styles.favoriteButton} ${session.favorited ? styles['favoriteButton--active'] : ''}`}
