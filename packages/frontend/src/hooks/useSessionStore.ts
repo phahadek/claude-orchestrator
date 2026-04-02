@@ -45,6 +45,8 @@ export interface SessionState {
   tags?: string[];
   /** True when the latest event indicates an API rate-limit interruption */
   isRateLimited?: boolean;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
 }
 
 export function useSessionStore() {
@@ -76,6 +78,8 @@ export function useSessionStore() {
             project_id: msg.project_id,
             note: msg.note,
             tags: msg.tags,
+            totalInputTokens: msg.totalInputTokens ?? 0,
+            totalOutputTokens: msg.totalOutputTokens ?? 0,
           });
           break;
         case 'session_event': {
@@ -152,6 +156,8 @@ export function useSessionStore() {
               ...s,
               ...(Object.prototype.hasOwnProperty.call(msg, 'note') && { note: msg.note }),
               ...(Object.prototype.hasOwnProperty.call(msg, 'tags') && { tags: msg.tags }),
+              ...(msg.totalInputTokens != null && { totalInputTokens: msg.totalInputTokens }),
+              ...(msg.totalOutputTokens != null && { totalOutputTokens: msg.totalOutputTokens }),
             });
           }
           break;

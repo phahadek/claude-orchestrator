@@ -420,6 +420,15 @@ export function getCacheAge(taskId: string): number {
   return Date.now() - row.fetched_at;
 }
 
+export function incrementTokens(sessionId: string, inputTokens: number, outputTokens: number): void {
+  db.prepare(`
+    UPDATE sessions
+    SET total_input_tokens  = total_input_tokens  + ?,
+        total_output_tokens = total_output_tokens + ?
+    WHERE session_id = ?
+  `).run(inputTokens, outputTokens, sessionId);
+}
+
 export function getTaskTitleFromCache(taskId: string): string | null {
   const row = getTaskCache(taskId);
   if (!row) return null;
