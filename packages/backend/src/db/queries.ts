@@ -102,6 +102,19 @@ export function deleteSession(sessionId: string): boolean {
   return result.changes > 0;
 }
 
+/**
+ * Delete sessions that have no events — these are "ghost sessions" created by
+ * either empty JSONL imports or session starts that never ran the subprocess.
+ * Returns the number of sessions deleted.
+ */
+export function deleteGhostSessions(): number {
+  const result = db.prepare(`
+    DELETE FROM sessions
+    WHERE session_id NOT IN (SELECT DISTINCT session_id FROM session_events)
+  `).run();
+  return result.changes;
+}
+
 export function getSessionsByStatus(statuses: string[]): Session[] {
   const placeholders = statuses.map(() => '?').join(', ');
   return db.prepare(`
