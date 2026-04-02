@@ -86,7 +86,8 @@ vi.mock('../db/db.js', async () => {
       synced_at         TEXT    NOT NULL,
       review_session_id TEXT,
       review_iteration  INTEGER NOT NULL DEFAULT 0,
-      head_sha          TEXT
+      head_sha          TEXT,
+      last_reviewed_sha TEXT
     );
   `);
   return { db };
@@ -115,6 +116,10 @@ describe('upsertPullRequest + getPRByNumber', () => {
     created_at: now,
     updated_at: now,
     synced_at: now,
+    review_iteration: 0,
+    review_session_id: null,
+    head_sha: null,
+    last_reviewed_sha: null,
   } as const;
 
   it('returns null/undefined when PR does not exist', () => {

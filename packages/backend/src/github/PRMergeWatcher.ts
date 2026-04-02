@@ -1,0 +1,92 @@
+import type { GitHubClient } from './GitHubClient';
+import type { SessionManager } from '../session/SessionManager';
+import type { NotionClient } from '../notion/NotionClient';
+import type { ServerMessage } from '../ws/types';
+import type { PullRequestRow } from '../db/types';
+import { getApprovedOpenPRs, updatePRState } from '../db/queries';
+
+const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+export class PRMergeWatcher {
+  private timer: ReturnType<typeof setInterval> | null = null;
+
+  constructor(
+    private github: GitHubClient,
+    private sessions: SessionManager,
+    private notion: NotionClient,
+    private broadcast: (msg: ServerMessage) => void,
+  ) {}
+
+  start(intervalMs: number = DEFAULT_INTERVAL_MS): void {
+    if (this.timer) return;
+    this.timer = setInterval(() => {
+      this.poll().catch((err: unknown) =>
+        console.warn('[PRMergeWatcher] poll error:', (err as Error).message),
+      );
+    }, intervalMs);
+    console.log(`[PRMergeWatcher] started (interval=${intervalMs}ms)`);
+  }
+
+  stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+
+  async poll(): Promise<void> {
+    const approved = getApprovedOpenPRs();
+    for (const pr of approved) {
+      await this.checkPR(pr);
+    }
+  }
+
+  private async checkPR(pr: PullRequestRow): Promise<void> {
+    let state: string;
+    try {
+      state = await this.github.getPRState(pr.pr_number, pr.repo);
+    } catch (err) {
+      console.warn(`[PRMergeWatcher] getPRState failed for PR #${pr.pr_number}:`, (err as Error).message);
+      return;
+    }
+
+    if (state === 'merged') {
+      await this.handleMerged(pr, null);
+    } else if (state === 'closed') {
+      updatePRState(pr.pr_number, pr.repo, 'closed');
+      this.broadcast({ type: 'pr_closed', prNumber: pr.pr_number, repo: pr.repo });
+    }
+  }
+
+  async handleMerged(pr: PullRequestRow, sha: string | null): Promise<void> {
+    updatePRState(pr.pr_number, pr.repo, 'merged');
+
+    // Kill coding session
+    if (pr.session_id) {
+      await this.sessions.kill(pr.session_id).catch((err: unknown) =>
+        console.warn(`[PRMergeWatcher] kill coding session failed:`, (err as Error).message),
+      );
+    }
+
+    // Kill review session
+    if (pr.review_session_id) {
+      await this.sessions.kill(pr.review_session_id).catch((err: unknown) =>
+        console.warn(`[PRMergeWatcher] kill review session failed:`, (err as Error).message),
+      );
+    }
+
+    // Update Notion task to Done
+    if (pr.notion_task_id) {
+      await this.notion.updateStatus(pr.notion_task_id, '✅ Done').catch((err: unknown) =>
+        console.warn(`[PRMergeWatcher] Notion updateStatus failed:`, (err as Error).message),
+      );
+    }
+
+    this.broadcast({
+      type: 'pr_merged',
+      prNumber: pr.pr_number,
+      repo: pr.repo,
+      sha: sha ?? '',
+    });
+  }
+}

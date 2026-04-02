@@ -442,8 +442,13 @@ export function getTaskTitleFromCache(taskId: string): string | null {
 
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
-export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_session_id' | 'review_iteration' | 'head_sha'>): PullRequestRow {
-  db.prepare<Omit<PullRequestRow, 'id' | 'review_session_id' | 'review_iteration' | 'head_sha'>>(`
+export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_session_id' | 'review_iteration' | 'head_sha' | 'last_reviewed_sha'> & {
+  review_session_id?: string | null;
+  review_iteration?: number;
+  head_sha?: string | null;
+  last_reviewed_sha?: string | null;
+}): PullRequestRow {
+  db.prepare(`
     INSERT INTO pull_requests
       (pr_number, pr_url, notion_task_id, session_id, repo, title, body,
        head_branch, base_branch, state, draft, review_result, review_at,
@@ -487,6 +492,14 @@ export function incrementReviewIteration(prNumber: number, repo: string): number
     SELECT review_iteration FROM pull_requests WHERE pr_number = @pr_number AND repo = @repo
   `).get({ pr_number: prNumber, repo }) as { review_iteration: number } | undefined;
   return row?.review_iteration ?? 1;
+}
+
+export function setLastReviewedSha(prNumber: number, repo: string, sha: string | null): void {
+  db.prepare<{ pr_number: number; repo: string; last_reviewed_sha: string | null }>(`
+    UPDATE pull_requests
+    SET last_reviewed_sha = @last_reviewed_sha
+    WHERE pr_number = @pr_number AND repo = @repo
+  `).run({ pr_number: prNumber, repo, last_reviewed_sha: sha });
 }
 
 export function getPRBySessionId(sessionId: string): PullRequestRow | null {
@@ -594,4 +607,16 @@ export function countMergedAndClosedPRs(repo: string): number {
     SELECT COUNT(*) as count FROM pull_requests WHERE repo = @repo AND state IN ('merged', 'closed')
   `).get({ repo }) as { count: number };
   return row.count;
+}
+
+export function resetReviewIteration(prNumber: number, repo: string): void {
+  db.prepare<{ pr_number: number; repo: string }>(`
+    UPDATE pull_requests SET review_iteration = 0 WHERE pr_number = @pr_number AND repo = @repo
+  `).run({ pr_number: prNumber, repo });
+}
+
+export function getApprovedOpenPRs(): PullRequestRow[] {
+  return db.prepare(`
+    SELECT * FROM pull_requests WHERE state = 'open' AND review_result LIKE '%approved%'
+  `).all() as PullRequestRow[];
 }
