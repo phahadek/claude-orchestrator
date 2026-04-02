@@ -2,6 +2,7 @@ import type { SessionState } from '../hooks/useSessionStore';
 import { taskNameFromNotionUrl } from '../utils/notionUrl';
 import { formatElapsed } from '../utils/sessionTimer';
 import { summarizeEvent, isHiddenSystemEvent, tryParseJson } from '../utils/eventParsing';
+import { formatTokenCount } from '@claude-dashboard/backend/src/utils/usage';
 import { StatusBadge } from './StatusBadge';
 import styles from './SessionCard.module.css';
 
@@ -93,6 +94,11 @@ export function SessionCard({ session, selected, onClick, projectColor, projectN
       )}
       <div className={styles['card-footer']}>
         <span className={styles.elapsed}>{elapsed}</span>
+        {(session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0) > 0 && (
+          <span className={styles['token-count']}>
+            {formatTokenCount((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0))} tokens
+          </span>
+        )}
         <span className={styles['footer-right']}>
           {session.note && (
             <span className={styles['note-icon']} title={session.note}>📝</span>
