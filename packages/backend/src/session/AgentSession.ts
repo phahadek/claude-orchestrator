@@ -400,11 +400,16 @@ export class AgentSession extends EventEmitter {
     if (this.sessionType === 'standard') {
       if (prUrl && !this.prDetectedLive) {
         // Fallback: live detection didn't fire (e.g. gh pr create via Bash).
-        // Attach the PR to Notion and insert a stub row (metadata populated by PRSyncJob).
+        // Attach the PR to Notion.
         this.notionClient.attachPR(this.taskId, prUrl).catch((e) =>
           console.error(`[AgentSession] attachPR failed: ${e}`),
         );
+      }
 
+      // Always upsert notion_task_id and session_id onto the PR row when a
+      // PR URL is known at session end. This ensures the link is set even if
+      // PRSyncJob ran before handleCleanExit and created the row with null values.
+      if (prUrl) {
         const prMatch = prUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
         if (prMatch) {
           const repo = prMatch[1];
@@ -413,7 +418,7 @@ export class AgentSession extends EventEmitter {
           upsertPullRequest({
             pr_number: prNumber,
             pr_url: prUrl,
-            notion_task_id: this.taskId,
+            notion_task_id: this.taskId || null,
             session_id: this.sessionId,
             repo,
             title: null,
