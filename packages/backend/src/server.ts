@@ -126,6 +126,10 @@ wss.on('connection', (ws) => {
 });
 
 jsonlReader.importAll().then(async () => {
+  await sessionManager.resumeOrphanSessions().catch((err: unknown) =>
+    console.warn('[server] orphan session resume failed:', (err as Error).message)
+  );
+
   const prSyncJob = new PRSyncJob(githubClient);
   await prSyncJob.run().catch((err: unknown) =>
     console.warn('[server] PR sync failed (check GITHUB_TOKEN):', (err as Error).message)
