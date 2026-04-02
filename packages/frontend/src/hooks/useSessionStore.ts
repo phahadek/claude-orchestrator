@@ -223,8 +223,24 @@ export function useSessionStore() {
     });
   }, []);
 
+  const clearSessionDenials = useCallback((sessionId: string) => {
+    setSessions((prev) => {
+      const s = prev.get(sessionId);
+      if (!s) return prev;
+      const next = new Map(prev);
+      next.set(sessionId, { ...s, permissionDenials: [] });
+      return next;
+    });
+    setDismissedDenialIds((prev) => {
+      const next = new Map(prev);
+      next.delete(sessionId);
+      saveDismissedToStorage(next);
+      return next;
+    });
+  }, []);
+
   const readyCount = tasks.filter((t) => !t.blocked && t.task.status === '🗂️ Ready').length;
   const blockedCount = tasks.filter((t) => t.blocked).length;
 
-  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials, prRefreshTrigger };
+  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials, clearSessionDenials, prRefreshTrigger };
 }
