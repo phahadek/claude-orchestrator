@@ -1,4 +1,5 @@
 import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
+import { formatTokenCount } from '@claude-dashboard/backend/src/utils/usage';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import styles from './Header.module.css';
 
@@ -12,9 +13,10 @@ interface Props {
   onBoardChange: (boardId: string) => void;
   activeView: TopView;
   onViewChange: (view: TopView) => void;
+  totalTokens?: number;
 }
 
-export function Header({ projects, activeProjectId, onProjectChange, activeBoardId, onBoardChange, activeView, onViewChange }: Props) {
+export function Header({ projects, activeProjectId, onProjectChange, activeBoardId, onBoardChange, activeView, onViewChange, totalTokens }: Props) {
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
   const boards = activeProject?.boards ?? [];
 
@@ -62,6 +64,12 @@ export function Header({ projects, activeProjectId, onProjectChange, activeBoard
               <option key={b.id} value={b.id}>{b.name}</option>
             ))}
           </select>
+        </>
+      )}
+      {totalTokens != null && totalTokens > 0 && (
+        <>
+          <div className={styles.divider} />
+          <span className={styles.tokenSummary}>{formatTokenCount(totalTokens)} tokens</span>
         </>
       )}
     </header>
