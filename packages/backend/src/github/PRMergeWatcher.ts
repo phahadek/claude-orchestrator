@@ -73,9 +73,17 @@ export class PRMergeWatcher {
 
     // Update Notion task to Done
     if (pr.notion_task_id) {
-      await this.notion.updateStatus(pr.notion_task_id, '✅ Done').catch((err: unknown) =>
-        console.warn(`[PRMergeWatcher] Notion updateStatus failed:`, (err as Error).message),
-      );
+      await this.notion.updateStatus(pr.notion_task_id, '✅ Done')
+        .then(() => {
+          this.broadcast({
+            type: 'task_status_changed',
+            notionTaskId: pr.notion_task_id!,
+            newStatus: '✅ Done',
+          });
+        })
+        .catch((err: unknown) =>
+          console.warn(`[PRMergeWatcher] Notion updateStatus failed:`, (err as Error).message),
+        );
     }
 
     this.broadcast({
