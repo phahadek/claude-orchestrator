@@ -7,6 +7,8 @@ describe('Header', () => {
     projects: [],
     activeProjectId: null,
     onProjectChange: vi.fn(),
+    activeBoardId: null,
+    onBoardChange: vi.fn(),
     prPanelVisible: false,
     onTogglePrPanel: vi.fn(),
   };
