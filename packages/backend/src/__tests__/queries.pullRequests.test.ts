@@ -105,6 +105,7 @@ describe('upsertPullRequest + getPRByNumber', () => {
     head_branch: 'feature/foo',
     base_branch: 'dev',
     state: 'open',
+    draft: 0,
     review_result: null,
     review_at: null,
     created_at: now,

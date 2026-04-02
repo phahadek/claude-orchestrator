@@ -446,15 +446,16 @@ export function upsertPullRequest(pr: Omit<PullRequestRow, 'id'>): PullRequestRo
   db.prepare<Omit<PullRequestRow, 'id'>>(`
     INSERT INTO pull_requests
       (pr_number, pr_url, notion_task_id, session_id, repo, title, body,
-       head_branch, base_branch, state, review_result, review_at,
+       head_branch, base_branch, state, draft, review_result, review_at,
        created_at, updated_at, synced_at)
     VALUES
       (@pr_number, @pr_url, @notion_task_id, @session_id, @repo, @title, @body,
-       @head_branch, @base_branch, @state, @review_result, @review_at,
+       @head_branch, @base_branch, @state, @draft, @review_result, @review_at,
        @created_at, @updated_at, @synced_at)
     ON CONFLICT(pr_url) DO UPDATE SET
       synced_at      = excluded.synced_at,
       state          = excluded.state,
+      draft          = excluded.draft,
       title          = COALESCE(excluded.title, title),
       body           = COALESCE(excluded.body, body),
       head_branch    = COALESCE(excluded.head_branch, head_branch),
