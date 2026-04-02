@@ -29,6 +29,35 @@ describe('SessionManager.start() — In Progress status', () => {
   });
 });
 
+// ── AC: SessionManager.start() — code-only session limit ────────────────────
+describe('SessionManager.start() — code-only session limit', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('code session is rejected when code session count reaches the limit', () => {
+    // Must check config.maxConcurrentCodeSessions for non-review sessions
+    expect(source).toMatch(/config\.maxConcurrentCodeSessions/);
+    // Error message references maxConcurrentCodeSessions
+    expect(source).toMatch(/Max concurrent code sessions/);
+  });
+
+  it('review session bypasses the cap check entirely', () => {
+    // The limit check must be gated on sessionType !== review
+    expect(source).toMatch(/sessionType\s*!==\s*'review'/);
+    // The cap check block is inside the sessionType !== review guard
+    const guardIdx = source.indexOf("sessionType !== 'review'");
+    const capCheckIdx = source.indexOf('maxConcurrentCodeSessions');
+    expect(capCheckIdx).toBeGreaterThan(guardIdx);
+  });
+
+  it('counts only non-review sessions against the cap', () => {
+    // Must filter sessions by sessionType !== review before counting
+    expect(source).toMatch(/\.filter\s*\(\s*\(s\)\s*=>\s*s\.sessionType\s*!==\s*'review'\s*\)/);
+  });
+});
+
 // ── AC: run() is called fire-and-forget in SessionManager.start() ──────────
 // This is a structural check — verify the source code does NOT await run().
 
@@ -229,15 +258,22 @@ describe('SessionManager.resumeOrphanSessions()', () => {
     expect(source).toMatch(/updateSessionStatus\s*\(.*'error'.*Date\.now\(\)\)/s);
   });
 
-  it('respects maxConcurrentSessions — slices orphans into toResume and toError', () => {
-    expect(source).toMatch(/config\.maxConcurrentSessions\s*-\s*this\.sessions\.size/);
-    expect(source).toMatch(/orphans\.slice\s*\(\s*0\s*,\s*available\s*\)/);
-    expect(source).toMatch(/orphans\.slice\s*\(\s*available\s*\)/);
+  it('respects maxConcurrentCodeSessions — slices code orphans into toResume and toError', () => {
+    expect(source).toMatch(/config\.maxConcurrentCodeSessions\s*-\s*codeSessionCount/);
+    expect(source).toMatch(/codeOrphans\.slice\s*\(\s*0\s*,\s*available\s*\)/);
+    expect(source).toMatch(/codeOrphans\.slice\s*\(\s*available\s*\)/);
   });
 
-  it('logs a warning and marks excess orphans as error when limit is exceeded', () => {
+  it('logs a warning and marks excess code orphans as error when limit is exceeded', () => {
     expect(source).toMatch(/for\s*\(.*of\s+toError/);
     expect(source).toMatch(/marking orphan.*as error/);
+  });
+
+  it('always resumes review orphans regardless of code session count', () => {
+    // review orphans are separated from code orphans and always included in toResume
+    expect(source).toMatch(/reviewOrphans\s*=\s*orphans\.filter/);
+    expect(source).toMatch(/codeOrphans\s*=\s*orphans\.filter/);
+    expect(source).toMatch(/\[\.\.\.reviewOrphans,\s*\.\.\.codeOrphans\.slice/);
   });
 });
 
