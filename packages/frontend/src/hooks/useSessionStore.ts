@@ -52,6 +52,12 @@ export interface SessionState {
   model?: string | null;
 }
 
+export interface IncompleteReview {
+  prNumber: number;
+  repo: string;
+  message: string;
+}
+
 export function useSessionStore() {
   const [sessions, setSessions] = useState<Map<string, SessionState>>(new Map());
   const [tasks, setTasks] = useState<ResolvedTask[]>([]);
@@ -60,6 +66,7 @@ export function useSessionStore() {
   const [dismissedDenialIds, setDismissedDenialIds] = useState<Map<string, Set<string>>>(loadDismissedFromStorage);
   const [prRefreshTrigger, setPrRefreshTrigger] = useState(0);
   const [lastPrReviewEvent, setLastPrReviewEvent] = useState<{ prNumber: number; repo: string; verdict: string; summary: string } | null>(null);
+  const [incompleteReviews, setIncompleteReviews] = useState<IncompleteReview[]>([]);
 
   const dispatch = useCallback((msg: ServerMessage) => {
     setSynced(true);
@@ -193,6 +200,9 @@ export function useSessionStore() {
     if (msg.type === 'pr_review_complete') {
       setLastPrReviewEvent({ prNumber: msg.prNumber, repo: msg.repo, verdict: msg.verdict, summary: msg.summary });
     }
+    if (msg.type === 'review_incomplete') {
+      setIncompleteReviews((prev) => [...prev, { prNumber: msg.prNumber, repo: msg.repo, message: msg.message }]);
+    }
   }, []);
 
   const resetTasks = useCallback(() => {
@@ -263,8 +273,12 @@ export function useSessionStore() {
     });
   }, []);
 
+  const dismissIncompleteReviews = useCallback(() => {
+    setIncompleteReviews([]);
+  }, []);
+
   const readyCount = tasks.filter((t) => !t.blocked && t.task.status === '🗂️ Ready').length;
   const blockedCount = tasks.filter((t) => t.blocked).length;
 
-  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials, clearSessionDenials, prRefreshTrigger, lastPrReviewEvent };
+  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials, clearSessionDenials, prRefreshTrigger, lastPrReviewEvent, incompleteReviews, dismissIncompleteReviews };
 }

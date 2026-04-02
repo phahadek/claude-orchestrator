@@ -134,11 +134,20 @@ export class ReviewOrchestrator {
     });
 
     // Route feedback to coding session if verdict requires changes
-    if (result.verdict === 'needs_changes' || result.verdict === 'incomplete') {
+    if (result.verdict === 'needs_changes') {
       const prRow = getPRByNumber(job.prNumber, job.repo);
       if (prRow?.session_id) {
         this.sendFeedbackToCodingSession(prRow.session_id, result, 0);
       }
+    } else if (result.verdict === 'incomplete') {
+      const message = `Review for PR #${job.prNumber} returned an incomplete verdict — the reviewer could not assess the PR. Manual intervention needed.`;
+      console.warn(`[ReviewOrchestrator] ${message}`);
+      this.sessionManager.emit('message', {
+        type: 'review_incomplete',
+        prNumber: job.prNumber,
+        repo: job.repo,
+        message,
+      });
     }
   }
 
@@ -201,8 +210,17 @@ export class ReviewOrchestrator {
         iteration,
       });
 
-      if (result.verdict === 'needs_changes' || result.verdict === 'incomplete') {
+      if (result.verdict === 'needs_changes') {
         this.sendFeedbackToCodingSession(codingSessionId, result, iteration);
+      } else if (result.verdict === 'incomplete') {
+        const message = `Review for PR #${prRow.pr_number} returned an incomplete verdict — the reviewer could not assess the PR. Manual intervention needed.`;
+        console.warn(`[ReviewOrchestrator] ${message}`);
+        this.sessionManager.emit('message', {
+          type: 'review_incomplete',
+          prNumber: prRow.pr_number,
+          repo: prRow.repo,
+          message,
+        });
       }
     } finally {
       this.pendingReReviews.delete(codingSessionId);

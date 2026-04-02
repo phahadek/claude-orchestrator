@@ -48,7 +48,7 @@ function resolveActiveBoardId(project: ProjectConfig): string {
 }
 
 export default function App() {
-  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, clearSessionDenials, prRefreshTrigger, lastPrReviewEvent } = useSessionStore();
+  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, clearSessionDenials, prRefreshTrigger, lastPrReviewEvent, incompleteReviews } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const activeProjectIdRef = useRef<string | null>(null);
@@ -383,6 +383,7 @@ export default function App() {
         onViewChange={handleViewChange}
         totalTokens={totalTokens}
         tasks={tasks}
+        incompleteReviewCount={incompleteReviews.length}
       />
       <div className={styles.mainArea}>
         {topView === 'sessions' && (

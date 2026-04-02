@@ -484,6 +484,82 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
   });
 });
 
+// ── Incomplete verdict handling ───────────────────────────────────────────────
+
+describe('ReviewOrchestrator — incomplete verdict', () => {
+  it('broadcasts review_incomplete and does NOT call sendFeedbackToCodingSession when verdict is incomplete', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'incomplete',
+      dimensions: [],
+      summary: 'Could not assess the PR.',
+      reviewedAt: new Date().toISOString(),
+    });
+
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Must NOT send feedback to coding session
+    expect(vi.mocked(sm.send)).not.toHaveBeenCalled();
+
+    // Must broadcast review_incomplete
+    const incompleteMsg = messages.find((m: any) => m.type === 'review_incomplete');
+    expect(incompleteMsg).toBeDefined();
+    expect(incompleteMsg).toMatchObject({
+      type: 'review_incomplete',
+      prNumber: 1,
+      repo: 'owner/repo',
+    });
+  });
+
+  it('broadcasts review_incomplete on re-review incomplete verdict and does NOT send feedback', async () => {
+    vi.mocked(getPRBySessionId).mockReturnValue(basePRRow as any);
+    vi.mocked(incrementReviewIteration).mockReturnValue(1);
+
+    const sm = makeMockSessionManager();
+    const rs = {
+      reviewPR: vi.fn(),
+      sendReReview: vi.fn().mockResolvedValue({
+        prNumber: 1,
+        repo: 'owner/repo',
+        verdict: 'incomplete',
+        dimensions: [],
+        summary: 'Reviewer could not assess.',
+        reviewedAt: new Date().toISOString(),
+      }),
+    } as unknown as PRReviewService;
+
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('push_detected', { sessionId: 'coding-session-id' });
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Must NOT send feedback to coding session
+    expect(vi.mocked(sm.send)).not.toHaveBeenCalled();
+
+    // Must broadcast review_incomplete
+    const incompleteMsg = messages.find((m: any) => m.type === 'review_incomplete');
+    expect(incompleteMsg).toBeDefined();
+    expect(incompleteMsg).toMatchObject({
+      type: 'review_incomplete',
+      prNumber: 1,
+      repo: 'owner/repo',
+    });
+  });
+});
+
 // ── Timeout handling ──────────────────────────────────────────────────────────
 
 describe('ReviewOrchestrator — timeout', () => {

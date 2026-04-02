@@ -82,3 +82,20 @@
   color: var(--text-faint);
   white-space: nowrap;
 }
+
+.incompleteBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 5px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--color-red, #f38ba8);
+  color: var(--color-base, #1e1e2e);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: middle;
+}
