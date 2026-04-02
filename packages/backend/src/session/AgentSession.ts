@@ -34,6 +34,36 @@ export function parseNotionPageId(url: string): string {
   return url;
 }
 
+/**
+ * Merge assistant message content blocks so that text blocks emitted in earlier
+ * streaming events are not lost when later streaming events contain only tool_use
+ * blocks. The Claude CLI can stream multiple `assistant` events for the same message
+ * turn (sharing the same `message.id`) — first text, then tool_use — so we must
+ * accumulate rather than replace.
+ */
+function mergeAssistantContent(
+  existing: Array<Record<string, unknown>>,
+  incoming: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  const existingText = existing.filter((b) => b.type === 'text');
+  const incomingText = incoming.filter((b) => b.type === 'text');
+
+  // Prefer incoming text blocks (they contain the most up-to-date streamed content).
+  // If the incoming event has no text blocks, preserve the existing ones.
+  const textBlocks = incomingText.length > 0 ? incomingText : existingText;
+
+  // Merge tool_use blocks by id so we don't duplicate them across streaming events.
+  const toolUseById = new Map<string, Record<string, unknown>>();
+  for (const b of existing) {
+    if (b.type === 'tool_use' && typeof b.id === 'string') toolUseById.set(b.id, b);
+  }
+  for (const b of incoming) {
+    if (b.type === 'tool_use' && typeof b.id === 'string') toolUseById.set(b.id, b);
+  }
+
+  return [...textBlocks, ...toolUseById.values()];
+}
+
 /** Map raw claude CLI event type strings to our DB EventType union. */
 function toEventType(raw: string): 'text' | 'tool_use' | 'tool_result' | 'system' | 'error' {
   switch (raw) {
@@ -64,6 +94,9 @@ export class AgentSession extends EventEmitter {
   public hasEnded = false;
   /** Maps message_id → DB row id for deduplicating streaming assistant events. */
   private messageIdMap = new Map<string, number>();
+  /** Maps message_id → accumulated content blocks, so text is not lost when
+   *  tool_use arrives in a later streaming event for the same message. */
+  private messageContentMap = new Map<string, Array<Record<string, unknown>>>();
   /** Maps tool_use_id → tool_name for PR creation tools, for real-time detection. */
   private pendingGHToolUseIds = new Map<string, string>();
   /** Maps tool_use_id → Bash command string, for push detection. */
@@ -330,7 +363,7 @@ Fetch both Notion pages, then begin the task.
 
       // Persist event to SQLite then broadcast
       const eventType = toEventType(rawType);
-      const payload = JSON.stringify(event);
+      let payload = JSON.stringify(event);
 
       // Extract message ID from assistant/message events for deduplication.
       // The Claude CLI emits multiple incremental streaming events per message,
@@ -340,6 +373,19 @@ Fetch both Notion pages, then begin the task.
         const msg = event.message as Record<string, unknown> | undefined;
         if (msg?.id && typeof msg.id === 'string') {
           messageId = msg.id;
+        }
+      }
+
+      // Merge content blocks for assistant events: accumulate text and tool_use
+      // across all streaming events for this message so neither is dropped.
+      if (messageId != null && (rawType === 'assistant' || rawType === 'message')) {
+        const msg = event.message as Record<string, unknown> | undefined;
+        if (msg && Array.isArray(msg.content)) {
+          const incomingContent = msg.content as Array<Record<string, unknown>>;
+          const existingContent = this.messageContentMap.get(messageId) ?? [];
+          const mergedContent = mergeAssistantContent(existingContent, incomingContent);
+          this.messageContentMap.set(messageId, mergedContent);
+          payload = JSON.stringify({ ...event, message: { ...msg, content: mergedContent } });
         }
       }
 
