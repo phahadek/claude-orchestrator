@@ -185,6 +185,7 @@
 
 .reviewButton,
 .fixButton,
+.reReviewButton,
 .mergeButton {
   font-size: 0.8rem;
   padding: 4px 10px;
@@ -199,6 +200,7 @@
 
 .reviewButton:hover:not(:disabled),
 .fixButton:hover:not(:disabled),
+.reReviewButton:hover:not(:disabled),
 .mergeButton:hover:not(:disabled) {
   background: #45475a;
   border-color: #585b70;
@@ -206,6 +208,7 @@
 
 .reviewButton:disabled,
 .fixButton:disabled,
+.reReviewButton:disabled,
 .mergeButton:disabled {
   opacity: 0.45;
   cursor: default;

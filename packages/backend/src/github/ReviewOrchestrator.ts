@@ -1,11 +1,19 @@
 import { config } from '../config';
-import { setPRReviewResult, getPRByNumber, getPRBySessionId, incrementReviewIteration } from '../db/queries';
+import { setPRReviewResult, getSetting, getPRByNumber, getPRBySessionId, incrementReviewIteration, setLastReviewedSha } from '../db/queries';
 import type { PRReviewService, PRReviewResult } from './PRReviewService';
 import type { SessionManager } from '../session/SessionManager';
 import type { ReviewJob } from './types';
+import { shouldAutoReview } from './reviewUtils';
 
 const REVIEW_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_ITERATIONS = 3;
+
+function getMaxReviewIterations(): number {
+  const raw = getSetting('max_review_iterations');
+  if (!raw) return DEFAULT_MAX_ITERATIONS;
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_ITERATIONS;
+}
 
 export class ReviewOrchestrator {
   private queue: ReviewJob[] = [];
@@ -58,6 +66,24 @@ export class ReviewOrchestrator {
       return;
     }
 
+    // Check iteration cap before starting a review
+    const prRow = getPRByNumber(job.prNumber, job.repo);
+    const maxIterations = getMaxReviewIterations();
+    if (prRow && prRow.review_iteration >= maxIterations) {
+      const message = `Review loop for PR #${job.prNumber} reached ${maxIterations} iterations without approval. Manual intervention needed.`;
+      console.warn(`[ReviewOrchestrator] ${message}`);
+      this.sessionManager.emit('message', {
+        type: 'review_escalated',
+        prNumber: job.prNumber,
+        repo: job.repo,
+        message,
+      });
+      return;
+    }
+
+    // Increment iteration counter before starting the review
+    incrementReviewIteration(job.prNumber, job.repo);
+
     let result: PRReviewResult;
     try {
       result = await Promise.race([
@@ -106,6 +132,12 @@ export class ReviewOrchestrator {
     if (!prRow || prRow.state !== 'open') return;
     if (!prRow.review_session_id) return;
 
+    const maxIter = getMaxReviewIterations();
+    if (!shouldAutoReview(
+      { reviewIteration: prRow.review_iteration, headSha: prRow.head_sha, lastReviewedSha: prRow.last_reviewed_sha },
+      maxIter,
+    )) return;
+
     this.pendingReReviews.add(codingSessionId);
     try {
       const iteration = incrementReviewIteration(prRow.pr_number, prRow.repo);
@@ -138,6 +170,9 @@ export class ReviewOrchestrator {
         });
         return;
       }
+
+      // Mark this SHA as reviewed so duplicate pushes don't re-trigger the same review
+      setLastReviewedSha(prRow.pr_number, prRow.repo, prRow.head_sha);
 
       this.sessionManager.emit('message', {
         type: 'review_verdict',
