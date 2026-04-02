@@ -22,6 +22,27 @@
   flex: 1;
 }
 
+.clearButton {
+  font-size: 0.8rem;
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(243, 139, 168, 0.4);
+  background: rgba(243, 139, 168, 0.08);
+  color: #f38ba8;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.clearButton:hover:not(:disabled) {
+  background: rgba(243, 139, 168, 0.15);
+  border-color: rgba(243, 139, 168, 0.6);
+}
+
+.clearButton:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .refreshButton {
   font-size: 0.8rem;
   padding: 3px 10px;
