@@ -431,14 +431,23 @@ describe('AgentSession', () => {
     await runPromise;
   });
 
-  // ── AC: sessionType=standard still calls notionClient.updateStatus ────────
-  it('calls notionClient.updateStatus on clean exit when sessionType is standard', async () => {
+  // ── AC: handleCleanExit() calls updateStatus In Review only when PR URL found ──
+  it('calls notionClient.updateStatus In Review when a PR URL is found at exit', async () => {
     const notion = fakeNotionClient();
     vi.mocked(getRules).mockReturnValue([]);
-    vi.mocked(getEventsBySession).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'standard-pr-session',
+        event_type: 'text',
+        payload: JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'PR: https://github.com/owner/repo/pull/7' }] } }),
+        timestamp: Date.now(),
+        message_id: null,
+      },
+    ]);
 
     const session = new AgentSession(
-      'standard-session',
+      'standard-pr-session',
       'https://notion.so/task',
       'https://notion.so/ctx',
       notion,
@@ -454,6 +463,31 @@ describe('AgentSession', () => {
     await runPromise;
 
     expect(notion.updateStatus).toHaveBeenCalledWith('task-id', '👀 In Review');
+  });
+
+  // ── AC: handleCleanExit() does NOT call updateStatus In Review when no PR ──
+  it('does NOT call notionClient.updateStatus In Review when no PR URL found at exit', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockReturnValue([]);
+
+    const session = new AgentSession(
+      'no-pr-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const runPromise = session.run();
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    expect(notion.updateStatus).not.toHaveBeenCalledWith('task-id', '👀 In Review');
   });
 
   // ── AC: pr_opened emitted in handleCleanExit() after upsertPullRequest() ──
