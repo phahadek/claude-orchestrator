@@ -23,6 +23,7 @@ export type ServerMessage =
   | { type: 'pr_merged';             prNumber: number; repo: string; sha: string }
   | { type: 'pr_closed';             prNumber: number; repo: string }
   | { type: 'review_escalated';      prNumber: number; repo: string; message: string }
+  | { type: 'review_incomplete';     prNumber: number; repo: string; message: string }
   | { type: 'session_audit';         sessionId: string; prOpened: boolean; prTargetsBranch: string | null; violations: string[]; specMismatch: string | null; auditedAt: string }
   | { type: 'error';                 message: string };
 
