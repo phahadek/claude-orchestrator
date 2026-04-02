@@ -132,6 +132,29 @@
   flex-wrap: wrap;
 }
 
+.removeButton {
+  font-size: 0.75rem;
+  padding: 4px 7px;
+  border-radius: 6px;
+  border: 1px solid #45475a;
+  background: transparent;
+  color: #6c7086;
+  cursor: pointer;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.removeButton:hover:not(:disabled) {
+  background: rgba(243, 139, 168, 0.1);
+  border-color: rgba(243, 139, 168, 0.4);
+  color: #f38ba8;
+}
+
+.removeButton:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .reviewButton,
 .fixButton,
 .mergeButton {
