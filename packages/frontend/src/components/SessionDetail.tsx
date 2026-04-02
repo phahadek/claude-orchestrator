@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import type { SessionState } from '../hooks/useSessionStore';
-import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
+import type { ClientMessage, PermissionDenial } from '@claude-dashboard/backend/src/ws/types';
 import { taskNameFromNotionUrl } from '../utils/notionUrl';
 import { calcElapsedMs, formatDuration } from '../utils/sessionTimer';
 import {
@@ -117,12 +117,9 @@ interface Props {
   onResume?: (sessionId: string) => void;
   onFavorite?: (sessionId: string) => void;
   onUnfavorite?: (sessionId: string) => void;
-  dismissedDenials?: Set<string>;
-  onDismissDenial?: (toolUseId: string) => void;
-  onClearAllDenials?: () => void;
 }
 
-export function SessionDetail({ session, send, onClose, onDelete, onArchive, onUnarchive, onResume, onFavorite, onUnfavorite, dismissedDenials = new Set(), onDismissDenial = () => {}, onClearAllDenials }: Props) {
+export function SessionDetail({ session, send, onClose, onDelete, onArchive, onUnarchive, onResume, onFavorite, onUnfavorite }: Props) {
   const [draftMessage, setDraftMessage] = useState('');
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const [deleting, setDeleting] = useState(false);
@@ -338,12 +335,6 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
     });
   }
 
-  async function handleClearAllDenials(count: number) {
-    if (!window.confirm(`Clear ${count} denial(s)?`)) return;
-    await fetch(`/api/sessions/${session!.sessionId}/denials`, { method: 'DELETE' });
-    onClearAllDenials?.();
-  }
-
   async function handleAddTag() {
     if (!session) return;
     const tag = tagInput.trim();
@@ -509,44 +500,11 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
           {session.events.length === 0 && (
             <p className={styles.emptyTranscript}>No events yet.</p>
           )}
+          {(session.permissionDenials ?? []).length > 0 && (
+            <PermissionDenialsInline denials={session.permissionDenials!} />
+          )}
         </div>
       </div>
-
-      {(() => {
-        const allDenials = session.permissionDenials ?? [];
-        const visibleDenials = allDenials.filter((d) => !dismissedDenials.has(d.tool_use_id));
-        if (visibleDenials.length === 0) return null;
-        return (
-          <div className={styles.permissionRequest}>
-            <div className={styles.permissionTitleRow}>
-              <p className={styles.permissionTitle}>
-                <strong>Permission Denials</strong> — add rules in Settings to allow these tools next time
-              </p>
-              {visibleDenials.length >= 1 && (
-                <button
-                  className={styles.clearAllBtn}
-                  onClick={() => void handleClearAllDenials(visibleDenials.length)}
-                >
-                  Clear all
-                </button>
-              )}
-            </div>
-            {visibleDenials.map((d) => (
-              <div key={d.tool_use_id} className={styles.proposedAction}>
-                <button
-                  className={styles.denialCloseBtn}
-                  onClick={() => onDismissDenial(d.tool_use_id)}
-                  aria-label="Dismiss"
-                >
-                  ✕
-                </button>
-                <strong>{d.tool_name}</strong>
-                <pre>{JSON.stringify(d.tool_input, null, 2)}</pre>
-              </div>
-            ))}
-          </div>
-        );
-      })()}
 
       {isActive && (
         <div className={styles.composer}>
@@ -746,6 +704,51 @@ function ToolResultRow({ result }: { result: string }) {
         <button className={styles.expandButton} onClick={toggle}>
           {expanded ? '▲ Collapse' : `▼ Show all ${lines.length} lines`}
         </button>
+      )}
+    </div>
+  );
+}
+
+// ── Inline permission denials ──────────────────────────────────────
+
+function getDenialInputSummary(toolName: string, input: unknown): string {
+  if (toolName === 'Bash') {
+    const cmd = extractBashCommand(input);
+    if (cmd) return cmd.length > 60 ? cmd.slice(0, 57) + '…' : cmd;
+  }
+  if (typeof input === 'object' && input !== null) {
+    const entries = Object.entries(input as Record<string, unknown>);
+    if (entries.length > 0) {
+      const [k, v] = entries[0];
+      const str = `${k}=${String(v)}`;
+      return str.length > 60 ? str.slice(0, 57) + '…' : str;
+    }
+  }
+  const str = String(input);
+  return str.length > 60 ? str.slice(0, 57) + '…' : str;
+}
+
+function PermissionDenialsInline({ denials }: { denials: PermissionDenial[] }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={styles.inlineDenials}>
+      <button
+        className={styles.inlineDenialsHeader}
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-label="Toggle permission denials"
+      >
+        <span className={styles.toolChevron}>{open ? '▼' : '▶'}</span>
+        🚫 {denials.length} permission denial{denials.length !== 1 ? 's' : ''}
+      </button>
+      {open && (
+        <div className={styles.inlineDenialsBody}>
+          {denials.map((d) => (
+            <p key={d.tool_use_id} className={styles.inlineDenialItem}>
+              🚫 Denied: {d.tool_name}({getDenialInputSummary(d.tool_name, d.tool_input)})
+            </p>
+          ))}
+        </div>
       )}
     </div>
   );

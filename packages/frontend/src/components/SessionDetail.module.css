@@ -543,74 +543,48 @@
   border-bottom-color: #89b4fa;
 }
 
-/* ── Permission request ──────────────────────────────────────────── */
-.permissionRequest {
-  border-top: 1px solid var(--border);
-  background: rgba(243, 139, 168, 0.05);
-  padding: 12px 16px;
+/* ── Inline permission denials ───────────────────────────────────── */
+.inlineDenials {
+  border: 1px solid rgba(243, 139, 168, 0.25);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-top: 4px;
   flex-shrink: 0;
 }
 
-.permissionTitleRow {
+.inlineDenialsHeader {
+  background: var(--bg-elevated);
+  border: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  padding: 4px 10px;
+  width: 100%;
+  text-align: left;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin: 0 0 8px;
+  gap: 6px;
+  transition: color 0.15s;
 }
 
-.permissionTitle {
+.inlineDenialsHeader:hover {
+  color: var(--text-primary);
+}
+
+.inlineDenialsBody {
+  padding: 4px 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.inlineDenialItem {
   margin: 0;
-  font-size: 0.875rem;
-  color: var(--text-primary);
-}
-
-.clearAllBtn {
-  background: transparent;
-  border: none;
-  color: var(--text-faint);
-  cursor: pointer;
-  font-size: 0.75rem;
-  padding: 0;
-  flex-shrink: 0;
-  transition: color 0.15s;
-}
-
-.clearAllBtn:hover {
-  color: var(--text-primary);
-}
-
-.proposedAction {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--ctp-red);
   font-size: 0.8rem;
-  line-height: 1.4;
-  margin: 0 0 10px;
-  overflow-x: auto;
-  padding: 8px 10px;
-  padding-right: 28px;
-  position: relative;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.denialCloseBtn {
-  background: transparent;
-  border: none;
   color: var(--text-faint);
-  cursor: pointer;
-  font-size: 0.75rem;
-  line-height: 1;
-  padding: 2px 4px;
-  position: absolute;
-  right: 6px;
-  top: 6px;
-  transition: color 0.15s;
-}
-
-.denialCloseBtn:hover {
-  color: var(--ctp-red);
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 .permissionButtons {
