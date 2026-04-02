@@ -17,6 +17,7 @@ import { GitHubApiError } from '../github/types';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { PRReviewService } from '../github/PRReviewService';
 import type { PRReviewResult } from '../github/PRReviewService';
+import type { PRMergeWatcher } from '../github/PRMergeWatcher';
 import type { SessionManager } from '../session/SessionManager';
 import type { NotionClient } from '../notion/NotionClient';
 import type { ServerMessage } from '../ws/types';
@@ -31,6 +32,7 @@ export function createPrsRouter(
   prReviewService: PRReviewService,
   sessionManager: SessionManager,
   notionClient: NotionClient,
+  mergeWatcher?: PRMergeWatcher,
 ): Router {
   const router = Router();
 
@@ -57,7 +59,11 @@ export function createPrsRouter(
       const stale = rows.filter((r) => r.state === 'open' && !openNumbers.has(r.pr_number));
       for (const pr of stale) {
         const state = await github.getPRState(pr.pr_number, repo);
-        updatePRState(pr.pr_number, repo, state);
+        if (state === 'merged' && mergeWatcher) {
+          await mergeWatcher.handleMerged(pr, null);
+        } else {
+          updatePRState(pr.pr_number, repo, state);
+        }
         reconciledStates.set(pr.pr_number, state);
       }
     } catch {
