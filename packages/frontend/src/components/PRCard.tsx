@@ -59,14 +59,19 @@ export function PRCard({
 }: PRCardProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
 
+  const isFinished = pr.state === 'merged' || pr.state === 'closed';
   const verdict = pr.reviewResult?.verdict ?? null;
   const canMerge = pr.state === 'open' && verdict === 'approved';
-  const showFixButton = verdict === 'needs_changes' || verdict === 'incomplete';
+  const showFixButton = !isFinished && (verdict === 'needs_changes' || verdict === 'incomplete');
 
-  const verdictClass = verdict
-    ? styles[`verdict-${verdict.replace('_', '-')}`]
-    : styles['verdict-none'];
-  const verdictLabel = verdict ? VERDICT_LABELS[verdict] : '— Not reviewed';
+  const verdictClass = isFinished
+    ? styles[`state-${pr.state}`]
+    : verdict
+      ? styles[`verdict-${verdict.replace('_', '-')}`]
+      : styles['verdict-none'];
+  const verdictLabel = isFinished
+    ? pr.state === 'merged' ? '✓ Merged' : '✕ Closed'
+    : verdict ? VERDICT_LABELS[verdict] : '— Not reviewed';
 
   const handleMerge = () => {
     const confirmed = window.confirm(
@@ -116,16 +121,18 @@ export function PRCard({
         <span className={`${styles.verdictBadge} ${verdictClass}`}>{verdictLabel}</span>
 
         <div className={styles.buttons}>
-          <button
-            type="button"
-            className={styles.reviewButton}
-            disabled={reviewInFlight}
-            onClick={() => onReview(pr.prNumber)}
-          >
-            {reviewInFlight
-              ? `Reviewing...${reviewElapsed > 0 ? ` (${reviewElapsed}s)` : ''}`
-              : 'Run Review'}
-          </button>
+          {!isFinished && (
+            <button
+              type="button"
+              className={styles.reviewButton}
+              disabled={reviewInFlight}
+              onClick={() => onReview(pr.prNumber)}
+            >
+              {reviewInFlight
+                ? `Reviewing...${reviewElapsed > 0 ? ` (${reviewElapsed}s)` : ''}`
+                : 'Run Review'}
+            </button>
+          )}
 
           {showFixButton && (
             <button

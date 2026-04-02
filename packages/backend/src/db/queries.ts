@@ -452,6 +452,12 @@ export function getOpenPRs(repo: string): PullRequestRow[] {
   `).all({ repo }) as PullRequestRow[];
 }
 
+export function getPRs(repo: string): PullRequestRow[] {
+  return db.prepare<{ repo: string }>(`
+    SELECT * FROM pull_requests WHERE repo = @repo ORDER BY pr_number DESC
+  `).all({ repo }) as PullRequestRow[];
+}
+
 export function getPRByNumber(prNumber: number, repo: string): PullRequestRow | null {
   return db.prepare<{ pr_number: number; repo: string }>(`
     SELECT * FROM pull_requests WHERE pr_number = @pr_number AND repo = @repo
