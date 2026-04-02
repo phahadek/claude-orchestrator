@@ -29,11 +29,13 @@ const defaultProps = {
   onFix: vi.fn(),
   onRemove: vi.fn(),
   onReReview: vi.fn(),
+  onApprove: vi.fn(),
   reviewInFlight: false,
   mergeInFlight: false,
   fixInFlight: false,
   removeInFlight: false,
   reReviewInFlight: false,
+  approveInFlight: false,
   reviewElapsed: 0,
   error: null,
 };
@@ -165,5 +167,35 @@ describe('PRCard', () => {
     render(<PRCard pr={pr} {...defaultProps} />);
     fireEvent.click(screen.getByText(/review details/i));
     expect(screen.getByText('Review failed: Review timed out')).toBeDefined();
+  });
+
+  it('shows Approve button when verdict is null', () => {
+    render(<PRCard pr={makePR()} {...defaultProps} />);
+    expect(screen.getByRole('button', { name: /approve/i })).toBeDefined();
+  });
+
+  it('shows Approve button when verdict is needs_changes', () => {
+    const pr = makePR({ reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' } });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    expect(screen.getByRole('button', { name: /approve/i })).toBeDefined();
+  });
+
+  it('does NOT show Approve button when verdict is already approved', () => {
+    const pr = makePR({ reviewResult: { verdict: 'approved', dimensions: [], summary: '' } });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    expect(screen.queryByRole('button', { name: /✓ approve/i })).toBeNull();
+  });
+
+  it('calls onApprove with prNumber when Approve button is clicked', () => {
+    const onApprove = vi.fn();
+    render(<PRCard pr={makePR({ prNumber: 7 })} {...defaultProps} onApprove={onApprove} />);
+    fireEvent.click(screen.getByRole('button', { name: /approve/i }));
+    expect(onApprove).toHaveBeenCalledWith(7);
+  });
+
+  it('disables Approve button when approveInFlight is true', () => {
+    render(<PRCard pr={makePR()} {...defaultProps} approveInFlight={true} />);
+    const btn = screen.getByRole('button', { name: /approving/i });
+    expect(btn.hasAttribute('disabled')).toBe(true);
   });
 });

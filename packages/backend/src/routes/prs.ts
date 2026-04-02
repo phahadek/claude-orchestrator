@@ -11,6 +11,7 @@ import {
   deleteMergedAndClosedPRs,
   countMergedAndClosedPRs,
   resetReviewIteration,
+  setPRReviewResult,
 } from '../db/queries';
 import { PRSyncJob } from '../github/PRSyncJob';
 import { GitHubApiError } from '../github/types';
@@ -257,6 +258,34 @@ export function createPrsRouter(
       }
       res.status(500).json({ error: (err as Error).message });
     }
+  });
+
+  // ── POST /api/prs/:owner/:repoName/:prNumber/approve ─────────────────────────
+  router.post('/prs/:owner/:repoName/:prNumber/approve', (req: Request, res: Response) => {
+    const repo = `${req.params.owner}/${req.params.repoName}`;
+    const prNumber = parseInt(String(req.params.prNumber), 10);
+    const prRow = getPRByNumber(prNumber, repo);
+    if (!prRow) {
+      res.status(404).json({ error: `PR #${prNumber} not found` });
+      return;
+    }
+    const result: PRReviewResult = {
+      prNumber,
+      repo,
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'Manually approved via dashboard',
+      reviewedAt: new Date().toISOString(),
+    };
+    setPRReviewResult(prNumber, repo, JSON.stringify(result));
+    _broadcast({
+      type: 'pr_review_complete',
+      prNumber,
+      repo,
+      verdict: 'approved',
+      summary: result.summary,
+    });
+    res.json(result);
   });
 
   // ── DELETE /api/prs/clear?projectId=<id> ────────────────────────────────────
