@@ -47,6 +47,8 @@ export interface SessionState {
   isRateLimited?: boolean;
   totalInputTokens?: number;
   totalOutputTokens?: number;
+  /** PR number this review session is reviewing (review sessions only) */
+  prNumber?: number;
 }
 
 export function useSessionStore() {
@@ -80,6 +82,7 @@ export function useSessionStore() {
             tags: msg.tags,
             totalInputTokens: msg.totalInputTokens ?? 0,
             totalOutputTokens: msg.totalOutputTokens ?? 0,
+            prNumber: msg.prNumber,
           });
           break;
         case 'session_event': {
