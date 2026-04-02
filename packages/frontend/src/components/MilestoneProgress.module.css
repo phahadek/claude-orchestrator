@@ -1,0 +1,71 @@
+.wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.barButton {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bar {
+  width: 120px;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--bg-tertiary, #313244);
+  display: flex;
+}
+
+.barSegment {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.segDone {
+  background: var(--color-green, #a6e3a1);
+}
+
+.segReview {
+  background: var(--color-blue, #89b4fa);
+}
+
+.segActive {
+  background: var(--color-yellow, #f9e2af);
+}
+
+.segOther {
+  background: var(--color-overlay0, #6c7086);
+}
+
+.label {
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.counts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.countItem {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.deferred {
+  color: var(--text-faint);
+  font-size: 11px;
+  opacity: 0.6;
+}
