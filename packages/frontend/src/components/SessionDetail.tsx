@@ -124,6 +124,7 @@ interface Props {
 
 export function SessionDetail({ session, send, onClose, onDelete, onArchive, onUnarchive, onResume, onFavorite, onUnfavorite, dismissedDenials = new Set(), onDismissDenial = () => {}, onClearAllDenials }: Props) {
   const [draftMessage, setDraftMessage] = useState('');
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const [deleting, setDeleting] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
@@ -226,6 +227,9 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
     if (!session || !draftMessage.trim()) return;
     send({ type: 'send_message', sessionId: session.sessionId, message: draftMessage });
     setDraftMessage('');
+    if (composerRef.current) {
+      composerRef.current.style.height = 'auto';
+    }
   }
 
   async function handleCopy() {
@@ -546,10 +550,16 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
 
       {isActive && (
         <div className={styles.composer}>
-          <input
+          <textarea
+            ref={composerRef}
             className={styles.composerInput}
             value={draftMessage}
-            onChange={(e) => setDraftMessage(e.target.value)}
+            rows={1}
+            onChange={(e) => {
+              setDraftMessage(e.target.value);
+              e.target.style.height = 'auto';
+              e.target.style.height = `${e.target.scrollHeight}px`;
+            }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && draftMessage.trim()) {
                 e.preventDefault();
