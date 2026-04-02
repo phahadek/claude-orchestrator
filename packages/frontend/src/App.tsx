@@ -86,7 +86,7 @@ export default function App() {
   const detailWidthRef = useRef(detailWidthPct);
 
   const [topView, setTopView] = useState<TopView>('sessions');
-  const [settingsInitialTab, setSettingsInitialTab] = useState<'general' | 'projects' | 'rules'>('general');
+  const settingsInitialTab = 'general' as const;
 
 
   useEffect(() => {
@@ -337,10 +337,6 @@ export default function App() {
       if (view === 'sessions') setTopView('sessions');
       else if (view === 'prs') setTopView('prs');
       else if (view === 'settings') setTopView('settings');
-      else if (view === 'rules') {
-        setSettingsInitialTab('rules');
-        setTopView('settings');
-      }
     },
     onFocusSearch: () => {
       searchInputRef.current?.focus();
