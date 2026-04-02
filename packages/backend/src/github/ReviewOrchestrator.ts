@@ -214,7 +214,7 @@ export class ReviewOrchestrator {
     result: PRReviewResult,
     iteration: number,
   ): void {
-    const failingDimensions = result.dimensions.filter((d) => !d.passed);
+    const failingDimensions = (result.dimensions ?? []).filter((d) => !d.passed);
     const dimensionLines = failingDimensions.length > 0
       ? failingDimensions.map((d) => `- **${d.name}**: ${d.notes}`).join('\n')
       : '(no specific dimension failures recorded)';
