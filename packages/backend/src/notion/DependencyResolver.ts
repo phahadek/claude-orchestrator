@@ -1,8 +1,14 @@
 import { NotionTask, ResolvedTask } from './types';
 
+/** Strip hyphens so both dashed and dashless Notion UUIDs match. */
+function stripHyphens(id: string): string {
+  return id.replace(/-/g, '');
+}
+
 export class DependencyResolver {
   resolve(tasks: NotionTask[]): ResolvedTask[] {
-    const byId = new Map(tasks.map((t) => [t.id, t]));
+    // Key by dashless ID so deps stored without hyphens still match page IDs with hyphens
+    const byId = new Map(tasks.map((t) => [stripHyphens(t.id), t]));
 
     return tasks.map((task) => {
       const blockers = this.findBlockers(task, byId, new Set());
@@ -20,12 +26,13 @@ export class DependencyResolver {
     byId: Map<string, NotionTask>,
     visited: Set<string>
   ): NotionTask[] {
-    if (visited.has(task.id)) return []; // cycle guard
-    visited.add(task.id);
+    const normId = stripHyphens(task.id);
+    if (visited.has(normId)) return []; // cycle guard
+    visited.add(normId);
 
     const blockers: NotionTask[] = [];
     for (const depId of task.dependsOn) {
-      const dep = byId.get(depId);
+      const dep = byId.get(stripHyphens(depId));
       if (!dep) continue; // dependency outside this board — treat as satisfied
       if (dep.status !== '✅ Done') {
         blockers.push(dep);
