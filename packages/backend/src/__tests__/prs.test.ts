@@ -113,11 +113,27 @@ const openGitHubPR: PullRequest = {
   draft: false,
 };
 
+const mockGitHubPR = {
+  id: 42,
+  title: 'feat: add something',
+  body: null,
+  url: 'https://github.com/owner/repo/pull/42',
+  apiUrl: 'https://api.github.com/repos/owner/repo/pulls/42',
+  headBranch: 'feature/add-something',
+  baseBranch: 'dev',
+  state: 'open' as const,
+  createdAt: '2024-01-01T00:00:00Z',
+  updatedAt: '2024-01-01T01:00:00Z',
+  mergeableState: 'clean',
+  draft: false,
+};
+
 function makeMockGitHub(): GitHubClient {
   return {
     listOpenPRs: vi.fn().mockResolvedValue([]),
     getPRState: vi.fn().mockResolvedValue('merged'),
     fetchDiff: vi.fn(),
+    fetchPR: vi.fn().mockResolvedValue(mockGitHubPR),
     mergePR: vi.fn().mockResolvedValue({ merged: true, message: 'Merged', sha: 'abc123' }),
   } as unknown as GitHubClient;
 }
@@ -219,20 +235,51 @@ describe('GET /api/prs', () => {
 // ── POST /api/prs/:prNumber/review ────────────────────────────────────────────
 
 describe('POST /api/prs/:prNumber/review', () => {
-  it('returns 422 when notion_task_id is null', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRowNoTask);
-    const res = await supertest(buildApp())
-      .post('/api/prs/43/review?projectId=proj-1');
-    expect(res.status).toBe(422);
-    expect(res.body.error).toMatch(/No Notion task/);
-  });
-
-  it('returns review result on success', async () => {
+  it('returns stub response when PR exists with notion_task_id', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
     const res = await supertest(buildApp())
       .post('/api/prs/42/review?projectId=proj-1');
     expect(res.status).toBe(200);
-    expect(res.body.verdict).toBe('approved');
+    expect(res.body.verdict).toBeNull();
+    expect(res.body.message).toBe('PR review not yet implemented');
+  });
+
+  it('returns stub response when PR exists without notion_task_id', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRowNoTask);
+    const res = await supertest(buildApp())
+      .post('/api/prs/43/review?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body.verdict).toBeNull();
+  });
+
+  it('performs on-demand sync and returns stub when PR is not in DB', async () => {
+    vi.mocked(queries.getPRByNumber)
+      .mockReturnValueOnce(null)           // first call — not found
+      .mockReturnValueOnce(mockPRRow);     // second call — after upsert
+    const github = makeMockGitHub();
+    const res = await supertest(buildApp(github))
+      .post('/api/prs/42/review?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body.verdict).toBeNull();
+    expect(vi.mocked(github.fetchPR)).toHaveBeenCalledWith('owner/repo', 42);
+    expect(vi.mocked(queries.upsertPullRequest)).toHaveBeenCalledOnce();
+  });
+
+  it('returns 404 when PR is not in DB and GitHub fetch also fails', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(null);
+    const github = makeMockGitHub();
+    vi.mocked(github.fetchPR).mockRejectedValue(new Error('Not Found'));
+    const res = await supertest(buildApp(github))
+      .post('/api/prs/42/review?projectId=proj-1');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/PR #42 not found/);
+  });
+
+  it('returns 404 when PR is not in DB and still not found after upsert', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(null);
+    const res = await supertest(buildApp())
+      .post('/api/prs/42/review?projectId=proj-1');
+    expect(res.status).toBe(404);
   });
 });
 
