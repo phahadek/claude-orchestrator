@@ -46,6 +46,28 @@ export function extractBashCommand(input: unknown): string | null {
   return typeof cmd === 'string' ? cmd : null;
 }
 
+/** Extract a short contextual detail string for common tools (e.g. filename for Read/Write/Edit). */
+export function extractToolDetail(toolName: string, input: unknown): string | null {
+  if (typeof input !== 'object' || input === null) return null;
+  const inp = input as Record<string, unknown>;
+  switch (toolName) {
+    case 'Read':
+    case 'Write':
+    case 'Edit': {
+      if (typeof inp.file_path !== 'string') return null;
+      const parts = inp.file_path.split(/[/\\]/);
+      return parts[parts.length - 1] || null;
+    }
+    case 'Glob':
+    case 'Grep':
+      return typeof inp.pattern === 'string' ? inp.pattern : null;
+    case 'Agent':
+      return typeof inp.description === 'string' ? inp.description : null;
+    default:
+      return null;
+  }
+}
+
 /** Extract tool name and input from a tool_use event payload. */
 export function extractToolUse(payload: unknown): { toolName: string; input: unknown } | null {
   if (typeof payload !== 'object' || payload === null) return null;
@@ -219,8 +241,16 @@ export function summarizeEvent(
                 if (typeof input === 'string') {
                   try { input = JSON.parse(input); } catch { /* leave */ }
                 }
-                const bashCmd = toolName === 'Bash' ? extractBashCommand(input) : null;
-                return bashCmd != null ? `🔧 ${toolName} $ ${bashCmd}` : `🔧 ${toolName}`;
+                if (toolName === 'Bash') {
+                  const bashCmd = extractBashCommand(input);
+                  return bashCmd != null ? `🔧 ${toolName} $ ${bashCmd}` : `🔧 ${toolName}`;
+                }
+                const detail = extractToolDetail(toolName, input);
+                if (detail != null) {
+                  const truncated = detail.length > 40 ? detail.slice(0, 40) + '…' : detail;
+                  return `🔧 ${toolName} (${truncated})`;
+                }
+                return `🔧 ${toolName}`;
               }
             }
           }
@@ -233,10 +263,16 @@ export function summarizeEvent(
     case 'tool_use': {
       const parsed = extractToolUse(payload);
       if (!parsed) return truncateStr(event.content, maxLen);
-      const bashCmd = parsed.toolName === 'Bash' ? extractBashCommand(parsed.input) : null;
-      return bashCmd != null
-        ? `🔧 ${parsed.toolName} $ ${bashCmd}`
-        : `🔧 ${parsed.toolName}`;
+      if (parsed.toolName === 'Bash') {
+        const bashCmd = extractBashCommand(parsed.input);
+        return bashCmd != null ? `🔧 ${parsed.toolName} $ ${bashCmd}` : `🔧 ${parsed.toolName}`;
+      }
+      const detail = extractToolDetail(parsed.toolName, parsed.input);
+      if (detail != null) {
+        const truncated = detail.length > 40 ? detail.slice(0, 40) + '…' : detail;
+        return `🔧 ${parsed.toolName} (${truncated})`;
+      }
+      return `🔧 ${parsed.toolName}`;
     }
 
     case 'tool_result': {
