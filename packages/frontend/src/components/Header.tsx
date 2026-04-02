@@ -2,17 +2,19 @@ import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import styles from './Header.module.css';
 
+export type TopView = 'sessions' | 'prs' | 'settings';
+
 interface Props {
   projects: ProjectConfig[];
   activeProjectId: string | null;
   onProjectChange: (projectId: string) => void;
   activeBoardId: string | null;
   onBoardChange: (boardId: string) => void;
-  prPanelVisible: boolean;
-  onTogglePrPanel: () => void;
+  activeView: TopView;
+  onViewChange: (view: TopView) => void;
 }
 
-export function Header({ projects, activeProjectId, onProjectChange, activeBoardId, onBoardChange, prPanelVisible, onTogglePrPanel }: Props) {
+export function Header({ projects, activeProjectId, onProjectChange, activeBoardId, onBoardChange, activeView, onViewChange }: Props) {
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
   const boards = activeProject?.boards ?? [];
 
@@ -22,10 +24,24 @@ export function Header({ projects, activeProjectId, onProjectChange, activeBoard
       <nav className={styles.nav}>
         <button
           type="button"
-          className={`${styles.navLink}${prPanelVisible ? ` ${styles.navLinkActive}` : ''}`}
-          onClick={onTogglePrPanel}
+          className={`${styles.navLink}${activeView === 'sessions' ? ` ${styles.navLinkActive}` : ''}`}
+          onClick={() => onViewChange('sessions')}
+        >
+          Sessions
+        </button>
+        <button
+          type="button"
+          className={`${styles.navLink}${activeView === 'prs' ? ` ${styles.navLinkActive}` : ''}`}
+          onClick={() => onViewChange('prs')}
         >
           PRs
+        </button>
+        <button
+          type="button"
+          className={`${styles.navLink}${activeView === 'settings' ? ` ${styles.navLinkActive}` : ''}`}
+          onClick={() => onViewChange('settings')}
+        >
+          Settings
         </button>
       </nav>
       <div className={styles.divider} />

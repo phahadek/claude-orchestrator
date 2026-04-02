@@ -60,6 +60,11 @@ export function runMigrations(): void {
       fetched_at     INTEGER NOT NULL,
       raw_json       TEXT    NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
 
   // Idempotent column additions for existing databases
