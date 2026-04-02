@@ -201,8 +201,8 @@ export class NotionClient {
    * Results are cached per board with a 5-minute TTL.
    * Returns ResolvedTask[] with dependency annotations.
    */
-  async fetchReadyTasks(boardId: string): Promise<ResolvedTask[]> {
-    if (isBoardCacheFresh(boardId)) {
+  async fetchReadyTasks(boardId: string, skipCache?: boolean): Promise<ResolvedTask[]> {
+    if (!skipCache && isBoardCacheFresh(boardId)) {
       const cached = readBoardCache(boardId);
       if (cached) return resolver.resolve(cached);
     }

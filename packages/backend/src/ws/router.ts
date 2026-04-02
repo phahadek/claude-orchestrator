@@ -57,7 +57,7 @@ export function handleMessage(
       }
       const boardId = msg.boardId ?? project.boardId;
       notion
-        .fetchReadyTasks(boardId)
+        .fetchReadyTasks(boardId, msg.skipCache)
         .then((tasks) => ws.send(JSON.stringify({ type: 'tasks_ready', tasks })))
         .catch((e) => ws.send(JSON.stringify({ type: 'error', message: String(e) })));
       break;
