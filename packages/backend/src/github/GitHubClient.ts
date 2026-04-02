@@ -1,5 +1,6 @@
 import { GITHUB_TOKEN, GITHUB_REPO } from '../config';
 import { GitHubApiError, PullRequest, PRDiff, MergeResult } from './types';
+import { getPRByNumber } from '../db/queries';
 
 export class GitHubClient {
   private readonly base = 'https://api.github.com';
@@ -56,14 +57,37 @@ export class GitHubClient {
   }
 
   async markPRReady(repo: string, prNumber: number): Promise<void> {
-    await this.request<unknown>(
-      `/repos/${repo}/pulls/${prNumber}`,
-      {
-        method: 'PATCH',
-        headers: { ...this.headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ draft: false }),
+    const prRow = getPRByNumber(prNumber, repo);
+    if (!prRow?.node_id) {
+      const pr = await this.fetchPR(repo, prNumber);
+      await this.markPRReadyByNodeId(pr.nodeId);
+      return;
+    }
+    await this.markPRReadyByNodeId(prRow.node_id);
+  }
+
+  private async markPRReadyByNodeId(nodeId: string): Promise<void> {
+    const query = `mutation($pullRequestId: ID!) {
+      markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) {
+        pullRequest { isDraft }
       }
-    );
+    }`;
+    const res = await fetch('https://api.github.com/graphql', {
+      method: 'POST',
+      headers: {
+        ...this.headers,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query, variables: { pullRequestId: nodeId } }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new GitHubApiError(res.status, text);
+    }
+    const body = await res.json() as { errors?: Array<{ message: string }> };
+    if (body.errors?.length) {
+      throw new GitHubApiError(422, body.errors.map(e => e.message).join('; '));
+    }
   }
 
   async mergePR(prId: number, commitTitle: string, repo?: string): Promise<MergeResult> {
@@ -100,6 +124,7 @@ export class GitHubClient {
 // ---- helpers ----------------------------------------------------------------
 
 interface GitHubRawPR {
+  node_id: string;
   number: number;
   title: string;
   body: string | null;
@@ -117,6 +142,7 @@ interface GitHubRawPR {
 
 function mapPR(pr: GitHubRawPR): PullRequest {
   return {
+    nodeId: pr.node_id,
     id: pr.number,
     title: pr.title,
     body: pr.body,

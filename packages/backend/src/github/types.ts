@@ -3,6 +3,7 @@ export class GitHubApiError extends Error {
 }
 
 export interface PullRequest {
+  nodeId: string;       // GitHub GraphQL global ID
   id: number;           // GitHub PR number
   title: string;
   body: string | null;  // PR description

@@ -101,6 +101,7 @@ const basePRRow = {
   review_iteration: 0,
   head_sha: 'sha-abc',
   last_reviewed_sha: null,
+  node_id: null,
 };
 
 beforeEach(() => {

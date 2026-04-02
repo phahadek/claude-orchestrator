@@ -94,3 +94,4 @@ try { db.exec(`ALTER TABLE pull_requests ADD COLUMN review_session_id TEXT`); } 
 try { db.exec(`ALTER TABLE pull_requests ADD COLUMN head_sha TEXT`); } catch { /* already exists */ }
 try { db.exec(`ALTER TABLE pull_requests ADD COLUMN last_reviewed_sha TEXT`); } catch { /* already exists */ }
 try { db.exec(`ALTER TABLE sessions ADD COLUMN model TEXT`); } catch { /* already exists */ }
+try { db.exec(`ALTER TABLE pull_requests ADD COLUMN node_id TEXT`); } catch { /* already exists */ }

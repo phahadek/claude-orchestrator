@@ -147,6 +147,7 @@ export function createPrsRouter(
           review_session_id: null,
           head_sha: null,
           last_reviewed_sha: null,
+          node_id: pr.nodeId,
         });
         prRow = getPRByNumber(prNumber, repo);
       } catch {

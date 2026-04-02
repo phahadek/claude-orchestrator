@@ -452,21 +452,22 @@ export function getTaskTitleFromCache(taskId: string): string | null {
 
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
-export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_session_id' | 'review_iteration' | 'head_sha' | 'last_reviewed_sha'> & {
+export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_session_id' | 'review_iteration' | 'head_sha' | 'last_reviewed_sha' | 'node_id'> & {
   review_session_id?: string | null;
   review_iteration?: number;
   head_sha?: string | null;
   last_reviewed_sha?: string | null;
+  node_id?: string | null;
 }): PullRequestRow {
   db.prepare(`
     INSERT INTO pull_requests
       (pr_number, pr_url, notion_task_id, session_id, repo, title, body,
        head_branch, base_branch, state, draft, review_result, review_at,
-       created_at, updated_at, synced_at)
+       created_at, updated_at, synced_at, node_id)
     VALUES
       (@pr_number, @pr_url, @notion_task_id, @session_id, @repo, @title, @body,
        @head_branch, @base_branch, @state, @draft, @review_result, @review_at,
-       @created_at, @updated_at, @synced_at)
+       @created_at, @updated_at, @synced_at, @node_id)
     ON CONFLICT(pr_url) DO UPDATE SET
       synced_at      = excluded.synced_at,
       state          = excluded.state,
@@ -477,7 +478,8 @@ export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_sessio
       base_branch    = COALESCE(excluded.base_branch, base_branch),
       notion_task_id = COALESCE(excluded.notion_task_id, notion_task_id),
       session_id     = COALESCE(excluded.session_id, session_id),
-      updated_at     = excluded.updated_at
+      updated_at     = excluded.updated_at,
+      node_id        = COALESCE(excluded.node_id, node_id)
   `).run(pr);
   return db.prepare<{ pr_url: string }>(`
     SELECT * FROM pull_requests WHERE pr_url = @pr_url
