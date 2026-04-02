@@ -18,6 +18,8 @@ import { createPrsRouter } from './routes/prs';
 import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
 import { PRSyncJob } from './github/PRSyncJob';
+import { ReviewOrchestrator } from './github/ReviewOrchestrator';
+import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
 import { getActiveSessions, getEventsBySession, getDenialsBySession, deleteGhostSessions } from './db/queries';
 import { isSystemOnlyUserEvent } from './utils/eventFilters';
 
@@ -36,6 +38,9 @@ const notionClient = new NotionClient();
 const sessionManager = new SessionManager(notionClient);
 const githubClient = new GitHubClient();
 const prReviewService = new PRReviewService(githubClient, notionClient, sessionManager);
+const reviewOrchestrator = new ReviewOrchestrator(
+  prReviewService, sessionManager, AUTO_REVIEW_CONCURRENCY, AUTO_REVIEW_ENABLED,
+);
 
 const PORT = parseInt(process.env.PORT ?? '3000');
 
