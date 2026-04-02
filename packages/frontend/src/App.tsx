@@ -29,12 +29,32 @@ const MIN_PR_PANEL_HEIGHT = 20;
 const MAX_PR_PANEL_HEIGHT = 60;
 
 const ACTIVE_PROJECT_KEY = 'activeProjectId';
+const ACTIVE_MILESTONE_KEY_PREFIX = 'activeMilestone_';
+
+function getMilestoneKey(projectId: string) {
+  return `${ACTIVE_MILESTONE_KEY_PREFIX}${projectId}`;
+}
+
+function getDefaultBoardId(project: ProjectConfig): string {
+  return project.boards?.[0]?.id ?? project.boardId;
+}
+
+function resolveActiveBoardId(project: ProjectConfig): string {
+  const stored = localStorage.getItem(getMilestoneKey(project.id));
+  const boards = project.boards ?? [];
+  if (stored && (boards.length === 0 || boards.some((b) => b.id === stored))) {
+    return stored;
+  }
+  return getDefaultBoardId(project);
+}
 
 export default function App() {
-  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials } = useSessionStore();
+  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials, prRefreshTrigger } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const activeProjectIdRef = useRef<string | null>(null);
+  const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
+  const activeBoardIdRef = useRef<string | null>(null);
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
@@ -43,7 +63,7 @@ export default function App() {
   const { send, connectionState } = useWebSocket(dispatch, (sendNow: (msg: ClientMessage) => void) => {
     // Called each time the WS (re)connects — fetch tasks if projectId is already known
     if (activeProjectIdRef.current) {
-      sendNow({ type: 'fetch_tasks', projectId: activeProjectIdRef.current });
+      sendNow({ type: 'fetch_tasks', projectId: activeProjectIdRef.current, boardId: activeBoardIdRef.current ?? undefined });
     }
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -81,6 +101,10 @@ export default function App() {
   });
   const [isPrDragging, setIsPrDragging] = useState(false);
   const prPanelHeightRef = useRef(prPanelHeightPct);
+
+  useEffect(() => {
+    activeBoardIdRef.current = activeBoardId;
+  }, [activeBoardId]);
 
   useEffect(() => {
     detailWidthRef.current = detailWidthPct;
@@ -138,20 +162,36 @@ export default function App() {
 
         // Restore from localStorage, validate against current project list
         const stored = localStorage.getItem(ACTIVE_PROJECT_KEY);
-        const valid = stored && loaded.some((p) => p.id === stored) ? stored : loaded[0].id;
+        const validProjectId = stored && loaded.some((p) => p.id === stored) ? stored : loaded[0].id;
+        const project = loaded.find((p) => p.id === validProjectId)!;
+        const boardId = resolveActiveBoardId(project);
 
-        activeProjectIdRef.current = valid;
-        setActiveProjectId(valid);
-        send({ type: 'fetch_tasks', projectId: valid });
+        activeProjectIdRef.current = validProjectId;
+        activeBoardIdRef.current = boardId;
+        setActiveProjectId(validProjectId);
+        setActiveBoardId(boardId);
+        send({ type: 'fetch_tasks', projectId: validProjectId, boardId });
       })
       .catch(() => {/* leave projects empty — DispatchModal handles the empty case */});
   }, []);
 
   const handleProjectChange = useCallback((id: string) => {
+    const project = projects.find((p) => p.id === id);
+    const boardId = project ? resolveActiveBoardId(project) : null;
     localStorage.setItem(ACTIVE_PROJECT_KEY, id);
     activeProjectIdRef.current = id;
+    activeBoardIdRef.current = boardId;
     setActiveProjectId(id);
-    send({ type: 'fetch_tasks', projectId: id });
+    setActiveBoardId(boardId);
+    send({ type: 'fetch_tasks', projectId: id, boardId: boardId ?? undefined });
+  }, [send, projects]);
+
+  const handleBoardChange = useCallback((boardId: string) => {
+    if (!activeProjectIdRef.current) return;
+    localStorage.setItem(getMilestoneKey(activeProjectIdRef.current), boardId);
+    activeBoardIdRef.current = boardId;
+    setActiveBoardId(boardId);
+    send({ type: 'fetch_tasks', projectId: activeProjectIdRef.current, boardId });
   }, [send]);
 
   useEffect(() => {
@@ -331,6 +371,8 @@ export default function App() {
         projects={projects}
         activeProjectId={activeProjectId}
         onProjectChange={handleProjectChange}
+        activeBoardId={activeBoardId}
+        onBoardChange={handleBoardChange}
         prPanelVisible={prPanelVisible}
         onTogglePrPanel={togglePrPanel}
       />
@@ -441,6 +483,7 @@ export default function App() {
                   setSelectedId(sessionId);
                 }}
                 onCollapse={togglePrPanel}
+                refreshTrigger={prRefreshTrigger}
               />
             </div>
           </>
