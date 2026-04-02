@@ -1,4 +1,4 @@
-import { getEventsBySession, setPRReviewResult, getPRByNumber } from '../db/queries';
+import { getEventsBySession, setPRReviewResult, getPRByNumber, setReviewSessionId } from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
 import type { NotionClient } from '../notion/NotionClient';
 import type { SessionManager } from '../session/SessionManager';
@@ -27,9 +27,16 @@ export class PRReviewService {
     private github: GitHubClient,
     private notion: NotionClient,
     private sessionManager: SessionManager,
+    private readonly defaultProjectId: string = '',
+    private readonly defaultProjectContextUrl: string = '',
   ) {}
 
-  async reviewPR(prNumber: number, repo: string, projectId: string, projectContextUrl: string): Promise<PRReviewResult> {
+  async reviewPR(
+    prNumber: number,
+    repo: string,
+    projectId: string = this.defaultProjectId,
+    projectContextUrl: string = this.defaultProjectContextUrl,
+  ): Promise<PRReviewResult> {
     const prRow = getPRByNumber(prNumber, repo);
     if (!prRow) {
       throw new Error(`PR #${prNumber} in ${repo} not found in database`);
@@ -58,23 +65,126 @@ export class PRReviewService {
       projectId,
     });
 
-    // Wait for session completion via EventEmitter
-    await new Promise<void>((resolve) => {
+    // Persist the review session pairing immediately
+    setReviewSessionId(prNumber, repo, sessionId);
+
+    return this.waitForVerdict(sessionId, prNumber, repo);
+  }
+
+  /**
+   * Send a re-review follow-up message to an existing review session and wait
+   * for the next verdict JSON block in the event stream.
+   */
+  async sendReReview(
+    reviewSessionId: string,
+    prNumber: number,
+    repo: string,
+    iteration: number,
+    maxIterations: number = 3,
+  ): Promise<PRReviewResult> {
+    const msg =
+      `The PR has been updated (new commits detected). Please re-review the changes. ` +
+      `This is review iteration ${iteration}/${maxIterations}.`;
+    this.sessionManager.send(reviewSessionId, msg);
+    return this.waitForVerdict(reviewSessionId, prNumber, repo);
+  }
+
+  /**
+   * Listen to session_event messages for `sessionId` and resolve with the
+   * first verdict JSON block found in an assistant message.
+   * Falls back to parseReviewResult over stored events if session_ended fires first.
+   */
+  private waitForVerdict(sessionId: string, prNumber: number, repo: string): Promise<PRReviewResult> {
+    return new Promise<PRReviewResult>((resolve) => {
+      const cleanup = () => {
+        this.sessionManager.off('message', handler);
+      };
+
       const handler = (msg: ServerMessage) => {
-        if (msg.type === 'session_ended' && msg.sessionId === sessionId) {
-          this.sessionManager.off('message', handler);
-          resolve();
+        if (!('sessionId' in msg) || msg.sessionId !== sessionId) return;
+
+        if (msg.type === 'session_event' && msg.eventType === 'text') {
+          const result = this.tryParseVerdictFromRawEvent(msg.content, prNumber, repo);
+          if (result) {
+            cleanup();
+            setPRReviewResult(prNumber, repo, JSON.stringify(result));
+            resolve(result);
+          }
+          return;
+        }
+
+        if (msg.type === 'session_ended') {
+          cleanup();
+          // Fallback: parse from stored events
+          const events = getEventsBySession(sessionId);
+          const result = this.parseReviewResult(events, prNumber, repo);
+          setPRReviewResult(prNumber, repo, JSON.stringify(result));
+          resolve(result);
         }
       };
+
       this.sessionManager.on('message', handler);
     });
+  }
 
-    // Parse result from stored events
-    const events = getEventsBySession(sessionId);
-    const result = this.parseReviewResult(events, prNumber, repo);
+  /**
+   * Try to parse a PRReviewResult verdict from the raw JSON payload of a
+   * session_event with eventType='text'. Returns null if no valid verdict found.
+   */
+  private tryParseVerdictFromRawEvent(
+    rawEventPayload: string,
+    prNumber: number,
+    repo: string,
+  ): PRReviewResult | null {
+    try {
+      const event = JSON.parse(rawEventPayload) as Record<string, unknown>;
+      if (event.type !== 'assistant') return null;
+      const msg = event.message as Record<string, unknown> | undefined;
+      const content = msg?.content as Array<Record<string, unknown>> | undefined;
+      if (!content) return null;
 
-    setPRReviewResult(prNumber, repo, JSON.stringify(result));
-    return result;
+      for (const block of content) {
+        if (block.type === 'text' && typeof block.text === 'string') {
+          const parsed = this.tryParseVerdict(block.text);
+          if (parsed) {
+            return {
+              prNumber,
+              repo,
+              verdict: parsed.verdict,
+              dimensions: parsed.dimensions,
+              summary: parsed.summary,
+              reviewedAt: new Date().toISOString(),
+            };
+          }
+        }
+      }
+    } catch {
+      // Not parseable — skip
+    }
+    return null;
+  }
+
+  /** Try to parse a JSON verdict object from a text string. Returns null on failure. */
+  private tryParseVerdict(
+    text: string,
+  ): { verdict: PRReviewResult['verdict']; dimensions: ReviewDimension[]; summary: string } | null {
+    try {
+      const parsed = JSON.parse(text.trim()) as Record<string, unknown>;
+      if (
+        typeof parsed.verdict === 'string' &&
+        Array.isArray(parsed.dimensions) &&
+        typeof parsed.summary === 'string'
+      ) {
+        return {
+          verdict: parsed.verdict as PRReviewResult['verdict'],
+          dimensions: parsed.dimensions as ReviewDimension[],
+          summary: parsed.summary,
+        };
+      }
+    } catch {
+      // Not JSON or wrong shape
+    }
+    return null;
   }
 
   buildPrompt(pr: PullRequest, diff: PRDiff, task: NotionTaskPage): string {
@@ -146,16 +256,14 @@ verdict rules: "approved" = all 4 passed. "needs_changes" = 1–3 passed. "incom
     }
 
     const combined = textParts.join('').trim();
-    let parsedResult: Record<string, unknown>;
-    try {
-      parsedResult = JSON.parse(combined) as Record<string, unknown>;
-    } catch (err) {
+    const parsed = this.tryParseVerdict(combined);
+    if (parsed) {
       return {
         prNumber,
         repo,
-        verdict: 'incomplete',
-        dimensions: [],
-        summary: `Failed to parse Claude output as JSON: ${String(err)}. Raw output: ${combined.slice(0, 500)}`,
+        verdict: parsed.verdict,
+        dimensions: parsed.dimensions,
+        summary: parsed.summary,
         reviewedAt: new Date().toISOString(),
       };
     }
@@ -163,9 +271,9 @@ verdict rules: "approved" = all 4 passed. "needs_changes" = 1–3 passed. "incom
     return {
       prNumber,
       repo,
-      verdict: (parsedResult.verdict as PRReviewResult['verdict']) ?? 'incomplete',
-      dimensions: (parsedResult.dimensions as ReviewDimension[]) ?? [],
-      summary: (parsedResult.summary as string) ?? '',
+      verdict: 'incomplete',
+      dimensions: [],
+      summary: `Failed to parse Claude output as JSON. Raw output: ${combined.slice(0, 500)}`,
       reviewedAt: new Date().toISOString(),
     };
   }

@@ -131,4 +131,7 @@ export interface PullRequestRow {
   created_at: string | null;
   updated_at: string | null;
   synced_at: string;
+  review_session_id: string | null;
+  review_iteration: number;
+  head_sha: string | null;
 }
