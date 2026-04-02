@@ -61,18 +61,14 @@ export class PRMergeWatcher {
   async handleMerged(pr: PullRequestRow, sha: string | null): Promise<void> {
     updatePRState(pr.pr_number, pr.repo, 'merged');
 
-    // Kill coding session
+    // End coding session gracefully (stdin close → clean CLI exit)
     if (pr.session_id) {
-      await this.sessions.kill(pr.session_id).catch((err: unknown) =>
-        console.warn(`[PRMergeWatcher] kill coding session failed:`, (err as Error).message),
-      );
+      this.sessions.endSession(pr.session_id);
     }
 
-    // Kill review session
+    // End review session gracefully (stdin close → clean CLI exit)
     if (pr.review_session_id) {
-      await this.sessions.kill(pr.review_session_id).catch((err: unknown) =>
-        console.warn(`[PRMergeWatcher] kill review session failed:`, (err as Error).message),
-      );
+      this.sessions.endSession(pr.review_session_id);
     }
 
     // Update Notion task to Done
