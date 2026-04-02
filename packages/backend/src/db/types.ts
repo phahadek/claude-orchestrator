@@ -136,4 +136,5 @@ export interface PullRequestRow {
   review_iteration: number;
   head_sha: string | null;
   last_reviewed_sha: string | null;
+  node_id: string | null;     // GitHub GraphQL global ID
 }
