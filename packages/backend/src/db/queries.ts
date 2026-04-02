@@ -257,6 +257,12 @@ export function clearPermissionEvents(): void {
   stmtClearPermissionEvents.run();
 }
 
+const stmtClearPermissionDenials = db.prepare(`DELETE FROM permission_denials`);
+
+export function clearPermissionDenials(): void {
+  stmtClearPermissionDenials.run();
+}
+
 // ─── permission_rules ──────────────────────────────────────────────────────
 
 const stmtGetRules = db.prepare(`
