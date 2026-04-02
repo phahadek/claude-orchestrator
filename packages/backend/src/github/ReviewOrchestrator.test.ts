@@ -10,6 +10,7 @@ vi.mock('../db/queries.js', () => ({
   getSetting: vi.fn().mockReturnValue(undefined),
   incrementReviewIteration: vi.fn(),
   setLastReviewedSha: vi.fn(),
+  updatePRDraftStatus: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
@@ -21,11 +22,18 @@ vi.mock('../config.js', () => ({
 }));
 
 import { ReviewOrchestrator } from './ReviewOrchestrator';
-import { setPRReviewResult, getPRByNumber, getPRBySessionId, incrementReviewIteration, setLastReviewedSha } from '../db/queries';
+import { setPRReviewResult, getPRByNumber, getPRBySessionId, incrementReviewIteration, setLastReviewedSha, updatePRDraftStatus } from '../db/queries';
 import type { PRReviewService } from './PRReviewService';
+import type { GitHubClient } from './GitHubClient';
 import type { ReviewJob } from './types';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+function makeMockGitHubClient(): GitHubClient {
+  return {
+    markPRReady: vi.fn().mockResolvedValue(undefined),
+  } as unknown as GitHubClient;
+}
 
 function makeMockSessionManager() {
   const emitter = new EventEmitter();
@@ -99,7 +107,7 @@ describe('ReviewOrchestrator — disabled', () => {
   it('does not enqueue when enabled === false', async () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, false);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, false);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 20));
@@ -110,7 +118,7 @@ describe('ReviewOrchestrator — disabled', () => {
   it('does not respond to push_detected when disabled', async () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, false);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, false);
 
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
     await new Promise((r) => setTimeout(r, 20));
@@ -125,7 +133,7 @@ describe('ReviewOrchestrator — missing taskId', () => {
   it('does not enqueue when job.taskId is empty', async () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
 
     sm.emit('pr_opened', { ...baseJob, taskId: '' });
     await new Promise((r) => setTimeout(r, 20));
@@ -165,7 +173,7 @@ describe('ReviewOrchestrator — concurrency', () => {
       sendReReview: vi.fn(),
     } as unknown as PRReviewService;
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
 
     sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
     sm.emit('pr_opened', { ...baseJob, prNumber: 2 });
@@ -198,7 +206,7 @@ describe('ReviewOrchestrator — pr_review_complete broadcast', () => {
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -233,7 +241,7 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -259,7 +267,7 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -278,7 +286,7 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
 
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
     await new Promise((r) => setTimeout(r, 30));
@@ -306,7 +314,7 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
       }),
     } as unknown as PRReviewService;
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -341,7 +349,7 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
       }),
     } as unknown as PRReviewService;
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
 
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
     await new Promise((r) => setTimeout(r, 30));
@@ -358,7 +366,7 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
 
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
     await new Promise((r) => setTimeout(r, 30));
@@ -375,7 +383,7 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
 
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
     await new Promise((r) => setTimeout(r, 30));
@@ -389,7 +397,7 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
 
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
     await new Promise((r) => setTimeout(r, 30));
@@ -416,7 +424,7 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
     } as unknown as PRReviewService;
 
     const sm = makeMockSessionManager();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
 
     // Fire two push_detected in quick succession
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
@@ -440,7 +448,7 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -463,7 +471,7 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -489,7 +497,7 @@ describe('ReviewOrchestrator — timeout', () => {
       sendReReview: vi.fn(),
     } as unknown as PRReviewService;
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -514,5 +522,64 @@ describe('ReviewOrchestrator — timeout', () => {
     });
 
     vi.useRealTimers();
+  });
+});
+
+// ── Draft PR transition ───────────────────────────────────────────────────────
+
+describe('ReviewOrchestrator — draft PR transition on approved verdict', () => {
+  it('calls markPRReady and updates DB when approved verdict on a draft PR', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, draft: 1 } as any);
+
+    const sm = makeMockSessionManager();
+    const gc = makeMockGitHubClient();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+
+    new ReviewOrchestrator(rs, sm as any, gc, 1, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(gc.markPRReady)).toHaveBeenCalledOnce();
+    expect(vi.mocked(gc.markPRReady)).toHaveBeenCalledWith('owner/repo', 1);
+    expect(vi.mocked(updatePRDraftStatus)).toHaveBeenCalledWith(1, 'owner/repo', 0);
+    expect(messages[0]).toMatchObject({
+      type: 'pr_review_complete',
+      verdict: 'approved',
+      draft: false,
+    });
+  });
+
+  it('does not call markPRReady when approved verdict on a non-draft PR', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, draft: 0 } as any);
+
+    const sm = makeMockSessionManager();
+    const gc = makeMockGitHubClient();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+
+    new ReviewOrchestrator(rs, sm as any, gc, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(gc.markPRReady)).not.toHaveBeenCalled();
+    expect(vi.mocked(updatePRDraftStatus)).not.toHaveBeenCalled();
   });
 });
