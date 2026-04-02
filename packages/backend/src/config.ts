@@ -66,6 +66,9 @@ export const config = {
 export const GITHUB_TOKEN = process.env.GITHUB_TOKEN ?? '';
 export const GITHUB_REPO  = process.env.GITHUB_REPO  ?? '';  // "owner/repo"
 
+export const AUTO_REVIEW_ENABLED     = process.env.AUTO_REVIEW !== 'false';
+export const AUTO_REVIEW_CONCURRENCY = Number(process.env.AUTO_REVIEW_CONCURRENCY ?? 1);
+
 export const ALLOWED_TOOLS = [
   'Bash(git:*)', 'Bash(npm:*)', 'Bash(npx:*)', 'Bash(node:*)', 'Bash(tsc:*)',
   'Bash(gh:*)', 'Bash(cd:*)', 'Bash(which:*)', 'Bash(where:*)',

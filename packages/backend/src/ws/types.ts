@@ -17,6 +17,7 @@ export type ServerMessage =
   | { type: 'pr_created';            sessionId: string; prUrl: string }
   | { type: 'session_updated';       sessionId: string; note?: string | null; tags?: string[] }
   | { type: 'tasks_ready';           tasks: ResolvedTask[] }
+  | { type: 'pr_review_complete';    prNumber: number; repo: string; verdict: string; summary: string }
   | { type: 'error';                 message: string };
 
 // ── Client → Server ──────────────────────────────────────────────
