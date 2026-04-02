@@ -16,6 +16,7 @@ import { StatusBadge } from './StatusBadge';
 import { formatModelName } from './SessionCard';
 import { ToolCallGroup } from './ToolCallGroup';
 import type { CallPair } from './ToolCallGroup';
+import { ReviewDetailView } from './ReviewDetailView';
 import styles from './SessionDetail.module.css';
 
 // ── Event grouping ────────────────────────────────────────────────
@@ -130,6 +131,7 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
   const [editingNote, setEditingNote] = useState(false);
   const [noteValue, setNoteValue] = useState('');
   const [tagInput, setTagInput] = useState('');
+  const [showReviewTranscript, setShowReviewTranscript] = useState(false);
 
   useEffect(() => {
     const el = transcriptRef.current;
@@ -468,72 +470,128 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
         </div>
       </div>
 
-      <div className={styles.transcriptSection}>
-        <div className={styles.transcriptHeader}>
-          {!isAtBottom && (
-            <button className={styles.goToEndButton} onClick={handleGoToEnd}>
-              Go to End ↓
-            </button>
-          )}
-          <button
-            className={styles.copyButton}
-            onClick={handleCopy}
-            disabled={session.events.length === 0}
-          >
-            {copyState === 'copied' ? '✓ Copied' : copyState === 'failed' ? '✗ Failed' : 'Copy'}
-          </button>
-        </div>
-        <div className={styles.transcript} ref={transcriptRef}>
-          {groupSessionEvents(session.events).map((item, i) => {
-            if (item.kind === 'group') {
-              return (
-                <ToolCallGroup key={`group-${i}`} toolName={item.toolName} calls={item.calls} />
-              );
-            }
-            return (
-              <EventRow
-                key={`${i}-${item.event.timestamp}-${item.event.eventType}`}
-                event={item.event}
-              />
-            );
-          })}
-          {session.events.length === 0 && (
-            <p className={styles.emptyTranscript}>No events yet.</p>
-          )}
-          {(session.permissionDenials ?? []).length > 0 && (
-            <PermissionDenialsInline denials={session.permissionDenials!} />
-          )}
-        </div>
-      </div>
+      {session.sessionType === 'review' ? (
+        <>
+          <ReviewDetailView session={session} />
 
-      {isActive && (
-        <div className={styles.composer}>
-          <textarea
-            ref={composerRef}
-            className={styles.composerInput}
-            value={draftMessage}
-            rows={1}
-            onChange={(e) => {
-              setDraftMessage(e.target.value);
-              e.target.style.height = 'auto';
-              e.target.style.height = `${e.target.scrollHeight}px`;
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && draftMessage.trim()) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            placeholder="Send a message to the session…"
-          />
-          <button
-            className={styles.sendButton}
-            onClick={handleSend}
-            disabled={!draftMessage.trim()}
-          >
-            Send
-          </button>
-        </div>
+          <div className={styles.transcriptSection}>
+            <div className={styles.transcriptHeader}>
+              <button
+                className={styles.copyButton}
+                onClick={() => setShowReviewTranscript((v) => !v)}
+                aria-expanded={showReviewTranscript}
+              >
+                {showReviewTranscript ? '▼ Hide transcript' : '▶ Show session transcript'}
+              </button>
+              {showReviewTranscript && (
+                <>
+                  {!isAtBottom && (
+                    <button className={styles.goToEndButton} onClick={handleGoToEnd}>
+                      Go to End ↓
+                    </button>
+                  )}
+                  <button
+                    className={styles.copyButton}
+                    onClick={handleCopy}
+                    disabled={session.events.length === 0}
+                  >
+                    {copyState === 'copied' ? '✓ Copied' : copyState === 'failed' ? '✗ Failed' : 'Copy'}
+                  </button>
+                </>
+              )}
+            </div>
+            {showReviewTranscript && (
+              <div className={styles.transcript} ref={transcriptRef}>
+                {groupSessionEvents(session.events).map((item, i) => {
+                  if (item.kind === 'group') {
+                    return (
+                      <ToolCallGroup key={`group-${i}`} toolName={item.toolName} calls={item.calls} />
+                    );
+                  }
+                  return (
+                    <EventRow
+                      key={`${i}-${item.event.timestamp}-${item.event.eventType}`}
+                      event={item.event}
+                    />
+                  );
+                })}
+                {session.events.length === 0 && (
+                  <p className={styles.emptyTranscript}>No events yet.</p>
+                )}
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        <>
+          <div className={styles.transcriptSection}>
+            <div className={styles.transcriptHeader}>
+              {!isAtBottom && (
+                <button className={styles.goToEndButton} onClick={handleGoToEnd}>
+                  Go to End ↓
+                </button>
+              )}
+              <button
+                className={styles.copyButton}
+                onClick={handleCopy}
+                disabled={session.events.length === 0}
+              >
+                {copyState === 'copied' ? '✓ Copied' : copyState === 'failed' ? '✗ Failed' : 'Copy'}
+              </button>
+            </div>
+            <div className={styles.transcript} ref={transcriptRef}>
+              {groupSessionEvents(session.events).map((item, i) => {
+                if (item.kind === 'group') {
+                  return (
+                    <ToolCallGroup key={`group-${i}`} toolName={item.toolName} calls={item.calls} />
+                  );
+                }
+                return (
+                  <EventRow
+                    key={`${i}-${item.event.timestamp}-${item.event.eventType}`}
+                    event={item.event}
+                  />
+                );
+              })}
+              {session.events.length === 0 && (
+                <p className={styles.emptyTranscript}>No events yet.</p>
+              )}
+              {(session.permissionDenials ?? []).length > 0 && (
+                <PermissionDenialsInline denials={session.permissionDenials!} />
+              )}
+            </div>
+          </div>
+
+          {isActive && (
+            <div className={styles.composer}>
+              <textarea
+                ref={composerRef}
+                className={styles.composerInput}
+                value={draftMessage}
+                rows={1}
+                onChange={(e) => {
+                  setDraftMessage(e.target.value);
+                  e.target.style.height = 'auto';
+                  e.target.style.height = `${e.target.scrollHeight}px`;
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey && draftMessage.trim()) {
+                    e.preventDefault();
+                    handleSend();
+                  }
+                }}
+                placeholder="Send a message to the session…"
+              />
+              <button
+                className={styles.sendButton}
+                onClick={handleSend}
+                disabled={!draftMessage.trim()}
+              >
+                Send
+              </button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
