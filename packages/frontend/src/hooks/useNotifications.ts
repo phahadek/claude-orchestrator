@@ -1,0 +1,85 @@
+import { useEffect, useRef } from 'react';
+import type { SessionState } from './useSessionStore';
+
+const NOTIFICATIONS_ENABLED_KEY = 'notificationsEnabled';
+const PERMISSION_REQUESTED_KEY = 'notificationPermissionRequested';
+
+function isNotificationsEnabled(): boolean {
+  return localStorage.getItem(NOTIFICATIONS_ENABLED_KEY) !== 'false';
+}
+
+function requestPermissionOnce(): void {
+  if (typeof Notification === 'undefined') return;
+  if (localStorage.getItem(PERMISSION_REQUESTED_KEY)) return;
+  localStorage.setItem(PERMISSION_REQUESTED_KEY, 'true');
+  void Notification.requestPermission().then((permission) => {
+    // Default notificationsEnabled to true when permission is granted
+    if (permission === 'granted' && localStorage.getItem(NOTIFICATIONS_ENABLED_KEY) === null) {
+      localStorage.setItem(NOTIFICATIONS_ENABLED_KEY, 'true');
+    }
+  });
+}
+
+function fireNotification(title: string, body: string, onClick?: () => void): void {
+  if (typeof Notification === 'undefined') return;
+  if (Notification.permission !== 'granted') return;
+  if (!isNotificationsEnabled()) return;
+  if (document.visibilityState === 'visible') return;
+
+  const n = new Notification(title, { body, icon: '/favicon.ico' });
+  if (onClick) {
+    n.onclick = onClick;
+  }
+}
+
+interface SessionSnapshot {
+  status: string;
+  pendingPermissionKey: string | null;
+}
+
+export function useNotifications(sessions: SessionState[]): void {
+  const prevRef = useRef<Map<string, SessionSnapshot>>(new Map());
+
+  useEffect(() => {
+    requestPermissionOnce();
+  }, []);
+
+  useEffect(() => {
+    const prev = prevRef.current;
+    const next = new Map<string, SessionSnapshot>();
+
+    for (const session of sessions) {
+      const { sessionId, taskName, status, pendingPermission } = session;
+      const pendingPermissionKey = pendingPermission
+        ? `${pendingPermission.toolName}:${pendingPermission.proposedAction}`
+        : null;
+
+      next.set(sessionId, { status, pendingPermissionKey });
+
+      const prevSnap = prev.get(sessionId);
+
+      if (status === 'done' && prevSnap?.status !== 'done') {
+        fireNotification('✅ Session done', `${taskName} finished successfully.`);
+      } else if (status === 'error' && prevSnap?.status !== 'error') {
+        fireNotification('❌ Session failed', `${taskName} encountered an error.`);
+      }
+
+      if (
+        pendingPermissionKey &&
+        pendingPermissionKey !== prevSnap?.pendingPermissionKey
+      ) {
+        const toolName = pendingPermission!.toolName;
+        fireNotification(
+          '🔔 Approval needed',
+          `${toolName} requested in ${taskName}. Click to review.`,
+          () => {
+            window.focus();
+            window.dispatchEvent(new CustomEvent('selectSession', { detail: { sessionId } }));
+          },
+        );
+      }
+    }
+
+    prevRef.current = next;
+  }, [sessions]);
+}

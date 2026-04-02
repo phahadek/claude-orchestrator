@@ -22,7 +22,7 @@ import { PRSyncJob } from './github/PRSyncJob';
 import { ReviewOrchestrator } from './github/ReviewOrchestrator';
 import { PRMergeWatcher } from './github/PRMergeWatcher';
 import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
-import { getActiveSessions, getEventsBySession, getDenialsBySession, deleteGhostSessions } from './db/queries';
+import { getActiveSessions, getEventsBySession, getDenialsBySession, deleteGhostSessions, getPRByNotionTaskId } from './db/queries';
 import { isSystemOnlyUserEvent } from './utils/eventFilters';
 
 runMigrations();
@@ -85,6 +85,9 @@ wss.on('connection', (ws) => {
   // Send existing active (non-archived) sessions to the new client so the UI populates on load
   for (const s of getActiveSessions()) {
     const tags = s.tags ? (() => { try { return JSON.parse(s.tags) as string[]; } catch { return undefined; } })() : undefined;
+    const prNumber = s.session_type === 'review' && s.notion_task_id
+      ? (getPRByNotionTaskId(s.notion_task_id)?.pr_number ?? undefined)
+      : undefined;
     ws.send(JSON.stringify({
       type: 'session_started',
       sessionId: s.session_id,
@@ -96,6 +99,7 @@ wss.on('connection', (ws) => {
       favorited: s.favorited === 1,
       project_id: s.project_id,
       sessionType: s.session_type,
+      ...(prNumber != null && { prNumber }),
       note: s.note ?? null,
       tags,
       totalInputTokens: s.total_input_tokens ?? 0,
