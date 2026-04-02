@@ -26,6 +26,7 @@ export interface Session {
   tags: string | null; // JSON array of strings, e.g. '["bugfix","auth"]'
   total_input_tokens: number;
   total_output_tokens: number;
+  model?: string | null;
 }
 
 export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path' | 'archived' | 'favorited' | 'project_id' | 'session_type' | 'note' | 'tags' | 'total_input_tokens' | 'total_output_tokens'> & {
