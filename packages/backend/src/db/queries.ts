@@ -483,3 +483,24 @@ export function updatePRState(prNumber: number, repo: string, state: string): vo
     UPDATE pull_requests SET state = @state WHERE pr_number = @pr_number AND repo = @repo
   `).run({ pr_number: prNumber, repo, state });
 }
+
+export function deletePR(prNumber: number, repo: string): boolean {
+  const result = db.prepare<{ pr_number: number; repo: string }>(`
+    DELETE FROM pull_requests WHERE pr_number = @pr_number AND repo = @repo
+  `).run({ pr_number: prNumber, repo });
+  return result.changes > 0;
+}
+
+export function deleteMergedAndClosedPRs(repo: string): number {
+  const result = db.prepare<{ repo: string }>(`
+    DELETE FROM pull_requests WHERE repo = @repo AND state IN ('merged', 'closed')
+  `).run({ repo });
+  return result.changes;
+}
+
+export function countMergedAndClosedPRs(repo: string): number {
+  const row = db.prepare<{ repo: string }>(`
+    SELECT COUNT(*) as count FROM pull_requests WHERE repo = @repo AND state IN ('merged', 'closed')
+  `).get({ repo }) as { count: number };
+  return row.count;
+}
