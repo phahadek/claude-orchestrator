@@ -98,7 +98,7 @@ export class ReviewOrchestrator {
       const summary = e instanceof Error && e.message === 'Review timed out'
         ? 'Review timed out'
         : String(e);
-      setPRReviewResult(job.prNumber, job.repo, JSON.stringify({ verdict: 'error', summary }));
+      setPRReviewResult(job.prNumber, job.repo, JSON.stringify({ verdict: 'error', summary, dimensions: [] }));
       this.sessionManager.emit('message', {
         type: 'pr_review_complete',
         prNumber: job.prNumber,
@@ -177,7 +177,7 @@ export class ReviewOrchestrator {
       } catch (e) {
         const summary = e instanceof Error ? e.message : String(e);
         console.error(`[ReviewOrchestrator] re-review failed for PR #${prRow.pr_number}:`, e);
-        setPRReviewResult(prRow.pr_number, prRow.repo, JSON.stringify({ verdict: 'error', summary }));
+        setPRReviewResult(prRow.pr_number, prRow.repo, JSON.stringify({ verdict: 'error', summary, dimensions: [] }));
         this.sessionManager.emit('message', {
           type: 'review_verdict',
           prNumber: prRow.pr_number,

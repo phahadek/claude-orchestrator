@@ -511,15 +511,61 @@ describe('ReviewOrchestrator — timeout', () => {
     const [prNum, repo, resultJson] = vi.mocked(setPRReviewResult).mock.calls[0];
     expect(prNum).toBe(1);
     expect(repo).toBe('owner/repo');
-    const stored = JSON.parse(resultJson as string) as { verdict: string; summary: string };
+    const stored = JSON.parse(resultJson as string) as { verdict: string; summary: string; dimensions: unknown };
     expect(stored.verdict).toBe('error');
     expect(stored.summary).toContain('timed out');
+    expect(Array.isArray(stored.dimensions)).toBe(true);
 
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({
       type: 'pr_review_complete',
       verdict: 'error',
     });
+
+    vi.useRealTimers();
+  });
+
+  it('stores error verdict with dimensions: [] when executeReview catches a non-timeout error', async () => {
+    const sm = makeMockSessionManager();
+    const rs = {
+      reviewPR: vi.fn().mockRejectedValue(new Error('GitHub API unreachable')),
+      sendReReview: vi.fn(),
+    } as unknown as PRReviewService;
+
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledOnce();
+    const [, , resultJson] = vi.mocked(setPRReviewResult).mock.calls[0];
+    const stored = JSON.parse(resultJson as string) as { verdict: string; dimensions: unknown };
+    expect(stored.verdict).toBe('error');
+    expect(Array.isArray(stored.dimensions)).toBe(true);
+  });
+
+  it('stores error verdict with dimensions: [] when re-review times out', async () => {
+    vi.useFakeTimers();
+    vi.mocked(getPRBySessionId).mockReturnValue(basePRRow as any);
+    vi.mocked(incrementReviewIteration).mockReturnValue(1);
+
+    const sm = makeMockSessionManager();
+    const rs = {
+      reviewPR: vi.fn(),
+      sendReReview: vi.fn().mockReturnValue(new Promise(() => {})),
+    } as unknown as PRReviewService;
+
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+
+    sm.emit('push_detected', { sessionId: 'coding-session-id' });
+
+    await vi.advanceTimersByTimeAsync(121_000);
+
+    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledOnce();
+    const [, , resultJson] = vi.mocked(setPRReviewResult).mock.calls[0];
+    const stored = JSON.parse(resultJson as string) as { verdict: string; dimensions: unknown };
+    expect(stored.verdict).toBe('error');
+    expect(Array.isArray(stored.dimensions)).toBe(true);
 
     vi.useRealTimers();
   });

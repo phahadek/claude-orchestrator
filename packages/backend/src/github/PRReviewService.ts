@@ -169,8 +169,13 @@ export class PRReviewService {
   private tryParseVerdict(
     text: string,
   ): { verdict: PRReviewResult['verdict']; dimensions: ReviewDimension[]; summary: string } | null {
+    const candidate = this.extractJsonCandidate(text.trim());
+    if (!candidate) {
+      console.debug('[PRReviewService] tryParseVerdict: no JSON candidate found in text block');
+      return null;
+    }
     try {
-      const parsed = JSON.parse(text.trim()) as Record<string, unknown>;
+      const parsed = JSON.parse(candidate) as Record<string, unknown>;
       if (
         typeof parsed.verdict === 'string' &&
         Array.isArray(parsed.dimensions) &&
@@ -183,7 +188,40 @@ export class PRReviewService {
         };
       }
     } catch {
-      // Not JSON or wrong shape
+      console.debug('[PRReviewService] tryParseVerdict: JSON.parse failed on candidate:', candidate.slice(0, 200));
+    }
+    return null;
+  }
+
+  /**
+   * Strip markdown fences and extract the first top-level `{...}` JSON object
+   * from `text`. Returns null if no object boundary is found.
+   */
+  private extractJsonCandidate(text: string): string | null {
+    // Strip markdown code fences: ```json ... ``` or ``` ... ```
+    const fenceMatch = text.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$/);
+    if (fenceMatch) {
+      return fenceMatch[1].trim();
+    }
+
+    // Find first '{' and walk brace depth to extract complete object
+    const start = text.indexOf('{');
+    if (start === -1) return null;
+
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i];
+      if (escape) { escape = false; continue; }
+      if (ch === '\\' && inString) { escape = true; continue; }
+      if (ch === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) return text.slice(start, i + 1);
+      }
     }
     return null;
   }
@@ -237,24 +275,28 @@ For the "Changed files vs Files/paths affected list" dimension: Pass if all chan
   }
 
   parseReviewResult(events: SessionEvent[], prNumber: number, repo: string): PRReviewResult {
-    const textParts: string[] = [];
-
+    // Only use text blocks from the LAST assistant message to avoid pollution
+    // from earlier tool-call assistant events.
+    let lastAssistantContent: Array<Record<string, unknown>> | null = null;
     for (const ev of events) {
       try {
         const parsed = JSON.parse(ev.payload) as Record<string, unknown>;
         if (parsed.type === 'assistant') {
           const msg = parsed.message as Record<string, unknown> | undefined;
           const content = msg?.content as Array<Record<string, unknown>> | undefined;
-          if (content) {
-            for (const block of content) {
-              if (block.type === 'text' && typeof block.text === 'string') {
-                textParts.push(block.text);
-              }
-            }
-          }
+          if (content) lastAssistantContent = content;
         }
       } catch {
         // Skip unparseable events
+      }
+    }
+
+    const textParts: string[] = [];
+    if (lastAssistantContent) {
+      for (const block of lastAssistantContent) {
+        if (block.type === 'text' && typeof block.text === 'string') {
+          textParts.push(block.text);
+        }
       }
     }
 
