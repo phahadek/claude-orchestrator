@@ -65,6 +65,8 @@ export class AgentSession extends EventEmitter {
   private messageIdMap = new Map<string, number>();
   /** Maps tool_use_id → tool_name for PR creation tools, for real-time detection. */
   private pendingGHToolUseIds = new Map<string, string>();
+  /** Maps tool_use_id → Bash command string, for push detection. */
+  private pendingBashCommands = new Map<string, string>();
   /** True once a PR was detected and inserted during the live session. */
   private prDetectedLive = false;
   /** Accumulated token counts for this session (in-memory, synced to SQLite). */
@@ -236,18 +238,31 @@ Fetch both Notion pages, then begin the task.
               if (block.name === 'mcp__github__create_pull_request' && typeof block.id === 'string') {
                 this.pendingGHToolUseIds.set(block.id, block.name as string);
               }
+              if (block.name === 'Bash' && typeof block.id === 'string') {
+                const cmd = ((block.input as Record<string, unknown>)?.command as string) ?? '';
+                this.pendingBashCommands.set(block.id, cmd);
+              }
             }
           }
         }
       }
 
       // Real-time PR detection: handle tool_result events for mcp__github__create_pull_request
+      // Also detect git push for push_detected event.
       if (rawType === 'tool_result') {
         const toolUseId = event.tool_use_id as string | undefined;
         if (toolUseId && this.pendingGHToolUseIds.has(toolUseId)) {
           this.pendingGHToolUseIds.delete(toolUseId);
           const content = event.content as Array<Record<string, unknown>> | undefined;
           this.handlePRCreatedFromContent(content ?? []);
+        }
+        if (toolUseId && this.pendingBashCommands.has(toolUseId)) {
+          const cmd = this.pendingBashCommands.get(toolUseId)!;
+          this.pendingBashCommands.delete(toolUseId);
+          if (/^git\s+push/.test(cmd)) {
+            this.emit('push_detected', { sessionId: this.sessionId });
+            this.broadcast({ type: 'push_detected', sessionId: this.sessionId });
+          }
         }
       }
 
