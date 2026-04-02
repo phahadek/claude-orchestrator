@@ -16,6 +16,7 @@ vi.mock('../db/queries.js', () => ({
   countMergedAndClosedPRs: vi.fn().mockReturnValue(0),
   resetReviewIteration: vi.fn(),
   setPRReviewResult: vi.fn(),
+  updatePRDraftStatus: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
@@ -143,6 +144,7 @@ function makeMockGitHub(): GitHubClient {
     fetchDiff: vi.fn(),
     fetchPR: vi.fn().mockResolvedValue(mockGitHubPR),
     mergePR: vi.fn().mockResolvedValue({ merged: true, message: 'Merged', sha: 'abc123' }),
+    markPRReady: vi.fn().mockResolvedValue(undefined),
   } as unknown as GitHubClient;
 }
 
@@ -455,6 +457,47 @@ describe('POST /api/prs/:owner/:repo/:prNumber/approve', () => {
       .post('/api/prs/owner/repo/99/approve');
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/PR #99 not found/);
+  });
+
+  it('calls markPRReady and updatePRDraftStatus when approving a draft PR', async () => {
+    const draftPR: PullRequestRow = { ...mockPRRow, draft: 1 };
+    vi.mocked(queries.getPRByNumber).mockReturnValue(draftPR);
+    const github = makeMockGitHub();
+    const res = await supertest(buildApp(github))
+      .post('/api/prs/owner/repo/42/approve');
+    expect(res.status).toBe(200);
+    expect(vi.mocked(github.markPRReady)).toHaveBeenCalledWith('owner/repo', 42);
+    expect(vi.mocked(queries.updatePRDraftStatus)).toHaveBeenCalledWith(42, 'owner/repo', 0);
+  });
+
+  it('does NOT call markPRReady when approving a non-draft PR', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow); // draft: 0
+    const github = makeMockGitHub();
+    const res = await supertest(buildApp(github))
+      .post('/api/prs/owner/repo/42/approve');
+    expect(res.status).toBe(200);
+    expect(vi.mocked(github.markPRReady)).not.toHaveBeenCalled();
+    expect(vi.mocked(queries.updatePRDraftStatus)).not.toHaveBeenCalled();
+  });
+
+  it('calls notionClient.updateStatus with In Review when PR has notion_task_id', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow); // notion_task_id: 'notion-task-abc'
+    const notionClient = makeMockNotionClient();
+    const res = await supertest(
+      buildApp(makeMockGitHub(), makeMockPRReviewService(), makeMockSessionManager(), notionClient),
+    ).post('/api/prs/owner/repo/42/approve');
+    expect(res.status).toBe(200);
+    expect(vi.mocked(notionClient.updateStatus)).toHaveBeenCalledWith('notion-task-abc', '👀 In Review');
+  });
+
+  it('does NOT call notionClient.updateStatus when PR has no notion_task_id', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRowNoTask); // notion_task_id: null
+    const notionClient = makeMockNotionClient();
+    const res = await supertest(
+      buildApp(makeMockGitHub(), makeMockPRReviewService(), makeMockSessionManager(), notionClient),
+    ).post('/api/prs/owner/repo/43/approve');
+    expect(res.status).toBe(200);
+    expect(vi.mocked(notionClient.updateStatus)).not.toHaveBeenCalled();
   });
 });
 
