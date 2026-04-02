@@ -85,6 +85,7 @@ export function useSessionStore() {
             totalOutputTokens: msg.totalOutputTokens ?? 0,
             prNumber: msg.prNumber,
             model: msg.model ?? null,
+            prUrl: msg.prUrl,
           });
           break;
         case 'session_event': {
@@ -168,6 +169,11 @@ export function useSessionStore() {
               ...(msg.model != null && { model: msg.model }),
             });
           }
+          break;
+        }
+        case 'pr_created': {
+          const s = next.get(msg.sessionId);
+          if (s) next.set(msg.sessionId, { ...s, prUrl: msg.prUrl });
           break;
         }
         default:
