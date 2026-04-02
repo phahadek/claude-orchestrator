@@ -7,9 +7,10 @@ interface Props {
   activeProjectId: string | null;
   onFixSession: (sessionId: string) => void;
   onCollapse?: () => void;
+  refreshTrigger?: number;
 }
 
-export function PRPanel({ activeProjectId, onFixSession, onCollapse }: Props) {
+export function PRPanel({ activeProjectId, onFixSession, onCollapse, refreshTrigger }: Props) {
   const [prs, setPRs] = useState<PRListItem[]>([]);
   const [networkError, setNetworkError] = useState(false);
   const [noRepo, setNoRepo] = useState(false);
@@ -48,6 +49,10 @@ export function PRPanel({ activeProjectId, onFixSession, onCollapse }: Props) {
     const interval = setInterval(fetchPRs, 30_000);
     return () => clearInterval(interval);
   }, [fetchPRs, activeProjectId]);
+
+  useEffect(() => {
+    if (refreshTrigger) fetchPRs();
+  }, [refreshTrigger, fetchPRs]);
 
   const setError = (prNumber: number, msg: string | null) => {
     setCardErrors((prev) => {
