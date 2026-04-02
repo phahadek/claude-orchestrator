@@ -298,3 +298,9 @@
   color: #a6adc8;
   font-style: italic;
 }
+
+.reviewError {
+  font-size: 0.82rem;
+  color: #f38ba8;
+  font-style: italic;
+}
