@@ -105,6 +105,7 @@ function makePR(overrides: Partial<{ pr_number: number; repo: string; state: str
     head_branch: 'feature/x',
     base_branch: 'dev',
     state: overrides.state ?? 'open',
+    draft: 0,
     review_result: null,
     review_at: null,
     created_at: '2024-01-01T00:00:00Z',
