@@ -41,6 +41,7 @@ vi.mock('../db/queries', () => ({
   getRules: vi.fn(() => []),
   insertPermissionDenial: vi.fn(),
   upsertPullRequest: vi.fn(),
+  insertSessionAudit: vi.fn(),
 }));
 
 import { AgentSession } from '../session/AgentSession';

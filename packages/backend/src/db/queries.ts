@@ -527,6 +527,34 @@ export function getAllSettings(): Record<string, string> {
   return Object.fromEntries(rows.map((r) => [r.key, r.value]));
 }
 
+// ─── session_audits ──────────────────────────────────────────────────────────
+
+export interface SessionAuditRow {
+  id: number;
+  session_id: string;
+  pr_opened: number;
+  pr_targets: string | null;
+  task_status: string | null;
+  violations: string;
+  spec_mismatch: string | null;
+  audited_at: string;
+}
+
+export function insertSessionAudit(row: Omit<SessionAuditRow, 'id'>): void {
+  db.prepare<Omit<SessionAuditRow, 'id'>>(`
+    INSERT INTO session_audits
+      (session_id, pr_opened, pr_targets, task_status, violations, spec_mismatch, audited_at)
+    VALUES
+      (@session_id, @pr_opened, @pr_targets, @task_status, @violations, @spec_mismatch, @audited_at)
+  `).run(row);
+}
+
+export function getSessionAudit(sessionId: string): SessionAuditRow | undefined {
+  return db.prepare<{ session_id: string }>(`
+    SELECT * FROM session_audits WHERE session_id = @session_id ORDER BY id DESC LIMIT 1
+  `).get({ session_id: sessionId }) as SessionAuditRow | undefined;
+}
+
 export function deleteMergedAndClosedPRs(repo: string): number {
   const result = db.prepare<{ repo: string }>(`
     DELETE FROM pull_requests WHERE repo = @repo AND state IN ('merged', 'closed')
