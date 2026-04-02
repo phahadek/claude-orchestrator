@@ -3,6 +3,8 @@ import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
 import { PermissionRules } from './PermissionRules';
 import styles from './Settings.module.css';
 
+const NOTIFICATIONS_ENABLED_KEY = 'notificationsEnabled';
+
 type Tab = 'general' | 'projects' | 'rules';
 
 interface SettingsValues {
@@ -48,6 +50,10 @@ export function Settings({ initialTab = 'general', projects }: Props) {
   const [settings, setSettings] = useState<SettingsValues | null>(null);
   const [loading, setLoading] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(
+    () => localStorage.getItem(NOTIFICATIONS_ENABLED_KEY) !== 'false',
+  );
+  const notificationPermission = typeof Notification !== 'undefined' ? Notification.permission : 'default';
 
   useEffect(() => {
     setActiveTab(initialTab);
@@ -169,6 +175,28 @@ export function Settings({ initialTab = 'general', projects }: Props) {
                     }
                   >
                     {settings?.auto_review === 'true' ? 'On' : 'Off'}
+                  </button>
+                </div>
+
+                <h3 className={styles.sectionTitle}>Notifications</h3>
+                <div className={styles.field}>
+                  <label className={styles.label}>
+                    🔔 Notifications
+                    {notificationPermission === 'denied' && (
+                      <span className={styles.hint}> (blocked by browser)</span>
+                    )}
+                  </label>
+                  <button
+                    type="button"
+                    className={`${styles.toggle}${notificationsEnabled ? ` ${styles.toggleOn}` : ''}`}
+                    disabled={notificationPermission === 'denied'}
+                    onClick={() => {
+                      const next = !notificationsEnabled;
+                      localStorage.setItem(NOTIFICATIONS_ENABLED_KEY, String(next));
+                      setNotificationsEnabled(next);
+                    }}
+                  >
+                    {notificationsEnabled ? 'On' : 'Off'}
                   </button>
                 </div>
               </>
