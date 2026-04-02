@@ -21,6 +21,7 @@ export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollap
   const [mergeInFlight, setMergeInFlight] = useState<Set<number>>(new Set());
   const [fixInFlight, setFixInFlight] = useState<Set<number>>(new Set());
   const [reReviewInFlight, setReReviewInFlight] = useState<Set<number>>(new Set());
+  const [approveInFlight, setApproveInFlight] = useState<Set<number>>(new Set());
   const [removeInFlight, setRemoveInFlight] = useState<Set<number>>(new Set());
   const [clearInFlight, setClearInFlight] = useState(false);
   const [clearableCount, setClearableCount] = useState(0);
@@ -215,6 +216,34 @@ export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollap
     }
   };
 
+  const handleApprove = async (prNumber: number) => {
+    const pr = prs.find((p) => p.prNumber === prNumber);
+    if (!pr) return;
+    const [owner, repoName] = pr.repo.split('/');
+    setApproveInFlight((prev) => new Set(prev).add(prNumber));
+    setError(prNumber, null);
+    try {
+      const res = await fetch(
+        `/api/prs/${owner}/${repoName}/${prNumber}/approve`,
+        { method: 'POST' },
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: 'Unknown error' })) as { error?: string };
+        setError(prNumber, `Approve failed: ${body.error ?? 'Unknown error'}`);
+        return;
+      }
+      await fetchPRs();
+    } catch {
+      setError(prNumber, 'Approve failed: network error');
+    } finally {
+      setApproveInFlight((prev) => {
+        const next = new Set(prev);
+        next.delete(prNumber);
+        return next;
+      });
+    }
+  };
+
   const handleRemovePR = async (prNumber: number) => {
     if (!activeProjectId) return;
     setRemoveInFlight((prev) => new Set(prev).add(prNumber));
@@ -308,11 +337,13 @@ export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollap
               onRemove={handleRemovePR}
               onViewSession={onViewSession}
               onReReview={handleReReview}
+              onApprove={handleApprove}
               reviewInFlight={reviewInFlight.has(pr.prNumber)}
               mergeInFlight={mergeInFlight.has(pr.prNumber)}
               fixInFlight={fixInFlight.has(pr.prNumber)}
               removeInFlight={removeInFlight.has(pr.prNumber)}
               reReviewInFlight={reReviewInFlight.has(pr.prNumber)}
+              approveInFlight={approveInFlight.has(pr.prNumber)}
               reviewElapsed={reviewElapsed.get(pr.prNumber) ?? 0}
               error={cardErrors.get(pr.prNumber) ?? null}
             />

@@ -12,7 +12,6 @@ function makePR(overrides: Partial<PRListItem> = {}): PRListItem {
     headBranch: 'feature/foo',
     baseBranch: 'dev',
     state: 'open',
-    repo: 'owner/repo',
     notionTaskId: null,
     notionTaskTitle: null,
     sessionId: null,
