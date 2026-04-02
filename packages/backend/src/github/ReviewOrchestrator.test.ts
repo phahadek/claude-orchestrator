@@ -35,6 +35,12 @@ function makeMockGitHubClient(): GitHubClient {
   } as unknown as GitHubClient;
 }
 
+function makeMockNotionClient() {
+  return {
+    updateStatus: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
 function makeMockSessionManager() {
   const emitter = new EventEmitter();
   return Object.assign(emitter, {
@@ -107,7 +113,7 @@ describe('ReviewOrchestrator — disabled', () => {
   it('does not enqueue when enabled === false', async () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, false);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, false);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 20));
@@ -118,7 +124,7 @@ describe('ReviewOrchestrator — disabled', () => {
   it('does not respond to push_detected when disabled', async () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, false);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, false);
 
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
     await new Promise((r) => setTimeout(r, 20));
@@ -133,7 +139,7 @@ describe('ReviewOrchestrator — missing taskId', () => {
   it('does not enqueue when job.taskId is empty', async () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
 
     sm.emit('pr_opened', { ...baseJob, taskId: '' });
     await new Promise((r) => setTimeout(r, 20));
@@ -173,7 +179,7 @@ describe('ReviewOrchestrator — concurrency', () => {
       sendReReview: vi.fn(),
     } as unknown as PRReviewService;
 
-    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
 
     sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
     sm.emit('pr_opened', { ...baseJob, prNumber: 2 });
@@ -206,7 +212,7 @@ describe('ReviewOrchestrator — pr_review_complete broadcast', () => {
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -241,7 +247,7 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -267,7 +273,7 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -286,7 +292,7 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
 
-    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
 
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
     await new Promise((r) => setTimeout(r, 30));
@@ -314,7 +320,7 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
       }),
     } as unknown as PRReviewService;
 
-    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -349,7 +355,7 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
       }),
     } as unknown as PRReviewService;
 
-    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
 
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
     await new Promise((r) => setTimeout(r, 30));
@@ -366,7 +372,7 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
 
-    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
 
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
     await new Promise((r) => setTimeout(r, 30));
@@ -383,7 +389,7 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
 
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
     await new Promise((r) => setTimeout(r, 30));
@@ -397,7 +403,7 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
 
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
     await new Promise((r) => setTimeout(r, 30));
@@ -424,7 +430,7 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
     } as unknown as PRReviewService;
 
     const sm = makeMockSessionManager();
-    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
 
     // Fire two push_detected in quick succession
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
@@ -448,7 +454,7 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
 
-    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -471,7 +477,7 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
 
-    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -573,7 +579,7 @@ describe('ReviewOrchestrator — timeout', () => {
       sendReReview: vi.fn(),
     } as unknown as PRReviewService;
 
-    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -608,7 +614,7 @@ describe('ReviewOrchestrator — timeout', () => {
       sendReReview: vi.fn(),
     } as unknown as PRReviewService;
 
-    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -631,7 +637,7 @@ describe('ReviewOrchestrator — timeout', () => {
       sendReReview: vi.fn().mockReturnValue(new Promise(() => {})),
     } as unknown as PRReviewService;
 
-    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
 
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
 
@@ -664,7 +670,7 @@ describe('ReviewOrchestrator — draft PR transition on approved verdict', () =>
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, gc, 1, true);
+    new ReviewOrchestrator(rs, sm as any, gc, makeMockNotionClient(), 1, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -696,12 +702,60 @@ describe('ReviewOrchestrator — draft PR transition on approved verdict', () =>
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, gc, 1, true);
+    new ReviewOrchestrator(rs, sm as any, gc, makeMockNotionClient(), 1, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(gc.markPRReady)).not.toHaveBeenCalled();
     expect(vi.mocked(updatePRDraftStatus)).not.toHaveBeenCalled();
+  });
+});
+
+// ── Notion status update on approved verdict ──────────────────────────────────
+
+describe('ReviewOrchestrator — Notion status update on approved verdict', () => {
+  it('calls notionClient.updateStatus with In Review when verdict is approved', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, draft: 0 } as any);
+
+    const sm = makeMockSessionManager();
+    const nc = makeMockNotionClient();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'All good.',
+      reviewedAt: new Date().toISOString(),
+    });
+
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), nc, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(nc.updateStatus)).toHaveBeenCalledWith('task-abc', '👀 In Review');
+  });
+
+  it('does NOT call notionClient.updateStatus when verdict is not approved', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, draft: 0 } as any);
+
+    const sm = makeMockSessionManager();
+    const nc = makeMockNotionClient();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [],
+      summary: 'Please fix.',
+      reviewedAt: new Date().toISOString(),
+    });
+
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), nc, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(nc.updateStatus)).not.toHaveBeenCalled();
   });
 });

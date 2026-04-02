@@ -5,6 +5,7 @@ import type { SessionManager } from '../session/SessionManager';
 import type { ReviewJob } from './types';
 import { shouldAutoReview } from './reviewUtils';
 import type { GitHubClient } from './GitHubClient';
+import type { NotionClient } from '../notion/NotionClient';
 
 const REVIEW_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_ITERATIONS = 3;
@@ -26,6 +27,7 @@ export class ReviewOrchestrator {
     private reviewService: PRReviewService,
     private sessionManager: SessionManager,
     private githubClient: GitHubClient,
+    private notionClient: NotionClient,
     private maxConcurrency: number = 1,
     private enabled: boolean = true,
     private maxIterations: number = DEFAULT_MAX_ITERATIONS,
@@ -121,6 +123,12 @@ export class ReviewOrchestrator {
         } catch (e) {
           console.error(`[ReviewOrchestrator] markPRReady failed for PR #${job.prNumber}:`, e);
         }
+      }
+      // Update Notion task to In Review
+      if (job.taskId) {
+        await this.notionClient.updateStatus(job.taskId, '👀 In Review').catch((e: unknown) =>
+          console.error(`[ReviewOrchestrator] Notion updateStatus failed for PR #${job.prNumber}:`, e),
+        );
       }
     }
 

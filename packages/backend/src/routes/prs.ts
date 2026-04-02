@@ -12,6 +12,7 @@ import {
   countMergedAndClosedPRs,
   resetReviewIteration,
   setPRReviewResult,
+  updatePRDraftStatus,
 } from '../db/queries';
 import { PRSyncJob } from '../github/PRSyncJob';
 import { GitHubApiError } from '../github/types';
@@ -257,7 +258,7 @@ export function createPrsRouter(
   });
 
   // ── POST /api/prs/:owner/:repoName/:prNumber/approve ─────────────────────────
-  router.post('/prs/:owner/:repoName/:prNumber/approve', (req: Request, res: Response) => {
+  router.post('/prs/:owner/:repoName/:prNumber/approve', async (req: Request, res: Response) => {
     const repo = `${req.params.owner}/${req.params.repoName}`;
     const prNumber = parseInt(String(req.params.prNumber), 10);
     const prRow = getPRByNumber(prNumber, repo);
@@ -274,6 +275,24 @@ export function createPrsRouter(
       reviewedAt: new Date().toISOString(),
     };
     setPRReviewResult(prNumber, repo, JSON.stringify(result));
+
+    // Transition draft → ready on GitHub
+    if (prRow.draft === 1) {
+      try {
+        await github.markPRReady(repo, prNumber);
+        updatePRDraftStatus(prNumber, repo, 0);
+      } catch (e) {
+        console.error(`[prs] markPRReady failed for PR #${prNumber}:`, e);
+      }
+    }
+
+    // Update Notion task to In Review
+    if (prRow.notion_task_id) {
+      await notionClient.updateStatus(prRow.notion_task_id, '👀 In Review').catch((e: unknown) =>
+        console.warn('[prs] Notion updateStatus failed:', (e as Error).message),
+      );
+    }
+
     _broadcast({
       type: 'pr_review_complete',
       prNumber,
