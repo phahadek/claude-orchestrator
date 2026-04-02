@@ -158,3 +158,18 @@
   background: rgba(137, 180, 250, 0.14);
   text-decoration: none;
 }
+
+.codeSessionLink {
+  font-size: 0.83rem;
+  color: var(--text-secondary, #a6adc8);
+  background: rgba(166, 173, 200, 0.07);
+  border: 1px solid rgba(166, 173, 200, 0.25);
+  border-radius: var(--radius-sm, 6px);
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.codeSessionLink:hover {
+  background: rgba(166, 173, 200, 0.14);
+}

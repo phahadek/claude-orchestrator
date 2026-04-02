@@ -171,17 +171,28 @@ export function ReviewDetailView({ session }: Props) {
         )}
       </div>
 
-      {/* ── PR link ── */}
-      {session.prUrl && (
+      {/* ── Links: PR + code session ── */}
+      {(session.prUrl || session.codeSessionId) && (
         <div className={styles.links}>
-          <a
-            href={session.prUrl}
-            target="_blank"
-            rel="noreferrer"
-            className={styles.prLink}
-          >
-            View PR{session.prNumber ? ` #${session.prNumber}` : ''} on GitHub ↗
-          </a>
+          {session.prUrl && (
+            <a
+              href={session.prUrl}
+              target="_blank"
+              rel="noreferrer"
+              className={styles.prLink}
+            >
+              View PR{session.prNumber ? ` #${session.prNumber}` : ''} on GitHub ↗
+            </a>
+          )}
+          {session.codeSessionId && (
+            <button
+              type="button"
+              className={styles.codeSessionLink}
+              onClick={() => window.dispatchEvent(new CustomEvent('selectSession', { detail: { sessionId: session.codeSessionId } }))}
+            >
+              View code session ↗
+            </button>
+          )}
         </div>
       )}
     </div>
