@@ -74,6 +74,8 @@ export default function App() {
   const hasConnectedOnce = useRef(false);
   const prevConnectionState = useRef<ConnectionState>('disconnected');
 
+  const [cardPreviewLines, setCardPreviewLines] = useState<number>(3);
+
   const [detailWidthPct, setDetailWidthPct] = useState<number>(() => {
     const saved = localStorage.getItem('sessionDetailWidth');
     if (saved) {
@@ -135,6 +137,16 @@ export default function App() {
       }
     }
   }, [sessions, send]);
+
+  useEffect(() => {
+    fetch('/api/settings')
+      .then((r) => r.json())
+      .then((s: Record<string, string>) => {
+        const lines = Number(s.card_preview_lines);
+        if (lines > 0) setCardPreviewLines(lines);
+      })
+      .catch(() => {/* keep default */});
+  }, []);
 
   useEffect(() => {
     fetch('/api/config')
@@ -410,6 +422,7 @@ export default function App() {
                     onResumeAll={handleResumeAll}
                     onResume={handleResume}
                     onToggleFavorite={(sessionId, favorited) => setSessionFavorited(sessionId, favorited)}
+                    cardPreviewLines={cardPreviewLines}
                   />
                 </>
               )}
