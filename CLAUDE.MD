@@ -41,6 +41,12 @@ or 🗂️ Ready. Work only on the task you have been assigned.
 | **Commit to `dev` or `main` directly?** | Never |
 | **When done** | Open draft PR → mark task 👀 In Review → stop. Human merges and marks ✅ Done. |
 | **Pre-PR gate (hard — in order)** | 1. Merge/rebase `dev` → resolve conflicts. 2. `tsc --noEmit` passes (both packages). 3. `vite build` passes. |
+| **Session Log / File Index updates** | Never — the dashboard handles session tracking. |
+
+## PR Format
+- Title: `feat: <exact task name>` — no scope prefix, no milestone tag
+- Use `gh pr create --draft --base dev --body-file /tmp/pr-body.md`
+- Body must include: ## Summary (bullets), ## Test plan (checkboxes), Notion task URL
 
 ### Git isolation — critical
 

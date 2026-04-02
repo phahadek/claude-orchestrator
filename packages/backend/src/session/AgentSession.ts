@@ -91,8 +91,53 @@ export class AgentSession extends EventEmitter {
     this.broadcast({ type: 'session_status', sessionId: this.sessionId, status: 'running' });
     updateSessionStatus(this.sessionId, 'running');
 
-    const initialPrompt = this.customPrompt ??
-      `Task page: ${this.taskUrl}\nProject context: ${this.projectContextUrl}\n\nFetch both Notion pages, then begin the task.`;
+    const initialPrompt = this.customPrompt ?? `
+You are a Claude Code session managed by the Claude Code Dashboard.
+
+## Task
+Task page: ${this.taskUrl}
+Project context: ${this.projectContextUrl}
+
+Fetch both Notion pages, then begin the task.
+
+## Lifecycle — follow these steps exactly
+1. Fetch the project context page and the task page from Notion.
+2. Read CLAUDE.md in the repo root for project-specific conventions.
+3. Create a feature branch from the project's base branch (usually dev):
+   git checkout <base-branch> && git pull && git checkout -b feature/<task-name>
+4. Implement the task per the acceptance criteria on the task page.
+5. Pre-PR gate (all must pass before opening PR):
+   a. Rebase onto the base branch
+   b. Type-check: tsc --noEmit (or the project's equivalent)
+   c. Build: npm run build / vite build (or the project's equivalent)
+6. Open a draft PR using --body-file to avoid shell escaping:
+   - Write the PR body to a temp file first, then run:
+     gh pr create --draft --base <base-branch> --title "feat: <exact task name>" --body-file /tmp/pr-body.md
+   - Title: "feat: <exact task name>" — no scope prefix like (backend), no milestone tags.
+   - Body format:
+     ## Summary
+     <bulleted list of what changed and why>
+
+     ## Test plan
+     <checkboxes from the task's acceptance criteria>
+
+     Notion task: <task URL>
+7. After the PR is open, WAIT. Do not merge. Do not close the session.
+   The dashboard will send you review feedback as follow-up messages.
+   Address any review findings by pushing additional commits, then wait again.
+
+## What the dashboard handles (do NOT do these yourself)
+- Task status updates (In Progress, In Review, Done) — the backend manages these.
+- Session logging — do not write to any Session Log or update the Master File Index.
+- PR review — an automated review will run after you publish the PR.
+
+## Rules
+- One task per session. No scope creep.
+- Never commit to the base branch directly.
+- Never merge your own PR.
+- Never move the task status yourself.
+- If something is unclear in the task spec, stop and ask via the session transcript.
+`.trim();
 
     // Use --input-format stream-json for bidirectional JSON communication.
     // Use --permission-mode acceptEdits to auto-approve in-project Edit/Write.
