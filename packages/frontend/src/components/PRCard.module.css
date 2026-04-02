@@ -186,6 +186,7 @@
 .reviewButton,
 .fixButton,
 .reReviewButton,
+.approveButton,
 .mergeButton {
   font-size: 0.8rem;
   padding: 4px 10px;
@@ -201,6 +202,7 @@
 .reviewButton:hover:not(:disabled),
 .fixButton:hover:not(:disabled),
 .reReviewButton:hover:not(:disabled),
+.approveButton:hover:not(:disabled),
 .mergeButton:hover:not(:disabled) {
   background: #45475a;
   border-color: #585b70;
@@ -209,9 +211,19 @@
 .reviewButton:disabled,
 .fixButton:disabled,
 .reReviewButton:disabled,
+.approveButton:disabled,
 .mergeButton:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+.approveButton:not(:disabled) {
+  border-color: #a6e3a1;
+  color: #a6e3a1;
+}
+
+.approveButton:hover:not(:disabled) {
+  background: rgba(166, 227, 161, 0.15);
 }
 
 .mergeButton:not(:disabled) {
