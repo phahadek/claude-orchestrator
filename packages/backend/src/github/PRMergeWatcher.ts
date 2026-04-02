@@ -3,7 +3,7 @@ import type { SessionManager } from '../session/SessionManager';
 import type { NotionClient } from '../notion/NotionClient';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
-import { getApprovedOpenPRs, updatePRState } from '../db/queries';
+import { getAllOpenPRs, updatePRState } from '../db/queries';
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -35,8 +35,8 @@ export class PRMergeWatcher {
   }
 
   async poll(): Promise<void> {
-    const approved = getApprovedOpenPRs();
-    for (const pr of approved) {
+    const openPRs = getAllOpenPRs();
+    for (const pr of openPRs) {
       await this.checkPR(pr);
     }
   }
