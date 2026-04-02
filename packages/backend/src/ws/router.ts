@@ -55,8 +55,9 @@ export function handleMessage(
         ws.send(JSON.stringify({ type: 'error', message: `Project not found: ${msg.projectId}` }));
         break;
       }
+      const boardId = msg.boardId ?? project.boardId;
       notion
-        .fetchReadyTasks(project.boardId)
+        .fetchReadyTasks(boardId)
         .then((tasks) => ws.send(JSON.stringify({ type: 'tasks_ready', tasks })))
         .catch((e) => ws.send(JSON.stringify({ type: 'error', message: String(e) })));
       break;
