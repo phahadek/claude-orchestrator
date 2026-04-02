@@ -632,3 +632,9 @@ export function getApprovedOpenPRs(): PullRequestRow[] {
     SELECT * FROM pull_requests WHERE state = 'open' AND review_result LIKE '%approved%'
   `).all() as PullRequestRow[];
 }
+
+export function getAllOpenPRs(): PullRequestRow[] {
+  return db.prepare(`
+    SELECT * FROM pull_requests WHERE state = 'open'
+  `).all() as PullRequestRow[];
+}
