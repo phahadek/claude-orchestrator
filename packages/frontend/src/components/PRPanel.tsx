@@ -19,6 +19,9 @@ export function PRPanel({ activeProjectId, onFixSession, onCollapse, refreshTrig
   const [reviewElapsed, setReviewElapsed] = useState<Map<number, number>>(new Map());
   const [mergeInFlight, setMergeInFlight] = useState<Set<number>>(new Set());
   const [fixInFlight, setFixInFlight] = useState<Set<number>>(new Set());
+  const [removeInFlight, setRemoveInFlight] = useState<Set<number>>(new Set());
+  const [clearInFlight, setClearInFlight] = useState(false);
+  const [clearableCount, setClearableCount] = useState(0);
   const [cardErrors, setCardErrors] = useState<Map<number, string>>(new Map());
 
   const elapsedTimers = useRef<Map<number, ReturnType<typeof setInterval>>>(new Map());
@@ -26,19 +29,26 @@ export function PRPanel({ activeProjectId, onFixSession, onCollapse, refreshTrig
   const fetchPRs = useCallback(async () => {
     if (!activeProjectId) return;
     try {
-      const res = await fetch(`/api/prs?projectId=${encodeURIComponent(activeProjectId)}`);
-      if (res.status === 422) {
+      const [prsRes, countRes] = await Promise.all([
+        fetch(`/api/prs?projectId=${encodeURIComponent(activeProjectId)}`),
+        fetch(`/api/prs/clear/count?projectId=${encodeURIComponent(activeProjectId)}`),
+      ]);
+      if (prsRes.status === 422) {
         setNoRepo(true);
         return;
       }
-      if (!res.ok) {
+      if (!prsRes.ok) {
         setNetworkError(true);
         return;
       }
-      const data = await res.json() as PRListItem[];
+      const data = await prsRes.json() as PRListItem[];
       setPRs(data);
       setNetworkError(false);
       setNoRepo(false);
+      if (countRes.ok) {
+        const { count } = await countRes.json() as { count: number };
+        setClearableCount(count);
+      }
     } catch {
       setNetworkError(true);
     }
@@ -169,10 +179,63 @@ export function PRPanel({ activeProjectId, onFixSession, onCollapse, refreshTrig
     }
   };
 
+  const handleRemovePR = async (prNumber: number) => {
+    if (!activeProjectId) return;
+    setRemoveInFlight((prev) => new Set(prev).add(prNumber));
+    setError(prNumber, null);
+    try {
+      const res = await fetch(
+        `/api/prs/${prNumber}?projectId=${encodeURIComponent(activeProjectId)}`,
+        { method: 'DELETE' },
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: 'Unknown error' })) as { error?: string };
+        setError(prNumber, `Remove failed: ${body.error ?? 'Unknown error'}`);
+        return;
+      }
+      await fetchPRs();
+    } catch {
+      setError(prNumber, 'Remove failed: network error');
+    } finally {
+      setRemoveInFlight((prev) => {
+        const next = new Set(prev);
+        next.delete(prNumber);
+        return next;
+      });
+    }
+  };
+
+  const handleClearMergedClosed = async () => {
+    if (!activeProjectId) return;
+    setClearInFlight(true);
+    try {
+      const res = await fetch(
+        `/api/prs/clear?projectId=${encodeURIComponent(activeProjectId)}`,
+        { method: 'DELETE' },
+      );
+      if (res.ok) {
+        await fetchPRs();
+      }
+    } finally {
+      setClearInFlight(false);
+    }
+  };
+
   return (
     <div className={styles.panel}>
       <div className={styles.headerBar}>
         <span className={styles.panelTitle}>Open Pull Requests</span>
+        {clearableCount > 0 && (
+          <button
+            type="button"
+            className={styles.clearButton}
+            onClick={handleClearMergedClosed}
+            disabled={clearInFlight}
+            title={`Remove ${clearableCount} merged/closed PR${clearableCount !== 1 ? 's' : ''}`}
+          >
+            {clearInFlight ? 'Clearing...' : `Clear merged/closed (${clearableCount})`}
+          </button>
+        )}
         <button type="button" className={styles.refreshButton} onClick={fetchPRs}>
           ↻ Refresh
         </button>
@@ -206,9 +269,11 @@ export function PRPanel({ activeProjectId, onFixSession, onCollapse, refreshTrig
               onReview={handleReview}
               onMerge={handleMerge}
               onFix={handleFix}
+              onRemove={handleRemovePR}
               reviewInFlight={reviewInFlight.has(pr.prNumber)}
               mergeInFlight={mergeInFlight.has(pr.prNumber)}
               fixInFlight={fixInFlight.has(pr.prNumber)}
+              removeInFlight={removeInFlight.has(pr.prNumber)}
               reviewElapsed={reviewElapsed.get(pr.prNumber) ?? 0}
               error={cardErrors.get(pr.prNumber) ?? null}
             />
