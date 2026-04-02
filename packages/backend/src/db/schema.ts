@@ -89,4 +89,7 @@ export function runMigrations(): void {
   try { db.exec(`ALTER TABLE sessions ADD COLUMN favorited INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE sessions ADD COLUMN total_input_tokens INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE sessions ADD COLUMN total_output_tokens INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE pull_requests ADD COLUMN review_session_id TEXT`); } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE pull_requests ADD COLUMN review_iteration INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE pull_requests ADD COLUMN head_sha TEXT`); } catch { /* already exists */ }
 }
