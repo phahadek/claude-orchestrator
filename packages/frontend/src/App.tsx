@@ -49,7 +49,7 @@ function resolveActiveBoardId(project: ProjectConfig): string {
 }
 
 export default function App() {
-  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials, prRefreshTrigger } = useSessionStore();
+  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials, clearSessionDenials, prRefreshTrigger } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const activeProjectIdRef = useRef<string | null>(null);
@@ -456,7 +456,7 @@ export default function App() {
                 onResume={handleResume}
                 dismissedDenials={dismissedDenialIds.get(selectedSession.sessionId) ?? new Set()}
                 onDismissDenial={(toolUseId) => dismissDenial(selectedSession.sessionId, toolUseId)}
-                onDismissAllDenials={(toolUseIds) => dismissAllDenials(selectedSession.sessionId, toolUseIds)}
+                onClearAllDenials={() => clearSessionDenials(selectedSession.sessionId)}
               />
             ) : (
               <div className={styles.detailPlaceholder}>
