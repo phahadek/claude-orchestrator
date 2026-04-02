@@ -8,7 +8,9 @@ export function useWebSocket(
   onOpen?: (send: (msg: ClientMessage) => void) => void
 ) {
   const ws = useRef<WebSocket | null>(null);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectDelay = useRef(1000);
+  const disposed = useRef(false);
   // Stable refs so connect closure doesn't capture stale callbacks
   const onMessageRef = useRef(onMessage);
   onMessageRef.current = onMessage;
@@ -17,6 +19,23 @@ export function useWebSocket(
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
 
   const connect = useCallback(() => {
+    if (disposed.current) return;
+
+    // Cancel any pending reconnect timer
+    if (reconnectTimer.current) {
+      clearTimeout(reconnectTimer.current);
+      reconnectTimer.current = null;
+    }
+
+    // Close any existing socket to prevent duplicate connections
+    if (ws.current) {
+      ws.current.onclose = null; // prevent triggering another reconnect
+      ws.current.onmessage = null;
+      ws.current.onopen = null;
+      ws.current.close();
+      ws.current = null;
+    }
+
     const socket = new WebSocket(`ws://${window.location.host}/ws`);
     ws.current = socket;
 
@@ -29,8 +48,9 @@ export function useWebSocket(
     };
 
     socket.onclose = () => {
+      if (disposed.current) return;
       setConnectionState('reconnecting');
-      setTimeout(() => {
+      reconnectTimer.current = setTimeout(() => {
         reconnectDelay.current = Math.min(reconnectDelay.current * 2, 30_000);
         connect();
       }, reconnectDelay.current);
@@ -44,8 +64,22 @@ export function useWebSocket(
   }, []);
 
   useEffect(() => {
+    disposed.current = false;
     connect();
-    return () => ws.current?.close();
+    return () => {
+      disposed.current = true;
+      if (reconnectTimer.current) {
+        clearTimeout(reconnectTimer.current);
+        reconnectTimer.current = null;
+      }
+      if (ws.current) {
+        ws.current.onclose = null;
+        ws.current.onmessage = null;
+        ws.current.onopen = null;
+        ws.current.close();
+        ws.current = null;
+      }
+    };
   }, [connect]);
 
   const send = useCallback((msg: ClientMessage) => {
