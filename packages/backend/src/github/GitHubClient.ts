@@ -36,6 +36,15 @@ export class GitHubClient {
     return mapPR(data);
   }
 
+  async getMergeability(prNumber: number, repo?: string): Promise<{ mergeable: boolean | null; mergeableState: string | null }> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<GitHubRawPR>(`/repos/${r}/pulls/${prNumber}`);
+    return {
+      mergeable: data.mergeable ?? null,
+      mergeableState: data.mergeable_state ?? null,
+    };
+  }
+
   async fetchDiff(prId: number, repo?: string): Promise<PRDiff> {
     const r = repo ?? GITHUB_REPO;
     const diff = await this.request<string>(
@@ -101,6 +110,7 @@ interface GitHubRawPR {
   state: string;
   created_at: string;
   updated_at: string;
+  mergeable?: boolean | null;
   mergeable_state?: string | null;
   draft: boolean;
 }
