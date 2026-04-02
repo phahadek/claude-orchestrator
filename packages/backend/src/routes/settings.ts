@@ -6,7 +6,7 @@ import { runtimeSettings } from '../config';
 const router = Router();
 
 const SETTING_KEYS = [
-  'max_concurrent_sessions',
+  'max_concurrent_code_sessions',
   'auto_review_concurrency',
   'auto_review',
   'plan_tier',
@@ -27,8 +27,8 @@ const PLAN_TIER_CAPS: Record<string, number> = {
 type SettingKey = (typeof SETTING_KEYS)[number];
 
 function applyToRuntime(key: SettingKey, value: string): void {
-  if (key === 'max_concurrent_sessions') {
-    runtimeSettings.max_concurrent_sessions = Number(value);
+  if (key === 'max_concurrent_code_sessions') {
+    runtimeSettings.max_concurrent_code_sessions = Number(value);
   } else if (key === 'auto_review_concurrency') {
     runtimeSettings.auto_review_concurrency = Number(value);
   } else if (key === 'auto_review') {
@@ -72,7 +72,7 @@ export function loadRuntimeSettingsFromDb(): void {
 
 function runtimeSettingsAsRecord(): Record<SettingKey, string> {
   return {
-    max_concurrent_sessions: String(runtimeSettings.max_concurrent_sessions),
+    max_concurrent_code_sessions: String(runtimeSettings.max_concurrent_code_sessions),
     auto_review_concurrency: String(runtimeSettings.auto_review_concurrency),
     auto_review: String(runtimeSettings.auto_review),
     plan_tier: runtimeSettings.plan_tier,
