@@ -81,6 +81,7 @@ function makeMockGitHub(): GitHubClient {
     listOpenPRs: vi.fn().mockResolvedValue([mockPR]),
     fetchDiff: vi.fn().mockResolvedValue(mockDiff),
     mergePR: vi.fn(),
+    getMergeability: vi.fn().mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
   } as unknown as GitHubClient;
 }
 
@@ -527,6 +528,92 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
     );
 
     await expect(service.reviewPR(99, 'owner/repo')).rejects.toThrow('not found in database');
+  });
+});
+
+// ── Merge conflict dimension ──────────────────────────────────────────────────
+
+describe('PRReviewService — merge conflict dimension', () => {
+  const allPassedAIPayload = {
+    verdict: 'approved',
+    dimensions: [
+      { name: 'Title and description vs task Summary', passed: true, notes: 'ok' },
+      { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
+      { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
+      { name: 'Changed files vs Files/paths affected list', passed: true, notes: 'ok' },
+    ],
+    summary: 'All four AI dimensions passed.',
+  };
+
+  it('includes 5th Merge conflicts dimension with passed=true when mergeable=true', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+
+    const mockSM = makeMockSessionManager();
+    const mockGH = makeMockGitHub();
+    vi.mocked(mockGH.getMergeability).mockResolvedValue({ mergeable: true, mergeableState: 'clean' });
+
+    const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+      const id = 'review-session-id';
+      setImmediate(() => mockSM.emit('message', makeSessionEventMessage(id, JSON.stringify(allPassedAIPayload))));
+      return id;
+    });
+
+    const result = await service.reviewPR(42, 'owner/repo');
+
+    expect(result.dimensions).toHaveLength(5);
+    const conflictDim = result.dimensions!.find((d) => d.name === 'Merge conflicts');
+    expect(conflictDim).toBeDefined();
+    expect(conflictDim!.passed).toBe(true);
+    expect(result.verdict).toBe('approved');
+  });
+
+  it('includes 5th Merge conflicts dimension with passed=false when mergeable=false, downgrading verdict to needs_changes', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+
+    const mockSM = makeMockSessionManager();
+    const mockGH = makeMockGitHub();
+    vi.mocked(mockGH.getMergeability).mockResolvedValue({ mergeable: false, mergeableState: 'dirty' });
+
+    const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+      const id = 'review-session-id';
+      setImmediate(() => mockSM.emit('message', makeSessionEventMessage(id, JSON.stringify(allPassedAIPayload))));
+      return id;
+    });
+
+    const result = await service.reviewPR(42, 'owner/repo');
+
+    expect(result.dimensions).toHaveLength(5);
+    const conflictDim = result.dimensions!.find((d) => d.name === 'Merge conflicts');
+    expect(conflictDim).toBeDefined();
+    expect(conflictDim!.passed).toBe(false);
+    expect(conflictDim!.notes).toContain('merge conflicts');
+    expect(result.verdict).toBe('needs_changes');
+  });
+
+  it('treats mergeable=null as passed (GitHub still computing)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+
+    const mockSM = makeMockSessionManager();
+    const mockGH = makeMockGitHub();
+    vi.mocked(mockGH.getMergeability).mockResolvedValue({ mergeable: null, mergeableState: null });
+
+    const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+      const id = 'review-session-id';
+      setImmediate(() => mockSM.emit('message', makeSessionEventMessage(id, JSON.stringify(allPassedAIPayload))));
+      return id;
+    });
+
+    const result = await service.reviewPR(42, 'owner/repo');
+
+    const conflictDim = result.dimensions!.find((d) => d.name === 'Merge conflicts');
+    expect(conflictDim!.passed).toBe(true);
+    expect(result.verdict).toBe('approved');
   });
 });
 

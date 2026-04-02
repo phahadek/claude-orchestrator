@@ -653,6 +653,40 @@ describe('ReviewOrchestrator — timeout', () => {
   });
 });
 
+// ── Merge conflict dimension routing ─────────────────────────────────────────
+
+describe('ReviewOrchestrator — merge conflict causes needs_changes', () => {
+  it('routes feedback to coding session when all AI dims pass but conflict dim fails', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [
+        { name: 'Title and description vs task Summary', passed: true, notes: 'ok' },
+        { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
+        { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
+        { name: 'Changed files vs Files/paths affected list', passed: true, notes: 'ok' },
+        { name: 'Merge conflicts', passed: false, notes: 'PR has merge conflicts with base branch. Rebase and resolve before re-review.' },
+      ],
+      summary: 'Merge conflicts detected.',
+      reviewedAt: new Date().toISOString(),
+    });
+
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(sm.send)).toHaveBeenCalledOnce();
+    const [sessionId, message] = vi.mocked(sm.send).mock.calls[0];
+    expect(sessionId).toBe('coding-session-id');
+    expect(message).toContain('Merge conflicts');
+  });
+});
+
 // ── Draft PR transition ───────────────────────────────────────────────────────
 
 describe('ReviewOrchestrator — draft PR transition on approved verdict', () => {

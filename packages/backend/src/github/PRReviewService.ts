@@ -80,7 +80,11 @@ export class PRReviewService {
     // 3. Persist the review session pairing.
     setReviewSessionId(prNumber, repo, sessionId);
 
-    return verdictPromise;
+    const aiResult = await verdictPromise;
+    const { mergeable } = await this.github.getMergeability(prNumber, repo);
+    const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
+    setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
+    return finalResult;
   }
 
   /**
@@ -98,7 +102,11 @@ export class PRReviewService {
       `The PR has been updated (new commits detected). Please re-review the changes. ` +
       `This is review iteration ${iteration}/${maxIterations}.`;
     this.sessionManager.send(reviewSessionId, msg);
-    return this.waitForVerdict(reviewSessionId, prNumber, repo);
+    const aiResult = await this.waitForVerdict(reviewSessionId, prNumber, repo);
+    const { mergeable } = await this.github.getMergeability(prNumber, repo);
+    const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
+    setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
+    return finalResult;
   }
 
   /**
@@ -119,7 +127,6 @@ export class PRReviewService {
           const result = this.tryParseVerdictFromRawEvent(msg.content, prNumber, repo);
           if (result) {
             cleanup();
-            setPRReviewResult(prNumber, repo, JSON.stringify(result));
             resolve(result);
           }
           return;
@@ -130,7 +137,6 @@ export class PRReviewService {
           // Fallback: parse from stored events
           const events = getEventsBySession(sessionId);
           const result = this.parseReviewResult(events, prNumber, repo);
-          setPRReviewResult(prNumber, repo, JSON.stringify(result));
           resolve(result);
         }
       };
@@ -235,6 +241,33 @@ export class PRReviewService {
       }
     }
     return null;
+  }
+
+  private appendMergeConflictDimension(result: PRReviewResult, mergeable: boolean | null): PRReviewResult {
+    const passed = mergeable !== false;
+    const conflictDim: ReviewDimension = {
+      name: 'Merge conflicts',
+      passed,
+      notes: passed
+        ? 'No merge conflicts detected.'
+        : 'PR has merge conflicts with base branch. Rebase and resolve before re-review.',
+    };
+
+    const dimensions = [...(result.dimensions ?? []), conflictDim];
+    const passedCount = dimensions.filter((d) => d.passed).length;
+
+    let verdict: PRReviewResult['verdict'];
+    if (result.verdict === 'error') {
+      verdict = 'error';
+    } else if (passedCount === dimensions.length) {
+      verdict = 'approved';
+    } else if (passedCount === 0) {
+      verdict = 'incomplete';
+    } else {
+      verdict = 'needs_changes';
+    }
+
+    return { ...result, dimensions, verdict };
   }
 
   buildPrompt(pr: PullRequest, diff: PRDiff, task: NotionTaskPage): string {
