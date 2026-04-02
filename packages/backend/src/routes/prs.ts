@@ -7,6 +7,9 @@ import {
   updatePRState,
   getTaskTitleFromCache,
   upsertPullRequest,
+  deletePR,
+  deleteMergedAndClosedPRs,
+  countMergedAndClosedPRs,
 } from '../db/queries';
 import { PRSyncJob } from '../github/PRSyncJob';
 import { GitHubApiError } from '../github/types';
@@ -163,6 +166,59 @@ export function createPrsRouter(
       }
       res.status(500).json({ error: (err as Error).message });
     }
+  });
+
+  // ── DELETE /api/prs/clear?projectId=<id> ────────────────────────────────────
+  router.delete('/prs/clear', (req: Request, res: Response) => {
+    const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : '';
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId query param is required' });
+      return;
+    }
+    const project = getProjectById(projectId);
+    if (!project?.githubRepo) {
+      res.status(422).json({ error: 'Project has no githubRepo configured' });
+      return;
+    }
+    const count = deleteMergedAndClosedPRs(project.githubRepo);
+    res.json({ deleted: count });
+  });
+
+  // ── GET /api/prs/clear/count?projectId=<id> ──────────────────────────────────
+  router.get('/prs/clear/count', (req: Request, res: Response) => {
+    const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : '';
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId query param is required' });
+      return;
+    }
+    const project = getProjectById(projectId);
+    if (!project?.githubRepo) {
+      res.status(422).json({ error: 'Project has no githubRepo configured' });
+      return;
+    }
+    const count = countMergedAndClosedPRs(project.githubRepo);
+    res.json({ count });
+  });
+
+  // ── DELETE /api/prs/:prNumber?projectId=<id> ─────────────────────────────────
+  router.delete('/prs/:prNumber', (req: Request, res: Response) => {
+    const prNumber = parseInt(String(req.params.prNumber), 10);
+    const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : '';
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId query param is required' });
+      return;
+    }
+    const project = getProjectById(projectId);
+    if (!project?.githubRepo) {
+      res.status(422).json({ error: 'Project has no githubRepo configured' });
+      return;
+    }
+    const deleted = deletePR(prNumber, project.githubRepo);
+    if (!deleted) {
+      res.status(404).json({ error: `PR #${prNumber} not found` });
+      return;
+    }
+    res.json({ ok: true });
   });
 
   // ── POST /api/prs/:prNumber/fix ──────────────────────────────────────────────
