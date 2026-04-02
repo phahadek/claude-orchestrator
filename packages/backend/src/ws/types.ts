@@ -25,6 +25,7 @@ export type ServerMessage =
   | { type: 'review_escalated';      prNumber: number; repo: string; message: string }
   | { type: 'review_incomplete';     prNumber: number; repo: string; message: string }
   | { type: 'session_audit';         sessionId: string; prOpened: boolean; prTargetsBranch: string | null; violations: string[]; specMismatch: string | null; auditedAt: string }
+  | { type: 'task_status_changed';   notionTaskId: string; newStatus: string }
   | { type: 'error';                 message: string };
 
 // ── Client → Server ──────────────────────────────────────────────
