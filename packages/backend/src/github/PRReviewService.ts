@@ -16,8 +16,8 @@ export interface ReviewDimension {
 export interface PRReviewResult {
   prNumber: number;
   repo: string;
-  verdict: 'approved' | 'needs_changes' | 'incomplete';
-  dimensions: ReviewDimension[];
+  verdict: 'approved' | 'needs_changes' | 'incomplete' | 'error';
+  dimensions?: ReviewDimension[];
   summary: string;
   reviewedAt: string;
 }
