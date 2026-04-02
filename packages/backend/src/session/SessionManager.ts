@@ -100,6 +100,12 @@ export class SessionManager extends EventEmitter {
       session_type: sessionType,
     });
 
+    if (sessionType === 'standard') {
+      this.notionClient.updateStatus(notionTaskId, '🔄 In Progress').catch((e) =>
+        console.error(`[SessionManager] failed to set In Progress: ${e}`),
+      );
+    }
+
     // Broadcast session_started so connected frontends see the card immediately
     this.emit('message', {
       type: 'session_started',
