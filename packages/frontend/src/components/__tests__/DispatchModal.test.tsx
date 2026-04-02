@@ -28,6 +28,7 @@ function renderModal(
   send: (msg: ClientMessage) => void,
   onClose = vi.fn(),
   resetTasks = vi.fn(),
+  boardId?: string,
 ) {
   return render(
     <DispatchModal
@@ -36,6 +37,7 @@ function renderModal(
       send={send}
       resetTasks={resetTasks}
       project={TEST_PROJECT}
+      boardId={boardId}
       onClose={onClose}
     />,
   );
@@ -52,10 +54,16 @@ describe('DispatchModal', () => {
     resetTasks = vi.fn();
   });
 
-  it('fires fetch_tasks on mount with the provided projectId', () => {
+  it('fires fetch_tasks on mount with projectId and no boardId when boardId prop is omitted', () => {
     renderModal([], false, send, onClose, resetTasks);
     expect(send).toHaveBeenCalledOnce();
-    expect(send).toHaveBeenCalledWith({ type: 'fetch_tasks', projectId: PROJECT_ID });
+    expect(send).toHaveBeenCalledWith({ type: 'fetch_tasks', projectId: PROJECT_ID, boardId: undefined });
+  });
+
+  it('fires fetch_tasks on mount with the boardId prop value when provided', () => {
+    renderModal([], false, send, onClose, resetTasks, 'custom-board-id');
+    expect(send).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledWith({ type: 'fetch_tasks', projectId: PROJECT_ID, boardId: 'custom-board-id' });
   });
 
   it('calls resetTasks before fetch_tasks on mount', () => {

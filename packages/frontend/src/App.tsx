@@ -497,6 +497,7 @@ export default function App() {
           send={send}
           resetTasks={resetTasks}
           project={activeProject}
+          boardId={activeBoardId ?? undefined}
           onClose={() => setShowModal(false)}
         />
       )}
