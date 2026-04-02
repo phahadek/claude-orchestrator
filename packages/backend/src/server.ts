@@ -11,8 +11,9 @@ import { NotionClient } from './notion/NotionClient';
 import { handleMessage } from './ws/router';
 import { JsonlReader, DEFAULT_SESSIONS_DIR } from './session/JsonlReader';
 import type { ServerMessage } from './ws/types';
-import { permissionEventsRouter, permissionDenialsRouter } from './routes/rules';
+import { permissionEventsRouter, permissionDenialsRouter, permissionRulesRouter } from './routes/rules';
 import configRouter from './routes/config';
+import settingsRouter, { loadRuntimeSettingsFromDb } from './routes/settings';
 import { sessionsRouter, setBroadcast } from './routes/sessions';
 import { createPrsRouter } from './routes/prs';
 import { GitHubClient } from './github/GitHubClient';
@@ -24,6 +25,7 @@ import { getActiveSessions, getEventsBySession, getDenialsBySession, deleteGhost
 import { isSystemOnlyUserEvent } from './utils/eventFilters';
 
 runMigrations();
+loadRuntimeSettingsFromDb();
 
 const ghostsRemoved = deleteGhostSessions();
 if (ghostsRemoved > 0) {
@@ -48,6 +50,8 @@ const app = express();
 app.use(express.json());
 app.use('/api/permission-events', permissionEventsRouter);
 app.use('/api/permission-denials', permissionDenialsRouter);
+app.use('/api/permission-rules', permissionRulesRouter);
+app.use('/api/settings', settingsRouter);
 app.use('/api/sessions', sessionsRouter);
 app.use('/api', createPrsRouter(githubClient, prReviewService, sessionManager));
 app.use('/api', configRouter);
