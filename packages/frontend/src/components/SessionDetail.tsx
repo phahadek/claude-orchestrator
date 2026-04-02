@@ -524,25 +524,14 @@ export function EventRow({ event }: EventRowProps) {
     }
 
     case 'tool_use': {
-      const parsed = extractToolUse(payload);
-      const isBash = parsed?.toolName === 'Bash';
-      const bashCmd = isBash ? extractBashCommand(parsed?.input) : null;
-      const toolName = parsed?.toolName ?? 'tool_use';
-      return (
-        <CollapsibleToolUse toolName={toolName}>
-          {isBash && bashCmd != null ? (
-            <pre className={styles.bashCommand}>$ {bashCmd}</pre>
-          ) : (
-            <pre className={styles.toolArgs}>
-              {parsed ? JSON.stringify(parsed.input, null, 2) : event.content}
-            </pre>
-          )}
-        </CollapsibleToolUse>
-      );
+      // Standalone tool_use events are redundant — the final assistant message
+      // (text event) already contains tool_use blocks rendered inline.
+      return null;
     }
 
     case 'tool_result': {
       const result = extractToolResult(payload, event.content);
+      if (!result.trim()) return null;
       return <ToolResultRow result={result} />;
     }
 
