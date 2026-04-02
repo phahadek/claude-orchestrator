@@ -192,40 +192,61 @@ describe('useSessionStore', () => {
     expect(result.current.sessions[0].events).not.toBe(before[0]?.events);
   });
 
-  it('isRateLimited is true when last event has error === "rate_limit" in payload', () => {
+  it('isRateLimited is true when a rate_limit_event with status "rate_limited" arrives', () => {
     const { result } = renderHook(() => useSessionStore());
     act(() => result.current.dispatch(msg.session_started()));
     const rateLimitEvent: ServerMessage = {
       type: 'session_event',
       sessionId: SESSION_ID,
-      eventType: 'text',
-      content: JSON.stringify({ type: 'assistant', error: 'rate_limit', isApiErrorMessage: true }),
+      eventType: 'system',
+      content: JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'rate_limited' } }),
     };
     act(() => result.current.dispatch(rateLimitEvent));
     expect(result.current.sessions[0].isRateLimited).toBe(true);
   });
 
-  it('isRateLimited is false after a non-rate-limit event arrives (user resumed)', () => {
+  it('isRateLimited stays true across non-rate-limit events (sticky)', () => {
     const { result } = renderHook(() => useSessionStore());
     act(() => result.current.dispatch(msg.session_started()));
     const rateLimitEvent: ServerMessage = {
       type: 'session_event',
       sessionId: SESSION_ID,
-      eventType: 'text',
-      content: JSON.stringify({ type: 'assistant', error: 'rate_limit', isApiErrorMessage: true }),
+      eventType: 'system',
+      content: JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'rate_limited' } }),
     };
     act(() => result.current.dispatch(rateLimitEvent));
     expect(result.current.sessions[0].isRateLimited).toBe(true);
-    // Normal event arrives after resuming
+    // Normal event arrives — flag should NOT reset
     act(() => result.current.dispatch(msg.session_event()));
+    expect(result.current.sessions[0].isRateLimited).toBe(true);
+  });
+
+  it('isRateLimited clears only when a rate_limit_event with status "resumed" arrives', () => {
+    const { result } = renderHook(() => useSessionStore());
+    act(() => result.current.dispatch(msg.session_started()));
+    const rateLimitEvent: ServerMessage = {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'rate_limited' } }),
+    };
+    act(() => result.current.dispatch(rateLimitEvent));
+    expect(result.current.sessions[0].isRateLimited).toBe(true);
+    const resumedEvent: ServerMessage = {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'resumed' } }),
+    };
+    act(() => result.current.dispatch(resumedEvent));
     expect(result.current.sessions[0].isRateLimited).toBe(false);
   });
 
-  it('isRateLimited is false for normal events without rate_limit error', () => {
+  it('isRateLimited is falsy for normal events without rate_limit_event', () => {
     const { result } = renderHook(() => useSessionStore());
     act(() => result.current.dispatch(msg.session_started()));
     act(() => result.current.dispatch(msg.session_event()));
-    expect(result.current.sessions[0].isRateLimited).toBe(false);
+    expect(result.current.sessions[0].isRateLimited).toBeFalsy();
   });
 
   describe('dismissDenial / dismissAllDenials', () => {
