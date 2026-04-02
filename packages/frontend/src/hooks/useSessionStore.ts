@@ -32,6 +32,7 @@ export function useSessionStore() {
   const [tasksReady, setTasksReady] = useState(false);
   const [synced, setSynced] = useState(false);
   const [dismissedDenialIds, setDismissedDenialIds] = useState<Map<string, Set<string>>>(new Map());
+  const [prRefreshTrigger, setPrRefreshTrigger] = useState(0);
 
   const dispatch = useCallback((msg: ServerMessage) => {
     setSynced(true);
@@ -136,6 +137,9 @@ export function useSessionStore() {
       setTasks(msg.tasks);
       setTasksReady(true);
     }
+    if (msg.type === 'pr_created') {
+      setPrRefreshTrigger((n) => n + 1);
+    }
   }, []);
 
   const resetTasks = useCallback(() => {
@@ -191,5 +195,5 @@ export function useSessionStore() {
   const readyCount = tasks.filter((t) => !t.blocked && t.task.status === '🗂️ Ready').length;
   const blockedCount = tasks.filter((t) => t.blocked).length;
 
-  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials };
+  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials, prRefreshTrigger };
 }
