@@ -23,7 +23,7 @@ export function shouldAutoReview(
  * suitable for sending to the coding session as a fix prompt.
  */
 export function formatReviewFeedback(prNumber: number, result: PRReviewResult): string {
-  const failingDimensions = result.dimensions.filter((d) => !d.passed);
+  const failingDimensions = (result.dimensions ?? []).filter((d) => !d.passed);
   const lines = failingDimensions.map((d) => `❌ ${d.name}: ${d.notes}`).join('\n');
   return `PR #${prNumber} review findings — please address the following:\n\n${lines}\n\nOverall: ${result.summary}`;
 }
