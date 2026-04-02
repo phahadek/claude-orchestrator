@@ -59,17 +59,28 @@ export class PRReviewService {
     const taskUrl = `https://www.notion.so/${prRow.notion_task_id}`;
     const prompt = this.buildPrompt(prData, diffData, taskPage);
 
-    const sessionId = this.sessionManager.start(taskUrl, projectContextUrl, {
+    // Generate the session ID before starting so the verdict listener can be
+    // subscribed before any events are emitted. Without this, fast reviews
+    // (verdict emitted within seconds, before waitForVerdict subscribes) are
+    // silently missed and fall through to the timeout.
+    const sessionId = crypto.randomUUID();
+
+    // 1. Attach listener BEFORE start() — ensures no events are missed.
+    const verdictPromise = this.waitForVerdict(sessionId, prNumber, repo);
+
+    // 2. Start session with the pre-generated ID.
+    this.sessionManager.start(taskUrl, projectContextUrl, {
+      sessionId,
       sessionType: 'review',
       customPrompt: prompt,
       projectId,
       taskName: `#${prData.id} ${prData.title}`,
     });
 
-    // Persist the review session pairing immediately
+    // 3. Persist the review session pairing.
     setReviewSessionId(prNumber, repo, sessionId);
 
-    return this.waitForVerdict(sessionId, prNumber, repo);
+    return verdictPromise;
   }
 
   /**

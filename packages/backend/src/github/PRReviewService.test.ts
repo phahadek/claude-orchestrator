@@ -388,8 +388,8 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
     );
 
     const startMock = mockSM.start as ReturnType<typeof vi.fn>;
-    startMock.mockImplementationOnce(() => {
-      const id = 'review-session-id';
+    startMock.mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+      const id = opts.sessionId;
       // Emit verdict via session_event — session stays alive (no session_ended)
       setImmediate(() =>
         mockSM.emit('message', makeSessionEventMessage(id, JSON.stringify(claudePayload))),
@@ -403,10 +403,11 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
     const [, , opts] = startMock.mock.calls[0];
     expect(opts.sessionType).toBe('review');
     expect(typeof opts.customPrompt).toBe('string');
+    expect(typeof opts.sessionId).toBe('string');
 
     expect(result.verdict).toBe('approved');
     expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledOnce();
-    expect(vi.mocked(setReviewSessionId)).toHaveBeenCalledWith(42, 'owner/repo', 'review-session-id');
+    expect(vi.mocked(setReviewSessionId)).toHaveBeenCalledWith(42, 'owner/repo', opts.sessionId);
   });
 
   it('falls back to stored events when session_ended fires before verdict', async () => {
@@ -429,8 +430,8 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
     );
 
     const startMock = mockSM.start as ReturnType<typeof vi.fn>;
-    startMock.mockImplementationOnce(() => {
-      const id = 'review-session-id';
+    startMock.mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+      const id = opts.sessionId;
       setImmediate(() =>
         mockSM.emit('message', { type: 'session_ended', sessionId: id, status: 'done' }),
       );
@@ -440,7 +441,78 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
     const result = await service.reviewPR(42, 'owner/repo');
 
     expect(result.verdict).toBe('needs_changes');
-    expect(vi.mocked(getEventsBySession)).toHaveBeenCalledWith('review-session-id');
+    const [, , opts] = startMock.mock.calls[0];
+    expect(vi.mocked(getEventsBySession)).toHaveBeenCalledWith(opts.sessionId);
+  });
+
+  it('verdict listener is active before session start() returns (race condition fix)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+
+    const claudePayload = {
+      verdict: 'approved',
+      dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+      summary: 'Fast review approved.',
+    };
+
+    const mockSM = makeMockSessionManager();
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    let listenerCountAtStart = 0;
+    const startMock = mockSM.start as ReturnType<typeof vi.fn>;
+    startMock.mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+      // Check how many 'message' listeners are attached at the moment start() is called.
+      // With the fix, waitForVerdict() has already subscribed, so count must be >= 1.
+      listenerCountAtStart = mockSM.listenerCount('message');
+      // Emit verdict synchronously inside start() — will only be captured if listener
+      // was already attached before start() was called.
+      mockSM.emit('message', makeSessionEventMessage(opts.sessionId, JSON.stringify(claudePayload)));
+      return opts.sessionId;
+    });
+
+    const result = await service.reviewPR(42, 'owner/repo');
+
+    expect(listenerCountAtStart).toBeGreaterThanOrEqual(1);
+    expect(result.verdict).toBe('approved');
+  });
+
+  it('fast review: verdict emitted synchronously during start() is captured, not missed', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+
+    const claudePayload = {
+      verdict: 'approved',
+      dimensions: [{ name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' }],
+      summary: 'Approved immediately.',
+    };
+
+    const mockSM = makeMockSessionManager();
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const startMock = mockSM.start as ReturnType<typeof vi.fn>;
+    startMock.mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+      const id = opts.sessionId;
+      // Emit SYNCHRONOUSLY inside start() — simulates the CLI completing the
+      // review before start() even returns (the original race condition).
+      mockSM.emit('message', makeSessionEventMessage(id, JSON.stringify(claudePayload)));
+      return id;
+    });
+
+    const result = await service.reviewPR(42, 'owner/repo');
+
+    expect(result.verdict).toBe('approved');
+    expect(result.summary).toBe('Approved immediately.');
+    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledOnce();
   });
 
   it('throws when PR is not found in database', async () => {
