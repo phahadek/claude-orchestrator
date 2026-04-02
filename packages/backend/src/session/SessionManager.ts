@@ -15,6 +15,7 @@ export interface StartOptions {
   sessionType?: 'standard' | 'review';
   customPrompt?: string;
   projectId?: string;
+  taskName?: string;
 }
 
 export class SessionManager extends EventEmitter {
@@ -28,7 +29,7 @@ export class SessionManager extends EventEmitter {
   }
 
   start(taskUrl: string, projectContextUrl: string, options?: StartOptions): string {
-    const { taskType, sessionType = 'standard', customPrompt, projectId = '' } = options ?? {};
+    const { taskType, sessionType = 'standard', customPrompt, projectId = '', taskName } = options ?? {};
 
     if (this.sessions.size >= config.maxConcurrentSessions) {
       throw new Error(`Max concurrent sessions (${config.maxConcurrentSessions}) reached`);
@@ -116,7 +117,7 @@ export class SessionManager extends EventEmitter {
     this.emit('message', {
       type: 'session_started',
       sessionId,
-      taskName: taskUrl,
+      taskName: taskName ?? taskUrl,
       notionTaskUrl: taskUrl,
       ...(taskType != null && { taskType }),
       ...(sessionType !== 'standard' && { sessionType }),
