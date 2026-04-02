@@ -16,12 +16,13 @@ interface Props {
   projectName?: string;
   onResume?: () => void;
   onToggleFavorite?: () => void;
+  previewLines?: number;
 }
 
-export function SessionCard({ session, selected, onClick, projectColor, projectName, onResume, onToggleFavorite }: Props) {
+export function SessionCard({ session, selected, onClick, projectColor, projectName, onResume, onToggleFavorite, previewLines = CARD_PREVIEW_LINES }: Props) {
   const previewEvents = session.events
     .filter((e) => !(e.eventType === 'system' && isHiddenSystemEvent(tryParseJson(e.content))))
-    .slice(-CARD_PREVIEW_LINES);
+    .slice(-previewLines);
   const elapsed = formatElapsed(session);
 
   const isReview = session.sessionType === 'review';
