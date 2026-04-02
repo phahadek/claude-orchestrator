@@ -490,6 +490,151 @@ describe('AgentSession', () => {
     expect(notion.updateStatus).not.toHaveBeenCalledWith('task-id', '👀 In Review');
   });
 
+  // ── AC: pr_opened emitted from handlePRCreatedFromContent (live path) ───────
+  it('emits pr_opened from the live detection path when mcp__github__create_pull_request tool_result is seen', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+
+    const session = new AgentSession(
+      'live-pr-session',
+      'https://notion.so/task-live',
+      'https://notion.so/ctx-live',
+      notion,
+      '/tmp',
+      'task-live-id',
+    );
+
+    const prOpenedEvents: unknown[] = [];
+    session.on('pr_opened', (job: unknown) => prOpenedEvents.push(job));
+
+    const runPromise = session.run();
+
+    // Step 1: emit assistant event with mcp__github__create_pull_request tool_use
+    const toolUseId = 'tu-abc-123';
+    const assistantEvent = JSON.stringify({
+      type: 'assistant',
+      message: {
+        id: 'msg-pr-live',
+        content: [
+          {
+            type: 'tool_use',
+            id: toolUseId,
+            name: 'mcp__github__create_pull_request',
+            input: {},
+          },
+        ],
+      },
+    });
+    mockProc.stdout.push(assistantEvent + '\n');
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Step 2: emit tool_result event with a GitHub PR JSON response
+    const prJson = JSON.stringify({
+      number: 77,
+      html_url: 'https://github.com/myorg/myrepo/pull/77',
+      title: 'My PR',
+      body: null,
+      head: { ref: 'feature/foo' },
+      base: { ref: 'dev' },
+      state: 'open',
+      created_at: '2026-04-02T00:00:00Z',
+      updated_at: '2026-04-02T00:00:00Z',
+    });
+    const toolResultEvent = JSON.stringify({
+      type: 'tool_result',
+      tool_use_id: toolUseId,
+      content: [{ type: 'text', text: prJson }],
+    });
+    mockProc.stdout.push(toolResultEvent + '\n');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(prOpenedEvents).toHaveLength(1);
+    const job = prOpenedEvents[0] as { prNumber: number; repo: string; taskId: string };
+    expect(job.prNumber).toBe(77);
+    expect(job.repo).toBe('myorg/myrepo');
+    expect(job.taskId).toBe('task-live-id');
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+  });
+
+  // ── AC: pr_opened NOT emitted twice when live detection fired ─────────────
+  it('does NOT emit pr_opened a second time from handleCleanExit when live detection already fired', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    // Return a session event that also contains a PR URL so handleCleanExit would
+    // normally emit pr_opened — but it must not because prDetectedLive is true.
+    vi.mocked(getEventsBySession).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'no-double-pr',
+        event_type: 'text',
+        payload: 'PR: https://github.com/myorg/myrepo/pull/77',
+        timestamp: Date.now(),
+        message_id: null,
+      },
+    ]);
+
+    const session = new AgentSession(
+      'no-double-pr',
+      'https://notion.so/task-nodbl',
+      'https://notion.so/ctx-nodbl',
+      notion,
+      '/tmp',
+      'task-nodbl-id',
+    );
+
+    const prOpenedEvents: unknown[] = [];
+    session.on('pr_opened', (job: unknown) => prOpenedEvents.push(job));
+
+    const runPromise = session.run();
+
+    // Trigger live PR detection
+    const toolUseId = 'tu-nodbl-456';
+    const assistantEvent = JSON.stringify({
+      type: 'assistant',
+      message: {
+        id: 'msg-nodbl',
+        content: [{ type: 'tool_use', id: toolUseId, name: 'mcp__github__create_pull_request', input: {} }],
+      },
+    });
+    mockProc.stdout.push(assistantEvent + '\n');
+    await new Promise((r) => setTimeout(r, 50));
+
+    const prJson = JSON.stringify({
+      number: 77,
+      html_url: 'https://github.com/myorg/myrepo/pull/77',
+      title: 'My PR',
+      body: null,
+      head: { ref: 'feature/foo' },
+      base: { ref: 'dev' },
+      state: 'open',
+      created_at: '2026-04-02T00:00:00Z',
+      updated_at: '2026-04-02T00:00:00Z',
+    });
+    const toolResultEvent = JSON.stringify({
+      type: 'tool_result',
+      tool_use_id: toolUseId,
+      content: [{ type: 'text', text: prJson }],
+    });
+    mockProc.stdout.push(toolResultEvent + '\n');
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Live path fired — exactly one emission so far
+    expect(prOpenedEvents).toHaveLength(1);
+
+    // Now the session exits — handleCleanExit runs and must NOT emit again
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    // Still only one emission
+    expect(prOpenedEvents).toHaveLength(1);
+  });
+
   // ── AC: pr_opened emitted in handleCleanExit() after upsertPullRequest() ──
   it('emits pr_opened event in handleCleanExit() when a PR URL is found at exit', async () => {
     const notion = fakeNotionClient();
