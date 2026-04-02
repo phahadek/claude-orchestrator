@@ -65,108 +65,98 @@ describe('AgentSession', () => {
     vi.clearAllMocks();
   });
 
-  // ── AC: Auto-allow writes { type: 'approve' } to stdin ──────────────────
-  it('auto-allows and writes { type: "approve" } to stdin when rule matches allow', async () => {
+  // ── AC: permission events are broadcast as session_event (engine removed) ─
+  // The permission engine (auto-allow/deny rules, UI escalation) was removed
+  // in favour of --permission-mode acceptEdits + --allowed-tools. `permission`
+  // events from the CLI are now treated as regular system events — stored in
+  // DB and broadcast as session_event to the UI.
+  it('broadcasts permission event as session_event when CLI emits it', async () => {
     const notion = fakeNotionClient();
     const session = new AgentSession('s1', 'https://notion.so/task', 'https://notion.so/ctx', notion, '/tmp');
 
-    vi.mocked(getRules).mockReturnValue([
-      { id: 1, order_index: 0, pattern: 'Read', match_type: 'glob', decision: 'allow', label: null, enabled: 1 } as PermissionRule,
-    ]);
+    vi.mocked(getRules).mockReturnValue([]);
 
     const messages: ServerMessage[] = [];
     session.on('message', (msg: ServerMessage) => messages.push(msg));
 
     const runPromise = session.run();
 
-    // Emit a permission event on stdout
     mockProc.stdout.push(JSON.stringify({ type: 'permission', tool_name: 'Read', tool_input: {} }) + '\n');
-
-    // Give the event loop time to process
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(mockProc.stdinChunks).toContain(JSON.stringify({ type: 'approve' }) + '\n');
+    // permission events are broadcast as session_event (type=system)
+    const sessionEvents = messages.filter((m) => m.type === 'session_event');
+    expect(sessionEvents).toHaveLength(1);
 
-    // Clean up — close the process
-    mockProc.proc.emit('close', 0);
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
     await runPromise;
   });
 
-  // ── AC: Auto-deny writes { type: 'deny', reason } to stdin ──────────────
-  it('auto-denies and writes { type: "deny", reason } to stdin when rule matches deny', async () => {
+  it('does NOT write approve/deny to stdin for permission events (engine removed)', async () => {
     const notion = fakeNotionClient();
     const session = new AgentSession('s2', 'https://notion.so/task', 'https://notion.so/ctx', notion, '/tmp');
 
-    vi.mocked(getRules).mockReturnValue([
-      { id: 1, order_index: 0, pattern: 'Bash*', match_type: 'glob', decision: 'deny', label: null, enabled: 1 } as PermissionRule,
-    ]);
+    vi.mocked(getRules).mockReturnValue([]);
 
     const runPromise = session.run();
 
     mockProc.stdout.push(JSON.stringify({ type: 'permission', tool_name: 'Bash', tool_input: { command: 'rm -rf /' } }) + '\n');
     await new Promise((r) => setTimeout(r, 50));
 
-    const denyMsg = mockProc.stdinChunks.find((c) => c.includes('"deny"'));
-    expect(denyMsg).toBeDefined();
-    const parsed = JSON.parse(denyMsg!.trim());
-    expect(parsed.type).toBe('deny');
-    expect(parsed.reason).toBe('Auto-denied by rule');
+    // Only the initial prompt should have been written — no approve/deny response
+    expect(mockProc.stdinChunks).toHaveLength(1);
+    expect(mockProc.stdinChunks[0]).toContain('"role":"user"');
 
-    mockProc.proc.emit('close', 0);
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
     await runPromise;
   });
 
-  // ── AC: approve() and deny() resolve pending permission promise ──────────
-  it('approve() resolves pending permission and writes approve to stdin', async () => {
+  // ── AC: approve() and deny() are safe no-ops ─────────────────────────────
+  // These were removed when the interactive permission engine was replaced by
+  // --permission-mode acceptEdits. They must not throw when called.
+  it('approve() is a safe no-op and does not write to stdin', async () => {
     const notion = fakeNotionClient();
     const session = new AgentSession('s3', 'https://notion.so/task', 'https://notion.so/ctx', notion, '/tmp');
 
-    // No rules → escalates to UI
     vi.mocked(getRules).mockReturnValue([]);
 
-    const messages: ServerMessage[] = [];
-    session.on('message', (msg: ServerMessage) => messages.push(msg));
-
     const runPromise = session.run();
+    const initialChunks = mockProc.stdinChunks.length;
 
-    mockProc.stdout.push(JSON.stringify({ type: 'permission', tool_name: 'Write', tool_input: {} }) + '\n');
-    await new Promise((r) => setTimeout(r, 50));
+    expect(() => session.approve()).not.toThrow();
+    await new Promise((r) => setTimeout(r, 10));
 
-    // Should have emitted a permission_request
-    const permReq = messages.find((m) => m.type === 'permission_request');
-    expect(permReq).toBeDefined();
+    // No extra data written to stdin by approve()
+    expect(mockProc.stdinChunks).toHaveLength(initialChunks);
 
-    // Simulate user approving
-    session.approve();
-    await new Promise((r) => setTimeout(r, 50));
-
-    expect(mockProc.stdinChunks).toContain(JSON.stringify({ type: 'approve' }) + '\n');
-
-    mockProc.proc.emit('close', 0);
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
     await runPromise;
   });
 
-  it('deny() resolves pending permission and writes deny with reason to stdin', async () => {
+  it('deny() is a safe no-op and does not write to stdin', async () => {
     const notion = fakeNotionClient();
     const session = new AgentSession('s4', 'https://notion.so/task', 'https://notion.so/ctx', notion, '/tmp');
 
     vi.mocked(getRules).mockReturnValue([]);
 
     const runPromise = session.run();
+    const initialChunks = mockProc.stdinChunks.length;
 
-    mockProc.stdout.push(JSON.stringify({ type: 'permission', tool_name: 'Bash', tool_input: {} }) + '\n');
-    await new Promise((r) => setTimeout(r, 50));
+    expect(() => session.deny('Not allowed')).not.toThrow();
+    await new Promise((r) => setTimeout(r, 10));
 
-    session.deny('Not allowed');
-    await new Promise((r) => setTimeout(r, 50));
+    // No extra data written to stdin by deny()
+    expect(mockProc.stdinChunks).toHaveLength(initialChunks);
 
-    const denyMsg = mockProc.stdinChunks.find((c) => c.includes('"deny"'));
-    expect(denyMsg).toBeDefined();
-    const parsed = JSON.parse(denyMsg!.trim());
-    expect(parsed.type).toBe('deny');
-    expect(parsed.reason).toBe('Not allowed');
-
-    mockProc.proc.emit('close', 0);
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
     await runPromise;
   });
 
@@ -634,6 +624,122 @@ describe('AgentSession', () => {
 
     // Still only one emission
     expect(prOpenedEvents).toHaveLength(1);
+  });
+
+  // ── AC: push_detected fires when Bash tool result matches git push ────────
+  it('emits push_detected when a Bash tool_use with git push command completes', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+
+    const session = new AgentSession(
+      'push-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const pushEvents: unknown[] = [];
+    session.on('push_detected', (payload: unknown) => pushEvents.push(payload));
+
+    const messages: ServerMessage[] = [];
+    session.on('message', (msg: ServerMessage) => messages.push(msg));
+
+    const runPromise = session.run();
+
+    const bashToolUseId = 'bash-tu-001';
+
+    // Step 1: assistant event with Bash tool_use containing git push
+    const assistantEvent = JSON.stringify({
+      type: 'assistant',
+      message: {
+        id: 'msg-bash',
+        content: [
+          {
+            type: 'tool_use',
+            id: bashToolUseId,
+            name: 'Bash',
+            input: { command: 'git push origin feature/my-branch' },
+          },
+        ],
+      },
+    });
+    mockProc.stdout.push(assistantEvent + '\n');
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Step 2: tool_result for the Bash call
+    const toolResultEvent = JSON.stringify({
+      type: 'tool_result',
+      tool_use_id: bashToolUseId,
+      content: [{ type: 'text', text: 'Everything up-to-date' }],
+    });
+    mockProc.stdout.push(toolResultEvent + '\n');
+    await new Promise((r) => setTimeout(r, 50));
+
+    // push_detected should have fired
+    expect(pushEvents).toHaveLength(1);
+    expect((pushEvents[0] as { sessionId: string }).sessionId).toBe('push-session');
+
+    // And broadcast as ServerMessage
+    const pushMsgs = messages.filter((m) => m.type === 'push_detected');
+    expect(pushMsgs).toHaveLength(1);
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+  });
+
+  it('does NOT emit push_detected for non-push Bash commands', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+
+    const session = new AgentSession(
+      'no-push-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const pushEvents: unknown[] = [];
+    session.on('push_detected', (payload: unknown) => pushEvents.push(payload));
+
+    const runPromise = session.run();
+
+    const bashToolUseId = 'bash-tu-002';
+    const assistantEvent = JSON.stringify({
+      type: 'assistant',
+      message: {
+        id: 'msg-bash-status',
+        content: [
+          {
+            type: 'tool_use',
+            id: bashToolUseId,
+            name: 'Bash',
+            input: { command: 'git status' },
+          },
+        ],
+      },
+    });
+    mockProc.stdout.push(assistantEvent + '\n');
+
+    const toolResultEvent = JSON.stringify({
+      type: 'tool_result',
+      tool_use_id: bashToolUseId,
+      content: [{ type: 'text', text: 'On branch feature/foo' }],
+    });
+    mockProc.stdout.push(toolResultEvent + '\n');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(pushEvents).toHaveLength(0);
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
   });
 
   // ── AC: pr_opened emitted in handleCleanExit() after upsertPullRequest() ──
