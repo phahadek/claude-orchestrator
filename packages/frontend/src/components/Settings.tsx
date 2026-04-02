@@ -13,7 +13,16 @@ interface SettingsValues {
   plan_tier: string;
   plan_token_cap: string;
   card_preview_lines: string;
+  code_session_model: string;
+  review_session_model: string;
 }
+
+const MODEL_OPTIONS = [
+  { label: '(CLI default)', value: '' },
+  { label: 'claude-opus-4-6', value: 'claude-opus-4-6' },
+  { label: 'claude-sonnet-4-6', value: 'claude-sonnet-4-6' },
+  { label: 'claude-haiku-4-5', value: 'claude-haiku-4-5' },
+];
 
 const PLAN_TIERS: { label: string; cap: number | null }[] = [
   { label: 'Free', cap: 0 },
@@ -175,6 +184,32 @@ export function Settings({ initialTab = 'general', projects }: Props) {
                   >
                     {settings?.auto_review === 'true' ? 'On' : 'Off'}
                   </button>
+                </div>
+
+                <h3 className={styles.sectionTitle}>Models</h3>
+                <div className={styles.field}>
+                  <label className={styles.label}>Code session model</label>
+                  <select
+                    className={styles.select}
+                    value={settings?.code_session_model ?? ''}
+                    onChange={(e) => void handleChange('code_session_model', e.target.value)}
+                  >
+                    {MODEL_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label}>Review session model</label>
+                  <select
+                    className={styles.select}
+                    value={settings?.review_session_model ?? ''}
+                    onChange={(e) => void handleChange('review_session_model', e.target.value)}
+                  >
+                    {MODEL_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
                 </div>
 
                 <h3 className={styles.sectionTitle}>Notifications</h3>

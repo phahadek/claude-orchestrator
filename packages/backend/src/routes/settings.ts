@@ -12,6 +12,8 @@ const SETTING_KEYS = [
   'plan_tier',
   'plan_token_cap',
   'card_preview_lines',
+  'code_session_model',
+  'review_session_model',
 ] as const;
 
 const PLAN_TIER_CAPS: Record<string, number> = {
@@ -40,6 +42,10 @@ function applyToRuntime(key: SettingKey, value: string): void {
     runtimeSettings.plan_token_cap = Number(value);
   } else if (key === 'card_preview_lines') {
     runtimeSettings.card_preview_lines = Number(value);
+  } else if (key === 'code_session_model') {
+    runtimeSettings.code_session_model = value;
+  } else if (key === 'review_session_model') {
+    runtimeSettings.review_session_model = value;
   }
 }
 
@@ -54,8 +60,8 @@ export function loadRuntimeSettingsFromDb(): void {
       let defaultVal: string;
       if (key === 'auto_review') {
         defaultVal = String(runtimeSettings.auto_review);
-      } else if (key === 'plan_tier') {
-        defaultVal = runtimeSettings.plan_tier;
+      } else if (key === 'plan_tier' || key === 'code_session_model' || key === 'review_session_model') {
+        defaultVal = runtimeSettings[key];
       } else {
         defaultVal = String(runtimeSettings[key]);
       }
@@ -72,6 +78,8 @@ function runtimeSettingsAsRecord(): Record<SettingKey, string> {
     plan_tier: runtimeSettings.plan_tier,
     plan_token_cap: String(runtimeSettings.plan_token_cap),
     card_preview_lines: String(runtimeSettings.card_preview_lines),
+    code_session_model: runtimeSettings.code_session_model,
+    review_session_model: runtimeSettings.review_session_model,
   };
 }
 
