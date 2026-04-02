@@ -125,6 +125,7 @@ export interface PullRequestRow {
   head_branch: string | null;
   base_branch: string | null;
   state: string;
+  draft: number;              // 0 | 1 (SQLite boolean)
   review_result: string | null; // JSON
   review_at: string | null;
   created_at: string | null;
