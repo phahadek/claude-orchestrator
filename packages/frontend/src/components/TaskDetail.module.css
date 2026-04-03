@@ -117,6 +117,12 @@
   white-space: nowrap;
 }
 
+.totalTokensBadge {
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
 .notionLink {
   font-size: 0.8rem;
   color: var(--accent);
@@ -272,6 +278,12 @@
 .iterationCount {
   font-size: 0.78rem;
   color: var(--text-faint);
+}
+
+.reviewTokenCount {
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  margin-left: 4px;
 }
 
 /* ── Verdict pill (inline in review header) ───────────────────────── */

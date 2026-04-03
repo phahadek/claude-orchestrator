@@ -201,6 +201,14 @@
   color: var(--text-muted);
 }
 
+/* Token badge */
+.tokenBadge {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-left: auto;
+  margin-right: 4px;
+}
+
 /* Launch button */
 .launchButton {
   background: none;
