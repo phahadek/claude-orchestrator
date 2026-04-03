@@ -5,10 +5,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../db/queries.js', () => ({
   getAllOpenPRs: vi.fn().mockReturnValue([]),
   updatePRState: vi.fn(),
+  updateMergeState: vi.fn(),
 }));
 
 import { PRMergeWatcher } from './PRMergeWatcher';
-import { getAllOpenPRs, updatePRState } from '../db/queries';
+import { getAllOpenPRs, updatePRState, updateMergeState } from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
 import type { SessionManager } from '../session/SessionManager';
 import type { NotionClient } from '../notion/NotionClient';
@@ -20,12 +21,14 @@ import type { PullRequestRow } from '../db/types';
 function makeMockGitHub(): GitHubClient {
   return {
     getPRState: vi.fn().mockResolvedValue('open'),
+    getMergeability: vi.fn().mockResolvedValue({ mergeable: null, mergeableState: null }),
   } as unknown as GitHubClient;
 }
 
 function makeMockSessions(): SessionManager {
   return {
     endSession: vi.fn(),
+    sendOrResume: vi.fn().mockResolvedValue('session-id'),
   } as unknown as SessionManager;
 }
 
@@ -58,6 +61,11 @@ function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
     review_iteration: 1,
     head_sha: null,
     last_reviewed_sha: null,
+    node_id: null,
+    mergeable: null,
+    merge_state: null,
+    merge_state_checked_at: null,
+    pending_push: 0,
     ...overrides,
   };
 }
@@ -187,6 +195,52 @@ describe('PRMergeWatcher.poll()', () => {
   });
 });
 
+// ── checkMergeability / dirty transition ─────────────────────────────────────
+
+describe('PRMergeWatcher dirty-transition sendOrResume', () => {
+  it('calls sendOrResume when merge_state transitions to dirty', async () => {
+    const pr = makePRRow({ merge_state: 'clean', session_id: 'coding-session', base_branch: 'dev' });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    vi.mocked(github.getMergeability).mockResolvedValue({ mergeable: false, mergeableState: 'dirty' });
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(github, sessions, makeMockNotion(), () => {});
+    await watcher.poll();
+
+    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledWith(
+      'coding-session',
+      'PR #42 has merge conflicts with the base branch. Rebase onto `dev`, resolve the conflicts, and push the fixed branch.',
+    );
+  });
+
+  it('does NOT call sendOrResume when merge_state is already dirty', async () => {
+    const pr = makePRRow({ merge_state: 'dirty', session_id: 'coding-session' });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    vi.mocked(github.getMergeability).mockResolvedValue({ mergeable: false, mergeableState: 'dirty' });
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(github, sessions, makeMockNotion(), () => {});
+    await watcher.poll();
+
+    expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call sendOrResume when PR has no session_id', async () => {
+    const pr = makePRRow({ merge_state: 'clean', session_id: null });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    vi.mocked(github.getMergeability).mockResolvedValue({ mergeable: false, mergeableState: 'dirty' });
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(github, sessions, makeMockNotion(), () => {});
+    await watcher.poll();
+
+    expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
+  });
+});
+
 // ── handleMerged() ────────────────────────────────────────────────────────────
 
 describe('PRMergeWatcher.handleMerged()', () => {
@@ -199,7 +253,7 @@ describe('PRMergeWatcher.handleMerged()', () => {
   });
 
   it('broadcasts pr_merged with sha', async () => {
-    const pr = makePRRow();
+    const pr = makePRRow({ notion_task_id: null });
     const messages: ServerMessage[] = [];
     const watcher = new PRMergeWatcher(makeMockGitHub(), makeMockSessions(), makeMockNotion(), (msg) => messages.push(msg));
     await watcher.handleMerged(pr, 'deadbeef');
