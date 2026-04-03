@@ -5,14 +5,13 @@ import styles from './PRPanel.module.css';
 
 interface Props {
   activeProjectId: string | null;
-  onFixSession: (sessionId: string) => void;
   onViewSession?: (sessionId: string) => void;
   onCollapse?: () => void;
   refreshTrigger?: number;
   prReviewEvent?: { prNumber: number; verdict: string; summary: string } | null;
 }
 
-export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollapse, refreshTrigger, prReviewEvent }: Props) {
+export function PRPanel({ activeProjectId, onViewSession, onCollapse, refreshTrigger, prReviewEvent }: Props) {
   const [prs, setPRs] = useState<PRListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [networkError, setNetworkError] = useState(false);
@@ -21,7 +20,6 @@ export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollap
   const [reviewInFlight, setReviewInFlight] = useState<Set<number>>(new Set());
   const [reviewElapsed, setReviewElapsed] = useState<Map<number, number>>(new Map());
   const [mergeInFlight, setMergeInFlight] = useState<Set<number>>(new Set());
-  const [fixInFlight, setFixInFlight] = useState<Set<number>>(new Set());
   const [reReviewInFlight, setReReviewInFlight] = useState<Set<number>>(new Set());
   const [approveInFlight, setApproveInFlight] = useState<Set<number>>(new Set());
   const [removeInFlight, setRemoveInFlight] = useState<Set<number>>(new Set());
@@ -172,33 +170,6 @@ export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollap
       setError(prNumber, 'Merge failed: network error');
     } finally {
       setMergeInFlight((prev) => {
-        const next = new Set(prev);
-        next.delete(prNumber);
-        return next;
-      });
-    }
-  };
-
-  const handleFix = async (prNumber: number) => {
-    if (!activeProjectId) return;
-    setFixInFlight((prev) => new Set(prev).add(prNumber));
-    setError(prNumber, null);
-    try {
-      const res = await fetch(
-        `/api/prs/${prNumber}/fix?projectId=${encodeURIComponent(activeProjectId)}`,
-        { method: 'POST' },
-      );
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: 'Unknown error' })) as { error?: string };
-        setError(prNumber, `Fix failed: ${body.error ?? 'Unknown error'}`);
-        return;
-      }
-      const { sessionId } = await res.json() as { sessionId: string };
-      onFixSession(sessionId);
-    } catch {
-      setError(prNumber, 'Fix failed: network error');
-    } finally {
-      setFixInFlight((prev) => {
         const next = new Set(prev);
         next.delete(prNumber);
         return next;
@@ -359,14 +330,12 @@ export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollap
               pr={pr}
               onReview={handleReview}
               onMerge={handleMerge}
-              onFix={handleFix}
               onRemove={handleRemovePR}
               onViewSession={onViewSession}
               onReReview={handleReReview}
               onApprove={handleApprove}
               reviewInFlight={reviewInFlight.has(pr.prNumber)}
               mergeInFlight={mergeInFlight.has(pr.prNumber)}
-              fixInFlight={fixInFlight.has(pr.prNumber)}
               removeInFlight={removeInFlight.has(pr.prNumber)}
               reReviewInFlight={reReviewInFlight.has(pr.prNumber)}
               approveInFlight={approveInFlight.has(pr.prNumber)}

@@ -27,13 +27,11 @@ function makePR(overrides: Partial<PRListItem> = {}): PRListItem {
 const defaultProps = {
   onReview: vi.fn(),
   onMerge: vi.fn(),
-  onFix: vi.fn(),
   onRemove: vi.fn(),
   onReReview: vi.fn(),
   onApprove: vi.fn(),
   reviewInFlight: false,
   mergeInFlight: false,
-  fixInFlight: false,
   removeInFlight: false,
   reReviewInFlight: false,
   approveInFlight: false,
@@ -73,36 +71,49 @@ describe('PRCard', () => {
     expect(mergeBtn.hasAttribute('disabled')).toBe(false);
   });
 
-  it('shows Send to Session button when verdict is needs_changes', () => {
-    const pr = makePR({ reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' } });
-    render(<PRCard pr={pr} {...defaultProps} />);
-    expect(screen.getByText(/send to session/i)).toBeDefined();
+  it('shows "Run Review" button when no prior review exists', () => {
+    render(<PRCard pr={makePR()} {...defaultProps} />);
+    expect(screen.getByRole('button', { name: /run review/i })).toBeDefined();
   });
 
-  it('shows Send to Session button when verdict is incomplete', () => {
-    const pr = makePR({ reviewResult: { verdict: 'incomplete', dimensions: [], summary: '' } });
+  it('shows "Re-review" button when verdict is needs_changes and coding session is alive', () => {
+    const pr = makePR({ sessionId: 'session-123', reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' } });
     render(<PRCard pr={pr} {...defaultProps} />);
-    expect(screen.getByText(/send to session/i)).toBeDefined();
+    expect(screen.getByRole('button', { name: /re-review/i })).toBeDefined();
   });
 
-  it('does not show Send to Session button when verdict is approved', () => {
+  it('shows "Re-review" button when verdict is incomplete and coding session is alive', () => {
+    const pr = makePR({ sessionId: 'session-123', reviewResult: { verdict: 'incomplete', dimensions: [], summary: '' } });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    expect(screen.getByRole('button', { name: /re-review/i })).toBeDefined();
+  });
+
+  it('hides the review button when verdict is approved', () => {
     const pr = makePR({ reviewResult: { verdict: 'approved', dimensions: [], summary: '' } });
     render(<PRCard pr={pr} {...defaultProps} />);
-    expect(screen.queryByText(/send to session/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /run review/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /re-review/i })).toBeNull();
   });
 
-  it('calls onFix with prNumber when Send to Session is clicked', () => {
-    const onFix = vi.fn();
-    const pr = makePR({ prNumber: 7, reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' } });
-    render(<PRCard pr={pr} {...defaultProps} onFix={onFix} />);
-    fireEvent.click(screen.getByText(/send to session/i));
-    expect(onFix).toHaveBeenCalledWith(7);
+  it('shows "Run Review" (not "Re-review") when verdict is needs_changes but coding session is dead', () => {
+    const pr = makePR({ sessionId: null, reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' } });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    expect(screen.getByRole('button', { name: /run review/i })).toBeDefined();
+    expect(screen.queryByRole('button', { name: /re-review/i })).toBeNull();
   });
 
-  it('disables Send to Session button when fixInFlight is true', () => {
-    const pr = makePR({ reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' } });
-    render(<PRCard pr={pr} {...defaultProps} fixInFlight={true} />);
-    const btn = screen.getByRole('button', { name: /sending/i });
+  it('calls onReReview when "Re-review" button is clicked', () => {
+    const onReReview = vi.fn();
+    const pr = makePR({ prNumber: 7, sessionId: 'session-abc', reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' } });
+    render(<PRCard pr={pr} {...defaultProps} onReReview={onReReview} />);
+    fireEvent.click(screen.getByRole('button', { name: /re-review/i }));
+    expect(onReReview).toHaveBeenCalledWith(7);
+  });
+
+  it('disables "Re-review" button when reReviewInFlight is true', () => {
+    const pr = makePR({ sessionId: 'session-123', reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' } });
+    render(<PRCard pr={pr} {...defaultProps} reReviewInFlight={true} />);
+    const btn = screen.getByRole('button', { name: /reviewing/i });
     expect(btn.hasAttribute('disabled')).toBe(true);
   });
 
