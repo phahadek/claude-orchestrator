@@ -14,7 +14,6 @@ import {
   setPRReviewResult,
   updatePRDraftStatus,
 } from '../db/queries';
-import { PRSyncJob } from '../github/PRSyncJob';
 import { GitHubApiError } from '../github/types';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { PRReviewService } from '../github/PRReviewService';
@@ -93,17 +92,6 @@ export function createPrsRouter(
       reviewIteration: pr.review_iteration,
     }));
     res.json(items);
-  });
-
-  // ── GET /api/prs/sync ───────────────────────────────────────────────────────
-  router.get('/prs/sync', async (_req: Request, res: Response) => {
-    const job = new PRSyncJob(github);
-    try {
-      await job.run();
-      res.json({ ok: true });
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
-    }
   });
 
   // ── POST /api/prs/:prNumber/review ──────────────────────────────────────────
@@ -292,14 +280,12 @@ export function createPrsRouter(
     };
     setPRReviewResult(prNumber, repo, JSON.stringify(result));
 
-    // Transition draft → ready on GitHub
-    if (prRow.draft === 1) {
-      try {
-        await github.markPRReady(repo, prNumber);
-        updatePRDraftStatus(prNumber, repo, 0);
-      } catch (e) {
-        console.error(`[prs] markPRReady failed for PR #${prNumber}:`, e);
-      }
+    // Transition draft → ready on GitHub (always attempt; handles "already not a draft" gracefully)
+    try {
+      await github.markPRReady(repo, prNumber);
+      updatePRDraftStatus(prNumber, repo, 0);
+    } catch (e) {
+      console.warn(`[prs] markPRReady skipped for PR #${prNumber}:`, e);
     }
 
     // Update Notion task to In Review
