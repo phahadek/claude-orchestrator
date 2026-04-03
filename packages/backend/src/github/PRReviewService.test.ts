@@ -820,47 +820,6 @@ describe('PRReviewService.reviewPR() — approved verdict calls handleApprovedVe
   });
 });
 
-// ── sendReReview() ────────────────────────────────────────────────────────────
-
-describe('PRReviewService.sendReReview()', () => {
-  it('sends follow-up message to review session and waits for next verdict', async () => {
-    const claudePayload = {
-      verdict: 'approved',
-      dimensions: [
-        { name: 'Diff vs Context spec', passed: true, notes: 'Fixed.' },
-      ],
-      summary: 'Issues addressed.',
-    };
-
-    const mockSM = makeMockSessionManager();
-    const service = new PRReviewService(
-      makeMockGitHub(),
-      makeMockNotion(),
-      mockSM as any,
-      'proj-1',
-      'https://notion.so/ctx',
-    );
-
-    const sendMock = mockSM.send as ReturnType<typeof vi.fn>;
-    sendMock.mockImplementationOnce(() => {
-      setImmediate(() =>
-        mockSM.emit('message', makeSessionEventMessage('review-session-id', JSON.stringify(claudePayload))),
-      );
-    });
-
-    const result = await service.sendReReview('review-session-id', 42, 'owner/repo', 2, 3);
-
-    expect(sendMock).toHaveBeenCalledOnce();
-    const [sessionId, msg] = sendMock.mock.calls[0];
-    expect(sessionId).toBe('review-session-id');
-    expect(msg).toContain('re-review');
-    expect(msg).toContain('2/3');
-
-    expect(result.verdict).toBe('approved');
-    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledOnce();
-  });
-});
-
 // ── reviewPR() — session reuse logic ─────────────────────────────────────────
 
 describe('PRReviewService.reviewPR() — session reuse', () => {

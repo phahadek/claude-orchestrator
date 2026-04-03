@@ -24,7 +24,7 @@ import { PRMergeWatcher } from './github/PRMergeWatcher';
 import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
 import { getActiveSessions, getEventsBySession, getDenialsBySession, deleteGhostSessions, getPRByNotionTaskId, getPRBySessionId, setPRReviewResult, setLastReviewedSha, setHeadSha, getSetting } from './db/queries';
 import { isSystemOnlyUserEvent } from './utils/eventFilters';
-import { shouldAutoReview } from './github/reviewUtils';
+import { shouldAutoReview, formatReviewFeedback } from './github/reviewUtils';
 import type { PRReviewResult } from './github/PRReviewService';
 
 runMigrations();
@@ -100,20 +100,6 @@ function getMaxReviewIterations(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_REVIEW_ITERATIONS;
 }
 
-function sendFeedbackToCodingSession(codingSessionId: string, result: PRReviewResult, iteration: number): void {
-  const failingDimensions = (result.dimensions ?? []).filter((d) => !d.passed);
-  const dimensionLines = failingDimensions.length > 0
-    ? failingDimensions.map((d) => `- **${d.name}**: ${d.notes}`).join('\n')
-    : '(no specific dimension failures recorded)';
-  const message =
-    `## Review Feedback — Iteration ${iteration}\n\n` +
-    `**Verdict:** ${result.verdict === 'needs_changes' ? 'Needs changes' : 'Incomplete'}\n\n` +
-    `### Issues found:\n${dimensionLines}\n\n` +
-    `**Overall:** ${result.summary}\n\n` +
-    `Please address these issues and push your changes. ` +
-    `The orchestrator will automatically re-review.`;
-  sessionManager.send(codingSessionId, message);
-}
 
 sessionManager.on('push_detected', ({ sessionId: codingSessionId }: { sessionId: string }) => {
   if (!AUTO_REVIEW_ENABLED) return;
@@ -182,7 +168,7 @@ sessionManager.on('push_detected', ({ sessionId: codingSessionId }: { sessionId:
       });
 
       if (result.verdict === 'needs_changes') {
-        sendFeedbackToCodingSession(codingSessionId, result, iteration);
+        sessionManager.send(codingSessionId, formatReviewFeedback(result, iteration));
       } else if (result.verdict === 'incomplete') {
         const message = `Review for PR #${prRow.pr_number} returned an incomplete verdict — the reviewer could not assess the PR. Manual intervention needed.`;
         console.warn(`[server] ${message}`);

@@ -147,28 +147,6 @@ export class PRReviewService {
   }
 
   /**
-   * Send a re-review follow-up message to an existing review session and wait
-   * for the next verdict JSON block in the event stream.
-   */
-  async sendReReview(
-    reviewSessionId: string,
-    prNumber: number,
-    repo: string,
-    iteration: number,
-    maxIterations: number = 3,
-  ): Promise<PRReviewResult> {
-    const msg =
-      `The PR has been updated (new commits detected). Please re-review the changes. ` +
-      `This is review iteration ${iteration}/${maxIterations}.`;
-    this.sessionManager.send(reviewSessionId, msg);
-    const aiResult = await this.waitForVerdict(reviewSessionId, prNumber, repo);
-    const { mergeable } = await this.github.getMergeability(prNumber, repo);
-    const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
-    setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
-    return finalResult;
-  }
-
-  /**
    * Send a re-review follow-up to the existing review session for the given PR.
    * Uses sendOrResume() so it works even if the review session has exited.
    * Falls back to a fresh reviewPR() if no review_session_id is set on the PR row.
