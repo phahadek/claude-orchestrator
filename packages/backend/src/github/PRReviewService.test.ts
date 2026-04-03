@@ -598,7 +598,7 @@ describe('PRReviewService — merge conflict dimension', () => {
     expect(result.verdict).toBe('needs_changes');
   });
 
-  it('treats mergeable=null as failed (GitHub still computing — unknown is not passing)', async () => {
+  it('skips Merge conflicts dimension when mergeable=null (GitHub still computing), preserving AI verdict', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
 
     const mockSM = makeMockSessionManager();
@@ -615,12 +615,15 @@ describe('PRReviewService — merge conflict dimension', () => {
 
     const result = await service.reviewPR(42, 'owner/repo');
 
+    // No Merge conflicts dimension appended — GitHub hasn't computed it yet
     const conflictDim = result.dimensions!.find((d) => d.name === 'Merge conflicts');
-    expect(conflictDim!.passed).toBe(false);
-    expect(result.verdict).toBe('needs_changes');
+    expect(conflictDim).toBeUndefined();
+    // AI verdict (approved) is preserved — not downgraded to needs_changes
+    expect(result.verdict).toBe('approved');
+    expect(result.dimensions).toHaveLength(4);
   });
 
-  it('preserves incomplete verdict when session killed with mergeable=null (killed-session bug)', async () => {
+  it('preserves incomplete verdict when session killed with mergeable=null, no conflict dim appended', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
     // Empty events → parseReviewResult returns incomplete (JSON parse failure)
     vi.mocked(getEventsBySession).mockReturnValue([]);
@@ -641,8 +644,9 @@ describe('PRReviewService — merge conflict dimension', () => {
     const result = await service.reviewPR(42, 'owner/repo');
 
     expect(result.verdict).toBe('incomplete');
-    const conflictDim = result.dimensions!.find((d) => d.name === 'Merge conflicts');
-    expect(conflictDim!.passed).toBe(false);
+    // mergeable=null → dimension is skipped entirely
+    const conflictDim = result.dimensions?.find((d) => d.name === 'Merge conflicts');
+    expect(conflictDim).toBeUndefined();
   });
 
   it('preserves incomplete verdict when session killed with mergeable=true', async () => {
