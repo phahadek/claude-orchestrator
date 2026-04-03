@@ -219,6 +219,12 @@ export function useSessionStore() {
     }
     if (msg.type === 'task_updated') {
       setLastTaskUpdate(msg.task);
+      // Keep the tasks array (used by MilestoneProgress) in sync
+      setTasks((prev) => prev.map((t) =>
+        t.task.id === msg.task.taskId
+          ? { ...t, task: { ...t.task, status: msg.task.notionStatus }, blocked: msg.task.blocked }
+          : t,
+      ));
     }
     if (msg.type === 'review_incomplete') {
       setIncompleteReviews((prev) => [...prev, { prNumber: msg.prNumber, repo: msg.repo, message: msg.message }]);

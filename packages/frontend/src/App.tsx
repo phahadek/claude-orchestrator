@@ -208,6 +208,18 @@ export default function App() {
       .catch(() => {/* non-critical */});
   }, [activeProjectId, activeBoardId, tasksReady, taskListRefreshTrigger]);
 
+  // Merge a single task update in-place so TaskDetail sees live changes without a full re-fetch
+  useEffect(() => {
+    if (!lastTaskUpdate) return;
+    setTaskViews((prev) => {
+      const idx = prev.findIndex((t) => t.taskId === lastTaskUpdate.taskId);
+      if (idx < 0) return prev;
+      const next = [...prev];
+      next[idx] = lastTaskUpdate;
+      return next;
+    });
+  }, [lastTaskUpdate]);
+
   useEffect(() => {
     for (const session of sessions) {
       if (
