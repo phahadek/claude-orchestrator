@@ -5,7 +5,7 @@ import { ProjectSwitcher } from './ProjectSwitcher';
 import { MilestoneProgress } from './MilestoneProgress';
 import styles from './Header.module.css';
 
-export type TopView = 'tasks' | 'sessions' | 'prs' | 'settings';
+export type TopView = 'tasks' | 'sessions' | 'prs' | 'analytics' | 'settings';
 
 interface Props {
   projects: ProjectConfig[];
@@ -55,6 +55,13 @@ export function Header({ projects, activeProjectId, onProjectChange, activeBoard
         </button>
         <button
           type="button"
+          className={`${styles.navLink}${activeView === 'analytics' ? ` ${styles.navLinkActive}` : ''}`}
+          onClick={() => onViewChange('analytics')}
+        >
+          Analytics
+        </button>
+        <button
+          type="button"
           className={`${styles.navLink}${activeView === 'settings' ? ` ${styles.navLinkActive}` : ''}`}
           onClick={() => onViewChange('settings')}
         >
@@ -90,10 +97,15 @@ export function Header({ projects, activeProjectId, onProjectChange, activeBoard
       {totalTokens != null && totalTokens > 0 && (
         <>
           <div className={styles.divider} />
-          <span className={styles.tokenSummary}>
+          <button
+            type="button"
+            className={styles.tokenSummary}
+            onClick={() => onViewChange('analytics')}
+            title="View token analytics"
+          >
             {formatTokenCount(totalTokens)} tokens
             {totalCost != null && totalCost > 0 ? ` (~${formatCost(totalCost)})` : ''}
-          </span>
+          </button>
         </>
       )}
     </header>
