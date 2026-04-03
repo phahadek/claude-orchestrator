@@ -71,6 +71,7 @@ function ReadySection({
   project,
   isExpanded,
   onToggleCollapse,
+  onOptimisticDispatch,
 }: {
   tasks: TaskView[];
   nonCodeTasks: TaskView[];
@@ -79,6 +80,7 @@ function ReadySection({
   project: ProjectConfig | null;
   isExpanded: boolean;
   onToggleCollapse: () => void;
+  onOptimisticDispatch: (taskIds: string[]) => void;
 }) {
   const dispatch = useDispatch(send, project);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
@@ -109,6 +111,9 @@ function ReadySection({
       .map((t) => ({ taskUrl: t.notionUrl, taskType: t.taskType }));
     if (toDispatch.length === 0) return;
     dispatch(toDispatch);
+    if (project) {
+      onOptimisticDispatch(wave1CodeTasks.filter((t) => checkedIds.has(t.taskId)).map((t) => t.taskId));
+    }
     setCheckedIds(new Set());
   }
 
@@ -165,7 +170,7 @@ function ReadySection({
         {waveNumbers.map((wave) => {
           const waveTasks = waveMap.get(wave)!;
           const isCollapsed = collapsedWaves.has(wave);
-          const isExpanded = !isCollapsed;
+          const isWaveExpanded = !isCollapsed;
 
           return (
             <div key={wave} className={styles.waveGroup} data-testid={`wave-group-${wave}`}>
@@ -173,18 +178,18 @@ function ReadySection({
                 className={styles.waveHeader}
                 onClick={() => { if (wave > 1) toggleWaveCollapse(wave); }}
                 role={wave > 1 ? 'button' : undefined}
-                aria-expanded={wave > 1 ? isExpanded : undefined}
+                aria-expanded={wave > 1 ? isWaveExpanded : undefined}
                 data-testid={`wave-header-${wave}`}
               >
                 <span className={styles.waveLabel}>Wave {wave}</span>
                 {wave > 1 && (
                   <span className={styles.waveToggle} aria-hidden="true">
-                    {isExpanded ? '▾' : '▸'}
+                    {isWaveExpanded ? '▾' : '▸'}
                   </span>
                 )}
               </div>
 
-              {isExpanded && waveTasks.map((task) => (
+              {isWaveExpanded && waveTasks.map((task) => (
                 <CompactTaskCard
                   key={task.taskId}
                   task={task}
@@ -226,6 +231,7 @@ function ReadySection({
 export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTask, lastTaskUpdate, reviewRefreshTrigger, send, project }: Props) {
   const [tasks, setTasks] = useState<TaskView[]>([]);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set(['done']));
 
   const toggleGroup = useCallback((status: string) => {
@@ -269,34 +275,69 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
     void fetchTasks();
   }, [reviewRefreshTrigger, fetchTasks]);
 
-  // Merge a single task in-place when a task_updated WS message arrives
+  // Merge a single task in-place when a task_updated WS message arrives.
+  // Unknown task IDs are ignored — do not add phantom entries.
   useEffect(() => {
     if (!lastTaskUpdate) return;
     setTasks((prev) => {
       const idx = prev.findIndex((t) => t.taskId === lastTaskUpdate.taskId);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = lastTaskUpdate;
-        return next;
-      }
-      // New task not yet in list — append it
-      return [...prev, lastTaskUpdate];
+      if (idx < 0) return prev;
+      const next = [...prev];
+      next[idx] = lastTaskUpdate;
+      return next;
     });
   }, [lastTaskUpdate]);
 
+  const handleOptimisticDispatch = useCallback((taskIds: string[]) => {
+    setTasks((prev) => prev.map((t) =>
+      taskIds.includes(t.taskId)
+        ? { ...t, notionStatus: '🔄 In Progress', displayStatus: 'in_progress' as DisplayStatus }
+        : t,
+    ));
+  }, []);
+
+  const handleSync = useCallback(() => {
+    if (!activeProjectId || syncing) return;
+    setSyncing(true);
+    send({ type: 'fetch_tasks', projectId: activeProjectId, boardId: boardId ?? undefined, skipCache: true });
+    void fetchTasks().finally(() => setSyncing(false));
+  }, [activeProjectId, boardId, syncing, send, fetchTasks]);
+
+  const syncButton = (
+    <div className={styles.listHeader}>
+      <button
+        className={`${styles.syncBtn}${syncing ? ` ${styles.syncBtnLoading}` : ''}`}
+        onClick={handleSync}
+        disabled={syncing || !activeProjectId}
+        aria-busy={syncing}
+        title="Sync tasks from Notion"
+        data-testid="sync-btn"
+      >
+        <span className={styles.syncIcon} aria-hidden="true">↻</span>
+        {syncing ? 'Syncing…' : 'Sync'}
+      </button>
+    </div>
+  );
+
   if (loading) {
     return (
-      <div className={styles.loading} data-testid="task-list-loading">
-        <span className={styles.loadingSpinner} aria-hidden="true" />
-        <span>Loading tasks…</span>
+      <div className={styles.taskListContainer}>
+        {syncButton}
+        <div className={styles.loading} data-testid="task-list-loading">
+          <span className={styles.loadingSpinner} aria-hidden="true" />
+          <span>Loading tasks…</span>
+        </div>
       </div>
     );
   }
 
   if (tasks.length === 0) {
     return (
-      <div className={styles.empty} data-testid="task-list-empty">
-        No active tasks found.
+      <div className={styles.taskListContainer}>
+        {syncButton}
+        <div className={styles.empty} data-testid="task-list-empty">
+          No active tasks found.
+        </div>
       </div>
     );
   }
@@ -326,81 +367,84 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
   }
 
   return (
-    <div className={styles.taskList} data-testid="task-list">
-      {GROUP_ORDER.map((status) => {
-        if (status === 'ready') {
-          // Compact wave-grouped section for ready tasks
-          if (!hasReadyTasks) return null;
+    <div className={styles.taskListContainer}>
+      {syncButton}
+      <div className={styles.taskList} data-testid="task-list">
+        {GROUP_ORDER.map((status) => {
+          if (status === 'ready') {
+            // Compact wave-grouped section for ready tasks
+            if (!hasReadyTasks) return null;
+            return (
+              <ReadySection
+                key="ready"
+                tasks={readyCodeTasks}
+                nonCodeTasks={readyNonCodeTasks}
+                onSelectTask={onSelectTask}
+                send={send}
+                project={project}
+                isExpanded={!collapsed.has('ready')}
+                onToggleCollapse={() => toggleGroup('ready')}
+                onOptimisticDispatch={handleOptimisticDispatch}
+              />
+            );
+          }
+
+          const groupTasks = nonReadyGroupMap.get(status) ?? [];
+          if (groupTasks.length === 0) return null;
+
+          const isExpanded = !collapsed.has(status);
+          const label = GROUP_LABELS[status];
+
           return (
-            <ReadySection
-              key="ready"
-              tasks={readyCodeTasks}
-              nonCodeTasks={readyNonCodeTasks}
-              onSelectTask={onSelectTask}
-              send={send}
-              project={project}
-              isExpanded={!collapsed.has('ready')}
-              onToggleCollapse={() => toggleGroup('ready')}
-            />
+            <div key={status} className={styles.group} data-status={status}>
+              <div
+                className={`${styles.groupHeader} ${styles.groupHeaderToggle}`}
+                onClick={() => toggleGroup(status)}
+                role="button"
+                aria-expanded={isExpanded}
+                data-testid={`group-header-${status}`}
+              >
+                <span className={styles.groupLabel}>{label}</span>
+                <span className={styles.groupCount}>{groupTasks.length}</span>
+                <span className={styles.toggle} aria-hidden="true">
+                  {isExpanded ? '▼' : '▶'}
+                </span>
+              </div>
+
+              {isExpanded && (
+                <div className={styles.groupCards}>
+                  {groupTasks.map((task) => (
+                    <TaskCard
+                      key={task.taskId}
+                      task={task}
+                      selected={task.taskId === selectedTaskId}
+                      onClick={() => onSelectTask(task.taskId)}
+                      send={send}
+                      project={project}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
           );
-        }
+        })}
 
-        const groupTasks = nonReadyGroupMap.get(status) ?? [];
-        if (groupTasks.length === 0) return null;
-
-        const isExpanded = !collapsed.has(status);
-        const label = GROUP_LABELS[status];
-
-        return (
-          <div key={status} className={styles.group} data-status={status}>
+        {nonReadyNonCodeTasks.length > 0 && (
+          <div className={`${styles.group} ${styles.nonCodeGroup}`} data-testid="non-code-section">
             <div
               className={`${styles.groupHeader} ${styles.groupHeaderToggle}`}
-              onClick={() => toggleGroup(status)}
+              onClick={() => toggleGroup('planning')}
               role="button"
-              aria-expanded={isExpanded}
-              data-testid={`group-header-${status}`}
+              aria-expanded={!collapsed.has('planning')}
+              data-testid="group-header-planning"
             >
-              <span className={styles.groupLabel}>{label}</span>
-              <span className={styles.groupCount}>{groupTasks.length}</span>
               <span className={styles.toggle} aria-hidden="true">
-                {isExpanded ? '▼' : '▶'}
+                {!collapsed.has('planning') ? '▼' : '▶'}
               </span>
+              <span className={styles.groupLabel}>📋 Planning / Testing</span>
+              <span className={styles.groupCount}>{nonReadyNonCodeTasks.length}</span>
             </div>
-
-            {isExpanded && (
-              <div className={styles.groupCards}>
-                {groupTasks.map((task) => (
-                  <TaskCard
-                    key={task.taskId}
-                    task={task}
-                    selected={task.taskId === selectedTaskId}
-                    onClick={() => onSelectTask(task.taskId)}
-                    send={send}
-                    project={project}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })}
-
-      {nonReadyNonCodeTasks.length > 0 && (
-        <div className={`${styles.group} ${styles.nonCodeGroup}`} data-testid="non-code-section">
-          <div
-            className={`${styles.groupHeader} ${styles.groupHeaderToggle}`}
-            onClick={() => toggleGroup('planning')}
-            role="button"
-            aria-expanded={!collapsed.has('planning')}
-            data-testid="group-header-planning"
-          >
-            <span className={styles.toggle} aria-hidden="true">
-              {!collapsed.has('planning') ? '▼' : '▶'}
-            </span>
-            <span className={styles.groupLabel}>📋 Planning / Testing</span>
-            <span className={styles.groupCount}>{nonReadyNonCodeTasks.length}</span>
-          </div>
-          {!collapsed.has('planning') && (
+            {!collapsed.has('planning') && (
             <div className={styles.groupCards}>
               {nonReadyNonCodeTasks.map((task) => (
                 <TaskCard
@@ -413,9 +457,10 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
                 />
               ))}
             </div>
-          )}
-        </div>
-      )}
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
