@@ -713,17 +713,17 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
     FROM task_cache tc
     LEFT JOIN sessions cs ON cs.session_id = (
       SELECT session_id FROM sessions
-      WHERE notion_task_id = tc.notion_task_id AND session_type = 'standard'
+      WHERE REPLACE(notion_task_id, '-', '') = REPLACE(tc.notion_task_id, '-', '') AND session_type = 'standard'
       ORDER BY started_at DESC LIMIT 1
     )
     LEFT JOIN sessions rs ON rs.session_id = (
       SELECT session_id FROM sessions
-      WHERE notion_task_id = tc.notion_task_id AND session_type = 'review'
+      WHERE REPLACE(notion_task_id, '-', '') = REPLACE(tc.notion_task_id, '-', '') AND session_type = 'review'
       ORDER BY started_at DESC LIMIT 1
     )
     LEFT JOIN pull_requests pr ON pr.id = (
       SELECT id FROM pull_requests
-      WHERE notion_task_id = tc.notion_task_id
+      WHERE REPLACE(notion_task_id, '-', '') = REPLACE(tc.notion_task_id, '-', '')
       ORDER BY pr_number DESC LIMIT 1
     )
     WHERE tc.notion_task_id IN (${placeholders})
