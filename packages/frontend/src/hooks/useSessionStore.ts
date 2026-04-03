@@ -227,6 +227,14 @@ export function useSessionStore() {
     if (msg.type === 'task_updated') {
       setLastTaskUpdate(msg.task);
     }
+    if (msg.type === 'pr_merged') {
+      setTaskListRefreshTrigger((n) => n + 1);
+      setPrRefreshTrigger((n) => n + 1);
+    }
+    if (msg.type === 'pr_closed') {
+      setTaskListRefreshTrigger((n) => n + 1);
+      setPrRefreshTrigger((n) => n + 1);
+    }
     if (msg.type === 'review_incomplete') {
       setIncompleteReviews((prev) => [...prev, { prNumber: msg.prNumber, repo: msg.repo, message: msg.message }]);
     }
