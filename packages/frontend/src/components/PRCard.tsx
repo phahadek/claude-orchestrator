@@ -77,7 +77,7 @@ export function PRCard({
 
   const isFinished = pr.state === 'merged' || pr.state === 'closed';
   const verdict = pr.reviewResult?.verdict ?? null;
-  const hasConflicts = pr.mergeState === 'dirty';
+  const hasConflicts = !isFinished && pr.mergeState === 'dirty';
   const canMerge = pr.state === 'open' && verdict === 'approved' && !hasConflicts;
   const sessionAlive = pr.sessionId !== null;
   // Single context-aware review action:
