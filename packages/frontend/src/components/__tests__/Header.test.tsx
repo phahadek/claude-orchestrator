@@ -13,11 +13,19 @@ describe('Header', () => {
     onViewChange: vi.fn(),
   };
 
-  it('renders Sessions, PRs, and Settings nav buttons', () => {
+  it('renders Tasks, Sessions, PRs, and Settings nav buttons', () => {
     render(<Header {...defaultProps} />);
+    expect(screen.getByRole('button', { name: 'Tasks' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Sessions' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'PRs' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Settings' })).toBeDefined();
+  });
+
+  it('calls onViewChange with "tasks" when Tasks button is clicked', () => {
+    const onViewChange = vi.fn();
+    render(<Header {...defaultProps} onViewChange={onViewChange} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Tasks' }));
+    expect(onViewChange).toHaveBeenCalledWith('tasks');
   });
 
   it('calls onViewChange with "prs" when PRs button is clicked', () => {
