@@ -418,7 +418,10 @@ export function updateTaskCacheStatus(taskId: string, status: string): void {
   if (!row) return;
   try {
     const parsed = JSON.parse(row.raw_json);
-    if (parsed?.properties?.Status?.select) {
+    // NotionTask stores status at top-level; raw Notion API uses properties.Status.select.name
+    if ('status' in parsed) {
+      parsed.status = status;
+    } else if (parsed?.properties?.Status?.select) {
       parsed.properties.Status.select.name = status;
     }
     stmtUpsertTaskCache.run({
