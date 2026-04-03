@@ -207,10 +207,24 @@ describe('TaskCard', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
 
-  it('Launch button is disabled when task status is not Ready', () => {
+  it('Launch button is disabled when task status is "🔄 In Progress"', () => {
     render(
       <TaskCard
         task={makeTask({ notionStatus: '🔄 In Progress', displayStatus: 'in_progress', taskType: '💻 Code', blocked: false })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />
+    );
+    const btn = screen.getByRole('button', { name: /task is not ready/i });
+    expect((btn as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('Launch button is disabled when task status is "👀 In Review"', () => {
+    render(
+      <TaskCard
+        task={makeTask({ notionStatus: '👀 In Review', displayStatus: 'in_review', taskType: '💻 Code', blocked: false })}
         selected={false}
         onClick={vi.fn()}
         send={noop}
