@@ -42,6 +42,23 @@ export class PRReviewService {
       throw new Error(`PR #${prNumber} in ${repo} not found in database`);
     }
 
+    const existingReviewSessionId = prRow.review_session_id;
+
+    // Case 1: Live review session exists — send follow-up, do not spawn a new session.
+    // review_session_id is intentionally NOT updated in this path.
+    if (existingReviewSessionId && this.sessionManager.isAlive(existingReviewSessionId)) {
+      const verdictPromise = this.waitForVerdict(existingReviewSessionId, prNumber, repo);
+      this.sessionManager.send(existingReviewSessionId, 'The PR has been updated. Please re-review the latest changes.');
+      const aiResult = await verdictPromise;
+      const { mergeable } = await this.github.getMergeability(prNumber, repo);
+      const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
+      setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
+      if (finalResult.verdict === 'approved') {
+        await this.handleApprovedVerdict(prNumber, repo, prRow.notion_task_id);
+      }
+      return finalResult;
+    }
+
     const [prData, diffData] = await Promise.all([
       this.github.listOpenPRs().then((prs) => {
         const found = prs.find((p) => p.id === prNumber);
@@ -59,6 +76,23 @@ export class PRReviewService {
     const taskUrl = `https://www.notion.so/${prRow.notion_task_id}`;
     const prompt = this.buildPrompt(prData, diffData, taskPage);
 
+    // Case 2: Dead existing review session — resume via sendOrResume with the
+    // original session ID (do NOT generate a new one here). The returned value
+    // is the actual session ID used (may be a new resumed session ID).
+    if (existingReviewSessionId) {
+      const resumedSessionId = await this.sessionManager.sendOrResume(existingReviewSessionId, prompt);
+      setReviewSessionId(prNumber, repo, resumedSessionId);
+      const aiResult = await this.waitForVerdict(resumedSessionId, prNumber, repo);
+      const { mergeable } = await this.github.getMergeability(prNumber, repo);
+      const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
+      setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
+      if (finalResult.verdict === 'approved') {
+        await this.handleApprovedVerdict(prNumber, repo, prRow.notion_task_id);
+      }
+      return finalResult;
+    }
+
+    // Case 3: No prior review session — spawn a fresh session.
     // Generate the session ID before starting so the verdict listener can be
     // subscribed before any events are emitted. Without this, fast reviews
     // (verdict emitted within seconds, before waitForVerdict subscribes) are
