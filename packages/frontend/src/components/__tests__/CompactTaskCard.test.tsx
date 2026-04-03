@@ -18,6 +18,7 @@ function makeTask(overrides: Partial<TaskView> = {}): TaskView {
     codeSession: null,
     pr: null,
     review: null,
+    totalTokens: { input: 0, output: 0 },
     ...overrides,
   };
 }
