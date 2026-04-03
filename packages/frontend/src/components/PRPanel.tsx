@@ -162,7 +162,9 @@ export function PRPanel({ activeProjectId, onViewSession, onCollapse, refreshTri
       );
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: 'Unknown error' })) as { error?: string };
-        setError(prNumber, `Merge failed: ${body.error ?? 'Unknown error'}`);
+        let errorMsg = body.error ?? 'Unknown error';
+        try { errorMsg = (JSON.parse(errorMsg) as { message?: string }).message ?? errorMsg; } catch { /* not JSON */ }
+        setError(prNumber, `Merge failed: ${errorMsg}`);
         return;
       }
       await fetchPRs();

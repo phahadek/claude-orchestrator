@@ -222,16 +222,24 @@ export function createPrsRouter(
 
       res.json(result);
     } catch (err) {
-      if (err instanceof GitHubApiError) {
-        if (err.status === 409 || err.status === 405) {
-          // Merge conflict or not mergeable — persist the conflict state
-          updateMergeState(prNumber, repo, 0, 'dirty');
-          _broadcast({ type: 'pr_state_changed', prNumber, repo, mergeable: false, mergeState: 'dirty' });
-          if (prRow?.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
-          res.status(422).json({ error: 'PR has merge conflicts. Use Re-review to have the code session fix them.' });
-          return;
-        }
-        res.status(422).json({ error: err.message });
+      // Check for GitHubApiError by class or by duck-typing (.status property),
+      // since instanceof can fail across module boundaries in some build configs.
+      const errStatus: number | null =
+        err instanceof GitHubApiError
+          ? err.status
+          : typeof (err as GitHubApiError).status === 'number'
+            ? (err as GitHubApiError).status
+            : null;
+      if (errStatus === 409 || errStatus === 405) {
+        // Merge conflict or not mergeable — persist the conflict state
+        updateMergeState(prNumber, repo, 0, 'dirty');
+        _broadcast({ type: 'pr_state_changed', prNumber, repo, mergeable: false, mergeState: 'dirty' });
+        if (prRow?.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
+        res.status(422).json({ error: 'PR has merge conflicts. Use Re-review to have the code session fix them.' });
+        return;
+      }
+      if (errStatus !== null) {
+        res.status(422).json({ error: (err as Error).message });
         return;
       }
       res.status(500).json({ error: (err as Error).message });
