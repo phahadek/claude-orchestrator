@@ -1,5 +1,5 @@
 import { config } from '../config';
-import { setPRReviewResult, getSetting, getPRByNumber, getPRBySessionId, incrementReviewIteration, setLastReviewedSha, updatePRDraftStatus } from '../db/queries';
+import { setPRReviewResult, getSetting, getPRByNumber, getPRBySessionId, incrementReviewIteration, setLastReviewedSha, setHeadSha, updatePRDraftStatus } from '../db/queries';
 import type { PRReviewService, PRReviewResult } from './PRReviewService';
 import type { SessionManager } from '../session/SessionManager';
 import type { ReviewJob } from './types';
@@ -167,9 +167,24 @@ export class ReviewOrchestrator {
     if (!prRow || prRow.state !== 'open') return;
     if (!prRow.review_session_id) return;
 
+    // Fetch the latest PR state from GitHub to get the current head SHA.
+    // This is more reliable than the DB value which may be stale or null at the
+    // moment push_detected fires.
+    let headSha = prRow.head_sha;
+    try {
+      const freshPR = await this.githubClient.fetchPR(prRow.repo, prRow.pr_number);
+      headSha = freshPR.headSha;
+      if (headSha !== prRow.head_sha) {
+        setHeadSha(prRow.pr_number, prRow.repo, headSha);
+      }
+    } catch (e) {
+      console.warn(`[ReviewOrchestrator] failed to fetch latest PR state for #${prRow.pr_number}:`, e);
+      // Fall through using the DB value — review will be skipped if headSha is null
+    }
+
     const maxIter = getMaxReviewIterations();
     if (!shouldAutoReview(
-      { reviewIteration: prRow.review_iteration, headSha: prRow.head_sha, lastReviewedSha: prRow.last_reviewed_sha },
+      { reviewIteration: prRow.review_iteration, headSha, lastReviewedSha: prRow.last_reviewed_sha },
       maxIter,
     )) return;
 
@@ -207,7 +222,7 @@ export class ReviewOrchestrator {
       }
 
       // Mark this SHA as reviewed so duplicate pushes don't re-trigger the same review
-      setLastReviewedSha(prRow.pr_number, prRow.repo, prRow.head_sha);
+      setLastReviewedSha(prRow.pr_number, prRow.repo, headSha);
 
       this.sessionManager.emit('message', {
         type: 'review_verdict',

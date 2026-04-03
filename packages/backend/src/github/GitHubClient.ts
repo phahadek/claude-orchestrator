@@ -130,7 +130,7 @@ interface GitHubRawPR {
   body: string | null;
   html_url: string;
   url: string;
-  head: { ref: string };
+  head: { ref: string; sha: string };
   base: { ref: string };
   state: string;
   created_at: string;
@@ -149,6 +149,7 @@ function mapPR(pr: GitHubRawPR): PullRequest {
     url: pr.html_url,
     apiUrl: pr.url,
     headBranch: pr.head.ref,
+    headSha: pr.head.sha,
     baseBranch: pr.base.ref,
     state: pr.state as PullRequest['state'],
     createdAt: pr.created_at,
