@@ -57,7 +57,7 @@ app.use('/api/settings', settingsRouter);
 app.use('/api/sessions', sessionsRouter);
 // PRMergeWatcher created early so routes and sync jobs can delegate lifecycle to it.
 // .start() is called later after server boots.
-const prMergeWatcher = new PRMergeWatcher(githubClient, sessionManager, notionClient, broadcast);
+const prMergeWatcher = new PRMergeWatcher(githubClient, sessionManager, notionClient);
 app.use('/api', createPrsRouter(githubClient, prReviewService, sessionManager, notionClient, prMergeWatcher));
 app.use('/api', createTasksRouter());
 app.use('/api', configRouter);
