@@ -375,6 +375,34 @@ describe('SessionManager.resumeSession() — nudge, timeout, mid-turn detection'
     // Must log a warning mentioning continuation nudge
     expect(source).toMatch(/Resuming mid-turn session.*continuation nudge|continuation nudge.*mid-turn session/s);
   });
+
+  it('does NOT send an initial prompt when resuming (no double-prompting)', () => {
+    // AgentSession.run() must gate the initial prompt write on !this.resumeSessionId
+    const agentSource = fs.readFileSync(
+      path.join(__dirname, '..', 'session', 'AgentSession.ts'),
+      'utf-8',
+    );
+    // The initial prompt write must be inside a !resumeSessionId check
+    expect(agentSource).toMatch(/if\s*\(\s*!this\.resumeSessionId\s*\)/);
+    // resumeSession() must pass row.session_id as the resumeSessionId argument
+    expect(source).toMatch(/row\.session_id,\s*\/\/\s*resumeSessionId|resumeSessionId.*row\.session_id/s);
+  });
+});
+
+// ── AC: AgentSession.sendMessage() — valid user message JSON format ──────────
+describe('AgentSession.sendMessage() — message format', () => {
+  it('writes a valid user message JSON object to stdin', () => {
+    const agentSource = fs.readFileSync(
+      path.join(__dirname, '..', 'session', 'AgentSession.ts'),
+      'utf-8',
+    );
+    // Must write JSON with type: 'user' and message.role: 'user'
+    expect(agentSource).toMatch(/JSON\.stringify\s*\(\s*\{[^}]*type:\s*'user'[^}]*message:\s*\{[^}]*role:\s*'user'/s);
+    // Must include the content from the message argument
+    expect(agentSource).toMatch(/content:\s*message/);
+    // Must append a newline so the CLI readline interface receives a full line
+    expect(agentSource).toMatch(/JSON\.stringify\s*\([^)]+\)\s*\+\s*'\\n'/);
+  });
 });
 
 // ── AC: sendOrResume() copies pr_url from original session ──────────────────
