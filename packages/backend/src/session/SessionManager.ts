@@ -572,13 +572,13 @@ export class SessionManager extends EventEmitter {
     const row = getSession(sessionId);
     if (!row) {
       console.error(`[SessionManager] sendOrResume: session ${sessionId} not found in DB`);
-      return;
+      return sessionId;
     }
 
     const project = getProjectById(row.project_id ?? '');
     if (!project) {
       console.error(`[SessionManager] sendOrResume: project not found for session ${sessionId}`);
-      return;
+      return sessionId;
     }
 
     const newSessionId = crypto.randomUUID();
