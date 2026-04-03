@@ -166,6 +166,13 @@ export function createPrsRouter(
           setTimeout(() => reject(new Error('Review timed out')), 120_000),
         ),
       ]);
+      _broadcast({
+        type: 'pr_review_complete',
+        prNumber,
+        repo,
+        verdict: result.verdict,
+        summary: result.summary,
+      });
       res.json(result);
     } catch (err) {
       if (err instanceof Error && err.message === 'Review timed out') {
@@ -248,6 +255,13 @@ export function createPrsRouter(
           setTimeout(() => reject(new Error('Review timed out')), 120_000),
         ),
       ]);
+      _broadcast({
+        type: 'pr_review_complete',
+        prNumber,
+        repo,
+        verdict: result.verdict,
+        summary: result.summary,
+      });
       res.json(result);
     } catch (err) {
       if (err instanceof Error && err.message === 'Review timed out') {

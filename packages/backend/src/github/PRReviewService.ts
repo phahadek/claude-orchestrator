@@ -1,4 +1,4 @@
-import { getEventsBySession, setPRReviewResult, getPRByNumber, setReviewSessionId } from '../db/queries';
+import { getEventsBySession, setPRReviewResult, getPRByNumber, setReviewSessionId, updatePRDraftStatus } from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
 import type { NotionClient } from '../notion/NotionClient';
 import type { SessionManager } from '../session/SessionManager';
@@ -84,7 +84,35 @@ export class PRReviewService {
     const { mergeable } = await this.github.getMergeability(prNumber, repo);
     const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
+    if (finalResult.verdict === 'approved') {
+      await this.handleApprovedVerdict(prNumber, repo, prRow.notion_task_id);
+    }
     return finalResult;
+  }
+
+  /**
+   * Handle post-verdict side effects when a PR is approved: transition draft → ready
+   * on GitHub, and update the Notion task status to 👀 In Review.
+   * Returns true if the PR was successfully transitioned from draft to ready.
+   */
+  async handleApprovedVerdict(prNumber: number, repo: string, taskId: string | null): Promise<boolean> {
+    const prRow = getPRByNumber(prNumber, repo);
+    let draftTransitioned = false;
+    if (prRow?.draft === 1) {
+      try {
+        await this.github.markPRReady(repo, prNumber);
+        updatePRDraftStatus(prNumber, repo, 0);
+        draftTransitioned = true;
+      } catch (e) {
+        console.error(`[PRReviewService] markPRReady failed for PR #${prNumber}:`, e);
+      }
+    }
+    if (taskId) {
+      await this.notion.updateStatus(taskId, '👀 In Review').catch((e: unknown) =>
+        console.error(`[PRReviewService] Notion updateStatus failed:`, e),
+      );
+    }
+    return draftTransitioned;
   }
 
   /**

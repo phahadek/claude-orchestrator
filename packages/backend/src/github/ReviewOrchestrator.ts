@@ -1,5 +1,5 @@
 import { config } from '../config';
-import { setPRReviewResult, getSetting, getPRByNumber, getPRBySessionId, incrementReviewIteration, setLastReviewedSha, setHeadSha, updatePRDraftStatus } from '../db/queries';
+import { setPRReviewResult, getSetting, getPRByNumber, getPRBySessionId, incrementReviewIteration, setLastReviewedSha, setHeadSha } from '../db/queries';
 import type { PRReviewService, PRReviewResult } from './PRReviewService';
 import type { SessionManager } from '../session/SessionManager';
 import type { ReviewJob } from './types';
@@ -111,26 +111,10 @@ export class ReviewOrchestrator {
       return;
     }
 
-    // Transition draft PR to ready for review if verdict is approved
-    let draftTransitioned = false;
-    if (result.verdict === 'approved') {
-      const pr = getPRByNumber(job.prNumber, job.repo);
-      if (pr?.draft === 1) {
-        try {
-          await this.githubClient.markPRReady(job.repo, job.prNumber);
-          updatePRDraftStatus(job.prNumber, job.repo, 0);
-          draftTransitioned = true;
-        } catch (e) {
-          console.error(`[ReviewOrchestrator] markPRReady failed for PR #${job.prNumber}:`, e);
-        }
-      }
-      // Update Notion task to In Review
-      if (job.taskId) {
-        await this.notionClient.updateStatus(job.taskId, '👀 In Review').catch((e: unknown) =>
-          console.error(`[ReviewOrchestrator] Notion updateStatus failed for PR #${job.prNumber}:`, e),
-        );
-      }
-    }
+    // Draft transition and Notion update are handled inside reviewService.reviewPR()
+    // via handleApprovedVerdict. Derive draftTransitioned from the pre-review row so
+    // we can include draft: false in the broadcast when applicable.
+    const draftTransitioned = result.verdict === 'approved' && prRow?.draft === 1;
 
     this.sessionManager.emit('message', {
       type: 'pr_review_complete',
