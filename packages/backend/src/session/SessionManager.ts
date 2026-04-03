@@ -628,7 +628,7 @@ export class SessionManager extends EventEmitter {
       status: 'starting',
       started_at: startedAt,
       ended_at: null,
-      pr_url: null,
+      pr_url: row.pr_url ?? null,
       worktree_path: worktreePath,
     });
 

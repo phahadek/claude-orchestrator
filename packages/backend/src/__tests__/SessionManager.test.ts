@@ -377,6 +377,28 @@ describe('SessionManager.resumeSession() — nudge, timeout, mid-turn detection'
   });
 });
 
+// ── AC: sendOrResume() copies pr_url from original session ──────────────────
+describe('SessionManager.sendOrResume() — pr_url carry-forward', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('passes row.pr_url (not null) to insertSession when resuming', () => {
+    // Must use row.pr_url when inserting the new session row, not a hard-coded null
+    expect(source).toMatch(/pr_url:\s*row\.pr_url\s*\?\?\s*null/);
+  });
+
+  it('does NOT hard-code pr_url: null in sendOrResume insertSession call', () => {
+    // The sendOrResume block must not pass pr_url: null directly
+    const sendOrResumeIdx = source.indexOf('sendOrResume');
+    const insertSessionInResume = source.indexOf('insertSession', sendOrResumeIdx);
+    const closingBrace = source.indexOf('});', insertSessionInResume);
+    const insertBlock = source.slice(insertSessionInResume, closingBrace);
+    expect(insertBlock).not.toMatch(/pr_url:\s*null(?!\s*\?\?)/);
+  });
+});
+
 // ── AC: server.ts calls resumeOrphanSessions() after jsonlReader.importAll() ──
 describe('server.ts startup sequence', () => {
   it('calls sessionManager.resumeOrphanSessions() in the importAll().then() block', () => {

@@ -7,6 +7,10 @@ import type { NotionClient } from '../notion/NotionClient';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { PullRequest } from '../github/types';
 
+vi.mock('../db/queries', () => ({
+  getPRByNotionTaskId: vi.fn(() => null),
+}));
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function makeSession(overrides: Partial<AuditableSession> = {}): AuditableSession {
@@ -65,11 +69,15 @@ function makeSessionManager(): ISessionManager {
   return { send: vi.fn() };
 }
 
+// ── Import mocked module for DB fallback tests ───────────────────────────────
+import * as queries from '../db/queries';
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('SessionAuditor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(queries.getPRByNotionTaskId).mockReturnValue(null);
   });
 
   // ── AC: Clean exit without PR ─────────────────────────────────────────────
@@ -201,6 +209,50 @@ describe('SessionAuditor', () => {
       (v) => v.includes('PR targets') || v.includes('PR title') || v.includes('PR body'),
     );
     expect(ghViolations).toHaveLength(0);
+  });
+
+  // ── AC: DB fallback — pr_url null but pull_requests table has a PR ─────────
+  it('does NOT flag "no PR opened" when getPRByNotionTaskId returns a row (DB fallback)', async () => {
+    vi.mocked(queries.getPRByNotionTaskId).mockReturnValue({
+      id: 1,
+      pr_number: 10,
+      pr_url: 'https://github.com/owner/repo/pull/10',
+      notion_task_id: 'task-abc123',
+      session_id: 'original-session',
+      repo: 'owner/repo',
+      title: 'feat: something',
+      body: null,
+      head_branch: 'feature/something',
+      base_branch: 'dev',
+    } as any);
+
+    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
+    const session = makeSession({ prUrl: undefined });
+    const audit = await auditor.audit(session, 0);
+
+    expect(audit.prOpened).toBe(true);
+    expect(audit.violations).not.toContain('Clean exit but no PR opened');
+  });
+
+  it('still flags "no PR opened" when both prUrl is null and getPRByNotionTaskId returns null', async () => {
+    vi.mocked(queries.getPRByNotionTaskId).mockReturnValue(null);
+
+    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
+    const session = makeSession({ prUrl: undefined });
+    const audit = await auditor.audit(session, 0);
+
+    expect(audit.prOpened).toBe(false);
+    expect(audit.violations).toContain('Clean exit but no PR opened');
+  });
+
+  it('does NOT call getPRByNotionTaskId when prUrl is already set', async () => {
+    vi.mocked(queries.getPRByNotionTaskId).mockReturnValue(null);
+
+    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
+    const session = makeSession({ prUrl: 'https://github.com/owner/repo/pull/42' });
+    await auditor.audit(session, 0);
+
+    expect(queries.getPRByNotionTaskId).not.toHaveBeenCalled();
   });
 
   // ── AC: sessionManager is optional — no crash when not provided ───────────
