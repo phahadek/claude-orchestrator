@@ -82,6 +82,7 @@ export function createPrsRouter(
       notionTaskId: pr.notion_task_id,
       notionTaskTitle: pr.notion_task_id ? getTaskTitleFromCache(pr.notion_task_id) : null,
       sessionId: pr.session_id ?? null,
+      reviewSessionId: pr.review_session_id ?? null,
       repo: pr.repo,
       reviewResult: pr.review_result
         ? (JSON.parse(pr.review_result) as PRReviewResult)
