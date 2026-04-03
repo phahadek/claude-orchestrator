@@ -314,7 +314,7 @@ Fetch both Notion pages, then begin the task.
         if (toolUseId && this.pendingBashCommands.has(toolUseId)) {
           const cmd = this.pendingBashCommands.get(toolUseId)!;
           this.pendingBashCommands.delete(toolUseId);
-          if (/^git\s+push/.test(cmd)) {
+          if (/^git\s+push/.test(cmd) && !cmd.includes('--dry-run')) {
             this.emit('push_detected', { sessionId: this.sessionId });
             this.broadcast({ type: 'push_detected', sessionId: this.sessionId });
           }
