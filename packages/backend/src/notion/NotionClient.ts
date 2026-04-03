@@ -1,5 +1,5 @@
 import { config } from '../config';
-import { upsertTaskCache, getCacheAge, getTaskCache, deleteTaskCache } from '../db/queries';
+import { upsertTaskCache, getCacheAge, getTaskCache, updateTaskCacheStatus } from '../db/queries';
 import { NotionTask, NotionApiError, ResolvedTask } from './types';
 import { DependencyResolver } from './DependencyResolver';
 
@@ -269,8 +269,8 @@ export class NotionClient {
         Status: { select: { name: status } },
       },
     });
-    // Invalidate per-task and board caches so the next read reflects the new status
-    deleteTaskCache(taskId);
+    // Update the cache row in-place so emitTaskUpdated() can still find the row
+    updateTaskCacheStatus(taskId, status);
   }
 
   /**
