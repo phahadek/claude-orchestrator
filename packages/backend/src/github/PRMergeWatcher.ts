@@ -3,7 +3,7 @@ import type { SessionManager } from '../session/SessionManager';
 import type { NotionClient } from '../notion/NotionClient';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
-import { getAllOpenPRs, updatePRState } from '../db/queries';
+import { getAllOpenPRs, updatePRState, updateMergeState } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -59,6 +59,57 @@ export class PRMergeWatcher {
     } else if (state === 'closed') {
       updatePRState(pr.pr_number, pr.repo, 'closed');
       this.broadcast({ type: 'pr_closed', prNumber: pr.pr_number, repo: pr.repo });
+    } else {
+      // PR is still open — check mergeability for approved PRs
+      await this.checkMergeability(pr);
+    }
+  }
+
+  private async checkMergeability(pr: PullRequestRow): Promise<void> {
+    // Only poll mergeability for PRs that have an approved verdict
+    if (!pr.review_result) return;
+    let verdict: string | undefined;
+    try {
+      const parsed = JSON.parse(pr.review_result) as { verdict?: string };
+      verdict = parsed.verdict;
+    } catch {
+      return;
+    }
+    if (verdict !== 'approved') return;
+
+    let mergeable: boolean | null;
+    let mergeableState: string | null;
+    try {
+      ({ mergeable, mergeableState } = await this.github.getMergeability(pr.pr_number, pr.repo));
+    } catch (err) {
+      console.warn(`[PRMergeWatcher] getMergeability failed for PR #${pr.pr_number}:`, (err as Error).message);
+      return;
+    }
+
+    // Skip if GitHub hasn't computed mergeability yet
+    if (mergeable === null && mergeableState === null) return;
+
+    const mergeableInt = mergeable === null ? null : (mergeable ? 1 : 0);
+    const prevMergeState = pr.merge_state;
+    const newMergeState = mergeableState;
+
+    // Only update if state changed
+    if (prevMergeState === newMergeState) return;
+
+    updateMergeState(pr.pr_number, pr.repo, mergeableInt, newMergeState);
+    this.broadcast({
+      type: 'pr_state_changed',
+      prNumber: pr.pr_number,
+      repo: pr.repo,
+      mergeable,
+      mergeState: newMergeState,
+    });
+    if (pr.notion_task_id) {
+      emitTaskUpdated(pr.notion_task_id);
+    }
+
+    if (newMergeState === 'dirty') {
+      console.log(`[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has merge conflicts`);
     }
   }
 
