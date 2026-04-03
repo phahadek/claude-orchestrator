@@ -362,13 +362,23 @@
   border-bottom: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 
-.prTitle {
+/* Line 1: number + title (truncated) + state badge */
+.prTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.prTitleLeft {
   display: flex;
   align-items: baseline;
-  gap: 6px;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
 }
 
 .prNumber {
@@ -382,20 +392,29 @@
   font-size: 0.88rem;
   font-weight: 600;
   color: var(--text-primary);
-  word-break: break-word;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Line 2: branch info + GitHub link */
+.prBranchRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
 }
 
 .prBranch {
   font-size: 0.78rem;
   color: var(--text-faint);
   font-family: var(--font-mono);
-}
-
-.prMeta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 .prStateBadge {
@@ -487,19 +506,14 @@
 }
 
 .githubLink {
-  font-size: 0.82rem;
+  font-size: 0.78rem;
   color: var(--accent);
   text-decoration: none;
-  padding: 5px 10px;
-  border: 1px solid rgba(137, 180, 250, 0.3);
-  border-radius: var(--radius-sm);
-  background: rgba(137, 180, 250, 0.07);
-  transition: background 0.15s;
+  flex-shrink: 0;
 }
 
 .githubLink:hover {
-  background: rgba(137, 180, 250, 0.14);
-  text-decoration: none;
+  text-decoration: underline;
 }
 
 /* ── Review dimensions ────────────────────────────────────────────── */
