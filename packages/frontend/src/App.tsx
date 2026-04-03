@@ -75,6 +75,7 @@ export default function App() {
   const prevConnectionState = useRef<ConnectionState>('disconnected');
 
   const [cardPreviewLines, setCardPreviewLines] = useState<number>(3);
+  const [planTokenCap, setPlanTokenCap] = useState<number>(0);
 
   const [detailWidthPct, setDetailWidthPct] = useState<number>(() => {
     const saved = localStorage.getItem('sessionDetailWidth');
@@ -144,6 +145,8 @@ export default function App() {
       .then((s: Record<string, string>) => {
         const lines = Number(s.card_preview_lines);
         if (lines > 0) setCardPreviewLines(lines);
+        const cap = Number(s.plan_token_cap);
+        if (cap > 0) setPlanTokenCap(cap);
       })
       .catch(() => {/* keep default */});
   }, []);
@@ -437,6 +440,7 @@ export default function App() {
         activeView={topView}
         onViewChange={handleViewChange}
         totalTokens={totalTokens}
+        planTokenCap={planTokenCap}
         tasks={tasks}
         incompleteReviewCount={incompleteReviews.length}
       />
@@ -495,6 +499,7 @@ export default function App() {
                     onResume={handleResume}
                     onToggleFavorite={(sessionId, favorited) => setSessionFavorited(sessionId, favorited)}
                     cardPreviewLines={cardPreviewLines}
+                    planTokenCap={planTokenCap}
                   />
                 </>
               )}
@@ -510,6 +515,7 @@ export default function App() {
                 <SessionDetail
                   session={selectedSession}
                   send={send}
+                  planTokenCap={planTokenCap}
                   onClose={() => setSelectedId(null)}
                   onDelete={(sessionId) => {
                     deleteSession(sessionId);
