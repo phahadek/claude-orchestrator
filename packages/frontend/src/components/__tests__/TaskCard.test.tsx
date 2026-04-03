@@ -194,7 +194,7 @@ describe('TaskCard', () => {
     expect((btn as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('Launch button is disabled when task type is not Code', () => {
+  it('does not render a Launch button for non-code tasks', () => {
     render(
       <TaskCard
         task={makeTask({ notionStatus: '🗂️ Ready', taskType: '📋 Planning', blocked: false })}
@@ -204,8 +204,7 @@ describe('TaskCard', () => {
         project={makeProject()}
       />
     );
-    const btn = screen.getByRole('button', { name: /non-code task/i });
-    expect((btn as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button')).toBeNull();
   });
 
   it('Launch button is disabled when task status is not Ready', () => {

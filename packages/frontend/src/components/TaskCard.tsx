@@ -39,10 +39,11 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
   const { codeSession, pr, review } = task;
   const statusKey = task.displayStatus.replace(/_/g, '-') as string;
   const dispatchTask = useDispatch(send, project);
+  const isNonCode = !task.taskType.includes('💻');
 
   const isLaunchable =
     task.notionStatus === '🗂️ Ready' &&
-    task.taskType.includes('💻') &&
+    !isNonCode &&
     !task.blocked;
 
   const tooltip = isLaunchable ? '' : launchTooltip(task);
@@ -55,7 +56,7 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
 
   return (
     <div
-      className={`${styles.card} ${selected ? styles.selected : ''}`}
+      className={`${styles.card} ${selected ? styles.selected : ''} ${isNonCode ? styles.nonCode : ''}`}
       onClick={onClick}
       data-status={task.displayStatus}
     >
@@ -117,15 +118,19 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
             Notion ↗
           </a>
         )}
-        <button
-          className={styles.launchButton}
-          disabled={!isLaunchable}
-          onClick={handleLaunch}
-          title={tooltip || 'Launch session'}
-          aria-label={isLaunchable ? `Launch session for ${task.taskName}` : tooltip}
-        >
-          🚀
-        </button>
+        {isNonCode ? (
+          <span className={styles.taskTypeLabel}>{task.taskType}</span>
+        ) : (
+          <button
+            className={styles.launchButton}
+            disabled={!isLaunchable}
+            onClick={handleLaunch}
+            title={tooltip || 'Launch session'}
+            aria-label={isLaunchable ? `Launch session for ${task.taskName}` : tooltip}
+          >
+            🚀
+          </button>
+        )}
       </div>
     </div>
   );
