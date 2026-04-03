@@ -348,11 +348,12 @@ Fetch both Notion pages, then begin the task.
         this.messageIdMap.set(messageId, rowId);
       }
 
-      // Accumulate token usage from result events (emitted once per turn in --verbose mode)
-      const usageData = event.usage as { input_tokens?: number; output_tokens?: number } | undefined;
-      if (usageData?.input_tokens != null || usageData?.output_tokens != null) {
-        const inputTokens = usageData.input_tokens ?? 0;
-        const outputTokens = usageData.output_tokens ?? 0;
+      // After each result event (one per turn), increment token counters and broadcast
+      // session_updated so the frontend receives live totals during execution.
+      if (rawType === 'result') {
+        const usageData = event.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+        const inputTokens = usageData?.input_tokens ?? 0;
+        const outputTokens = usageData?.output_tokens ?? 0;
         if (inputTokens > 0 || outputTokens > 0) {
           this.totalInputTokens += inputTokens;
           this.totalOutputTokens += outputTokens;
