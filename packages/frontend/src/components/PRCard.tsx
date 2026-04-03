@@ -40,11 +40,13 @@ export interface PRCardProps {
   onRemove: (prNumber: number) => void;
   onViewSession?: (sessionId: string) => void;
   onReReview: (prNumber: number) => void;
+  onFixConflicts: (prNumber: number) => void;
   onApprove: (prNumber: number) => void;
   reviewInFlight: boolean;
   mergeInFlight: boolean;
   removeInFlight: boolean;
   reReviewInFlight: boolean;
+  fixConflictsInFlight: boolean;
   approveInFlight: boolean;
   reviewElapsed: number;
   error: string | null;
@@ -64,11 +66,13 @@ export function PRCard({
   onRemove,
   onViewSession,
   onReReview,
+  onFixConflicts,
   onApprove,
   reviewInFlight,
   mergeInFlight,
   removeInFlight,
   reReviewInFlight,
+  fixConflictsInFlight,
   approveInFlight,
   reviewElapsed,
   error,
@@ -82,15 +86,15 @@ export function PRCard({
   const sessionAlive = pr.sessionId !== null;
   // Single context-aware review action:
   // - finished → no button
-  // - has conflicts (dirty) → "Re-review" to resolve conflicts (regardless of verdict)
+  // - has conflicts (dirty) → "Fix Conflicts" to message code session with rebase instructions
   // - approved (no conflicts) → no button
   // - needs_changes/incomplete + session alive → "Re-review" (sends findings + queues re-review)
   // - everything else (no review yet, or session dead) → "Run Review"
-  const reviewAction: 'run-review' | 're-review' | null =
+  const reviewAction: 'run-review' | 're-review' | 'fix-conflicts' | null =
     isFinished
       ? null
       : hasConflicts
-        ? 're-review'
+        ? 'fix-conflicts'
         : verdict === 'approved'
           ? null
           : (verdict === 'needs_changes' || verdict === 'incomplete') && sessionAlive
@@ -213,6 +217,18 @@ export function PRCard({
               title="Send findings to session and queue re-review after next push"
             >
               {reReviewInFlight ? 'Reviewing...' : '↺ Re-review'}
+            </button>
+          )}
+
+          {reviewAction === 'fix-conflicts' && (
+            <button
+              type="button"
+              className={styles.fixButton}
+              disabled={fixConflictsInFlight}
+              onClick={() => onFixConflicts(pr.prNumber)}
+              title="Send rebase instructions to the code session to resolve merge conflicts"
+            >
+              {fixConflictsInFlight ? 'Fixing...' : '↺ Fix Conflicts'}
             </button>
           )}
 
