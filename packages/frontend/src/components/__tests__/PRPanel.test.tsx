@@ -44,7 +44,7 @@ describe('PRPanel', () => {
       json: async () => prs,
     });
 
-    render(<PRPanel activeProjectId="proj-1" onFixSession={vi.fn()} />);
+    render(<PRPanel activeProjectId="proj-1"  />);
 
     await waitFor(() => {
       expect(screen.getByText('PR One')).toBeDefined();
@@ -59,7 +59,7 @@ describe('PRPanel', () => {
       json: async () => [],
     });
 
-    render(<PRPanel activeProjectId="proj-1" onFixSession={vi.fn()} />);
+    render(<PRPanel activeProjectId="proj-1"  />);
 
     await waitFor(() => {
       expect(screen.getByText(/no open pull requests/i)).toBeDefined();
@@ -73,7 +73,7 @@ describe('PRPanel', () => {
       json: async () => ({ error: 'Project has no githubRepo configured' }),
     });
 
-    render(<PRPanel activeProjectId="proj-no-repo" onFixSession={vi.fn()} />);
+    render(<PRPanel activeProjectId="proj-no-repo"  />);
 
     await waitFor(() => {
       expect(screen.getByText(/no github repo configured/i)).toBeDefined();
@@ -83,7 +83,7 @@ describe('PRPanel', () => {
   it('shows network error banner on fetch failure', async () => {
     (fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Network error'));
 
-    render(<PRPanel activeProjectId="proj-1" onFixSession={vi.fn()} />);
+    render(<PRPanel activeProjectId="proj-1"  />);
 
     await waitFor(() => {
       expect(screen.getByText(/could not reach server/i)).toBeDefined();
