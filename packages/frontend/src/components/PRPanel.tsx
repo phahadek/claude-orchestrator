@@ -14,6 +14,7 @@ interface Props {
 
 export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollapse, refreshTrigger, prReviewEvent }: Props) {
   const [prs, setPRs] = useState<PRListItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [networkError, setNetworkError] = useState(false);
   const [noRepo, setNoRepo] = useState(false);
 
@@ -29,9 +30,11 @@ export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollap
   const [cardErrors, setCardErrors] = useState<Map<number, string>>(new Map());
 
   const elapsedTimers = useRef<Map<number, ReturnType<typeof setInterval>>>(new Map());
+  const isInitialLoad = useRef(true);
 
   const fetchPRs = useCallback(async () => {
     if (!activeProjectId) return;
+    if (isInitialLoad.current) setIsLoading(true);
     try {
       const [prsRes, countRes] = await Promise.all([
         fetch(`/api/prs?projectId=${encodeURIComponent(activeProjectId)}`),
@@ -55,6 +58,9 @@ export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollap
       }
     } catch {
       setNetworkError(true);
+    } finally {
+      isInitialLoad.current = false;
+      setIsLoading(false);
     }
   }, [activeProjectId]);
 
@@ -339,7 +345,11 @@ export function PRPanel({ activeProjectId, onFixSession, onViewSession, onCollap
         </div>
       )}
 
-      {!noRepo && (prs.length === 0 && !networkError ? (
+      {!noRepo && isLoading && prs.length === 0 && (
+        <div className={styles.loadingState}>Loading PRs…</div>
+      )}
+
+      {!noRepo && !isLoading && (prs.length === 0 && !networkError ? (
         <div className={styles.emptyState}>No open pull requests.</div>
       ) : (
         <div className={styles.prList}>

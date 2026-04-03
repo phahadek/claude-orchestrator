@@ -76,6 +76,13 @@
   text-align: center;
 }
 
+.loadingState {
+  color: #6c7086;
+  font-size: 0.88rem;
+  padding: 24px 0;
+  text-align: center;
+}
+
 .prList {
   display: flex;
   flex-direction: column;
