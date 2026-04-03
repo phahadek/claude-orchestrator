@@ -180,6 +180,20 @@ describe('TaskCard', () => {
     expect((btn as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it('Launch button is enabled only when task status is "🗂️ Ready" and not blocked and is a code task', () => {
+    render(
+      <TaskCard
+        task={makeTask({ notionStatus: '🗂️ Ready', taskType: '💻 Code', blocked: false })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />
+    );
+    const btn = screen.getByRole('button', { name: /launch session/i });
+    expect((btn as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it('Launch button is disabled when task is blocked', () => {
     render(
       <TaskCard
