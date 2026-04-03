@@ -36,14 +36,12 @@ export interface PRCardProps {
   pr: PRListItem;
   onReview: (prNumber: number) => void;
   onMerge: (prNumber: number) => void;
-  onFix: (prNumber: number) => void;
   onRemove: (prNumber: number) => void;
   onViewSession?: (sessionId: string) => void;
   onReReview: (prNumber: number) => void;
   onApprove: (prNumber: number) => void;
   reviewInFlight: boolean;
   mergeInFlight: boolean;
-  fixInFlight: boolean;
   removeInFlight: boolean;
   reReviewInFlight: boolean;
   approveInFlight: boolean;
@@ -62,14 +60,12 @@ export function PRCard({
   pr,
   onReview,
   onMerge,
-  onFix,
   onRemove,
   onViewSession,
   onReReview,
   onApprove,
   reviewInFlight,
   mergeInFlight,
-  fixInFlight,
   removeInFlight,
   reReviewInFlight,
   approveInFlight,
@@ -81,8 +77,17 @@ export function PRCard({
   const isFinished = pr.state === 'merged' || pr.state === 'closed';
   const verdict = pr.reviewResult?.verdict ?? null;
   const canMerge = pr.state === 'open' && verdict === 'approved';
-  const showFixButton = !isFinished && (verdict === 'needs_changes' || verdict === 'incomplete');
-  const showReReviewButton = !isFinished && verdict !== null;
+  const sessionAlive = pr.sessionId !== null;
+  // Single context-aware review action:
+  // - approved or finished → no button
+  // - needs_changes/incomplete + session alive → "Re-review" (sends findings + queues re-review)
+  // - everything else (no review yet, or session dead) → "Run Review"
+  const reviewAction: 'run-review' | 're-review' | null =
+    isFinished || verdict === 'approved'
+      ? null
+      : (verdict === 'needs_changes' || verdict === 'incomplete') && sessionAlive
+        ? 're-review'
+        : 'run-review';
   const showApproveButton = !isFinished && verdict !== 'approved';
 
   const verdictClass = isFinished
@@ -175,7 +180,7 @@ export function PRCard({
             {removeInFlight ? '…' : '✕'}
           </button>
 
-          {!isFinished && (
+          {reviewAction === 'run-review' && (
             <button
               type="button"
               className={styles.reviewButton}
@@ -188,24 +193,13 @@ export function PRCard({
             </button>
           )}
 
-          {showFixButton && (
-            <button
-              type="button"
-              className={styles.fixButton}
-              disabled={fixInFlight}
-              onClick={() => onFix(pr.prNumber)}
-            >
-              {fixInFlight ? 'Sending...' : '🔁 Send to Session'}
-            </button>
-          )}
-
-          {showReReviewButton && (
+          {reviewAction === 're-review' && (
             <button
               type="button"
               className={styles.reReviewButton}
               disabled={reReviewInFlight}
               onClick={() => onReReview(pr.prNumber)}
-              title="Reset iteration counter and run a fresh review"
+              title="Send findings to session and queue re-review after next push"
             >
               {reReviewInFlight ? 'Reviewing...' : '↺ Re-review'}
             </button>
