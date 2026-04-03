@@ -58,8 +58,12 @@ export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
     return 'in_progress';
   }
 
-  // 6. ready — default (Notion status = Ready, no active code session)
-  void notionStatus; // consumed for documentation; no runtime check needed
+  // 6. Notion status fallback — when no session/PR data exists
+  if (notionStatus.includes('Done')) return 'done';
+  if (notionStatus.includes('In Progress')) return 'in_progress';
+  if (notionStatus.includes('In Review')) return 'in_review';
+
+  // 7. ready — default
   return 'ready';
 }
 
