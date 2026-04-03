@@ -4,6 +4,7 @@ import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
 import { AgentSession, parseNotionPageId } from './AgentSession';
 import { buildOrchestratorClaudeMd } from './orchestrator-claudemd';
+import { loadOrchestratorConfig } from './orchestrator-config';
 import { config, getProjectById, normalizePath } from '../config';
 import { insertSession, updateSessionStatus, insertEvent, getSession, getSessionsByStatus, getPRByNotionTaskId, getEventsBySession, getPRByNumber } from '../db/queries';
 import type { Session } from '../db/types';
@@ -184,6 +185,21 @@ export class SessionManager extends EventEmitter {
       (isUnixStylePath ? ' [WARNING: Unix-style path detected — may not resolve correctly on Windows]' : ''),
     );
 
+    // Load per-project orchestrator config (fresh read — no restart needed).
+    const orchConfig = loadOrchestratorConfig(projectDir);
+
+    // Run bootstrap script if configured (after worktree creation, before session spawn).
+    // cwd is the main project root so git rev-parse --show-toplevel resolves correctly.
+    // The worktree path is passed as $1 so the script can operate on it.
+    if (orchConfig.bootstrapScript) {
+      try {
+        execSync(`${orchConfig.bootstrapScript} "${worktreePath}"`, { cwd: projectDir, timeout: 120_000, stdio: 'pipe' });
+        console.log(`[SessionManager] bootstrap script completed for ${sessionId.slice(0, 8)}`);
+      } catch (err) {
+        console.warn(`[SessionManager] bootstrap script failed for ${sessionId.slice(0, 8)} (continuing): ${err}`);
+      }
+    }
+
     // Inject merged CLAUDE.md into the worktree: orchestrator rules first (authoritative),
     // project CLAUDE.md appended below. The project's original file is never modified.
     try {
@@ -192,6 +208,8 @@ export class SessionManager extends EventEmitter {
         taskUrl,
         projectContextUrl,
         targetBranch: 'dev',
+        prGate: orchConfig.prGate,
+        bashRules: orchConfig.bashRules,
       });
       const projectMdPath = path.join(projectDir, 'CLAUDE.md');
       const projectMd = fs.existsSync(projectMdPath) ? fs.readFileSync(projectMdPath, 'utf-8') : '';
@@ -218,6 +236,7 @@ export class SessionManager extends EventEmitter {
       sessionType,
       this,
       this.githubClient,
+      orchConfig.allowedTools,
     );
 
     // Insert session into SQLite before anything writes events

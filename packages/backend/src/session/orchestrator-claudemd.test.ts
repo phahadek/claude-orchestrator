@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { buildOrchestratorClaudeMd } from './orchestrator-claudemd';
+import { loadOrchestratorConfig } from './orchestrator-config';
 
 const defaultParams = {
   taskName: 'My test task',
@@ -65,6 +66,58 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(result).toContain('## Bash Rules (Permission System)');
     expect(result).toContain('One command per Bash call');
     expect(result).toContain('mcp__github__create_pull_request');
+  });
+
+  it('uses custom prGate commands when provided', () => {
+    const result = buildOrchestratorClaudeMd({
+      ...defaultParams,
+      prGate: { typeCheck: 'dotnet build', build: 'dotnet test' },
+    });
+    expect(result).toContain('`dotnet build`');
+    expect(result).toContain('`dotnet test`');
+    // Pre-PR Gate section should not contain the Node.js defaults
+    const prGateSection = result.slice(
+      result.indexOf('## Pre-PR Gate'),
+      result.indexOf('## Forbidden Actions'),
+    );
+    expect(prGateSection).not.toContain('npx tsc');
+    expect(prGateSection).not.toContain('npx vite');
+  });
+
+  it('uses custom bashRules when provided', () => {
+    const result = buildOrchestratorClaudeMd({
+      ...defaultParams,
+      bashRules: ['Use `dotnet` for builds and tests. Do not use `npm` or `npx`.'],
+    });
+    expect(result).toContain('**Rule 5 — Use `dotnet` for builds and tests');
+    // Bash Rules section should not contain the npx rule
+    const bashSection = result.slice(result.indexOf('## Bash Rules (Permission System)'));
+    expect(bashSection).not.toContain('npx tsc');
+  });
+
+  it('renders multi-line bashRules with heading and body', () => {
+    const result = buildOrchestratorClaudeMd({
+      ...defaultParams,
+      bashRules: ['First line heading.\nSecond line body.'],
+    });
+    expect(result).toContain('**Rule 5 — First line heading.**');
+    expect(result).toContain('Second line body.');
+  });
+
+  it('renders multiple bashRules as Rule 5, Rule 6, etc.', () => {
+    const result = buildOrchestratorClaudeMd({
+      ...defaultParams,
+      bashRules: ['Rule A.', 'Rule B.'],
+    });
+    expect(result).toContain('**Rule 5 — Rule A.**');
+    expect(result).toContain('**Rule 6 — Rule B.**');
+  });
+
+  it('falls back to npx default when prGate and bashRules are omitted', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    expect(result).toContain('npx tsc --noEmit');
+    expect(result).toContain('npx vite build');
+    expect(result).toContain('**Rule 5 — Use `npx` instead of bare tool names.**');
   });
 
   it('interpolates taskName, taskUrl, projectContextUrl, and targetBranch', () => {
@@ -173,5 +226,68 @@ describe('orchestrator CLAUDE.md merge logic (section 10)', () => {
 
     const afterMerge = fs.readFileSync(path.join(projectDir, 'CLAUDE.md'), 'utf-8');
     expect(afterMerge).toBe(original);
+  });
+});
+
+describe('loadOrchestratorConfig', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-config-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns Node.js defaults when no config file exists', () => {
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.allowedTools).toEqual([]);
+    expect(config.prGate.typeCheck).toBe('npx tsc --noEmit');
+    expect(config.prGate.build).toBe('npx vite build');
+    expect(config.bootstrapScript).toBe('');
+    expect(config.bashRules.length).toBeGreaterThan(0);
+    expect(config.bashRules[0]).toContain('npx');
+  });
+
+  it('reads custom config from .claude/orchestrator.json', () => {
+    const claudeDir = path.join(tmpDir, '.claude');
+    fs.mkdirSync(claudeDir, { recursive: true });
+    fs.writeFileSync(path.join(claudeDir, 'orchestrator.json'), JSON.stringify({
+      allowedTools: ['Bash(dotnet:*)'],
+      prGate: { typeCheck: 'dotnet build', build: 'dotnet test' },
+      bootstrapScript: './bootstrap.sh',
+      bashRules: ['Use `dotnet` instead of `npm`.'],
+    }), 'utf-8');
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.allowedTools).toEqual(['Bash(dotnet:*)']);
+    expect(config.prGate.typeCheck).toBe('dotnet build');
+    expect(config.prGate.build).toBe('dotnet test');
+    expect(config.bootstrapScript).toBe('./bootstrap.sh');
+    expect(config.bashRules).toEqual(['Use `dotnet` instead of `npm`.']);
+  });
+
+  it('falls back to defaults for missing fields in partial config', () => {
+    const claudeDir = path.join(tmpDir, '.claude');
+    fs.mkdirSync(claudeDir, { recursive: true });
+    fs.writeFileSync(path.join(claudeDir, 'orchestrator.json'), JSON.stringify({
+      allowedTools: ['Bash(dotnet:*)'],
+    }), 'utf-8');
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.allowedTools).toEqual(['Bash(dotnet:*)']);
+    expect(config.prGate.typeCheck).toBe('npx tsc --noEmit');
+    expect(config.prGate.build).toBe('npx vite build');
+    expect(config.bootstrapScript).toBe('');
+  });
+
+  it('returns defaults when config file is invalid JSON', () => {
+    const claudeDir = path.join(tmpDir, '.claude');
+    fs.mkdirSync(claudeDir, { recursive: true });
+    fs.writeFileSync(path.join(claudeDir, 'orchestrator.json'), 'not json', 'utf-8');
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.prGate.typeCheck).toBe('npx tsc --noEmit');
   });
 });
