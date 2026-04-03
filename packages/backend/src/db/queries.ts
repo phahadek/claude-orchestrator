@@ -452,10 +452,9 @@ export function getTaskTitleFromCache(taskId: string): string | null {
 
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
-export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_session_id' | 'review_iteration' | 'head_sha' | 'last_reviewed_sha' | 'node_id'> & {
+export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_session_id' | 'review_iteration' | 'last_reviewed_sha' | 'node_id'> & {
   review_session_id?: string | null;
   review_iteration?: number;
-  head_sha?: string | null;
   last_reviewed_sha?: string | null;
   node_id?: string | null;
 }): PullRequestRow {
@@ -463,11 +462,11 @@ export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_sessio
     INSERT INTO pull_requests
       (pr_number, pr_url, notion_task_id, session_id, repo, title, body,
        head_branch, base_branch, state, draft, review_result, review_at,
-       created_at, updated_at, synced_at, node_id)
+       created_at, updated_at, synced_at, node_id, head_sha)
     VALUES
       (@pr_number, @pr_url, @notion_task_id, @session_id, @repo, @title, @body,
        @head_branch, @base_branch, @state, @draft, @review_result, @review_at,
-       @created_at, @updated_at, @synced_at, @node_id)
+       @created_at, @updated_at, @synced_at, @node_id, @head_sha)
     ON CONFLICT(pr_url) DO UPDATE SET
       synced_at      = excluded.synced_at,
       state          = excluded.state,
@@ -479,7 +478,8 @@ export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_sessio
       notion_task_id = COALESCE(excluded.notion_task_id, notion_task_id),
       session_id     = COALESCE(excluded.session_id, session_id),
       updated_at     = excluded.updated_at,
-      node_id        = COALESCE(excluded.node_id, node_id)
+      node_id        = COALESCE(excluded.node_id, node_id),
+      head_sha       = COALESCE(excluded.head_sha, head_sha)
   `).run(pr);
   return db.prepare<{ pr_url: string }>(`
     SELECT * FROM pull_requests WHERE pr_url = @pr_url
@@ -512,6 +512,14 @@ export function setLastReviewedSha(prNumber: number, repo: string, sha: string |
     SET last_reviewed_sha = @last_reviewed_sha
     WHERE pr_number = @pr_number AND repo = @repo
   `).run({ pr_number: prNumber, repo, last_reviewed_sha: sha });
+}
+
+export function setHeadSha(prNumber: number, repo: string, sha: string | null): void {
+  db.prepare<{ pr_number: number; repo: string; head_sha: string | null }>(`
+    UPDATE pull_requests
+    SET head_sha = @head_sha
+    WHERE pr_number = @pr_number AND repo = @repo
+  `).run({ pr_number: prNumber, repo, head_sha: sha });
 }
 
 export function getPRBySessionId(sessionId: string): PullRequestRow | null {

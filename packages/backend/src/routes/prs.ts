@@ -145,7 +145,7 @@ export function createPrsRouter(
           synced_at: now,
           review_iteration: 0,
           review_session_id: null,
-          head_sha: null,
+          head_sha: pr.headSha,
           last_reviewed_sha: null,
           node_id: pr.nodeId,
         });
