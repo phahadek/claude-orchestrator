@@ -8,6 +8,33 @@ export interface PermissionDenial {
   tool_input: Record<string, unknown>;
 }
 
+/**
+ * Persistent state snapshot of a session as synced to frontend clients via
+ * `session_started` WS messages. Populated from the `sessions` table joined
+ * against `pull_requests` (for prUrl) on each WS connection.
+ */
+export interface SessionState {
+  sessionId: string;
+  taskName: string;
+  notionTaskUrl: string;
+  taskType?: string;
+  sessionType?: string;
+  prNumber?: number;
+  codeSessionId?: string;
+  started_at?: number;
+  ended_at?: number;
+  archived?: boolean;
+  favorited?: boolean;
+  project_id?: string | null;
+  note?: string | null;
+  tags?: string[];
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  model?: string | null;
+  /** PR URL linked to this session, resolved from the pull_requests join. */
+  prUrl?: string;
+}
+
 /** Full live-state snapshot of a task, sent in task_updated WS messages. */
 export interface TaskView {
   taskId: string;
@@ -48,7 +75,7 @@ export interface TaskView {
 }
 
 export type ServerMessage =
-  | { type: 'session_started';       sessionId: string; taskName: string; notionTaskUrl: string; taskType?: string; sessionType?: string; prNumber?: number; codeSessionId?: string; started_at?: number; ended_at?: number; archived?: boolean; favorited?: boolean; project_id?: string | null; note?: string | null; tags?: string[]; totalInputTokens?: number; totalOutputTokens?: number; model?: string | null; prUrl?: string }
+  | ({ type: 'session_started' } & SessionState)
   | { type: 'session_event';         sessionId: string; eventType: 'text' | 'tool_use' | 'tool_result' | 'system' | 'user_message'; content: string; messageId?: string }
   | { type: 'session_status';        sessionId: string; status: 'starting' | 'running' | 'needs_permission' | 'done' | 'error' | 'killed' }
   | { type: 'permission_request';    sessionId: string; toolName: string; proposedAction: string }

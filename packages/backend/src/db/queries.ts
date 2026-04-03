@@ -123,7 +123,21 @@ export function getSessionsByStatus(statuses: string[]): Session[] {
 }
 
 export function getActiveSessions(): Session[] {
-  return db.prepare('SELECT * FROM sessions WHERE archived = 0 ORDER BY started_at DESC').all() as Session[];
+  // LEFT JOIN pull_requests so that prUrl is populated even when sessions.pr_url
+  // is NULL (e.g. sessions started before their PR was linked back to the row).
+  return db.prepare(`
+    SELECT
+      s.session_id, s.notion_task_id, s.notion_task_url, s.project_context_url,
+      s.project_id, s.status, s.started_at, s.ended_at, s.worktree_path,
+      s.archived, s.favorited, s.session_type, s.note, s.tags,
+      s.total_input_tokens, s.total_output_tokens, s.model, s.task_name,
+      COALESCE(s.pr_url, (
+        SELECT p.pr_url FROM pull_requests p WHERE p.session_id = s.session_id LIMIT 1
+      )) AS pr_url
+    FROM sessions s
+    WHERE s.archived = 0
+    ORDER BY s.started_at DESC
+  `).all() as Session[];
 }
 
 export function getArchivedSessions(): Session[] {
