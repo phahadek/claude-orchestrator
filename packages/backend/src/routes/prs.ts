@@ -377,6 +377,32 @@ export function createPrsRouter(
     res.json({ ok: true });
   });
 
+  // ── GET /api/prs/:prNumber/diff?projectId=<id> ───────────────────────────────
+  router.get('/prs/:prNumber/diff', async (req: Request, res: Response) => {
+    const prNumber = parseInt(String(req.params.prNumber), 10);
+    const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : '';
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId query param is required' });
+      return;
+    }
+    const project = getProjectById(projectId);
+    if (!project?.githubRepo) {
+      res.status(422).json({ error: 'Project has no githubRepo configured' });
+      return;
+    }
+    const repo = project.githubRepo;
+    try {
+      const result = await github.fetchDiff(prNumber, repo);
+      res.json({ diff: result.diff, filesChanged: result.filesChanged });
+    } catch (err) {
+      if (err instanceof GitHubApiError) {
+        res.status(err.status).json({ error: err.message });
+        return;
+      }
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // ── POST /api/prs/:prNumber/fix ──────────────────────────────────────────────
   router.post('/prs/:prNumber/fix', async (req: Request, res: Response) => {
     const prNumber = parseInt(String(req.params.prNumber), 10);
