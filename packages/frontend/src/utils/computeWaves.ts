@@ -1,4 +1,53 @@
 import type { ResolvedTask } from '@claude-dashboard/backend/src/notion/types';
+import type { TaskView } from '../types/taskView';
+
+export interface TaskViewWaveResult {
+  waves: TaskView[][];
+  statusCounts: Record<string, number>;
+  deferredCount: number;
+  totalNonDeferred: number;
+  doneCount: number;
+}
+
+/**
+ * Computes progress bar data from a TaskView array (the REST /api/tasks/active data source).
+ * Uses the pre-computed `wave` field from the backend rather than re-deriving from dependsOn.
+ * Deferred tasks are excluded from the counts and wave display.
+ */
+export function computeProgressFromTaskViews(tasks: TaskView[]): TaskViewWaveResult {
+  const DEFERRED = '⏭️ Deferred';
+  const DONE = '✅ Done';
+
+  const deferred = tasks.filter((t) => t.notionStatus === DEFERRED);
+  const nonDeferred = tasks.filter((t) => t.notionStatus !== DEFERRED);
+
+  const statusCounts: Record<string, number> = {};
+  for (const t of nonDeferred) {
+    statusCounts[t.notionStatus] = (statusCounts[t.notionStatus] ?? 0) + 1;
+  }
+
+  const doneCount = statusCounts[DONE] ?? 0;
+
+  // Group non-done non-deferred tasks by their pre-computed wave number
+  const nonDoneNonDeferred = nonDeferred.filter((t) => t.notionStatus !== DONE);
+  const waveMap = new Map<number, TaskView[]>();
+  for (const t of nonDoneNonDeferred) {
+    const w = t.wave ?? 1;
+    if (!waveMap.has(w)) waveMap.set(w, []);
+    waveMap.get(w)!.push(t);
+  }
+  const waves = Array.from(waveMap.keys())
+    .sort((a, b) => a - b)
+    .map((w) => waveMap.get(w)!);
+
+  return {
+    waves,
+    statusCounts,
+    deferredCount: deferred.length,
+    totalNonDeferred: nonDeferred.length,
+    doneCount,
+  };
+}
 
 export interface WaveResult {
   waves: ResolvedTask[][];

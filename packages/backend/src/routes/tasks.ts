@@ -222,7 +222,6 @@ export function createTasksRouter(): Router {
       .map((row) => buildTaskViewFromRow(row, cap))
       .filter(
         (v) =>
-          v.displayStatus !== 'done' &&
           !v.notionStatus.includes('Deferred') &&
           !v.notionStatus.includes('Backlog'),
       );

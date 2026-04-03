@@ -524,7 +524,7 @@ export default function App() {
         onViewChange={handleViewChange}
         totalTokens={totalTokens}
         planTokenCap={planTokenCap}
-        tasks={tasks}
+        tasks={taskViews}
         incompleteReviewCount={incompleteReviews.length}
       />
       <div className={styles.mainArea}>
