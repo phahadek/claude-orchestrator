@@ -840,6 +840,81 @@ describe('ReviewOrchestrator — draft PR transition on approved verdict', () =>
   });
 });
 
+// ── AC: Break 4 — auto findings routing on needs_changes ─────────────────────
+// Required by task: Wire ReviewOrchestrator into server event flow
+// Verifies that after a review with needs_changes, the orchestrator routes
+// formatted findings to the originating coding session via sessionManager.send().
+
+describe('Break 4 (AC) — auto findings routing: sessionManager.send() called on needs_changes', () => {
+  it('calls sessionManager.send() with formatted findings when verdict is needs_changes', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [{ name: 'Diff vs Acceptance Criteria', passed: false, notes: 'Unit tests missing.' }],
+      summary: 'Please add tests.',
+      reviewedAt: new Date().toISOString(),
+    });
+
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(sm.send)).toHaveBeenCalledOnce();
+    const [sessionId, message] = vi.mocked(sm.send).mock.calls[0];
+    expect(sessionId).toBe('coding-session-id');
+    expect(message).toContain('Review Feedback');
+    expect(message).toContain('Unit tests missing.');
+    expect(message).toContain('Please add tests.');
+  });
+});
+
+// ── AC: Break 5 — re-review trigger on push ──────────────────────────────────
+// Required by task: Wire ReviewOrchestrator into server event flow
+// Verifies that push_detected increments review_iteration and sends re-review,
+// and that the orchestrator escalates when the cap is exceeded.
+
+describe('Break 5 (AC) — re-review trigger: review_iteration incremented and re-review sent on push_detected', () => {
+  it('increments review_iteration and sends re-review follow-up on push_detected', async () => {
+    vi.mocked(getPRBySessionId).mockReturnValue(basePRRow as any);
+    vi.mocked(incrementReviewIteration).mockReturnValue(1);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
+
+    sm.emit('push_detected', { sessionId: 'coding-session-id' });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(incrementReviewIteration)).toHaveBeenCalledWith(1, 'owner/repo');
+    expect(vi.mocked(rs.sendReReview)).toHaveBeenCalledWith(
+      'review-session-id', 1, 'owner/repo', 1, 3,
+    );
+  });
+
+  it('emits review_escalated when review_iteration exceeds max_review_iterations', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, review_iteration: 3 } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+    const escalated = messages.find((m: any) => m.type === 'review_escalated');
+    expect(escalated).toBeDefined();
+    expect(escalated).toMatchObject({ type: 'review_escalated', prNumber: 1, repo: 'owner/repo' });
+  });
+});
+
 // ── Notion status update on approved verdict ──────────────────────────────────
 // Notion updateStatus is now delegated to PRReviewService.handleApprovedVerdict().
 // The orchestrator no longer calls notionClient directly — see PRReviewService.test.ts.
