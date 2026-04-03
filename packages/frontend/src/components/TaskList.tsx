@@ -8,6 +8,8 @@ interface Props {
   boardId: string | null;
   selectedTaskId: string | null;
   onSelectTask: (taskId: string) => void;
+  /** Latest task_updated WS message — merges a single task in-place without a full re-fetch. */
+  lastTaskUpdate?: TaskView | null;
 }
 
 const GROUP_ORDER: DisplayStatus[] = [
@@ -38,9 +40,7 @@ function priorityRank(p: string): number {
   return PRIORITY_RANK[p] ?? 99;
 }
 
-const POLL_INTERVAL_MS = 15_000;
-
-export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTask }: Props) {
+export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTask, lastTaskUpdate }: Props) {
   const [tasks, setTasks] = useState<TaskView[]>([]);
   const [loading, setLoading] = useState(true);
   const [doneExpanded, setDoneExpanded] = useState(false);
@@ -64,18 +64,27 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
     }
   }, [activeProjectId, boardId]);
 
-  // Re-fetch on mount and whenever projectId/boardId changes
+  // Full re-fetch only on mount and when projectId/boardId changes
   useEffect(() => {
     setLoading(true);
     setTasks([]);
     void fetchTasks();
   }, [fetchTasks]);
 
-  // Poll for updates
+  // Merge a single task in-place when a task_updated WS message arrives
   useEffect(() => {
-    const timer = setInterval(() => { void fetchTasks(); }, POLL_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, [fetchTasks]);
+    if (!lastTaskUpdate) return;
+    setTasks((prev) => {
+      const idx = prev.findIndex((t) => t.taskId === lastTaskUpdate.taskId);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = lastTaskUpdate;
+        return next;
+      }
+      // New task not yet in list — append it
+      return [...prev, lastTaskUpdate];
+    });
+  }, [lastTaskUpdate]);
 
   if (loading) {
     return (

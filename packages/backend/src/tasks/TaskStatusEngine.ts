@@ -1,5 +1,4 @@
 import { getPRByNotionTaskId, getLatestCodeSessionByNotionTaskId, getSetting } from '../db/queries';
-import type { TaskView } from '../ws/types';
 
 export type DisplayStatus =
   | 'ready'
@@ -102,28 +101,3 @@ export function deriveDisplayStatusFromDb(notionTaskId: string): DisplayStatus {
   });
 }
 
-/**
- * Build a TaskView snapshot for a Notion task from SQLite — used as the patch payload
- * in task_updated messages.
- */
-export function buildTaskViewFromDb(notionTaskId: string): Partial<TaskView> {
-  const prRow = getPRByNotionTaskId(notionTaskId);
-  const sessionRow = getLatestCodeSessionByNotionTaskId(notionTaskId);
-
-  let reviewVerdict: string | null = null;
-  if (prRow?.review_result) {
-    try {
-      const parsed = JSON.parse(prRow.review_result) as { verdict?: string };
-      reviewVerdict = parsed.verdict ?? null;
-    } catch {
-      // ignore malformed review_result
-    }
-  }
-
-  const patch: Partial<TaskView> = {};
-  if (sessionRow) patch.codeSession = { status: sessionRow.status };
-  if (prRow?.pr_url) patch.prUrl = prRow.pr_url;
-  if (prRow?.state) patch.prState = prRow.state;
-  if (reviewVerdict) patch.reviewVerdict = reviewVerdict;
-  return patch;
-}
