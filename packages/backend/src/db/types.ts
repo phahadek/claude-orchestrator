@@ -27,9 +27,10 @@ export interface Session {
   total_input_tokens: number;
   total_output_tokens: number;
   model?: string | null;
+  task_name: string | null;
 }
 
-export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path' | 'archived' | 'favorited' | 'project_id' | 'session_type' | 'note' | 'tags' | 'total_input_tokens' | 'total_output_tokens'> & {
+export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path' | 'archived' | 'favorited' | 'project_id' | 'session_type' | 'note' | 'tags' | 'total_input_tokens' | 'total_output_tokens' | 'task_name'> & {
   ended_at?: number | null;
   pr_url?: string | null;
   worktree_path?: string | null;
@@ -41,6 +42,7 @@ export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path' |
   tags?: string | null;
   total_input_tokens?: number;
   total_output_tokens?: number;
+  task_name?: string | null;
 };
 
 // ─── session_events ────────────────────────────────────────────────────────

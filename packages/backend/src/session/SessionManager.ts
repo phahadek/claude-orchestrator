@@ -232,6 +232,7 @@ export class SessionManager extends EventEmitter {
       pr_url: null,
       worktree_path: worktreePath,
       session_type: sessionType,
+      task_name: taskName ?? null,
     });
 
     if (sessionType === 'standard') {
