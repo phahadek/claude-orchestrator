@@ -6,6 +6,7 @@ export interface NotionTask {
   dependsOn: string[]; // array of Notion page IDs
   notionUrl: string;
   prUrl?: string; // value of the "PR" URL property on the Notion page, if present
+  priority?: string; // '🔴 High' | '🟡 Medium' | '🟢 Low'
 }
 
 export interface ResolvedTask {

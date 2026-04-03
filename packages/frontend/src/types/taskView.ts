@@ -4,7 +4,8 @@ export type DisplayStatus =
   | 'in_review'
   | 'needs_attention'
   | 'ready_to_merge'
-  | 'done';
+  | 'done'
+  | 'backlog';
 
 export interface TaskView {
   taskId: string;

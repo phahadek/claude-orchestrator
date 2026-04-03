@@ -33,6 +33,7 @@ interface NotionPage {
     'Task Name': { type: 'title'; title: NotionRichTextItem[] };
     Status: { type: 'select'; select: { name: string } | null };
     Type: { type: 'select'; select: { name: string } | null };
+    Priority?: { type: 'select'; select: { name: string } | null };
     'Depends On': { type: 'rich_text'; rich_text: NotionRichTextItem[] };
     Notes: { type: 'rich_text'; rich_text: NotionRichTextItem[] };
     PR?: { type: 'url'; url: string | null };
@@ -114,6 +115,7 @@ function mapPageToTask(page: NotionPage): NotionTask {
 
   const status = page.properties.Status?.select?.name ?? '';
   const type = page.properties.Type?.select?.name ?? '';
+  const priority = page.properties['Priority']?.select?.name ?? '';
 
   const dependsOnRaw =
     page.properties['Depends On']?.rich_text?.[0]?.text?.content ?? '';
@@ -123,7 +125,7 @@ function mapPageToTask(page: NotionPage): NotionTask {
 
   const prUrl = page.properties['PR']?.url ?? undefined;
 
-  return { id: page.id, title, status, type, dependsOn, notionUrl: page.url, prUrl };
+  return { id: page.id, title, status, type, dependsOn, notionUrl: page.url, prUrl, priority };
 }
 
 // ─── Block helpers for fetchTaskPage ────────────────────────────────────────

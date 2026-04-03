@@ -51,7 +51,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
   }
 
   const notionStatus = notionTask?.status ?? '';
-  const priority = '';
+  const priority = notionTask?.priority ?? '';
 
   let codeSession: TaskView['codeSession'] = null;
   if (row.code_session_id) {
@@ -220,11 +220,7 @@ export function createTasksRouter(): Router {
     const cap = getReviewIterationCap();
     const views: TaskView[] = aggregates
       .map((row) => buildTaskViewFromRow(row, cap))
-      .filter(
-        (v) =>
-          !v.notionStatus.includes('Deferred') &&
-          !v.notionStatus.includes('Backlog'),
-      );
+      .filter((v) => !v.notionStatus.includes('Deferred'));
 
     // Resolve blocked status from the full board task list
     if (boardCacheRow) {

@@ -147,6 +147,13 @@
   margin-top: 4px;
 }
 
+/* Backlog section separator */
+.backlogGroup {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 8px;
+  margin-top: 4px;
+}
+
 /* Cards container */
 .groupCards {
   display: flex;
