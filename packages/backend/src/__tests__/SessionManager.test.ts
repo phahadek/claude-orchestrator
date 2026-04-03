@@ -341,39 +341,71 @@ describe('SessionManager.resumeSession() — nudge, timeout, mid-turn detection'
     path.join(__dirname, '..', 'session', 'SessionManager.ts'),
     'utf-8',
   );
+  const agentSource = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'AgentSession.ts'),
+    'utf-8',
+  );
 
-  it('sends a continuation nudge via sendMessage() after the first event from the resumed CLI', () => {
-    // Must use session.once('message', ...) to detect first event
-    expect(source).toMatch(/session\.once\s*\(\s*'message'/);
-    // Must call sendMessage with the continuation nudge
-    expect(source).toMatch(/session\.sendMessage\s*\(/);
-    expect(source).toMatch(/continue where you left off/);
+  // AC #1 — resumeSession() sends a continuation message to stdin after the CLI emits its first event
+  it('exports RESUME_NUDGE_MESSAGE with continuation text', () => {
+    // Must be exported at module level so tests can reference it without hardcoding
+    expect(source).toMatch(/export\s+const\s+RESUME_NUDGE_MESSAGE\s*=/);
+    // Must instruct the model to continue the previous work
+    expect(source).toMatch(/RESUME_NUDGE_MESSAGE\s*=[\s\S]*?continue where you left off/);
+  });
+
+  it('calls this.send() with RESUME_NUDGE_MESSAGE inside the once("message") callback', () => {
+    // Must use session.once('message', () => { ... }) to detect the first CLI event
+    expect(source).toMatch(/session\.once\s*\(\s*'message'\s*,\s*\(\)\s*=>/);
+    // Inside that callback: this.send(row.session_id, RESUME_NUDGE_MESSAGE).
+    // Using this.send() (not session.sendMessage directly) ensures the nudge is also recorded
+    // in the DB as a user_message event and broadcast via WebSocket.
+    expect(source).toMatch(/this\.send\s*\(\s*row\.session_id\s*,\s*RESUME_NUDGE_MESSAGE\s*\)/);
+    // The send call must appear AFTER the once listener setup in the source
+    const onceCallbackStart = source.search(/session\.once\s*\(\s*'message'\s*,\s*\(\)\s*=>\s*\{/);
+    const sendCallIdx = source.indexOf('this.send(row.session_id, RESUME_NUDGE_MESSAGE)');
+    expect(onceCallbackStart).toBeGreaterThanOrEqual(0);
+    expect(sendCallIdx).toBeGreaterThan(onceCallbackStart);
+  });
+
+  // AC #2 — the continuation message is a valid user message JSON object
+  it('the continuation message is written to stdin as { type: "user", message: { role: "user", content } }', () => {
+    // this.send() delegates to session.sendMessage() which writes the correct JSON shape
+    expect(agentSource).toMatch(/JSON\.stringify\s*\(\s*\{\s*type:\s*'user'\s*,\s*message:\s*\{\s*role:\s*'user'\s*,\s*content:\s*message\s*\}\s*\}\s*\)/);
+    // Must be terminated with \n so the CLI readline interface receives a complete line
+    expect(agentSource).toMatch(/JSON\.stringify[^)]+\)\s*\+\s*'\\n'/);
   });
 
   it('sets a 30-second timeout and marks session as error if no events are received', () => {
-    // Must use setTimeout with 30s constant
     expect(source).toMatch(/RESUME_TIMEOUT_MS\s*=\s*30[_]?000/);
     expect(source).toMatch(/setTimeout\s*\(/);
-    // On timeout: must call updateSessionStatus with 'error'
     expect(source).toMatch(/updateSessionStatus\s*\(.*'error'.*Date\.now\(\)\)/s);
-    // On timeout: must emit session_ended with status error
     expect(source).toMatch(/session_ended/);
-    // Must clear the timer when nudge is sent (happy path)
     expect(source).toMatch(/clearTimeout\s*\(\s*nudgeTimer\s*\)/);
   });
 
   it('guards timeout against sessions that end naturally before 30s', () => {
-    // Must check !session.hasEnded before marking error in the timeout callback
     expect(source).toMatch(/!session\.hasEnded/);
   });
 
   it('detects mid-turn state and logs a warning when last event is tool_result or tool_use', () => {
-    // Must fetch events for the session
     expect(source).toMatch(/getEventsBySession\s*\(\s*row\.session_id\s*\)/);
-    // Must check for tool_result or tool_use as last event type
     expect(source).toMatch(/tool_result.*tool_use|tool_use.*tool_result/);
-    // Must log a warning mentioning continuation nudge
     expect(source).toMatch(/Resuming mid-turn session.*continuation nudge|continuation nudge.*mid-turn session/s);
+  });
+
+  // AC #3 — resumeSession() does NOT send an initial prompt (no double-prompting)
+  it('does NOT send an initial prompt when resuming (no double-prompting)', () => {
+    // AgentSession.run() gates the initial prompt write on !this.resumeSessionId
+    expect(agentSource).toMatch(/if\s*\(\s*!this\.resumeSessionId\s*\)/);
+    // resumeSession() passes row.session_id as the resumeSessionId to AgentSession constructor
+    // so the guard is always active for resumed sessions
+    expect(source).toMatch(/row\.session_id,\s*\/\/\s*resumeSessionId|resumeSessionId.*row\.session_id/s);
+    // wireSession (which calls run()) must come AFTER the once listener is set up —
+    // ensuring the nudge is deferred until the CLI is ready, not sent at construction
+    const onceIdx = source.search(/session\.once\s*\(\s*'message'/);
+    const wireIdx = source.indexOf('this.wireSession(row.session_id');
+    expect(wireIdx).toBeGreaterThan(onceIdx);
   });
 });
 

@@ -27,6 +27,13 @@ export interface StartOptions {
 /** How long to suppress lastMessage-only task_updated broadcasts per task (ms). */
 const LAST_MESSAGE_THROTTLE_MS = 3_000;
 
+/**
+ * Continuation nudge sent to a resumed session after its first CLI event.
+ * Exported so tests can verify the exact message without hardcoding it.
+ */
+export const RESUME_NUDGE_MESSAGE =
+  'The dashboard was restarted while you were working. Please continue where you left off.';
+
 export class SessionManager extends EventEmitter {
   private sessions = new Map<string, AgentSession>();
 
@@ -378,8 +385,8 @@ export class SessionManager extends EventEmitter {
     // --print mode requires input to produce output; without a message, the CLI
     // either hangs waiting for stdin or exits immediately. This covers both
     // mid-turn sessions (last event was a tool result) and idle sessions.
-    const NUDGE_MESSAGE =
-      'The dashboard was restarted while you were working. Please continue where you left off.';
+    // Use this.send() (same pattern as sendOrResume) so the nudge is recorded
+    // in the DB as a user_message event and broadcast via WebSocket.
     const RESUME_TIMEOUT_MS = 30_000;
 
     let nudgeSent = false;
@@ -402,7 +409,7 @@ export class SessionManager extends EventEmitter {
     session.once('message', () => {
       nudgeSent = true;
       clearTimeout(nudgeTimer);
-      session.sendMessage(NUDGE_MESSAGE);
+      this.send(row.session_id, RESUME_NUDGE_MESSAGE);
     });
 
     this.wireSession(row.session_id, session, projectDir, branchName, worktreePath);
