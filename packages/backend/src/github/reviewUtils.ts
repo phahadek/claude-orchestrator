@@ -22,8 +22,17 @@ export function shouldAutoReview(
  * Format failing review dimensions into a human-readable message
  * suitable for sending to the coding session as a fix prompt.
  */
-export function formatReviewFeedback(prNumber: number, result: PRReviewResult): string {
+export function formatReviewFeedback(result: PRReviewResult, iteration: number): string {
   const failingDimensions = (result.dimensions ?? []).filter((d) => !d.passed);
-  const lines = failingDimensions.map((d) => `❌ ${d.name}: ${d.notes}`).join('\n');
-  return `PR #${prNumber} review findings — please address the following:\n\n${lines}\n\nOverall: ${result.summary}`;
+  const dimensionLines = failingDimensions.length > 0
+    ? failingDimensions.map((d) => `- **${d.name}**: ${d.notes}`).join('\n')
+    : '(no specific dimension failures recorded)';
+  return (
+    `## Review Feedback — Iteration ${iteration}\n\n` +
+    `**Verdict:** ${result.verdict === 'needs_changes' ? 'Needs changes' : 'Incomplete'}\n\n` +
+    `### Issues found:\n${dimensionLines}\n\n` +
+    `**Overall:** ${result.summary}\n\n` +
+    `Please address these issues and push your changes. ` +
+    `The orchestrator will automatically re-review.`
+  );
 }

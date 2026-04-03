@@ -22,8 +22,10 @@ import { PRReviewService } from './github/PRReviewService';
 import { ReviewOrchestrator } from './github/ReviewOrchestrator';
 import { PRMergeWatcher } from './github/PRMergeWatcher';
 import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
-import { getActiveSessions, getEventsBySession, getDenialsBySession, deleteGhostSessions, getPRByNotionTaskId } from './db/queries';
+import { getActiveSessions, getEventsBySession, getDenialsBySession, deleteGhostSessions, getPRByNotionTaskId, getPRBySessionId, setPRReviewResult, setLastReviewedSha, setHeadSha, getSetting } from './db/queries';
 import { isSystemOnlyUserEvent } from './utils/eventFilters';
+import { shouldAutoReview, formatReviewFeedback } from './github/reviewUtils';
+import type { PRReviewResult } from './github/PRReviewService';
 
 runMigrations();
 loadRuntimeSettingsFromDb();
@@ -84,6 +86,104 @@ setTaskBroadcast(broadcast);
 
 // Broadcast all session events to every connected WS client
 sessionManager.on('message', broadcast);
+
+// ── Push-detected re-review loop ─────────────────────────────────────────────
+
+const PUSH_REVIEW_TIMEOUT_MS = 120_000;
+const DEFAULT_MAX_REVIEW_ITERATIONS = 3;
+const pendingReReviews = new Set<string>();
+
+function getMaxReviewIterations(): number {
+  const raw = getSetting('max_review_iterations');
+  if (!raw) return DEFAULT_MAX_REVIEW_ITERATIONS;
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_REVIEW_ITERATIONS;
+}
+
+
+sessionManager.on('push_detected', ({ sessionId: codingSessionId }: { sessionId: string }) => {
+  if (!AUTO_REVIEW_ENABLED) return;
+  if (pendingReReviews.has(codingSessionId)) return;
+
+  const prRow = getPRBySessionId(codingSessionId);
+  if (!prRow || prRow.state !== 'open') return;
+  if (!prRow.review_session_id) return;
+
+  pendingReReviews.add(codingSessionId);
+
+  void (async () => {
+    let headSha = prRow.head_sha;
+    try {
+      const freshPR = await githubClient.fetchPR(prRow.repo, prRow.pr_number);
+      headSha = freshPR.headSha;
+      if (headSha !== prRow.head_sha) {
+        setHeadSha(prRow.pr_number, prRow.repo, headSha);
+      }
+    } catch (e) {
+      console.warn(`[server] failed to fetch latest PR state for #${prRow.pr_number}:`, e);
+    }
+
+    const maxIter = getMaxReviewIterations();
+    if (!shouldAutoReview(
+      { reviewIteration: prRow.review_iteration, headSha, lastReviewedSha: prRow.last_reviewed_sha },
+      maxIter,
+    )) {
+      pendingReReviews.delete(codingSessionId);
+      return;
+    }
+
+    const iteration = prRow.review_iteration + 1;
+    try {
+      let result: PRReviewResult;
+      try {
+        result = await Promise.race([
+          prReviewService.reReviewPR(prRow.pr_number, prRow.repo),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Re-review timed out')), PUSH_REVIEW_TIMEOUT_MS),
+          ),
+        ]);
+      } catch (e) {
+        const summary = e instanceof Error ? e.message : String(e);
+        console.error(`[server] re-review failed for PR #${prRow.pr_number}:`, e);
+        setPRReviewResult(prRow.pr_number, prRow.repo, JSON.stringify({ verdict: 'error', summary, dimensions: [] }));
+        sessionManager.emit('message', {
+          type: 'review_verdict',
+          prNumber: prRow.pr_number,
+          repo: prRow.repo,
+          verdict: 'error',
+          summary,
+          iteration,
+        });
+        return;
+      }
+
+      setLastReviewedSha(prRow.pr_number, prRow.repo, headSha);
+      sessionManager.emit('message', {
+        type: 'review_verdict',
+        prNumber: prRow.pr_number,
+        repo: prRow.repo,
+        verdict: result.verdict,
+        summary: result.summary,
+        iteration,
+      });
+
+      if (result.verdict === 'needs_changes') {
+        sessionManager.send(codingSessionId, formatReviewFeedback(result, iteration));
+      } else if (result.verdict === 'incomplete') {
+        const message = `Review for PR #${prRow.pr_number} returned an incomplete verdict — the reviewer could not assess the PR. Manual intervention needed.`;
+        console.warn(`[server] ${message}`);
+        sessionManager.emit('message', {
+          type: 'review_incomplete',
+          prNumber: prRow.pr_number,
+          repo: prRow.repo,
+          message,
+        });
+      }
+    } finally {
+      pendingReReviews.delete(codingSessionId);
+    }
+  })();
+});
 
 wss.on('connection', (ws) => {
   console.log('[WS] client connected');
