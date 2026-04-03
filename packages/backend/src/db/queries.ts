@@ -481,7 +481,7 @@ export function getTaskTitleFromCache(taskId: string): string | null {
 
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
-export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_session_id' | 'review_iteration' | 'last_reviewed_sha' | 'node_id' | 'mergeable' | 'merge_state' | 'merge_state_checked_at'> & {
+export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_session_id' | 'review_iteration' | 'last_reviewed_sha' | 'node_id' | 'mergeable' | 'merge_state' | 'merge_state_checked_at' | 'pending_push'> & {
   review_session_id?: string | null;
   review_iteration?: number;
   last_reviewed_sha?: string | null;
@@ -557,6 +557,12 @@ export function setHeadSha(prNumber: number, repo: string, sha: string | null): 
     SET head_sha = @head_sha
     WHERE pr_number = @pr_number AND repo = @repo
   `).run({ pr_number: prNumber, repo, head_sha: sha });
+}
+
+export function setPendingPush(prNumber: number, repo: string, value: 0 | 1): void {
+  db.prepare<{ pr_number: number; repo: string; pending_push: number }>(`
+    UPDATE pull_requests SET pending_push = @pending_push WHERE pr_number = @pr_number AND repo = @repo
+  `).run({ pr_number: prNumber, repo, pending_push: value });
 }
 
 export function getPRBySessionId(sessionId: string): PullRequestRow | null {

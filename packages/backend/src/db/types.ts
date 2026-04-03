@@ -142,4 +142,5 @@ export interface PullRequestRow {
   mergeable: number | null;   // 0 | 1 | NULL (SQLite boolean, NULL = unknown)
   merge_state: string | null; // 'clean' | 'dirty' | 'blocked' | 'unknown' | null
   merge_state_checked_at: string | null; // ISO timestamp
+  pending_push: number;       // 0 | 1 — push arrived before initial review completed
 }
