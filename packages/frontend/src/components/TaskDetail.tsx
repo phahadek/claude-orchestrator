@@ -310,42 +310,22 @@ export function TaskDetail({ task, send, onClose, sessions = [] }: Props) {
               <span className={styles.sectionTitle}>Pull Request</span>
             </div>
 
-            <div className={styles.prTitle}>
-              <span className={styles.prNumber}>#{task.pr.prNumber}</span>
-              <span className={styles.prTitleText}>{task.pr.title}</span>
-            </div>
-            <div className={styles.prBranch}>
-              {task.pr.headBranch} → {task.pr.baseBranch}
-            </div>
-            <div className={styles.prMeta}>
+            {/* Line 1: PR number + title (truncated) + state badge */}
+            <div className={styles.prTitleRow}>
+              <div className={styles.prTitleLeft}>
+                <span className={styles.prNumber}>#{task.pr.prNumber}</span>
+                <span className={styles.prTitleText}>{task.pr.title}</span>
+              </div>
               <span className={`${styles.prStateBadge} ${styles[`prState--${task.pr.state}${task.pr.draft ? '-draft' : ''}`]}`}>
                 {prStateLabel(task.pr.state, task.pr.draft)}
               </span>
             </div>
 
-            {reviewError && (
-              <div className={styles.errorBanner}>{reviewError}</div>
-            )}
-
-            <div className={styles.prActions}>
-              {task.pr.state === 'open' && (
-                <button
-                  className={styles.reviewButton}
-                  disabled={reviewInFlight}
-                  onClick={() => void handleRunReview()}
-                >
-                  {reviewInFlight ? 'Reviewing…' : 'Run Review'}
-                </button>
-              )}
-              {task.pr.state === 'open' && task.review?.verdict === 'approved' && (
-                <button
-                  className={styles.mergeButton}
-                  disabled={mergeInFlight}
-                  onClick={() => void handleMerge()}
-                >
-                  {mergeInFlight ? 'Merging…' : 'Merge ↓'}
-                </button>
-              )}
+            {/* Line 2: branch info + GitHub link */}
+            <div className={styles.prBranchRow}>
+              <span className={styles.prBranch}>
+                {task.pr.headBranch} → {task.pr.baseBranch}
+              </span>
               <a
                 href={task.pr.prUrl}
                 target="_blank"
@@ -355,6 +335,32 @@ export function TaskDetail({ task, send, onClose, sessions = [] }: Props) {
                 GitHub ↗
               </a>
             </div>
+
+            {reviewError && (
+              <div className={styles.errorBanner}>{reviewError}</div>
+            )}
+
+            {/* Line 3 (conditional): action buttons only when PR is open */}
+            {task.pr.state === 'open' && (
+              <div className={styles.prActions}>
+                <button
+                  className={styles.reviewButton}
+                  disabled={reviewInFlight}
+                  onClick={() => void handleRunReview()}
+                >
+                  {reviewInFlight ? 'Reviewing…' : 'Run Review'}
+                </button>
+                {task.review?.verdict === 'approved' && (
+                  <button
+                    className={styles.mergeButton}
+                    disabled={mergeInFlight}
+                    onClick={() => void handleMerge()}
+                  >
+                    {mergeInFlight ? 'Merging…' : 'Merge ↓'}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
 
