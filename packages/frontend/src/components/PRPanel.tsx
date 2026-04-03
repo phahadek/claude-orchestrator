@@ -21,6 +21,7 @@ export function PRPanel({ activeProjectId, onViewSession, onCollapse, refreshTri
   const [reviewElapsed, setReviewElapsed] = useState<Map<number, number>>(new Map());
   const [mergeInFlight, setMergeInFlight] = useState<Set<number>>(new Set());
   const [reReviewInFlight, setReReviewInFlight] = useState<Set<number>>(new Set());
+  const [fixConflictsInFlight, setFixConflictsInFlight] = useState<Set<number>>(new Set());
   const [approveInFlight, setApproveInFlight] = useState<Set<number>>(new Set());
   const [removeInFlight, setRemoveInFlight] = useState<Set<number>>(new Set());
   const [clearInFlight, setClearInFlight] = useState(false);
@@ -211,6 +212,34 @@ export function PRPanel({ activeProjectId, onViewSession, onCollapse, refreshTri
     }
   };
 
+  const handleFixConflicts = async (prNumber: number) => {
+    const pr = prs.find((p) => p.prNumber === prNumber);
+    if (!pr) return;
+    const [owner, repoName] = pr.repo.split('/');
+    setFixConflictsInFlight((prev) => new Set(prev).add(prNumber));
+    setError(prNumber, null);
+    try {
+      const res = await fetch(
+        `/api/prs/${owner}/${repoName}/${prNumber}/fix-conflicts`,
+        { method: 'POST' },
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: 'Unknown error' })) as { error?: string };
+        setError(prNumber, `Fix conflicts failed: ${body.error ?? 'Unknown error'}`);
+        return;
+      }
+      await fetchPRs();
+    } catch {
+      setError(prNumber, 'Fix conflicts failed: network error');
+    } finally {
+      setFixConflictsInFlight((prev) => {
+        const next = new Set(prev);
+        next.delete(prNumber);
+        return next;
+      });
+    }
+  };
+
   const handleApprove = async (prNumber: number) => {
     const pr = prs.find((p) => p.prNumber === prNumber);
     if (!pr) return;
@@ -335,11 +364,13 @@ export function PRPanel({ activeProjectId, onViewSession, onCollapse, refreshTri
               onRemove={handleRemovePR}
               onViewSession={onViewSession}
               onReReview={handleReReview}
+              onFixConflicts={handleFixConflicts}
               onApprove={handleApprove}
               reviewInFlight={reviewInFlight.has(pr.prNumber)}
               mergeInFlight={mergeInFlight.has(pr.prNumber)}
               removeInFlight={removeInFlight.has(pr.prNumber)}
               reReviewInFlight={reReviewInFlight.has(pr.prNumber)}
+              fixConflictsInFlight={fixConflictsInFlight.has(pr.prNumber)}
               approveInFlight={approveInFlight.has(pr.prNumber)}
               reviewElapsed={reviewElapsed.get(pr.prNumber) ?? 0}
               error={cardErrors.get(pr.prNumber) ?? null}
