@@ -8,6 +8,7 @@ import { formatModelName } from './SessionCard';
 import { formatTokenCount, formatCost, calculateCost } from '@claude-dashboard/backend/src/utils/usage';
 import { ReviewDetailView } from './ReviewDetailView';
 import { EventTranscript } from './EventTranscript';
+import { DiffViewer } from './DiffViewer';
 import styles from './SessionDetail.module.css';
 
 // Re-export EventRow and groupSessionEvents for consumers (e.g. tests) that import
@@ -37,11 +38,13 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
   const [noteValue, setNoteValue] = useState('');
   const [tagInput, setTagInput] = useState('');
   const [showReviewTranscript, setShowReviewTranscript] = useState(false);
+  const [activeTab, setActiveTab] = useState<'transcript' | 'diff'>('transcript');
 
   useEffect(() => {
     setEditingNote(false);
     setNoteValue(session?.note ?? '');
     setTagInput('');
+    setActiveTab('transcript');
   }, [session?.sessionId]);
 
   if (!session) return null;
@@ -288,12 +291,41 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
         </>
       ) : (
         <>
-          <EventTranscript
-            events={session.events}
-            permissionDenials={session.permissionDenials}
-          />
+          {session.prUrl != null && (
+            <div className={styles.tabBar}>
+              <button
+                className={`${styles.tabButton} ${activeTab === 'transcript' ? styles['tabButton--active'] : ''}`}
+                onClick={() => setActiveTab('transcript')}
+              >
+                Transcript
+              </button>
+              <button
+                className={`${styles.tabButton} ${activeTab === 'diff' ? styles['tabButton--active'] : ''}`}
+                onClick={() => setActiveTab('diff')}
+              >
+                Diff
+              </button>
+            </div>
+          )}
 
-          {isActive && (
+          {activeTab === 'transcript' && (
+            <EventTranscript
+              events={session.events}
+              permissionDenials={session.permissionDenials}
+            />
+          )}
+
+          {activeTab === 'diff' && session.prUrl != null && (() => {
+            const match = /\/pull\/(\d+)/.exec(session.prUrl);
+            const prNumber = match ? parseInt(match[1], 10) : null;
+            return prNumber != null ? (
+              <DiffViewer prNumber={prNumber} projectId={session.project_id} />
+            ) : (
+              <div className={styles.diffError}>Could not parse PR number from URL.</div>
+            );
+          })()}
+
+          {activeTab === 'transcript' && isActive && (
             <div className={styles.composer}>
               <textarea
                 ref={composerRef}
