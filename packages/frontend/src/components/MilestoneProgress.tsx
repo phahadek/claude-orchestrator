@@ -1,11 +1,11 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
-import type { ResolvedTask } from '@claude-dashboard/backend/src/notion/types';
-import { computeWaves } from '../utils/computeWaves';
+import type { TaskView } from '../types/taskView';
+import { computeProgressFromTaskViews } from '../utils/computeWaves';
 import { WaveView } from './WaveView';
 import styles from './MilestoneProgress.module.css';
 
 interface Props {
-  tasks: ResolvedTask[];
+  tasks: TaskView[];
 }
 
 const STATUS_LABELS: { key: string; label: string; cls: string }[] = [
@@ -21,7 +21,7 @@ export function MilestoneProgress({ tasks }: Props) {
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   const { waves, statusCounts, deferredCount, totalNonDeferred, doneCount } = useMemo(
-    () => computeWaves(tasks),
+    () => computeProgressFromTaskViews(tasks),
     [tasks],
   );
 

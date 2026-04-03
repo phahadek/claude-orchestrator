@@ -1,6 +1,6 @@
 import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
 import { formatTokenCount, formatUtilization } from '@claude-dashboard/backend/src/utils/usage';
-import type { ResolvedTask } from '@claude-dashboard/backend/src/notion/types';
+import type { TaskView } from '../types/taskView';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { MilestoneProgress } from './MilestoneProgress';
 import styles from './Header.module.css';
@@ -17,7 +17,7 @@ interface Props {
   onViewChange: (view: TopView) => void;
   totalTokens?: number;
   planTokenCap?: number;
-  tasks?: ResolvedTask[];
+  tasks?: TaskView[];
   incompleteReviewCount?: number;
 }
 
