@@ -96,16 +96,13 @@ export class PRReviewService {
    * Returns true if the PR was successfully transitioned from draft to ready.
    */
   async handleApprovedVerdict(prNumber: number, repo: string, taskId: string | null): Promise<boolean> {
-    const prRow = getPRByNumber(prNumber, repo);
     let draftTransitioned = false;
-    if (prRow?.draft === 1) {
-      try {
-        await this.github.markPRReady(repo, prNumber);
-        updatePRDraftStatus(prNumber, repo, 0);
-        draftTransitioned = true;
-      } catch (e) {
-        console.error(`[PRReviewService] markPRReady failed for PR #${prNumber}:`, e);
-      }
+    try {
+      await this.github.markPRReady(repo, prNumber);
+      updatePRDraftStatus(prNumber, repo, 0);
+      draftTransitioned = true;
+    } catch (e) {
+      console.warn(`[PRReviewService] markPRReady skipped for PR #${prNumber}:`, e);
     }
     if (taskId) {
       await this.notion.updateStatus(taskId, '👀 In Review').catch((e: unknown) =>
