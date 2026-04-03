@@ -1,4 +1,4 @@
-import { getPRByNotionTaskId, getLatestCodeSessionByNotionTaskId, getSetting } from '../db/queries';
+import { getPRByNotionTaskId, getLatestCodeSessionByNotionTaskId, getSetting, getTaskCache } from '../db/queries';
 
 export type DisplayStatus =
   | 'ready'
@@ -19,51 +19,39 @@ export interface TaskStatusInput {
 }
 
 /**
- * Pure, stateless function that derives a display status for a task by
- * combining Notion status, session state, PR state, and review verdict.
- * Conditions are evaluated in priority order (most terminal first).
+ * Pure, stateless function that derives a display status for a task.
+ * Notion status is the primary source of truth for grouping.
+ * Local signals (PR state, review verdict) are used only for enrichment
+ * within the Notion-derived group, not for overriding it.
+ * Exception: a merged or closed PR always results in 'done'.
  */
 export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
   const {
-    codeSessionStatus,
+    notionStatus,
     prState,
     reviewVerdict,
     reviewIterationCount,
     reviewIterationCap,
-    notionStatus,
   } = input;
 
-  // 1. done — PR merged or closed (terminal state)
+  // 1. done — PR merged or closed (terminal override, takes precedence over Notion)
   if (prState === 'merged' || prState === 'closed') {
     return 'done';
   }
 
-  // 2. ready_to_merge — review approved, PR still open
-  if (reviewVerdict === 'approved' && prState === 'open') {
-    return 'ready_to_merge';
-  }
+  // 2. Notion status is the primary source of truth for grouping
+  if (notionStatus.includes('Done')) return 'done';
 
-  // 3. needs_attention — review iteration cap exceeded
-  if (reviewIterationCount >= reviewIterationCap) {
-    return 'needs_attention';
-  }
-
-  // 4. in_review — PR exists, not yet approved
-  if (prState === 'open') {
+  if (notionStatus.includes('In Review')) {
+    // Enrich with review-specific sub-states within the In Review group
+    if (reviewVerdict === 'approved' && prState === 'open') return 'ready_to_merge';
+    if (reviewIterationCount >= reviewIterationCap) return 'needs_attention';
     return 'in_review';
   }
 
-  // 5. in_progress — code session running, no PR yet
-  if (codeSessionStatus === 'running') {
-    return 'in_progress';
-  }
-
-  // 6. Notion status fallback — when no session/PR data exists
-  if (notionStatus.includes('Done')) return 'done';
   if (notionStatus.includes('In Progress')) return 'in_progress';
-  if (notionStatus.includes('In Review')) return 'in_review';
 
-  // 7. ready — default
+  // 3. ready — default (includes 🗂️ Ready and any unrecognized status)
   return 'ready';
 }
 
@@ -78,11 +66,22 @@ function getReviewIterationCap(): number {
 
 /**
  * Fetch the live state for a Notion task from SQLite and derive its display status.
- * Returns null if no session or PR is found (i.e. task is not tracked in DB yet).
+ * Reads the Notion status from the task cache so grouping respects Notion as source of truth.
  */
 export function deriveDisplayStatusFromDb(notionTaskId: string): DisplayStatus {
   const prRow = getPRByNotionTaskId(notionTaskId);
   const sessionRow = getLatestCodeSessionByNotionTaskId(notionTaskId);
+
+  let notionStatus = '';
+  const taskCacheRow = getTaskCache(notionTaskId);
+  if (taskCacheRow) {
+    try {
+      const task = JSON.parse(taskCacheRow.raw_json) as { status?: string };
+      notionStatus = task.status ?? '';
+    } catch {
+      // ignore malformed cache
+    }
+  }
 
   let reviewVerdict: string | null = null;
   if (prRow?.review_result) {
@@ -95,7 +94,7 @@ export function deriveDisplayStatusFromDb(notionTaskId: string): DisplayStatus {
   }
 
   return deriveDisplayStatus({
-    notionStatus: '',
+    notionStatus,
     codeSessionStatus: sessionRow?.status ?? null,
     prState: prRow?.state ?? null,
     prDraft: (prRow?.draft ?? 0) === 1,
