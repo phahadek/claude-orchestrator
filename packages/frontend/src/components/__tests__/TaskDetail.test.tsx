@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { TaskDetail } from '../TaskDetail';
 import type { TaskView } from '@claude-dashboard/backend/src/routes/tasks';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
+import type { SessionState } from '../../hooks/useSessionStore';
 
 function makeTask(overrides?: Partial<TaskView>): TaskView {
   return {
@@ -18,6 +19,17 @@ function makeTask(overrides?: Partial<TaskView>): TaskView {
     codeSession: null,
     pr: null,
     review: null,
+    ...overrides,
+  };
+}
+
+function makeSessionState(overrides?: Partial<SessionState>): SessionState {
+  return {
+    sessionId: 'sess-1',
+    taskName: 'Test Task',
+    notionTaskUrl: 'https://notion.so/task',
+    status: 'running',
+    events: [],
     ...overrides,
   };
 }
@@ -272,5 +284,36 @@ describe('TaskDetail', () => {
     });
 
     vi.unstubAllGlobals();
+  });
+
+  // ── EventTranscript integration ──
+
+  it('renders EventTranscript for code session when sessions prop includes matching session', () => {
+    const codeSession = makeCodeSession({ sessionId: 'sess-1' });
+    const sessions: SessionState[] = [makeSessionState({ sessionId: 'sess-1', events: [] })];
+    render(<TaskDetail task={makeTask({ codeSession })} send={vi.fn()} onClose={vi.fn()} sessions={sessions} />);
+    fireEvent.click(screen.getByText('▶ View full transcript'));
+    expect(screen.getByText('No events yet.')).toBeTruthy();
+  });
+
+  it('renders EventTranscript for review session when sessions prop includes matching session', () => {
+    const review = makeReview({ sessionId: 'review-sess-1' });
+    const sessions: SessionState[] = [makeSessionState({ sessionId: 'review-sess-1', status: 'done', events: [] })];
+    render(<TaskDetail task={makeTask({ review })} send={vi.fn()} onClose={vi.fn()} sessions={sessions} />);
+    fireEvent.click(screen.getByText('▶ View review transcript'));
+    expect(screen.getByText('No events yet.')).toBeTruthy();
+  });
+
+  it('EventTranscript displays live events from session store for code session', () => {
+    const codeSession = makeCodeSession({ sessionId: 'sess-1' });
+    const sessions: SessionState[] = [
+      makeSessionState({
+        sessionId: 'sess-1',
+        events: [{ eventType: 'text', content: 'Working on the fix…', timestamp: 1000 }],
+      }),
+    ];
+    render(<TaskDetail task={makeTask({ codeSession })} send={vi.fn()} onClose={vi.fn()} sessions={sessions} />);
+    fireEvent.click(screen.getByText('▶ View full transcript'));
+    expect(screen.getByText('Working on the fix…')).toBeTruthy();
   });
 });
