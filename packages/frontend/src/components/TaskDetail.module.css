@@ -458,6 +458,35 @@
   padding: 6px 10px;
 }
 
+.conflictBanner {
+  font-size: 0.82rem;
+  color: #fab387;
+  background: rgba(250, 179, 135, 0.1);
+  border: 1px solid rgba(250, 179, 135, 0.3);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+}
+
+.reReviewButton {
+  background: rgba(250, 179, 135, 0.1);
+  border: 1px solid rgba(250, 179, 135, 0.3);
+  border-radius: var(--radius-sm);
+  color: #fab387;
+  cursor: pointer;
+  font-size: 0.82rem;
+  padding: 5px 12px;
+  transition: background 0.15s;
+}
+
+.reReviewButton:hover:not(:disabled) {
+  background: rgba(250, 179, 135, 0.2);
+}
+
+.reReviewButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .prActions {
   display: flex;
   align-items: center;

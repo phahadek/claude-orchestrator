@@ -30,6 +30,7 @@ export interface PRListItem {
   createdAt: string;
   updatedAt: string;
   reviewIteration?: number;
+  mergeState: string | null;
 }
 
 export interface PRCardProps {
@@ -76,19 +77,26 @@ export function PRCard({
 
   const isFinished = pr.state === 'merged' || pr.state === 'closed';
   const verdict = pr.reviewResult?.verdict ?? null;
-  const canMerge = pr.state === 'open' && verdict === 'approved';
+  const hasConflicts = pr.mergeState === 'dirty';
+  const canMerge = pr.state === 'open' && verdict === 'approved' && !hasConflicts;
   const sessionAlive = pr.sessionId !== null;
   // Single context-aware review action:
-  // - approved or finished → no button
+  // - finished → no button
+  // - has conflicts (dirty) → "Re-review" to resolve conflicts (regardless of verdict)
+  // - approved (no conflicts) → no button
   // - needs_changes/incomplete + session alive → "Re-review" (sends findings + queues re-review)
   // - everything else (no review yet, or session dead) → "Run Review"
   const reviewAction: 'run-review' | 're-review' | null =
-    isFinished || verdict === 'approved'
+    isFinished
       ? null
-      : (verdict === 'needs_changes' || verdict === 'incomplete') && sessionAlive
+      : hasConflicts
         ? 're-review'
-        : 'run-review';
-  const showApproveButton = !isFinished && verdict !== 'approved';
+        : verdict === 'approved'
+          ? null
+          : (verdict === 'needs_changes' || verdict === 'incomplete') && sessionAlive
+            ? 're-review'
+            : 'run-review';
+  const showApproveButton = !isFinished && verdict !== 'approved' && !hasConflicts;
 
   const verdictClass = isFinished
     ? styles[`state-${pr.state}`]
@@ -168,6 +176,9 @@ export function PRCard({
 
       <div className={styles.cardActions}>
         <span className={`${styles.verdictBadge} ${verdictClass}`}>{verdictLabel}</span>
+        {hasConflicts && (
+          <span className={styles.conflictBadge} title="PR has merge conflicts">⚠ Merge Conflicts</span>
+        )}
 
         <div className={styles.buttons}>
           <button

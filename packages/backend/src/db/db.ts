@@ -99,3 +99,6 @@ try { db.exec(`ALTER TABLE pull_requests ADD COLUMN last_reviewed_sha TEXT`); } 
 try { db.exec(`ALTER TABLE sessions ADD COLUMN model TEXT`); } catch { /* already exists */ }
 try { db.exec(`ALTER TABLE pull_requests ADD COLUMN node_id TEXT`); } catch { /* already exists */ }
 try { db.exec(`ALTER TABLE sessions ADD COLUMN task_name TEXT`); } catch { /* already exists */ }
+try { db.exec(`ALTER TABLE pull_requests ADD COLUMN mergeable INTEGER`); } catch { /* already exists */ }
+try { db.exec(`ALTER TABLE pull_requests ADD COLUMN merge_state TEXT`); } catch { /* already exists */ }
+try { db.exec(`ALTER TABLE pull_requests ADD COLUMN merge_state_checked_at TEXT`); } catch { /* already exists */ }
