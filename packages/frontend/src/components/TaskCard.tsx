@@ -19,6 +19,7 @@ const STATUS_LABELS: Record<DisplayStatus, string> = {
   in_review: '👀 In Review',
   ready: '🗂️ Ready',
   done: '✔️ Done',
+  backlog: '🗂️ Backlog',
 };
 
 function verdictLabel(verdict: string): string {
