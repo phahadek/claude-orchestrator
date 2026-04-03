@@ -1,0 +1,39 @@
+services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - packages/backend/.env
+    environment:
+      - NODE_ENV=production
+      # Store the database inside the mounted data volume
+      - DB_PATH=/app/data/dashboard.db
+      # Claude sessions directory — matches the host ~/.claude/projects mount below
+      - SESSIONS_DIR=/root/.claude/projects
+    volumes:
+      # ── Required: Claude CLI auth credentials ─────────────────────────────
+      # Mount the host ~/.claude directory so the claude CLI is authenticated
+      # without requiring in-container login. This also provides the SESSIONS_DIR
+      # for reading existing session JSONL files.
+      - "${HOME}/.claude:/root/.claude"
+
+      # ── Required: claude CLI binary ────────────────────────────────────────
+      # The container does not install the claude CLI. Mount the host binary
+      # instead. Adjust CLAUDE_BIN to match the output of `which claude`.
+      # Common locations: /usr/local/bin/claude, ~/.local/bin/claude
+      - "${CLAUDE_BIN:-/usr/local/bin/claude}:/usr/local/bin/claude:ro"
+
+      # ── Required: SQLite database persistence ──────────────────────────────
+      # Persists dashboard.db across container restarts.
+      - "./data:/app/data"
+
+      # ── Required: Project directories ──────────────────────────────────────
+      # Mount each project directory referenced in your PROJECTS env var.
+      # The container path must match the path used in the PROJECTS JSON.
+      # Example (uncomment and adjust for each project):
+      # - "/path/to/your/project:/path/to/your/project"
+
+    restart: unless-stopped

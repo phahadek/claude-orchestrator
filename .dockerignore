@@ -1,0 +1,14 @@
+node_modules
+packages/*/node_modules
+packages/backend/dist
+packages/frontend/dist
+.claude
+.claire
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+packages/backend/.env
+packages/frontend/.env
+data
+.git

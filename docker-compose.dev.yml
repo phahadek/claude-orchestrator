@@ -1,0 +1,38 @@
+services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Override the production CMD with the dev script (hot reload via ts-node + Vite HMR)
+    command: npm run dev
+    ports:
+      # Backend
+      - "${PORT:-3000}:3000"
+      # Vite dev server
+      - "5173:5173"
+    env_file:
+      - packages/backend/.env
+    environment:
+      - NODE_ENV=development
+      - DB_PATH=/app/data/dashboard.db
+      - SESSIONS_DIR=/root/.claude/projects
+    volumes:
+      # ── Source mounts for hot reload ───────────────────────────────────────
+      - ./packages:/app/packages
+      - ./package.json:/app/package.json:ro
+      - ./package-lock.json:/app/package-lock.json:ro
+
+      # ── Claude CLI auth credentials ────────────────────────────────────────
+      - "${HOME}/.claude:/root/.claude"
+
+      # ── claude CLI binary ──────────────────────────────────────────────────
+      - "${CLAUDE_BIN:-/usr/local/bin/claude}:/usr/local/bin/claude:ro"
+
+      # ── SQLite database persistence ────────────────────────────────────────
+      - "./data:/app/data"
+
+      # ── Project directories ────────────────────────────────────────────────
+      # Example (uncomment and adjust for each project):
+      # - "/path/to/your/project:/path/to/your/project"
+
+    restart: unless-stopped
