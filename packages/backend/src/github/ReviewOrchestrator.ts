@@ -151,6 +151,10 @@ export class ReviewOrchestrator {
     if (!prRow || prRow.state !== 'open') return;
     if (!prRow.review_session_id) return;
 
+    // Mark as pending before any awaits to prevent duplicate triggers from
+    // concurrent push_detected events firing before the first one reaches the add().
+    this.pendingReReviews.add(codingSessionId);
+
     // Fetch the latest PR state from GitHub to get the current head SHA.
     // This is more reliable than the DB value which may be stale or null at the
     // moment push_detected fires.
@@ -170,9 +174,11 @@ export class ReviewOrchestrator {
     if (!shouldAutoReview(
       { reviewIteration: prRow.review_iteration, headSha, lastReviewedSha: prRow.last_reviewed_sha },
       maxIter,
-    )) return;
+    )) {
+      this.pendingReReviews.delete(codingSessionId);
+      return;
+    }
 
-    this.pendingReReviews.add(codingSessionId);
     try {
       const iteration = incrementReviewIteration(prRow.pr_number, prRow.repo);
 

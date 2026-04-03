@@ -91,7 +91,7 @@ function makeMockNotion(): NotionClient {
   return {
     fetchTaskPage: vi.fn().mockResolvedValue(mockTask),
     fetchReadyTasks: vi.fn(),
-    updateStatus: vi.fn(),
+    updateStatus: vi.fn().mockResolvedValue(undefined),
     attachPR: vi.fn(),
   } as unknown as NotionClient;
 }
