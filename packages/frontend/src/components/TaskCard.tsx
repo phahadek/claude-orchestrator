@@ -41,6 +41,9 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
   const dispatchTask = useDispatch(send, project);
   const isNonCode = !task.taskType.includes('💻');
 
+  // Only Ready code tasks that aren't blocked can be launched.
+  // In Progress and In Review tasks already have an active session — launching
+  // another would create a duplicate.
   const isLaunchable =
     task.notionStatus === '🗂️ Ready' &&
     !isNonCode &&
