@@ -1,4 +1,4 @@
-import { getEventsBySession, setPRReviewResult, getPRByNumber, setReviewSessionId, updatePRDraftStatus, incrementReviewIteration } from '../db/queries';
+import { getEventsBySession, setPRReviewResult, getPRByNumber, setReviewSessionId, updatePRDraftStatus, incrementReviewIteration, setLastReviewedSha } from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
 import type { NotionClient } from '../notion/NotionClient';
 import type { SessionManager } from '../session/SessionManager';
@@ -118,6 +118,8 @@ export class PRReviewService {
     const { mergeable } = await this.github.getMergeability(prNumber, repo);
     const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
+    // Set last_reviewed_sha so the next push_detected can compare correctly.
+    setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
     if (finalResult.verdict === 'approved') {
       await this.handleApprovedVerdict(prNumber, repo, prRow.notion_task_id);
     }

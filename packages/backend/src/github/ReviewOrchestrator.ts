@@ -1,5 +1,5 @@
 import { config } from '../config';
-import { setPRReviewResult, getSetting, getPRByNumber, incrementReviewIteration } from '../db/queries';
+import { setPRReviewResult, getSetting, getPRByNumber, incrementReviewIteration, setPendingPush } from '../db/queries';
 import type { PRReviewService, PRReviewResult } from './PRReviewService';
 import type { SessionManager } from '../session/SessionManager';
 import type { ReviewJob } from './types';
@@ -135,6 +135,17 @@ export class ReviewOrchestrator {
         repo: job.repo,
         message,
       });
+    }
+
+    // After the initial review, check if a push arrived during the review window.
+    // If so, clear the flag and trigger re-review via push_detected so the
+    // standard re-review path (server.ts push_detected handler) handles it,
+    // now that review_session_id is populated.
+    const postReviewRow = getPRByNumber(job.prNumber, job.repo);
+    if (postReviewRow?.pending_push && postReviewRow.session_id) {
+      setPendingPush(job.prNumber, job.repo, 0);
+      console.log(`[ReviewOrchestrator] pending_push detected for PR #${job.prNumber} — triggering re-review`);
+      this.sessionManager.emit('push_detected', { sessionId: postReviewRow.session_id });
     }
   }
 
