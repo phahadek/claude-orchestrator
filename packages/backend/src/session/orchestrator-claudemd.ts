@@ -3,6 +3,17 @@ export interface OrchestratorClaudeMdParams {
   taskUrl: string;
   projectContextUrl: string;
   targetBranch: string;
+  /** Pre-PR gate commands. Defaults to Node.js/Vite commands when omitted. */
+  prGate?: {
+    typeCheck: string;
+    build: string;
+  };
+  /**
+   * Bash rules (Rule 5+). Each item is the full rule text — the first line
+   * becomes the bold heading, subsequent lines become the body paragraph.
+   * Defaults to the `npx` convention when omitted.
+   */
+  bashRules?: string[];
 }
 
 /**
@@ -26,7 +37,22 @@ export interface OrchestratorClaudeMdParams {
  * 11. Separator + "# Project Instructions (from project CLAUDE.md)" (added by caller)
  */
 export function buildOrchestratorClaudeMd(params: OrchestratorClaudeMdParams): string {
-  const { taskName, taskUrl, projectContextUrl, targetBranch } = params;
+  const { taskName, taskUrl, projectContextUrl, targetBranch, prGate, bashRules } = params;
+
+  const resolvedPrGate = prGate ?? { typeCheck: 'npx tsc --noEmit', build: 'npx vite build' };
+  const resolvedBashRules = bashRules ?? [
+    'Use `npx` instead of bare tool names.\n`tsc` → `npx tsc`. Bare commands may not be on PATH.',
+  ];
+
+  const bashRulesText = resolvedBashRules
+    .map((rule, i) => {
+      const ruleNum = i + 5;
+      const lines = rule.split('\n');
+      const heading = lines[0];
+      const body = lines.slice(1).join('\n');
+      return `**Rule ${ruleNum} — ${heading}**${body ? '\n' + body : ''}`;
+    })
+    .join('\n\n');
 
   // Sections 1-9 — returned by this function.
   // Section 10 (separator + project instructions heading) is written by the caller.
@@ -105,8 +131,8 @@ The orchestrator backend handles all status transitions (In Progress → In Revi
 Run in order — all must pass before opening the PR:
 
 1. Rebase onto \`${targetBranch}\` and resolve any conflicts.
-2. \`npx tsc --noEmit\` — must pass in both \`packages/backend\` and \`packages/frontend\`.
-3. \`npx vite build\` — must pass without errors.
+2. \`${resolvedPrGate.typeCheck}\` — must pass.
+3. \`${resolvedPrGate.build}\` — must pass without errors.
 
 ---
 
@@ -148,6 +174,5 @@ For multiline commit messages, use \`git commit -F <file>\` and write the file w
 **Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
 Use the Write tool for any file creation. Never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
 
-**Rule 5 — Use \`npx\` instead of bare tool names.**
-\`tsc\` → \`npx tsc\`. Bare commands may not be on PATH.`.trimEnd();
+${bashRulesText}`.trimEnd();
 }
