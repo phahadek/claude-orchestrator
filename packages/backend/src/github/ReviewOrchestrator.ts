@@ -4,7 +4,7 @@ import type { PRReviewService, PRReviewResult } from './PRReviewService';
 import type { SessionManager } from '../session/SessionManager';
 import type { ReviewJob } from './types';
 import type { GitHubClient } from './GitHubClient';
-import type { NotionClient } from '../notion/NotionClient';
+import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
 import { formatReviewFeedback } from './reviewUtils';
 
 const REVIEW_TIMEOUT_MS = 120_000;
@@ -25,7 +25,7 @@ export class ReviewOrchestrator {
     private reviewService: PRReviewService,
     private sessionManager: SessionManager,
     private githubClient: GitHubClient,
-    private notionClient: NotionClient,
+    private notionClient: TaskTrackerBackend,
     private maxConcurrency: number = 1,
     private enabled: boolean = true,
     private maxIterations: number = DEFAULT_MAX_ITERATIONS,

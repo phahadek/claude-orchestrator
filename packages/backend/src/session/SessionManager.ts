@@ -5,10 +5,10 @@ import { EventEmitter } from 'events';
 import { AgentSession, parseNotionPageId } from './AgentSession';
 import { buildOrchestratorClaudeMd } from './orchestrator-claudemd';
 import { loadOrchestratorConfig } from './orchestrator-config';
-import { config, getProjectById, normalizePath } from '../config';
+import { config, getProjectById, normalizePath, TASK_BACKEND } from '../config';
 import { insertSession, updateSessionStatus, insertEvent, getSession, getSessionsByStatus, getPRByNotionTaskId, getEventsBySession, getPRByNumber } from '../db/queries';
 import type { Session } from '../db/types';
-import type { NotionClient } from '../notion/NotionClient';
+import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { ServerMessage } from '../ws/types';
 import { deriveDisplayStatusFromDb } from '../tasks/TaskStatusEngine';
@@ -46,7 +46,7 @@ export class SessionManager extends EventEmitter {
   private _inTaskUpdate = false;
 
   constructor(
-    private readonly notionClient: NotionClient,
+    private readonly notionClient: TaskTrackerBackend,
     private readonly githubClient?: GitHubClient,
   ) {
     super();
@@ -210,6 +210,7 @@ export class SessionManager extends EventEmitter {
         targetBranch: 'dev',
         prGate: orchConfig.prGate,
         bashRules: orchConfig.bashRules,
+        taskBackend: TASK_BACKEND,
       });
       const projectMdPath = path.join(projectDir, 'CLAUDE.md');
       const projectMd = fs.existsSync(projectMdPath) ? fs.readFileSync(projectMdPath, 'utf-8') : '';
