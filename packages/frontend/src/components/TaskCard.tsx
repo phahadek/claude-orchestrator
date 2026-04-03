@@ -1,10 +1,15 @@
 import type { TaskView, DisplayStatus } from '../types/taskView';
+import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
+import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
+import { useDispatch } from '../hooks/useDispatch';
 import styles from './TaskCard.module.css';
 
 interface Props {
   task: TaskView;
   selected: boolean;
   onClick: () => void;
+  send: (msg: ClientMessage) => void;
+  project: ProjectConfig | null;
 }
 
 const STATUS_LABELS: Record<DisplayStatus, string> = {
@@ -18,14 +23,35 @@ const STATUS_LABELS: Record<DisplayStatus, string> = {
 
 function verdictLabel(verdict: string): string {
   if (verdict === 'approved') return '✅ Approved';
-  if (verdict === 'needs_changes') return '⚠️ Needs changes';
+  if (verdict === 'needs_changes') return '🔁 Needs changes';
   if (verdict === 'incomplete') return '❌ Incomplete';
   return verdict;
 }
 
-export function TaskCard({ task, selected, onClick }: Props) {
+function launchTooltip(task: TaskView): string {
+  if (task.notionStatus !== '🗂️ Ready') return 'Task is not Ready';
+  if (!task.taskType.includes('💻')) return 'Non-code task';
+  if (task.blocked) return `Blocked by ${task.blockerNames.join(', ')}`;
+  return '';
+}
+
+export function TaskCard({ task, selected, onClick, send, project }: Props) {
   const { codeSession, pr, review } = task;
   const statusKey = task.displayStatus.replace(/_/g, '-') as string;
+  const dispatchTask = useDispatch(send, project);
+
+  const isLaunchable =
+    task.notionStatus === '🗂️ Ready' &&
+    task.taskType.includes('💻') &&
+    !task.blocked;
+
+  const tooltip = isLaunchable ? '' : launchTooltip(task);
+
+  const handleLaunch = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!isLaunchable) return;
+    dispatchTask([{ taskUrl: task.notionUrl, taskType: task.taskType }]);
+  };
 
   return (
     <div
@@ -55,7 +81,9 @@ export function TaskCard({ task, selected, onClick }: Props) {
         </div>
       )}
 
-      {pr && (
+      {!codeSession && <span className={styles.placeholder}>—</span>}
+
+      {pr ? (
         <div className={styles.prRow}>
           <a
             href={pr.prUrl}
@@ -64,27 +92,41 @@ export function TaskCard({ task, selected, onClick }: Props) {
             className={styles.prLink}
             onClick={(e) => e.stopPropagation()}
           >
-            PR #{pr.prNumber}{pr.draft ? ' (draft)' : ''}
+            #{pr.prNumber}
           </a>
+          <span className={styles.prState}>{pr.draft ? 'draft' : pr.state}</span>
           {review?.verdict && (
             <span className={`${styles.verdict} ${styles[`verdict-${review.verdict.replace(/_/g, '-')}`] ?? ''}`}>
               {verdictLabel(review.verdict)}
             </span>
           )}
         </div>
+      ) : (
+        <span className={styles.placeholder}>—</span>
       )}
 
-      {task.notionUrl && (
-        <a
-          href={task.notionUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={styles.notionLink}
-          onClick={(e) => e.stopPropagation()}
+      <div className={styles.cardFooter}>
+        {task.notionUrl && (
+          <a
+            href={task.notionUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={styles.notionLink}
+            onClick={(e) => e.stopPropagation()}
+          >
+            Notion ↗
+          </a>
+        )}
+        <button
+          className={styles.launchButton}
+          disabled={!isLaunchable}
+          onClick={handleLaunch}
+          title={tooltip || 'Launch session'}
+          aria-label={isLaunchable ? `Launch session for ${task.taskName}` : tooltip}
         >
-          Notion ↗
-        </a>
-      )}
+          🚀
+        </button>
+      </div>
     </div>
   );
 }
