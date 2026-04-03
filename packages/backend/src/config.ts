@@ -63,6 +63,7 @@ export const config = {
   projects: parseProjects(),
   claudePath: resolveClaudePath(),
   maxConcurrentCodeSessions: Number(process.env.MAX_CONCURRENT_CODE_SESSIONS ?? 20),
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
 };
 
 export const GITHUB_TOKEN = process.env.GITHUB_TOKEN ?? '';
@@ -93,6 +94,8 @@ export interface RuntimeSettings {
   card_preview_lines: number;
   code_session_model: string;
   review_session_model: string;
+  /** Session launch mode: 'cli' uses the claude subprocess, 'api' uses the Agent SDK. */
+  session_mode: 'cli' | 'api';
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -103,4 +106,5 @@ export const runtimeSettings: RuntimeSettings = {
   card_preview_lines: Number(process.env.CARD_PREVIEW_LINES ?? 3),
   code_session_model: '',
   review_session_model: '',
+  session_mode: (process.env.SESSION_MODE === 'api' ? 'api' : 'cli'),
 };
