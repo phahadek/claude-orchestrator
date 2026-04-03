@@ -12,6 +12,7 @@ import {
   insertSessionAudit,
   setSessionModel,
   getPRBySessionId,
+  setHeadSha,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { emitTaskUpdated } from '../routes/tasks';
@@ -594,6 +595,22 @@ Fetch both Notion pages, then begin the task.
         node_id: null,
         head_sha: prShape.head?.sha ?? null,
       });
+
+      // If head_sha was missing from the tool response, fetch it from GitHub
+      // so shouldAutoReview() can compare SHAs on the first re-review attempt.
+      if (!prShape.head?.sha && this.githubClient) {
+        const ghClient = this.githubClient;
+        void (async () => {
+          try {
+            const freshPR = await ghClient.fetchPR(repo, prNumber);
+            if (freshPR.headSha) {
+              setHeadSha(prNumber, repo, freshPR.headSha);
+            }
+          } catch (e) {
+            console.warn(`[AgentSession] handlePRCreatedFromContent: failed to fetch head_sha for PR #${prNumber}:`, e);
+          }
+        })();
+      }
     }
 
     this.broadcast({ type: 'pr_created', sessionId: this.sessionId, prUrl });

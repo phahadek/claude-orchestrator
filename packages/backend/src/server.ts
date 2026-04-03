@@ -22,7 +22,7 @@ import { PRReviewService } from './github/PRReviewService';
 import { ReviewOrchestrator } from './github/ReviewOrchestrator';
 import { PRMergeWatcher } from './github/PRMergeWatcher';
 import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
-import { getActiveSessions, getEventsBySession, getDenialsBySession, deleteGhostSessions, getPRByNotionTaskId, getPRBySessionId, setPRReviewResult, setLastReviewedSha, setHeadSha, getSetting } from './db/queries';
+import { getActiveSessions, getEventsBySession, getDenialsBySession, deleteGhostSessions, getPRByNotionTaskId, getPRBySessionId, setPRReviewResult, setLastReviewedSha, setHeadSha, getSetting, setPendingPush } from './db/queries';
 import { isSystemOnlyUserEvent } from './utils/eventFilters';
 import { shouldAutoReview, formatReviewFeedback } from './github/reviewUtils';
 import type { PRReviewResult } from './github/PRReviewService';
@@ -107,7 +107,13 @@ sessionManager.on('push_detected', ({ sessionId: codingSessionId }: { sessionId:
 
   const prRow = getPRBySessionId(codingSessionId);
   if (!prRow || prRow.state !== 'open') return;
-  if (!prRow.review_session_id) return;
+  if (!prRow.review_session_id) {
+    // Initial review hasn't started yet — queue the push so it triggers
+    // re-review after the initial review session is established.
+    setPendingPush(prRow.pr_number, prRow.repo, 1);
+    console.log(`[server] push_detected for PR #${prRow.pr_number} before review session established — queued as pending_push`);
+    return;
+  }
 
   pendingReReviews.add(codingSessionId);
 
