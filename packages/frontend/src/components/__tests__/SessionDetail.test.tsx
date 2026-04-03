@@ -349,6 +349,63 @@ describe('EventRow', () => {
     expect(screen.getByText('Hello from the user')).toBeTruthy();
   });
 
+  it('tool_use event for Read with file_path renders filename detail in header', () => {
+    const content = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'tool_use', name: 'Read', input: { file_path: 'src/App.tsx' } },
+        ],
+      },
+    });
+    render(<EventRow event={makeEvent('text', content)} />);
+    expect(screen.getByText(/Read/)).toBeTruthy();
+    expect(screen.getByText(/App\.tsx/)).toBeTruthy();
+  });
+
+  it('tool_use event for Grep with pattern renders pattern detail in header', () => {
+    const content = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'tool_use', name: 'Grep', input: { pattern: 'fetchTasks' } },
+        ],
+      },
+    });
+    render(<EventRow event={makeEvent('text', content)} />);
+    expect(screen.getByText(/Grep/)).toBeTruthy();
+    expect(screen.getByText(/fetchTasks/)).toBeTruthy();
+  });
+
+  it('tool_use event for unknown tool with no extractable detail renders bare tool name', () => {
+    const content = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'tool_use', name: 'SomeTool', input: { unknown_field: 'value' } },
+        ],
+      },
+    });
+    render(<EventRow event={makeEvent('text', content)} />);
+    expect(screen.getByText(/SomeTool/)).toBeTruthy();
+    expect(screen.queryByText(/\(value\)/)).toBeNull();
+  });
+
+  it('tool_use detail text longer than 60 chars is truncated with ellipsis in collapsed header', () => {
+    const longPattern = 'x'.repeat(70);
+    const content = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'tool_use', name: 'Grep', input: { pattern: longPattern } },
+        ],
+      },
+    });
+    render(<EventRow event={makeEvent('text', content)} />);
+    const truncated = '(' + 'x'.repeat(60) + '…)';
+    expect(screen.getByText(truncated)).toBeTruthy();
+  });
+
   it('uses timestamp-eventType as key (tests via stable rendering)', () => {
     // Validates the key format renders without duplicate-key warnings
     const events = [
