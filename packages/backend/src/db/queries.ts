@@ -413,6 +413,24 @@ export function deleteTaskCache(taskId: string): void {
   stmtDeleteTaskCache.run({ notion_task_id: taskId });
 }
 
+export function updateTaskCacheStatus(taskId: string, status: string): void {
+  const row = getTaskCache(taskId);
+  if (!row) return;
+  try {
+    const parsed = JSON.parse(row.raw_json);
+    if (parsed?.properties?.Status?.select) {
+      parsed.properties.Status.select.name = status;
+    }
+    stmtUpsertTaskCache.run({
+      notion_task_id: row.notion_task_id,
+      fetched_at: row.fetched_at,
+      raw_json: JSON.stringify(parsed),
+    });
+  } catch {
+    // If parsing fails, leave cache as-is rather than deleting it
+  }
+}
+
 export function upsertTaskCache(taskId: string, rawJson: string): void {
   stmtUpsertTaskCache.run({
     notion_task_id: taskId,
