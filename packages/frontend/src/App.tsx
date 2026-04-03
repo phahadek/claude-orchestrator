@@ -12,6 +12,8 @@ import { SessionDetail } from './components/SessionDetail';
 import { PRPanel } from './components/PRPanel';
 import { DispatchModal } from './components/DispatchModal';
 import { PermissionEventLog } from './components/PermissionEventLog';
+import { TaskList } from './components/TaskList';
+import { TaskDetail } from './components/TaskDetail';
 import { Settings } from './components/Settings';
 import { Notifications } from './components/Notifications';
 import { ShortcutHint } from './components/ShortcutHint';
@@ -87,7 +89,8 @@ export default function App() {
   const [isDragging, setIsDragging] = useState(false);
   const detailWidthRef = useRef(detailWidthPct);
 
-  const [topView, setTopView] = useState<TopView>('sessions');
+  const [topView, setTopView] = useState<TopView>('tasks');
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const settingsInitialTab = 'general' as const;
 
 
@@ -417,7 +420,8 @@ export default function App() {
       if (keyboardHighlightedId) setSelectedId(keyboardHighlightedId);
     },
     onSwitchView: (view) => {
-      if (view === 'sessions') setTopView('sessions');
+      if (view === 'tasks') setTopView('tasks');
+      else if (view === 'sessions') setTopView('sessions');
       else if (view === 'prs') setTopView('prs');
       else if (view === 'settings') setTopView('settings');
     },
@@ -441,6 +445,35 @@ export default function App() {
         incompleteReviewCount={incompleteReviews.length}
       />
       <div className={styles.mainArea}>
+        {topView === 'tasks' && (
+          <div className={styles.contentArea}>
+            <div className={styles.leftPanel}>
+              <TaskList
+                selectedTaskId={selectedTaskId}
+                onSelect={setSelectedTaskId}
+              />
+            </div>
+
+            <div
+              className={styles.resizeHandle}
+              onMouseDown={handleResizeMouseDown}
+            />
+
+            <div className={styles.rightPanel} style={{ width: `${detailWidthPct}%` }}>
+              {selectedTaskId ? (
+                <TaskDetail
+                  taskId={selectedTaskId}
+                  onClose={() => setSelectedTaskId(null)}
+                />
+              ) : (
+                <div className={styles.detailPlaceholder}>
+                  <p>Select a task to view details</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {topView === 'sessions' && (
           <div className={styles.contentArea}>
             <div className={styles.leftPanel}>
