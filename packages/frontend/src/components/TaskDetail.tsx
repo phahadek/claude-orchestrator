@@ -3,8 +3,6 @@ import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
 import type { TaskView } from '@claude-dashboard/backend/src/routes/tasks';
 import type { DisplayStatus } from '@claude-dashboard/backend/src/tasks/TaskStatusEngine';
 import type { SessionState } from '../hooks/useSessionStore';
-import { formatDuration } from '../utils/sessionTimer';
-import { formatTokenCount } from '@claude-dashboard/backend/src/utils/usage';
 import { StatusBadge } from './StatusBadge';
 import { EventTranscript } from './EventTranscript';
 import { parseReviewResultFromEvents } from './ReviewDetailView';
@@ -56,15 +54,6 @@ function prStateLabel(state: string, draft: boolean): string {
     case 'closed': return 'Closed';
     default:       return state;
   }
-}
-
-// ── Elapsed time for code session ─────────────────────────────────
-
-function calcSessionElapsedMs(codeSession: NonNullable<TaskView['codeSession']>): number | null {
-  const start = codeSession.startedAt;
-  if (!start) return null;
-  const end = codeSession.endedAt ?? Date.now();
-  return end - start;
 }
 
 // ── Parse owner/repo from GitHub PR URL ───────────────────────────
@@ -138,18 +127,16 @@ interface Props {
 // ── TaskDetail ────────────────────────────────────────────────────
 
 export function TaskDetail({ task, send, onClose, sessions = [] }: Props) {
-  const [showCodeTranscript, setShowCodeTranscript] = useState(false);
+  const [showReviewSection, setShowReviewSection] = useState(true);
   const [showReviewDimensions, setShowReviewDimensions] = useState(false);
-  const [showReviewTranscript, setShowReviewTranscript] = useState(false);
   const [reviewInFlight, setReviewInFlight] = useState(false);
   const [mergeInFlight, setMergeInFlight] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
 
-  // Reset transcript toggles when task changes
+  // Reset state when task changes
   useEffect(() => {
-    setShowCodeTranscript(false);
+    setShowReviewSection(true);
     setShowReviewDimensions(false);
-    setShowReviewTranscript(false);
     setReviewError(null);
   }, [task.taskId]);
 
@@ -207,11 +194,6 @@ export function TaskDetail({ task, send, onClose, sessions = [] }: Props) {
     }
   }
 
-  const codeElapsedMs = task.codeSession ? calcSessionElapsedMs(task.codeSession) : null;
-  const totalTokens = task.codeSession
-    ? (task.codeSession.inputTokens ?? 0) + (task.codeSession.outputTokens ?? 0)
-    : 0;
-
   return (
     <div className={styles.panel}>
       {/* ── Header ── */}
@@ -243,55 +225,87 @@ export function TaskDetail({ task, send, onClose, sessions = [] }: Props) {
       </div>
 
       <div className={styles.body}>
-        {/* ── Code Session section ── */}
+        {/* ── Code Session — full transcript, takes bulk of panel ── */}
         {task.codeSession && (
-          <div className={styles.section}>
+          <div className={styles.codeSection}>
             <div className={styles.sectionHeader}>
               <span className={styles.sectionTitle}>Code Session</span>
               <StatusBadge status={task.codeSession.status} />
-              {codeElapsedMs != null && (
-                <span className={styles.elapsed}>{formatDuration(codeElapsedMs)}</span>
-              )}
-              {totalTokens > 0 && (
-                <span className={styles.tokenCount}>
-                  {formatTokenCount(totalTokens)} tokens
-                </span>
-              )}
             </div>
-
-            {task.codeSession.lastMessage && (
-              <p className={styles.lastMessage}>{task.codeSession.lastMessage}</p>
-            )}
-
-            {isCodeActive && (
-              <InlineComposer sessionId={task.codeSession.sessionId} send={send} />
-            )}
-
-            <button
-              className={styles.toggleButton}
-              onClick={() => setShowCodeTranscript((v) => !v)}
-              aria-expanded={showCodeTranscript}
-            >
-              {showCodeTranscript ? '▼ Hide transcript' : '▶ View full transcript'}
-            </button>
-
-            {showCodeTranscript && codeSession && (
-              <div className={styles.transcriptWrapper}>
+            <div className={styles.transcriptArea}>
+              {codeSession ? (
                 <EventTranscript
                   events={codeSession.events}
                   permissionDenials={codeSession.permissionDenials}
                 />
-              </div>
-            )}
-            {showCodeTranscript && !codeSession && (
-              <p className={styles.noTranscript}>Transcript not available — session not loaded.</p>
+              ) : (
+                <p className={styles.noTranscript}>Transcript not available — session not loaded.</p>
+              )}
+            </div>
+            {isCodeActive && (
+              <InlineComposer sessionId={task.codeSession.sessionId} send={send} />
             )}
           </div>
         )}
 
-        {/* ── Pull Request section ── */}
+        {/* ── Review session — collapsible transcript ── */}
+        {task.review && (
+          <div className={styles.reviewSection}>
+            <div
+              className={styles.reviewSectionHeader}
+              onClick={() => setShowReviewSection((v) => !v)}
+              role="button"
+              aria-expanded={showReviewSection}
+            >
+              <span className={styles.reviewToggleIcon} aria-hidden="true">
+                {showReviewSection ? '▼' : '▶'}
+              </span>
+              <span className={styles.sectionTitle}>Review</span>
+              {task.review.iterationCount > 0 && (
+                <span className={styles.iterationCount}>
+                  #{task.review.iterationCount}
+                </span>
+              )}
+              {task.review.verdict ? (
+                <span className={`${styles.verdictPill} ${styles[VERDICT_CSS_KEYS[task.review.verdict] ?? 'verdict--error']}`}>
+                  {VERDICT_LABELS[task.review.verdict] ?? task.review.verdict}
+                </span>
+              ) : (task.review.status === 'running' || task.review.status === 'starting') ? (
+                <span className={`${styles.verdictPill} ${styles['verdict--pending']}`}>
+                  In progress…
+                </span>
+              ) : null}
+            </div>
+
+            {showReviewSection && (
+              <div className={styles.reviewBody}>
+                {reviewSession ? (
+                  <>
+                    <div className={styles.reviewTranscriptArea}>
+                      <EventTranscript events={reviewSession.events} />
+                    </div>
+                    <button
+                      className={styles.toggleButton}
+                      onClick={() => setShowReviewDimensions((v) => !v)}
+                      aria-expanded={showReviewDimensions}
+                    >
+                      {showReviewDimensions ? '▼ Hide dimensions' : '▶ Show dimensions'}
+                    </button>
+                    {showReviewDimensions && (
+                      <ReviewDimensions session={reviewSession} />
+                    )}
+                  </>
+                ) : (
+                  <p className={styles.noTranscript}>Review transcript not available.</p>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Pull Request — compact metadata + action buttons ── */}
         {task.pr && (
-          <div className={styles.section}>
+          <div className={styles.prSection}>
             <div className={styles.sectionHeader}>
               <span className={styles.sectionTitle}>Pull Request</span>
             </div>
@@ -341,68 +355,6 @@ export function TaskDetail({ task, send, onClose, sessions = [] }: Props) {
                 GitHub ↗
               </a>
             </div>
-          </div>
-        )}
-
-        {/* ── Review section ── */}
-        {task.review && (
-          <div className={styles.section}>
-            <div className={styles.sectionHeader}>
-              <span className={styles.sectionTitle}>Review</span>
-              {task.review.iterationCount > 0 && (
-                <span className={styles.iterationCount}>
-                  Review #{task.review.iterationCount}
-                </span>
-              )}
-            </div>
-
-            {task.review.verdict ? (
-              <div
-                className={`${styles.verdictBadge} ${styles[VERDICT_CSS_KEYS[task.review.verdict] ?? 'verdict--error']}`}
-              >
-                {VERDICT_LABELS[task.review.verdict] ?? task.review.verdict}
-              </div>
-            ) : task.review.status === 'running' || task.review.status === 'starting' ? (
-              <div className={`${styles.verdictBadge} ${styles['verdict--pending']}`}>
-                Review in progress…
-              </div>
-            ) : (
-              <div className={`${styles.verdictBadge} ${styles['verdict--pending']}`}>
-                No verdict yet
-              </div>
-            )}
-
-            {task.review.summary && (
-              <p className={styles.reviewSummary}>{task.review.summary}</p>
-            )}
-
-            {reviewSession && (
-              <>
-                <button
-                  className={styles.toggleButton}
-                  onClick={() => setShowReviewDimensions((v) => !v)}
-                  aria-expanded={showReviewDimensions}
-                >
-                  {showReviewDimensions ? '▼ Hide dimensions' : '▶ Show dimensions'}
-                </button>
-                {showReviewDimensions && (
-                  <ReviewDimensions session={reviewSession} />
-                )}
-
-                <button
-                  className={styles.toggleButton}
-                  onClick={() => setShowReviewTranscript((v) => !v)}
-                  aria-expanded={showReviewTranscript}
-                >
-                  {showReviewTranscript ? '▼ Hide review transcript' : '▶ View review transcript'}
-                </button>
-                {showReviewTranscript && (
-                  <div className={styles.transcriptWrapper}>
-                    <EventTranscript events={reviewSession.events} />
-                  </div>
-                )}
-              </>
-            )}
           </div>
         )}
 
