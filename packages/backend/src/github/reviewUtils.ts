@@ -15,10 +15,14 @@ export function shouldAutoReview(
 ): boolean {
   if (pr.reviewIteration >= maxIterations) return false;
   if (!pr.headSha) {
-    console.warn('[reviewUtils] shouldAutoReview: headSha is null — skipping auto-review. PR head_sha was not populated at creation.');
+    // headSha is null — the caller must attempt to fetch it from GitHub before
+    // calling this function. If it is still null (fetch failed), skip the review
+    // so we don't store null as last_reviewed_sha and break future comparisons.
+    console.warn('[reviewUtils] shouldAutoReview: headSha is null after GitHub fetch — skipping re-review to avoid storing null SHA');
     return false;
   }
-  if (pr.headSha === pr.lastReviewedSha) return false;
+  // null lastReviewedSha means the PR was never reviewed — allow re-review.
+  if (pr.lastReviewedSha !== null && pr.headSha === pr.lastReviewedSha) return false;
   return true;
 }
 
