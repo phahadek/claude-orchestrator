@@ -481,35 +481,43 @@ export function getTaskTitleFromCache(taskId: string): string | null {
 
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
-export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_session_id' | 'review_iteration' | 'last_reviewed_sha' | 'node_id'> & {
+export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_session_id' | 'review_iteration' | 'last_reviewed_sha' | 'node_id' | 'mergeable' | 'merge_state' | 'merge_state_checked_at'> & {
   review_session_id?: string | null;
   review_iteration?: number;
   last_reviewed_sha?: string | null;
   node_id?: string | null;
+  mergeable?: number | null;
+  merge_state?: string | null;
+  merge_state_checked_at?: string | null;
 }): PullRequestRow {
   db.prepare(`
     INSERT INTO pull_requests
       (pr_number, pr_url, notion_task_id, session_id, repo, title, body,
        head_branch, base_branch, state, draft, review_result, review_at,
-       created_at, updated_at, synced_at, node_id, head_sha)
+       created_at, updated_at, synced_at, node_id, head_sha,
+       mergeable, merge_state, merge_state_checked_at)
     VALUES
       (@pr_number, @pr_url, @notion_task_id, @session_id, @repo, @title, @body,
        @head_branch, @base_branch, @state, @draft, @review_result, @review_at,
-       @created_at, @updated_at, @synced_at, @node_id, @head_sha)
+       @created_at, @updated_at, @synced_at, @node_id, @head_sha,
+       @mergeable, @merge_state, @merge_state_checked_at)
     ON CONFLICT(pr_url) DO UPDATE SET
-      synced_at      = excluded.synced_at,
-      state          = excluded.state,
-      draft          = excluded.draft,
-      title          = COALESCE(excluded.title, title),
-      body           = COALESCE(excluded.body, body),
-      head_branch    = COALESCE(excluded.head_branch, head_branch),
-      base_branch    = COALESCE(excluded.base_branch, base_branch),
-      notion_task_id = COALESCE(excluded.notion_task_id, notion_task_id),
-      session_id     = COALESCE(excluded.session_id, session_id),
-      updated_at     = excluded.updated_at,
-      node_id        = COALESCE(excluded.node_id, node_id),
-      head_sha       = COALESCE(excluded.head_sha, head_sha)
-  `).run(pr);
+      synced_at              = excluded.synced_at,
+      state                  = excluded.state,
+      draft                  = excluded.draft,
+      title                  = COALESCE(excluded.title, title),
+      body                   = COALESCE(excluded.body, body),
+      head_branch            = COALESCE(excluded.head_branch, head_branch),
+      base_branch            = COALESCE(excluded.base_branch, base_branch),
+      notion_task_id         = COALESCE(excluded.notion_task_id, notion_task_id),
+      session_id             = COALESCE(excluded.session_id, session_id),
+      updated_at             = excluded.updated_at,
+      node_id                = COALESCE(excluded.node_id, node_id),
+      head_sha               = COALESCE(excluded.head_sha, head_sha),
+      mergeable              = COALESCE(excluded.mergeable, mergeable),
+      merge_state            = COALESCE(excluded.merge_state, merge_state),
+      merge_state_checked_at = COALESCE(excluded.merge_state_checked_at, merge_state_checked_at)
+  `).run({ mergeable: null, merge_state: null, merge_state_checked_at: null, ...pr });
   return db.prepare<{ pr_url: string }>(`
     SELECT * FROM pull_requests WHERE pr_url = @pr_url
   `).get({ pr_url: pr.pr_url }) as PullRequestRow;
@@ -670,6 +678,19 @@ export function countMergedAndClosedPRs(repo: string): number {
   return row.count;
 }
 
+export function updateMergeState(
+  prNumber: number,
+  repo: string,
+  mergeable: number | null,
+  mergeState: string | null,
+): void {
+  db.prepare<{ pr_number: number; repo: string; mergeable: number | null; merge_state: string | null; checked_at: string }>(`
+    UPDATE pull_requests
+    SET mergeable = @mergeable, merge_state = @merge_state, merge_state_checked_at = @checked_at
+    WHERE pr_number = @pr_number AND repo = @repo
+  `).run({ pr_number: prNumber, repo, mergeable, merge_state: mergeState, checked_at: new Date().toISOString() });
+}
+
 export function resetReviewIteration(prNumber: number, repo: string): void {
   db.prepare<{ pr_number: number; repo: string }>(`
     UPDATE pull_requests SET review_iteration = 0 WHERE pr_number = @pr_number AND repo = @repo
@@ -713,6 +734,7 @@ export interface TaskAggregateRow {
   pr_draft: number | null;
   pr_review_result: string | null;
   pr_review_iteration: number | null;
+  pr_merge_state: string | null;
 }
 
 export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
@@ -738,7 +760,8 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       pr.state               AS pr_state,
       pr.draft               AS pr_draft,
       pr.review_result       AS pr_review_result,
-      pr.review_iteration    AS pr_review_iteration
+      pr.review_iteration    AS pr_review_iteration,
+      pr.merge_state         AS pr_merge_state
     FROM task_cache tc
     LEFT JOIN sessions cs ON cs.session_id = (
       SELECT session_id FROM sessions

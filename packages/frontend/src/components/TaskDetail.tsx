@@ -131,6 +131,7 @@ export function TaskDetail({ task, send, onClose, sessions = [] }: Props) {
   const [showReviewDimensions, setShowReviewDimensions] = useState(false);
   const [reviewInFlight, setReviewInFlight] = useState(false);
   const [mergeInFlight, setMergeInFlight] = useState(false);
+  const [reReviewInFlight, setReReviewInFlight] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
 
   // Reset state when task changes
@@ -168,6 +169,28 @@ export function TaskDetail({ task, send, onClose, sessions = [] }: Props) {
       setReviewError(err instanceof Error ? err.message : 'Network error');
     } finally {
       setReviewInFlight(false);
+    }
+  }
+
+  async function handleReReview() {
+    if (!task.pr) return;
+    setReReviewInFlight(true);
+    setReviewError(null);
+    try {
+      const ownerRepo = parseOwnerRepo(task.pr.prUrl);
+      if (!ownerRepo) {
+        setReviewError('Could not parse owner/repo from PR URL.');
+        return;
+      }
+      const res = await fetch(`/api/prs/${ownerRepo.owner}/${ownerRepo.repo}/${task.pr.prNumber}/re-review`, { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        setReviewError(body.error ?? `HTTP ${res.status}`);
+      }
+    } catch (err) {
+      setReviewError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setReReviewInFlight(false);
     }
   }
 
@@ -340,23 +363,50 @@ export function TaskDetail({ task, send, onClose, sessions = [] }: Props) {
               <div className={styles.errorBanner}>{reviewError}</div>
             )}
 
+            {task.pr.mergeState === 'dirty' && (
+              <div className={styles.conflictBanner}>
+                ⚠ Merge conflicts detected — use Re-review to have the code session fix them.
+              </div>
+            )}
+
             {/* Line 3 (conditional): action buttons only when PR is open */}
             {task.pr.state === 'open' && (
               <div className={styles.prActions}>
-                <button
-                  className={styles.reviewButton}
-                  disabled={reviewInFlight}
-                  onClick={() => void handleRunReview()}
-                >
-                  {reviewInFlight ? 'Reviewing…' : 'Run Review'}
-                </button>
-                {task.review?.verdict === 'approved' && (
+                {task.pr.mergeState !== 'dirty' && (
+                  <button
+                    className={styles.reviewButton}
+                    disabled={reviewInFlight}
+                    onClick={() => void handleRunReview()}
+                  >
+                    {reviewInFlight ? 'Reviewing…' : 'Run Review'}
+                  </button>
+                )}
+                {task.pr.mergeState === 'dirty' && (
+                  <button
+                    className={styles.reReviewButton}
+                    disabled={reReviewInFlight}
+                    onClick={() => void handleReReview()}
+                    title="Trigger re-review to resolve merge conflicts"
+                  >
+                    {reReviewInFlight ? 'Reviewing…' : '↺ Re-review'}
+                  </button>
+                )}
+                {task.review?.verdict === 'approved' && task.pr.mergeState !== 'dirty' && (
                   <button
                     className={styles.mergeButton}
                     disabled={mergeInFlight}
                     onClick={() => void handleMerge()}
                   >
                     {mergeInFlight ? 'Merging…' : 'Merge ↓'}
+                  </button>
+                )}
+                {task.review?.verdict === 'approved' && task.pr.mergeState === 'dirty' && (
+                  <button
+                    className={styles.mergeButton}
+                    disabled={true}
+                    title="Cannot merge — PR has merge conflicts"
+                  >
+                    Merge ↓
                   </button>
                 )}
               </div>
