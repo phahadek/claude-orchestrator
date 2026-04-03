@@ -193,7 +193,7 @@ export class SessionManager extends EventEmitter {
     // The worktree path is passed as $1 so the script can operate on it.
     if (orchConfig.bootstrapScript) {
       try {
-        execSync(`${orchConfig.bootstrapScript} "${worktreePath}"`, { cwd: projectDir, timeout: 120_000, stdio: 'pipe' });
+        execSync(`bash ${orchConfig.bootstrapScript} "${worktreePath}"`, { cwd: projectDir, timeout: 120_000, stdio: 'pipe' });
         console.log(`[SessionManager] bootstrap script completed for ${sessionId.slice(0, 8)}`);
       } catch (err) {
         console.warn(`[SessionManager] bootstrap script failed for ${sessionId.slice(0, 8)} (continuing): ${err}`);
