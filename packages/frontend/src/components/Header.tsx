@@ -1,5 +1,5 @@
 import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
-import { formatTokenCount, formatUtilization } from '@claude-dashboard/backend/src/utils/usage';
+import { formatTokenCount, formatCost } from '@claude-dashboard/backend/src/utils/usage';
 import type { TaskView } from '../types/taskView';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { MilestoneProgress } from './MilestoneProgress';
@@ -16,12 +16,12 @@ interface Props {
   activeView: TopView;
   onViewChange: (view: TopView) => void;
   totalTokens?: number;
-  planTokenCap?: number;
+  totalCost?: number;
   tasks?: TaskView[];
   incompleteReviewCount?: number;
 }
 
-export function Header({ projects, activeProjectId, onProjectChange, activeBoardId, onBoardChange, activeView, onViewChange, totalTokens, planTokenCap, tasks, incompleteReviewCount }: Props) {
+export function Header({ projects, activeProjectId, onProjectChange, activeBoardId, onBoardChange, activeView, onViewChange, totalTokens, totalCost, tasks, incompleteReviewCount }: Props) {
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
   const boards = activeProject?.boards ?? [];
 
@@ -92,9 +92,7 @@ export function Header({ projects, activeProjectId, onProjectChange, activeBoard
           <div className={styles.divider} />
           <span className={styles.tokenSummary}>
             {formatTokenCount(totalTokens)} tokens
-            {planTokenCap != null && planTokenCap > 0
-              ? ` (${formatUtilization((totalTokens / planTokenCap) * 100)})`
-              : ''}
+            {totalCost != null && totalCost > 0 ? ` (~${formatCost(totalCost)})` : ''}
           </span>
         </>
       )}
