@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { TaskView, DisplayStatus } from '../types/taskView';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
@@ -271,10 +271,18 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
     void fetchTasks();
   }, [fetchTasks]);
 
-  // Re-fetch when a review session starts or a pr_review_complete event arrives
+  // True while a user-initiated Sync is waiting for the tasks_ready → fetchTasks cycle to complete.
+  const syncPendingRef = useRef(false);
+
+  // Re-fetch when tasks_ready arrives (covers sync, pr_review_complete, and other triggers).
+  // If a user-initiated Sync is pending, clear the loading state after the fetch completes.
   useEffect(() => {
     if (!reviewRefreshTrigger) return;
-    void fetchTasks();
+    const clearSyncing = syncPendingRef.current;
+    syncPendingRef.current = false;
+    void fetchTasks().finally(() => {
+      if (clearSyncing) setSyncing(false);
+    });
   }, [reviewRefreshTrigger, fetchTasks]);
 
   // Merge a single task in-place when a task_updated WS message arrives.
@@ -301,12 +309,15 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
     ));
   }, []);
 
+  // Send WS fetch_tasks with skipCache=true and wait for the tasks_ready response before
+  // reading from the REST endpoint. The reviewRefreshTrigger effect handles the actual
+  // REST fetch once the cache is fresh (sequential, not parallel).
   const handleSync = useCallback(() => {
     if (!activeProjectId || syncing) return;
     setSyncing(true);
+    syncPendingRef.current = true;
     send({ type: 'fetch_tasks', projectId: activeProjectId, boardId: boardId ?? undefined, skipCache: true });
-    void fetchTasks().finally(() => setSyncing(false));
-  }, [activeProjectId, boardId, syncing, send, fetchTasks]);
+  }, [activeProjectId, boardId, syncing, send]);
 
   const syncButton = (
     <div className={styles.listHeader}>
