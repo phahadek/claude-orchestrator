@@ -15,8 +15,32 @@ import {
   Area,
 } from 'recharts';
 import { formatTokenCount, formatCost } from '@claude-dashboard/backend/src/utils/usage';
-import type { TokenAnalyticsResponse, TokenAnalyticsSession } from '@claude-dashboard/backend/src/routes/analytics';
 import styles from './AnalyticsPanel.module.css';
+
+// API response types — kept in sync with packages/backend/src/routes/analytics.ts
+interface TokenAnalyticsSession {
+  sessionId: string;
+  taskName: string | null;
+  startedAt: number;
+  endedAt: number | null;
+  sessionType: string;
+  model: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cost: number;
+}
+
+interface TokenAnalyticsResponse {
+  sessions: TokenAnalyticsSession[];
+  totals: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    totalCost: number;
+    sessionCount: number;
+  };
+}
 
 interface Props {
   activeProjectId: string | null;

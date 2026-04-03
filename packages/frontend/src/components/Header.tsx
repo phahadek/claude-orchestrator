@@ -97,10 +97,15 @@ export function Header({ projects, activeProjectId, onProjectChange, activeBoard
       {totalTokens != null && totalTokens > 0 && (
         <>
           <div className={styles.divider} />
-          <span className={styles.tokenSummary}>
+          <button
+            type="button"
+            className={styles.tokenSummary}
+            onClick={() => onViewChange('analytics')}
+            title="View token analytics"
+          >
             {formatTokenCount(totalTokens)} tokens
             {totalCost != null && totalCost > 0 ? ` (~${formatCost(totalCost)})` : ''}
-          </span>
+          </button>
         </>
       )}
     </header>
