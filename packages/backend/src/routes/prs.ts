@@ -235,7 +235,7 @@ export function createPrsRouter(
         updateMergeState(prNumber, repo, 0, 'dirty');
         _broadcast({ type: 'pr_state_changed', prNumber, repo, mergeable: false, mergeState: 'dirty' });
         if (prRow?.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
-        res.status(422).json({ error: 'PR has merge conflicts. Use Re-review to have the code session fix them.' });
+        res.status(422).json({ error: 'PR has merge conflicts. Use Fix Conflicts to have the code session rebase and resolve them.' });
         return;
       }
       if (errStatus !== null) {
@@ -409,6 +409,30 @@ export function createPrsRouter(
       }
       res.status(500).json({ error: (err as Error).message });
     }
+  });
+
+  // ── POST /api/prs/:owner/:repoName/:prNumber/fix-conflicts ──────────────────
+  router.post('/prs/:owner/:repoName/:prNumber/fix-conflicts', async (req: Request, res: Response) => {
+    const repo = `${req.params.owner}/${req.params.repoName}`;
+    const prNumber = parseInt(String(req.params.prNumber), 10);
+    const prRow = getPRByNumber(prNumber, repo);
+    if (!prRow) {
+      res.status(404).json({ error: `PR #${prNumber} not found` });
+      return;
+    }
+    if (!prRow.session_id) {
+      res.status(422).json({ error: 'No code session linked to this PR' });
+      return;
+    }
+    const message =
+      `PR #${prNumber} has merge conflicts with the base branch. ` +
+      `Please rebase onto \`dev\`, resolve the conflicts, and push the fixed branch.`;
+    const sessionId = await sessionManager.sendOrResume(prRow.session_id, message);
+    // Reset merge state so PRMergeWatcher will re-check after the push
+    updateMergeState(prNumber, repo, null, null);
+    _broadcast({ type: 'pr_state_changed', prNumber, repo, mergeable: null, mergeState: null });
+    if (prRow.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
+    res.json({ sessionId });
   });
 
   // ── POST /api/prs/:prNumber/fix ──────────────────────────────────────────────
