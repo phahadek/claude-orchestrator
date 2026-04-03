@@ -173,7 +173,7 @@ function blockToLine(block: NotionBlock): string {
  * like "### 🤖 Automated tests" that do not match any keyword are treated as
  * content within the current section.
  */
-const TOP_LEVEL_SECTIONS = [
+export const TOP_LEVEL_SECTIONS = [
   'summary',
   'dependencies',
   'context',
@@ -183,7 +183,7 @@ const TOP_LEVEL_SECTIONS = [
 ];
 
 /** Extract the text content of a named heading section from a markdown string. */
-function parseSection(markdown: string, headingKeyword: string): string {
+export function parseSection(markdown: string, headingKeyword: string): string {
   const lines = markdown.split('\n');
   let inSection = false;
   const buf: string[] = [];

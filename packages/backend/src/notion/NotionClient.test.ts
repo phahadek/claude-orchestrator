@@ -1,6 +1,19 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+
+// Stub modules with side effects so NotionClient.ts can be imported without
+// a real database connection or environment variables.
+vi.mock('../config', () => ({
+  config: { notionApiKey: 'test', notionDatabaseId: 'test', port: 3000 },
+}));
+vi.mock('../db/queries', () => ({
+  upsertTaskCache: vi.fn(),
+  getCacheAge: vi.fn(() => null),
+  getTaskCache: vi.fn(() => null),
+}));
+
+import { parseSection } from './NotionClient';
 
 const source = fs.readFileSync(
   path.join(__dirname, 'NotionClient.ts'),
@@ -21,47 +34,6 @@ describe('NotionClient.fetchReadyTasks() — Notion query filter', () => {
 });
 
 // ─── parseSection unit tests ──────────────────────────────────────────────────
-
-// We extract parseSection from source by evaluating the relevant parts in a
-// controlled way. Instead, we duplicate the logic here from the implementation
-// so we can test it directly without importing the entire module (which has
-// side effects and requires environment variables).
-
-const TOP_LEVEL_SECTIONS = [
-  'summary',
-  'dependencies',
-  'context',
-  'acceptance criteria',
-  'files',
-  'implementation notes',
-];
-
-function parseSection(markdown: string, headingKeyword: string): string {
-  const lines = markdown.split('\n');
-  let inSection = false;
-  const buf: string[] = [];
-  for (const line of lines) {
-    const isHeading = /^#{1,3} /.test(line);
-    if (isHeading) {
-      const heading = line.replace(/^#+\s*/, '').toLowerCase();
-      if (heading.includes(headingKeyword.toLowerCase())) {
-        inSection = true;
-        continue;
-      } else if (inSection) {
-        const isTopLevel = TOP_LEVEL_SECTIONS.some(
-          s => heading.includes(s) && s !== headingKeyword.toLowerCase(),
-        );
-        if (isTopLevel) {
-          break;
-        }
-        buf.push(line);
-      }
-    } else if (inSection) {
-      buf.push(line);
-    }
-  }
-  return buf.join('\n').trim();
-}
 
 const SAMPLE_MD = `
 ## Summary
