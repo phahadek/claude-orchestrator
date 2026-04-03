@@ -213,7 +213,14 @@ export function createTasksRouter(): Router {
 
     const aggregates = getActiveTaskAggregates(taskIds);
     const cap = getReviewIterationCap();
-    const views: TaskView[] = aggregates.map((row) => buildTaskViewFromRow(row, cap));
+    const views: TaskView[] = aggregates
+      .map((row) => buildTaskViewFromRow(row, cap))
+      .filter(
+        (v) =>
+          v.displayStatus !== 'done' &&
+          !v.notionStatus.includes('Deferred') &&
+          !v.notionStatus.includes('Backlog'),
+      );
 
     res.json(views);
   });
