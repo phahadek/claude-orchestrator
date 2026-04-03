@@ -124,6 +124,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     taskType: notionTask?.type ?? '',
     blocked: false,
     blockerNames: [],
+    wave: 1,
     codeSession,
     pr,
     review,
@@ -238,6 +239,7 @@ export function createTasksRouter(): Router {
           if (r) {
             view.blocked = r.blocked;
             view.blockerNames = r.blockers.map((b) => b.title);
+            view.wave = r.wave;
           }
         }
       } catch {

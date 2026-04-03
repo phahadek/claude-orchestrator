@@ -13,6 +13,7 @@ export interface ResolvedTask {
   blocked: boolean;
   blockers: NotionTask[];  // direct + transitive blockers still not Done
   nonCode: boolean;        // true if type is Planning or Testing
+  wave: number;            // dispatch wave: 1 = immediately launchable, 2+ = blocked by lower waves
 }
 
 export class NotionApiError extends Error {

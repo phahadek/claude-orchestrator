@@ -3,6 +3,8 @@ import type { TaskView, DisplayStatus } from '../types/taskView';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
 import { TaskCard } from './TaskCard';
+import { CompactTaskCard } from './CompactTaskCard';
+import { useDispatch } from '../hooks/useDispatch';
 import styles from './TaskList.module.css';
 
 interface Props {
@@ -44,6 +46,163 @@ const PRIORITY_RANK: Record<string, number> = {
 
 function priorityRank(p: string): number {
   return PRIORITY_RANK[p] ?? 99;
+}
+
+/** Group tasks by wave number, returning a map of wave → sorted tasks. */
+function groupByWave(tasks: TaskView[]): Map<number, TaskView[]> {
+  const map = new Map<number, TaskView[]>();
+  for (const task of tasks) {
+    const wave = task.wave ?? 1;
+    if (!map.has(wave)) map.set(wave, []);
+    map.get(wave)!.push(task);
+  }
+  for (const [, waveTasks] of map) {
+    waveTasks.sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority));
+  }
+  return map;
+}
+
+/** Compact wave-grouped section for Ready tasks with Select All / Launch controls. */
+function ReadySection({
+  tasks,
+  nonCodeTasks,
+  onSelectTask,
+  send,
+  project,
+}: {
+  tasks: TaskView[];
+  nonCodeTasks: TaskView[];
+  onSelectTask: (taskId: string) => void;
+  send: (msg: ClientMessage) => void;
+  project: ProjectConfig | null;
+}) {
+  const dispatch = useDispatch(send, project);
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  // Wave 2+ start collapsed
+  const [collapsedWaves, setCollapsedWaves] = useState<Set<number>>(new Set());
+
+  const wave1CodeTasks = tasks.filter((t) => (t.wave ?? 1) === 1 && !t.blocked);
+  const totalCount = tasks.length + nonCodeTasks.length;
+  const waveMap = groupByWave(tasks);
+  const waveNumbers = Array.from(waveMap.keys()).sort((a, b) => a - b);
+
+  function toggleCheck(taskId: string, checked: boolean) {
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(taskId);
+      else next.delete(taskId);
+      return next;
+    });
+  }
+
+  function handleSelectAll() {
+    setCheckedIds(new Set(wave1CodeTasks.map((t) => t.taskId)));
+  }
+
+  function handleLaunch() {
+    const toDispatch = wave1CodeTasks
+      .filter((t) => checkedIds.has(t.taskId))
+      .map((t) => ({ taskUrl: t.notionUrl, taskType: t.taskType }));
+    if (toDispatch.length === 0) return;
+    dispatch(toDispatch);
+    setCheckedIds(new Set());
+  }
+
+  function toggleWaveCollapse(wave: number) {
+    setCollapsedWaves((prev) => {
+      const next = new Set(prev);
+      if (next.has(wave)) next.delete(wave);
+      else next.add(wave);
+      return next;
+    });
+  }
+
+  const checkedCount = wave1CodeTasks.filter((t) => checkedIds.has(t.taskId)).length;
+
+  return (
+    <div className={styles.group} data-status="ready" data-testid="ready-section">
+      <div className={styles.groupHeader}>
+        <span className={styles.groupLabel}>{GROUP_LABELS.ready}</span>
+        <span className={styles.groupCount}>{totalCount}</span>
+        <div className={styles.launchControls}>
+          <button
+            className={styles.selectAllBtn}
+            onClick={handleSelectAll}
+            disabled={wave1CodeTasks.length === 0}
+            data-testid="select-all-btn"
+          >
+            Select All
+          </button>
+          <button
+            className={styles.launchBtn}
+            onClick={handleLaunch}
+            disabled={checkedCount === 0}
+            data-testid="launch-btn"
+          >
+            Launch ({checkedCount})
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.groupCards}>
+        {waveNumbers.map((wave) => {
+          const waveTasks = waveMap.get(wave)!;
+          const isCollapsed = collapsedWaves.has(wave);
+          const isExpanded = !isCollapsed;
+
+          return (
+            <div key={wave} className={styles.waveGroup} data-testid={`wave-group-${wave}`}>
+              <div
+                className={styles.waveHeader}
+                onClick={() => { if (wave > 1) toggleWaveCollapse(wave); }}
+                role={wave > 1 ? 'button' : undefined}
+                aria-expanded={wave > 1 ? isExpanded : undefined}
+                data-testid={`wave-header-${wave}`}
+              >
+                <span className={styles.waveLabel}>Wave {wave}</span>
+                {wave > 1 && (
+                  <span className={styles.waveToggle} aria-hidden="true">
+                    {isExpanded ? '▾' : '▸'}
+                  </span>
+                )}
+              </div>
+
+              {isExpanded && waveTasks.map((task) => (
+                <CompactTaskCard
+                  key={task.taskId}
+                  task={task}
+                  showCheckbox={wave === 1 && !task.blocked && task.taskType.includes('💻')}
+                  checked={checkedIds.has(task.taskId)}
+                  onCheckChange={toggleCheck}
+                  onClick={() => onSelectTask(task.taskId)}
+                />
+              ))}
+            </div>
+          );
+        })}
+
+        {nonCodeTasks.length > 0 && (
+          <div className={styles.waveGroup} data-testid="non-code-wave-group">
+            <div className={styles.waveHeader} data-testid="non-code-wave-header">
+              <span className={styles.waveLabel}>Non-Code</span>
+            </div>
+            {nonCodeTasks
+              .sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority))
+              .map((task) => (
+                <CompactTaskCard
+                  key={task.taskId}
+                  task={task}
+                  showCheckbox={false}
+                  checked={false}
+                  onCheckChange={() => {}}
+                  onClick={() => onSelectTask(task.taskId)}
+                />
+              ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTask, lastTaskUpdate, reviewRefreshTrigger, send, project }: Props) {
@@ -116,20 +275,50 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
   }
 
   const codeTasks = tasks.filter((t) => t.taskType.includes('💻'));
-  const nonCodeTasks = tasks
-    .filter((t) => !t.taskType.includes('💻'))
+  const nonCodeTasks = tasks.filter((t) => !t.taskType.includes('💻'));
+
+  const readyCodeTasks = codeTasks.filter((t) => t.displayStatus === 'ready');
+  const readyNonCodeTasks = nonCodeTasks.filter((t) => t.displayStatus === 'ready');
+  const hasReadyTasks = readyCodeTasks.length > 0 || readyNonCodeTasks.length > 0;
+
+  const nonReadyCodeTasks = codeTasks.filter((t) => t.displayStatus !== 'ready');
+  const nonReadyNonCodeTasks = nonCodeTasks
+    .filter((t) => t.displayStatus !== 'ready')
     .sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority));
 
-  const groups = GROUP_ORDER.map((status) => ({
-    status,
-    tasks: codeTasks
-      .filter((t) => t.displayStatus === status)
-      .sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority)),
-  })).filter((g) => g.tasks.length > 0);
+  // Build per-status lookup for non-ready code tasks
+  const nonReadyGroupMap = new Map<DisplayStatus, TaskView[]>();
+  for (const status of GROUP_ORDER) {
+    if (status === 'ready') continue;
+    nonReadyGroupMap.set(
+      status,
+      nonReadyCodeTasks
+        .filter((t) => t.displayStatus === status)
+        .sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority)),
+    );
+  }
 
   return (
     <div className={styles.taskList} data-testid="task-list">
-      {groups.map(({ status, tasks: groupTasks }) => {
+      {GROUP_ORDER.map((status) => {
+        if (status === 'ready') {
+          // Compact wave-grouped section for ready tasks
+          if (!hasReadyTasks) return null;
+          return (
+            <ReadySection
+              key="ready"
+              tasks={readyCodeTasks}
+              nonCodeTasks={readyNonCodeTasks}
+              onSelectTask={onSelectTask}
+              send={send}
+              project={project}
+            />
+          );
+        }
+
+        const groupTasks = nonReadyGroupMap.get(status) ?? [];
+        if (groupTasks.length === 0) return null;
+
         const isDone = status === 'done';
         const isExpanded = isDone ? doneExpanded : true;
         const label = GROUP_LABELS[status];
@@ -169,14 +358,14 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
         );
       })}
 
-      {nonCodeTasks.length > 0 && (
+      {nonReadyNonCodeTasks.length > 0 && (
         <div className={`${styles.group} ${styles.nonCodeGroup}`} data-testid="non-code-section">
           <div className={styles.groupHeader}>
             <span className={styles.groupLabel}>📋 Planning / Testing</span>
-            <span className={styles.groupCount}>{nonCodeTasks.length}</span>
+            <span className={styles.groupCount}>{nonReadyNonCodeTasks.length}</span>
           </div>
           <div className={styles.groupCards}>
-            {nonCodeTasks.map((task) => (
+            {nonReadyNonCodeTasks.map((task) => (
               <TaskCard
                 key={task.taskId}
                 task={task}
