@@ -19,6 +19,7 @@ export interface TaskView {
   taskType: string;
   blocked: boolean;
   blockerNames: string[];
+  wave: number;
   codeSession: {
     sessionId: string;
     status: string;

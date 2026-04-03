@@ -10,6 +10,7 @@ const makeTask = (id: string, title: string, overrides: Partial<ResolvedTask> = 
   blocked: false,
   blockers: [],
   nonCode: false,
+  wave: 1,
   ...overrides,
 });
 

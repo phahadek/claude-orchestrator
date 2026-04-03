@@ -8,10 +8,11 @@ function makeTask(overrides: Partial<TaskView> & { taskId: string; displayStatus
     taskName: 'Test Task',
     notionStatus: '🔄 In Progress',
     priority: '',
-    notionUrl: '',
+    notionUrl: 'https://notion.so/task',
     taskType: '💻 Code',
     blocked: false,
     blockerNames: [],
+    wave: 1,
     codeSession: null,
     pr: null,
     review: null,
@@ -67,30 +68,173 @@ describe('TaskList', () => {
     expect(screen.queryByText(/ready to merge/i)).toBeNull();
   });
 
-  it('does not render a section header for empty groups', async () => {
+  it('shows Ready section header when there are ready tasks', async () => {
     mockFetch([
       makeTask({ taskId: 't1', taskName: 'Only Task', displayStatus: 'ready' }),
     ]);
     render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
     await waitFor(() => {
+      expect(screen.getByTestId('ready-section')).toBeDefined();
       expect(screen.getByText(/ready/i)).toBeDefined();
     });
     expect(screen.queryByText(/in progress/i)).toBeNull();
   });
 
-  it('sorts tasks within a group by priority — High first', async () => {
+  it('renders ready tasks in compact row format (CompactTaskCard), not full TaskCard', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Low Priority Task',    displayStatus: 'ready', priority: '🟢 Low' }),
-      makeTask({ taskId: 't2', taskName: 'High Priority Task',   displayStatus: 'ready', priority: '🔴 High' }),
-      makeTask({ taskId: 't3', taskName: 'Medium Priority Task', displayStatus: 'ready', priority: '🟡 Medium' }),
+      makeTask({ taskId: 't1', taskName: 'Ready Task', displayStatus: 'ready', wave: 1 }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('compact-task-card')).toBeDefined();
+      expect(screen.getByText('Ready Task')).toBeDefined();
+    });
+  });
+
+  it('groups ready code tasks under correct wave headers', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Wave 1 Task', displayStatus: 'ready', wave: 1, blocked: false }),
+      makeTask({ taskId: 't2', taskName: 'Wave 2 Task', displayStatus: 'ready', wave: 2, blocked: true, blockerNames: ['Wave 1 Task'] }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('wave-group-1')).toBeDefined();
+      expect(screen.getByTestId('wave-group-2')).toBeDefined();
+    });
+    expect(screen.getByTestId('wave-group-1').textContent).toContain('Wave 1 Task');
+    expect(screen.getByTestId('wave-group-2').textContent).toContain('Wave 2 Task');
+  });
+
+  it('Wave 2+ tasks render with blocked CSS class', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Blocked Task', displayStatus: 'ready', wave: 2, blocked: true, blockerNames: ['Other'] }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('compact-task-card')).toBeDefined();
+    });
+    expect(screen.getByTestId('compact-task-card').className).toContain('blocked');
+  });
+
+  it('Wave 2+ tasks show blocker names', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Blocked Task', displayStatus: 'ready', wave: 2, blocked: true, blockerNames: ['Task Alpha'] }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('blocker-names')).toBeDefined();
+    });
+    expect(screen.getByTestId('blocker-names').textContent).toContain('Task Alpha');
+  });
+
+  it('Wave 2+ tasks do NOT render checkboxes', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Blocked Task', displayStatus: 'ready', wave: 2, blocked: true, blockerNames: ['Other'] }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('compact-task-card')).toBeDefined();
+    });
+    expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+
+  it('Wave 1 code tasks render with a checkbox', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Launchable Task', displayStatus: 'ready', wave: 1, blocked: false, taskType: '💻 Code' }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByRole('checkbox')).toBeDefined();
+    });
+  });
+
+  it('non-code ready tasks are in the Non-Code sub-group within the Ready section with no checkboxes', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Code Task', displayStatus: 'ready', taskType: '💻 Code', wave: 1 }),
+      makeTask({ taskId: 't2', taskName: 'Planning Task', displayStatus: 'ready', taskType: '📋 Planning', notionStatus: '🗂️ Ready', wave: 1 }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('non-code-wave-group')).toBeDefined();
+    });
+    const nonCodeGroup = screen.getByTestId('non-code-wave-group');
+    expect(nonCodeGroup.textContent).toContain('Planning Task');
+    expect(nonCodeGroup.textContent).not.toContain('Code Task');
+    // No checkbox inside the non-code sub-group's task cards
+    // (only wave-1 code task has a checkbox)
+    const checkboxes = screen.getAllByRole('checkbox');
+    // Only the code task should have a checkbox
+    expect(checkboxes).toHaveLength(1);
+  });
+
+  it('renders non-ready non-code tasks in a separate section at the bottom', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Code Task', displayStatus: 'in_progress', taskType: '💻 Code' }),
+      makeTask({ taskId: 't2', taskName: 'Planning Task', displayStatus: 'in_progress', taskType: '📋 Planning', notionStatus: '🔄 In Progress' }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('non-code-section')).toBeDefined();
+    });
+    const nonCodeSection = screen.getByTestId('non-code-section');
+    expect(nonCodeSection.textContent).toContain('Planning Task');
+    expect(nonCodeSection.textContent).not.toContain('Code Task');
+  });
+
+  it('"Select All" button only selects Wave 1 code tasks', async () => {
+    mockFetch([
+      makeTask({ taskId: 'w1-1', taskName: 'Wave 1 Task', displayStatus: 'ready', wave: 1, blocked: false, taskType: '💻 Code' }),
+      makeTask({ taskId: 'w2-1', taskName: 'Wave 2 Task', displayStatus: 'ready', wave: 2, blocked: true, blockerNames: ['Other'], taskType: '💻 Code' }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('select-all-btn')).toBeDefined();
+    });
+    fireEvent.click(screen.getByTestId('select-all-btn'));
+    // Only wave 1 checkbox should be checked
+    const checkboxes = screen.getAllByRole('checkbox');
+    expect(checkboxes).toHaveLength(1); // only wave 1 has a checkbox
+    expect((checkboxes[0] as HTMLInputElement).checked).toBe(true);
+  });
+
+  it('"Launch (N)" button is disabled when no tasks are checked', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Task', displayStatus: 'ready', wave: 1, blocked: false, taskType: '💻 Code' }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('launch-btn')).toBeDefined();
+    });
+    const launchBtn = screen.getByTestId('launch-btn') as HTMLButtonElement;
+    expect(launchBtn.disabled).toBe(true);
+  });
+
+  it('"Launch (N)" button becomes enabled and shows count when tasks are checked', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Task', displayStatus: 'ready', wave: 1, blocked: false, taskType: '💻 Code', notionUrl: 'https://notion.so/t1' }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByRole('checkbox')).toBeDefined();
+    });
+    fireEvent.click(screen.getByRole('checkbox'));
+    const launchBtn = screen.getByTestId('launch-btn') as HTMLButtonElement;
+    expect(launchBtn.disabled).toBe(false);
+    expect(launchBtn.textContent).toContain('1');
+  });
+
+  it('sorts ready tasks within a wave by priority — High first', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Low Priority Task',    displayStatus: 'ready', priority: '🟢 Low',    wave: 1 }),
+      makeTask({ taskId: 't2', taskName: 'High Priority Task',   displayStatus: 'ready', priority: '🔴 High',   wave: 1 }),
+      makeTask({ taskId: 't3', taskName: 'Medium Priority Task', displayStatus: 'ready', priority: '🟡 Medium', wave: 1 }),
     ]);
     render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
     await waitFor(() => {
       expect(screen.getByText('High Priority Task')).toBeDefined();
     });
-    const cards = screen.getAllByRole('generic').filter(
-      (el) => el.getAttribute('data-status') === 'ready',
-    );
+    const cards = screen.getAllByTestId('compact-task-card');
+    // Wave 1 tasks sorted by priority
     expect(cards[0].textContent).toContain('High Priority Task');
     expect(cards[1].textContent).toContain('Medium Priority Task');
     expect(cards[2].textContent).toContain('Low Priority Task');
@@ -121,7 +265,20 @@ describe('TaskList', () => {
     expect(screen.getByText('Completed Work')).toBeDefined();
   });
 
-  it('calls onSelectTask with the task id when a card is clicked', async () => {
+  it('calls onSelectTask with the task id when a ready card is clicked', async () => {
+    const onSelectTask = vi.fn();
+    mockFetch([
+      makeTask({ taskId: 'task-abc', taskName: 'Clickable Task', displayStatus: 'ready', wave: 1 }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={onSelectTask} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByText('Clickable Task')).toBeDefined();
+    });
+    fireEvent.click(screen.getByText('Clickable Task'));
+    expect(onSelectTask).toHaveBeenCalledWith('task-abc');
+  });
+
+  it('calls onSelectTask with the task id when an in-progress card is clicked', async () => {
     const onSelectTask = vi.fn();
     mockFetch([
       makeTask({ taskId: 'task-abc', taskName: 'Clickable Task', displayStatus: 'in_progress' }),
@@ -138,44 +295,6 @@ describe('TaskList', () => {
     render(<TaskList activeProjectId={null} boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
     await waitFor(() => {
       expect(screen.getByTestId('task-list-empty')).toBeDefined();
-    });
-  });
-
-  it('renders non-code tasks in a separate section, not mixed with code tasks', async () => {
-    mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Code Task', displayStatus: 'ready', taskType: '💻 Code', notionStatus: '🗂️ Ready' }),
-      makeTask({ taskId: 't2', taskName: 'Planning Task', displayStatus: 'ready', taskType: '📋 Planning', notionStatus: '🗂️ Ready' }),
-    ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
-    await waitFor(() => {
-      expect(screen.getByText('Code Task')).toBeDefined();
-      expect(screen.getByText('Planning Task')).toBeDefined();
-    });
-    const nonCodeSection = screen.getByTestId('non-code-section');
-    expect(nonCodeSection.textContent).toContain('Planning Task');
-    expect(nonCodeSection.textContent).not.toContain('Code Task');
-  });
-
-  it('non-code tasks in separate section do not render a Launch button', async () => {
-    mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Planning Task', displayStatus: 'ready', taskType: '📋 Planning', notionStatus: '🗂️ Ready' }),
-    ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
-    await waitFor(() => {
-      expect(screen.getByTestId('non-code-section')).toBeDefined();
-    });
-    expect(screen.queryByRole('button')).toBeNull();
-  });
-
-  it('non-code task section header shows the count', async () => {
-    mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Planning Task 1', displayStatus: 'ready', taskType: '📋 Planning', notionStatus: '🗂️ Ready' }),
-      makeTask({ taskId: 't2', taskName: 'Testing Task', displayStatus: 'ready', taskType: '🧪 Testing', notionStatus: '🗂️ Ready' }),
-    ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
-    await waitFor(() => {
-      const nonCodeSection = screen.getByTestId('non-code-section');
-      expect(nonCodeSection.textContent).toContain('2');
     });
   });
 
@@ -240,10 +359,10 @@ describe('TaskList', () => {
   });
 
   it('patches an existing task in-place when lastTaskUpdate changes', async () => {
-    const initial = makeTask({ taskId: 't1', taskName: 'Old Name', displayStatus: 'ready' });
+    const initial = makeTask({ taskId: 't1', taskName: 'Old Name', displayStatus: 'ready', wave: 1 });
     mockFetch([initial]);
 
-    const updated = makeTask({ taskId: 't1', taskName: 'Updated Name', displayStatus: 'in_progress' });
+    const updated = makeTask({ taskId: 't1', taskName: 'Updated Name', displayStatus: 'in_progress', wave: 1 });
 
     const { rerender } = render(
       <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} lastTaskUpdate={null} send={noop} project={null} />,
