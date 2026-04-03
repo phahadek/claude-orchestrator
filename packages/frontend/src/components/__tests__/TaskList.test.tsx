@@ -9,12 +9,17 @@ function makeTask(overrides: Partial<TaskView> & { taskId: string; displayStatus
     notionStatus: '🔄 In Progress',
     priority: '',
     notionUrl: '',
+    taskType: '💻 Code',
+    blocked: false,
+    blockerNames: [],
     codeSession: null,
     pr: null,
     review: null,
     ...overrides,
   };
 }
+
+const noop = vi.fn();
 
 function mockFetch(tasks: TaskView[]) {
   (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -35,13 +40,13 @@ describe('TaskList', () => {
 
   it('renders a loading indicator while tasks are being fetched', () => {
     (fetch as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => { /* never resolves */ }));
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} />);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
     expect(screen.getByTestId('task-list-loading')).toBeDefined();
   });
 
   it('renders an empty state when no active tasks exist', async () => {
     mockFetch([]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} />);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
     await waitFor(() => {
       expect(screen.getByTestId('task-list-empty')).toBeDefined();
     });
@@ -52,7 +57,7 @@ describe('TaskList', () => {
       makeTask({ taskId: 't1', taskName: 'Running Task', displayStatus: 'in_progress' }),
       makeTask({ taskId: 't2', taskName: 'Review Task',  displayStatus: 'in_review' }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} />);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
     await waitFor(() => {
       expect(screen.getByText(/in progress/i)).toBeDefined();
       expect(screen.getByText(/in review/i)).toBeDefined();
@@ -66,7 +71,7 @@ describe('TaskList', () => {
     mockFetch([
       makeTask({ taskId: 't1', taskName: 'Only Task', displayStatus: 'ready' }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} />);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
     await waitFor(() => {
       expect(screen.getByText(/ready/i)).toBeDefined();
     });
@@ -79,7 +84,7 @@ describe('TaskList', () => {
       makeTask({ taskId: 't2', taskName: 'High Priority Task',   displayStatus: 'ready', priority: '🔴 High' }),
       makeTask({ taskId: 't3', taskName: 'Medium Priority Task', displayStatus: 'ready', priority: '🟡 Medium' }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} />);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
     await waitFor(() => {
       expect(screen.getByText('High Priority Task')).toBeDefined();
     });
@@ -95,7 +100,7 @@ describe('TaskList', () => {
     mockFetch([
       makeTask({ taskId: 't1', taskName: 'Done Task', displayStatus: 'done' }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} />);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
     await waitFor(() => {
       // The header should exist
       expect(screen.getByText(/done/i)).toBeDefined();
@@ -108,7 +113,7 @@ describe('TaskList', () => {
     mockFetch([
       makeTask({ taskId: 't1', taskName: 'Completed Work', displayStatus: 'done' }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} />);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
     await waitFor(() => {
       expect(screen.getByRole('button')).toBeDefined();
     });
@@ -121,7 +126,7 @@ describe('TaskList', () => {
     mockFetch([
       makeTask({ taskId: 'task-abc', taskName: 'Clickable Task', displayStatus: 'in_progress' }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={onSelectTask} />);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={onSelectTask} send={noop} project={null} />);
     await waitFor(() => {
       expect(screen.getByText('Clickable Task')).toBeDefined();
     });
@@ -130,7 +135,7 @@ describe('TaskList', () => {
   });
 
   it('renders the empty state when activeProjectId is null', async () => {
-    render(<TaskList activeProjectId={null} boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} />);
+    render(<TaskList activeProjectId={null} boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
     await waitFor(() => {
       expect(screen.getByTestId('task-list-empty')).toBeDefined();
     });
@@ -143,7 +148,7 @@ describe('TaskList', () => {
     const updated = makeTask({ taskId: 't1', taskName: 'Updated Name', displayStatus: 'in_progress' });
 
     const { rerender } = render(
-      <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} lastTaskUpdate={null} />,
+      <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} lastTaskUpdate={null} send={noop} project={null} />,
     );
 
     await waitFor(() => {
@@ -152,7 +157,7 @@ describe('TaskList', () => {
 
     act(() => {
       rerender(
-        <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} lastTaskUpdate={updated} />,
+        <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} lastTaskUpdate={updated} send={noop} project={null} />,
       );
     });
 

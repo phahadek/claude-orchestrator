@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { TaskView, DisplayStatus } from '../types/taskView';
+import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
+import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
 import { TaskCard } from './TaskCard';
 import styles from './TaskList.module.css';
 
@@ -10,6 +12,8 @@ interface Props {
   onSelectTask: (taskId: string) => void;
   /** Latest task_updated WS message — merges a single task in-place without a full re-fetch. */
   lastTaskUpdate?: TaskView | null;
+  send: (msg: ClientMessage) => void;
+  project: ProjectConfig | null;
 }
 
 const GROUP_ORDER: DisplayStatus[] = [
@@ -40,7 +44,7 @@ function priorityRank(p: string): number {
   return PRIORITY_RANK[p] ?? 99;
 }
 
-export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTask, lastTaskUpdate }: Props) {
+export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTask, lastTaskUpdate, send, project }: Props) {
   const [tasks, setTasks] = useState<TaskView[]>([]);
   const [loading, setLoading] = useState(true);
   const [doneExpanded, setDoneExpanded] = useState(false);
@@ -142,6 +146,8 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
                     task={task}
                     selected={task.taskId === selectedTaskId}
                     onClick={() => onSelectTask(task.taskId)}
+                    send={send}
+                    project={project}
                   />
                 ))}
               </div>

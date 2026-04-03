@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
 import type { ResolvedTask } from '@claude-dashboard/backend/src/notion/types';
 import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
+import { useDispatch } from '../hooks/useDispatch';
 import styles from './DispatchModal.module.css';
 
 function taskTypeIcon(type: string): string {
@@ -27,6 +28,7 @@ export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, bo
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [collapsed, setCollapsed] = useState<Set<GroupKey>>(new Set());
+  const dispatchTasks = useDispatch(send, project);
 
   const toggleGroup = useCallback((key: GroupKey) => {
     setCollapsed((prev) => {
@@ -61,9 +63,9 @@ export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, bo
   const launch = () => {
     const toDispatch = ready
       .filter((t) => selected.has(t.task.id))
-      .map((t) => ({ taskUrl: t.task.notionUrl, projectContextUrl: project.contextUrl, taskType: t.task.type, projectId: project.id }));
+      .map((t) => ({ taskUrl: t.task.notionUrl, taskType: t.task.type }));
     if (toDispatch.length > 0) {
-      send({ type: 'dispatch', tasks: toDispatch });
+      dispatchTasks(toDispatch);
       onClose();
     }
   };
