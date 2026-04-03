@@ -471,6 +471,8 @@ export default function App() {
                 selectedTaskId={selectedTaskId}
                 onSelectTask={setSelectedTaskId}
                 lastTaskUpdate={lastTaskUpdate}
+                send={send}
+                project={activeProject}
               />
             </div>
 
