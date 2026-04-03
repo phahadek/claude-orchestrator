@@ -541,6 +541,28 @@ describe('POST /api/prs/:owner/:repo/:prNumber/approve', () => {
   });
 });
 
+// ── AC: Break 2 — review endpoint calls prReviewService.reviewPR() ──────────
+// Required by task: Wire ReviewOrchestrator into server event flow
+// Verifies the endpoint is NOT stubbed and delegates to prReviewService.reviewPR().
+
+describe('Break 2 (AC) — POST /api/prs/:prNumber/review calls prReviewService.reviewPR()', () => {
+  it('calls prReviewService.reviewPR() with correct args and returns real verdict, not stub null', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const prReviewService = makeMockPRReviewService();
+    const res = await supertest(buildApp(makeMockGitHub(), prReviewService))
+      .post('/api/prs/42/review?projectId=proj-1');
+    expect(res.status).toBe(200);
+    // Must invoke reviewPR — not return the old stub { verdict: null }
+    expect(vi.mocked(prReviewService.reviewPR)).toHaveBeenCalledWith(
+      42, 'owner/repo', 'proj-1', 'https://notion.so/ctx',
+    );
+    expect(res.body.verdict).toBe('approved');
+    expect(res.body.verdict).not.toBeNull();
+    // Old stub message must be absent
+    expect(res.body.message).not.toMatch(/not yet implemented/i);
+  });
+});
+
 // ── PRSyncJob ─────────────────────────────────────────────────────────────────
 
 describe('PRSyncJob.run()', () => {
