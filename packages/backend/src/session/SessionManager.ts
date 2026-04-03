@@ -502,6 +502,11 @@ export class SessionManager extends EventEmitter {
     }
   }
 
+  /** Returns true if the session is currently live in the in-memory sessions map. */
+  isAlive(sessionId: string): boolean {
+    return this.sessions.has(sessionId);
+  }
+
   async kill(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (session) {
@@ -551,11 +556,16 @@ export class SessionManager extends EventEmitter {
    * with --resume <sessionId> so the CLI restores the conversation history,
    * and the message is sent once the session emits its first event.
    */
-  async sendOrResume(sessionId: string, text: string): Promise<void> {
+  /**
+   * Send a message to a session, resuming it first if it is no longer live.
+   * Returns the session ID that was used (the original if live, or the new
+   * resumed session ID if the session was restarted with --resume).
+   */
+  async sendOrResume(sessionId: string, text: string): Promise<string> {
     // Live session — deliver directly
     if (this.sessions.has(sessionId)) {
       this.send(sessionId, text);
-      return;
+      return sessionId;
     }
 
     // Session not live — look up details from DB and re-launch with --resume
@@ -667,6 +677,7 @@ export class SessionManager extends EventEmitter {
       });
 
     await firstEvent;
+    return newSessionId;
   }
 
   async shutdownAll(): Promise<void> {

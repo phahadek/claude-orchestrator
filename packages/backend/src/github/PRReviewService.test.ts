@@ -101,6 +101,8 @@ function makeMockSessionManager() {
   return Object.assign(emitter, {
     start: vi.fn().mockReturnValue('review-session-id'),
     send: vi.fn(),
+    isAlive: vi.fn().mockReturnValue(false),
+    sendOrResume: vi.fn().mockResolvedValue('resumed-session-id'),
   });
 }
 
@@ -835,5 +837,105 @@ describe('PRReviewService.sendReReview()', () => {
 
     expect(result.verdict).toBe('approved');
     expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledOnce();
+  });
+});
+
+// ── reviewPR() — session reuse logic ─────────────────────────────────────────
+
+describe('PRReviewService.reviewPR() — session reuse', () => {
+  const claudePayload = {
+    verdict: 'approved',
+    dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+    summary: 'All good.',
+  };
+
+  it('reuses an existing live review session: sends follow-up, does not spawn', async () => {
+    const prRowWithLiveSession = { ...mockPRRow, review_session_id: 'existing-review-session-id' };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithLiveSession as any);
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    const sendMock = mockSM.send as ReturnType<typeof vi.fn>;
+    sendMock.mockImplementationOnce(() => {
+      setImmediate(() =>
+        mockSM.emit('message', makeSessionEventMessage('existing-review-session-id', JSON.stringify(claudePayload))),
+      );
+    });
+
+    const service = new PRReviewService(makeMockGitHub(), makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    const result = await service.reviewPR(42, 'owner/repo');
+
+    expect(mockSM.start).not.toHaveBeenCalled();
+    expect(sendMock).toHaveBeenCalledWith('existing-review-session-id', expect.any(String));
+    expect(vi.mocked(setReviewSessionId)).not.toHaveBeenCalled();
+    expect(result.verdict).toBe('approved');
+  });
+
+  it('resumes a dead review session via sendOrResume with the original session ID', async () => {
+    const prRowWithDeadSession = { ...mockPRRow, review_session_id: 'dead-review-session-id' };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithDeadSession as any);
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(false);
+
+    const resumedId = 'new-resumed-session-id';
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+      setImmediate(() =>
+        mockSM.emit('message', makeSessionEventMessage(resumedId, JSON.stringify(claudePayload))),
+      );
+      return resumedId;
+    });
+
+    const service = new PRReviewService(makeMockGitHub(), makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    const result = await service.reviewPR(42, 'owner/repo');
+
+    expect(mockSM.start).not.toHaveBeenCalled();
+    expect(mockSM.sendOrResume).toHaveBeenCalledWith('dead-review-session-id', expect.any(String));
+    expect(vi.mocked(setReviewSessionId)).toHaveBeenCalledWith(42, 'owner/repo', resumedId);
+    expect(result.verdict).toBe('approved');
+  });
+
+  it('spawns a new session only when no prior review_session_id exists on the PR', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any); // review_session_id: null
+
+    const mockSM = makeMockSessionManager();
+    const startMock = mockSM.start as ReturnType<typeof vi.fn>;
+    startMock.mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+      const id = opts.sessionId;
+      setImmediate(() =>
+        mockSM.emit('message', makeSessionEventMessage(id, JSON.stringify(claudePayload))),
+      );
+      return id;
+    });
+
+    const service = new PRReviewService(makeMockGitHub(), makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    const result = await service.reviewPR(42, 'owner/repo');
+
+    expect(startMock).toHaveBeenCalledOnce();
+    expect(mockSM.send).not.toHaveBeenCalled();
+    expect(mockSM.sendOrResume).not.toHaveBeenCalled();
+    const [, , opts] = startMock.mock.calls[0];
+    expect(vi.mocked(setReviewSessionId)).toHaveBeenCalledWith(42, 'owner/repo', opts.sessionId);
+    expect(result.verdict).toBe('approved');
+  });
+
+  it('does not overwrite review_session_id when reusing an existing live session', async () => {
+    const prRowWithLiveSession = { ...mockPRRow, review_session_id: 'existing-review-session-id' };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithLiveSession as any);
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    (mockSM.send as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+      setImmediate(() =>
+        mockSM.emit('message', makeSessionEventMessage('existing-review-session-id', JSON.stringify(claudePayload))),
+      );
+    });
+
+    const service = new PRReviewService(makeMockGitHub(), makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    await service.reviewPR(42, 'owner/repo');
+
+    expect(vi.mocked(setReviewSessionId)).not.toHaveBeenCalled();
   });
 });
