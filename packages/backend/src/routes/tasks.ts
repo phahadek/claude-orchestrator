@@ -4,7 +4,6 @@ import { getProjectById } from '../config';
 import { getTaskCache, getActiveTaskAggregates, getLatestNonSystemEventPayload, getSetting } from '../db/queries';
 import type { TaskAggregateRow } from '../db/queries';
 import { deriveDisplayStatus } from '../tasks/TaskStatusEngine';
-import type { DisplayStatus } from '../tasks/TaskStatusEngine';
 import type { NotionTask } from '../notion/types';
 import type { PRReviewResult } from '../github/PRReviewService';
 import type { ServerMessage, TaskView } from '../ws/types';
