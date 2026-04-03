@@ -63,7 +63,7 @@ vi.mock('../config.js', () => ({
   }),
 }));
 
-import { createPrsRouter } from '../routes/prs.js';
+import { createPrsRouter, setPRBroadcast } from '../routes/prs.js';
 import * as queries from '../db/queries.js';
 import type { PullRequest } from '../github/types.js';
 import { GitHubApiError } from '../github/types.js';
@@ -299,6 +299,26 @@ describe('POST /api/prs/:prNumber/review', () => {
       .post('/api/prs/42/review?projectId=proj-1');
     expect(res.status).toBe(404);
   });
+
+  it('broadcasts pr_review_complete after a successful review', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const broadcastedMessages: object[] = [];
+    setPRBroadcast((msg) => broadcastedMessages.push(msg));
+
+    await supertest(buildApp()).post('/api/prs/42/review?projectId=proj-1');
+
+    expect(broadcastedMessages).toHaveLength(1);
+    expect(broadcastedMessages[0]).toMatchObject({
+      type: 'pr_review_complete',
+      prNumber: 42,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      summary: 'Looks good',
+    });
+
+    // Reset broadcast to no-op
+    setPRBroadcast(() => {});
+  });
 });
 
 // ── POST /api/prs/:prNumber/merge ─────────────────────────────────────────────
@@ -376,6 +396,26 @@ describe('POST /api/prs/:prNumber/re-review', () => {
       .post('/api/prs/unknown/norepo/42/re-review');
     expect(res.status).toBe(422);
     expect(res.body.error).toMatch(/No project configured/);
+  });
+
+  it('broadcasts pr_review_complete after a successful re-review', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const broadcastedMessages: object[] = [];
+    setPRBroadcast((msg) => broadcastedMessages.push(msg));
+
+    await supertest(buildApp()).post('/api/prs/owner/repo/42/re-review');
+
+    expect(broadcastedMessages).toHaveLength(1);
+    expect(broadcastedMessages[0]).toMatchObject({
+      type: 'pr_review_complete',
+      prNumber: 42,
+      repo: 'owner/repo',
+      verdict: 'approved',
+      summary: 'Looks good',
+    });
+
+    // Reset broadcast to no-op
+    setPRBroadcast(() => {});
   });
 });
 
