@@ -21,6 +21,7 @@ import { SessionFilterBar } from './components/SessionFilterBar';
 import type { NotificationItem } from './components/Notifications';
 import type { ClientMessage, ServerMessage } from '@claude-dashboard/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
+import { calculateCost } from '@claude-dashboard/backend/src/utils/usage';
 import type { TaskView } from '@claude-dashboard/backend/src/routes/tasks';
 import styles from './App.module.css';
 
@@ -78,7 +79,6 @@ export default function App() {
   const prevConnectionState = useRef<ConnectionState>('disconnected');
 
   const [cardPreviewLines, setCardPreviewLines] = useState<number>(3);
-  const [planTokenCap, setPlanTokenCap] = useState<number>(0);
 
   const [detailWidthPct, setDetailWidthPct] = useState<number>(() => {
     const saved = localStorage.getItem('sessionDetailWidth');
@@ -150,8 +150,6 @@ export default function App() {
       .then((s: Record<string, string>) => {
         const lines = Number(s.card_preview_lines);
         if (lines > 0) setCardPreviewLines(lines);
-        const cap = Number(s.plan_token_cap);
-        if (cap > 0) setPlanTokenCap(cap);
       })
       .catch(() => {/* keep default */});
   }, []);
@@ -432,11 +430,20 @@ export default function App() {
   const runningCount = filteredSessions.filter((s) => ['running', 'starting', 'needs_permission'].includes(s.status)).length;
   const doneCount = filteredSessions.filter((s) => ['done', 'error', 'killed'].includes(s.status)).length;
 
-  const totalTokens = useMemo(() => {
-    return sessions
-      .filter((s) => !s.archived && (!activeProjectId || s.project_id === activeProjectId))
-      .reduce((sum, s) => sum + (s.totalInputTokens ?? 0) + (s.totalOutputTokens ?? 0), 0);
-  }, [sessions, activeProjectId]);
+  const activeSessions = useMemo(
+    () => sessions.filter((s) => !s.archived && (!activeProjectId || s.project_id === activeProjectId)),
+    [sessions, activeProjectId],
+  );
+
+  const totalTokens = useMemo(
+    () => activeSessions.reduce((sum, s) => sum + (s.totalInputTokens ?? 0) + (s.totalOutputTokens ?? 0), 0),
+    [activeSessions],
+  );
+
+  const totalCost = useMemo(
+    () => activeSessions.reduce((sum, s) => sum + calculateCost(s.totalInputTokens ?? 0, s.totalOutputTokens ?? 0, s.model), 0),
+    [activeSessions],
+  );
 
   // Keyboard navigation: sorted active sessions (same order as SessionGrid)
   const kbSortedSessions = [...filteredSessions].sort((a, b) => {
@@ -523,7 +530,7 @@ export default function App() {
         activeView={topView}
         onViewChange={handleViewChange}
         totalTokens={totalTokens}
-        planTokenCap={planTokenCap}
+        totalCost={totalCost}
         tasks={taskViews}
         incompleteReviewCount={incompleteReviews.length}
       />
@@ -619,7 +626,6 @@ export default function App() {
                     onResume={handleResume}
                     onToggleFavorite={(sessionId, favorited) => setSessionFavorited(sessionId, favorited)}
                     cardPreviewLines={cardPreviewLines}
-                    planTokenCap={planTokenCap}
                   />
                 </>
               )}
@@ -635,7 +641,6 @@ export default function App() {
                 <SessionDetail
                   session={selectedSession}
                   send={send}
-                  planTokenCap={planTokenCap}
                   onClose={() => setSelectedId(null)}
                   onDelete={(sessionId) => {
                     deleteSession(sessionId);

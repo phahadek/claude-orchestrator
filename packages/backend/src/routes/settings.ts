@@ -9,20 +9,10 @@ const SETTING_KEYS = [
   'max_concurrent_code_sessions',
   'auto_review_concurrency',
   'auto_review',
-  'plan_tier',
-  'plan_token_cap',
   'card_preview_lines',
   'code_session_model',
   'review_session_model',
 ] as const;
-
-const PLAN_TIER_CAPS: Record<string, number> = {
-  'Free': 0,
-  'Pro': 5_000_000,
-  'Team': 5_000_000,
-  'Max (5x)': 25_000_000,
-  'Max (20x)': 100_000_000,
-};
 
 type SettingKey = (typeof SETTING_KEYS)[number];
 
@@ -33,13 +23,6 @@ function applyToRuntime(key: SettingKey, value: string): void {
     runtimeSettings.auto_review_concurrency = Number(value);
   } else if (key === 'auto_review') {
     runtimeSettings.auto_review = value !== 'false';
-  } else if (key === 'plan_tier') {
-    runtimeSettings.plan_tier = value;
-    if (value in PLAN_TIER_CAPS) {
-      runtimeSettings.plan_token_cap = PLAN_TIER_CAPS[value];
-    }
-  } else if (key === 'plan_token_cap') {
-    runtimeSettings.plan_token_cap = Number(value);
   } else if (key === 'card_preview_lines') {
     runtimeSettings.card_preview_lines = Number(value);
   } else if (key === 'code_session_model') {
@@ -60,7 +43,7 @@ export function loadRuntimeSettingsFromDb(): void {
       let defaultVal: string;
       if (key === 'auto_review') {
         defaultVal = String(runtimeSettings.auto_review);
-      } else if (key === 'plan_tier' || key === 'code_session_model' || key === 'review_session_model') {
+      } else if (key === 'code_session_model' || key === 'review_session_model') {
         defaultVal = runtimeSettings[key];
       } else {
         defaultVal = String(runtimeSettings[key]);
@@ -75,8 +58,6 @@ function runtimeSettingsAsRecord(): Record<SettingKey, string> {
     max_concurrent_code_sessions: String(runtimeSettings.max_concurrent_code_sessions),
     auto_review_concurrency: String(runtimeSettings.auto_review_concurrency),
     auto_review: String(runtimeSettings.auto_review),
-    plan_tier: runtimeSettings.plan_tier,
-    plan_token_cap: String(runtimeSettings.plan_token_cap),
     card_preview_lines: String(runtimeSettings.card_preview_lines),
     code_session_model: runtimeSettings.code_session_model,
     review_session_model: runtimeSettings.review_session_model,
@@ -99,12 +80,7 @@ router.patch('/', (req: Request, res: Response) => {
       setSetting(key, value);
       applyToRuntime(key, value);
       updated[key] = value;
-      // When a known tier is set, also persist the resolved cap
-      if (key === 'plan_tier' && value in PLAN_TIER_CAPS) {
-        const resolvedCap = String(PLAN_TIER_CAPS[value]);
-        setSetting('plan_token_cap', resolvedCap);
-        updated['plan_token_cap'] = resolvedCap;
-      }
+  
     }
   }
 

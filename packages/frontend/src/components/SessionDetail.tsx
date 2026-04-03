@@ -5,7 +5,7 @@ import { taskNameFromNotionUrl } from '../utils/notionUrl';
 import { calcElapsedMs, formatDuration } from '../utils/sessionTimer';
 import { StatusBadge } from './StatusBadge';
 import { formatModelName } from './SessionCard';
-import { formatTokenCount, formatUtilization } from '@claude-dashboard/backend/src/utils/usage';
+import { formatTokenCount, formatCost, calculateCost } from '@claude-dashboard/backend/src/utils/usage';
 import { ReviewDetailView } from './ReviewDetailView';
 import { EventTranscript } from './EventTranscript';
 import styles from './SessionDetail.module.css';
@@ -26,10 +26,9 @@ interface Props {
   onResume?: (sessionId: string) => void;
   onFavorite?: (sessionId: string) => void;
   onUnfavorite?: (sessionId: string) => void;
-  planTokenCap?: number;
 }
 
-export function SessionDetail({ session, send, onClose, onDelete, onArchive, onUnarchive, onResume, onFavorite, onUnfavorite, planTokenCap }: Props) {
+export function SessionDetail({ session, send, onClose, onDelete, onArchive, onUnarchive, onResume, onFavorite, onUnfavorite }: Props) {
   const [draftMessage, setDraftMessage] = useState('');
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const [deleting, setDeleting] = useState(false);
@@ -166,9 +165,7 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
           {(session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0) > 0 && (
             <span className={styles.tokenCount}>
               {formatTokenCount((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0))} tokens
-              {planTokenCap != null && planTokenCap > 0
-                ? ` (${formatUtilization(((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0)) / planTokenCap * 100)})`
-                : ''}
+              {' (~' + formatCost(calculateCost(session.totalInputTokens ?? 0, session.totalOutputTokens ?? 0, session.model)) + ')'}
             </span>
           )}
           <button
