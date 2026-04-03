@@ -188,12 +188,12 @@ describe('SessionManager.start() — StartOptions', () => {
 describe('normalizePath()', () => {
   it('converts /c/Users/... to C:/Users/... on Windows, no-op on other platforms', () => {
     if (process.platform === 'win32') {
-      expect(normalizePath('/c/Users/phadek/foo')).toBe('C:/Users/phadek/foo');
+      expect(normalizePath('/c/Users/testuser/foo')).toBe('C:/Users/testuser/foo');
       expect(normalizePath('/D/projects/bar')).toBe('D:/projects/bar');
-      expect(normalizePath('C:/Users/phadek/foo')).toBe('C:/Users/phadek/foo');
+      expect(normalizePath('C:/Users/testuser/foo')).toBe('C:/Users/testuser/foo');
       expect(normalizePath('/usr/local/bin')).toBe('/usr/local/bin');
     } else {
-      expect(normalizePath('/c/Users/phadek/foo')).toBe('/c/Users/phadek/foo');
+      expect(normalizePath('/c/Users/testuser/foo')).toBe('/c/Users/testuser/foo');
       expect(normalizePath('/usr/local/bin')).toBe('/usr/local/bin');
     }
   });
