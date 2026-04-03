@@ -303,6 +303,11 @@ export class PRReviewService {
   }
 
   private appendMergeConflictDimension(result: PRReviewResult, mergeable: boolean | null): PRReviewResult {
+    // When GitHub returns null, mergeability is still being computed — skip the dimension entirely.
+    if (mergeable === null) {
+      return result;
+    }
+
     const passed = mergeable === true;
     const conflictDim: ReviewDimension = {
       name: 'Merge conflicts',
