@@ -19,16 +19,8 @@
     "concurrently": "^8.0.0",
     "kill-port": "^2.0.1"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/phahadek/claude-dashboard.git"
-  },
   "keywords": [],
   "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "bugs": {
-    "url": "https://github.com/phahadek/claude-dashboard/issues"
-  },
-  "homepage": "https://github.com/phahadek/claude-dashboard#readme"
+  "license": "MIT",
+  "type": "commonjs"
 }
