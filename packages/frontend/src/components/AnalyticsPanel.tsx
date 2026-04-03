@@ -8,6 +8,11 @@ import {
   ResponsiveContainer,
   CartesianGrid,
   Legend,
+  PieChart,
+  Pie,
+  Cell,
+  AreaChart,
+  Area,
 } from 'recharts';
 import { formatTokenCount, formatCost } from '@claude-dashboard/backend/src/utils/usage';
 import type { TokenAnalyticsResponse, TokenAnalyticsSession } from '@claude-dashboard/backend/src/routes/analytics';
@@ -33,6 +38,8 @@ function shortLabel(session: TokenAnalyticsSession): string {
   const name = session.taskName ?? session.sessionId.slice(0, 8);
   return name.length > 20 ? name.slice(0, 20) + '…' : name;
 }
+
+const PIE_COLORS = ['#89b4fa', '#cba6f7', '#a6e3a1', '#fab387'];
 
 export function AnalyticsPanel({ activeProjectId }: Props) {
   const [data, setData] = useState<TokenAnalyticsResponse | null>(null);
@@ -68,20 +75,39 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
     fetchData();
   }, [fetchData]);
 
-  // Sessions with tokens only (skip zero-token historical sessions)
+  // Sessions with tokens only — zero-token historical sessions are excluded from all charts/tables
   const sessionsWithTokens = data?.sessions.filter((s) => s.totalTokens > 0) ?? [];
 
-  // Chart data: last 20 sessions with tokens, in chronological order
+  // Bar chart: last 20 sessions with tokens, in chronological order
   const chartSessions = [...sessionsWithTokens]
     .sort((a, b) => a.startedAt - b.startedAt)
     .slice(-20);
 
-  const chartData = chartSessions.map((s) => ({
+  const barChartData = chartSessions.map((s) => ({
     name: shortLabel(s),
     inputTokens: s.inputTokens,
     outputTokens: s.outputTokens,
     cost: s.cost,
   }));
+
+  // Pie chart: token breakdown by session type
+  const typeMap = new Map<string, number>();
+  for (const s of sessionsWithTokens) {
+    const key = s.sessionType === 'review' ? 'Review' : 'Code';
+    typeMap.set(key, (typeMap.get(key) ?? 0) + s.totalTokens);
+  }
+  const pieData = [...typeMap.entries()]
+    .map(([name, value]) => ({ name, value }))
+    .filter((d) => d.value > 0);
+
+  // Cumulative trend: tokens accumulated over sessions, sorted chronologically
+  const cumulativeData = [...sessionsWithTokens]
+    .sort((a, b) => a.startedAt - b.startedAt)
+    .reduce<{ name: string; cumulative: number }[]>((acc, s) => {
+      const prev = acc.length > 0 ? acc[acc.length - 1].cumulative : 0;
+      acc.push({ name: shortLabel(s), cumulative: prev + s.totalTokens });
+      return acc;
+    }, []);
 
   // Top sessions by total tokens
   const topSessions = [...sessionsWithTokens]
@@ -112,6 +138,7 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
 
       {data && !loading && (
         <>
+          {/* ── Summary stat cards ── */}
           <div className={styles.summaryRow}>
             <div className={styles.summaryCard}>
               <div className={styles.summaryValue}>{data.totals.sessionCount}</div>
@@ -135,78 +162,159 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
             </div>
           </div>
 
-          {chartData.length > 0 ? (
-            <div className={styles.chartSection}>
-              <h3 className={styles.sectionTitle}>Token usage per session (last {chartData.length})</h3>
-              <div className={styles.chartContainer}>
-                <ResponsiveContainer width="100%" height={280}>
-                  <BarChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 60 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#313244" />
-                    <XAxis
-                      dataKey="name"
-                      tick={{ fill: '#a6adc8', fontSize: 11 }}
-                      angle={-40}
-                      textAnchor="end"
-                      interval={0}
-                    />
-                    <YAxis
-                      tickFormatter={(v: number) => formatTokenCount(v)}
-                      tick={{ fill: '#a6adc8', fontSize: 11 }}
-                      width={55}
-                    />
-                    <Tooltip
-                      contentStyle={{ background: '#1e1e2e', border: '1px solid #45475a', borderRadius: 6 }}
-                      labelStyle={{ color: '#cdd6f4', marginBottom: 4 }}
-                      itemStyle={{ color: '#cdd6f4' }}
-                      formatter={(value: number, name: string) => [
-                        formatTokenCount(value),
-                        name === 'inputTokens' ? 'Input' : 'Output',
-                      ]}
-                    />
-                    <Legend
-                      formatter={(value: string) => value === 'inputTokens' ? 'Input' : 'Output'}
-                      wrapperStyle={{ color: '#a6adc8', fontSize: 12 }}
-                    />
-                    <Bar dataKey="inputTokens" stackId="a" fill="#89b4fa" name="inputTokens" />
-                    <Bar dataKey="outputTokens" stackId="a" fill="#cba6f7" name="outputTokens" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          ) : (
+          {sessionsWithTokens.length === 0 ? (
             <div className={styles.emptyChart}>No token data in this date range.</div>
-          )}
+          ) : (
+            <>
+              {/* ── Token usage bar chart ── */}
+              <div className={styles.chartSection}>
+                <h3 className={styles.sectionTitle}>Token usage per session (last {barChartData.length})</h3>
+                <div className={styles.chartContainer}>
+                  <ResponsiveContainer width="100%" height={280}>
+                    <BarChart data={barChartData} margin={{ top: 8, right: 16, left: 0, bottom: 60 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#313244" />
+                      <XAxis
+                        dataKey="name"
+                        tick={{ fill: '#a6adc8', fontSize: 11 }}
+                        angle={-40}
+                        textAnchor="end"
+                        interval={0}
+                      />
+                      <YAxis
+                        tickFormatter={(v: number) => formatTokenCount(v)}
+                        tick={{ fill: '#a6adc8', fontSize: 11 }}
+                        width={55}
+                      />
+                      <Tooltip
+                        contentStyle={{ background: '#1e1e2e', border: '1px solid #45475a', borderRadius: 6 }}
+                        labelStyle={{ color: '#cdd6f4', marginBottom: 4 }}
+                        itemStyle={{ color: '#cdd6f4' }}
+                        formatter={(value: number, name: string) => [
+                          formatTokenCount(value),
+                          name === 'inputTokens' ? 'Input' : 'Output',
+                        ]}
+                      />
+                      <Legend
+                        formatter={(value: string) => value === 'inputTokens' ? 'Input' : 'Output'}
+                        wrapperStyle={{ color: '#a6adc8', fontSize: 12 }}
+                      />
+                      <Bar dataKey="inputTokens" stackId="a" fill="#89b4fa" name="inputTokens" />
+                      <Bar dataKey="outputTokens" stackId="a" fill="#cba6f7" name="outputTokens" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
 
-          {topSessions.length > 0 && (
-            <div className={styles.tableSection}>
-              <h3 className={styles.sectionTitle}>Top sessions by token usage</h3>
-              <table className={styles.table}>
-                <thead>
-                  <tr>
-                    <th>Session</th>
-                    <th>Type</th>
-                    <th>Input</th>
-                    <th>Output</th>
-                    <th>Total</th>
-                    <th>Est. cost</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {topSessions.map((s) => (
-                    <tr key={s.sessionId}>
-                      <td className={styles.taskNameCell} title={s.taskName ?? s.sessionId}>
-                        {s.taskName ?? s.sessionId.slice(0, 8)}
-                      </td>
-                      <td>{s.sessionType}</td>
-                      <td>{formatTokenCount(s.inputTokens)}</td>
-                      <td>{formatTokenCount(s.outputTokens)}</td>
-                      <td>{formatTokenCount(s.totalTokens)}</td>
-                      <td>{formatCost(s.cost)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+              {/* ── Two-column row: pie chart + cumulative trend ── */}
+              <div className={styles.chartsRow}>
+                {/* Session-type breakdown pie */}
+                {pieData.length > 0 && (
+                  <div className={styles.chartSection}>
+                    <h3 className={styles.sectionTitle}>Tokens by session type</h3>
+                    <div className={`${styles.chartContainer} ${styles.pieContainer}`}>
+                      <ResponsiveContainer width="100%" height={220}>
+                        <PieChart>
+                          <Pie
+                            data={pieData}
+                            dataKey="value"
+                            nameKey="name"
+                            cx="50%"
+                            cy="50%"
+                            outerRadius={80}
+                            label={({ name, percent }: { name: string; percent: number }) =>
+                              `${name} ${Math.round(percent * 100)}%`
+                            }
+                            labelLine={{ stroke: '#585b70' }}
+                          >
+                            {pieData.map((_entry, index) => (
+                              <Cell key={index} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                            ))}
+                          </Pie>
+                          <Tooltip
+                            contentStyle={{ background: '#1e1e2e', border: '1px solid #45475a', borderRadius: 6 }}
+                            itemStyle={{ color: '#cdd6f4' }}
+                            formatter={(value: number) => [formatTokenCount(value), 'Tokens']}
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                )}
+
+                {/* Cumulative token trend */}
+                {cumulativeData.length > 1 && (
+                  <div className={styles.chartSection}>
+                    <h3 className={styles.sectionTitle}>Cumulative token usage</h3>
+                    <div className={styles.chartContainer}>
+                      <ResponsiveContainer width="100%" height={220}>
+                        <AreaChart data={cumulativeData} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+                          <defs>
+                            <linearGradient id="cumulativeGrad" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="#89b4fa" stopOpacity={0.3} />
+                              <stop offset="95%" stopColor="#89b4fa" stopOpacity={0} />
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#313244" />
+                          <XAxis dataKey="name" hide />
+                          <YAxis
+                            tickFormatter={(v: number) => formatTokenCount(v)}
+                            tick={{ fill: '#a6adc8', fontSize: 11 }}
+                            width={55}
+                          />
+                          <Tooltip
+                            contentStyle={{ background: '#1e1e2e', border: '1px solid #45475a', borderRadius: 6 }}
+                            labelStyle={{ color: '#cdd6f4', marginBottom: 4 }}
+                            itemStyle={{ color: '#cdd6f4' }}
+                            formatter={(value: number) => [formatTokenCount(value), 'Cumulative']}
+                          />
+                          <Area
+                            type="monotone"
+                            dataKey="cumulative"
+                            stroke="#89b4fa"
+                            fill="url(#cumulativeGrad)"
+                            strokeWidth={2}
+                            dot={false}
+                          />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* ── Top sessions table ── */}
+              {topSessions.length > 0 && (
+                <div className={styles.tableSection}>
+                  <h3 className={styles.sectionTitle}>Top sessions by token usage</h3>
+                  <table className={styles.table}>
+                    <thead>
+                      <tr>
+                        <th>Session</th>
+                        <th>Type</th>
+                        <th>Input</th>
+                        <th>Output</th>
+                        <th>Total</th>
+                        <th>Est. cost</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {topSessions.map((s) => (
+                        <tr key={s.sessionId}>
+                          <td className={styles.taskNameCell} title={s.taskName ?? s.sessionId}>
+                            {s.taskName ?? s.sessionId.slice(0, 8)}
+                          </td>
+                          <td>{s.sessionType}</td>
+                          <td>{formatTokenCount(s.inputTokens)}</td>
+                          <td>{formatTokenCount(s.outputTokens)}</td>
+                          <td>{formatTokenCount(s.totalTokens)}</td>
+                          <td>{formatCost(s.cost)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
           )}
         </>
       )}

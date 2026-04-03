@@ -91,10 +91,27 @@
   margin-top: 2px;
 }
 
+.chartsRow {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.chartsRow > .chartSection {
+  flex: 1;
+  min-width: 280px;
+}
+
 .chartSection {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.pieContainer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .sectionTitle {

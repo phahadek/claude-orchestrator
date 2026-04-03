@@ -105,7 +105,10 @@ export function SessionCard({ session, selected, onClick, projectColor, projectN
       <div className={styles['card-footer']}>
         <span className={styles.elapsed}>{elapsed}</span>
         {(session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0) > 0 && (
-          <span className={styles['token-count']}>
+          <span
+            className={styles['token-count']}
+            title={`${formatTokenCount(session.totalInputTokens ?? 0)} input · ${formatTokenCount(session.totalOutputTokens ?? 0)} output`}
+          >
             {sessionMode === 'api'
               ? formatCost(calculateCost(session.totalInputTokens ?? 0, session.totalOutputTokens ?? 0, session.model))
               : `${formatTokenCount((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0))} tokens (~${formatCost(calculateCost(session.totalInputTokens ?? 0, session.totalOutputTokens ?? 0, session.model))} est.)`}
