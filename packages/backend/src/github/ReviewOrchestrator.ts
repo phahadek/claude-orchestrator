@@ -1,5 +1,5 @@
 import { config } from '../config';
-import { setPRReviewResult, getSetting, getPRByNumber, incrementReviewIteration, setPendingPush } from '../db/queries';
+import { setPRReviewResult, getSetting, getPRByNumber, setPendingPush } from '../db/queries';
 import type { PRReviewService, PRReviewResult } from './PRReviewService';
 import type { SessionManager } from '../session/SessionManager';
 import type { ReviewJob } from './types';
@@ -79,9 +79,6 @@ export class ReviewOrchestrator {
       });
       return;
     }
-
-    // Increment iteration counter before starting the review
-    incrementReviewIteration(job.prNumber, job.repo);
 
     let result: PRReviewResult;
     try {
