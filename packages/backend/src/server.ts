@@ -20,6 +20,7 @@ import settingsRouter, { loadRuntimeSettingsFromDb } from './routes/settings';
 import { sessionsRouter, setBroadcast } from './routes/sessions';
 import { createPrsRouter, setPRBroadcast } from './routes/prs';
 import { createTasksRouter, setTaskBroadcast } from './routes/tasks';
+import { analyticsRouter } from './routes/analytics';
 import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
 import { ReviewOrchestrator } from './github/ReviewOrchestrator';
@@ -71,6 +72,7 @@ app.use('/api/sessions', sessionsRouter);
 const prMergeWatcher = new PRMergeWatcher(githubClient, sessionManager, taskBackend);
 app.use('/api', createPrsRouter(githubClient, prReviewService, sessionManager, taskBackend, prMergeWatcher));
 app.use('/api', createTasksRouter());
+app.use('/api/analytics', analyticsRouter);
 app.use('/api', configRouter);
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>

@@ -15,6 +15,7 @@ import { PermissionEventLog } from './components/PermissionEventLog';
 import { TaskList } from './components/TaskList';
 import { TaskDetail } from './components/TaskDetail';
 import { Settings } from './components/Settings';
+import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { Notifications } from './components/Notifications';
 import { ShortcutHint } from './components/ShortcutHint';
 import { SessionFilterBar } from './components/SessionFilterBar';
@@ -514,6 +515,7 @@ export default function App() {
       if (view === 'tasks') setTopView('tasks');
       else if (view === 'sessions') setTopView('sessions');
       else if (view === 'prs') setTopView('prs');
+      else if (view === 'analytics') setTopView('analytics');
       else if (view === 'settings') setTopView('settings');
     },
     onFocusSearch: () => {
@@ -678,6 +680,12 @@ export default function App() {
               refreshTrigger={prRefreshTrigger}
               prReviewEvent={lastPrReviewEvent}
             />
+          </div>
+        )}
+
+        {topView === 'analytics' && (
+          <div className={styles.analyticsView}>
+            <AnalyticsPanel activeProjectId={activeProjectId} />
           </div>
         )}
 
