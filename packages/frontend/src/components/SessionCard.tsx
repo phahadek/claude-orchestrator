@@ -79,6 +79,11 @@ export function SessionCard({ session, selected, onClick, projectColor, projectN
           )}
         </div>
       )}
+      {session.status === 'retrying' && (
+        <div className={styles['retrying-row']}>
+          <span className={styles['retrying-badge']}>🔁 Retrying after transient API error…</span>
+        </div>
+      )}
       {isReview && session.prNumber != null && (
         <div className={styles['review-pr-tag']}>Review of #{session.prNumber}</div>
       )}
