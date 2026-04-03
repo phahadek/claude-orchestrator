@@ -4,6 +4,7 @@ import {
   tryParseJson,
   extractText,
   extractBashCommand,
+  extractToolDetail,
   extractToolUse,
   extractToolResult,
   extractSystem,
@@ -129,8 +130,9 @@ export function EventRow({ event }: EventRowProps) {
                 }
                 const isBash = toolName === 'Bash';
                 const bashCmd = isBash ? extractBashCommand(input) : null;
+                const detail = !isBash ? extractToolDetail(toolName, input) : null;
                 nodes.push(
-                  <CollapsibleToolUse key={idx} toolName={toolName}>
+                  <CollapsibleToolUse key={idx} toolName={toolName} detail={detail}>
                     {isBash && bashCmd != null ? (
                       <pre className={styles.bashCommand}>$ {bashCmd}</pre>
                     ) : (
@@ -201,8 +203,11 @@ export function EventRow({ event }: EventRowProps) {
 
 // ── CollapsibleToolUse ─────────────────────────────────────────────
 
-function CollapsibleToolUse({ toolName, children }: { toolName: string; children: React.ReactNode }) {
+function CollapsibleToolUse({ toolName, detail, children }: { toolName: string; detail?: string | null; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
+  const truncatedDetail = detail != null
+    ? (detail.length > 60 ? detail.slice(0, 60) + '…' : detail)
+    : null;
   return (
     <div className={styles.eventToolUse}>
       <div
@@ -215,6 +220,9 @@ function CollapsibleToolUse({ toolName, children }: { toolName: string; children
       >
         <span className={styles.toolChevron}>{open ? '▼' : '▶'}</span>
         🔧 {toolName}
+        {truncatedDetail != null && (
+          <span className={styles.toolDetail}>({truncatedDetail})</span>
+        )}
       </div>
       <div className={open ? styles.toolBody : styles.toolBodyHidden}>
         {children}
