@@ -593,10 +593,6 @@ export default function App() {
           <div className={styles.prFullView}>
             <PRPanel
               activeProjectId={activeProjectId}
-              onFixSession={(sessionId) => {
-                setTopView('sessions');
-                setSelectedId(sessionId);
-              }}
               onViewSession={(sessionId) => {
                 setTopView('sessions');
                 setSelectedId(sessionId);
