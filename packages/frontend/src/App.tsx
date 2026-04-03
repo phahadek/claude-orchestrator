@@ -51,7 +51,7 @@ function resolveActiveBoardId(project: ProjectConfig): string {
 }
 
 export default function App() {
-  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, prRefreshTrigger, lastPrReviewEvent, incompleteReviews, lastTaskUpdate } = useSessionStore();
+  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, prRefreshTrigger, lastPrReviewEvent, incompleteReviews, lastTaskUpdate, taskListRefreshTrigger } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const activeProjectIdRef = useRef<string | null>(null);
@@ -197,7 +197,7 @@ export default function App() {
     send({ type: 'fetch_tasks', projectId: activeProjectIdRef.current, boardId });
   }, [send]);
 
-  // Fetch TaskView list whenever tasks are ready or project/board changes
+  // Fetch TaskView list whenever tasks are ready, project/board changes, or a review session starts
   useEffect(() => {
     if (!activeProjectId) return;
     const params = new URLSearchParams({ projectId: activeProjectId });
@@ -206,7 +206,7 @@ export default function App() {
       .then((r) => r.ok ? r.json() as Promise<TaskView[]> : Promise.resolve([]))
       .then(setTaskViews)
       .catch(() => {/* non-critical */});
-  }, [activeProjectId, activeBoardId, tasksReady]);
+  }, [activeProjectId, activeBoardId, tasksReady, taskListRefreshTrigger]);
 
   useEffect(() => {
     for (const session of sessions) {
@@ -471,6 +471,7 @@ export default function App() {
                 selectedTaskId={selectedTaskId}
                 onSelectTask={setSelectedTaskId}
                 lastTaskUpdate={lastTaskUpdate}
+                reviewRefreshTrigger={taskListRefreshTrigger}
                 send={send}
                 project={activeProject}
               />

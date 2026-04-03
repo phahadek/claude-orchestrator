@@ -71,6 +71,7 @@ export function useSessionStore() {
   const [lastPrReviewEvent, setLastPrReviewEvent] = useState<{ prNumber: number; repo: string; verdict: string; summary: string } | null>(null);
   const [incompleteReviews, setIncompleteReviews] = useState<IncompleteReview[]>([]);
   const [lastTaskUpdate, setLastTaskUpdate] = useState<TaskView | null>(null);
+  const [taskListRefreshTrigger, setTaskListRefreshTrigger] = useState(0);
 
   const dispatch = useCallback((msg: ServerMessage) => {
     setSynced(true);
@@ -211,6 +212,10 @@ export function useSessionStore() {
     }
     if (msg.type === 'pr_review_complete') {
       setLastPrReviewEvent({ prNumber: msg.prNumber, repo: msg.repo, verdict: msg.verdict, summary: msg.summary });
+      setTaskListRefreshTrigger((n) => n + 1);
+    }
+    if (msg.type === 'session_started' && msg.sessionType === 'review') {
+      setTaskListRefreshTrigger((n) => n + 1);
     }
     if (msg.type === 'task_updated') {
       setLastTaskUpdate(msg.task);
@@ -295,5 +300,5 @@ export function useSessionStore() {
   const readyCount = tasks.filter((t) => !t.blocked && t.task.status === '🗂️ Ready').length;
   const blockedCount = tasks.filter((t) => t.blocked).length;
 
-  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials, clearSessionDenials, prRefreshTrigger, lastPrReviewEvent, incompleteReviews, dismissIncompleteReviews, lastTaskUpdate };
+  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials, clearSessionDenials, prRefreshTrigger, lastPrReviewEvent, incompleteReviews, dismissIncompleteReviews, lastTaskUpdate, taskListRefreshTrigger };
 }

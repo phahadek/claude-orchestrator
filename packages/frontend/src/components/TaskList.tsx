@@ -12,6 +12,8 @@ interface Props {
   onSelectTask: (taskId: string) => void;
   /** Latest task_updated WS message — merges a single task in-place without a full re-fetch. */
   lastTaskUpdate?: TaskView | null;
+  /** Incremented when a review session starts or pr_review_complete arrives — triggers a full re-fetch. */
+  reviewRefreshTrigger?: number;
   send: (msg: ClientMessage) => void;
   project: ProjectConfig | null;
 }
@@ -44,7 +46,7 @@ function priorityRank(p: string): number {
   return PRIORITY_RANK[p] ?? 99;
 }
 
-export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTask, lastTaskUpdate, send, project }: Props) {
+export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTask, lastTaskUpdate, reviewRefreshTrigger, send, project }: Props) {
   const [tasks, setTasks] = useState<TaskView[]>([]);
   const [loading, setLoading] = useState(true);
   const [doneExpanded, setDoneExpanded] = useState(false);
@@ -74,6 +76,12 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
     setTasks([]);
     void fetchTasks();
   }, [fetchTasks]);
+
+  // Re-fetch when a review session starts or a pr_review_complete event arrives
+  useEffect(() => {
+    if (!reviewRefreshTrigger) return;
+    void fetchTasks();
+  }, [reviewRefreshTrigger, fetchTasks]);
 
   // Merge a single task in-place when a task_updated WS message arrives
   useEffect(() => {
