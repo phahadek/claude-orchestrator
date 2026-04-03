@@ -33,7 +33,7 @@ const LAST_MESSAGE_THROTTLE_MS = 3_000;
  * Exported so tests can verify the exact message without hardcoding it.
  */
 export const RESUME_NUDGE_MESSAGE =
-  'The dashboard was restarted while you were working. Please continue where you left off.';
+  'Continue implementing the task. Check git status and your todo list to see where you left off.';
 
 export class SessionManager extends EventEmitter {
   private sessions = new Map<string, AgentSession>();
@@ -405,17 +405,19 @@ export class SessionManager extends EventEmitter {
       );
     }
 
-    // Send a continuation nudge after the first event from the resumed CLI.
-    // --print mode requires input to produce output; without a message, the CLI
-    // either hangs waiting for stdin or exits immediately. This covers both
-    // mid-turn sessions (last event was a tool result) and idle sessions.
-    // Use this.send() (same pattern as sendOrResume) so the nudge is recorded
-    // in the DB as a user_message event and broadcast via WebSocket.
+    // The CLI in --print --input-format stream-json mode needs stdin input to
+    // produce output. Without an upfront message, a resumed session deadlocks:
+    // CLI waits for input → SessionManager waits for output → nothing happens.
+    // Fix: send the nudge on a short delay after wireSession() (which spawns
+    // the CLI process), rather than waiting for a first event that may never
+    // arrive. Use this.send() so the nudge is recorded in the DB as a
+    // user_message event and broadcast via WebSocket.
+    const RESUME_NUDGE_DELAY_MS = 2_000;
     const RESUME_TIMEOUT_MS = 30_000;
 
-    let nudgeSent = false;
-    const nudgeTimer = setTimeout(() => {
-      if (!nudgeSent && !session.hasEnded) {
+    // Error timer: if the CLI doesn't emit any events within 30s, mark as error.
+    const errorTimer = setTimeout(() => {
+      if (!session.hasEnded) {
         console.warn(
           `[SessionManager] resumeSession ${row.session_id}: no events within 30s after resume — marking as error`,
         );
@@ -428,15 +430,23 @@ export class SessionManager extends EventEmitter {
         session.kill().catch(() => {});
       }
     }, RESUME_TIMEOUT_MS);
-    nudgeTimer.unref();
+    errorTimer.unref();
 
+    // Cancel the error timer once the CLI emits its first event.
     session.once('message', () => {
-      nudgeSent = true;
-      clearTimeout(nudgeTimer);
-      this.send(row.session_id, RESUME_NUDGE_MESSAGE);
+      clearTimeout(errorTimer);
     });
 
     this.wireSession(row.session_id, session, projectDir, branchName, worktreePath);
+
+    // Send the nudge after a short delay so the CLI process is ready to receive
+    // stdin before we write to it.
+    const nudgeDelay = setTimeout(() => {
+      if (!session.hasEnded) {
+        this.send(row.session_id, RESUME_NUDGE_MESSAGE);
+      }
+    }, RESUME_NUDGE_DELAY_MS);
+    nudgeDelay.unref();
   }
 
   /**
