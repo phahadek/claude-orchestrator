@@ -8,6 +8,7 @@ function makeTask(id: string, status: string, dependsOn: string[] = []): Resolve
     blocked: false,
     blockers: [],
     nonCode: false,
+    wave: 1,
   };
 }
 

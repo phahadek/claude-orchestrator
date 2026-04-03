@@ -41,7 +41,7 @@ const msg = {
       task: { id: 't1', title: 'Task 1', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: 'https://notion.so/t1' },
       blocked: false,
       blockers: [],
-      nonCode: false,
+      nonCode: false, wave: 1,
     }],
   }),
 };
@@ -128,9 +128,9 @@ describe('useSessionStore', () => {
     const tasksMsg: ServerMessage = {
       type: 'tasks_ready',
       tasks: [
-        { task: { id: 't1', title: 'Task 1', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false },
-        { task: { id: 't2', title: 'Task 2', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: true, blockers: [], nonCode: false },
-        { task: { id: 't3', title: 'Task 3', status: '🔄 In Progress', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false },
+        { task: { id: 't1', title: 'Task 1', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false, wave: 1 },
+        { task: { id: 't2', title: 'Task 2', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: true, blockers: [], nonCode: false, wave: 1 },
+        { task: { id: 't3', title: 'Task 3', status: '🔄 In Progress', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false, wave: 1 },
       ],
     };
     act(() => result.current.dispatch(tasksMsg));
@@ -142,9 +142,9 @@ describe('useSessionStore', () => {
     const tasksMsg: ServerMessage = {
       type: 'tasks_ready',
       tasks: [
-        { task: { id: 't1', title: 'Task 1', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false },
-        { task: { id: 't2', title: 'Task 2', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: true, blockers: [], nonCode: false },
-        { task: { id: 't3', title: 'Task 3', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: true, blockers: [], nonCode: false },
+        { task: { id: 't1', title: 'Task 1', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false, wave: 1 },
+        { task: { id: 't2', title: 'Task 2', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: true, blockers: [], nonCode: false, wave: 1 },
+        { task: { id: 't3', title: 'Task 3', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: true, blockers: [], nonCode: false, wave: 1 },
       ],
     };
     act(() => result.current.dispatch(tasksMsg));
@@ -297,7 +297,7 @@ describe('useSessionStore', () => {
       const tasksMsg: ServerMessage = {
         type: 'tasks_ready',
         tasks: [
-          { task: { id: 'abc123', title: 'Task A', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false },
+          { task: { id: 'abc123', title: 'Task A', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false, wave: 1 },
         ],
       };
       act(() => result.current.dispatch(tasksMsg));
@@ -311,7 +311,7 @@ describe('useSessionStore', () => {
       const tasksMsg: ServerMessage = {
         type: 'tasks_ready',
         tasks: [
-          { task: { id: 'abc123', title: 'Task A', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false },
+          { task: { id: 'abc123', title: 'Task A', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false, wave: 1 },
         ],
       };
       act(() => result.current.dispatch(tasksMsg));
@@ -325,8 +325,8 @@ describe('useSessionStore', () => {
       const tasksMsg: ServerMessage = {
         type: 'tasks_ready',
         tasks: [
-          { task: { id: 'task-1', title: 'Task 1', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false },
-          { task: { id: 'task-2', title: 'Task 2', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false },
+          { task: { id: 'task-1', title: 'Task 1', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false, wave: 1 },
+          { task: { id: 'task-2', title: 'Task 2', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false, wave: 1 },
         ],
       };
       act(() => result.current.dispatch(tasksMsg));

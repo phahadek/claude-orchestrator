@@ -16,6 +16,7 @@ function makeTask(overrides?: Partial<TaskView>): TaskView {
     taskType: '💻 Code',
     blocked: false,
     blockerNames: [],
+    wave: 1,
     codeSession: null,
     pr: null,
     review: null,
