@@ -369,6 +369,10 @@ export class SessionManager extends EventEmitter {
       });
     }
 
+    // Load per-project orchestrator config so resumed sessions get the same
+    // extra allowed tools (e.g. Bash(dotnet:*)) as freshly spawned ones.
+    const orchConfig = loadOrchestratorConfig(projectDir);
+
     const session = new AgentSession(
       row.session_id,           // keep original ID — same card, same transcript
       row.notion_task_url ?? '',
@@ -381,6 +385,7 @@ export class SessionManager extends EventEmitter {
       'standard',
       this,
       this.githubClient,
+      orchConfig.allowedTools,
     );
 
     this.sessions.set(row.session_id, session);
@@ -640,6 +645,10 @@ export class SessionManager extends EventEmitter {
     const projectContextUrl = row.project_context_url ?? '';
     const taskId = row.notion_task_id ?? '';
 
+    // Load per-project orchestrator config so resumed sessions get the same
+    // extra allowed tools (e.g. Bash(dotnet:*)) as freshly spawned ones.
+    const orchConfigResume = loadOrchestratorConfig(projectDir);
+
     const session = new AgentSession(
       newSessionId,
       taskUrl,
@@ -652,6 +661,7 @@ export class SessionManager extends EventEmitter {
       'standard',
       this,
       this.githubClient,
+      orchConfigResume.allowedTools,
     );
 
     const startedAt = Date.now();
