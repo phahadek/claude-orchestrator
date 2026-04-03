@@ -334,6 +334,60 @@ export default function App() {
       .catch((err) => console.error('[App] failed to load archived session events:', err));
   }, [selectedId]);
 
+  // Fetch session events for the selected task's code and review sessions if not yet in store.
+  // Mirrors the archived-session fetch for the Sessions tab so TaskDetail always has live or
+  // historical transcript data regardless of whether the session was started before page load.
+  const fetchedTaskSessionsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!selectedTaskId) return;
+    const task = taskViews.find((t) => t.taskId === selectedTaskId);
+    if (!task) return;
+
+    const sessionIds: string[] = [];
+    if (task.codeSession?.sessionId) sessionIds.push(task.codeSession.sessionId);
+    if (task.review?.sessionId) sessionIds.push(task.review.sessionId);
+
+    for (const sessionId of sessionIds) {
+      if (fetchedTaskSessionsRef.current.has(sessionId)) continue;
+      if (sessions.find((s) => s.sessionId === sessionId)) continue;
+      fetchedTaskSessionsRef.current.add(sessionId);
+      fetch(`/api/sessions/${sessionId}/events`)
+        .then((r) => {
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          return r.json() as Promise<{ session: any; events: any[] }>;
+        })
+        .then(({ session, events }) => {
+          dispatch({
+            type: 'session_started',
+            sessionId: session.session_id,
+            taskName: session.notion_task_url ?? session.session_id.slice(0, 8),
+            notionTaskUrl: session.notion_task_url ?? '',
+            started_at: session.started_at,
+            ended_at: session.ended_at,
+            archived: session.archived === 1,
+            favorited: session.favorited === 1,
+            project_id: session.project_id,
+          } as ServerMessage);
+          dispatch({
+            type: 'session_status',
+            sessionId: session.session_id,
+            status: session.status,
+          } as ServerMessage);
+          for (const ev of events) {
+            dispatch({
+              type: 'session_event',
+              sessionId: session.session_id,
+              eventType: ev.eventType,
+              content: ev.content,
+              ...(ev.messageId && { messageId: ev.messageId }),
+            } as ServerMessage);
+          }
+        })
+        .catch((err) => console.error('[App] failed to load task session events:', err));
+    }
+  }, [selectedTaskId, taskViews]);
+
   const selectedSession = selectedId != null
     ? (sessions.find((s) => s.sessionId === selectedId) ?? null)
     : null;
