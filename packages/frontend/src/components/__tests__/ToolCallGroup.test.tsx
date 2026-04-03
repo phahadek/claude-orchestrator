@@ -41,14 +41,52 @@ function makeCallPair(toolName: string, input: Record<string, unknown>, result: 
 // ── ToolCallGroup component tests ─────────────────────────────────
 
 describe('ToolCallGroup', () => {
-  it('renders collapsed header with tool name and count', () => {
+  it('renders collapsed header with tool name, detail, and count', () => {
     const calls = [
       makeCallPair('Read', { file_path: '/a.ts' }, 'content a'),
       makeCallPair('Read', { file_path: '/b.ts' }, 'content b'),
       makeCallPair('Read', { file_path: '/c.ts' }, 'content c'),
     ];
     render(<ToolCallGroup toolName="Read" calls={calls} />);
-    expect(screen.getByText(/🔧 Read ×3/)).toBeTruthy();
+    expect(screen.getByText(/🔧 Read \(a\.ts\) ×3/)).toBeTruthy();
+  });
+
+  it('collapsed header shows description for Bash groups', () => {
+    const calls = [
+      makeCallPair('Bash', { command: 'npx tsc --noEmit', description: 'Run tsc' }, 'output'),
+      makeCallPair('Bash', { command: 'npx tsc --noEmit', description: 'Run tsc' }, 'output'),
+    ];
+    render(<ToolCallGroup toolName="Bash" calls={calls} />);
+    expect(screen.getByText(/🔧 Bash \(Run tsc\) ×2/)).toBeTruthy();
+  });
+
+  it('collapsed header shows detail for Read groups', () => {
+    const calls = [
+      makeCallPair('Read', { file_path: '/src/file.ts' }, 'content a'),
+      makeCallPair('Read', { file_path: '/src/other.ts' }, 'content b'),
+      makeCallPair('Read', { file_path: '/src/third.ts' }, 'content c'),
+    ];
+    render(<ToolCallGroup toolName="Read" calls={calls} />);
+    expect(screen.getByText(/🔧 Read \(file\.ts\) ×3/)).toBeTruthy();
+  });
+
+  it('collapsed header falls back to bare tool name when no detail available', () => {
+    const calls = [
+      makeCallPair('Bash', { command: 'ls' }, 'output1'),
+      makeCallPair('Bash', { command: 'pwd' }, 'output2'),
+    ];
+    render(<ToolCallGroup toolName="Bash" calls={calls} />);
+    // No description field — falls back to command, which is short enough
+    expect(screen.getByText(/🔧 Bash \(ls\) ×2/)).toBeTruthy();
+  });
+
+  it('collapsed header shows only bare tool name for unknown tool with no extractable detail', () => {
+    const calls = [
+      makeCallPair('TodoWrite', { todos: [] }, 'ok'),
+      makeCallPair('TodoWrite', { todos: [] }, 'ok'),
+    ];
+    render(<ToolCallGroup toolName="TodoWrite" calls={calls} />);
+    expect(screen.getByText(/🔧 TodoWrite ×2/)).toBeTruthy();
   });
 
   it('does not render call details when collapsed', () => {
@@ -164,7 +202,7 @@ describe('groupSessionEvents', () => {
     }
   });
 
-  it('renders grouped events as "🔧 Read ×3" in the component', () => {
+  it('renders grouped events with detail in the component header', () => {
     const events = [
       makeToolUseTextEvent('Read', { file_path: '/a.ts' }),
       makeToolResultEvent('a'),
@@ -177,7 +215,7 @@ describe('groupSessionEvents', () => {
     expect(items).toHaveLength(1);
     if (items[0].kind === 'group') {
       render(<ToolCallGroup toolName={items[0].toolName} calls={items[0].calls} />);
-      expect(screen.getByText(/🔧 Read ×3/)).toBeTruthy();
+      expect(screen.getByText(/🔧 Read \(a\.ts\) ×3/)).toBeTruthy();
     }
   });
 
