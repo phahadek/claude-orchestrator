@@ -50,7 +50,7 @@ export interface TaskView {
 export type ServerMessage =
   | { type: 'session_started';       sessionId: string; taskName: string; notionTaskUrl: string; taskType?: string; sessionType?: string; prNumber?: number; codeSessionId?: string; started_at?: number; ended_at?: number; archived?: boolean; favorited?: boolean; project_id?: string | null; note?: string | null; tags?: string[]; totalInputTokens?: number; totalOutputTokens?: number; model?: string | null; prUrl?: string }
   | { type: 'session_event';         sessionId: string; eventType: 'text' | 'tool_use' | 'tool_result' | 'system' | 'user_message'; content: string; messageId?: string }
-  | { type: 'session_status';        sessionId: string; status: 'starting' | 'running' | 'needs_permission' | 'done' | 'error' | 'killed' }
+  | { type: 'session_status';        sessionId: string; status: 'starting' | 'running' | 'needs_permission' | 'done' | 'error' | 'killed' | 'retrying' }
   | { type: 'permission_request';    sessionId: string; toolName: string; proposedAction: string }
   | { type: 'permission_denials';    sessionId: string; denials: PermissionDenial[] }
   | { type: 'session_ended';         sessionId: string; status: string; prUrl?: string }

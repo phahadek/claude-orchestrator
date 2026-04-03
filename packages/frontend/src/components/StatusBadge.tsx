@@ -9,6 +9,7 @@ const BADGE_CONFIG: Record<string, { label: string; className: string }> = {
   killed:            { label: '🛑 Killed',        className: styles['badge-killed'] },
   review:            { label: '🔍 Review',        className: styles['badge-review'] },
   rate_limited:      { label: '⏸️ Rate Limited',  className: styles['badge-rate-limited'] },
+  retrying:          { label: '🔁 Retrying',       className: styles['badge-retrying'] },
 };
 
 interface Props {
