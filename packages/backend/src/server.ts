@@ -198,7 +198,11 @@ sessionManager.on('push_detected', ({ sessionId: codingSessionId }: { sessionId:
       });
 
       if (result.verdict === 'needs_changes') {
-        sessionManager.send(codingSessionId, formatReviewFeedback(result, iteration));
+        try {
+          await sessionManager.sendOrResume(codingSessionId, formatReviewFeedback(result, iteration));
+        } catch (e) {
+          console.warn(`[server] Failed to deliver review feedback to session ${codingSessionId}:`, e);
+        }
       } else if (result.verdict === 'incomplete') {
         const message = `Review for PR #${prRow.pr_number} returned an incomplete verdict — the reviewer could not assess the PR. Manual intervention needed.`;
         console.warn(`[server] ${message}`);

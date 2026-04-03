@@ -196,6 +196,7 @@ export class PRReviewService {
     const { mergeable } = await this.github.getMergeability(prNumber, repo);
     const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
+    setLastReviewedSha(prNumber, repo, pr.head_sha ?? null);
     return finalResult;
   }
 
