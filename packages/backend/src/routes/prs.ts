@@ -22,6 +22,7 @@ import type { PRMergeWatcher } from '../github/PRMergeWatcher';
 import type { SessionManager } from '../session/SessionManager';
 import type { NotionClient } from '../notion/NotionClient';
 import type { ServerMessage } from '../ws/types';
+import { emitTaskUpdated } from './tasks';
 
 let _broadcast: (msg: ServerMessage) => void = () => {};
 export function setPRBroadcast(fn: (msg: ServerMessage) => void): void {
@@ -195,11 +196,17 @@ export function createPrsRouter(
         sessionManager.endSession(prRow.review_session_id);
       }
 
-      // Update Notion task to Done
+      // Update Notion task to Done and broadcast task_updated so the Tasks view refreshes
       if (prRow?.notion_task_id) {
-        await notionClient.updateStatus(prRow.notion_task_id, '✅ Done').catch((err: unknown) =>
-          console.warn('[prs] Notion updateStatus failed:', (err as Error).message),
-        );
+        const taskId = prRow.notion_task_id;
+        await notionClient.updateStatus(taskId, '✅ Done')
+          .then(() => {
+            _broadcast({ type: 'task_status_changed', notionTaskId: taskId, newStatus: '✅ Done' });
+            emitTaskUpdated(taskId);
+          })
+          .catch((err: unknown) =>
+            console.warn('[prs] Notion updateStatus failed:', (err as Error).message),
+          );
       }
 
       _broadcast({
