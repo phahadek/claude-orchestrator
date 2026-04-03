@@ -60,12 +60,12 @@ export class PRReviewService {
     }
 
     const [prData, diffData] = await Promise.all([
-      this.github.listOpenPRs().then((prs) => {
+      this.github.listOpenPRs(repo).then((prs) => {
         const found = prs.find((p) => p.id === prNumber);
         if (!found) throw new Error(`PR #${prNumber} not found on GitHub`);
         return found;
       }),
-      this.github.fetchDiff(prNumber),
+      this.github.fetchDiff(prNumber, repo),
     ]);
 
     if (!prRow.notion_task_id) {
@@ -164,7 +164,7 @@ export class PRReviewService {
       return this.reviewPR(prNumber, repo, projectId, projectContextUrl);
     }
 
-    const diffData = await this.github.fetchDiff(prNumber);
+    const diffData = await this.github.fetchDiff(prNumber, repo);
     const MAX_DIFF_CHARS = 12000;
     const truncatedDiff = diffData.diff.length > MAX_DIFF_CHARS
       ? diffData.diff.slice(0, MAX_DIFF_CHARS) + '\n\n[diff truncated]'
