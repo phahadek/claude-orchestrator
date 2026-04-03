@@ -199,6 +199,7 @@ export function useSessionStore() {
     if (msg.type === 'tasks_ready') {
       setTasks(msg.tasks);
       setTasksReady(true);
+      setTaskListRefreshTrigger((n) => n + 1);
     }
     if (msg.type === 'task_status_changed') {
       setTasks((prev) => prev.map((t) =>
