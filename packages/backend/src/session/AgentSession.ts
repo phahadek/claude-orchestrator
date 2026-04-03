@@ -1,7 +1,5 @@
-import { spawn, ChildProcess, execSync } from 'child_process';
-import { createInterface } from 'readline';
 import { EventEmitter } from 'events';
-import { config, ALLOWED_TOOLS, runtimeSettings } from '../config';
+import { ALLOWED_TOOLS, runtimeSettings } from '../config';
 import {
   upsertSessionEvent,
   updateSessionStatus,
@@ -21,6 +19,8 @@ import type { GitHubClient } from '../github/GitHubClient';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import { SessionAuditor } from './SessionAuditor';
 import type { ISessionManager } from './SessionAuditor';
+import type { ISessionRunner } from './SessionRunner';
+import { CliSessionRunner } from './CliSessionRunner';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
 
@@ -100,7 +100,6 @@ function toEventType(raw: string): 'text' | 'tool_use' | 'tool_result' | 'system
 }
 
 export class AgentSession extends EventEmitter {
-  private proc: ChildProcess | null = null;
   private isKilling = false;
   public prUrl: string | undefined;
   /** True once a session_ended message has been broadcast. */
@@ -126,6 +125,9 @@ export class AgentSession extends EventEmitter {
   /** Count of consecutive transient-error retries for this session instance. Resets on clean exit. */
   private retryCount = 0;
 
+  /** The underlying I/O adapter (CLI subprocess or Agent SDK). */
+  private runner: ISessionRunner;
+
   constructor(
     public readonly sessionId: string,
     public readonly taskUrl: string,
@@ -139,8 +141,20 @@ export class AgentSession extends EventEmitter {
     private readonly sessionManager?: ISessionManager,
     private readonly githubClient?: GitHubClient,
     private readonly extraAllowedTools: string[] = [],
+    /**
+     * System prompt content for API mode.
+     * In CLI mode this is written to CLAUDE.md in the worktree before spawn.
+     * In API mode this is passed directly to the Agent SDK as systemPrompt.
+     */
+    private readonly systemPromptContent?: string,
+    /**
+     * The session runner to use. Defaults to CliSessionRunner.
+     * Pass an ApiSessionRunner instance when SESSION_MODE=api.
+     */
+    runner?: ISessionRunner,
   ) {
     super();
+    this.runner = runner ?? new CliSessionRunner(sessionId);
   }
 
   async run(): Promise<void> {
@@ -185,294 +199,38 @@ Fetch both Notion pages, then begin the task.
     // resumeIdForSpawn: undefined on first run, set to this.sessionId on each retry.
     let resumeIdForSpawn: string | undefined = this.resumeSessionId;
 
+    const modelSetting = this.sessionType === 'review'
+      ? runtimeSettings.review_session_model
+      : runtimeSettings.code_session_model;
+
     // eslint-disable-next-line no-constant-condition
     while (true) {
-      // Clear per-spawn pending tool-call maps so stale IDs from a previous run
-      // do not interfere with the retried process's tool events.
+      // Clear per-run pending tool-call maps so stale IDs from a previous run
+      // do not interfere with the retried transport's tool events.
       if (resumeIdForSpawn === this.sessionId) {
         this.pendingGHToolUseIds.clear();
         this.pendingBashCommands.clear();
         this.pendingPushFileToolUseIds.clear();
       }
 
-      // Use --input-format stream-json for bidirectional JSON communication.
-      // Use --permission-mode acceptEdits to auto-approve in-project Edit/Write.
-      // acceptEdits also auto-approves read-only Bash (git status, ls, cat, etc.)
-      // but blocks write Bash commands unless explicitly allowed via --allowed-tools.
-      // Use Bash(<prefix>:*) patterns for granular Bash access — only commands
-      // starting with the given prefix are allowed. Unmatched Bash commands are
-      // silently denied in --print mode.
-      const modelSetting = this.sessionType === 'review'
-        ? runtimeSettings.review_session_model
-        : runtimeSettings.code_session_model;
-      const spawnArgs = [
-        ...(resumeIdForSpawn ? ['--resume', resumeIdForSpawn] : []),
-        '--print',
-        '--output-format', 'stream-json',
-        '--input-format', 'stream-json',
-        '--verbose',
-        '--permission-mode', 'acceptEdits',
-        ...(modelSetting ? ['--model', modelSetting] : []),
-        '--allowed-tools',
-        ...ALLOWED_TOOLS,
-        ...this.extraAllowedTools,
-      ];
-      const envKeys = ['PROJECT_DIR', 'SESSIONS_DIR', 'DB_PATH'] as const;
-      const envStr = envKeys
-        .filter((k) => process.env[k] !== undefined)
-        .map((k) => `${k}=${process.env[k]}`)
-        .join(', ');
       sessionLog(
         this.sessionId,
-        `spawning: cwd=${this.worktreePath} cmd=${config.claudePath} ${spawnArgs.join(' ')} env={${envStr}}`,
+        `starting session: runner=${this.runner.constructor.name} worktree=${this.worktreePath}`,
       );
-      this.proc = spawn(
-        config.claudePath,
-        spawnArgs,
+
+      const exitCode = await this.runner.run(
+        resumeIdForSpawn ? undefined : initialPrompt,
+        resumeIdForSpawn,
         {
-          cwd: this.worktreePath,
-          stdio: ['pipe', 'pipe', 'pipe'],
-          ...(process.platform !== 'win32' && { detached: true }),
+          worktreePath: this.worktreePath,
+          model: modelSetting || undefined,
+          allowedTools: [...ALLOWED_TOOLS, ...this.extraAllowedTools],
+          systemPrompt: this.systemPromptContent,
         },
+        (event) => this.handleRawEvent(event),
       );
 
-      // Send the initial prompt via stdin (required by --input-format stream-json).
-      // Do NOT call stdin.end() here — keeping stdin open allows sendMessage() to
-      // deliver follow-up prompts and lets the CLI remain alive after completing
-      // its initial task. Call endSession() to close stdin and exit cleanly.
-      // Resumed sessions skip the initial prompt — --resume restores conversation
-      // history and the caller delivers its message via sendOrResume() instead.
-      if (!resumeIdForSpawn) {
-        this.proc.stdin!.write(
-          JSON.stringify({ type: 'user', message: { role: 'user', content: initialPrompt } }) + '\n',
-        );
-      }
-
-      let spawnErrored = false;
-
-      this.proc.on('error', (err) => {
-        spawnErrored = true;
-        console.error(`[AgentSession] spawn error: ${err.message}`);
-        updateSessionStatus(this.sessionId, 'error', Date.now());
-        this.broadcast({ type: 'session_ended', sessionId: this.sessionId, status: 'error' });
-      });
-
-      // Pipe stderr to console for diagnostics
-      this.proc.stderr!.on('data', (chunk: Buffer) => {
-        sessionLog(this.sessionId, `stderr: ${chunk.toString().trimEnd()}`);
-      });
-
-      const rl = createInterface({ input: this.proc.stdout! });
-
-      // Capture readline completion early so we can drain after exit,
-      // even if 'close' fires before or during the exit await below.
-      const rlDone = new Promise<void>((resolve) => rl.once('close', resolve));
-
-      rl.on('line', (line) => {
-        if (!line.trim()) return;
-        let event: Record<string, unknown>;
-        try {
-          event = JSON.parse(line) as Record<string, unknown>;
-        } catch {
-          return;
-        }
-
-        const rawType = (event.type as string) ?? 'unknown';
-
-        // Debug logging
-        sessionLog(this.sessionId, `event type=${rawType} subtype=${event.subtype ?? '-'}`);
-
-        if (rawType === 'system' && (event.subtype as string) === 'init') {
-          sessionLog(this.sessionId, `INIT permissionMode=${event.permissionMode}`);
-        }
-
-        // Extract model name from first assistant event
-        if (rawType === 'assistant' && this.model === null && event.message) {
-          const msgForModel = event.message as Record<string, unknown>;
-          if (typeof msgForModel.model === 'string' && msgForModel.model) {
-            this.model = msgForModel.model;
-            setSessionModel(this.sessionId, this.model);
-            this.broadcast({
-              type: 'session_updated',
-              sessionId: this.sessionId,
-              model: this.model,
-            });
-          }
-        }
-
-        // Log tool_use blocks from assistant messages and track PR creation tool calls
-        if (rawType === 'assistant' && event.message) {
-          const msg = event.message as Record<string, unknown>;
-          const content = msg.content as Array<Record<string, unknown>> | undefined;
-          if (content) {
-            for (const block of content) {
-              if (block.type === 'tool_use') {
-                sessionLog(this.sessionId, `TOOL_USE name=${block.name} id=${block.id}`);
-                if (block.name === 'mcp__github__create_pull_request' && typeof block.id === 'string') {
-                  this.pendingGHToolUseIds.set(block.id, block.name as string);
-                }
-                if (block.name === 'Bash' && typeof block.id === 'string') {
-                  const cmd = ((block.input as Record<string, unknown>)?.command as string) ?? '';
-                  this.pendingBashCommands.set(block.id, cmd);
-                }
-                if (block.name === 'mcp__github__push_files' && typeof block.id === 'string') {
-                  this.pendingPushFileToolUseIds.add(block.id);
-                }
-              }
-            }
-          }
-        }
-
-        // Real-time PR detection: handle tool_result events for mcp__github__create_pull_request
-        // Also detect git push for push_detected event.
-        if (rawType === 'tool_result') {
-          const toolUseId = event.tool_use_id as string | undefined;
-          if (toolUseId && this.pendingGHToolUseIds.has(toolUseId)) {
-            this.pendingGHToolUseIds.delete(toolUseId);
-            const content = event.content as Array<Record<string, unknown>> | undefined;
-            this.handlePRCreatedFromContent(content ?? []);
-          }
-          if (toolUseId && this.pendingPushFileToolUseIds.has(toolUseId)) {
-            this.pendingPushFileToolUseIds.delete(toolUseId);
-            this.handlePushDetected();
-          }
-          if (toolUseId && this.pendingBashCommands.has(toolUseId)) {
-            const cmd = this.pendingBashCommands.get(toolUseId)!;
-            this.pendingBashCommands.delete(toolUseId);
-            if (isPushCommand('Bash', cmd)) {
-              this.handlePushDetected();
-            }
-          }
-        }
-
-        // Also handle tool_result blocks embedded in user events
-        if (rawType === 'user' && !this.prDetectedLive) {
-          const msg = event.message as Record<string, unknown> | undefined;
-          const content = (msg?.content ?? event.content) as Array<Record<string, unknown>> | undefined;
-          if (Array.isArray(content)) {
-            for (const block of content) {
-              if (block.type === 'tool_result') {
-                const toolUseId = block.tool_use_id as string | undefined;
-                if (toolUseId && this.pendingGHToolUseIds.has(toolUseId)) {
-                  this.pendingGHToolUseIds.delete(toolUseId);
-                  const innerContent = block.content as Array<Record<string, unknown>> | undefined;
-                  this.handlePRCreatedFromContent(innerContent ?? []);
-                }
-              }
-            }
-          }
-        }
-
-        // Extract permission_denials from result event and broadcast to UI
-        if (rawType === 'result') {
-          const denials = event.permission_denials as PermissionDenial[] | undefined;
-          sessionLog(this.sessionId, `RESULT stop_reason=${event.stop_reason} denials=${JSON.stringify(denials)}`);
-          if (denials && denials.length > 0) {
-            const ts = Date.now();
-            for (const d of denials) {
-              insertPermissionDenial({
-                session_id: this.sessionId,
-                tool_name: d.tool_name,
-                tool_use_id: d.tool_use_id,
-                tool_input: JSON.stringify(d.tool_input),
-                timestamp: ts,
-              });
-            }
-            this.broadcast({
-              type: 'permission_denials',
-              sessionId: this.sessionId,
-              denials,
-            });
-          }
-        }
-
-        // Persist event to SQLite then broadcast
-        const eventType = toEventType(rawType);
-        let payload = JSON.stringify(event);
-
-        // Extract message ID from assistant/message events for deduplication.
-        // The Claude CLI emits multiple incremental streaming events per message,
-        // all sharing the same message.id. We keep only the latest payload.
-        let messageId: string | undefined;
-        if (rawType === 'assistant' || rawType === 'message') {
-          const msg = event.message as Record<string, unknown> | undefined;
-          if (msg?.id && typeof msg.id === 'string') {
-            messageId = msg.id;
-          }
-        }
-
-        // Merge content blocks for assistant events: accumulate text and tool_use
-        // across all streaming events for this message so neither is dropped.
-        if (messageId != null && (rawType === 'assistant' || rawType === 'message')) {
-          const msg = event.message as Record<string, unknown> | undefined;
-          if (msg && Array.isArray(msg.content)) {
-            const incomingContent = msg.content as Array<Record<string, unknown>>;
-            const existingContent = this.messageContentMap.get(messageId) ?? [];
-            const mergedContent = mergeAssistantContent(existingContent, incomingContent);
-            this.messageContentMap.set(messageId, mergedContent);
-            payload = JSON.stringify({ ...event, message: { ...msg, content: mergedContent } });
-          }
-        }
-
-        const existingRowId = messageId != null ? this.messageIdMap.get(messageId) : undefined;
-        const rowId = upsertSessionEvent(
-          { session_id: this.sessionId, event_type: eventType, payload, timestamp: Date.now(), message_id: messageId ?? null },
-          existingRowId,
-        );
-        if (messageId != null) {
-          this.messageIdMap.set(messageId, rowId);
-        }
-
-        // After each result event (one per turn), increment token counters and broadcast
-        // session_updated so the frontend receives live totals during execution.
-        if (rawType === 'result') {
-          const usageData = event.usage as { input_tokens?: number; output_tokens?: number } | undefined;
-          const inputTokens = usageData?.input_tokens ?? 0;
-          const outputTokens = usageData?.output_tokens ?? 0;
-          if (inputTokens > 0 || outputTokens > 0) {
-            this.totalInputTokens += inputTokens;
-            this.totalOutputTokens += outputTokens;
-            incrementTokens(this.sessionId, inputTokens, outputTokens);
-            this.broadcast({
-              type: 'session_updated',
-              sessionId: this.sessionId,
-              totalInputTokens: this.totalInputTokens,
-              totalOutputTokens: this.totalOutputTokens,
-            });
-          }
-        }
-
-        // Skip broadcasting user events that contain only system-injected content
-        // (CLAUDE.md bootstrap, system reminders). They are stored in DB for debugging
-        // but are noise in the transcript UI.
-        if (rawType === 'user' && isSystemOnlyUserEvent(payload)) {
-          return;
-        }
-
-        this.broadcast({
-          type: 'session_event',
-          sessionId: this.sessionId,
-          eventType: eventType as 'text' | 'tool_use' | 'tool_result' | 'system',
-          content: payload,
-          ...(messageId != null && { messageId }),
-        });
-      });
-
-      // Use 'exit' rather than 'close': the 'close' event can be indefinitely
-      // delayed if readline holds stdout open after the subprocess has exited,
-      // which would leave the session stuck at 'running' forever.
-      const exitCode = await new Promise<number | null>((resolve) => {
-        this.proc!.once('exit', (code) => resolve(code));
-      });
-
-      // Drain any remaining buffered lines from stdout before proceeding.
-      // Guard with a 5 s timeout in case the stream is stuck.
-      await Promise.race([
-        rlDone,
-        new Promise<void>((resolve) => setTimeout(() => { rl.close(); resolve(); }, 5_000)),
-      ]);
-
-      if (spawnErrored || this.isKilling) return;
+      if (this.runner.hasSpawnError || this.isKilling) return;
 
       if (exitCode === 0) {
         this.retryCount = 0;
@@ -516,6 +274,192 @@ Fetch both Notion pages, then begin the task.
     if (lastEvent.event_type !== 'error') return false;
     const payload = lastEvent.payload.toLowerCase();
     return payload.includes('api_error') || payload.includes('overloaded_error');
+  }
+
+  /**
+   * Process a single raw JSON event from the session transport.
+   * This is called for each event by both CliSessionRunner and ApiSessionRunner.
+   */
+  private handleRawEvent(event: Record<string, unknown>): void {
+    const rawType = (event.type as string) ?? 'unknown';
+
+    // Debug logging
+    sessionLog(this.sessionId, `event type=${rawType} subtype=${event.subtype ?? '-'}`);
+
+    if (rawType === 'system' && (event.subtype as string) === 'init') {
+      sessionLog(this.sessionId, `INIT permissionMode=${event.permissionMode}`);
+    }
+
+    // Extract model name from first assistant event
+    if (rawType === 'assistant' && this.model === null && event.message) {
+      const msgForModel = event.message as Record<string, unknown>;
+      if (typeof msgForModel.model === 'string' && msgForModel.model) {
+        this.model = msgForModel.model;
+        setSessionModel(this.sessionId, this.model);
+        this.broadcast({
+          type: 'session_updated',
+          sessionId: this.sessionId,
+          model: this.model,
+        });
+      }
+    }
+
+    // Log tool_use blocks from assistant messages and track PR creation tool calls
+    if (rawType === 'assistant' && event.message) {
+      const msg = event.message as Record<string, unknown>;
+      const content = msg.content as Array<Record<string, unknown>> | undefined;
+      if (content) {
+        for (const block of content) {
+          if (block.type === 'tool_use') {
+            sessionLog(this.sessionId, `TOOL_USE name=${block.name} id=${block.id}`);
+            if (block.name === 'mcp__github__create_pull_request' && typeof block.id === 'string') {
+              this.pendingGHToolUseIds.set(block.id, block.name as string);
+            }
+            if (block.name === 'Bash' && typeof block.id === 'string') {
+              const cmd = ((block.input as Record<string, unknown>)?.command as string) ?? '';
+              this.pendingBashCommands.set(block.id, cmd);
+            }
+            if (block.name === 'mcp__github__push_files' && typeof block.id === 'string') {
+              this.pendingPushFileToolUseIds.add(block.id);
+            }
+          }
+        }
+      }
+    }
+
+    // Real-time PR detection: handle tool_result events for mcp__github__create_pull_request
+    // Also detect git push for push_detected event.
+    if (rawType === 'tool_result') {
+      const toolUseId = event.tool_use_id as string | undefined;
+      if (toolUseId && this.pendingGHToolUseIds.has(toolUseId)) {
+        this.pendingGHToolUseIds.delete(toolUseId);
+        const content = event.content as Array<Record<string, unknown>> | undefined;
+        this.handlePRCreatedFromContent(content ?? []);
+      }
+      if (toolUseId && this.pendingPushFileToolUseIds.has(toolUseId)) {
+        this.pendingPushFileToolUseIds.delete(toolUseId);
+        this.handlePushDetected();
+      }
+      if (toolUseId && this.pendingBashCommands.has(toolUseId)) {
+        const cmd = this.pendingBashCommands.get(toolUseId)!;
+        this.pendingBashCommands.delete(toolUseId);
+        if (isPushCommand('Bash', cmd)) {
+          this.handlePushDetected();
+        }
+      }
+    }
+
+    // Also handle tool_result blocks embedded in user events
+    if (rawType === 'user' && !this.prDetectedLive) {
+      const msg = event.message as Record<string, unknown> | undefined;
+      const content = (msg?.content ?? event.content) as Array<Record<string, unknown>> | undefined;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block.type === 'tool_result') {
+            const toolUseId = block.tool_use_id as string | undefined;
+            if (toolUseId && this.pendingGHToolUseIds.has(toolUseId)) {
+              this.pendingGHToolUseIds.delete(toolUseId);
+              const innerContent = block.content as Array<Record<string, unknown>> | undefined;
+              this.handlePRCreatedFromContent(innerContent ?? []);
+            }
+          }
+        }
+      }
+    }
+
+    // Extract permission_denials from result event and broadcast to UI
+    if (rawType === 'result') {
+      const denials = event.permission_denials as PermissionDenial[] | undefined;
+      sessionLog(this.sessionId, `RESULT stop_reason=${event.stop_reason} denials=${JSON.stringify(denials)}`);
+      if (denials && denials.length > 0) {
+        const ts = Date.now();
+        for (const d of denials) {
+          insertPermissionDenial({
+            session_id: this.sessionId,
+            tool_name: d.tool_name,
+            tool_use_id: d.tool_use_id,
+            tool_input: JSON.stringify(d.tool_input),
+            timestamp: ts,
+          });
+        }
+        this.broadcast({
+          type: 'permission_denials',
+          sessionId: this.sessionId,
+          denials,
+        });
+      }
+    }
+
+    // Persist event to SQLite then broadcast
+    const eventType = toEventType(rawType);
+    let payload = JSON.stringify(event);
+
+    // Extract message ID from assistant/message events for deduplication.
+    // The Claude CLI emits multiple incremental streaming events per message,
+    // all sharing the same message.id. We keep only the latest payload.
+    let messageId: string | undefined;
+    if (rawType === 'assistant' || rawType === 'message') {
+      const msg = event.message as Record<string, unknown> | undefined;
+      if (msg?.id && typeof msg.id === 'string') {
+        messageId = msg.id;
+      }
+    }
+
+    // Merge content blocks for assistant events: accumulate text and tool_use
+    // across all streaming events for this message so neither is dropped.
+    if (messageId != null && (rawType === 'assistant' || rawType === 'message')) {
+      const msg = event.message as Record<string, unknown> | undefined;
+      if (msg && Array.isArray(msg.content)) {
+        const incomingContent = msg.content as Array<Record<string, unknown>>;
+        const existingContent = this.messageContentMap.get(messageId) ?? [];
+        const mergedContent = mergeAssistantContent(existingContent, incomingContent);
+        this.messageContentMap.set(messageId, mergedContent);
+        payload = JSON.stringify({ ...event, message: { ...msg, content: mergedContent } });
+      }
+    }
+
+    const existingRowId = messageId != null ? this.messageIdMap.get(messageId) : undefined;
+    const rowId = upsertSessionEvent(
+      { session_id: this.sessionId, event_type: eventType, payload, timestamp: Date.now(), message_id: messageId ?? null },
+      existingRowId,
+    );
+    if (messageId != null) {
+      this.messageIdMap.set(messageId, rowId);
+    }
+
+    // After each result event (one per turn), increment token counters and broadcast
+    // session_updated so the frontend receives live totals during execution.
+    if (rawType === 'result') {
+      const usageData = event.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+      const inputTokens = usageData?.input_tokens ?? 0;
+      const outputTokens = usageData?.output_tokens ?? 0;
+      if (inputTokens > 0 || outputTokens > 0) {
+        this.totalInputTokens += inputTokens;
+        this.totalOutputTokens += outputTokens;
+        incrementTokens(this.sessionId, inputTokens, outputTokens);
+        this.broadcast({
+          type: 'session_updated',
+          sessionId: this.sessionId,
+          totalInputTokens: this.totalInputTokens,
+          totalOutputTokens: this.totalOutputTokens,
+        });
+      }
+    }
+
+    // Skip broadcasting user events that contain only system-injected content
+    // (CLAUDE.md bootstrap, system reminders). They are stored in DB for debugging
+    // but are noise in the transcript UI.
+    if (rawType === 'user' && isSystemOnlyUserEvent(payload)) {
+      return;
+    }
+
+    this.broadcast({
+      type: 'session_event',
+      sessionId: this.sessionId,
+      eventType: eventType as 'text' | 'tool_use' | 'tool_result' | 'system',
+      content: payload,
+      ...(messageId != null && { messageId }),
+    });
   }
 
   /**
@@ -783,67 +727,26 @@ Fetch both Notion pages, then begin the task.
   deny(_reason?: string): void {}
 
   /**
-   * Send a follow-up user message to the subprocess via stdin.
-   * Requires --input-format stream-json.
+   * Send a follow-up user message to the session.
+   * Delegates to the underlying runner (stdin for CLI, message queue for API).
    */
   sendMessage(message: string): void {
-    if (!this.proc?.stdin?.writable) return;
-    this.proc.stdin.write(
-      JSON.stringify({ type: 'user', message: { role: 'user', content: message } }) + '\n',
-    );
+    this.runner.sendMessage(message);
   }
 
   /**
-   * Close stdin to signal EOF, allowing the CLI to exit cleanly once it
-   * finishes any in-progress work. The existing `exit` handler takes over
-   * from there and transitions the session to `done` or `error`.
+   * Signal a clean session end. Delegates to the underlying runner.
    */
   endSession(): void {
-    if (this.proc?.stdin?.writable) {
-      this.proc.stdin.end();
-    }
+    this.runner.endSession();
   }
 
   async kill(): Promise<void> {
-    if (!this.proc || this.proc.exitCode !== null) return;
+    if (this.isKilling) return;
     this.isKilling = true;
-    try {
-      this.killProcessTree(this.proc.pid!);
-    } catch {
-      // Process may have exited between guard check and here — ignore
-    }
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        try {
-          this.killProcessTree(this.proc!.pid!);
-        } catch {
-          // Already gone
-        }
-        resolve();
-      }, 15_000);
-      this.proc!.once('exit', () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-    });
+    await this.runner.kill();
     updateSessionStatus(this.sessionId, 'killed', Date.now());
     this.broadcast({ type: 'session_ended', sessionId: this.sessionId, status: 'killed' });
-  }
-
-  private killProcessTree(pid: number): void {
-    if (process.platform === 'win32') {
-      try {
-        execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' });
-      } catch {
-        // Process may have already exited — ignore
-      }
-    } else {
-      try {
-        process.kill(-pid, 'SIGTERM');
-      } catch {
-        // ESRCH = process already gone
-      }
-    }
   }
 
   /** Persist to SQLite first, then emit. Caller (SessionManager) listens and broadcasts. */
