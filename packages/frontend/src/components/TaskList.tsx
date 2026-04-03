@@ -84,8 +84,11 @@ function ReadySection({
 }) {
   const dispatch = useDispatch(send, project);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
-  // Wave 2+ start collapsed
-  const [collapsedWaves, setCollapsedWaves] = useState<Set<number>>(new Set());
+  // Wave 2+ start collapsed by default; wave 1 starts expanded
+  const [collapsedWaves, setCollapsedWaves] = useState<Set<number>>(() => {
+    const initialMap = groupByWave(tasks);
+    return new Set(Array.from(initialMap.keys()).filter(w => w > 1));
+  });
 
   const wave1CodeTasks = tasks.filter((t) => (t.wave ?? 1) === 1 && !t.blocked);
   const totalCount = tasks.length + nonCodeTasks.length;
@@ -176,17 +179,15 @@ function ReadySection({
             <div key={wave} className={styles.waveGroup} data-testid={`wave-group-${wave}`}>
               <div
                 className={styles.waveHeader}
-                onClick={() => { if (wave > 1) toggleWaveCollapse(wave); }}
-                role={wave > 1 ? 'button' : undefined}
-                aria-expanded={wave > 1 ? isWaveExpanded : undefined}
+                onClick={() => toggleWaveCollapse(wave)}
+                role="button"
+                aria-expanded={isWaveExpanded}
                 data-testid={`wave-header-${wave}`}
               >
-                <span className={styles.waveLabel}>Wave {wave}</span>
-                {wave > 1 && (
-                  <span className={styles.waveToggle} aria-hidden="true">
-                    {isWaveExpanded ? '▾' : '▸'}
-                  </span>
-                )}
+                <span className={styles.waveLabel}>Wave {wave} ({waveTasks.length})</span>
+                <span className={styles.waveToggle} aria-hidden="true">
+                  {isWaveExpanded ? '▾' : '▸'}
+                </span>
               </div>
 
               {isWaveExpanded && waveTasks.map((task) => (
