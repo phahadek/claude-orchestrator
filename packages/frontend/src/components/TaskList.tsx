@@ -208,7 +208,16 @@ function ReadySection({
 export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTask, lastTaskUpdate, reviewRefreshTrigger, send, project }: Props) {
   const [tasks, setTasks] = useState<TaskView[]>([]);
   const [loading, setLoading] = useState(true);
-  const [doneExpanded, setDoneExpanded] = useState(false);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set(['done']));
+
+  const toggleGroup = useCallback((status: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(status)) next.delete(status);
+      else next.add(status);
+      return next;
+    });
+  }, []);
 
   const fetchTasks = useCallback(async () => {
     if (!activeProjectId) {
@@ -319,25 +328,23 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
         const groupTasks = nonReadyGroupMap.get(status) ?? [];
         if (groupTasks.length === 0) return null;
 
-        const isDone = status === 'done';
-        const isExpanded = isDone ? doneExpanded : true;
+        const isExpanded = !collapsed.has(status);
         const label = GROUP_LABELS[status];
 
         return (
           <div key={status} className={styles.group} data-status={status}>
             <div
-              className={`${styles.groupHeader}${isDone ? ` ${styles.groupHeaderToggle}` : ''}`}
-              onClick={isDone ? () => setDoneExpanded((v) => !v) : undefined}
-              role={isDone ? 'button' : undefined}
-              aria-expanded={isDone ? isExpanded : undefined}
+              className={`${styles.groupHeader} ${styles.groupHeaderToggle}`}
+              onClick={() => toggleGroup(status)}
+              role="button"
+              aria-expanded={isExpanded}
+              data-testid={`group-header-${status}`}
             >
               <span className={styles.groupLabel}>{label}</span>
               <span className={styles.groupCount}>{groupTasks.length}</span>
-              {isDone && (
-                <span className={styles.toggle} aria-hidden="true">
-                  {isExpanded ? '▼' : '▶'}
-                </span>
-              )}
+              <span className={styles.toggle} aria-hidden="true">
+                {isExpanded ? '▼' : '▶'}
+              </span>
             </div>
 
             {isExpanded && (

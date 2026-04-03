@@ -240,6 +240,71 @@ describe('TaskList', () => {
     expect(cards[2].textContent).toContain('Low Priority Task');
   });
 
+  it('clicking a non-done group header collapses it (toggles collapsed state)', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Running Task', displayStatus: 'in_progress' }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('group-header-in_progress')).toBeDefined();
+    });
+    // Initially expanded
+    const header = screen.getByTestId('group-header-in_progress');
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('Running Task')).toBeDefined();
+    // Click to collapse
+    fireEvent.click(header);
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('Running Task')).toBeNull();
+    // Click again to expand
+    fireEvent.click(header);
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('Running Task')).toBeDefined();
+  });
+
+  it('collapsed group does not render its task list children', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'In Review Task', displayStatus: 'in_review' }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('group-header-in_review')).toBeDefined();
+    });
+    // Collapse the group
+    fireEvent.click(screen.getByTestId('group-header-in_review'));
+    // Task card should not be rendered
+    expect(screen.queryByText('In Review Task')).toBeNull();
+  });
+
+  it('expanded group renders all task items', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Task Alpha', displayStatus: 'in_progress' }),
+      makeTask({ taskId: 't2', taskName: 'Task Beta', displayStatus: 'in_progress' }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByText('Task Alpha')).toBeDefined();
+      expect(screen.getByText('Task Beta')).toBeDefined();
+    });
+  });
+
+  it('toggle icon changes between expanded and collapsed states', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Some Task', displayStatus: 'in_progress' }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('group-header-in_progress')).toBeDefined();
+    });
+    const header = screen.getByTestId('group-header-in_progress');
+    // Expanded by default: shows ▼
+    expect(header.textContent).toContain('▼');
+    // Collapse: shows ▶
+    fireEvent.click(header);
+    expect(header.textContent).toContain('▶');
+    expect(header.textContent).not.toContain('▼');
+  });
+
   it('collapses the Done group by default', async () => {
     mockFetch([
       makeTask({ taskId: 't1', taskName: 'Done Task', displayStatus: 'done' }),
@@ -259,9 +324,9 @@ describe('TaskList', () => {
     ]);
     render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
     await waitFor(() => {
-      expect(screen.getByRole('button')).toBeDefined();
+      expect(screen.getByTestId('group-header-done')).toBeDefined();
     });
-    fireEvent.click(screen.getByRole('button'));
+    fireEvent.click(screen.getByTestId('group-header-done'));
     expect(screen.getByText('Completed Work')).toBeDefined();
   });
 
