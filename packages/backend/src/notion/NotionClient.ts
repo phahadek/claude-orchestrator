@@ -167,6 +167,21 @@ function blockToLine(block: NotionBlock): string {
   }
 }
 
+/**
+ * Known top-level section keywords. A heading is considered a top-level
+ * section boundary only when it matches one of these keywords. Sub-headings
+ * like "### 🤖 Automated tests" that do not match any keyword are treated as
+ * content within the current section.
+ */
+const TOP_LEVEL_SECTIONS = [
+  'summary',
+  'dependencies',
+  'context',
+  'acceptance criteria',
+  'files',
+  'implementation notes',
+];
+
 /** Extract the text content of a named heading section from a markdown string. */
 function parseSection(markdown: string, headingKeyword: string): string {
   const lines = markdown.split('\n');
@@ -180,7 +195,14 @@ function parseSection(markdown: string, headingKeyword: string): string {
         inSection = true;
         continue;
       } else if (inSection) {
-        break;
+        // Only break on a different known top-level section, not sub-headings
+        const isTopLevel = TOP_LEVEL_SECTIONS.some(
+          s => heading.includes(s) && s !== headingKeyword.toLowerCase(),
+        );
+        if (isTopLevel) {
+          break;
+        }
+        buf.push(line);
       }
     } else if (inSection) {
       buf.push(line);
