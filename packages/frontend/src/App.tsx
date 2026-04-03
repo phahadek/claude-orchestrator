@@ -79,6 +79,7 @@ export default function App() {
   const prevConnectionState = useRef<ConnectionState>('disconnected');
 
   const [cardPreviewLines, setCardPreviewLines] = useState<number>(3);
+  const [sessionMode, setSessionMode] = useState<string>('cli');
 
   const [detailWidthPct, setDetailWidthPct] = useState<number>(() => {
     const saved = localStorage.getItem('sessionDetailWidth');
@@ -150,6 +151,7 @@ export default function App() {
       .then((s: Record<string, string>) => {
         const lines = Number(s.card_preview_lines);
         if (lines > 0) setCardPreviewLines(lines);
+        if (s.session_mode === 'api' || s.session_mode === 'cli') setSessionMode(s.session_mode);
       })
       .catch(() => {/* keep default */});
   }, []);
@@ -627,6 +629,7 @@ export default function App() {
                     onResume={handleResume}
                     onToggleFavorite={(sessionId, favorited) => setSessionFavorited(sessionId, favorited)}
                     cardPreviewLines={cardPreviewLines}
+                    sessionMode={sessionMode}
                   />
                 </>
               )}
@@ -652,6 +655,7 @@ export default function App() {
                   onFavorite={(sessionId) => setSessionFavorited(sessionId, true)}
                   onUnfavorite={(sessionId) => setSessionFavorited(sessionId, false)}
                   onResume={handleResume}
+                  sessionMode={sessionMode}
                 />
               ) : (
                 <div className={styles.detailPlaceholder}>
