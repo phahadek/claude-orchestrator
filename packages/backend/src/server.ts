@@ -8,6 +8,9 @@ import { runMigrations } from './db/schema';
 import { db } from './db/db';
 import { SessionManager } from './session/SessionManager';
 import { NotionClient } from './notion/NotionClient';
+import { NotionTaskBackend } from './tasks/NotionTaskBackend';
+import { LocalTaskBackend } from './tasks/LocalTaskBackend';
+import type { TaskTrackerBackend } from './tasks/TaskTrackerBackend';
 import { handleMessage } from './ws/router';
 import { JsonlReader, DEFAULT_SESSIONS_DIR } from './session/JsonlReader';
 import type { ServerMessage } from './ws/types';
@@ -21,7 +24,7 @@ import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
 import { ReviewOrchestrator } from './github/ReviewOrchestrator';
 import { PRMergeWatcher } from './github/PRMergeWatcher';
-import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
+import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY, TASK_BACKEND, config as appConfig } from './config';
 import { getActiveSessions, getEventsBySession, getDenialsBySession, deleteGhostSessions, getPRByNotionTaskId, getPRBySessionId, setPRReviewResult, setLastReviewedSha, setHeadSha, getSetting, setPendingPush } from './db/queries';
 import { isSystemOnlyUserEvent } from './utils/eventFilters';
 import { shouldAutoReview, formatReviewFeedback } from './github/reviewUtils';
@@ -41,10 +44,17 @@ const jsonlReader = new JsonlReader(sessionsDir);
 
 const notionClient = new NotionClient();
 const githubClient = new GitHubClient();
-const sessionManager = new SessionManager(notionClient, githubClient);
-const prReviewService = new PRReviewService(githubClient, notionClient, sessionManager);
+
+const taskBackend: TaskTrackerBackend = TASK_BACKEND === 'local'
+  ? new LocalTaskBackend(appConfig.projectDir)
+  : new NotionTaskBackend(notionClient);
+
+console.log(`[server] task backend: ${taskBackend.type}`);
+
+const sessionManager = new SessionManager(taskBackend, githubClient);
+const prReviewService = new PRReviewService(githubClient, taskBackend, sessionManager);
 const reviewOrchestrator = new ReviewOrchestrator(
-  prReviewService, sessionManager, githubClient, notionClient, AUTO_REVIEW_CONCURRENCY, AUTO_REVIEW_ENABLED,
+  prReviewService, sessionManager, githubClient, taskBackend, AUTO_REVIEW_CONCURRENCY, AUTO_REVIEW_ENABLED,
 );
 
 const PORT = parseInt(process.env.PORT ?? '3000');
@@ -58,8 +68,8 @@ app.use('/api/settings', settingsRouter);
 app.use('/api/sessions', sessionsRouter);
 // PRMergeWatcher created early so routes and sync jobs can delegate lifecycle to it.
 // .start() is called later after server boots.
-const prMergeWatcher = new PRMergeWatcher(githubClient, sessionManager, notionClient);
-app.use('/api', createPrsRouter(githubClient, prReviewService, sessionManager, notionClient, prMergeWatcher));
+const prMergeWatcher = new PRMergeWatcher(githubClient, sessionManager, taskBackend);
+app.use('/api', createPrsRouter(githubClient, prReviewService, sessionManager, taskBackend, prMergeWatcher));
 app.use('/api', createTasksRouter());
 app.use('/api', configRouter);
 app.use(express.static(path.join(__dirname, 'public')));
@@ -269,7 +279,7 @@ wss.on('connection', (ws) => {
     }
   }
 
-  ws.on('message', (data) => handleMessage(ws, data.toString(), sessionManager, notionClient));
+  ws.on('message', (data) => handleMessage(ws, data.toString(), sessionManager, taskBackend));
   ws.on('close', () => console.log('[WS] client disconnected'));
 });
 

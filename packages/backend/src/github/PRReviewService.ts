@@ -1,9 +1,8 @@
 import { getEventsBySession, setPRReviewResult, getPRByNumber, setReviewSessionId, updatePRDraftStatus, incrementReviewIteration, setLastReviewedSha } from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
-import type { NotionClient } from '../notion/NotionClient';
+import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
 import type { SessionManager } from '../session/SessionManager';
 import type { PullRequest, PRDiff } from './types';
-import type { NotionTaskPage } from '../notion/NotionClient';
 import type { ServerMessage } from '../ws/types';
 import type { SessionEvent } from '../db/types';
 
@@ -25,7 +24,7 @@ export interface PRReviewResult {
 export class PRReviewService {
   constructor(
     private github: GitHubClient,
-    private notion: NotionClient,
+    private notion: TaskTrackerBackend,
     private sessionManager: SessionManager,
     private readonly defaultProjectId: string = '',
     private readonly defaultProjectContextUrl: string = '',
@@ -72,9 +71,9 @@ export class PRReviewService {
       throw new Error(`PR #${prNumber} has no linked Notion task`);
     }
 
-    const taskPage = await this.notion.fetchTaskPage(prRow.notion_task_id);
+    const taskBody = await this.notion.fetchTaskPage(prRow.notion_task_id);
     const taskUrl = `https://www.notion.so/${prRow.notion_task_id}`;
-    const prompt = this.buildPrompt(prData, diffData, taskPage);
+    const prompt = this.buildPrompt(prData, diffData, taskBody);
 
     // Case 2: Dead existing review session — resume via sendOrResume with the
     // original session ID (do NOT generate a new one here). The returned value
@@ -366,14 +365,14 @@ export class PRReviewService {
     return { ...result, dimensions, verdict };
   }
 
-  buildPrompt(pr: PullRequest, diff: PRDiff, task: NotionTaskPage): string {
+  buildPrompt(pr: PullRequest, diff: PRDiff, taskBody: string): string {
     const MAX_DIFF_CHARS = 12000;
     let diffText = diff.diff;
     if (diffText.length > MAX_DIFF_CHARS) {
       diffText = diffText.slice(0, MAX_DIFF_CHARS) + '\n\n[diff truncated — exceeded 12000 characters]';
     }
 
-    return `You are a code reviewer. Compare the following GitHub PR against its Notion task specification.
+    return `You are a code reviewer. Compare the following GitHub PR against its task specification.
 Respond ONLY with a JSON object — no preamble, no markdown fences.
 
 ## PR Metadata
@@ -384,18 +383,8 @@ Head branch: ${pr.headBranch}
 ## PR Diff
 ${diffText}
 
-## Notion Task Specification
-### Summary
-${task.summarySection || task.name}
-
-### Context (Implementation Spec)
-${task.contextSection}
-
-### Acceptance Criteria
-${task.acceptanceCriteria}
-
-### Files / Paths Affected
-${task.filesSection}
+## Task Specification
+${taskBody}
 
 ## Your task
 Evaluate the PR across exactly these 4 dimensions and respond with this JSON schema:

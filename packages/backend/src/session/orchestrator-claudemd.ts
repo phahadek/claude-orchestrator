@@ -14,6 +14,11 @@ export interface OrchestratorClaudeMdParams {
    * Defaults to the `npx` convention when omitted.
    */
   bashRules?: string[];
+  /**
+   * Task backend type. When 'local', the lifecycle instructions are adjusted
+   * to skip Notion fetch steps and read tasks.yaml instead.
+   */
+  taskBackend?: 'notion' | 'local';
 }
 
 /**
@@ -37,7 +42,7 @@ export interface OrchestratorClaudeMdParams {
  * 11. Separator + "# Project Instructions (from project CLAUDE.md)" (added by caller)
  */
 export function buildOrchestratorClaudeMd(params: OrchestratorClaudeMdParams): string {
-  const { taskName, taskUrl, projectContextUrl, targetBranch, prGate, bashRules } = params;
+  const { taskName, taskUrl, projectContextUrl, targetBranch, prGate, bashRules, taskBackend = 'notion' } = params;
 
   const resolvedPrGate = prGate ?? { typeCheck: 'npx tsc --noEmit', build: 'npx vite build' };
   const resolvedBashRules = bashRules ?? [
@@ -75,8 +80,14 @@ export function buildOrchestratorClaudeMd(params: OrchestratorClaudeMdParams): s
 
 Follow these steps in order — every session:
 
-1. Fetch the Notion task page and project context page.
-2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.
+${taskBackend === 'local'
+  ? `> ⚠️ **TASK_BACKEND=local**: Task context comes from \`tasks.yaml\` in the project root, not Notion.
+> Skip steps 1 (Notion fetch) and instead read \`tasks.yaml\` for task context.
+
+1. Read \`tasks.yaml\` in the project root for task context (skip Notion fetch).
+2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
+  : `1. Fetch the Notion task page and project context page.
+2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`}
 3. Implement the task per the acceptance criteria on the task page.
 4. Pass the pre-PR gate (see Pre-PR Gate section below).
 5. Open a draft PR targeting \`${targetBranch}\` using the required body template.

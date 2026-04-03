@@ -16,7 +16,7 @@ import {
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { emitTaskUpdated } from '../routes/tasks';
-import type { NotionClient } from '../notion/NotionClient';
+import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
 import type { GitHubClient } from '../github/GitHubClient';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import { SessionAuditor } from './SessionAuditor';
@@ -130,7 +130,7 @@ export class AgentSession extends EventEmitter {
     public readonly sessionId: string,
     public readonly taskUrl: string,
     public readonly projectContextUrl: string,
-    private readonly notionClient: NotionClient,
+    private readonly notionClient: TaskTrackerBackend,
     private readonly worktreePath: string,
     public readonly taskId: string,
     private readonly resumeSessionId?: string,

@@ -15,9 +15,8 @@ vi.mock('../db/queries.js', () => ({
 import { PRReviewService } from './PRReviewService';
 import { getPRByNumber, setPRReviewResult, getEventsBySession, setReviewSessionId, updatePRDraftStatus, incrementReviewIteration } from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
-import type { NotionClient } from '../notion/NotionClient';
+import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
 import type { PullRequest, PRDiff } from './types';
-import type { NotionTaskPage } from '../notion/NotionClient';
 import type { SessionEvent } from '../db/types';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -43,15 +42,11 @@ const mockDiff: PRDiff = {
   filesChanged: ['src/foo.ts'],
 };
 
-const mockTask: NotionTaskPage = {
-  taskId: 'task-abc123',
-  name: 'Add something cool',
-  summarySection: 'Implement the something cool feature for users',
-  contextSection: 'The implementation should add bar export to foo.ts using the existing pattern',
-  acceptanceCriteria: '- [ ] bar export is added\n- [ ] tsc passes',
-  filesSection: '- src/foo.ts (update)',
-  rawMarkdown: '## Summary\nImplement...\n## Context\n...\n## Acceptance Criteria\n...\n## Files\n...',
-};
+const mockTaskBody =
+  '## Summary\nImplement the something cool feature for users\n\n' +
+  '## Context\nThe implementation should add bar export to foo.ts using the existing pattern\n\n' +
+  '## Acceptance Criteria\n- [ ] bar export is added\n- [ ] tsc passes\n\n' +
+  '## Files\n- src/foo.ts (update)';
 
 const mockPRRow = {
   id: 1,
@@ -88,13 +83,14 @@ function makeMockGitHub(): GitHubClient {
   } as unknown as GitHubClient;
 }
 
-function makeMockNotion(): NotionClient {
+function makeMockNotion(): TaskTrackerBackend {
   return {
-    fetchTaskPage: vi.fn().mockResolvedValue(mockTask),
+    type: 'notion' as const,
+    fetchTaskPage: vi.fn().mockResolvedValue(mockTaskBody),
     fetchReadyTasks: vi.fn(),
     updateStatus: vi.fn().mockResolvedValue(undefined),
     attachPR: vi.fn(),
-  } as unknown as NotionClient;
+  } as unknown as TaskTrackerBackend;
 }
 
 function makeMockSessionManager() {
@@ -265,7 +261,7 @@ describe('PRReviewService.parseReviewResult() — last assistant message only', 
 // ── buildPrompt() ─────────────────────────────────────────────────────────────
 
 describe('PRReviewService.buildPrompt()', () => {
-  it('includes PR diff, all four Notion spec sections, and the JSON schema instruction', () => {
+  it('includes PR diff, task spec body, and the JSON schema instruction', () => {
     const service = new PRReviewService(
       makeMockGitHub(),
       makeMockNotion(),
@@ -273,14 +269,14 @@ describe('PRReviewService.buildPrompt()', () => {
       'proj-1',
       'https://notion.so/ctx',
     );
-    const prompt = service.buildPrompt(mockPR, mockDiff, mockTask);
+    const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
 
     expect(prompt).toContain(mockPR.title);
     expect(prompt).toContain(mockDiff.diff);
-    expect(prompt).toContain(mockTask.summarySection);
-    expect(prompt).toContain(mockTask.contextSection);
-    expect(prompt).toContain(mockTask.acceptanceCriteria);
-    expect(prompt).toContain(mockTask.filesSection);
+    expect(prompt).toContain('Implement the something cool feature for users');
+    expect(prompt).toContain('add bar export to foo.ts');
+    expect(prompt).toContain('bar export is added');
+    expect(prompt).toContain('src/foo.ts (update)');
     expect(prompt).toContain('"verdict"');
     expect(prompt).toContain('"dimensions"');
     expect(prompt).toContain('Title and description vs task Summary');
@@ -297,7 +293,7 @@ describe('PRReviewService.buildPrompt()', () => {
       'proj-1',
       'https://notion.so/ctx',
     );
-    const prompt = service.buildPrompt(mockPR, mockDiff, mockTask);
+    const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
 
     expect(prompt).toContain('necessary downstream updates caused by the listed changes');
     expect(prompt).toContain('Fail only if the PR touches files unrelated to the task');
@@ -312,7 +308,7 @@ describe('PRReviewService.buildPrompt()', () => {
       'proj-1',
       'https://notion.so/ctx',
     );
-    const prompt = service.buildPrompt(mockPR, longDiff, mockTask);
+    const prompt = service.buildPrompt(mockPR, longDiff, mockTaskBody);
 
     expect(prompt).toContain('[diff truncated');
     expect(prompt).not.toContain('A'.repeat(13000));
