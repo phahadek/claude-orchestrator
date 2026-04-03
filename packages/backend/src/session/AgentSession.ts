@@ -11,6 +11,7 @@ import {
   incrementTokens,
   insertSessionAudit,
   setSessionModel,
+  getPRBySessionId,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { emitTaskUpdated } from '../routes/tasks';
@@ -21,6 +22,16 @@ import { SessionAuditor } from './SessionAuditor';
 import type { ISessionManager } from './SessionAuditor';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
+
+/**
+ * Returns true if the tool call represents a git push operation.
+ * Exported for unit testing.
+ */
+export function isPushCommand(toolName: string, toolInput: string): boolean {
+  if (toolName === 'mcp__github__push_files') return true;
+  if (toolName === 'Bash' && /git\s+push/.test(toolInput) && !toolInput.includes('--dry-run')) return true;
+  return false;
+}
 
 function sessionLog(sessionId: string, ...args: unknown[]) {
   console.log(`[Session ${sessionId.slice(0, 8)}]`, ...args);
@@ -102,6 +113,8 @@ export class AgentSession extends EventEmitter {
   private pendingGHToolUseIds = new Map<string, string>();
   /** Maps tool_use_id → Bash command string, for push detection. */
   private pendingBashCommands = new Map<string, string>();
+  /** Tracks mcp__github__push_files tool_use IDs awaiting a successful tool_result. */
+  private pendingPushFileToolUseIds = new Set<string>();
   /** True once a PR was detected and inserted during the live session. */
   private prDetectedLive = false;
   /** Accumulated token counts for this session (in-memory, synced to SQLite). */
@@ -297,6 +310,9 @@ Fetch both Notion pages, then begin the task.
                 const cmd = ((block.input as Record<string, unknown>)?.command as string) ?? '';
                 this.pendingBashCommands.set(block.id, cmd);
               }
+              if (block.name === 'mcp__github__push_files' && typeof block.id === 'string') {
+                this.pendingPushFileToolUseIds.add(block.id);
+              }
             }
           }
         }
@@ -311,12 +327,15 @@ Fetch both Notion pages, then begin the task.
           const content = event.content as Array<Record<string, unknown>> | undefined;
           this.handlePRCreatedFromContent(content ?? []);
         }
+        if (toolUseId && this.pendingPushFileToolUseIds.has(toolUseId)) {
+          this.pendingPushFileToolUseIds.delete(toolUseId);
+          this.handlePushDetected();
+        }
         if (toolUseId && this.pendingBashCommands.has(toolUseId)) {
           const cmd = this.pendingBashCommands.get(toolUseId)!;
           this.pendingBashCommands.delete(toolUseId);
-          if (/^git\s+push/.test(cmd) && !cmd.includes('--dry-run')) {
-            this.emit('push_detected', { sessionId: this.sessionId });
-            this.broadcast({ type: 'push_detected', sessionId: this.sessionId });
+          if (isPushCommand('Bash', cmd)) {
+            this.handlePushDetected();
           }
         }
       }
@@ -547,6 +566,24 @@ Fetch both Notion pages, then begin the task.
       contextUrl: this.projectContextUrl,
     });
     sessionLog(this.sessionId, `PR detected live: ${prUrl}`);
+  }
+
+  /**
+   * Emit the push_detected EventEmitter event (always, for ReviewOrchestrator) and,
+   * if a PR row exists for this session, also broadcast the WS push_detected message
+   * with prNumber and repo included.
+   */
+  private handlePushDetected(): void {
+    this.emit('push_detected', { sessionId: this.sessionId });
+    const pr = getPRBySessionId(this.sessionId);
+    if (pr) {
+      this.broadcast({
+        type: 'push_detected',
+        sessionId: this.sessionId,
+        prNumber: pr.pr_number,
+        repo: pr.repo,
+      });
+    }
   }
 
   private async handleCleanExit(): Promise<void> {

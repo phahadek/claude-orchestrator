@@ -1,5 +1,5 @@
 import { config } from '../config';
-import { setPRReviewResult, getSetting, getPRByNumber, getPRBySessionId, incrementReviewIteration, setLastReviewedSha, setHeadSha } from '../db/queries';
+import { setPRReviewResult, getSetting, getPRByNumber, getPRBySessionId, setLastReviewedSha, setHeadSha, incrementReviewIteration } from '../db/queries';
 import type { PRReviewService, PRReviewResult } from './PRReviewService';
 import type { SessionManager } from '../session/SessionManager';
 import type { ReviewJob } from './types';
@@ -179,19 +179,14 @@ export class ReviewOrchestrator {
       return;
     }
 
-    try {
-      const iteration = incrementReviewIteration(prRow.pr_number, prRow.repo);
+    // Derive the expected new iteration (reReviewPR() will increment it internally)
+    const iteration = prRow.review_iteration + 1;
 
+    try {
       let result: PRReviewResult;
       try {
         result = await Promise.race([
-          this.reviewService.sendReReview(
-            prRow.review_session_id,
-            prRow.pr_number,
-            prRow.repo,
-            iteration,
-            this.maxIterations,
-          ),
+          this.reviewService.reReviewPR(prRow.pr_number, prRow.repo),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error('Re-review timed out')), REVIEW_TIMEOUT_MS),
           ),

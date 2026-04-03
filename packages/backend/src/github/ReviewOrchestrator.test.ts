@@ -69,25 +69,18 @@ function makeMockSessionManager() {
 }
 
 function makeMockReviewService(resolveWith?: object): PRReviewService {
+  const defaultResult = {
+    prNumber: 1,
+    repo: 'owner/repo',
+    verdict: 'approved',
+    dimensions: [],
+    summary: 'All good.',
+    reviewedAt: new Date().toISOString(),
+  };
   return {
-    reviewPR: vi.fn().mockResolvedValue(
-      resolveWith ?? {
-        prNumber: 1,
-        repo: 'owner/repo',
-        verdict: 'approved',
-        dimensions: [],
-        summary: 'All good.',
-        reviewedAt: new Date().toISOString(),
-      },
-    ),
-    sendReReview: vi.fn().mockResolvedValue({
-      prNumber: 1,
-      repo: 'owner/repo',
-      verdict: 'approved',
-      dimensions: [],
-      summary: 'Fixed.',
-      reviewedAt: new Date().toISOString(),
-    }),
+    reviewPR: vi.fn().mockResolvedValue(resolveWith ?? defaultResult),
+    sendReReview: vi.fn().mockResolvedValue({ ...defaultResult, summary: 'Fixed.' }),
+    reReviewPR: vi.fn().mockResolvedValue(resolveWith ?? defaultResult),
   } as unknown as PRReviewService;
 }
 
@@ -150,7 +143,7 @@ describe('ReviewOrchestrator — disabled', () => {
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
     await new Promise((r) => setTimeout(r, 20));
 
-    expect(vi.mocked(rs.sendReReview)).not.toHaveBeenCalled();
+    expect(vi.mocked(rs.reReviewPR)).not.toHaveBeenCalled();
   });
 });
 
@@ -198,6 +191,7 @@ describe('ReviewOrchestrator — concurrency', () => {
           return { prNumber: 2, repo: 'owner/repo', verdict: 'approved', dimensions: [], summary: 'ok', reviewedAt: '' };
         }),
       sendReReview: vi.fn(),
+      reReviewPR: vi.fn(),
     } as unknown as PRReviewService;
 
     new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
@@ -306,9 +300,8 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
 // ── Push detection and re-review ──────────────────────────────────────────────
 
 describe('ReviewOrchestrator — push_detected triggers re-review', () => {
-  it('calls sendReReview and increments iteration on push_detected', async () => {
+  it('calls reReviewPR on push_detected', async () => {
     vi.mocked(getPRBySessionId).mockReturnValue(basePRRow as any);
-    vi.mocked(incrementReviewIteration).mockReturnValue(1);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
@@ -318,20 +311,17 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(vi.mocked(incrementReviewIteration)).toHaveBeenCalledWith(1, 'owner/repo');
-    expect(vi.mocked(rs.sendReReview)).toHaveBeenCalledWith(
-      'review-session-id', 1, 'owner/repo', 1, 3,
-    );
+    expect(vi.mocked(rs.reReviewPR)).toHaveBeenCalledWith(1, 'owner/repo');
   });
 
   it('emits review_verdict after re-review completes', async () => {
     vi.mocked(getPRBySessionId).mockReturnValue(basePRRow as any);
-    vi.mocked(incrementReviewIteration).mockReturnValue(1);
 
     const sm = makeMockSessionManager();
     const rs = {
       reviewPR: vi.fn(),
-      sendReReview: vi.fn().mockResolvedValue({
+      sendReReview: vi.fn(),
+      reReviewPR: vi.fn().mockResolvedValue({
         prNumber: 1,
         repo: 'owner/repo',
         verdict: 'approved',
@@ -360,13 +350,14 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
   });
 
   it('sends feedback to coding session when re-review verdict is needs_changes', async () => {
-    vi.mocked(getPRBySessionId).mockReturnValue(basePRRow as any);
-    vi.mocked(incrementReviewIteration).mockReturnValue(2);
+    // Use review_iteration: 1 so orchestrator calculates iteration = 2
+    vi.mocked(getPRBySessionId).mockReturnValue({ ...basePRRow, review_iteration: 1 } as any);
 
     const sm = makeMockSessionManager();
     const rs = {
       reviewPR: vi.fn(),
-      sendReReview: vi.fn().mockResolvedValue({
+      sendReReview: vi.fn(),
+      reReviewPR: vi.fn().mockResolvedValue({
         prNumber: 1,
         repo: 'owner/repo',
         verdict: 'needs_changes',
@@ -398,7 +389,7 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(vi.mocked(rs.sendReReview)).not.toHaveBeenCalled();
+    expect(vi.mocked(rs.reReviewPR)).not.toHaveBeenCalled();
   });
 
   it('skips re-review when headSha === lastReviewedSha (no new commits since last review)', async () => {
@@ -417,12 +408,11 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(vi.mocked(rs.sendReReview)).not.toHaveBeenCalled();
+    expect(vi.mocked(rs.reReviewPR)).not.toHaveBeenCalled();
   });
 
   it('calls setLastReviewedSha with the fresh head SHA after a successful re-review', async () => {
     vi.mocked(getPRBySessionId).mockReturnValue({ ...basePRRow, head_sha: 'sha-abc', last_reviewed_sha: null } as any);
-    vi.mocked(incrementReviewIteration).mockReturnValue(1);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
@@ -436,7 +426,6 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
 
   it('calls fetchPR with correct repo and PR number on push_detected', async () => {
     vi.mocked(getPRBySessionId).mockReturnValue(basePRRow as any);
-    vi.mocked(incrementReviewIteration).mockReturnValue(1);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
@@ -451,7 +440,6 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
 
   it('triggers re-review when DB has null head_sha but GitHub returns a new SHA', async () => {
     vi.mocked(getPRBySessionId).mockReturnValue({ ...basePRRow, head_sha: null, last_reviewed_sha: null } as any);
-    vi.mocked(incrementReviewIteration).mockReturnValue(1);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
@@ -462,12 +450,11 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(vi.mocked(rs.sendReReview)).toHaveBeenCalledOnce();
+    expect(vi.mocked(rs.reReviewPR)).toHaveBeenCalledOnce();
   });
 
   it('calls setHeadSha when fresh GitHub SHA differs from DB value', async () => {
     vi.mocked(getPRBySessionId).mockReturnValue({ ...basePRRow, head_sha: 'old-sha', last_reviewed_sha: null } as any);
-    vi.mocked(incrementReviewIteration).mockReturnValue(1);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
@@ -482,7 +469,6 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
 
   it('does not call setHeadSha when fresh SHA matches DB value', async () => {
     vi.mocked(getPRBySessionId).mockReturnValue({ ...basePRRow, head_sha: 'sha-abc', last_reviewed_sha: null } as any);
-    vi.mocked(incrementReviewIteration).mockReturnValue(1);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
@@ -498,7 +484,6 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
 
   it('deduplicates concurrent push_detected for the same coding session', async () => {
     vi.mocked(getPRBySessionId).mockReturnValue(basePRRow as any);
-    vi.mocked(incrementReviewIteration).mockReturnValue(1);
 
     let resolveReview!: () => void;
     const reviewStarted = new Promise<void>((r) => { resolveReview = r; });
@@ -507,7 +492,8 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
 
     const rs = {
       reviewPR: vi.fn(),
-      sendReReview: vi.fn().mockImplementationOnce(async () => {
+      sendReReview: vi.fn(),
+      reReviewPR: vi.fn().mockImplementationOnce(async () => {
         resolveReview();
         await reviewDone;
         return { prNumber: 1, repo: 'owner/repo', verdict: 'approved', dimensions: [], summary: 'ok', reviewedAt: '' };
@@ -522,8 +508,8 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
 
     await reviewStarted;
-    // Only one sendReReview should have been called
-    expect(vi.mocked(rs.sendReReview)).toHaveBeenCalledTimes(1);
+    // Only one reReviewPR should have been called
+    expect(vi.mocked(rs.reReviewPR)).toHaveBeenCalledTimes(1);
 
     completeReview();
     await new Promise((r) => setTimeout(r, 20));
@@ -614,12 +600,12 @@ describe('ReviewOrchestrator — incomplete verdict', () => {
 
   it('broadcasts review_incomplete on re-review incomplete verdict and does NOT send feedback', async () => {
     vi.mocked(getPRBySessionId).mockReturnValue(basePRRow as any);
-    vi.mocked(incrementReviewIteration).mockReturnValue(1);
 
     const sm = makeMockSessionManager();
     const rs = {
       reviewPR: vi.fn(),
-      sendReReview: vi.fn().mockResolvedValue({
+      sendReReview: vi.fn(),
+      reReviewPR: vi.fn().mockResolvedValue({
         prNumber: 1,
         repo: 'owner/repo',
         verdict: 'incomplete',
@@ -714,12 +700,12 @@ describe('ReviewOrchestrator — timeout', () => {
   it('stores error verdict with dimensions: [] when re-review times out', async () => {
     vi.useFakeTimers();
     vi.mocked(getPRBySessionId).mockReturnValue(basePRRow as any);
-    vi.mocked(incrementReviewIteration).mockReturnValue(1);
 
     const sm = makeMockSessionManager();
     const rs = {
       reviewPR: vi.fn(),
-      sendReReview: vi.fn().mockReturnValue(new Promise(() => {})),
+      sendReReview: vi.fn(),
+      reReviewPR: vi.fn().mockReturnValue(new Promise(() => {})),
     } as unknown as PRReviewService;
 
     new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
@@ -877,10 +863,9 @@ describe('Break 4 (AC) — auto findings routing: sessionManager.send() called o
 // Verifies that push_detected increments review_iteration and sends re-review,
 // and that the orchestrator escalates when the cap is exceeded.
 
-describe('Break 5 (AC) — re-review trigger: review_iteration incremented and re-review sent on push_detected', () => {
-  it('increments review_iteration and sends re-review follow-up on push_detected', async () => {
+describe('Break 5 (AC) — re-review trigger: re-review called on push_detected', () => {
+  it('calls reReviewPR on push_detected', async () => {
     vi.mocked(getPRBySessionId).mockReturnValue(basePRRow as any);
-    vi.mocked(incrementReviewIteration).mockReturnValue(1);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
@@ -889,10 +874,7 @@ describe('Break 5 (AC) — re-review trigger: review_iteration incremented and r
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(vi.mocked(incrementReviewIteration)).toHaveBeenCalledWith(1, 'owner/repo');
-    expect(vi.mocked(rs.sendReReview)).toHaveBeenCalledWith(
-      'review-session-id', 1, 'owner/repo', 1, 3,
-    );
+    expect(vi.mocked(rs.reReviewPR)).toHaveBeenCalledWith(1, 'owner/repo');
   });
 
   it('emits review_escalated when review_iteration exceeds max_review_iterations', async () => {

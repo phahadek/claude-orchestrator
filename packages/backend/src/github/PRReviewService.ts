@@ -1,4 +1,4 @@
-import { getEventsBySession, setPRReviewResult, getPRByNumber, setReviewSessionId, updatePRDraftStatus } from '../db/queries';
+import { getEventsBySession, setPRReviewResult, getPRByNumber, setReviewSessionId, updatePRDraftStatus, incrementReviewIteration } from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
 import type { NotionClient } from '../notion/NotionClient';
 import type { SessionManager } from '../session/SessionManager';
@@ -162,6 +162,58 @@ export class PRReviewService {
       `This is review iteration ${iteration}/${maxIterations}.`;
     this.sessionManager.send(reviewSessionId, msg);
     const aiResult = await this.waitForVerdict(reviewSessionId, prNumber, repo);
+    const { mergeable } = await this.github.getMergeability(prNumber, repo);
+    const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
+    setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
+    return finalResult;
+  }
+
+  /**
+   * Send a re-review follow-up to the existing review session for the given PR.
+   * Uses sendOrResume() so it works even if the review session has exited.
+   * Falls back to a fresh reviewPR() if no review_session_id is set on the PR row.
+   * Increments review_iteration in the DB.
+   */
+  async reReviewPR(
+    prNumber: number,
+    repo: string,
+    projectId: string = this.defaultProjectId,
+    projectContextUrl: string = this.defaultProjectContextUrl,
+  ): Promise<PRReviewResult> {
+    const pr = getPRByNumber(prNumber, repo);
+    if (!pr?.review_session_id) {
+      // No paired review session — fall back to fresh review
+      return this.reviewPR(prNumber, repo, projectId, projectContextUrl);
+    }
+
+    const diffData = await this.github.fetchDiff(prNumber);
+    const MAX_DIFF_CHARS = 12000;
+    const truncatedDiff = diffData.diff.length > MAX_DIFF_CHARS
+      ? diffData.diff.slice(0, MAX_DIFF_CHARS) + '\n\n[diff truncated]'
+      : diffData.diff;
+
+    const followUp = [
+      `The code session has pushed new commits to PR #${prNumber}.`,
+      `Please re-review the updated diff against the same task spec.`,
+      ``,
+      `### Updated Diff`,
+      '```',
+      truncatedDiff,
+      '```',
+      ``,
+      `Respond with the same JSON review format as before.`,
+    ].join('\n');
+
+    // Increment iteration before sending so the DB reflects the new iteration
+    incrementReviewIteration(prNumber, repo);
+
+    // Send to the existing review session (resumes via --resume if it has exited)
+    const resumedSessionId = await this.sessionManager.sendOrResume(pr.review_session_id, followUp);
+    if (resumedSessionId !== pr.review_session_id) {
+      setReviewSessionId(prNumber, repo, resumedSessionId);
+    }
+
+    const aiResult = await this.waitForVerdict(resumedSessionId, prNumber, repo);
     const { mergeable } = await this.github.getMergeability(prNumber, repo);
     const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
