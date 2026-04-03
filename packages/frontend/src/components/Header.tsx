@@ -5,7 +5,7 @@ import { ProjectSwitcher } from './ProjectSwitcher';
 import { MilestoneProgress } from './MilestoneProgress';
 import styles from './Header.module.css';
 
-export type TopView = 'sessions' | 'prs' | 'settings';
+export type TopView = 'tasks' | 'sessions' | 'prs' | 'settings';
 
 interface Props {
   projects: ProjectConfig[];
@@ -28,6 +28,13 @@ export function Header({ projects, activeProjectId, onProjectChange, activeBoard
     <header className={styles.header}>
       <span className={styles.appName}>Claude Code Dashboard</span>
       <nav className={styles.nav}>
+        <button
+          type="button"
+          className={`${styles.navLink}${activeView === 'tasks' ? ` ${styles.navLinkActive}` : ''}`}
+          onClick={() => onViewChange('tasks')}
+        >
+          Tasks
+        </button>
         <button
           type="button"
           className={`${styles.navLink}${activeView === 'sessions' ? ` ${styles.navLinkActive}` : ''}`}
