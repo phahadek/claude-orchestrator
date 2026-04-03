@@ -562,6 +562,7 @@ export default function App() {
                   send={send}
                   sessions={sessions}
                   onClose={() => setSelectedTaskId(null)}
+                  projectId={activeProjectId ?? undefined}
                 />
               ) : (
                 <div className={styles.detailPlaceholder}>
