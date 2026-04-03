@@ -12,6 +12,7 @@ vi.mock('../db/queries.js', () => ({
   getPRs: vi.fn(),
   getPRByNumber: vi.fn(),
   updatePRState: vi.fn(),
+  updateMergeState: vi.fn(),
   getTaskTitleFromCache: vi.fn().mockReturnValue(null),
   upsertPullRequest: vi.fn(),
   deletePR: vi.fn(),
@@ -101,6 +102,11 @@ const mockPRRow: PullRequestRow = {
   review_iteration: 0,
   head_sha: null,
   last_reviewed_sha: null,
+  node_id: null,
+  mergeable: null,
+  merge_state: null,
+  merge_state_checked_at: null,
+  pending_push: 0,
 };
 
 const mockPRRowNoTask: PullRequestRow = {
@@ -328,7 +334,7 @@ describe('POST /api/prs/:prNumber/review', () => {
 // ── POST /api/prs/:prNumber/merge ─────────────────────────────────────────────
 
 describe('POST /api/prs/:prNumber/merge', () => {
-  it('returns 422 with error message on GitHubApiError', async () => {
+  it('returns 422 with conflict message on 405 GitHubApiError', async () => {
     const github = makeMockGitHub();
     vi.mocked(github.mergePR).mockRejectedValue(new GitHubApiError(405, 'Not mergeable'));
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
@@ -336,7 +342,22 @@ describe('POST /api/prs/:prNumber/merge', () => {
       .post('/api/prs/owner/repo/42/merge')
       .send({});
     expect(res.status).toBe(422);
-    expect(res.body.error).toBe('Not mergeable');
+    expect(res.body.error).toBe('PR has merge conflicts. Use Fix Conflicts to have the code session rebase and resolve them.');
+  });
+
+  it('calls sendOrResume with conflict-fix message on 409 merge conflict', async () => {
+    const github = makeMockGitHub();
+    vi.mocked(github.mergePR).mockRejectedValue(new GitHubApiError(409, 'Merge conflict'));
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const sessionManager = makeMockSessionManager();
+    const res = await supertest(buildApp(github, makeMockPRReviewService(), sessionManager))
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.status).toBe(422);
+    expect(vi.mocked(sessionManager.sendOrResume)).toHaveBeenCalledWith(
+      'session-xyz',
+      'PR #42 has merge conflicts with the base branch. Rebase onto `dev`, resolve the conflicts, and push the fixed branch.',
+    );
   });
 
   it('returns merge result and updates state on success', async () => {
@@ -599,8 +620,8 @@ describe('Break 2 (AC) — POST /api/prs/:prNumber/review calls prReviewService.
     );
     expect(res.body.verdict).toBe('approved');
     expect(res.body.verdict).not.toBeNull();
-    // Old stub message must be absent
-    expect(res.body.message).not.toMatch(/not yet implemented/i);
+    // Old stub message must be absent (response has no message field in current impl)
+    expect(res.body.message ?? '').not.toMatch(/not yet implemented/i);
   });
 });
 

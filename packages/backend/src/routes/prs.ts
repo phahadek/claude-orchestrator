@@ -235,6 +235,14 @@ export function createPrsRouter(
         updateMergeState(prNumber, repo, 0, 'dirty');
         _broadcast({ type: 'pr_state_changed', prNumber, repo, mergeable: false, mergeState: 'dirty' });
         if (prRow?.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
+        // Message the code session to fix the conflicts
+        if (prRow?.session_id) {
+          const baseBranch = prRow.base_branch ?? 'dev';
+          const msg = `PR #${prNumber} has merge conflicts with the base branch. Rebase onto \`${baseBranch}\`, resolve the conflicts, and push the fixed branch.`;
+          sessionManager.sendOrResume(prRow.session_id, msg).catch((err: unknown) =>
+            console.warn('[prs] sendOrResume failed:', (err as Error).message),
+          );
+        }
         res.status(422).json({ error: 'PR has merge conflicts. Use Fix Conflicts to have the code session rebase and resolve them.' });
         return;
       }
