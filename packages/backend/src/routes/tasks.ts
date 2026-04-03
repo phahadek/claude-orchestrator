@@ -8,6 +8,7 @@ import type { NotionTask } from '../notion/types';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import type { PRReviewResult } from '../github/PRReviewService';
 import type { ServerMessage, TaskView } from '../ws/types';
+import yaml from 'js-yaml';
 export type { TaskView } from '../ws/types';
 
 const DEFAULT_MAX_REVIEW_ITERATIONS = 3;
@@ -190,6 +191,67 @@ function summarizeEvent(payload: string): string {
 
 export function createTasksRouter(): Router {
   const router = Router();
+
+  // ── GET /api/tasks/export?format=yaml&projectId=<id>&boardId=<id> ────────
+  router.get('/tasks/export', (req: Request, res: Response) => {
+    const format = typeof req.query.format === 'string' ? req.query.format : 'yaml';
+    if (format !== 'yaml') {
+      res.status(400).json({ error: 'Only format=yaml is supported' });
+      return;
+    }
+
+    const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : '';
+    const project = projectId ? getProjectById(projectId) : null;
+    const boardId = project
+      ? (typeof req.query.boardId === 'string' && req.query.boardId
+          ? req.query.boardId
+          : project.boardId)
+      : (typeof req.query.boardId === 'string' ? req.query.boardId : '');
+
+    if (!boardId) {
+      res.status(400).json({ error: 'boardId or projectId query param is required' });
+      return;
+    }
+
+    const boardCacheKey = `board:${boardId}`;
+    const boardCacheRow = getTaskCache(boardCacheKey);
+    if (!boardCacheRow) {
+      res.status(404).json({ error: 'Board not found in cache. Fetch tasks first.' });
+      return;
+    }
+
+    let notionTasks: NotionTask[] = [];
+    try {
+      notionTasks = JSON.parse(boardCacheRow.raw_json) as NotionTask[];
+    } catch {
+      res.status(500).json({ error: 'Failed to parse board cache' });
+      return;
+    }
+
+    const exportedTasks = notionTasks
+      .filter((t) => !t.status.includes('Deferred'))
+      .map((t) => ({
+        id: t.id,
+        name: t.title,
+        status: t.status.replace(/^[^\s]+ /, ''), // strip emoji prefix
+        priority: t.priority?.replace(/^[^\s]+ /, '') ?? '',
+        type: t.type ?? 'Code',
+        depends_on: t.dependsOn ?? [],
+        pr_url: t.prUrl ?? null,
+        context: '',
+        acceptance_criteria: '',
+        files_affected: [],
+        notes: '',
+      }));
+
+    const output = yaml.dump(
+      { board_id: boardId, tasks: exportedTasks },
+      { lineWidth: 120 },
+    );
+
+    res.setHeader('Content-Type', 'application/yaml');
+    res.send(output);
+  });
 
   // ── GET /api/tasks/active?projectId=<id>&boardId=<id> ────────────────────
   router.get('/tasks/active', (req: Request, res: Response) => {

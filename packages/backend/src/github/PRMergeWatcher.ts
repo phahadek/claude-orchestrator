@@ -1,6 +1,6 @@
 import type { GitHubClient } from './GitHubClient';
 import type { SessionManager } from '../session/SessionManager';
-import type { NotionClient } from '../notion/NotionClient';
+import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
 import { getAllOpenPRs, updatePRState, updateMergeState } from '../db/queries';
@@ -14,7 +14,7 @@ export class PRMergeWatcher {
   constructor(
     private github: GitHubClient,
     private sessions: SessionManager,
-    private notion: NotionClient,
+    private notion: TaskTrackerBackend,
   ) {}
 
   private broadcast(msg: ServerMessage): void {

@@ -21,7 +21,7 @@ import type { PRReviewService } from '../github/PRReviewService';
 import type { PRReviewResult } from '../github/PRReviewService';
 import type { PRMergeWatcher } from '../github/PRMergeWatcher';
 import type { SessionManager } from '../session/SessionManager';
-import type { NotionClient } from '../notion/NotionClient';
+import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
 import type { ServerMessage } from '../ws/types';
 import { emitTaskUpdated } from './tasks';
 
@@ -34,7 +34,7 @@ export function createPrsRouter(
   github: GitHubClient,
   prReviewService: PRReviewService,
   sessionManager: SessionManager,
-  notionClient: NotionClient,
+  notionClient: TaskTrackerBackend,
   mergeWatcher?: PRMergeWatcher,
 ): Router {
   const router = Router();
