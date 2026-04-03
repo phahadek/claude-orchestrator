@@ -423,6 +423,94 @@ describe('TaskList', () => {
     });
   });
 
+  it('Ready group header renders with role="button" and aria-expanded', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Ready Task', displayStatus: 'ready', wave: 1 }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('group-header-ready')).toBeDefined();
+    });
+    const header = screen.getByTestId('group-header-ready');
+    expect(header.getAttribute('role')).toBe('button');
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('clicking Ready group header toggles aria-expanded between true and false', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Ready Task', displayStatus: 'ready', wave: 1 }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('group-header-ready')).toBeDefined();
+    });
+    const header = screen.getByTestId('group-header-ready');
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(header);
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(header);
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('when Ready is collapsed, wave cards are not rendered', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Ready Task', displayStatus: 'ready', wave: 1 }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('group-header-ready')).toBeDefined();
+    });
+    // Initially visible
+    expect(screen.getByText('Ready Task')).toBeDefined();
+    // Collapse
+    fireEvent.click(screen.getByTestId('group-header-ready'));
+    expect(screen.queryByText('Ready Task')).toBeNull();
+  });
+
+  it('Launch button click does NOT trigger collapse toggle (stopPropagation)', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Ready Task', displayStatus: 'ready', wave: 1, taskType: '💻 Code' }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('launch-btn')).toBeDefined();
+    });
+    const header = screen.getByTestId('group-header-ready');
+    // Initially expanded
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+    // Click the launch button — should NOT collapse
+    fireEvent.click(screen.getByTestId('launch-btn'));
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('Planning/Testing group header renders with role="button" and aria-expanded', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Planning Task', displayStatus: 'in_progress', taskType: '📋 Planning', notionStatus: '🔄 In Progress' }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('group-header-planning')).toBeDefined();
+    });
+    const header = screen.getByTestId('group-header-planning');
+    expect(header.getAttribute('role')).toBe('button');
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('clicking Planning/Testing header toggles visibility of its task cards', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Planning Task', displayStatus: 'in_progress', taskType: '📋 Planning', notionStatus: '🔄 In Progress' }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('group-header-planning')).toBeDefined();
+    });
+    expect(screen.getByText('Planning Task')).toBeDefined();
+    fireEvent.click(screen.getByTestId('group-header-planning'));
+    expect(screen.queryByText('Planning Task')).toBeNull();
+    fireEvent.click(screen.getByTestId('group-header-planning'));
+    expect(screen.getByText('Planning Task')).toBeDefined();
+  });
+
   it('patches an existing task in-place when lastTaskUpdate changes', async () => {
     const initial = makeTask({ taskId: 't1', taskName: 'Old Name', displayStatus: 'ready', wave: 1 });
     mockFetch([initial]);

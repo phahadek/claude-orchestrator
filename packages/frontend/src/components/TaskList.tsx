@@ -69,12 +69,16 @@ function ReadySection({
   onSelectTask,
   send,
   project,
+  isExpanded,
+  onToggleCollapse,
 }: {
   tasks: TaskView[];
   nonCodeTasks: TaskView[];
   onSelectTask: (taskId: string) => void;
   send: (msg: ClientMessage) => void;
   project: ProjectConfig | null;
+  isExpanded: boolean;
+  onToggleCollapse: () => void;
 }) {
   const dispatch = useDispatch(send, project);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
@@ -121,10 +125,22 @@ function ReadySection({
 
   return (
     <div className={styles.group} data-status="ready" data-testid="ready-section">
-      <div className={styles.groupHeader}>
+      <div
+        className={`${styles.groupHeader} ${styles.groupHeaderToggle}`}
+        onClick={onToggleCollapse}
+        role="button"
+        aria-expanded={isExpanded}
+        data-testid="group-header-ready"
+      >
+        <span className={styles.toggle} aria-hidden="true">
+          {isExpanded ? '▼' : '▶'}
+        </span>
         <span className={styles.groupLabel}>{GROUP_LABELS.ready}</span>
         <span className={styles.groupCount}>{totalCount}</span>
-        <div className={styles.launchControls}>
+        <div
+          className={styles.launchControls}
+          onClick={(e) => e.stopPropagation()}
+        >
           <button
             className={styles.selectAllBtn}
             onClick={handleSelectAll}
@@ -144,6 +160,7 @@ function ReadySection({
         </div>
       </div>
 
+      {isExpanded && (
       <div className={styles.groupCards}>
         {waveNumbers.map((wave) => {
           const waveTasks = waveMap.get(wave)!;
@@ -201,6 +218,7 @@ function ReadySection({
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }
@@ -321,6 +339,8 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
               onSelectTask={onSelectTask}
               send={send}
               project={project}
+              isExpanded={!collapsed.has('ready')}
+              onToggleCollapse={() => toggleGroup('ready')}
             />
           );
         }
@@ -367,22 +387,33 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
 
       {nonReadyNonCodeTasks.length > 0 && (
         <div className={`${styles.group} ${styles.nonCodeGroup}`} data-testid="non-code-section">
-          <div className={styles.groupHeader}>
+          <div
+            className={`${styles.groupHeader} ${styles.groupHeaderToggle}`}
+            onClick={() => toggleGroup('planning')}
+            role="button"
+            aria-expanded={!collapsed.has('planning')}
+            data-testid="group-header-planning"
+          >
+            <span className={styles.toggle} aria-hidden="true">
+              {!collapsed.has('planning') ? '▼' : '▶'}
+            </span>
             <span className={styles.groupLabel}>📋 Planning / Testing</span>
             <span className={styles.groupCount}>{nonReadyNonCodeTasks.length}</span>
           </div>
-          <div className={styles.groupCards}>
-            {nonReadyNonCodeTasks.map((task) => (
-              <TaskCard
-                key={task.taskId}
-                task={task}
-                selected={task.taskId === selectedTaskId}
-                onClick={() => onSelectTask(task.taskId)}
-                send={send}
-                project={project}
-              />
-            ))}
-          </div>
+          {!collapsed.has('planning') && (
+            <div className={styles.groupCards}>
+              {nonReadyNonCodeTasks.map((task) => (
+                <TaskCard
+                  key={task.taskId}
+                  task={task}
+                  selected={task.taskId === selectedTaskId}
+                  onClick={() => onSelectTask(task.taskId)}
+                  send={send}
+                  project={project}
+                />
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
