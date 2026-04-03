@@ -453,8 +453,10 @@ export default function App() {
           <div className={styles.contentArea}>
             <div className={styles.leftPanel}>
               <TaskList
+                activeProjectId={activeProjectId}
+                boardId={activeBoardId}
                 selectedTaskId={selectedTaskId}
-                onSelect={setSelectedTaskId}
+                onSelectTask={setSelectedTaskId}
               />
             </div>
 

@@ -1,5 +1,4 @@
 import type { TaskView, DisplayStatus } from '../types/taskView';
-import { formatDuration } from '../utils/sessionTimer';
 import styles from './TaskCard.module.css';
 
 interface Props {
@@ -8,98 +7,84 @@ interface Props {
   onClick: () => void;
 }
 
-const STATUS_ICONS: Record<DisplayStatus, string> = {
-  ready: '🗂️',
-  in_progress: '🔄',
-  in_review: '👁️',
-  needs_attention: '⚠️',
-  ready_to_merge: '🟢',
-  done: '✅',
+const STATUS_LABELS: Record<DisplayStatus, string> = {
+  needs_attention: '⚠️ Needs Attention',
+  ready_to_merge: '✅ Ready to Merge',
+  in_progress: '🔄 In Progress',
+  in_review: '👀 In Review',
+  ready: '🗂️ Ready',
+  done: '✔️ Done',
 };
 
-const VERDICT_LABELS: Record<string, string> = {
-  approved: '✅ Approved',
-  needs_changes: '🔁 Needs changes',
-  incomplete: '⏳ Incomplete',
-};
-
-function calcElapsedLabel(startedAt: number, endedAt: number | null): string {
-  const endMs = endedAt ?? Date.now();
-  const ms = endMs - startedAt;
-  if (ms <= 0) return '< 1s';
-  return formatDuration(ms);
+function verdictLabel(verdict: string): string {
+  if (verdict === 'approved') return '✅ Approved';
+  if (verdict === 'needs_changes') return '⚠️ Needs changes';
+  if (verdict === 'incomplete') return '❌ Incomplete';
+  return verdict;
 }
 
 export function TaskCard({ task, selected, onClick }: Props) {
-  const statusIcon = STATUS_ICONS[task.displayStatus] ?? '';
+  const { codeSession, pr, review } = task;
+  const statusKey = task.displayStatus.replace(/_/g, '-') as string;
 
   return (
     <div
-      className={`${styles['task-card']} ${styles[`status-${task.displayStatus}`]} ${selected ? styles.selected : ''}`}
-      data-display-status={task.displayStatus}
+      className={`${styles.card} ${selected ? styles.selected : ''}`}
       onClick={onClick}
+      data-status={task.displayStatus}
     >
-      {/* Line 1: status icon + task name + priority badge */}
-      <div className={styles['card-header']}>
-        <span className={styles['status-icon']}>{statusIcon}</span>
-        <span className={styles['task-name']}>{task.taskName}</span>
-        {task.priority && (
-          <span className={styles['priority-badge']}>{task.priority}</span>
-        )}
+      <div className={styles.header}>
+        <span className={styles.taskName}>{task.taskName}</span>
+        <span className={`${styles.statusBadge} ${styles[`status-${statusKey}`] ?? ''}`}>
+          {STATUS_LABELS[task.displayStatus]}
+        </span>
       </div>
 
-      {/* Line 2: code session status + elapsed + last message */}
-      <div className={styles['session-line']}>
-        {task.codeSession ? (
-          <>
-            <span className={styles['session-status']}>{task.codeSession.status}</span>
-            <span className={styles['session-elapsed']}>
-              {calcElapsedLabel(task.codeSession.startedAt, task.codeSession.endedAt)}
-            </span>
-            {task.codeSession.lastMessage && (
-              <span className={styles['session-message']}>{task.codeSession.lastMessage}</span>
-            )}
-          </>
-        ) : (
-          <span className={styles['placeholder']}>—</span>
-        )}
-      </div>
+      {task.priority && (
+        <div className={styles.priority}>{task.priority}</div>
+      )}
 
-      {/* Line 3: PR info + review verdict + Notion link */}
-      <div className={styles['meta-line']}>
-        {task.pr ? (
-          <>
-            <a
-              href={task.pr.prUrl}
-              target="_blank"
-              rel="noreferrer"
-              className={styles['pr-link']}
-              onClick={(e) => e.stopPropagation()}
-            >
-              #{task.pr.prNumber}
-            </a>
-            <span className={styles['pr-state']}>{task.pr.draft ? 'draft' : task.pr.state}</span>
-          </>
-        ) : (
-          <span className={styles['placeholder']}>—</span>
-        )}
-        {task.review?.verdict && (
-          <span className={styles['verdict-badge']}>
-            {VERDICT_LABELS[task.review.verdict] ?? task.review.verdict}
+      {codeSession && (
+        <div className={styles.sessionRow}>
+          <span className={`${styles.sessionStatus} ${styles[`session-${codeSession.status}`] ?? ''}`}>
+            {codeSession.status}
           </span>
-        )}
-        {task.notionUrl && (
+          {codeSession.lastMessage && (
+            <span className={styles.lastMessage}>{codeSession.lastMessage}</span>
+          )}
+        </div>
+      )}
+
+      {pr && (
+        <div className={styles.prRow}>
           <a
-            href={task.notionUrl}
+            href={pr.prUrl}
             target="_blank"
-            rel="noreferrer"
-            className={styles['notion-link']}
+            rel="noopener noreferrer"
+            className={styles.prLink}
             onClick={(e) => e.stopPropagation()}
           >
-            Notion ↗
+            PR #{pr.prNumber}{pr.draft ? ' (draft)' : ''}
           </a>
-        )}
-      </div>
+          {review?.verdict && (
+            <span className={`${styles.verdict} ${styles[`verdict-${review.verdict.replace(/_/g, '-')}`] ?? ''}`}>
+              {verdictLabel(review.verdict)}
+            </span>
+          )}
+        </div>
+      )}
+
+      {task.notionUrl && (
+        <a
+          href={task.notionUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={styles.notionLink}
+          onClick={(e) => e.stopPropagation()}
+        >
+          Notion ↗
+        </a>
+      )}
     </div>
   );
 }
