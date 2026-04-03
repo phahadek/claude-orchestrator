@@ -1,4 +1,4 @@
-import type { ResolvedTask } from '@claude-dashboard/backend/src/notion/types';
+import type { TaskView } from '../types/taskView';
 import styles from './WaveView.module.css';
 
 const STATUS_ICON: Record<string, string> = {
@@ -10,7 +10,7 @@ const STATUS_ICON: Record<string, string> = {
 };
 
 interface Props {
-  waves: ResolvedTask[][];
+  waves: TaskView[][];
 }
 
 export function WaveView({ waves }: Props) {
@@ -19,7 +19,7 @@ export function WaveView({ waves }: Props) {
   return (
     <div className={styles.container}>
       {waves.map((wave, i) => {
-        const doneInWave = wave.filter((t) => t.task.status === '✅ Done').length;
+        const doneInWave = wave.filter((t) => t.notionStatus === '✅ Done').length;
         const fillPct = wave.length > 0 ? (doneInWave / wave.length) * 100 : 0;
         const allDone = doneInWave === wave.length;
 
@@ -36,13 +36,13 @@ export function WaveView({ waves }: Props) {
             </div>
             <div className={styles.taskList}>
               {wave.map((t) => {
-                const icon = STATUS_ICON[t.task.status] ?? '•';
-                const isDone = t.task.status === '✅ Done';
+                const icon = STATUS_ICON[t.notionStatus] ?? '•';
+                const isDone = t.notionStatus === '✅ Done';
                 return (
-                  <div key={t.task.id} className={styles.taskRow}>
+                  <div key={t.taskId} className={styles.taskRow}>
                     <span className={styles.taskStatus}>{icon}</span>
                     <span className={`${styles.taskTitle}${isDone ? ` ${styles.done}` : ''}`}>
-                      {t.task.title}
+                      {t.taskName}
                     </span>
                   </div>
                 );
