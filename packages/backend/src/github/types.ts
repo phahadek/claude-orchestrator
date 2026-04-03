@@ -10,6 +10,7 @@ export interface PullRequest {
   url: string;          // html_url
   apiUrl: string;       // url (REST API base)
   headBranch: string;   // head.ref
+  headSha: string | null; // head.sha — current tip commit of the PR branch
   baseBranch: string;   // base.ref
   state: 'open' | 'closed' | 'merged';
   createdAt: string;    // ISO-8601

@@ -10,6 +10,7 @@ vi.mock('../db/queries.js', () => ({
   getSetting: vi.fn().mockReturnValue(undefined),
   incrementReviewIteration: vi.fn(),
   setLastReviewedSha: vi.fn(),
+  setHeadSha: vi.fn(),
   updatePRDraftStatus: vi.fn(),
 }));
 
@@ -22,16 +23,35 @@ vi.mock('../config.js', () => ({
 }));
 
 import { ReviewOrchestrator } from './ReviewOrchestrator';
-import { setPRReviewResult, getPRByNumber, getPRBySessionId, incrementReviewIteration, setLastReviewedSha, updatePRDraftStatus } from '../db/queries';
+import { setPRReviewResult, getPRByNumber, getPRBySessionId, incrementReviewIteration, setLastReviewedSha, setHeadSha, updatePRDraftStatus } from '../db/queries';
 import type { PRReviewService } from './PRReviewService';
 import type { GitHubClient } from './GitHubClient';
+import type { PullRequest } from './types';
 import type { ReviewJob } from './types';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function makeMockGitHubClient(): GitHubClient {
+const baseFreshPR: PullRequest = {
+  nodeId: 'node-1',
+  id: 1,
+  title: 'feat: test',
+  body: null,
+  url: 'https://github.com/owner/repo/pull/1',
+  apiUrl: 'https://api.github.com/repos/owner/repo/pulls/1',
+  headBranch: 'feature/test',
+  headSha: 'sha-abc',
+  baseBranch: 'dev',
+  state: 'open',
+  createdAt: '2024-01-01T00:00:00Z',
+  updatedAt: '2024-01-01T00:00:00Z',
+  mergeableState: null,
+  draft: false,
+};
+
+function makeMockGitHubClient(fetchPRResolveWith?: Partial<PullRequest>): GitHubClient {
   return {
     markPRReady: vi.fn().mockResolvedValue(undefined),
+    fetchPR: vi.fn().mockResolvedValue({ ...baseFreshPR, ...fetchPRResolveWith }),
   } as unknown as GitHubClient;
 }
 
@@ -390,7 +410,9 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, makeMockGitHubClient(), makeMockNotionClient(), 1, true);
+    // fetchPR returns the same SHA as last_reviewed_sha — no new commits
+    const gc = makeMockGitHubClient({ headSha: 'same-sha' });
+    new ReviewOrchestrator(rs, sm as any, gc, makeMockNotionClient(), 1, true);
 
     sm.emit('push_detected', { sessionId: 'coding-session-id' });
     await new Promise((r) => setTimeout(r, 30));
@@ -398,7 +420,7 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
     expect(vi.mocked(rs.sendReReview)).not.toHaveBeenCalled();
   });
 
-  it('calls setLastReviewedSha with prRow.head_sha after a successful re-review', async () => {
+  it('calls setLastReviewedSha with the fresh head SHA after a successful re-review', async () => {
     vi.mocked(getPRBySessionId).mockReturnValue({ ...basePRRow, head_sha: 'sha-abc', last_reviewed_sha: null } as any);
     vi.mocked(incrementReviewIteration).mockReturnValue(1);
 
@@ -410,6 +432,68 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(setLastReviewedSha)).toHaveBeenCalledWith(1, 'owner/repo', 'sha-abc');
+  });
+
+  it('calls fetchPR with correct repo and PR number on push_detected', async () => {
+    vi.mocked(getPRBySessionId).mockReturnValue(basePRRow as any);
+    vi.mocked(incrementReviewIteration).mockReturnValue(1);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const gc = makeMockGitHubClient();
+    new ReviewOrchestrator(rs, sm as any, gc, makeMockNotionClient(), 1, true);
+
+    sm.emit('push_detected', { sessionId: 'coding-session-id' });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(gc.fetchPR)).toHaveBeenCalledWith('owner/repo', 1);
+  });
+
+  it('triggers re-review when DB has null head_sha but GitHub returns a new SHA', async () => {
+    vi.mocked(getPRBySessionId).mockReturnValue({ ...basePRRow, head_sha: null, last_reviewed_sha: null } as any);
+    vi.mocked(incrementReviewIteration).mockReturnValue(1);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    // GitHub returns a fresh SHA even though DB had null
+    const gc = makeMockGitHubClient({ headSha: 'fresh-sha' });
+    new ReviewOrchestrator(rs, sm as any, gc, makeMockNotionClient(), 1, true);
+
+    sm.emit('push_detected', { sessionId: 'coding-session-id' });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.sendReReview)).toHaveBeenCalledOnce();
+  });
+
+  it('calls setHeadSha when fresh GitHub SHA differs from DB value', async () => {
+    vi.mocked(getPRBySessionId).mockReturnValue({ ...basePRRow, head_sha: 'old-sha', last_reviewed_sha: null } as any);
+    vi.mocked(incrementReviewIteration).mockReturnValue(1);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const gc = makeMockGitHubClient({ headSha: 'new-sha' });
+    new ReviewOrchestrator(rs, sm as any, gc, makeMockNotionClient(), 1, true);
+
+    sm.emit('push_detected', { sessionId: 'coding-session-id' });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setHeadSha)).toHaveBeenCalledWith(1, 'owner/repo', 'new-sha');
+  });
+
+  it('does not call setHeadSha when fresh SHA matches DB value', async () => {
+    vi.mocked(getPRBySessionId).mockReturnValue({ ...basePRRow, head_sha: 'sha-abc', last_reviewed_sha: null } as any);
+    vi.mocked(incrementReviewIteration).mockReturnValue(1);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    // fetchPR returns same SHA as DB
+    const gc = makeMockGitHubClient({ headSha: 'sha-abc' });
+    new ReviewOrchestrator(rs, sm as any, gc, makeMockNotionClient(), 1, true);
+
+    sm.emit('push_detected', { sessionId: 'coding-session-id' });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setHeadSha)).not.toHaveBeenCalled();
   });
 
   it('deduplicates concurrent push_detected for the same coding session', async () => {
