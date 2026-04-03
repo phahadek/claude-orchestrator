@@ -209,12 +209,19 @@ export function useSessionStore() {
     }
     if (msg.type === 'pr_created') {
       setPrRefreshTrigger((n) => n + 1);
+      setTaskListRefreshTrigger((n) => n + 1);
     }
     if (msg.type === 'pr_review_complete') {
       setLastPrReviewEvent({ prNumber: msg.prNumber, repo: msg.repo, verdict: msg.verdict, summary: msg.summary });
       setTaskListRefreshTrigger((n) => n + 1);
     }
-    if (msg.type === 'session_started' && msg.sessionType === 'review') {
+    if (msg.type === 'session_started') {
+      setTaskListRefreshTrigger((n) => n + 1);
+    }
+    if (msg.type === 'session_ended') {
+      setTaskListRefreshTrigger((n) => n + 1);
+    }
+    if (msg.type === 'task_status_changed') {
       setTaskListRefreshTrigger((n) => n + 1);
     }
     if (msg.type === 'task_updated') {
