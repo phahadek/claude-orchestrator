@@ -21,6 +21,7 @@ import { SessionFilterBar } from './components/SessionFilterBar';
 import type { NotificationItem } from './components/Notifications';
 import type { ClientMessage, ServerMessage } from '@claude-dashboard/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
+import type { TaskView } from '@claude-dashboard/backend/src/routes/tasks';
 import styles from './App.module.css';
 
 const DEFAULT_DETAIL_WIDTH = 40;
@@ -92,6 +93,7 @@ export default function App() {
 
   const [topView, setTopView] = useState<TopView>('tasks');
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [taskViews, setTaskViews] = useState<TaskView[]>([]);
   const settingsInitialTab = 'general' as const;
 
 
@@ -194,6 +196,17 @@ export default function App() {
     setActiveBoardId(boardId);
     send({ type: 'fetch_tasks', projectId: activeProjectIdRef.current, boardId });
   }, [send]);
+
+  // Fetch TaskView list whenever tasks are ready or project/board changes
+  useEffect(() => {
+    if (!activeProjectId) return;
+    const params = new URLSearchParams({ projectId: activeProjectId });
+    if (activeBoardId) params.set('boardId', activeBoardId);
+    fetch(`/api/tasks/active?${params}`)
+      .then((r) => r.ok ? r.json() as Promise<TaskView[]> : Promise.resolve([]))
+      .then(setTaskViews)
+      .catch(() => {/* non-critical */});
+  }, [activeProjectId, activeBoardId, tasksReady]);
 
   useEffect(() => {
     for (const session of sessions) {
@@ -464,9 +477,11 @@ export default function App() {
             />
 
             <div className={styles.rightPanel} style={{ width: `${detailWidthPct}%` }}>
-              {selectedTaskId ? (
+              {selectedTaskId && taskViews.find((t) => t.taskId === selectedTaskId) ? (
                 <TaskDetail
-                  taskId={selectedTaskId}
+                  task={taskViews.find((t) => t.taskId === selectedTaskId)!}
+                  send={send}
+                  sessions={sessions}
                   onClose={() => setSelectedTaskId(null)}
                 />
               ) : (
