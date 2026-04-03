@@ -1,9 +1,8 @@
 import { config } from '../config';
-import { setPRReviewResult, getSetting, getPRByNumber, getPRBySessionId, setLastReviewedSha, setHeadSha, incrementReviewIteration } from '../db/queries';
+import { setPRReviewResult, getSetting, getPRByNumber, incrementReviewIteration } from '../db/queries';
 import type { PRReviewService, PRReviewResult } from './PRReviewService';
 import type { SessionManager } from '../session/SessionManager';
 import type { ReviewJob } from './types';
-import { shouldAutoReview } from './reviewUtils';
 import type { GitHubClient } from './GitHubClient';
 import type { NotionClient } from '../notion/NotionClient';
 
@@ -20,8 +19,6 @@ function getMaxReviewIterations(): number {
 export class ReviewOrchestrator {
   private queue: ReviewJob[] = [];
   private running = 0;
-  /** Coding session IDs currently undergoing a re-review, to prevent duplicate triggers. */
-  private pendingReReviews = new Set<string>();
 
   constructor(
     private reviewService: PRReviewService,
@@ -33,9 +30,6 @@ export class ReviewOrchestrator {
     private maxIterations: number = DEFAULT_MAX_ITERATIONS,
   ) {
     sessionManager.on('pr_opened', (job: ReviewJob) => this.onPrOpened(job));
-    sessionManager.on('push_detected', ({ sessionId }: { sessionId: string }) =>
-      this.onPushDetected(sessionId),
-    );
   }
 
   private onPrOpened(job: ReviewJob): void {
@@ -140,98 +134,6 @@ export class ReviewOrchestrator {
         repo: job.repo,
         message,
       });
-    }
-  }
-
-  private async onPushDetected(codingSessionId: string): Promise<void> {
-    if (!this.enabled) return;
-    if (this.pendingReReviews.has(codingSessionId)) return;
-
-    const prRow = getPRBySessionId(codingSessionId);
-    if (!prRow || prRow.state !== 'open') return;
-    if (!prRow.review_session_id) return;
-
-    // Mark as pending before any awaits to prevent duplicate triggers from
-    // concurrent push_detected events firing before the first one reaches the add().
-    this.pendingReReviews.add(codingSessionId);
-
-    // Fetch the latest PR state from GitHub to get the current head SHA.
-    // This is more reliable than the DB value which may be stale or null at the
-    // moment push_detected fires.
-    let headSha = prRow.head_sha;
-    try {
-      const freshPR = await this.githubClient.fetchPR(prRow.repo, prRow.pr_number);
-      headSha = freshPR.headSha;
-      if (headSha !== prRow.head_sha) {
-        setHeadSha(prRow.pr_number, prRow.repo, headSha);
-      }
-    } catch (e) {
-      console.warn(`[ReviewOrchestrator] failed to fetch latest PR state for #${prRow.pr_number}:`, e);
-      // Fall through using the DB value — review will be skipped if headSha is null
-    }
-
-    const maxIter = getMaxReviewIterations();
-    if (!shouldAutoReview(
-      { reviewIteration: prRow.review_iteration, headSha, lastReviewedSha: prRow.last_reviewed_sha },
-      maxIter,
-    )) {
-      this.pendingReReviews.delete(codingSessionId);
-      return;
-    }
-
-    // Derive the expected new iteration (reReviewPR() will increment it internally)
-    const iteration = prRow.review_iteration + 1;
-
-    try {
-      let result: PRReviewResult;
-      try {
-        result = await Promise.race([
-          this.reviewService.reReviewPR(prRow.pr_number, prRow.repo),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('Re-review timed out')), REVIEW_TIMEOUT_MS),
-          ),
-        ]);
-      } catch (e) {
-        const summary = e instanceof Error ? e.message : String(e);
-        console.error(`[ReviewOrchestrator] re-review failed for PR #${prRow.pr_number}:`, e);
-        setPRReviewResult(prRow.pr_number, prRow.repo, JSON.stringify({ verdict: 'error', summary, dimensions: [] }));
-        this.sessionManager.emit('message', {
-          type: 'review_verdict',
-          prNumber: prRow.pr_number,
-          repo: prRow.repo,
-          verdict: 'error',
-          summary,
-          iteration,
-        });
-        return;
-      }
-
-      // Mark this SHA as reviewed so duplicate pushes don't re-trigger the same review
-      setLastReviewedSha(prRow.pr_number, prRow.repo, headSha);
-
-      this.sessionManager.emit('message', {
-        type: 'review_verdict',
-        prNumber: prRow.pr_number,
-        repo: prRow.repo,
-        verdict: result.verdict,
-        summary: result.summary,
-        iteration,
-      });
-
-      if (result.verdict === 'needs_changes') {
-        this.sendFeedbackToCodingSession(codingSessionId, result, iteration);
-      } else if (result.verdict === 'incomplete') {
-        const message = `Review for PR #${prRow.pr_number} returned an incomplete verdict — the reviewer could not assess the PR. Manual intervention needed.`;
-        console.warn(`[ReviewOrchestrator] ${message}`);
-        this.sessionManager.emit('message', {
-          type: 'review_incomplete',
-          prNumber: prRow.pr_number,
-          repo: prRow.repo,
-          message,
-        });
-      }
-    } finally {
-      this.pendingReReviews.delete(codingSessionId);
     }
   }
 
