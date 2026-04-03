@@ -119,6 +119,20 @@
   flex: 1;
 }
 
+.retrying-row {
+  display: flex;
+  align-items: center;
+  background: rgba(180,190,254,0.10);
+  border: 1px solid rgba(180,190,254,0.30);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+}
+
+.retrying-badge {
+  font-size: 0.8rem;
+  color: var(--ctp-lavender);
+}
+
 .resume-button {
   font-size: 0.75rem;
   padding: 2px 10px;
