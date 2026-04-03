@@ -181,4 +181,66 @@ describe('DispatchModal', () => {
     fireEvent.click(heading);
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it('all groups are expanded by default', () => {
+    const tasks = [
+      makeTask('t1', 'Ready Task'),
+      makeTask('t2', 'In Progress Task', { task: { id: 't2', title: 'In Progress Task', status: '🔄 In Progress', type: '💻 Code', dependsOn: [], notionUrl: 'https://notion.so/t2' } }),
+    ];
+    renderModal(tasks, true, send, onClose);
+    expect(screen.getByText('Ready Task')).toBeTruthy();
+    expect(screen.getByText('In Progress Task')).toBeTruthy();
+  });
+
+  it('clicking a group header collapses its task list', () => {
+    const tasks = [makeTask('t1', 'Ready Task One'), makeTask('t2', 'Ready Task Two')];
+    renderModal(tasks, true, send, onClose);
+    // Initially visible
+    expect(screen.getByText('Ready Task One')).toBeTruthy();
+    // Click the Ready group header
+    const readyHeader = screen.getByRole('button', { name: /ready/i });
+    fireEvent.click(readyHeader);
+    // Tasks should no longer be in the DOM
+    expect(screen.queryByText('Ready Task One')).toBeNull();
+    expect(screen.queryByText('Ready Task Two')).toBeNull();
+  });
+
+  it('clicking a collapsed group header expands it again', () => {
+    const tasks = [makeTask('t1', 'Ready Task')];
+    renderModal(tasks, true, send, onClose);
+    const readyHeader = screen.getByRole('button', { name: /ready/i });
+    // Collapse
+    fireEvent.click(readyHeader);
+    expect(screen.queryByText('Ready Task')).toBeNull();
+    // Expand
+    fireEvent.click(readyHeader);
+    expect(screen.getByText('Ready Task')).toBeTruthy();
+  });
+
+  it('chevron has collapsed class when group is collapsed', () => {
+    const tasks = [makeTask('t1', 'Ready Task')];
+    renderModal(tasks, true, send, onClose);
+    const readyHeader = screen.getByRole('button', { name: /ready/i });
+    // Before collapse — chevron should not have the collapsed class
+    const chevronBefore = readyHeader.querySelector('[aria-hidden="true"]') as HTMLElement;
+    expect(chevronBefore.className).not.toMatch(/chevronCollapsed/);
+    // After collapse — chevron should have the collapsed class
+    fireEvent.click(readyHeader);
+    const chevronAfter = readyHeader.querySelector('[aria-hidden="true"]') as HTMLElement;
+    expect(chevronAfter.className).toMatch(/chevronCollapsed/);
+  });
+
+  it('collapsing one group does not affect other groups', () => {
+    const tasks = [
+      makeTask('t1', 'Ready Task'),
+      makeTask('t2', 'In Progress Task', { task: { id: 't2', title: 'In Progress Task', status: '🔄 In Progress', type: '💻 Code', dependsOn: [], notionUrl: 'https://notion.so/t2' } }),
+    ];
+    renderModal(tasks, true, send, onClose);
+    // Collapse only the Ready group
+    const readyHeader = screen.getByRole('button', { name: /✅ ready/i });
+    fireEvent.click(readyHeader);
+    expect(screen.queryByText('Ready Task')).toBeNull();
+    // In Progress group still visible
+    expect(screen.getByText('In Progress Task')).toBeTruthy();
+  });
 });
