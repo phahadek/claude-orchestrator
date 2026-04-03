@@ -69,7 +69,7 @@ app.use('/api/settings', settingsRouter);
 app.use('/api/sessions', sessionsRouter);
 // PRMergeWatcher created early so routes and sync jobs can delegate lifecycle to it.
 // .start() is called later after server boots.
-const prMergeWatcher = new PRMergeWatcher(githubClient, sessionManager, taskBackend);
+const prMergeWatcher = new PRMergeWatcher(githubClient, sessionManager, taskBackend, broadcast);
 app.use('/api', createPrsRouter(githubClient, prReviewService, sessionManager, taskBackend, prMergeWatcher));
 app.use('/api', createTasksRouter());
 app.use('/api/analytics', analyticsRouter);

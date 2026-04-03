@@ -15,11 +15,9 @@ export class PRMergeWatcher {
     private github: GitHubClient,
     private sessions: SessionManager,
     private notion: TaskTrackerBackend,
+    private broadcast: (msg: ServerMessage) => void,
   ) {}
 
-  private broadcast(msg: ServerMessage): void {
-    this.sessions.emit('message', msg);
-  }
 
   start(intervalMs: number = DEFAULT_INTERVAL_MS): void {
     if (this.timer) return;
@@ -110,6 +108,13 @@ export class PRMergeWatcher {
 
     if (newMergeState === 'dirty') {
       console.log(`[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has merge conflicts`);
+      if (pr.session_id) {
+        const baseBranch = pr.base_branch ?? 'dev';
+        const msg = `PR #${pr.pr_number} has merge conflicts with the base branch. Rebase onto \`${baseBranch}\`, resolve the conflicts, and push the fixed branch.`;
+        this.sessions.sendOrResume(pr.session_id, msg).catch((err: unknown) =>
+          console.warn(`[PRMergeWatcher] sendOrResume failed for session ${pr.session_id}:`, (err as Error).message),
+        );
+      }
     }
   }
 
