@@ -1,14 +1,14 @@
 import { WebSocket } from 'ws';
 import { ClientMessage } from './types';
 import { SessionManager } from '../session/SessionManager';
-import { NotionClient } from '../notion/NotionClient';
+import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
 import { getProjectById } from '../config';
 
 export function handleMessage(
   ws: WebSocket,
   raw: string,
   sessions: SessionManager,
-  notion: NotionClient
+  notion: TaskTrackerBackend
 ): void {
   let msg: ClientMessage;
   try {

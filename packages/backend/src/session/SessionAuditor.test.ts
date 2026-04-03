@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { SessionAuditor } from './SessionAuditor';
 import type { AuditableSession, ISessionManager } from './SessionAuditor';
-import type { NotionClient } from '../notion/NotionClient';
+import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { PullRequest } from '../github/types';
 
@@ -23,21 +23,21 @@ function makeSession(overrides: Partial<AuditableSession> = {}): AuditableSessio
   };
 }
 
-function makeNotionClient(filesSection = ''): NotionClient {
+function makeNotionClient(filesSection = ''): TaskTrackerBackend {
+  const body = [
+    '# Add post-session audit hook',
+    '## Summary\nSummary text',
+    '## Context\nContext text',
+    '## Acceptance Criteria\nAC text',
+    filesSection ? `## Files\n${filesSection}` : '',
+  ].filter(Boolean).join('\n\n');
   return {
-    fetchTaskPage: vi.fn(async () => ({
-      taskId: 'task-abc123',
-      name: 'Add post-session audit hook',
-      summarySection: 'Summary text',
-      contextSection: 'Context text',
-      acceptanceCriteria: 'AC text',
-      filesSection,
-      rawMarkdown: '',
-    })),
+    type: 'notion' as const,
+    fetchTaskPage: vi.fn(async () => body),
     fetchReadyTasks: vi.fn(async () => []),
     updateStatus: vi.fn(async () => {}),
     attachPR: vi.fn(async () => {}),
-  } as unknown as NotionClient;
+  } as unknown as TaskTrackerBackend;
 }
 
 function makeGitHubClient(prOverrides: Partial<PullRequest> = {}): GitHubClient {

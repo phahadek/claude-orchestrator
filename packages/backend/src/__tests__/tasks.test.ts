@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
+import yaml from 'js-yaml';
 import type { TaskAggregateRow } from '../db/queries.js';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
@@ -161,6 +162,72 @@ describe('GET /api/tasks/active', () => {
 
   it('returns 404 when project is not found', async () => {
     const res = await supertest(buildApp()).get('/api/tasks/active?projectId=unknown');
+    expect(res.status).toBe(404);
+  });
+});
+
+// ── GET /api/tasks/export?format=yaml ─────────────────────────────────────────
+
+describe('GET /api/tasks/export?format=yaml', () => {
+  const boardTasks = [
+    {
+      id: 'task-a',
+      title: 'Task A',
+      status: '🗂️ Ready',
+      type: '💻 Code',
+      priority: '🔴 High',
+      dependsOn: [],
+      notionUrl: 'https://notion.so/task-a',
+    },
+    {
+      id: 'task-b',
+      title: 'Task B',
+      status: '⏭️ Deferred',
+      type: '💻 Code',
+      priority: '🟡 Medium',
+      dependsOn: [],
+      notionUrl: 'https://notion.so/task-b',
+    },
+  ];
+
+  beforeEach(() => {
+    vi.mocked(queries.getTaskCache).mockReturnValue({
+      cache_key: 'board:board-1',
+      raw_json: JSON.stringify(boardTasks),
+      fetched_at: Date.now(),
+    } as never);
+  });
+
+  it('returns 200 with Content-Type application/yaml', async () => {
+    const res = await supertest(buildApp()).get('/api/tasks/export?format=yaml&boardId=board-1');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/yaml/);
+  });
+
+  it('returns valid YAML parseable by js-yaml', async () => {
+    const res = await supertest(buildApp()).get('/api/tasks/export?format=yaml&boardId=board-1');
+    expect(() => yaml.load(res.text)).not.toThrow();
+    const parsed = yaml.load(res.text) as { board_id: string; tasks: unknown[] };
+    expect(parsed).toHaveProperty('tasks');
+    expect(Array.isArray(parsed.tasks)).toBe(true);
+  });
+
+  it('excludes Deferred tasks from the export', async () => {
+    const res = await supertest(buildApp()).get('/api/tasks/export?format=yaml&boardId=board-1');
+    const parsed = yaml.load(res.text) as { tasks: Array<{ id: string }> };
+    const ids = parsed.tasks.map((t) => t.id);
+    expect(ids).toContain('task-a');
+    expect(ids).not.toContain('task-b');
+  });
+
+  it('returns 400 when format is unsupported', async () => {
+    const res = await supertest(buildApp()).get('/api/tasks/export?format=json&boardId=board-1');
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 404 when board is not found in cache', async () => {
+    vi.mocked(queries.getTaskCache).mockReturnValue(null);
+    const res = await supertest(buildApp()).get('/api/tasks/export?format=yaml&boardId=unknown-board');
     expect(res.status).toBe(404);
   });
 });

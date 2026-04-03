@@ -1,4 +1,5 @@
-import type { NotionClient } from '../notion/NotionClient';
+import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
+import { parseSection } from '../notion/NotionClient';
 import type { GitHubClient } from '../github/GitHubClient';
 import { getPRByNotionTaskId } from '../db/queries';
 
@@ -31,7 +32,7 @@ export interface AuditableSession {
 
 export class SessionAuditor {
   constructor(
-    private notionClient: NotionClient,
+    private notionClient: TaskTrackerBackend,
     private githubClient?: GitHubClient,
     private sessionManager?: ISessionManager,
   ) {}
@@ -135,15 +136,15 @@ export class SessionAuditor {
       return null;
     }
 
-    let taskPage: import('../notion/NotionClient').NotionTaskPage | null = null;
+    let taskMarkdown: string | null = null;
     try {
-      taskPage = await this.notionClient.fetchTaskPage(taskId);
+      taskMarkdown = await this.notionClient.fetchTaskPage(taskId);
     } catch (err) {
       console.warn(`[SessionAuditor] fetchTaskPage failed — skipping spec comparison: ${err}`);
       return null;
     }
 
-    const filesSection = taskPage?.filesSection ?? '';
+    const filesSection = taskMarkdown ? parseSection(taskMarkdown, 'files') : '';
     if (!filesSection.trim()) return null;
 
     // Extract file paths from the filesSection (lines containing slashes or dots)

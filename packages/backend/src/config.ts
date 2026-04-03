@@ -53,8 +53,10 @@ export function normalizePath(p: string): string {
   return p;
 }
 
+export const TASK_BACKEND = (process.env.TASK_BACKEND ?? 'notion') as 'notion' | 'local';
+
 export const config = {
-  notionApiKey: requireEnv('NOTION_API_KEY'),
+  notionApiKey: TASK_BACKEND === 'notion' ? requireEnv('NOTION_API_KEY') : (process.env.NOTION_API_KEY ?? ''),
   sqlitePath: process.env.DB_PATH ?? './dashboard.db',
   port: Number(process.env.PORT ?? 3000),
   projectDir: normalizePath(process.env.PROJECT_DIR ?? process.cwd()),
