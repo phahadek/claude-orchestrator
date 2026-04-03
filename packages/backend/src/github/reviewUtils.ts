@@ -14,7 +14,11 @@ export function shouldAutoReview(
   maxIterations: number,
 ): boolean {
   if (pr.reviewIteration >= maxIterations) return false;
-  if (!pr.headSha || pr.headSha === pr.lastReviewedSha) return false;
+  if (!pr.headSha) {
+    console.warn('[reviewUtils] shouldAutoReview: headSha is null — skipping auto-review. PR head_sha was not populated at creation.');
+    return false;
+  }
+  if (pr.headSha === pr.lastReviewedSha) return false;
   return true;
 }
 

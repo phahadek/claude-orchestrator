@@ -486,7 +486,7 @@ Fetch both Notion pages, then begin the task.
       html_url?: string;
       title?: string;
       body?: string | null;
-      head?: { ref?: string };
+      head?: { ref?: string; sha?: string };
       base?: { ref?: string };
       state?: string;
       created_at?: string;
@@ -540,7 +540,7 @@ Fetch both Notion pages, then begin the task.
         updated_at: prShape.updated_at ?? now,
         synced_at: now,
         node_id: null,
-        head_sha: null,
+        head_sha: prShape.head?.sha ?? null,
       });
     }
 
@@ -607,6 +607,15 @@ Fetch both Notion pages, then begin the task.
           const repo = prMatch[1];
           const prNumber = parseInt(prMatch[2], 10);
           const now = new Date().toISOString();
+          let headSha: string | null = null;
+          if (this.githubClient) {
+            try {
+              const freshPR = await this.githubClient.fetchPR(repo, prNumber);
+              headSha = freshPR.headSha ?? null;
+            } catch (e) {
+              console.warn(`[AgentSession] handleCleanExit: failed to fetch PR #${prNumber} from GitHub for head_sha:`, e);
+            }
+          }
           upsertPullRequest({
             pr_number: prNumber,
             pr_url: prUrl,
@@ -625,7 +634,7 @@ Fetch both Notion pages, then begin the task.
             updated_at: now,
             synced_at: now,
             node_id: null,
-            head_sha: null,
+            head_sha: headSha,
           });
           if (!this.prDetectedLive) {
             this.emit('pr_opened', {
