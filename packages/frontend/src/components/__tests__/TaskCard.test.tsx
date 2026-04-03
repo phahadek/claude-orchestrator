@@ -19,6 +19,7 @@ function makeTask(overrides?: Partial<TaskView>): TaskView {
     codeSession: null,
     pr: null,
     review: null,
+    totalTokens: { input: 0, output: 0 },
     ...overrides,
   };
 }
@@ -56,6 +57,8 @@ function makeReview(overrides?: Partial<NonNullable<TaskView['review']>>): NonNu
     verdict: 'approved',
     summary: 'Looks good',
     iterationCount: 1,
+    inputTokens: 0,
+    outputTokens: 0,
     ...overrides,
   };
 }
