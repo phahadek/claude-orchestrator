@@ -1,0 +1,72 @@
+# jira-config.yaml — Jira integration configuration for scripts/jira-export.mjs
+#
+# Copy this file to jira-config.yaml (in your project root or wherever you run
+# the script from) and fill in your project's values.
+#
+# Credentials are read from environment variables, not this file:
+#   Jira Cloud:  JIRA_BASE_URL + JIRA_EMAIL + JIRA_API_TOKEN
+#   Jira Server: JIRA_BASE_URL + JIRA_PAT
+
+# ── Project ───────────────────────────────────────────────────────────────────
+
+# Your Jira project key (e.g. "PROJ", "ENG", "PLAT")
+project_key: PROJ
+
+# Default issue type used when creating new issues via the sync direction.
+# Must match an issue type configured in your project (e.g. Task, Story, Bug).
+issue_type: Task
+
+# Default JQL filter for the export direction.
+# Override at runtime with the --jql flag.
+jql_filter: project = PROJ AND sprint in openSprints() ORDER BY priority DESC
+
+# ── Status mapping (sync direction: tasks.yaml → Jira) ────────────────────────
+#
+# Maps tasks.yaml status values to Jira transition names.
+# The value must exactly match a transition name in your Jira workflow.
+# Unmapped statuses are sent as-is; if no matching transition is found the
+# issue status is left unchanged (no error).
+
+status_map:
+  "🔲 Backlog": "To Do"
+  "🗂️ Ready": "To Do"
+  "🔄 In Progress": "In Progress"
+  "👀 In Review": "In Review"
+  "✅ Done": "Done"
+  "🚫 Blocked": "Blocked"
+  "⏭️ Deferred": "Won't Do"
+
+# ── Priority mapping (sync direction: tasks.yaml → Jira) ──────────────────────
+#
+# Maps tasks.yaml priority values to Jira priority names.
+# The value must exactly match a priority name configured in your Jira instance.
+
+priority_map:
+  "🔴 High": "High"
+  "🟡 Medium": "Medium"
+  "🟢 Low": "Low"
+
+# ── Reverse status mapping (export direction: Jira → tasks.yaml) ──────────────
+#
+# Maps Jira status names back to tasks.yaml status values.
+# If omitted, Jira status names are written to tasks.yaml as-is.
+
+reverse_status_map:
+  "To Do": "🔲 Backlog"
+  "In Progress": "🔄 In Progress"
+  "In Review": "👀 In Review"
+  "Done": "✅ Done"
+  "Blocked": "🚫 Blocked"
+  "Won't Do": "⏭️ Deferred"
+
+# ── Reverse priority mapping (export direction: Jira → tasks.yaml) ────────────
+#
+# Maps Jira priority names back to tasks.yaml priority values.
+# If omitted, Jira priority names are written to tasks.yaml as-is.
+
+reverse_priority_map:
+  "Highest": "🔴 High"
+  "High": "🔴 High"
+  "Medium": "🟡 Medium"
+  "Low": "🟢 Low"
+  "Lowest": "🟢 Low"
