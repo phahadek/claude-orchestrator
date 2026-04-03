@@ -5,6 +5,7 @@ import {
   getPRs,
   getPRByNumber,
   updatePRState,
+  updateMergeState,
   getTaskTitleFromCache,
   upsertPullRequest,
   deletePR,
@@ -91,6 +92,7 @@ export function createPrsRouter(
       createdAt: pr.created_at,
       updatedAt: pr.updated_at,
       reviewIteration: pr.review_iteration,
+      mergeState: pr.merge_state ?? null,
     }));
     res.json(items);
   });
@@ -138,6 +140,8 @@ export function createPrsRouter(
           head_sha: pr.headSha,
           last_reviewed_sha: null,
           node_id: pr.nodeId,
+          merge_state: pr.mergeableState,
+          merge_state_checked_at: now,
         });
         prRow = getPRByNumber(prNumber, repo);
       } catch {
@@ -219,6 +223,14 @@ export function createPrsRouter(
       res.json(result);
     } catch (err) {
       if (err instanceof GitHubApiError) {
+        if (err.status === 409 || err.status === 405) {
+          // Merge conflict or not mergeable — persist the conflict state
+          updateMergeState(prNumber, repo, 0, 'dirty');
+          _broadcast({ type: 'pr_state_changed', prNumber, repo, mergeable: false, mergeState: 'dirty' });
+          if (prRow?.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
+          res.status(422).json({ error: 'PR has merge conflicts. Use Re-review to have the code session fix them.' });
+          return;
+        }
         res.status(422).json({ error: err.message });
         return;
       }

@@ -57,6 +57,7 @@ function makePr(overrides?: Partial<NonNullable<TaskView['pr']>>): NonNullable<T
     baseBranch: 'dev',
     state: 'open',
     draft: false,
+    mergeState: null,
     ...overrides,
   };
 }
