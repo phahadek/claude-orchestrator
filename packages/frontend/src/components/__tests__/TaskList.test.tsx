@@ -141,6 +141,66 @@ describe('TaskList', () => {
     });
   });
 
+  it('triggers a re-fetch when reviewRefreshTrigger changes (pr_review_complete scenario)', async () => {
+    const task = makeTask({ taskId: 't1', taskName: 'Task A', displayStatus: 'in_review' });
+    const updatedTask = makeTask({ taskId: 't1', taskName: 'Task A (reviewed)', displayStatus: 'needs_attention' });
+
+    // First fetch returns initial task list
+    (fetch as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => [task] })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => [updatedTask] });
+
+    const { rerender } = render(
+      <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} reviewRefreshTrigger={0} send={noop} project={null} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Task A')).toBeDefined();
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      rerender(
+        <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} reviewRefreshTrigger={1} send={noop} project={null} />,
+      );
+    });
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(screen.getByText('Task A (reviewed)')).toBeDefined();
+    });
+  });
+
+  it('triggers a re-fetch when reviewRefreshTrigger changes (session_started review scenario)', async () => {
+    const task = makeTask({ taskId: 't2', taskName: 'Task B', displayStatus: 'in_progress' });
+    const withReview = makeTask({ taskId: 't2', taskName: 'Task B', displayStatus: 'in_review', review: { sessionId: 'rev-1', status: 'running', verdict: null, summary: null, iterationCount: 1 } });
+
+    (fetch as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => [task] })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => [withReview] });
+
+    const { rerender } = render(
+      <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} reviewRefreshTrigger={0} send={noop} project={null} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Task B')).toBeDefined();
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      rerender(
+        <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} reviewRefreshTrigger={1} send={noop} project={null} />,
+      );
+    });
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it('patches an existing task in-place when lastTaskUpdate changes', async () => {
     const initial = makeTask({ taskId: 't1', taskName: 'Old Name', displayStatus: 'ready' });
     mockFetch([initial]);
