@@ -14,8 +14,11 @@ export class PRMergeWatcher {
     private github: GitHubClient,
     private sessions: SessionManager,
     private notion: NotionClient,
-    private broadcast: (msg: ServerMessage) => void,
   ) {}
+
+  private broadcast(msg: ServerMessage): void {
+    this.sessions.emit('message', msg);
+  }
 
   start(intervalMs: number = DEFAULT_INTERVAL_MS): void {
     if (this.timer) return;

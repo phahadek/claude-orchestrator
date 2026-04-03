@@ -733,3 +733,13 @@ export function getLatestNonSystemEventPayload(sessionId: string): string | null
   `).get(sessionId) as { payload: string } | undefined;
   return row?.payload ?? null;
 }
+
+/** Returns the most recent standard (non-review) session for a given Notion task ID. */
+export function getLatestCodeSessionByNotionTaskId(notionTaskId: string): Session | undefined {
+  return db.prepare<{ notion_task_id: string }>(`
+    SELECT * FROM sessions
+    WHERE notion_task_id = @notion_task_id AND (session_type = 'standard' OR session_type IS NULL)
+    ORDER BY started_at DESC
+    LIMIT 1
+  `).get({ notion_task_id: notionTaskId }) as Session | undefined;
+}
