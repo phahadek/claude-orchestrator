@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { TaskDetail } from '../TaskDetail';
 import type { TaskView } from '@claude-dashboard/backend/src/routes/tasks';
@@ -224,5 +224,53 @@ describe('TaskDetail', () => {
   it('is hidden when review is null', () => {
     render(<TaskDetail task={makeTask({ review: null })} send={vi.fn()} onClose={vi.fn()} />);
     expect(screen.queryByText('Review')).toBeNull();
+  });
+
+  // ── Merge button ──
+
+  it('shows Merge button only when PR is open and review is approved', () => {
+    const pr = makePr({ state: 'open' });
+    const review = makeReview({ verdict: 'approved' });
+    render(<TaskDetail task={makeTask({ pr, review })} send={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByText('Merge ↓')).toBeTruthy();
+  });
+
+  it('does not show Merge button when PR is open but review is not approved', () => {
+    const pr = makePr({ state: 'open' });
+    const review = makeReview({ verdict: 'needs_changes' });
+    render(<TaskDetail task={makeTask({ pr, review })} send={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.queryByText('Merge ↓')).toBeNull();
+  });
+
+  it('does not show Merge button when PR is already merged', () => {
+    const pr = makePr({ state: 'merged' });
+    const review = makeReview({ verdict: 'approved' });
+    render(<TaskDetail task={makeTask({ pr, review })} send={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.queryByText('Merge ↓')).toBeNull();
+  });
+
+  it('calls the correct merge endpoint with owner/repo parsed from PR URL', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    const pr = makePr({
+      state: 'open',
+      prUrl: 'https://github.com/owner/repo/pull/42',
+      prNumber: 42,
+    });
+    const review = makeReview({ verdict: 'approved' });
+    render(<TaskDetail task={makeTask({ pr, review })} send={vi.fn()} onClose={vi.fn()} />);
+
+    fireEvent.click(screen.getByText('Merge ↓'));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/prs/owner/repo/42/merge',
+        { method: 'POST' },
+      );
+    });
+
+    vi.unstubAllGlobals();
   });
 });

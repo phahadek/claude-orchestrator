@@ -4,6 +4,10 @@ import supertest from 'supertest';
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
+vi.mock('../routes/tasks.js', () => ({
+  emitTaskUpdated: vi.fn(),
+}));
+
 vi.mock('../db/queries.js', () => ({
   getPRs: vi.fn(),
   getPRByNumber: vi.fn(),
@@ -64,6 +68,7 @@ vi.mock('../config.js', () => ({
 
 import { createPrsRouter, setPRBroadcast } from '../routes/prs.js';
 import * as queries from '../db/queries.js';
+import * as tasksRoute from '../routes/tasks.js';
 import type { PullRequest } from '../github/types.js';
 import { GitHubApiError } from '../github/types.js';
 import type { GitHubClient } from '../github/GitHubClient.js';
@@ -368,6 +373,43 @@ describe('POST /api/prs/:prNumber/merge', () => {
       .send({});
     expect(res.status).toBe(200);
     expect(vi.mocked(notionClient.updateStatus)).toHaveBeenCalledWith('notion-task-abc', '✅ Done');
+  });
+
+  it('calls emitTaskUpdated after successful Notion update on merge', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const notionClient = makeMockNotionClient();
+    const res = await supertest(buildApp(makeMockGitHub(), makeMockPRReviewService(), makeMockSessionManager(), notionClient))
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.status).toBe(200);
+    expect(vi.mocked(tasksRoute.emitTaskUpdated)).toHaveBeenCalledWith('notion-task-abc');
+  });
+
+  it('broadcasts task_status_changed after successful Notion update on merge', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const broadcastedMessages: object[] = [];
+    setPRBroadcast((msg) => broadcastedMessages.push(msg));
+
+    await supertest(buildApp())
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+
+    expect(broadcastedMessages).toContainEqual({
+      type: 'task_status_changed',
+      notionTaskId: 'notion-task-abc',
+      newStatus: '✅ Done',
+    });
+
+    setPRBroadcast(() => {});
+  });
+
+  it('does NOT call emitTaskUpdated when PR has no notion_task_id', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRowNoTask);
+    const res = await supertest(buildApp())
+      .post('/api/prs/owner/repo/43/merge')
+      .send({});
+    expect(res.status).toBe(200);
+    expect(vi.mocked(tasksRoute.emitTaskUpdated)).not.toHaveBeenCalled();
   });
 });
 
