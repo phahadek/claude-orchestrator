@@ -133,7 +133,7 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
   const [showReviewDimensions, setShowReviewDimensions] = useState(false);
   const [reviewInFlight, setReviewInFlight] = useState(false);
   const [mergeInFlight, setMergeInFlight] = useState(false);
-  const [reReviewInFlight, setReReviewInFlight] = useState(false);
+  const [fixConflictsInFlight, setFixConflictsInFlight] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
 
   // Reset state when task changes
@@ -141,6 +141,7 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
     setShowReviewSection(true);
     setShowReviewDimensions(false);
     setReviewError(null);
+    setFixConflictsInFlight(false);
   }, [task.taskId]);
 
   // Look up live session state for event transcripts
@@ -177,9 +178,9 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
     }
   }
 
-  async function handleReReview() {
+  async function handleFixConflicts() {
     if (!task.pr) return;
-    setReReviewInFlight(true);
+    setFixConflictsInFlight(true);
     setReviewError(null);
     try {
       const ownerRepo = parseOwnerRepo(task.pr.prUrl);
@@ -187,7 +188,7 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
         setReviewError('Could not parse owner/repo from PR URL.');
         return;
       }
-      const res = await fetch(`/api/prs/${ownerRepo.owner}/${ownerRepo.repo}/${task.pr.prNumber}/re-review`, { method: 'POST' });
+      const res = await fetch(`/api/prs/${ownerRepo.owner}/${ownerRepo.repo}/${task.pr.prNumber}/fix-conflicts`, { method: 'POST' });
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string };
         setReviewError(body.error ?? `HTTP ${res.status}`);
@@ -195,7 +196,7 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
     } catch (err) {
       setReviewError(err instanceof Error ? err.message : 'Network error');
     } finally {
-      setReReviewInFlight(false);
+      setFixConflictsInFlight(false);
     }
   }
 
@@ -380,7 +381,7 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
 
             {task.pr.mergeState === 'dirty' && (
               <div className={styles.conflictBanner}>
-                ⚠ Merge conflicts detected — use Re-review to have the code session fix them.
+                ⚠ Merge conflicts detected — use Fix Conflicts to have the code session rebase and resolve them.
               </div>
             )}
 
@@ -400,11 +401,11 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
                 {task.pr.mergeState === 'dirty' && (
                   <button
                     className={styles.reReviewButton}
-                    disabled={reReviewInFlight}
-                    onClick={() => void handleReReview()}
-                    title="Trigger re-review to resolve merge conflicts"
+                    disabled={fixConflictsInFlight}
+                    onClick={() => void handleFixConflicts()}
+                    title="Send rebase instructions to the code session to resolve merge conflicts"
                   >
-                    {reReviewInFlight ? 'Reviewing…' : '↺ Re-review'}
+                    {fixConflictsInFlight ? 'Fixing…' : '↺ Fix Conflicts'}
                   </button>
                 )}
                 {task.review?.verdict === 'approved' && task.pr.mergeState !== 'dirty' && (
