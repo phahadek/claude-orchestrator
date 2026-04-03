@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
 import type { ResolvedTask } from '@claude-dashboard/backend/src/notion/types';
 import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
@@ -21,9 +21,20 @@ interface Props {
   onClose: () => void;
 }
 
+type GroupKey = 'ready' | 'inProgress' | 'inReview' | 'blocked';
+
 export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, boardId, onClose }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
+  const [collapsed, setCollapsed] = useState<Set<GroupKey>>(new Set());
+
+  const toggleGroup = useCallback((key: GroupKey) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     resetTasks();
@@ -66,24 +77,44 @@ export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, bo
         ) : (
           <div className={styles['modal-body']}>
             <section>
-              <h3>✅ Ready ({ready.length})</h3>
-              {ready.map((t) => (
-                <label key={t.task.id} className={styles['ready-task']}>
-                  <input
-                    type="checkbox"
-                    checked={selected.has(t.task.id)}
-                    onChange={() => toggle(t.task.id)}
-                  />
-                  <span className={styles['type-icon']} title={t.task.type}>{taskTypeIcon(t.task.type)}</span>
-                  {t.task.title}
-                </label>
-              ))}
-              {ready.length === 0 && <p className={styles.empty}>No unblocked tasks.</p>}
+              <h3
+                className={styles['section-header']}
+                role="button"
+                aria-expanded={!collapsed.has('ready')}
+                onClick={() => toggleGroup('ready')}
+              >
+                <span className={`${styles.chevron}${collapsed.has('ready') ? ` ${styles.chevronCollapsed}` : ''}`} aria-hidden="true" />
+                ✅ Ready ({ready.length})
+              </h3>
+              {!collapsed.has('ready') && (
+                <>
+                  {ready.map((t) => (
+                    <label key={t.task.id} className={styles['ready-task']}>
+                      <input
+                        type="checkbox"
+                        checked={selected.has(t.task.id)}
+                        onChange={() => toggle(t.task.id)}
+                      />
+                      <span className={styles['type-icon']} title={t.task.type}>{taskTypeIcon(t.task.type)}</span>
+                      {t.task.title}
+                    </label>
+                  ))}
+                  {ready.length === 0 && <p className={styles.empty}>No unblocked tasks.</p>}
+                </>
+              )}
             </section>
             {inProgress.length > 0 && (
               <section>
-                <h3>🔄 In Progress ({inProgress.length})</h3>
-                {inProgress.map((t) => (
+                <h3
+                  className={styles['section-header']}
+                  role="button"
+                  aria-expanded={!collapsed.has('inProgress')}
+                  onClick={() => toggleGroup('inProgress')}
+                >
+                  <span className={`${styles.chevron}${collapsed.has('inProgress') ? ` ${styles.chevronCollapsed}` : ''}`} aria-hidden="true" />
+                  🔄 In Progress ({inProgress.length})
+                </h3>
+                {!collapsed.has('inProgress') && inProgress.map((t) => (
                   <div key={t.task.id} className={styles['blocked-task']}>
                     <span className={styles['type-icon']} title={t.task.type}>{taskTypeIcon(t.task.type)}</span>
                     {t.task.title}
@@ -93,8 +124,16 @@ export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, bo
             )}
             {inReview.length > 0 && (
               <section>
-                <h3>👀 In Review ({inReview.length})</h3>
-                {inReview.map((t) => (
+                <h3
+                  className={styles['section-header']}
+                  role="button"
+                  aria-expanded={!collapsed.has('inReview')}
+                  onClick={() => toggleGroup('inReview')}
+                >
+                  <span className={`${styles.chevron}${collapsed.has('inReview') ? ` ${styles.chevronCollapsed}` : ''}`} aria-hidden="true" />
+                  👀 In Review ({inReview.length})
+                </h3>
+                {!collapsed.has('inReview') && inReview.map((t) => (
                   <div key={t.task.id} className={styles['blocked-task']}>
                     <span className={styles['type-icon']} title={t.task.type}>{taskTypeIcon(t.task.type)}</span>
                     {t.task.title}
@@ -103,8 +142,16 @@ export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, bo
               </section>
             )}
             <section>
-              <h3>🚫 Blocked ({blocked.length})</h3>
-              {blocked.map((t) => (
+              <h3
+                className={styles['section-header']}
+                role="button"
+                aria-expanded={!collapsed.has('blocked')}
+                onClick={() => toggleGroup('blocked')}
+              >
+                <span className={`${styles.chevron}${collapsed.has('blocked') ? ` ${styles.chevronCollapsed}` : ''}`} aria-hidden="true" />
+                🚫 Blocked ({blocked.length})
+              </h3>
+              {!collapsed.has('blocked') && blocked.map((t) => (
                 <div key={t.task.id} className={styles['blocked-task']}>
                   <span className={styles['type-icon']} title={t.task.type}>{taskTypeIcon(t.task.type)}</span>
                   {t.task.title}

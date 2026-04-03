@@ -52,6 +52,34 @@
   letter-spacing: 0.05em;
 }
 
+.section-header {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+
+.section-header:hover {
+  color: var(--text-primary);
+}
+
+.chevron {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 6px solid currentColor;
+  flex-shrink: 0;
+  transform: rotate(90deg);
+  transition: transform 0.15s ease;
+}
+
+.chevronCollapsed {
+  transform: rotate(0deg);
+}
+
 .ready-task {
   display: flex;
   align-items: center;
