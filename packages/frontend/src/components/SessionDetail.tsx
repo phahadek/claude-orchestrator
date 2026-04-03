@@ -14,7 +14,7 @@ import {
 } from '../utils/eventParsing';
 import { StatusBadge } from './StatusBadge';
 import { formatModelName } from './SessionCard';
-import { formatTokenCount } from '@claude-dashboard/backend/src/utils/usage';
+import { formatTokenCount, formatUtilization } from '@claude-dashboard/backend/src/utils/usage';
 import { ToolCallGroup } from './ToolCallGroup';
 import type { CallPair } from './ToolCallGroup';
 import { ReviewDetailView } from './ReviewDetailView';
@@ -119,9 +119,10 @@ interface Props {
   onResume?: (sessionId: string) => void;
   onFavorite?: (sessionId: string) => void;
   onUnfavorite?: (sessionId: string) => void;
+  planTokenCap?: number;
 }
 
-export function SessionDetail({ session, send, onClose, onDelete, onArchive, onUnarchive, onResume, onFavorite, onUnfavorite }: Props) {
+export function SessionDetail({ session, send, onClose, onDelete, onArchive, onUnarchive, onResume, onFavorite, onUnfavorite, planTokenCap }: Props) {
   const [draftMessage, setDraftMessage] = useState('');
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const [deleting, setDeleting] = useState(false);
@@ -375,6 +376,9 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
           {(session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0) > 0 && (
             <span className={styles.tokenCount}>
               {formatTokenCount((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0))} tokens
+              {planTokenCap != null && planTokenCap > 0
+                ? ` (${formatUtilization(((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0)) / planTokenCap * 100)})`
+                : ''}
             </span>
           )}
           <button

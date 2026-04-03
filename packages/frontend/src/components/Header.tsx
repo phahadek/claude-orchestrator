@@ -1,5 +1,5 @@
 import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
-import { formatTokenCount } from '@claude-dashboard/backend/src/utils/usage';
+import { formatTokenCount, formatUtilization } from '@claude-dashboard/backend/src/utils/usage';
 import type { ResolvedTask } from '@claude-dashboard/backend/src/notion/types';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { MilestoneProgress } from './MilestoneProgress';
@@ -16,11 +16,12 @@ interface Props {
   activeView: TopView;
   onViewChange: (view: TopView) => void;
   totalTokens?: number;
+  planTokenCap?: number;
   tasks?: ResolvedTask[];
   incompleteReviewCount?: number;
 }
 
-export function Header({ projects, activeProjectId, onProjectChange, activeBoardId, onBoardChange, activeView, onViewChange, totalTokens, tasks, incompleteReviewCount }: Props) {
+export function Header({ projects, activeProjectId, onProjectChange, activeBoardId, onBoardChange, activeView, onViewChange, totalTokens, planTokenCap, tasks, incompleteReviewCount }: Props) {
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
   const boards = activeProject?.boards ?? [];
 
@@ -89,7 +90,12 @@ export function Header({ projects, activeProjectId, onProjectChange, activeBoard
       {totalTokens != null && totalTokens > 0 && (
         <>
           <div className={styles.divider} />
-          <span className={styles.tokenSummary}>{formatTokenCount(totalTokens)} tokens</span>
+          <span className={styles.tokenSummary}>
+            {formatTokenCount(totalTokens)} tokens
+            {planTokenCap != null && planTokenCap > 0
+              ? ` (${formatUtilization((totalTokens / planTokenCap) * 100)})`
+              : ''}
+          </span>
         </>
       )}
     </header>
