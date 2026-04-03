@@ -1,5 +1,6 @@
 import type { NotionClient } from '../notion/NotionClient';
 import type { GitHubClient } from '../github/GitHubClient';
+import { getPRByNotionTaskId } from '../db/queries';
 
 // ── Public interfaces ────────────────────────────────────────────────────────
 
@@ -45,7 +46,8 @@ export class SessionAuditor {
     let specMismatch: string | null = null;
 
     // 1. PR opened on clean exit?
-    const prOpened = session.prUrl != null;
+    const prOpened = session.prUrl != null
+      || (!!session.taskId && getPRByNotionTaskId(session.taskId) != null);
     if (exitCode === 0 && !prOpened) {
       violations.push('Clean exit but no PR opened');
     }
