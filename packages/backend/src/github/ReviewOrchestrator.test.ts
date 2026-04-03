@@ -773,9 +773,12 @@ describe('ReviewOrchestrator — merge conflict causes needs_changes', () => {
 });
 
 // ── Draft PR transition ───────────────────────────────────────────────────────
+// Draft transition (markPRReady) is now handled inside PRReviewService.handleApprovedVerdict()
+// which is called from reviewPR(). The orchestrator derives the draftTransitioned flag from
+// the pre-review prRow to include draft: false in the broadcast when applicable.
 
 describe('ReviewOrchestrator — draft PR transition on approved verdict', () => {
-  it('calls markPRReady and updates DB when approved verdict on a draft PR', async () => {
+  it('broadcasts draft: false when approved verdict on a draft PR (transition delegated to PRReviewService)', async () => {
     vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, draft: 1 } as any);
 
     const sm = makeMockSessionManager();
@@ -797,9 +800,10 @@ describe('ReviewOrchestrator — draft PR transition on approved verdict', () =>
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(vi.mocked(gc.markPRReady)).toHaveBeenCalledOnce();
-    expect(vi.mocked(gc.markPRReady)).toHaveBeenCalledWith('owner/repo', 1);
-    expect(vi.mocked(updatePRDraftStatus)).toHaveBeenCalledWith(1, 'owner/repo', 0);
+    // markPRReady is no longer called by the orchestrator — it is handled by
+    // PRReviewService.handleApprovedVerdict() inside reviewPR(). The orchestrator
+    // reads the pre-review draft status and includes draft: false in the broadcast.
+    expect(vi.mocked(gc.markPRReady)).not.toHaveBeenCalled();
     expect(messages[0]).toMatchObject({
       type: 'pr_review_complete',
       verdict: 'approved',
@@ -807,7 +811,7 @@ describe('ReviewOrchestrator — draft PR transition on approved verdict', () =>
     });
   });
 
-  it('does not call markPRReady when approved verdict on a non-draft PR', async () => {
+  it('does not include draft: false in broadcast when approved verdict on a non-draft PR', async () => {
     vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, draft: 0 } as any);
 
     const sm = makeMockSessionManager();
@@ -823,18 +827,25 @@ describe('ReviewOrchestrator — draft PR transition on approved verdict', () =>
 
     new ReviewOrchestrator(rs, sm as any, gc, makeMockNotionClient(), 1, true);
 
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(gc.markPRReady)).not.toHaveBeenCalled();
     expect(vi.mocked(updatePRDraftStatus)).not.toHaveBeenCalled();
+    // Non-draft: draft: false should not be in the broadcast
+    expect((messages[0] as any).draft).toBeUndefined();
   });
 });
 
 // ── Notion status update on approved verdict ──────────────────────────────────
+// Notion updateStatus is now delegated to PRReviewService.handleApprovedVerdict().
+// The orchestrator no longer calls notionClient directly — see PRReviewService.test.ts.
 
 describe('ReviewOrchestrator — Notion status update on approved verdict', () => {
-  it('calls notionClient.updateStatus with In Review when verdict is approved', async () => {
+  it('does NOT call notionClient.updateStatus directly when verdict is approved (delegated to PRReviewService)', async () => {
     vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, draft: 0 } as any);
 
     const sm = makeMockSessionManager();
@@ -853,7 +864,9 @@ describe('ReviewOrchestrator — Notion status update on approved verdict', () =
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(vi.mocked(nc.updateStatus)).toHaveBeenCalledWith('task-abc', '👀 In Review');
+    // The orchestrator no longer calls notionClient.updateStatus — this is now
+    // handled inside PRReviewService.handleApprovedVerdict() called from reviewPR().
+    expect(vi.mocked(nc.updateStatus)).not.toHaveBeenCalled();
   });
 
   it('does NOT call notionClient.updateStatus when verdict is not approved', async () => {
