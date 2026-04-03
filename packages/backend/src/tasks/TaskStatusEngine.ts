@@ -6,7 +6,8 @@ export type DisplayStatus =
   | 'in_review'
   | 'needs_attention'
   | 'ready_to_merge'
-  | 'done';
+  | 'done'
+  | 'backlog';
 
 export interface TaskStatusInput {
   notionStatus: string;             // raw Notion status string
@@ -50,6 +51,8 @@ export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
   }
 
   if (notionStatus.includes('In Progress')) return 'in_progress';
+
+  if (notionStatus.includes('Backlog')) return 'backlog';
 
   // 3. ready — default (includes 🗂️ Ready and any unrecognized status)
   return 'ready';
