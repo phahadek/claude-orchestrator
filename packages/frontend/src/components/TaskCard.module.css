@@ -185,6 +185,22 @@
   color: var(--text-muted);
 }
 
+/* Non-code task variant */
+.nonCode {
+  opacity: 0.65;
+  border-left-color: #585b70 !important;
+}
+
+.nonCode .taskName {
+  color: var(--text-muted);
+}
+
+/* Task type label (shown in non-code card footers instead of launch button) */
+.taskTypeLabel {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 /* Launch button */
 .launchButton {
   background: none;
