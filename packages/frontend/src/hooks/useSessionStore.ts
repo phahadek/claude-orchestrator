@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import type { ServerMessage, PermissionDenial } from '@claude-dashboard/backend/src/ws/types';
 import type { ResolvedTask } from '@claude-dashboard/backend/src/notion/types';
+import type { TaskView } from '@claude-dashboard/backend/src/routes/tasks';
 
 const DISMISSED_DENIALS_KEY = 'permission_denials_dismissed';
 
@@ -69,6 +70,7 @@ export function useSessionStore() {
   const [prRefreshTrigger, setPrRefreshTrigger] = useState(0);
   const [lastPrReviewEvent, setLastPrReviewEvent] = useState<{ prNumber: number; repo: string; verdict: string; summary: string } | null>(null);
   const [incompleteReviews, setIncompleteReviews] = useState<IncompleteReview[]>([]);
+  const [lastTaskUpdate, setLastTaskUpdate] = useState<TaskView | null>(null);
 
   const dispatch = useCallback((msg: ServerMessage) => {
     setSynced(true);
@@ -210,6 +212,9 @@ export function useSessionStore() {
     if (msg.type === 'pr_review_complete') {
       setLastPrReviewEvent({ prNumber: msg.prNumber, repo: msg.repo, verdict: msg.verdict, summary: msg.summary });
     }
+    if (msg.type === 'task_updated') {
+      setLastTaskUpdate(msg.task);
+    }
     if (msg.type === 'review_incomplete') {
       setIncompleteReviews((prev) => [...prev, { prNumber: msg.prNumber, repo: msg.repo, message: msg.message }]);
     }
@@ -290,5 +295,5 @@ export function useSessionStore() {
   const readyCount = tasks.filter((t) => !t.blocked && t.task.status === '🗂️ Ready').length;
   const blockedCount = tasks.filter((t) => t.blocked).length;
 
-  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials, clearSessionDenials, prRefreshTrigger, lastPrReviewEvent, incompleteReviews, dismissIncompleteReviews };
+  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials, clearSessionDenials, prRefreshTrigger, lastPrReviewEvent, incompleteReviews, dismissIncompleteReviews, lastTaskUpdate };
 }

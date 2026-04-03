@@ -8,12 +8,39 @@ export interface PermissionDenial {
   tool_input: Record<string, unknown>;
 }
 
-/** Minimal projection of a task's live state sent in task_updated patches. */
+/** Full live-state snapshot of a task, sent in task_updated WS messages. */
 export interface TaskView {
-  codeSession: { status: string } | null;
-  prUrl: string | null;
-  prState: string | null;
-  reviewVerdict: string | null;
+  taskId: string;
+  taskName: string;
+  notionStatus: string;
+  displayStatus: DisplayStatus;
+  priority: string;
+  notionUrl: string;
+  codeSession: {
+    sessionId: string;
+    status: string;
+    startedAt: number;
+    endedAt: number | null;
+    lastMessage: string;
+    inputTokens: number;
+    outputTokens: number;
+  } | null;
+  pr: {
+    prNumber: number;
+    prUrl: string;
+    title: string;
+    headBranch: string;
+    baseBranch: string;
+    state: string;
+    draft: boolean;
+  } | null;
+  review: {
+    sessionId: string;
+    status: string;
+    verdict: string | null;
+    summary: string | null;
+    iterationCount: number;
+  } | null;
 }
 
 export type ServerMessage =
@@ -35,7 +62,7 @@ export type ServerMessage =
   | { type: 'review_incomplete';     prNumber: number; repo: string; message: string }
   | { type: 'session_audit';         sessionId: string; prOpened: boolean; prTargetsBranch: string | null; violations: string[]; specMismatch: string | null; auditedAt: string }
   | { type: 'task_status_changed';   notionTaskId: string; newStatus: string }
-  | { type: 'task_updated';          taskId: string; displayStatus: DisplayStatus; patch: Partial<TaskView> }
+  | { type: 'task_updated';          task: TaskView }
   | { type: 'error';                 message: string };
 
 // ── Client → Server ──────────────────────────────────────────────
@@ -47,3 +74,4 @@ export type ClientMessage =
   | { type: 'kill';         sessionId: string }
   | { type: 'end_session';  sessionId: string }
   | { type: 'fetch_tasks';  projectId: string; boardId?: string; skipCache?: boolean };
+
