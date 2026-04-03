@@ -2,6 +2,7 @@ import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TaskList } from '../TaskList';
 import type { TaskView, DisplayStatus } from '../../types/taskView';
+import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
 
 function makeTask(overrides: Partial<TaskView> & { taskId: string; displayStatus: DisplayStatus }): TaskView {
   return {
@@ -533,5 +534,151 @@ describe('TaskList', () => {
 
     expect(screen.getByText('Updated Name')).toBeDefined();
     expect(screen.queryByText('Old Name')).toBeNull();
+  });
+
+  it('task_updated for an unknown task ID does not crash or add a phantom entry', async () => {
+    const initial = makeTask({ taskId: 't1', taskName: 'Known Task', displayStatus: 'in_progress' });
+    mockFetch([initial]);
+
+    const phantom = makeTask({ taskId: 'unknown-id', taskName: 'Phantom Task', displayStatus: 'in_progress' });
+
+    const { rerender } = render(
+      <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} lastTaskUpdate={null} send={noop} project={null} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Known Task')).toBeDefined();
+    });
+
+    act(() => {
+      rerender(
+        <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} lastTaskUpdate={phantom} send={noop} project={null} />,
+      );
+    });
+
+    // Phantom task should not appear in the list
+    expect(screen.queryByText('Phantom Task')).toBeNull();
+    // Known task is still present
+    expect(screen.getByText('Known Task')).toBeDefined();
+  });
+
+  it('dispatching tasks updates local state to In Progress immediately', async () => {
+    const task = makeTask({
+      taskId: 't1',
+      taskName: 'Ready Task',
+      displayStatus: 'ready',
+      wave: 1,
+      blocked: false,
+      taskType: '💻 Code',
+      notionUrl: 'https://notion.so/t1',
+    });
+    mockFetch([task]);
+    const sendFn = vi.fn();
+    const project: ProjectConfig = {
+      id: 'proj-1',
+      name: 'Test',
+      projectDir: '/tmp/test',
+      contextUrl: 'https://notion.so/ctx',
+      boardId: 'board-1',
+    };
+
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={sendFn}
+        project={project}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('checkbox')).toBeDefined();
+    });
+
+    // Check the task and launch
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByTestId('launch-btn'));
+
+    // Ready section should disappear (task moved to in_progress)
+    await waitFor(() => {
+      expect(screen.queryByTestId('ready-section')).toBeNull();
+    });
+    // Task should appear in the In Progress group header
+    expect(screen.getByTestId('group-header-in_progress')).toBeDefined();
+  });
+
+  it('Sync button sends fetch_tasks WS message on click', async () => {
+    mockFetch([makeTask({ taskId: 't1', taskName: 'Task', displayStatus: 'in_progress' })]);
+    const sendFn = vi.fn();
+    render(
+      <TaskList activeProjectId="proj-1" boardId="board-1" selectedTaskId={null} onSelectTask={vi.fn()} send={sendFn} project={null} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-btn')).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByTestId('sync-btn'));
+
+    expect(sendFn).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'fetch_tasks', projectId: 'proj-1' }),
+    );
+  });
+
+  it('Sync button shows loading state while fetch is in flight', async () => {
+    // First fetch resolves (initial load)
+    (fetch as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => [] })
+      // Second fetch (triggered by sync) never resolves — keeps syncing state
+      .mockReturnValueOnce(new Promise(() => { /* never resolves */ }));
+
+    render(
+      <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={vi.fn()} project={null} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-btn')).toBeDefined();
+    });
+
+    const syncBtn = screen.getByTestId('sync-btn') as HTMLButtonElement;
+    expect(syncBtn.getAttribute('aria-busy')).toBe('false');
+
+    fireEvent.click(syncBtn);
+
+    // aria-busy should be true while fetch is pending
+    expect(syncBtn.getAttribute('aria-busy')).toBe('true');
+    expect(syncBtn.disabled).toBe(true);
+  });
+
+  it('task_updated WS message updates the matching task status in local state', async () => {
+    const initial = makeTask({ taskId: 't1', taskName: 'Task Alpha', displayStatus: 'ready', wave: 1 });
+    mockFetch([initial]);
+
+    const updated: TaskView = {
+      ...initial,
+      notionStatus: '🔄 In Progress',
+      displayStatus: 'in_progress',
+    };
+
+    const { rerender } = render(
+      <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} lastTaskUpdate={null} send={noop} project={null} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('ready-section')).toBeDefined();
+    });
+
+    act(() => {
+      rerender(
+        <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} lastTaskUpdate={updated} send={noop} project={null} />,
+      );
+    });
+
+    // Task moved from Ready to In Progress — ready section gone, in_progress group visible
+    expect(screen.queryByTestId('ready-section')).toBeNull();
+    expect(screen.getByTestId('group-header-in_progress')).toBeDefined();
+    expect(screen.getByText('Task Alpha')).toBeDefined();
   });
 });
