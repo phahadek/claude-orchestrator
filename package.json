@@ -10,7 +10,10 @@
     "build": "npm run build -w packages/frontend && npm run build -w packages/backend",
     "start": "node packages/backend/dist/server.js",
     "restart": "npx kill-port 3000 && npm run dev",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start:win": "powershell -ExecutionPolicy Bypass -File start.ps1",
+    "stop:win": "powershell -ExecutionPolicy Bypass -File stop.ps1",
+    "restart:win": "powershell -ExecutionPolicy Bypass -File restart.ps1"
   },
   "devDependencies": {
     "concurrently": "^8.0.0",
