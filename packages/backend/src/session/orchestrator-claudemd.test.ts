@@ -12,7 +12,7 @@ const defaultParams = {
 };
 
 describe('buildOrchestratorClaudeMd', () => {
-  it('returns a string containing all 10 required sections', () => {
+  it('returns a string containing all 11 required sections', () => {
     const result = buildOrchestratorClaudeMd(defaultParams);
 
     // Section 1: Header with override warning
@@ -60,6 +60,11 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(result).toContain('## Git Isolation');
     expect(result).toContain('inside the worktree directory');
     expect(result).toContain('git -C <path>');
+
+    // Section 10: Bash rules
+    expect(result).toContain('## Bash Rules (Permission System)');
+    expect(result).toContain('One command per Bash call');
+    expect(result).toContain('mcp__github__create_pull_request');
   });
 
   it('interpolates taskName, taskUrl, projectContextUrl, and targetBranch', () => {
