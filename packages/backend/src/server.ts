@@ -16,7 +16,7 @@ import configRouter from './routes/config';
 import settingsRouter, { loadRuntimeSettingsFromDb } from './routes/settings';
 import { sessionsRouter, setBroadcast } from './routes/sessions';
 import { createPrsRouter, setPRBroadcast } from './routes/prs';
-import { createTasksRouter } from './routes/tasks';
+import { createTasksRouter, setTaskBroadcast } from './routes/tasks';
 import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
 import { PRSyncJob } from './github/PRSyncJob';
@@ -80,6 +80,8 @@ function broadcast(msg: ServerMessage) {
 setBroadcast(broadcast);
 // Wire broadcast into the prs router (for merge/close events)
 setPRBroadcast(broadcast);
+// Wire broadcast into the tasks route (for task_updated WS messages)
+setTaskBroadcast(broadcast);
 
 // Broadcast all session events to every connected WS client
 sessionManager.on('message', broadcast);

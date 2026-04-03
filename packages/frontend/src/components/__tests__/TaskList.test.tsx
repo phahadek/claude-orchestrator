@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TaskList } from '../TaskList';
 import type { TaskView, DisplayStatus } from '../../types/taskView';
@@ -27,12 +27,10 @@ function mockFetch(tasks: TaskView[]) {
 describe('TaskList', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn());
-    vi.useFakeTimers();
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    vi.useRealTimers();
   });
 
   it('renders a loading indicator while tasks are being fetched', () => {
@@ -136,5 +134,29 @@ describe('TaskList', () => {
     await waitFor(() => {
       expect(screen.getByTestId('task-list-empty')).toBeDefined();
     });
+  });
+
+  it('patches an existing task in-place when lastTaskUpdate changes', async () => {
+    const initial = makeTask({ taskId: 't1', taskName: 'Old Name', displayStatus: 'ready' });
+    mockFetch([initial]);
+
+    const updated = makeTask({ taskId: 't1', taskName: 'Updated Name', displayStatus: 'in_progress' });
+
+    const { rerender } = render(
+      <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} lastTaskUpdate={null} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Old Name')).toBeDefined();
+    });
+
+    act(() => {
+      rerender(
+        <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} lastTaskUpdate={updated} />,
+      );
+    });
+
+    expect(screen.getByText('Updated Name')).toBeDefined();
+    expect(screen.queryByText('Old Name')).toBeNull();
   });
 });

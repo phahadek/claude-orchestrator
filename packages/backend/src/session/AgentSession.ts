@@ -13,6 +13,7 @@ import {
   setSessionModel,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
+import { emitTaskUpdated } from '../routes/tasks';
 import type { NotionClient } from '../notion/NotionClient';
 import type { GitHubClient } from '../github/GitHubClient';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
@@ -622,6 +623,7 @@ Fetch both Notion pages, then begin the task.
               notionTaskId: this.taskId,
               newStatus: '👀 In Review',
             });
+            emitTaskUpdated(this.taskId);
           })
           .catch((e) => console.error(`[AgentSession] updateStatus failed: ${e}`));
       }

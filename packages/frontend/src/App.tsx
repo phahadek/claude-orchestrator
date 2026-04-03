@@ -50,7 +50,7 @@ function resolveActiveBoardId(project: ProjectConfig): string {
 }
 
 export default function App() {
-  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, prRefreshTrigger, lastPrReviewEvent, incompleteReviews } = useSessionStore();
+  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, prRefreshTrigger, lastPrReviewEvent, incompleteReviews, lastTaskUpdate } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const activeProjectIdRef = useRef<string | null>(null);
@@ -457,6 +457,7 @@ export default function App() {
                 boardId={activeBoardId}
                 selectedTaskId={selectedTaskId}
                 onSelectTask={setSelectedTaskId}
+                lastTaskUpdate={lastTaskUpdate}
               />
             </div>
 
