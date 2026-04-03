@@ -5,7 +5,7 @@ import { ProjectSwitcher } from './ProjectSwitcher';
 import { MilestoneProgress } from './MilestoneProgress';
 import styles from './Header.module.css';
 
-export type TopView = 'tasks' | 'sessions' | 'prs' | 'settings';
+export type TopView = 'tasks' | 'sessions' | 'prs' | 'analytics' | 'settings';
 
 interface Props {
   projects: ProjectConfig[];
@@ -52,6 +52,13 @@ export function Header({ projects, activeProjectId, onProjectChange, activeBoard
           {incompleteReviewCount != null && incompleteReviewCount > 0 && (
             <span className={styles.incompleteBadge} title="Incomplete review — needs attention">{incompleteReviewCount}</span>
           )}
+        </button>
+        <button
+          type="button"
+          className={`${styles.navLink}${activeView === 'analytics' ? ` ${styles.navLinkActive}` : ''}`}
+          onClick={() => onViewChange('analytics')}
+        >
+          Analytics
         </button>
         <button
           type="button"
