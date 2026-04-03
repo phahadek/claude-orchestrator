@@ -3,9 +3,11 @@ import fs from 'fs';
 import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
 import { AgentSession, parseNotionPageId } from './AgentSession';
-import { buildOrchestratorClaudeMd } from './orchestrator-claudemd';
+import { buildSessionContext } from './ContextBuilder';
 import { loadOrchestratorConfig } from './orchestrator-config';
-import { config, getProjectById, normalizePath, TASK_BACKEND } from '../config';
+import { CliSessionRunner } from './CliSessionRunner';
+import { ApiSessionRunner } from './ApiSessionRunner';
+import { config, getProjectById, normalizePath, runtimeSettings, TASK_BACKEND } from '../config';
 import { insertSession, updateSessionStatus, insertEvent, getSession, getSessionsByStatus, getPRByNotionTaskId, getEventsBySession, getPRByNumber } from '../db/queries';
 import type { Session } from '../db/types';
 import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
@@ -200,28 +202,43 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // Inject merged CLAUDE.md into the worktree: orchestrator rules first (authoritative),
-    // project CLAUDE.md appended below. The project's original file is never modified.
+    // Build the merged session context (orchestrator rules + project CLAUDE.md).
+    // In CLI mode: write it to CLAUDE.md in the worktree so the subprocess picks it up.
+    // In API mode: pass it as systemPromptContent to inject via the Agent SDK instead.
+    let sessionContextContent: string | undefined;
     try {
-      const orchestratorMd = buildOrchestratorClaudeMd({
+      sessionContextContent = buildSessionContext({
         taskName: taskName ?? taskUrl,
         taskUrl,
         projectContextUrl,
         targetBranch: 'dev',
+        projectDir,
         prGate: orchConfig.prGate,
         bashRules: orchConfig.bashRules,
         taskBackend: TASK_BACKEND,
       });
-      const projectMdPath = path.join(projectDir, 'CLAUDE.md');
-      const projectMd = fs.existsSync(projectMdPath) ? fs.readFileSync(projectMdPath, 'utf-8') : '';
-      const merged = projectMd
-        ? `${orchestratorMd}\n\n---\n\n# Project Instructions\n\n${projectMd}`
-        : orchestratorMd;
-      fs.writeFileSync(path.join(worktreePath, 'CLAUDE.md'), merged, 'utf-8');
-      console.log(`[SessionManager] orchestrator CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`);
     } catch (err) {
-      console.error(`[SessionManager] failed to write orchestrator CLAUDE.md for ${sessionId}: ${err}`);
+      console.error(`[SessionManager] failed to build session context for ${sessionId}: ${err}`);
     }
+
+    const sessionMode = runtimeSettings.session_mode;
+
+    if (sessionMode === 'cli' && sessionContextContent) {
+      // CLI mode: write CLAUDE.md to worktree so the subprocess reads it.
+      try {
+        fs.writeFileSync(path.join(worktreePath, 'CLAUDE.md'), sessionContextContent, 'utf-8');
+        console.log(`[SessionManager] orchestrator CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`);
+      } catch (err) {
+        console.error(`[SessionManager] failed to write orchestrator CLAUDE.md for ${sessionId}: ${err}`);
+      }
+    } else if (sessionMode === 'api') {
+      console.log(`[SessionManager] API mode: session context will be injected as system prompt for ${sessionId.slice(0, 8)}`);
+    }
+
+    // Create the appropriate session runner based on the current session_mode setting.
+    const runner = sessionMode === 'api'
+      ? new ApiSessionRunner(sessionId)
+      : new CliSessionRunner(sessionId);
 
     const notionTaskId = parseNotionPageId(taskUrl);
 
@@ -238,6 +255,10 @@ export class SessionManager extends EventEmitter {
       this,
       this.githubClient,
       orchConfig.allowedTools,
+      // In API mode, pass the context as systemPromptContent.
+      // In CLI mode, it was written to the CLAUDE.md file above.
+      sessionMode === 'api' ? sessionContextContent : undefined,
+      runner,
     );
 
     // Insert session into SQLite before anything writes events
@@ -374,6 +395,11 @@ export class SessionManager extends EventEmitter {
     // extra allowed tools (e.g. Bash(dotnet:*)) as freshly spawned ones.
     const orchConfig = loadOrchestratorConfig(projectDir);
 
+    const resumeSessionMode = runtimeSettings.session_mode;
+    const resumeRunner = resumeSessionMode === 'api'
+      ? new ApiSessionRunner(row.session_id)
+      : new CliSessionRunner(row.session_id);
+
     const session = new AgentSession(
       row.session_id,           // keep original ID — same card, same transcript
       row.notion_task_url ?? '',
@@ -381,12 +407,14 @@ export class SessionManager extends EventEmitter {
       this.notionClient,
       worktreePath,
       row.notion_task_id ?? '',
-      row.session_id,           // resumeSessionId — passes --resume to CLI
+      row.session_id,           // resumeSessionId — passes --resume to CLI / SDK
       undefined,
       'standard',
       this,
       this.githubClient,
       orchConfig.allowedTools,
+      undefined,                // no systemPromptContent for resume (session already has context)
+      resumeRunner,
     );
 
     this.sessions.set(row.session_id, session);
@@ -660,6 +688,11 @@ export class SessionManager extends EventEmitter {
     // extra allowed tools (e.g. Bash(dotnet:*)) as freshly spawned ones.
     const orchConfigResume = loadOrchestratorConfig(projectDir);
 
+    const sendOrResumeMode = runtimeSettings.session_mode;
+    const sendOrResumeRunner = sendOrResumeMode === 'api'
+      ? new ApiSessionRunner(newSessionId)
+      : new CliSessionRunner(newSessionId);
+
     const session = new AgentSession(
       newSessionId,
       taskUrl,
@@ -667,12 +700,14 @@ export class SessionManager extends EventEmitter {
       this.notionClient,
       worktreePath,
       taskId,
-      sessionId, // resumeSessionId — restores conversation history via --resume
+      sessionId, // resumeSessionId — restores conversation history via --resume / SDK resume
       undefined,
       'standard',
       this,
       this.githubClient,
       orchConfigResume.allowedTools,
+      undefined, // no systemPromptContent for resume
+      sendOrResumeRunner,
     );
 
     const startedAt = Date.now();

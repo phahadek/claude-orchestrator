@@ -27,9 +27,10 @@ interface Props {
   onResume?: (sessionId: string) => void;
   onFavorite?: (sessionId: string) => void;
   onUnfavorite?: (sessionId: string) => void;
+  sessionMode?: string;
 }
 
-export function SessionDetail({ session, send, onClose, onDelete, onArchive, onUnarchive, onResume, onFavorite, onUnfavorite }: Props) {
+export function SessionDetail({ session, send, onClose, onDelete, onArchive, onUnarchive, onResume, onFavorite, onUnfavorite, sessionMode }: Props) {
   const [draftMessage, setDraftMessage] = useState('');
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const [deleting, setDeleting] = useState(false);
@@ -167,8 +168,9 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
           )}
           {(session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0) > 0 && (
             <span className={styles.tokenCount}>
-              {formatTokenCount((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0))} tokens
-              {' (~' + formatCost(calculateCost(session.totalInputTokens ?? 0, session.totalOutputTokens ?? 0, session.model)) + ')'}
+              {sessionMode === 'api'
+                ? formatCost(calculateCost(session.totalInputTokens ?? 0, session.totalOutputTokens ?? 0, session.model))
+                : `${formatTokenCount((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0))} tokens (~${formatCost(calculateCost(session.totalInputTokens ?? 0, session.totalOutputTokens ?? 0, session.model))} est.)`}
             </span>
           )}
           <button

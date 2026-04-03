@@ -13,6 +13,7 @@ interface SettingsValues {
   card_preview_lines: string;
   code_session_model: string;
   review_session_model: string;
+  session_mode: string;
 }
 
 const MODEL_OPTIONS = [
@@ -150,6 +151,29 @@ export function Settings({ initialTab = 'general', projects }: Props) {
                     {settings?.auto_review === 'true' ? 'On' : 'Off'}
                   </button>
                 </div>
+
+                <h3 className={styles.sectionTitle}>Session Mode</h3>
+                <div className={styles.field}>
+                  <label className={styles.label}>
+                    Session launch mode
+                    <span className={styles.hint}> (cli = subprocess, api = Agent SDK)</span>
+                  </label>
+                  <button
+                    type="button"
+                    className={`${styles.toggle}${settings?.session_mode === 'api' ? ` ${styles.toggleOn}` : ''}`}
+                    onClick={() =>
+                      handleChange('session_mode', settings?.session_mode === 'api' ? 'cli' : 'api')
+                    }
+                  >
+                    {settings?.session_mode === 'api' ? 'API' : 'CLI'}
+                  </button>
+                </div>
+                {settings?.session_mode === 'api' && (
+                  <p className={styles.hint}>
+                    API mode requires <code>ANTHROPIC_API_KEY</code> in the backend environment.
+                    Sessions run via the Agent SDK; cost is billed per token.
+                  </p>
+                )}
 
                 <h3 className={styles.sectionTitle}>Models</h3>
                 <div className={styles.field}>

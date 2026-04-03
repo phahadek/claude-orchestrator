@@ -12,6 +12,7 @@ const SETTING_KEYS = [
   'card_preview_lines',
   'code_session_model',
   'review_session_model',
+  'session_mode',
 ] as const;
 
 type SettingKey = (typeof SETTING_KEYS)[number];
@@ -29,6 +30,8 @@ function applyToRuntime(key: SettingKey, value: string): void {
     runtimeSettings.code_session_model = value;
   } else if (key === 'review_session_model') {
     runtimeSettings.review_session_model = value;
+  } else if (key === 'session_mode') {
+    runtimeSettings.session_mode = value === 'api' ? 'api' : 'cli';
   }
 }
 
@@ -43,7 +46,7 @@ export function loadRuntimeSettingsFromDb(): void {
       let defaultVal: string;
       if (key === 'auto_review') {
         defaultVal = String(runtimeSettings.auto_review);
-      } else if (key === 'code_session_model' || key === 'review_session_model') {
+      } else if (key === 'code_session_model' || key === 'review_session_model' || key === 'session_mode') {
         defaultVal = runtimeSettings[key];
       } else {
         defaultVal = String(runtimeSettings[key]);
@@ -61,6 +64,7 @@ function runtimeSettingsAsRecord(): Record<SettingKey, string> {
     card_preview_lines: String(runtimeSettings.card_preview_lines),
     code_session_model: runtimeSettings.code_session_model,
     review_session_model: runtimeSettings.review_session_model,
+    session_mode: runtimeSettings.session_mode,
   };
 }
 
