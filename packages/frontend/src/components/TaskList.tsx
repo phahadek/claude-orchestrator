@@ -276,17 +276,20 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
   }, [reviewRefreshTrigger, fetchTasks]);
 
   // Merge a single task in-place when a task_updated WS message arrives.
-  // Unknown task IDs are ignored — do not add phantom entries.
+  // If the task ID is unknown (not yet in the list), trigger a full re-fetch.
   useEffect(() => {
     if (!lastTaskUpdate) return;
     setTasks((prev) => {
       const idx = prev.findIndex((t) => t.taskId === lastTaskUpdate.taskId);
-      if (idx < 0) return prev;
+      if (idx < 0) {
+        void fetchTasks();
+        return prev;
+      }
       const next = [...prev];
       next[idx] = lastTaskUpdate;
       return next;
     });
-  }, [lastTaskUpdate]);
+  }, [lastTaskUpdate, fetchTasks]);
 
   const handleOptimisticDispatch = useCallback((taskIds: string[]) => {
     setTasks((prev) => prev.map((t) =>

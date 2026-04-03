@@ -405,6 +405,14 @@ const stmtGetTaskCache = db.prepare<{ notion_task_id: string }>(`
   SELECT * FROM task_cache WHERE notion_task_id = @notion_task_id
 `);
 
+const stmtDeleteTaskCache = db.prepare<{ notion_task_id: string }>(`
+  DELETE FROM task_cache WHERE notion_task_id = @notion_task_id
+`);
+
+export function deleteTaskCache(taskId: string): void {
+  stmtDeleteTaskCache.run({ notion_task_id: taskId });
+}
+
 export function upsertTaskCache(taskId: string, rawJson: string): void {
   stmtUpsertTaskCache.run({
     notion_task_id: taskId,
