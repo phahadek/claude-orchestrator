@@ -113,14 +113,26 @@ sessionManager.on('push_detected', ({ sessionId: codingSessionId }: { sessionId:
 
   void (async () => {
     let headSha = prRow.head_sha;
-    try {
-      const freshPR = await githubClient.fetchPR(prRow.repo, prRow.pr_number);
-      headSha = freshPR.headSha;
-      if (headSha !== prRow.head_sha) {
-        setHeadSha(prRow.pr_number, prRow.repo, headSha);
+    let fetchError: unknown;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const freshPR = await githubClient.fetchPR(prRow.repo, prRow.pr_number);
+        headSha = freshPR.headSha;
+        fetchError = undefined;
+        if (headSha !== prRow.head_sha) {
+          setHeadSha(prRow.pr_number, prRow.repo, headSha);
+        }
+        break;
+      } catch (e) {
+        fetchError = e;
+        if (attempt === 0) {
+          console.warn(`[server] fetch PR #${prRow.pr_number} failed (attempt 1), retrying...`);
+          await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+        }
       }
-    } catch (e) {
-      console.warn(`[server] failed to fetch latest PR state for #${prRow.pr_number}:`, e);
+    }
+    if (fetchError) {
+      console.warn(`[server] failed to fetch latest PR state for #${prRow.pr_number} after retry:`, fetchError);
     }
 
     const maxIter = getMaxReviewIterations();
