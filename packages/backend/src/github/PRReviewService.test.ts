@@ -682,7 +682,7 @@ describe('PRReviewService.handleApprovedVerdict()', () => {
     expect(result).toBe(true);
   });
 
-  it('does NOT call markPRReady when PR is not a draft', async () => {
+  it('calls markPRReady even when PR is not a draft (draft=0) — eliminates stale-field race', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any); // draft: 0
 
     const mockGH = makeMockGitHub();
@@ -690,9 +690,25 @@ describe('PRReviewService.handleApprovedVerdict()', () => {
 
     const result = await service.handleApprovedVerdict(42, 'owner/repo', 'task-abc123');
 
-    expect(vi.mocked(mockGH.markPRReady)).not.toHaveBeenCalled();
+    expect(vi.mocked(mockGH.markPRReady)).toHaveBeenCalledWith('owner/repo', 42);
+    expect(vi.mocked(updatePRDraftStatus)).toHaveBeenCalledWith(42, 'owner/repo', 0);
+    expect(result).toBe(true);
+  });
+
+  it('handles markPRReady failure gracefully — does not throw, returns false', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+
+    const mockGH = makeMockGitHub();
+    vi.mocked(mockGH.markPRReady).mockRejectedValue(new Error('PR is not a draft'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const service = new PRReviewService(mockGH, makeMockNotion(), makeMockSessionManager() as any, 'proj-1', 'https://notion.so/ctx');
+
+    const result = await service.handleApprovedVerdict(42, 'owner/repo', 'task-abc123');
+
+    expect(vi.mocked(mockGH.markPRReady)).toHaveBeenCalledWith('owner/repo', 42);
     expect(vi.mocked(updatePRDraftStatus)).not.toHaveBeenCalled();
     expect(result).toBe(false);
+    warnSpy.mockRestore();
   });
 
   it('updates Notion status to In Review when taskId is provided', async () => {

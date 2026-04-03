@@ -6,7 +6,6 @@ import supertest from 'supertest';
 
 vi.mock('../db/queries.js', () => ({
   getPRs: vi.fn(),
-  getOpenPRs: vi.fn(),
   getPRByNumber: vi.fn(),
   updatePRState: vi.fn(),
   getTaskTitleFromCache: vi.fn().mockReturnValue(null),
@@ -510,14 +509,14 @@ describe('POST /api/prs/:owner/:repo/:prNumber/approve', () => {
     expect(vi.mocked(queries.updatePRDraftStatus)).toHaveBeenCalledWith(42, 'owner/repo', 0);
   });
 
-  it('does NOT call markPRReady when approving a non-draft PR', async () => {
+  it('calls markPRReady unconditionally even when approving a non-draft PR (eliminates stale-field race)', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow); // draft: 0
     const github = makeMockGitHub();
     const res = await supertest(buildApp(github))
       .post('/api/prs/owner/repo/42/approve');
     expect(res.status).toBe(200);
-    expect(vi.mocked(github.markPRReady)).not.toHaveBeenCalled();
-    expect(vi.mocked(queries.updatePRDraftStatus)).not.toHaveBeenCalled();
+    expect(vi.mocked(github.markPRReady)).toHaveBeenCalledWith('owner/repo', 42);
+    expect(vi.mocked(queries.updatePRDraftStatus)).toHaveBeenCalledWith(42, 'owner/repo', 0);
   });
 
   it('calls notionClient.updateStatus with In Review when PR has notion_task_id', async () => {
@@ -563,48 +562,3 @@ describe('Break 2 (AC) — POST /api/prs/:prNumber/review calls prReviewService.
   });
 });
 
-// ── PRSyncJob ─────────────────────────────────────────────────────────────────
-
-describe('PRSyncJob.run()', () => {
-  it('does not throw when listOpenPRs rejects — warns instead', async () => {
-    // Import here so the config mock is active
-    const { PRSyncJob } = await import('../github/PRSyncJob.js');
-    const github = makeMockGitHub();
-    vi.mocked(github.listOpenPRs).mockRejectedValue(new Error('network error'));
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    const job = new PRSyncJob(github);
-    await expect(job.run()).resolves.toBeUndefined();
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('sync failed'),
-      'network error',
-    );
-    warnSpy.mockRestore();
-  });
-
-  it('upserts PRs from GitHub into the DB', async () => {
-    const { PRSyncJob } = await import('../github/PRSyncJob.js');
-    const github = makeMockGitHub();
-    vi.mocked(github.listOpenPRs).mockResolvedValue([openGitHubPR]);
-    vi.mocked(queries.getOpenPRs).mockReturnValue([]);
-
-    const job = new PRSyncJob(github);
-    await job.run();
-    expect(vi.mocked(queries.upsertPullRequest)).toHaveBeenCalledOnce();
-  });
-
-  it('updates state to merged for a locally-open PR no longer open on GitHub', async () => {
-    const { PRSyncJob } = await import('../github/PRSyncJob.js');
-    const github = makeMockGitHub();
-    // GitHub reports PR 1 as open; locally PR 99 is also "open" but absent from GitHub
-    vi.mocked(github.listOpenPRs).mockResolvedValue([openGitHubPR]);
-    vi.mocked(github.getPRState).mockResolvedValue('merged');
-    const staleRow: PullRequestRow = { ...mockPRRow, pr_number: 99, state: 'open' };
-    vi.mocked(queries.getOpenPRs).mockReturnValue([staleRow]);
-
-    const job = new PRSyncJob(github);
-    await job.run();
-    expect(vi.mocked(github.getPRState)).toHaveBeenCalledWith(99, 'owner/repo');
-    expect(vi.mocked(queries.updatePRState)).toHaveBeenCalledWith(99, 'owner/repo', 'merged');
-  });
-});

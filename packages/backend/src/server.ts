@@ -19,7 +19,6 @@ import { createPrsRouter, setPRBroadcast } from './routes/prs';
 import { createTasksRouter, setTaskBroadcast } from './routes/tasks';
 import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
-import { PRSyncJob } from './github/PRSyncJob';
 import { ReviewOrchestrator } from './github/ReviewOrchestrator';
 import { PRMergeWatcher } from './github/PRMergeWatcher';
 import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
@@ -160,18 +159,6 @@ jsonlReader.importAll().then(async () => {
   await sessionManager.resumeOrphanSessions().catch((err: unknown) =>
     console.warn('[server] orphan session resume failed:', (err as Error).message)
   );
-
-  const prSyncJob = new PRSyncJob(githubClient);
-  prSyncJob.setMergeWatcher(prMergeWatcher);
-  await prSyncJob.run().catch((err: unknown) =>
-    console.warn('[server] PR sync failed (check GITHUB_TOKEN):', (err as Error).message)
-  );
-
-  setInterval(() => {
-    prSyncJob.run().catch((err: unknown) =>
-      console.warn('[server] PR sync failed:', (err as Error).message)
-    );
-  }, 5 * 60 * 1000);
 
   prMergeWatcher.start();
 
