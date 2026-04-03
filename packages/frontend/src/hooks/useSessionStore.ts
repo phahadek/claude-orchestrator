@@ -49,6 +49,8 @@ export interface SessionState {
   totalOutputTokens?: number;
   /** PR number this review session is reviewing (review sessions only) */
   prNumber?: number;
+  /** Session ID of the code session whose PR this review session is reviewing */
+  codeSessionId?: string;
   model?: string | null;
 }
 
@@ -92,6 +94,7 @@ export function useSessionStore() {
             totalInputTokens: msg.totalInputTokens ?? 0,
             totalOutputTokens: msg.totalOutputTokens ?? 0,
             prNumber: msg.prNumber,
+            codeSessionId: msg.codeSessionId,
             model: msg.model ?? null,
             prUrl: msg.prUrl,
           });

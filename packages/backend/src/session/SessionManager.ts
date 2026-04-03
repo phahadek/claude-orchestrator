@@ -145,10 +145,12 @@ export class SessionManager extends EventEmitter {
         .catch((e) => console.error(`[SessionManager] failed to set In Progress: ${e}`));
     }
 
-    // Look up the PR number for review sessions so the card can display "Review of #N"
-    const reviewPrNumber = sessionType === 'review' && notionTaskId
-      ? (getPRByNotionTaskId(notionTaskId)?.pr_number ?? undefined)
+    // Look up the PR for review sessions so the card can display "Review of #N" and link to code session
+    const reviewPr = sessionType === 'review' && notionTaskId
+      ? (getPRByNotionTaskId(notionTaskId) ?? undefined)
       : undefined;
+    const reviewPrNumber = reviewPr?.pr_number;
+    const reviewCodeSessionId = reviewPr?.session_id ?? undefined;
 
     // Broadcast session_started so connected frontends see the card immediately
     this.emit('message', {
@@ -159,6 +161,7 @@ export class SessionManager extends EventEmitter {
       ...(taskType != null && { taskType }),
       ...(sessionType !== 'standard' && { sessionType }),
       ...(reviewPrNumber != null && { prNumber: reviewPrNumber }),
+      ...(reviewCodeSessionId != null && { codeSessionId: reviewCodeSessionId }),
       started_at: startedAt,
       project_id: projectId,
     } satisfies ServerMessage);
