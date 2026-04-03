@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { tryParseJson, extractBashCommand, extractToolResult } from '../utils/eventParsing';
+import { tryParseJson, extractBashCommand, extractToolDetail, extractToolResult } from '../utils/eventParsing';
 import styles from './ToolCallGroup.module.css';
 
 export interface CallPair {
@@ -54,6 +54,16 @@ function inputLabel(toolName: string, input: unknown): string {
 export function ToolCallGroup({ toolName, calls }: Props) {
   const [expanded, setExpanded] = useState(false);
 
+  const firstInput = calls.length > 0 ? extractCallInput(calls[0].textEvent) : null;
+  const rawDetail = toolName === 'Bash'
+    ? ((firstInput as Record<string, unknown> | null)?.description as string | undefined
+        ?? extractBashCommand(firstInput)?.slice(0, 40)
+        ?? null)
+    : extractToolDetail(toolName, firstInput);
+  const headerSuffix = rawDetail
+    ? ` (${rawDetail.length > 40 ? rawDetail.slice(0, 40) + '…' : rawDetail})`
+    : '';
+
   function toggle() {
     setExpanded((e) => !e);
   }
@@ -69,7 +79,7 @@ export function ToolCallGroup({ toolName, calls }: Props) {
         aria-expanded={expanded}
       >
         <span className={styles.chevron}>{expanded ? '▼' : '▶'}</span>
-        🔧 {toolName} ×{calls.length}
+        🔧 {toolName}{headerSuffix} ×{calls.length}
       </div>
       {expanded && (
         <div className={styles.groupBody}>
