@@ -16,6 +16,9 @@ export interface TaskView {
   displayStatus: DisplayStatus;
   priority: string;
   notionUrl: string;
+  taskType: string;
+  blocked: boolean;
+  blockerNames: string[];
   codeSession: {
     sessionId: string;
     status: string;

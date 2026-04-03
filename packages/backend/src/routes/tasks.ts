@@ -5,6 +5,7 @@ import { getTaskCache, getActiveTaskAggregates, getLatestNonSystemEventPayload, 
 import type { TaskAggregateRow } from '../db/queries';
 import { deriveDisplayStatus } from '../tasks/TaskStatusEngine';
 import type { NotionTask } from '../notion/types';
+import { DependencyResolver } from '../notion/DependencyResolver';
 import type { PRReviewResult } from '../github/PRReviewService';
 import type { ServerMessage, TaskView } from '../ws/types';
 export type { TaskView } from '../ws/types';
@@ -120,6 +121,9 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     displayStatus,
     priority,
     notionUrl: notionTask?.notionUrl ?? '',
+    taskType: notionTask?.type ?? '',
+    blocked: false,
+    blockerNames: [],
     codeSession,
     pr,
     review,
@@ -221,6 +225,25 @@ export function createTasksRouter(): Router {
           !v.notionStatus.includes('Deferred') &&
           !v.notionStatus.includes('Backlog'),
       );
+
+    // Resolve blocked status from the full board task list
+    if (boardCacheRow) {
+      try {
+        const allBoardTasks = JSON.parse(boardCacheRow.raw_json) as NotionTask[];
+        const resolver = new DependencyResolver();
+        const resolved = resolver.resolve(allBoardTasks);
+        const resolvedMap = new Map(resolved.map((r) => [r.task.id, r]));
+        for (const view of views) {
+          const r = resolvedMap.get(view.taskId);
+          if (r) {
+            view.blocked = r.blocked;
+            view.blockerNames = r.blockers.map((b) => b.title);
+          }
+        }
+      } catch {
+        // ignore — views retain their default blocked: false
+      }
+    }
 
     res.json(views);
   });

@@ -152,15 +152,58 @@
 .verdict-needs-changes  { background: rgba(249,226,175,0.15); color: #f9e2af; }
 .verdict-incomplete     { background: rgba(243,139,168,0.15); color: #f38ba8; }
 
+/* Card footer row */
+.cardFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 2px;
+}
+
 /* Notion link */
 .notionLink {
   font-size: 11px;
   color: var(--text-faint);
   text-decoration: none;
-  align-self: flex-start;
 }
 
 .notionLink:hover {
   color: var(--accent);
   text-decoration: underline;
+}
+
+/* Placeholder dash for empty rows */
+.placeholder {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+/* PR state badge */
+.prState {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* Launch button */
+.launchButton {
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm, 4px);
+  padding: 2px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text-primary);
+  flex-shrink: 0;
+  transition: border-color 0.15s, opacity 0.15s;
+  line-height: 1;
+}
+
+.launchButton:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.launchButton:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
