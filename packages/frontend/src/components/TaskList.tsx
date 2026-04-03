@@ -115,9 +115,14 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
     );
   }
 
+  const codeTasks = tasks.filter((t) => t.taskType.includes('💻'));
+  const nonCodeTasks = tasks
+    .filter((t) => !t.taskType.includes('💻'))
+    .sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority));
+
   const groups = GROUP_ORDER.map((status) => ({
     status,
-    tasks: tasks
+    tasks: codeTasks
       .filter((t) => t.displayStatus === status)
       .sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority)),
   })).filter((g) => g.tasks.length > 0);
@@ -163,6 +168,27 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
           </div>
         );
       })}
+
+      {nonCodeTasks.length > 0 && (
+        <div className={`${styles.group} ${styles.nonCodeGroup}`} data-testid="non-code-section">
+          <div className={styles.groupHeader}>
+            <span className={styles.groupLabel}>📋 Planning / Testing</span>
+            <span className={styles.groupCount}>{nonCodeTasks.length}</span>
+          </div>
+          <div className={styles.groupCards}>
+            {nonCodeTasks.map((task) => (
+              <TaskCard
+                key={task.taskId}
+                task={task}
+                selected={task.taskId === selectedTaskId}
+                onClick={() => onSelectTask(task.taskId)}
+                send={send}
+                project={project}
+              />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

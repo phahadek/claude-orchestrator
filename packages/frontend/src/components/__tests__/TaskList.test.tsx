@@ -141,6 +141,44 @@ describe('TaskList', () => {
     });
   });
 
+  it('renders non-code tasks in a separate section, not mixed with code tasks', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Code Task', displayStatus: 'ready', taskType: '💻 Code', notionStatus: '🗂️ Ready' }),
+      makeTask({ taskId: 't2', taskName: 'Planning Task', displayStatus: 'ready', taskType: '📋 Planning', notionStatus: '🗂️ Ready' }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByText('Code Task')).toBeDefined();
+      expect(screen.getByText('Planning Task')).toBeDefined();
+    });
+    const nonCodeSection = screen.getByTestId('non-code-section');
+    expect(nonCodeSection.textContent).toContain('Planning Task');
+    expect(nonCodeSection.textContent).not.toContain('Code Task');
+  });
+
+  it('non-code tasks in separate section do not render a Launch button', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Planning Task', displayStatus: 'ready', taskType: '📋 Planning', notionStatus: '🗂️ Ready' }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('non-code-section')).toBeDefined();
+    });
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('non-code task section header shows the count', async () => {
+    mockFetch([
+      makeTask({ taskId: 't1', taskName: 'Planning Task 1', displayStatus: 'ready', taskType: '📋 Planning', notionStatus: '🗂️ Ready' }),
+      makeTask({ taskId: 't2', taskName: 'Testing Task', displayStatus: 'ready', taskType: '🧪 Testing', notionStatus: '🗂️ Ready' }),
+    ]);
+    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    await waitFor(() => {
+      const nonCodeSection = screen.getByTestId('non-code-section');
+      expect(nonCodeSection.textContent).toContain('2');
+    });
+  });
+
   it('triggers a re-fetch when reviewRefreshTrigger changes (pr_review_complete scenario)', async () => {
     const task = makeTask({ taskId: 't1', taskName: 'Task A', displayStatus: 'in_review' });
     const updatedTask = makeTask({ taskId: 't1', taskName: 'Task A (reviewed)', displayStatus: 'needs_attention' });
