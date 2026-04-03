@@ -14,6 +14,7 @@ function makePR(overrides: Partial<PRListItem> = {}): PRListItem {
     notionTaskId: null,
     notionTaskTitle: null,
     sessionId: null,
+    reviewSessionId: null,
     repo: 'owner/repo',
     reviewResult: null,
     reviewedAt: null,
@@ -197,5 +198,25 @@ describe('PRCard', () => {
     render(<PRCard pr={makePR()} {...defaultProps} approveInFlight={true} />);
     const btn = screen.getByRole('button', { name: /approving/i });
     expect(btn.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('shows "Review ⇗" button when reviewSessionId is present and onViewSession is provided', () => {
+    const pr = makePR({ reviewSessionId: 'review-session-abc' });
+    render(<PRCard pr={pr} {...defaultProps} onViewSession={vi.fn()} />);
+    expect(screen.getByRole('button', { name: /review ⇗/i })).toBeDefined();
+  });
+
+  it('does NOT show "Review ⇗" button when reviewSessionId is null', () => {
+    const pr = makePR({ reviewSessionId: null });
+    render(<PRCard pr={pr} {...defaultProps} onViewSession={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /review ⇗/i })).toBeNull();
+  });
+
+  it('calls onViewSession with reviewSessionId when "Review ⇗" is clicked', () => {
+    const onViewSession = vi.fn();
+    const pr = makePR({ reviewSessionId: 'review-session-xyz' });
+    render(<PRCard pr={pr} {...defaultProps} onViewSession={onViewSession} />);
+    fireEvent.click(screen.getByRole('button', { name: /review ⇗/i }));
+    expect(onViewSession).toHaveBeenCalledWith('review-session-xyz');
   });
 });

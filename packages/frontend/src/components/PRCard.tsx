@@ -23,6 +23,7 @@ export interface PRListItem {
   notionTaskId: string | null;
   notionTaskTitle: string | null;
   sessionId: string | null;
+  reviewSessionId: string | null;
   repo: string;
   reviewResult: PRReviewResult | null;
   reviewedAt: string | null;
@@ -119,7 +120,7 @@ export function PRCard({
         <span className={styles.branch}>
           {pr.headBranch} → {pr.baseBranch}
         </span>
-        {(pr.notionTaskTitle || pr.sessionId) && (
+        {(pr.notionTaskTitle || pr.sessionId || pr.reviewSessionId) && (
           <div className={styles.metaRow}>
             {pr.notionTaskTitle && (
               <div className={styles.notionRow}>
@@ -145,6 +146,15 @@ export function PRCard({
                 onClick={() => onViewSession(pr.sessionId!)}
               >
                 Session ⇗
+              </button>
+            )}
+            {pr.reviewSessionId && onViewSession && (
+              <button
+                type="button"
+                className={styles.sessionLink}
+                onClick={() => onViewSession(pr.reviewSessionId!)}
+              >
+                Review ⇗
               </button>
             )}
           </div>
