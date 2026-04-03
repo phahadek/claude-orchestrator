@@ -2,7 +2,7 @@ import type { SessionState } from '../hooks/useSessionStore';
 import { taskNameFromNotionUrl } from '../utils/notionUrl';
 import { formatElapsed } from '../utils/sessionTimer';
 import { summarizeEvent, isHiddenSystemEvent, tryParseJson } from '../utils/eventParsing';
-import { formatTokenCount } from '@claude-dashboard/backend/src/utils/usage';
+import { formatTokenCount, formatUtilization } from '@claude-dashboard/backend/src/utils/usage';
 import { StatusBadge } from './StatusBadge';
 import styles from './SessionCard.module.css';
 
@@ -17,9 +17,10 @@ interface Props {
   onResume?: () => void;
   onToggleFavorite?: () => void;
   previewLines?: number;
+  planTokenCap?: number;
 }
 
-export function SessionCard({ session, selected, onClick, projectColor, projectName, onResume, onToggleFavorite, previewLines = CARD_PREVIEW_LINES }: Props) {
+export function SessionCard({ session, selected, onClick, projectColor, projectName, onResume, onToggleFavorite, previewLines = CARD_PREVIEW_LINES, planTokenCap }: Props) {
   const previewEvents = session.events
     .filter((e) => !(e.eventType === 'system' && isHiddenSystemEvent(tryParseJson(e.content))))
     .slice(-previewLines);
@@ -101,6 +102,9 @@ export function SessionCard({ session, selected, onClick, projectColor, projectN
         {(session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0) > 0 && (
           <span className={styles['token-count']}>
             {formatTokenCount((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0))} tokens
+            {planTokenCap != null && planTokenCap > 0
+              ? ` (${formatUtilization(((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0)) / planTokenCap * 100)})`
+              : ''}
           </span>
         )}
         {session.model && (
