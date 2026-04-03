@@ -58,7 +58,7 @@ export type ServerMessage =
   | { type: 'session_updated';       sessionId: string; note?: string | null; tags?: string[]; totalInputTokens?: number; totalOutputTokens?: number; model?: string }
   | { type: 'tasks_ready';           tasks: ResolvedTask[] }
   | { type: 'pr_review_complete';    prNumber: number; repo: string; verdict: string; summary: string; draft?: boolean }
-  | { type: 'push_detected';         sessionId: string }
+  | { type: 'push_detected';         sessionId: string; prNumber: number; repo: string }
   | { type: 'review_verdict';        prNumber: number; repo: string; verdict: string; summary: string; iteration: number }
   | { type: 'pr_merged';             prNumber: number; repo: string; sha: string }
   | { type: 'pr_closed';             prNumber: number; repo: string }
