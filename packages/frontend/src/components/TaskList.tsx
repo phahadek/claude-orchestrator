@@ -36,6 +36,7 @@ const GROUP_LABELS: Record<DisplayStatus, string> = {
   in_review: '👀 In Review',
   ready: '🗂️ Ready',
   done: '✔️ Done',
+  backlog: '🗂️ Backlog',
 };
 
 const PRIORITY_RANK: Record<string, number> = {
@@ -233,7 +234,7 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
   const [tasks, setTasks] = useState<TaskView[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set(['done']));
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set(['done', 'backlog']));
 
   const toggleGroup = useCallback((status: string) => {
     setCollapsed((prev) => {
@@ -346,8 +347,11 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
     );
   }
 
-  const codeTasks = tasks.filter((t) => t.taskType.includes('💻'));
-  const nonCodeTasks = tasks.filter((t) => !t.taskType.includes('💻'));
+  const backlogTasks = tasks.filter((t) => t.displayStatus === 'backlog');
+  const activeTasks = tasks.filter((t) => t.displayStatus !== 'backlog');
+
+  const codeTasks = activeTasks.filter((t) => t.taskType.includes('💻'));
+  const nonCodeTasks = activeTasks.filter((t) => !t.taskType.includes('💻'));
 
   const readyCodeTasks = codeTasks.filter((t) => t.displayStatus === 'ready');
   const readyNonCodeTasks = nonCodeTasks.filter((t) => t.displayStatus === 'ready');
@@ -461,6 +465,40 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
                 />
               ))}
             </div>
+            )}
+          </div>
+        )}
+
+        {backlogTasks.length > 0 && (
+          <div className={`${styles.group} ${styles.backlogGroup}`} data-status="backlog" data-testid="backlog-section">
+            <div
+              className={`${styles.groupHeader} ${styles.groupHeaderToggle}`}
+              onClick={() => toggleGroup('backlog')}
+              role="button"
+              aria-expanded={!collapsed.has('backlog')}
+              data-testid="group-header-backlog"
+            >
+              <span className={styles.toggle} aria-hidden="true">
+                {!collapsed.has('backlog') ? '▼' : '▶'}
+              </span>
+              <span className={styles.groupLabel}>🗂️ Backlog</span>
+              <span className={styles.groupCount}>{backlogTasks.length}</span>
+            </div>
+            {!collapsed.has('backlog') && (
+              <div className={styles.groupCards}>
+                {backlogTasks
+                  .sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority))
+                  .map((task) => (
+                    <CompactTaskCard
+                      key={task.taskId}
+                      task={task}
+                      showCheckbox={false}
+                      checked={false}
+                      onCheckChange={() => {}}
+                      onClick={() => window.open(task.notionUrl, '_blank', 'noopener,noreferrer')}
+                    />
+                  ))}
+              </div>
             )}
           </div>
         )}
