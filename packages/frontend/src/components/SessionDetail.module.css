@@ -632,6 +632,48 @@
   background: rgba(243, 139, 168, 0.25);
 }
 
+/* ── Transcript / Diff tab bar ───────────────────────────────────── */
+.tabBar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  padding: 0 16px;
+  background: var(--bg-secondary);
+}
+
+.tabButton {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 6px 12px;
+  transition: color 0.15s, border-color 0.15s;
+  margin-bottom: -1px;
+}
+
+.tabButton:hover {
+  color: var(--text-primary);
+}
+
+.tabButton--active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.diffError {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ctp-red);
+  font-size: 0.875rem;
+  padding: 24px;
+}
+
 /* ── Message composer ────────────────────────────────────────────── */
 .composer {
   display: flex;
