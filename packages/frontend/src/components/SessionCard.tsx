@@ -17,9 +17,10 @@ interface Props {
   onResume?: () => void;
   onToggleFavorite?: () => void;
   previewLines?: number;
+  sessionMode?: string;
 }
 
-export function SessionCard({ session, selected, onClick, projectColor, projectName, onResume, onToggleFavorite, previewLines = CARD_PREVIEW_LINES }: Props) {
+export function SessionCard({ session, selected, onClick, projectColor, projectName, onResume, onToggleFavorite, previewLines = CARD_PREVIEW_LINES, sessionMode }: Props) {
   const previewEvents = session.events
     .filter((e) => !(e.eventType === 'system' && isHiddenSystemEvent(tryParseJson(e.content))))
     .slice(-previewLines);
@@ -105,8 +106,9 @@ export function SessionCard({ session, selected, onClick, projectColor, projectN
         <span className={styles.elapsed}>{elapsed}</span>
         {(session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0) > 0 && (
           <span className={styles['token-count']}>
-            {formatTokenCount((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0))} tokens
-            {' (~' + formatCost(calculateCost(session.totalInputTokens ?? 0, session.totalOutputTokens ?? 0, session.model)) + ')'}
+            {sessionMode === 'api'
+              ? formatCost(calculateCost(session.totalInputTokens ?? 0, session.totalOutputTokens ?? 0, session.model))
+              : `${formatTokenCount((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0))} tokens (~${formatCost(calculateCost(session.totalInputTokens ?? 0, session.totalOutputTokens ?? 0, session.model))} est.)`}
           </span>
         )}
         {session.model && (
