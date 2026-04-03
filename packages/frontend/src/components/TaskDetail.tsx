@@ -6,6 +6,7 @@ import type { SessionState } from '../hooks/useSessionStore';
 import { StatusBadge } from './StatusBadge';
 import { EventTranscript } from './EventTranscript';
 import { parseReviewResultFromEvents } from './ReviewDetailView';
+import { formatTokenCount } from '@claude-dashboard/backend/src/utils/usage';
 import styles from './TaskDetail.module.css';
 
 // ── Display status helpers ─────────────────────────────────────────
@@ -211,6 +212,11 @@ export function TaskDetail({ task, send, onClose, sessions = [] }: Props) {
           {task.priority && (
             <span className={styles.priorityBadge}>{task.priority}</span>
           )}
+          {(task.totalTokens.input + task.totalTokens.output) > 0 && (
+            <span className={styles.totalTokensBadge}>
+              {formatTokenCount(task.totalTokens.input + task.totalTokens.output)} tokens
+            </span>
+          )}
           {task.notionUrl && (
             <a
               href={task.notionUrl}
@@ -264,6 +270,11 @@ export function TaskDetail({ task, send, onClose, sessions = [] }: Props) {
               {task.review.iterationCount > 0 && (
                 <span className={styles.iterationCount}>
                   #{task.review.iterationCount}
+                </span>
+              )}
+              {(task.review.inputTokens + task.review.outputTokens) > 0 && (
+                <span className={styles.reviewTokenCount}>
+                  {formatTokenCount(task.review.inputTokens + task.review.outputTokens)} tokens
                 </span>
               )}
               {task.review.verdict ? (

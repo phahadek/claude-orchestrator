@@ -703,6 +703,8 @@ export interface TaskAggregateRow {
   // review session (session_type = 'review')
   review_session_id: string | null;
   review_session_status: string | null;
+  review_session_input_tokens: number | null;
+  review_session_output_tokens: number | null;
   // pull request
   pr_number: number | null;
   pr_url: string | null;
@@ -730,6 +732,8 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       cs.total_output_tokens AS code_session_output_tokens,
       rs.session_id          AS review_session_id,
       rs.status              AS review_session_status,
+      rs.total_input_tokens  AS review_session_input_tokens,
+      rs.total_output_tokens AS review_session_output_tokens,
       pr.pr_number,
       pr.pr_url,
       pr.title               AS pr_title,

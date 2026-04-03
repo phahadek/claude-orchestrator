@@ -101,6 +101,8 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
       verdict: reviewVerdict,
       summary: reviewSummary,
       iterationCount: row.pr_review_iteration ?? 0,
+      inputTokens: row.review_session_input_tokens ?? 0,
+      outputTokens: row.review_session_output_tokens ?? 0,
     };
   }
 
@@ -113,6 +115,11 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     reviewIterationCount: row.pr_review_iteration ?? 0,
     reviewIterationCap: cap,
   });
+
+  const totalTokens = {
+    input: (row.code_session_input_tokens ?? 0) + (row.review_session_input_tokens ?? 0),
+    output: (row.code_session_output_tokens ?? 0) + (row.review_session_output_tokens ?? 0),
+  };
 
   return {
     taskId: row.notion_task_id,
@@ -128,6 +135,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     codeSession,
     pr,
     review,
+    totalTokens,
   };
 }
 
