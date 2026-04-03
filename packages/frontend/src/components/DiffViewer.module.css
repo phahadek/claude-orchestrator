@@ -1,0 +1,168 @@
+/* ── Diff viewer container ───────────────────────────────────────── */
+.container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--ctp-crust);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.refreshButton {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 3px 8px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.refreshButton:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--text-faint);
+}
+
+.refreshButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Loading skeleton ────────────────────────────────────────────── */
+.skeleton {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px;
+  overflow: hidden;
+}
+
+.skeletonLine {
+  height: 14px;
+  background: var(--bg-elevated);
+  border-radius: 3px;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0%   { opacity: 0.6; }
+  50%  { opacity: 1; }
+  100% { opacity: 0.6; }
+}
+
+/* ── Error state ─────────────────────────────────────────────────── */
+.error {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ctp-red);
+  font-size: 0.875rem;
+  padding: 24px;
+  text-align: center;
+}
+
+/* ── Empty state ─────────────────────────────────────────────────── */
+.empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+  font-size: 0.875rem;
+  font-style: italic;
+}
+
+/* ── Diff content ────────────────────────────────────────────────── */
+.diff {
+  flex: 1;
+  overflow: auto;
+  padding: 0;
+}
+
+.diffTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* ── Diff line types ─────────────────────────────────────────────── */
+.lineAdded {
+  background: rgba(166, 227, 161, 0.12);
+}
+
+.lineRemoved {
+  background: rgba(243, 139, 168, 0.12);
+}
+
+.lineHunk {
+  background: rgba(137, 180, 250, 0.08);
+}
+
+.lineFileHeader {
+  background: var(--bg-elevated);
+}
+
+.lineContext {
+  /* default — no special background */
+}
+
+/* ── Cell styles ─────────────────────────────────────────────────── */
+.lineNum {
+  user-select: none;
+  text-align: right;
+  padding: 0 8px;
+  color: var(--text-faint);
+  min-width: 40px;
+  white-space: nowrap;
+  border-right: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.lineAdded .lineNum {
+  color: rgba(166, 227, 161, 0.6);
+}
+
+.lineRemoved .lineNum {
+  color: rgba(243, 139, 168, 0.6);
+}
+
+.lineContent {
+  padding: 0 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-primary);
+  width: 100%;
+  vertical-align: top;
+}
+
+.lineAdded .lineContent {
+  color: var(--ctp-green);
+}
+
+.lineRemoved .lineContent {
+  color: var(--ctp-red);
+}
+
+.lineHunk .lineContent {
+  color: var(--ctp-blue);
+  font-style: italic;
+}
+
+.lineFileHeader .lineContent {
+  font-weight: 700;
+  color: var(--text-primary);
+}
