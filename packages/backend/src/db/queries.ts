@@ -650,3 +650,86 @@ export function getAllOpenPRs(): PullRequestRow[] {
     SELECT * FROM pull_requests WHERE state = 'open'
   `).all() as PullRequestRow[];
 }
+
+// ─── task aggregation ─────────────────────────────────────────────────────────
+
+export interface TaskAggregateRow {
+  notion_task_id: string;
+  raw_json: string;
+  // code session (session_type = 'standard')
+  code_session_id: string | null;
+  code_session_status: string | null;
+  code_session_started_at: number | null;
+  code_session_ended_at: number | null;
+  code_session_input_tokens: number | null;
+  code_session_output_tokens: number | null;
+  // review session (session_type = 'review')
+  review_session_id: string | null;
+  review_session_status: string | null;
+  // pull request
+  pr_number: number | null;
+  pr_url: string | null;
+  pr_title: string | null;
+  pr_head_branch: string | null;
+  pr_base_branch: string | null;
+  pr_state: string | null;
+  pr_draft: number | null;
+  pr_review_result: string | null;
+  pr_review_iteration: number | null;
+}
+
+export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
+  if (taskIds.length === 0) return [];
+  const placeholders = taskIds.map(() => '?').join(', ');
+  return db.prepare(`
+    SELECT
+      tc.notion_task_id,
+      tc.raw_json,
+      cs.session_id          AS code_session_id,
+      cs.status              AS code_session_status,
+      cs.started_at          AS code_session_started_at,
+      cs.ended_at            AS code_session_ended_at,
+      cs.total_input_tokens  AS code_session_input_tokens,
+      cs.total_output_tokens AS code_session_output_tokens,
+      rs.session_id          AS review_session_id,
+      rs.status              AS review_session_status,
+      pr.pr_number,
+      pr.pr_url,
+      pr.title               AS pr_title,
+      pr.head_branch         AS pr_head_branch,
+      pr.base_branch         AS pr_base_branch,
+      pr.state               AS pr_state,
+      pr.draft               AS pr_draft,
+      pr.review_result       AS pr_review_result,
+      pr.review_iteration    AS pr_review_iteration
+    FROM task_cache tc
+    LEFT JOIN sessions cs ON cs.session_id = (
+      SELECT session_id FROM sessions
+      WHERE notion_task_id = tc.notion_task_id AND session_type = 'standard'
+      ORDER BY started_at DESC LIMIT 1
+    )
+    LEFT JOIN sessions rs ON rs.session_id = (
+      SELECT session_id FROM sessions
+      WHERE notion_task_id = tc.notion_task_id AND session_type = 'review'
+      ORDER BY started_at DESC LIMIT 1
+    )
+    LEFT JOIN pull_requests pr ON pr.id = (
+      SELECT id FROM pull_requests
+      WHERE notion_task_id = tc.notion_task_id
+      ORDER BY pr_number DESC LIMIT 1
+    )
+    WHERE tc.notion_task_id IN (${placeholders})
+    ORDER BY tc.fetched_at DESC
+  `).all(...taskIds) as TaskAggregateRow[];
+}
+
+export function getLatestNonSystemEventPayload(sessionId: string): string | null {
+  const row = db.prepare(`
+    SELECT payload FROM session_events
+    WHERE session_id = ?
+      AND event_type NOT IN ('system', 'user_message')
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(sessionId) as { payload: string } | undefined;
+  return row?.payload ?? null;
+}

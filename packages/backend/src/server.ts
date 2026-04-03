@@ -16,6 +16,7 @@ import configRouter from './routes/config';
 import settingsRouter, { loadRuntimeSettingsFromDb } from './routes/settings';
 import { sessionsRouter, setBroadcast } from './routes/sessions';
 import { createPrsRouter, setPRBroadcast } from './routes/prs';
+import { createTasksRouter } from './routes/tasks';
 import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
 import { PRSyncJob } from './github/PRSyncJob';
@@ -58,6 +59,7 @@ app.use('/api/sessions', sessionsRouter);
 // .start() is called later after server boots.
 const prMergeWatcher = new PRMergeWatcher(githubClient, sessionManager, notionClient, broadcast);
 app.use('/api', createPrsRouter(githubClient, prReviewService, sessionManager, notionClient, prMergeWatcher));
+app.use('/api', createTasksRouter());
 app.use('/api', configRouter);
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>
