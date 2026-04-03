@@ -45,7 +45,10 @@ export interface TaskView {
     verdict: string | null;
     summary: string | null;
     iterationCount: number;
+    inputTokens: number;
+    outputTokens: number;
   } | null;
+  totalTokens: { input: number; output: number };
 }
 
 export type ServerMessage =

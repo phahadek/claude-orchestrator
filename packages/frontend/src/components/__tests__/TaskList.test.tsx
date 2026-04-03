@@ -17,6 +17,7 @@ function makeTask(overrides: Partial<TaskView> & { taskId: string; displayStatus
     codeSession: null,
     pr: null,
     review: null,
+    totalTokens: { input: 0, output: 0 },
     ...overrides,
   };
 }
@@ -397,7 +398,7 @@ describe('TaskList', () => {
 
   it('triggers a re-fetch when reviewRefreshTrigger changes (session_started review scenario)', async () => {
     const task = makeTask({ taskId: 't2', taskName: 'Task B', displayStatus: 'in_progress' });
-    const withReview = makeTask({ taskId: 't2', taskName: 'Task B', displayStatus: 'in_review', review: { sessionId: 'rev-1', status: 'running', verdict: null, summary: null, iterationCount: 1 } });
+    const withReview = makeTask({ taskId: 't2', taskName: 'Task B', displayStatus: 'in_review', review: { sessionId: 'rev-1', status: 'running', verdict: null, summary: null, iterationCount: 1, inputTokens: 0, outputTokens: 0 } });
 
     (fetch as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => [task] })

@@ -2,6 +2,7 @@ import type { TaskView, DisplayStatus } from '../types/taskView';
 import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
 import { useDispatch } from '../hooks/useDispatch';
+import { formatTokenCount } from '@claude-dashboard/backend/src/utils/usage';
 import styles from './TaskCard.module.css';
 
 interface Props {
@@ -121,6 +122,11 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
           >
             Notion ↗
           </a>
+        )}
+        {(task.totalTokens.input + task.totalTokens.output) > 0 && (
+          <span className={styles.tokenBadge}>
+            {formatTokenCount(task.totalTokens.input + task.totalTokens.output)} tokens
+          </span>
         )}
         {isNonCode ? (
           <span className={styles.taskTypeLabel}>{task.taskType}</span>

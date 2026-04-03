@@ -17,6 +17,7 @@ function makeTaskView(taskId: string, notionStatus: string, wave = 1): TaskView 
     codeSession: null,
     pr: null,
     review: null,
+    totalTokens: { input: 0, output: 0 },
   };
 }
 
