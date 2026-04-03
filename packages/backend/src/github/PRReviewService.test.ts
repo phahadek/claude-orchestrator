@@ -554,8 +554,8 @@ describe('PRReviewService — merge conflict dimension', () => {
 
     const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
 
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
-      const id = 'review-session-id';
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+      const id = opts.sessionId;
       setImmediate(() => mockSM.emit('message', makeSessionEventMessage(id, JSON.stringify(allPassedAIPayload))));
       return id;
     });
@@ -578,8 +578,8 @@ describe('PRReviewService — merge conflict dimension', () => {
 
     const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
 
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
-      const id = 'review-session-id';
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+      const id = opts.sessionId;
       setImmediate(() => mockSM.emit('message', makeSessionEventMessage(id, JSON.stringify(allPassedAIPayload))));
       return id;
     });
@@ -594,7 +594,7 @@ describe('PRReviewService — merge conflict dimension', () => {
     expect(result.verdict).toBe('needs_changes');
   });
 
-  it('treats mergeable=null as passed (GitHub still computing)', async () => {
+  it('treats mergeable=null as failed (GitHub still computing — unknown is not passing)', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
 
     const mockSM = makeMockSessionManager();
@@ -603,8 +603,8 @@ describe('PRReviewService — merge conflict dimension', () => {
 
     const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
 
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
-      const id = 'review-session-id';
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+      const id = opts.sessionId;
       setImmediate(() => mockSM.emit('message', makeSessionEventMessage(id, JSON.stringify(allPassedAIPayload))));
       return id;
     });
@@ -612,8 +612,54 @@ describe('PRReviewService — merge conflict dimension', () => {
     const result = await service.reviewPR(42, 'owner/repo');
 
     const conflictDim = result.dimensions!.find((d) => d.name === 'Merge conflicts');
-    expect(conflictDim!.passed).toBe(true);
-    expect(result.verdict).toBe('approved');
+    expect(conflictDim!.passed).toBe(false);
+    expect(result.verdict).toBe('needs_changes');
+  });
+
+  it('preserves incomplete verdict when session killed with mergeable=null (killed-session bug)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    // Empty events → parseReviewResult returns incomplete (JSON parse failure)
+    vi.mocked(getEventsBySession).mockReturnValue([]);
+
+    const mockSM = makeMockSessionManager();
+    const mockGH = makeMockGitHub();
+    vi.mocked(mockGH.getMergeability).mockResolvedValue({ mergeable: null, mergeableState: null });
+
+    const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+      const id = opts.sessionId;
+      // Simulate killed session: session_ended fires with no prior verdict
+      setImmediate(() => mockSM.emit('message', { type: 'session_ended', sessionId: id, status: 'killed' }));
+      return id;
+    });
+
+    const result = await service.reviewPR(42, 'owner/repo');
+
+    expect(result.verdict).toBe('incomplete');
+    const conflictDim = result.dimensions!.find((d) => d.name === 'Merge conflicts');
+    expect(conflictDim!.passed).toBe(false);
+  });
+
+  it('preserves incomplete verdict when session killed with mergeable=true', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    vi.mocked(getEventsBySession).mockReturnValue([]);
+
+    const mockSM = makeMockSessionManager();
+    const mockGH = makeMockGitHub();
+    vi.mocked(mockGH.getMergeability).mockResolvedValue({ mergeable: true, mergeableState: 'clean' });
+
+    const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+      const id = opts.sessionId;
+      setImmediate(() => mockSM.emit('message', { type: 'session_ended', sessionId: id, status: 'killed' }));
+      return id;
+    });
+
+    const result = await service.reviewPR(42, 'owner/repo');
+
+    expect(result.verdict).toBe('incomplete');
   });
 });
 
