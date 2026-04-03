@@ -1,10 +1,19 @@
 import type { ResolvedTask } from '../notion/types';
+import type { DisplayStatus } from '../tasks/TaskStatusEngine';
 
 // ── Server → Client ──────────────────────────────────────────────
 export interface PermissionDenial {
   tool_name: string;
   tool_use_id: string;
   tool_input: Record<string, unknown>;
+}
+
+/** Minimal projection of a task's live state sent in task_updated patches. */
+export interface TaskView {
+  codeSession: { status: string } | null;
+  prUrl: string | null;
+  prState: string | null;
+  reviewVerdict: string | null;
 }
 
 export type ServerMessage =
@@ -26,6 +35,7 @@ export type ServerMessage =
   | { type: 'review_incomplete';     prNumber: number; repo: string; message: string }
   | { type: 'session_audit';         sessionId: string; prOpened: boolean; prTargetsBranch: string | null; violations: string[]; specMismatch: string | null; auditedAt: string }
   | { type: 'task_status_changed';   notionTaskId: string; newStatus: string }
+  | { type: 'task_updated';          taskId: string; displayStatus: DisplayStatus; patch: Partial<TaskView> }
   | { type: 'error';                 message: string };
 
 // ── Client → Server ──────────────────────────────────────────────

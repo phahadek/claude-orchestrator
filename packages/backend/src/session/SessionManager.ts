@@ -5,11 +5,13 @@ import { EventEmitter } from 'events';
 import { AgentSession, parseNotionPageId } from './AgentSession';
 import { buildOrchestratorClaudeMd } from './orchestrator-claudemd';
 import { config, getProjectById, normalizePath } from '../config';
-import { insertSession, updateSessionStatus, insertEvent, getSession, getSessionsByStatus, getPRByNotionTaskId, getEventsBySession } from '../db/queries';
+import { insertSession, updateSessionStatus, insertEvent, getSession, getSessionsByStatus, getPRByNotionTaskId, getEventsBySession, getPRByNumber } from '../db/queries';
 import type { Session } from '../db/types';
 import type { NotionClient } from '../notion/NotionClient';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { ServerMessage } from '../ws/types';
+import { deriveDisplayStatusFromDb, buildTaskViewFromDb } from '../tasks/TaskStatusEngine';
+import type { DisplayStatus } from '../tasks/TaskStatusEngine';
 
 export interface StartOptions {
   taskType?: string;
@@ -21,14 +23,113 @@ export interface StartOptions {
   sessionId?: string;
 }
 
+/** How long to suppress lastMessage-only task_updated broadcasts per task (ms). */
+const LAST_MESSAGE_THROTTLE_MS = 3_000;
+
 export class SessionManager extends EventEmitter {
   private sessions = new Map<string, AgentSession>();
+
+  /** Last known DisplayStatus per notionTaskId — used to skip no-op broadcasts. */
+  private _lastDisplayStatus = new Map<string, DisplayStatus>();
+  /** Timestamp of last lastMessage-only task_updated per notionTaskId. */
+  private _lastMessageThrottle = new Map<string, number>();
+  /** Guards against re-entrant task_updated emission inside the emit override. */
+  private _inTaskUpdate = false;
 
   constructor(
     private readonly notionClient: NotionClient,
     private readonly githubClient?: GitHubClient,
   ) {
     super();
+  }
+
+  /**
+   * Override emit to intercept `message` events and emit `task_updated` whenever a
+   * message could change a task's derived display status. Guards against re-entrant
+   * calls so the task_updated broadcast itself never triggers another one.
+   */
+  override emit(event: string | symbol, ...args: unknown[]): boolean {
+    const result = super.emit(event, ...args);
+    if (event === 'message' && !this._inTaskUpdate) {
+      this._inTaskUpdate = true;
+      try {
+        this._handleTaskUpdated(args[0] as ServerMessage);
+      } catch (err) {
+        console.error('[SessionManager] task_updated handler error:', err);
+      } finally {
+        this._inTaskUpdate = false;
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Inspect an outgoing ServerMessage and, if it could change a task's derived
+   * display status, re-derive and broadcast task_updated (de-duped by last known status).
+   */
+  private _handleTaskUpdated(msg: ServerMessage): void {
+    const notionTaskId = this._notionTaskIdForMessage(msg);
+    if (!notionTaskId) return;
+
+    const isLastMessageOnly = msg.type === 'session_event';
+
+    if (isLastMessageOnly) {
+      const last = this._lastMessageThrottle.get(notionTaskId) ?? 0;
+      const now = Date.now();
+      if (now - last < LAST_MESSAGE_THROTTLE_MS) return;
+      this._lastMessageThrottle.set(notionTaskId, now);
+    }
+
+    const displayStatus = deriveDisplayStatusFromDb(notionTaskId);
+    const prev = this._lastDisplayStatus.get(notionTaskId);
+
+    if (!isLastMessageOnly && displayStatus === prev) return;
+    if (isLastMessageOnly && displayStatus === prev) {
+      // lastMessage-only and status unchanged — skip entirely (throttle already passed,
+      // but there's nothing interesting to send)
+      return;
+    }
+
+    this._lastDisplayStatus.set(notionTaskId, displayStatus);
+    const patch = buildTaskViewFromDb(notionTaskId);
+    super.emit('message', {
+      type: 'task_updated',
+      taskId: notionTaskId,
+      displayStatus,
+      patch,
+    } satisfies ServerMessage);
+  }
+
+  /**
+   * Determine the notionTaskId affected by a ServerMessage, if any.
+   * Returns null for messages that cannot change task display status.
+   */
+  private _notionTaskIdForMessage(msg: ServerMessage): string | null {
+    switch (msg.type) {
+      case 'session_started':
+      case 'session_ended':
+      case 'session_status':
+      case 'session_event':
+      case 'pr_created': {
+        const sessionId = (msg as { sessionId: string }).sessionId;
+        const row = getSession(sessionId);
+        return row?.notion_task_id ?? null;
+      }
+      case 'pr_review_complete':
+      case 'review_verdict': {
+        const { prNumber, repo } = msg as { prNumber: number; repo: string };
+        const prRow = getPRByNumber(prNumber, repo);
+        return prRow?.notion_task_id ?? null;
+      }
+      case 'pr_merged':
+      case 'pr_closed': {
+        const { prNumber, repo } = msg as { prNumber: number; repo: string };
+        const prRow = getPRByNumber(prNumber, repo);
+        return prRow?.notion_task_id ?? null;
+      }
+      default:
+        return null;
+    }
   }
 
   start(taskUrl: string, projectContextUrl: string, options?: StartOptions): string {
