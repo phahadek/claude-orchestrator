@@ -10,6 +10,7 @@ export interface BuildSessionContextParams {
   projectDir: string;
   prGate?: { typeCheck: string; build: string };
   bashRules?: string[];
+  taskBackend?: 'notion' | 'local';
 }
 
 /**
@@ -30,6 +31,7 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     projectDir,
     prGate,
     bashRules,
+    taskBackend,
   } = params;
 
   const orchestratorMd = buildOrchestratorClaudeMd({
@@ -39,6 +41,7 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     targetBranch,
     prGate,
     bashRules,
+    taskBackend,
   });
 
   const projectMdPath = path.join(projectDir, 'CLAUDE.md');
