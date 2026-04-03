@@ -244,7 +244,7 @@ export class PRReviewService {
   }
 
   private appendMergeConflictDimension(result: PRReviewResult, mergeable: boolean | null): PRReviewResult {
-    const passed = mergeable !== false;
+    const passed = mergeable === true;
     const conflictDim: ReviewDimension = {
       name: 'Merge conflicts',
       passed,
@@ -257,8 +257,8 @@ export class PRReviewService {
     const passedCount = dimensions.filter((d) => d.passed).length;
 
     let verdict: PRReviewResult['verdict'];
-    if (result.verdict === 'error') {
-      verdict = 'error';
+    if (result.verdict === 'error' || result.verdict === 'incomplete') {
+      verdict = result.verdict;  // Never override error/incomplete
     } else if (passedCount === dimensions.length) {
       verdict = 'approved';
     } else if (passedCount === 0) {
