@@ -189,9 +189,11 @@ export class SessionManager extends EventEmitter {
     const orchConfig = loadOrchestratorConfig(projectDir);
 
     // Run bootstrap script if configured (after worktree creation, before session spawn).
+    // cwd is the main project root so git rev-parse --show-toplevel resolves correctly.
+    // The worktree path is passed as $1 so the script can operate on it.
     if (orchConfig.bootstrapScript) {
       try {
-        execSync(orchConfig.bootstrapScript, { cwd: worktreePath, timeout: 120_000, stdio: 'pipe' });
+        execSync(`${orchConfig.bootstrapScript} "${worktreePath}"`, { cwd: projectDir, timeout: 120_000, stdio: 'pipe' });
         console.log(`[SessionManager] bootstrap script completed for ${sessionId.slice(0, 8)}`);
       } catch (err) {
         console.warn(`[SessionManager] bootstrap script failed for ${sessionId.slice(0, 8)} (continuing): ${err}`);
