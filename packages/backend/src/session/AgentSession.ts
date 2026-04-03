@@ -135,6 +135,7 @@ export class AgentSession extends EventEmitter {
     public readonly sessionType: string = 'standard',
     private readonly sessionManager?: ISessionManager,
     private readonly githubClient?: GitHubClient,
+    private readonly extraAllowedTools: string[] = [],
   ) {
     super();
   }
@@ -155,25 +156,10 @@ Fetch both Notion pages, then begin the task.
 ## Lifecycle — follow these steps exactly
 1. Fetch the project context page and the task page from Notion.
 2. Read CLAUDE.md in the repo root for project-specific conventions.
-3. Create a feature branch from the project's base branch (usually dev):
-   git checkout <base-branch> && git pull && git checkout -b feature/<task-name>
+3. Create a feature branch from the project's base branch.
 4. Implement the task per the acceptance criteria on the task page.
-5. Pre-PR gate (all must pass before opening PR):
-   a. Rebase onto the base branch
-   b. Type-check: tsc --noEmit (or the project's equivalent)
-   c. Build: npm run build / vite build (or the project's equivalent)
-6. Open a draft PR using --body-file to avoid shell escaping:
-   - Write the PR body to a temp file first, then run:
-     gh pr create --draft --base <base-branch> --title "feat: <exact task name>" --body-file /tmp/pr-body.md
-   - Title: "feat: <exact task name>" — no scope prefix like (backend), no milestone tags.
-   - Body format:
-     ## Summary
-     <bulleted list of what changed and why>
-
-     ## Test plan
-     <checkboxes from the task's acceptance criteria>
-
-     Notion task: <task URL>
+5. Pass the pre-PR gate as specified in CLAUDE.md.
+6. Open a draft PR as specified in CLAUDE.md.
 7. After the PR is open, WAIT. Do not merge. Do not close the session.
    The dashboard will send you review feedback as follow-up messages.
    Address any review findings by pushing additional commits, then wait again.
@@ -211,6 +197,7 @@ Fetch both Notion pages, then begin the task.
       ...(modelSetting ? ['--model', modelSetting] : []),
       '--allowed-tools',
       ...ALLOWED_TOOLS,
+      ...this.extraAllowedTools,
     ];
     const envKeys = ['PROJECT_DIR', 'SESSIONS_DIR', 'DB_PATH'] as const;
     const envStr = envKeys
