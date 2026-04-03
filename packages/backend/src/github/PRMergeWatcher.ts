@@ -4,6 +4,7 @@ import type { NotionClient } from '../notion/NotionClient';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
 import { getAllOpenPRs, updatePRState } from '../db/queries';
+import { emitTaskUpdated } from '../routes/tasks';
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -83,6 +84,7 @@ export class PRMergeWatcher {
             notionTaskId: pr.notion_task_id!,
             newStatus: '✅ Done',
           });
+          emitTaskUpdated(pr.notion_task_id!);
         })
         .catch((err: unknown) =>
           console.warn(`[PRMergeWatcher] Notion updateStatus failed:`, (err as Error).message),

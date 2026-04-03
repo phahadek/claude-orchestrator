@@ -10,8 +10,9 @@ import type { Session } from '../db/types';
 import type { NotionClient } from '../notion/NotionClient';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { ServerMessage } from '../ws/types';
-import { deriveDisplayStatusFromDb, buildTaskViewFromDb } from '../tasks/TaskStatusEngine';
+import { deriveDisplayStatusFromDb } from '../tasks/TaskStatusEngine';
 import type { DisplayStatus } from '../tasks/TaskStatusEngine';
+import { emitTaskUpdated } from '../routes/tasks';
 
 export interface StartOptions {
   taskType?: string;
@@ -91,13 +92,7 @@ export class SessionManager extends EventEmitter {
     }
 
     this._lastDisplayStatus.set(notionTaskId, displayStatus);
-    const patch = buildTaskViewFromDb(notionTaskId);
-    super.emit('message', {
-      type: 'task_updated',
-      taskId: notionTaskId,
-      displayStatus,
-      patch,
-    } satisfies ServerMessage);
+    emitTaskUpdated(notionTaskId);
   }
 
   /**
@@ -243,6 +238,7 @@ export class SessionManager extends EventEmitter {
             notionTaskId,
             newStatus: '🔄 In Progress',
           } satisfies ServerMessage);
+          emitTaskUpdated(notionTaskId);
         })
         .catch((e) => console.error(`[SessionManager] failed to set In Progress: ${e}`));
     }
