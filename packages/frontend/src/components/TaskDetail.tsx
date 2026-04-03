@@ -122,11 +122,12 @@ interface Props {
   send: (msg: ClientMessage) => void;
   onClose: () => void;
   sessions?: SessionState[];
+  projectId?: string;
 }
 
 // ── TaskDetail ────────────────────────────────────────────────────
 
-export function TaskDetail({ task, send, onClose, sessions = [] }: Props) {
+export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Props) {
   const [showReviewSection, setShowReviewSection] = useState(true);
   const [showReviewDimensions, setShowReviewDimensions] = useState(false);
   const [reviewInFlight, setReviewInFlight] = useState(false);
@@ -160,7 +161,10 @@ export function TaskDetail({ task, send, onClose, sessions = [] }: Props) {
     setReviewInFlight(true);
     setReviewError(null);
     try {
-      const res = await fetch(`/api/prs/${task.pr.prNumber}/review`, { method: 'POST' });
+      const url = projectId
+        ? `/api/prs/${task.pr.prNumber}/review?projectId=${encodeURIComponent(projectId)}`
+        : `/api/prs/${task.pr.prNumber}/review`;
+      const res = await fetch(url, { method: 'POST' });
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string };
         setReviewError(body.error ?? `HTTP ${res.status}`);
@@ -375,8 +379,9 @@ export function TaskDetail({ task, send, onClose, sessions = [] }: Props) {
                 {task.pr.mergeState !== 'dirty' && (
                   <button
                     className={styles.reviewButton}
-                    disabled={reviewInFlight}
+                    disabled={reviewInFlight || !projectId}
                     onClick={() => void handleRunReview()}
+                    title={!projectId ? 'Project ID unavailable' : undefined}
                   >
                     {reviewInFlight ? 'Reviewing…' : 'Run Review'}
                   </button>
