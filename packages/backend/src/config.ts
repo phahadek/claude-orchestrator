@@ -88,8 +88,6 @@ export interface RuntimeSettings {
   max_concurrent_code_sessions: number;
   auto_review_concurrency: number;
   auto_review: boolean;
-  plan_tier: string;
-  plan_token_cap: number;
   card_preview_lines: number;
   code_session_model: string;
   review_session_model: string;
@@ -100,8 +98,6 @@ export const runtimeSettings: RuntimeSettings = {
   max_concurrent_code_sessions: Number(process.env.MAX_CONCURRENT_CODE_SESSIONS ?? 20),
   auto_review_concurrency: Number(process.env.AUTO_REVIEW_CONCURRENCY ?? 1),
   auto_review: (process.env.AUTO_REVIEW ?? 'true') !== 'false',
-  plan_tier: process.env.PLAN_TIER ?? 'Max (5x)',
-  plan_token_cap: Number(process.env.PLAN_TOKEN_CAP ?? 25_000_000),
   card_preview_lines: Number(process.env.CARD_PREVIEW_LINES ?? 3),
   code_session_model: '',
   review_session_model: '',
