@@ -1,0 +1,294 @@
+/* ── Transcript section ───────────────────────────────────────────── */
+.transcriptSection {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.transcriptHeader {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.copyButton {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 3px 8px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.copyButton:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--text-faint);
+}
+
+.copyButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.goToEndButton {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 3px 8px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.goToEndButton:hover {
+  color: var(--text-primary);
+  border-color: var(--text-faint);
+}
+
+.transcript {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--ctp-crust);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.transcript > * {
+  flex-shrink: 0;
+}
+
+.emptyTranscript {
+  color: var(--text-faint);
+  font-style: italic;
+  font-size: 0.875rem;
+  margin: 0;
+  font-family: var(--font-sans);
+}
+
+/* ── Event rows ──────────────────────────────────────────────────── */
+.eventText {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.eventToolUse {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  font-size: 0.85rem;
+}
+
+.toolHeader {
+  background: var(--bg-elevated);
+  color: var(--ctp-blue);
+  font-weight: 600;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolHeader:hover {
+  background: var(--bg-hover, rgba(255,255,255,0.05));
+}
+
+.toolChevron {
+  font-size: 0.6rem;
+  flex-shrink: 0;
+}
+
+.toolBody {
+  overflow: auto;
+  max-height: 800px;
+  transition: max-height 0.25s ease, opacity 0.2s ease;
+  opacity: 1;
+}
+
+.toolBodyHidden {
+  overflow: hidden;
+  max-height: 0;
+  transition: max-height 0.2s ease, opacity 0.15s ease;
+  opacity: 0;
+}
+
+.toolArgs {
+  margin: 0;
+  padding: 8px 10px;
+  color: var(--ctp-green);
+  overflow-x: auto;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bashCommand {
+  margin: 0;
+  padding: 8px 10px;
+  color: var(--ctp-yellow);
+  font-size: 0.85rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
+.eventToolResult {
+  border-left: 3px solid var(--border);
+  padding-left: 10px;
+  margin-left: 8px;
+}
+
+.toolResultContent {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
+.toolResultExpanded {
+  /* no height cap in expanded state */
+}
+
+.expandButton {
+  background: transparent;
+  border: none;
+  color: var(--ctp-surface2);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 4px 0 2px;
+  display: block;
+  transition: color 0.15s;
+}
+
+.expandButton:hover {
+  color: var(--accent);
+}
+
+.eventSystem {
+  margin: 0;
+  font-style: italic;
+  color: var(--text-faint);
+  font-size: 0.85rem;
+}
+
+.eventUser {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: var(--ctp-mauve);
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-left: 3px solid var(--ctp-mauve);
+  padding-left: 10px;
+}
+
+.eventUserMessage {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.userMessageLabel {
+  font-size: 0.75rem;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.eventUserMessage p {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(137, 180, 250, 0.08);
+  border: 1px solid rgba(137, 180, 250, 0.25);
+  border-radius: 8px;
+  border-bottom-right-radius: 2px;
+  padding: 8px 12px;
+  max-width: 85%;
+}
+
+.eventError {
+  background: rgba(243, 139, 168, 0.1);
+  border-left: 3px solid var(--ctp-red);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+
+.eventError pre {
+  margin: 0;
+  color: var(--ctp-red);
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Inline permission denials ───────────────────────────────────── */
+.inlineDenials {
+  border: 1px solid rgba(243, 139, 168, 0.25);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-top: 4px;
+  flex-shrink: 0;
+}
+
+.inlineDenialsHeader {
+  background: var(--bg-elevated);
+  border: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  padding: 4px 10px;
+  width: 100%;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: color 0.15s;
+}
+
+.inlineDenialsHeader:hover {
+  color: var(--text-primary);
+}
+
+.inlineDenialsBody {
+  padding: 4px 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.inlineDenialItem {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-faint);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
