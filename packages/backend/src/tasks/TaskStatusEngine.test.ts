@@ -126,6 +126,26 @@ describe('deriveDisplayStatus', () => {
     ).toBe('done');
   });
 
+  // ─── Notion status fallback ────────────────────────────────────────────────
+
+  it("returns 'done' when notionStatus is '✅ Done' and no PR/session", () => {
+    expect(
+      deriveDisplayStatus(makeInput({ notionStatus: '✅ Done', codeSessionStatus: null, prState: null })),
+    ).toBe('done');
+  });
+
+  it("returns 'in_progress' when notionStatus is '🔄 In Progress' and no running session", () => {
+    expect(
+      deriveDisplayStatus(makeInput({ notionStatus: '🔄 In Progress', codeSessionStatus: null, prState: null })),
+    ).toBe('in_progress');
+  });
+
+  it("returns 'in_review' when notionStatus is '👀 In Review' and no PR", () => {
+    expect(
+      deriveDisplayStatus(makeInput({ notionStatus: '👀 In Review', codeSessionStatus: null, prState: null })),
+    ).toBe('in_review');
+  });
+
   // ─── priority ordering ─────────────────────────────────────────────────────
 
   it('done takes priority over ready_to_merge', () => {
