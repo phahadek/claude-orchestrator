@@ -1,0 +1,164 @@
+.task-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--ctp-overlay0);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: var(--shadow-sm);
+}
+
+.task-card:hover {
+  border-color: var(--border);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.task-card.selected {
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
+/* ── Status-specific left border colors ──────────────────────────────────── */
+
+.status-ready {
+  border-left-color: var(--ctp-overlay0);
+}
+
+.status-in_progress {
+  border-left-color: var(--ctp-blue);
+}
+
+.status-in_review {
+  border-left-color: var(--ctp-yellow);
+}
+
+.status-needs_attention {
+  border-left-color: var(--ctp-red);
+}
+
+.status-ready_to_merge {
+  border-left-color: var(--ctp-green);
+}
+
+.status-done {
+  border-left-color: rgba(166, 227, 161, 0.3);
+  opacity: 0.7;
+}
+
+/* ── Card header (line 1) ────────────────────────────────────────────────── */
+
+.card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-icon {
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
+.task-name {
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.priority-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ── Session line (line 2) ───────────────────────────────────────────────── */
+
+.session-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+}
+
+.session-status {
+  color: var(--text-faint);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.session-elapsed {
+  color: var(--text-faint);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.session-message {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+/* ── Meta line (line 3) ──────────────────────────────────────────────────── */
+
+.meta-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.pr-link {
+  color: var(--accent);
+  text-decoration: none;
+  flex-shrink: 0;
+}
+
+.pr-link:hover {
+  text-decoration: underline;
+}
+
+.pr-state {
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+
+.verdict-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.notion-link {
+  margin-left: auto;
+  color: var(--text-faint);
+  text-decoration: none;
+  flex-shrink: 0;
+}
+
+.notion-link:hover {
+  color: var(--text-muted);
+  text-decoration: underline;
+}
+
+.placeholder {
+  color: var(--text-faint);
+}
