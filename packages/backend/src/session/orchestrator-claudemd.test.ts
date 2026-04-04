@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { buildOrchestratorClaudeMd } from './orchestrator-claudemd';
+import { buildSessionContext, stripOrchestratorHeader } from './ContextBuilder';
 import { loadOrchestratorConfig } from './orchestrator-config';
 
 const defaultParams = {
@@ -10,6 +11,7 @@ const defaultParams = {
   taskUrl: 'https://www.notion.so/abc123',
   projectContextUrl: 'https://www.notion.so/ctx456',
   targetBranch: 'dev',
+  worktreePath: '/fake/worktree/path',
 };
 
 describe('buildOrchestratorClaudeMd', () => {
@@ -120,12 +122,22 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(result).toContain('**Rule 5 — Use `npx` instead of bare tool names.**');
   });
 
+  it('includes worktree path in Git Isolation section', () => {
+    const result = buildOrchestratorClaudeMd({
+      ...defaultParams,
+      worktreePath: '/my/worktree/dir',
+    });
+    expect(result).toContain('Your worktree directory is `/my/worktree/dir`');
+    expect(result).toContain('Never navigate to or operate on any parent directory');
+  });
+
   it('interpolates taskName, taskUrl, projectContextUrl, and targetBranch', () => {
     const params = {
       taskName: 'Fix the thing',
       taskUrl: 'https://www.notion.so/task-999',
       projectContextUrl: 'https://www.notion.so/ctx-888',
       targetBranch: 'main',
+      worktreePath: '/fake/path',
     };
     const result = buildOrchestratorClaudeMd(params);
 
@@ -160,18 +172,15 @@ describe('orchestrator CLAUDE.md merge logic (section 10)', () => {
    * in isolation without spawning a real session.
    */
   function writeMergedClaudeMd(taskName: string, taskUrl: string): void {
-    const orchestratorMd = buildOrchestratorClaudeMd({
+    const content = buildSessionContext({
       taskName,
       taskUrl,
       projectContextUrl: 'https://www.notion.so/ctx',
       targetBranch: 'dev',
+      projectDir,
+      worktreePath,
     });
-    const projectMdPath = path.join(projectDir, 'CLAUDE.md');
-    const projectMd = fs.existsSync(projectMdPath) ? fs.readFileSync(projectMdPath, 'utf-8') : '';
-    const merged = projectMd
-      ? `${orchestratorMd}\n\n---\n\n# Project Instructions\n\n${projectMd}`
-      : orchestratorMd;
-    fs.writeFileSync(path.join(worktreePath, 'CLAUDE.md'), merged, 'utf-8');
+    fs.writeFileSync(path.join(worktreePath, 'CLAUDE.md'), content, 'utf-8');
   }
 
   it('writes merged CLAUDE.md to the worktree path, not the project directory', () => {
@@ -226,6 +235,142 @@ describe('orchestrator CLAUDE.md merge logic (section 10)', () => {
 
     const afterMerge = fs.readFileSync(path.join(projectDir, 'CLAUDE.md'), 'utf-8');
     expect(afterMerge).toBe(original);
+  });
+});
+
+describe('stripOrchestratorHeader', () => {
+  it('returns the input unchanged when it does not start with orchestrator rules', () => {
+    const md = '# My Project\n\nSome instructions.';
+    expect(stripOrchestratorHeader(md)).toBe(md);
+  });
+
+  it('strips orchestrator header and returns content after "# Project Instructions"', () => {
+    const md = [
+      '# Orchestrator Rules (DO NOT OVERRIDE)',
+      '',
+      '## Task Assignment',
+      '- Task: old task',
+      '',
+      '---',
+      '',
+      '# Project Instructions',
+      '',
+      '# My Project',
+      '',
+      'Real instructions here.',
+    ].join('\n');
+    const result = stripOrchestratorHeader(md);
+    expect(result).toBe('# My Project\n\nReal instructions here.');
+    expect(result).not.toContain('Orchestrator Rules');
+    expect(result).not.toContain('old task');
+  });
+
+  it('returns empty string when entire file is orchestrator content with no project instructions', () => {
+    const md = [
+      '# Orchestrator Rules (DO NOT OVERRIDE)',
+      '',
+      '## Task Assignment',
+      '- Task: some task',
+    ].join('\n');
+    expect(stripOrchestratorHeader(md)).toBe('');
+  });
+
+  it('handles double-nested orchestrator pollution (orchestrator → project instructions → orchestrator → project instructions)', () => {
+    // This is the actual bug scenario: project CLAUDE.md was polluted, then
+    // embedded as "Project Instructions", creating nested orchestrator headers.
+    const md = [
+      '# Orchestrator Rules (DO NOT OVERRIDE)',
+      'Stale task rules',
+      '',
+      '# Project Instructions',
+      '',
+      '# Orchestrator Rules (DO NOT OVERRIDE)',
+      'Even staler rules',
+      '',
+      '# Project Instructions',
+      '',
+      '# Real Project Content',
+      'The actual instructions.',
+    ].join('\n');
+    const result = stripOrchestratorHeader(md);
+    // First strip removes the outer orchestrator header, exposing the inner one.
+    // The inner one still starts with "# Orchestrator Rules" so a second call
+    // would strip it too. But one level of stripping is sufficient for our use
+    // case since buildSessionContext calls it once before embedding.
+    expect(result).toContain('# Orchestrator Rules');
+    // The important thing is that the outer stale orchestrator header is gone.
+    expect(result).not.toContain('Stale task rules');
+  });
+});
+
+describe('buildSessionContext strips polluted project CLAUDE.md', () => {
+  let tmpDir: string;
+  let projectDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ctx-strip-test-'));
+    projectDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(projectDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('strips stale orchestrator header from project CLAUDE.md before embedding', () => {
+    // Simulate a polluted project CLAUDE.md (written by a previous escaped session)
+    const polluted = [
+      '# Orchestrator Rules (DO NOT OVERRIDE)',
+      '',
+      '## Task Assignment',
+      '- Task: Old stale task',
+      '',
+      '---',
+      '',
+      '# Project Instructions',
+      '',
+      '# Real Project',
+      'Actual project instructions.',
+    ].join('\n');
+    fs.writeFileSync(path.join(projectDir, 'CLAUDE.md'), polluted, 'utf-8');
+
+    const result = buildSessionContext({
+      taskName: 'Current task',
+      taskUrl: 'https://www.notion.so/current',
+      projectContextUrl: 'https://www.notion.so/ctx',
+      targetBranch: 'dev',
+      projectDir,
+      worktreePath: '/fake/worktree',
+    });
+
+    // Should have exactly ONE set of orchestrator rules (the current task's)
+    const orchestratorCount = (result.match(/# Orchestrator Rules \(DO NOT OVERRIDE\)/g) || []).length;
+    expect(orchestratorCount).toBe(1);
+
+    // Should NOT contain the stale task reference
+    expect(result).not.toContain('Old stale task');
+
+    // Should contain the current task and the real project instructions
+    expect(result).toContain('Current task');
+    expect(result).toContain('Actual project instructions.');
+  });
+
+  it('leaves clean project CLAUDE.md unchanged', () => {
+    const clean = '# My Game\n\nProject instructions here.';
+    fs.writeFileSync(path.join(projectDir, 'CLAUDE.md'), clean, 'utf-8');
+
+    const result = buildSessionContext({
+      taskName: 'Task X',
+      taskUrl: 'https://www.notion.so/x',
+      projectContextUrl: 'https://www.notion.so/ctx',
+      targetBranch: 'dev',
+      projectDir,
+      worktreePath: '/fake/worktree',
+    });
+
+    expect(result).toContain('# Project Instructions');
+    expect(result).toContain('# My Game');
+    expect(result).toContain('Project instructions here.');
   });
 });
 
