@@ -170,10 +170,11 @@ export class SessionManager extends EventEmitter {
     }
 
     try {
-      // Pass HEAD explicitly so git never has to guess the start-point, which
-      // avoids an obscure git edge case where omitting the commit-ish can
-      // trigger unexpected branch resolution in some git versions.
-      execSync(`git worktree add "${worktreePath}" -b "${branchName}" HEAD`, {
+      // Always branch from `dev` so sessions start from the correct base
+      // regardless of what branch the main working directory happens to be on.
+      // Using HEAD caused sessions to start from stale `main` commits when a
+      // previous session had changed the main repo's checked-out branch.
+      execSync(`git worktree add "${worktreePath}" -b "${branchName}" dev`, {
         cwd: projectDir,
       });
     } catch (err) {
@@ -213,6 +214,7 @@ export class SessionManager extends EventEmitter {
         projectContextUrl,
         targetBranch: 'dev',
         projectDir,
+        worktreePath,
         prGate: orchConfig.prGate,
         bashRules: orchConfig.bashRules,
         taskBackend: TASK_BACKEND,
@@ -386,7 +388,7 @@ export class SessionManager extends EventEmitter {
       branchName = `worktree-resume-${row.session_id.slice(0, 8)}`;
       worktreePath = path.join(projectDir, '.claude', 'worktrees', row.session_id);
       console.log(`[SessionManager] resumeSession ${row.session_id}: creating new worktree ${worktreePath} (branch=${branchName})`);
-      execSync(`git worktree add "${worktreePath}" -b "${branchName}" HEAD`, {
+      execSync(`git worktree add "${worktreePath}" -b "${branchName}" dev`, {
         cwd: projectDir,
       });
     }
@@ -666,7 +668,7 @@ export class SessionManager extends EventEmitter {
     }
 
     try {
-      execSync(`git worktree add "${worktreePath}" -b "${branchName}" HEAD`, {
+      execSync(`git worktree add "${worktreePath}" -b "${branchName}" dev`, {
         cwd: projectDir,
       });
     } catch (err) {
