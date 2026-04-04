@@ -3,6 +3,8 @@ export interface OrchestratorClaudeMdParams {
   taskUrl: string;
   projectContextUrl: string;
   targetBranch: string;
+  /** Absolute path to the worktree directory. Injected into Git Isolation rules. */
+  worktreePath: string;
   /** Pre-PR gate commands. Defaults to Node.js/Vite commands when omitted. */
   prGate?: {
     typeCheck: string;
@@ -42,7 +44,7 @@ export interface OrchestratorClaudeMdParams {
  * 11. Separator + "# Project Instructions (from project CLAUDE.md)" (added by caller)
  */
 export function buildOrchestratorClaudeMd(params: OrchestratorClaudeMdParams): string {
-  const { taskName, taskUrl, projectContextUrl, targetBranch, prGate, bashRules, taskBackend = 'notion' } = params;
+  const { taskName, taskUrl, projectContextUrl, targetBranch, worktreePath, prGate, bashRules, taskBackend = 'notion' } = params;
 
   const resolvedPrGate = prGate ?? { typeCheck: 'npx tsc --noEmit', build: 'npx vite build' };
   const resolvedBashRules = bashRules ?? [
@@ -158,6 +160,9 @@ Run in order — all must pass before opening the PR:
 ---
 
 ## Git Isolation
+
+> **Your worktree directory is \`${worktreePath}\`.**
+> This is your \`cwd\`. All commands run here. Never navigate to or operate on any parent directory.
 
 - All git commands must run inside the worktree directory (your \`cwd\`)
 - Never use \`git -C <path>\` pointing outside this worktree

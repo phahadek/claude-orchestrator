@@ -8,9 +8,40 @@ export interface BuildSessionContextParams {
   projectContextUrl: string;
   targetBranch: string;
   projectDir: string;
+  worktreePath: string;
   prGate?: { typeCheck: string; build: string };
   bashRules?: string[];
   taskBackend?: 'notion' | 'local';
+}
+
+/**
+ * Strip stale orchestrator rules from a project CLAUDE.md.
+ *
+ * If a previous session escaped its worktree and wrote the orchestrator header
+ * to the project's CLAUDE.md, subsequent sessions would see double orchestrator
+ * rules — one from the injected content and one embedded in "Project Instructions".
+ * This function detects and removes the stale orchestrator block so only the
+ * project's own instructions remain.
+ *
+ * Exported for testing.
+ */
+export function stripOrchestratorHeader(md: string): string {
+  if (!md.startsWith('# Orchestrator Rules')) return md;
+
+  // The orchestrator block ends at "# Project Instructions" — the separator
+  // added by buildSessionContext when the orchestrator was originally injected.
+  const marker = '# Project Instructions';
+  const idx = md.indexOf(marker);
+  if (idx === -1) {
+    // No "# Project Instructions" found — the entire file is orchestrator content.
+    // Return empty so the session only sees its own injected orchestrator rules.
+    return '';
+  }
+
+  // Skip the "# Project Instructions" heading and any blank lines after it.
+  let rest = md.slice(idx + marker.length);
+  rest = rest.replace(/^\n+/, '');
+  return rest;
 }
 
 /**
@@ -29,6 +60,7 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     projectContextUrl,
     targetBranch,
     projectDir,
+    worktreePath,
     prGate,
     bashRules,
     taskBackend,
@@ -39,13 +71,19 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     taskUrl,
     projectContextUrl,
     targetBranch,
+    worktreePath,
     prGate,
     bashRules,
     taskBackend,
   });
 
   const projectMdPath = path.join(projectDir, 'CLAUDE.md');
-  const projectMd = fs.existsSync(projectMdPath) ? fs.readFileSync(projectMdPath, 'utf-8') : '';
+  let projectMd = fs.existsSync(projectMdPath) ? fs.readFileSync(projectMdPath, 'utf-8') : '';
+
+  // Strip stale orchestrator rules that a previous escaped session may have
+  // written to the project's CLAUDE.md. Without this, every session would see
+  // double orchestrator rules — one correct, one stale.
+  projectMd = stripOrchestratorHeader(projectMd);
 
   return projectMd
     ? `${orchestratorMd}\n\n---\n\n# Project Instructions\n\n${projectMd}`
