@@ -231,3 +231,16 @@
   opacity: 0.35;
   cursor: not-allowed;
 }
+
+/* Conflict badge */
+.conflictBadge {
+  font-size: 0.75rem;
+  padding: 1px 6px;
+  border-radius: 10px;
+  white-space: nowrap;
+  font-weight: 500;
+  background: rgba(243, 139, 168, 0.15);
+  color: #f38ba8;
+  border: 1px solid rgba(243, 139, 168, 0.4);
+  flex-shrink: 0;
+}
