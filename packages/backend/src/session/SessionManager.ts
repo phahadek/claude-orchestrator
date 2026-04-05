@@ -317,14 +317,15 @@ export class SessionManager extends EventEmitter {
       }
 
       if (sessionMode === 'cli' && sessionContextContent) {
+        // Write to .claude/CLAUDE.md instead of the root CLAUDE.md.
+        // Claude Code reads both locations, and .claude/ is gitignored — so the
+        // orchestrator content is invisible to git. This avoids the assume-unchanged
+        // flag that blocked git checkout/rebase/merge operations.
         try {
-          fs.writeFileSync(path.join(worktreePath, 'CLAUDE.md'), sessionContextContent, 'utf-8');
-          try {
-            execSync('git update-index --assume-unchanged CLAUDE.md', { cwd: worktreePath });
-          } catch (assumeErr) {
-            console.warn(`[SessionManager] failed to mark CLAUDE.md assume-unchanged: ${assumeErr}`);
-          }
-          console.log(`[SessionManager] orchestrator CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`);
+          const claudeDir = path.join(worktreePath, '.claude');
+          fs.mkdirSync(claudeDir, { recursive: true });
+          fs.writeFileSync(path.join(claudeDir, 'CLAUDE.md'), sessionContextContent, 'utf-8');
+          console.log(`[SessionManager] orchestrator .claude/CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`);
         } catch (err) {
           console.error(`[SessionManager] failed to write orchestrator CLAUDE.md for ${sessionId}: ${err}`);
         }
