@@ -482,6 +482,15 @@ export function incrementTokens(sessionId: string, inputTokens: number, outputTo
   `).run(inputTokens, outputTokens, sessionId);
 }
 
+export function getZeroTokenSessions(limit: number): Session[] {
+  return db.prepare(`
+    SELECT * FROM sessions
+    WHERE total_input_tokens = 0 AND total_output_tokens = 0
+    ORDER BY started_at DESC
+    LIMIT ?
+  `).all(limit) as Session[];
+}
+
 export function getTaskTitleFromCache(taskId: string): string | null {
   const row = getTaskCache(taskId);
   if (!row) return null;
