@@ -36,9 +36,13 @@ function readTaskFiles(taskMarkdown: string, projectDir: string): string | undef
   const filePaths = filesSection
     .split('\n')
     .map((line) => line.replace(/^[-*\s]+/, '').trim())
-    // Extract just the path portion — strip trailing descriptions after whitespace or dash
-    .map((line) => line.replace(/\s+[-—–].*$/, '').replace(/\s*\(.*\)$/, '').trim())
-    .filter((line) => line.includes('/') || line.includes('.'));
+    // Strip backticks, trailing descriptions, and markdown formatting like *(new)*
+    .map((line) => line
+      .replace(/`/g, '')                     // remove backticks
+      .replace(/\s+\*?\(.*?\)\*?\s*$/, '')   // remove *(new)*, (update), etc.
+      .replace(/\s+[-—–].*$/, '')            // remove "— description" suffixes
+      .trim())
+    .filter((line) => line.length > 0 && (line.includes('/') || line.includes('.')));
 
   if (filePaths.length === 0) return undefined;
 
