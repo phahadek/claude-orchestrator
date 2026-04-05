@@ -204,76 +204,90 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // Build the session context to inject into the worktree's CLAUDE.md.
-    // Code sessions get the full orchestrator rules + project CLAUDE.md.
-    // Review sessions get a lightweight review-only identity document.
-    let sessionContextContent: string | undefined;
-    if (sessionType === 'review') {
-      sessionContextContent = buildReviewClaudeMd(taskName ?? taskUrl);
-    } else {
-      try {
-        sessionContextContent = buildSessionContext({
-          taskName: taskName ?? taskUrl,
-          taskUrl,
-          projectContextUrl,
-          targetBranch: 'dev',
-          projectDir,
-          worktreePath,
-          prGate: orchConfig.prGate,
-          bashRules: orchConfig.bashRules,
-          taskBackend: TASK_BACKEND,
-        });
-      } catch (err) {
-        console.error(`[SessionManager] failed to build session context for ${sessionId}: ${err}`);
-      }
-    }
-
+    const notionTaskId = parseNotionPageId(taskUrl);
     const sessionMode = runtimeSettings.session_mode;
-
-    if (sessionMode === 'cli' && sessionContextContent) {
-      // CLI mode: write CLAUDE.md to worktree so the subprocess reads it.
-      try {
-        fs.writeFileSync(path.join(worktreePath, 'CLAUDE.md'), sessionContextContent, 'utf-8');
-        // Mark CLAUDE.md as assume-unchanged so sessions cannot accidentally
-        // stage/commit the orchestrator-injected content in their PRs.
-        try {
-          execSync('git update-index --assume-unchanged CLAUDE.md', { cwd: worktreePath });
-        } catch (assumeErr) {
-          console.warn(`[SessionManager] failed to mark CLAUDE.md assume-unchanged: ${assumeErr}`);
-        }
-        console.log(`[SessionManager] orchestrator CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`);
-      } catch (err) {
-        console.error(`[SessionManager] failed to write orchestrator CLAUDE.md for ${sessionId}: ${err}`);
-      }
-    } else if (sessionMode === 'api' && sessionContextContent) {
-      console.log(`[SessionManager] API mode: session context will be injected as system prompt for ${sessionId.slice(0, 8)}`);
-    }
-
-    // Create the appropriate session runner based on the current session_mode setting.
     const runner = sessionMode === 'api'
       ? new ApiSessionRunner(sessionId)
       : new CliSessionRunner(sessionId);
 
-    const notionTaskId = parseNotionPageId(taskUrl);
+    // Pre-fetch task content from Notion so sessions skip Notion calls entirely.
+    // This is async — the session card is shown immediately, context is written
+    // before the AgentSession is created and run() is called.
+    const launchSession = async () => {
+      let taskContent: string | undefined;
+      if (sessionType !== 'review' && notionTaskId) {
+        try {
+          taskContent = await this.notionClient.fetchTaskPage(notionTaskId);
+          console.log(`[SessionManager] pre-fetched task content for ${sessionId.slice(0, 8)} (${taskContent.length} chars)`);
+        } catch (err) {
+          console.warn(`[SessionManager] failed to pre-fetch task content for ${sessionId.slice(0, 8)} — session will fetch from Notion: ${err}`);
+        }
+      }
 
-    const session = new AgentSession(
-      sessionId,
-      taskUrl,
-      projectContextUrl,
-      this.notionClient,
-      worktreePath,
-      notionTaskId,
-      undefined,
-      customPrompt,
-      sessionType,
-      this,
-      this.githubClient,
-      orchConfig.allowedTools,
-      // In API mode, pass the context as systemPromptContent.
-      // In CLI mode, it was written to the CLAUDE.md file above.
-      sessionMode === 'api' ? sessionContextContent : undefined,
-      runner,
-    );
+      // Build the session context to inject into the worktree's CLAUDE.md.
+      let sessionContextContent: string | undefined;
+      if (sessionType === 'review') {
+        sessionContextContent = buildReviewClaudeMd(taskName ?? taskUrl);
+      } else {
+        try {
+          sessionContextContent = buildSessionContext({
+            taskName: taskName ?? taskUrl,
+            taskUrl,
+            projectContextUrl,
+            targetBranch: 'dev',
+            projectDir,
+            worktreePath,
+            prGate: orchConfig.prGate,
+            bashRules: orchConfig.bashRules,
+            taskBackend: TASK_BACKEND,
+            taskContent,
+          });
+        } catch (err) {
+          console.error(`[SessionManager] failed to build session context for ${sessionId}: ${err}`);
+        }
+      }
+
+      if (sessionMode === 'cli' && sessionContextContent) {
+        try {
+          fs.writeFileSync(path.join(worktreePath, 'CLAUDE.md'), sessionContextContent, 'utf-8');
+          try {
+            execSync('git update-index --assume-unchanged CLAUDE.md', { cwd: worktreePath });
+          } catch (assumeErr) {
+            console.warn(`[SessionManager] failed to mark CLAUDE.md assume-unchanged: ${assumeErr}`);
+          }
+          console.log(`[SessionManager] orchestrator CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`);
+        } catch (err) {
+          console.error(`[SessionManager] failed to write orchestrator CLAUDE.md for ${sessionId}: ${err}`);
+        }
+      }
+
+      const session = new AgentSession(
+        sessionId,
+        taskUrl,
+        projectContextUrl,
+        this.notionClient,
+        worktreePath,
+        notionTaskId,
+        undefined,
+        customPrompt,
+        sessionType,
+        this,
+        this.githubClient,
+        orchConfig.allowedTools,
+        sessionMode === 'api' ? sessionContextContent : undefined,
+        runner,
+      );
+
+      this.sessions.set(sessionId, session);
+      this.wireSession(sessionId, session, projectDir, branchName, worktreePath, mainBranch);
+    };
+
+    // Launch async — session card is already visible to the frontend via the broadcast below.
+    launchSession().catch((err) => {
+      console.error(`[SessionManager] launchSession failed for ${sessionId}: ${err}`);
+      updateSessionStatus(sessionId, 'error', Date.now());
+      this.emit('message', { type: 'session_ended', sessionId, status: 'error' } satisfies ServerMessage);
+    });
 
     // Insert session into SQLite before anything writes events
     const startedAt = Date.now();
@@ -325,9 +339,6 @@ export class SessionManager extends EventEmitter {
       started_at: startedAt,
       project_id: projectId,
     } satisfies ServerMessage);
-
-    this.sessions.set(sessionId, session);
-    this.wireSession(sessionId, session, projectDir, branchName, worktreePath, mainBranch);
 
     return sessionId;
   }

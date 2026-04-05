@@ -12,6 +12,8 @@ export interface BuildSessionContextParams {
   prGate?: { typeCheck: string; build: string };
   bashRules?: string[];
   taskBackend?: 'notion' | 'local';
+  /** Pre-fetched task spec markdown. Passed through to orchestrator CLAUDE.md. */
+  taskContent?: string;
 }
 
 /**
@@ -64,6 +66,7 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     prGate,
     bashRules,
     taskBackend,
+    taskContent,
   } = params;
 
   const orchestratorMd = buildOrchestratorClaudeMd({
@@ -75,6 +78,7 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     prGate,
     bashRules,
     taskBackend,
+    taskContent,
   });
 
   const projectMdPath = path.join(projectDir, 'CLAUDE.md');
