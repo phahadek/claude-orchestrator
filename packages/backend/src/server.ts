@@ -307,6 +307,8 @@ wss.on('connection', (ws) => {
 });
 
 jsonlReader.importAll().then(async () => {
+  jsonlReader.backfillTokens();
+
   await sessionManager.resumeOrphanSessions().catch((err: unknown) =>
     console.warn('[server] orphan session resume failed:', (err as Error).message)
   );

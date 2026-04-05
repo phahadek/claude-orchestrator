@@ -5,6 +5,9 @@ import {
   getAllSessionIds,
   insertSessionOrIgnore,
   insertEventOrIgnore,
+  getZeroTokenSessions,
+  getEventsBySession,
+  incrementTokens,
 } from '../db/queries';
 import type { EventType, NewSession } from '../db/types';
 
@@ -28,6 +31,7 @@ const VALID_EVENT_TYPES: ReadonlySet<string> = new Set([
   'assistant',
   'message',
   'file-history-snapshot',
+  'result',
 ]);
 
 /** Map raw Claude CLI event type strings to our internal EventType union. */
@@ -151,5 +155,61 @@ export class JsonlReader {
   /** Return list of session IDs (filenames) already known in SQLite. */
   knownSessionIds(): string[] {
     return getAllSessionIds();
+  }
+
+  /**
+   * Backfill token counts for sessions that were imported without token data.
+   * Processes up to 100 sessions per call to bound startup time.
+   * Skips sessions where no events contain usage data (genuinely zero-token sessions).
+   */
+  backfillTokens(): void {
+    const sessions = getZeroTokenSessions(100);
+    let backfilled = 0;
+
+    for (const session of sessions) {
+      const events = getEventsBySession(session.session_id);
+      let totalInput = 0;
+      let totalOutput = 0;
+      let foundResultEvent = false;
+
+      // First pass: look for result events which contain session-total usage.
+      for (const event of events) {
+        try {
+          const payload = JSON.parse(event.payload) as Record<string, unknown>;
+          if (payload.type === 'result') {
+            const usage = payload.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+            if (usage) {
+              totalInput = usage.input_tokens ?? 0;
+              totalOutput = usage.output_tokens ?? 0;
+              foundResultEvent = true;
+              break;
+            }
+          }
+        } catch { /* ignore malformed payloads */ }
+      }
+
+      // Second pass: if no result event, sum usage from all events (e.g. assistant message events).
+      if (!foundResultEvent) {
+        for (const event of events) {
+          try {
+            const payload = JSON.parse(event.payload) as Record<string, unknown>;
+            const usage = payload.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+            if (usage) {
+              totalInput += usage.input_tokens ?? 0;
+              totalOutput += usage.output_tokens ?? 0;
+            }
+          } catch { /* ignore malformed payloads */ }
+        }
+      }
+
+      if (totalInput > 0 || totalOutput > 0) {
+        incrementTokens(session.session_id, totalInput, totalOutput);
+        backfilled++;
+      }
+    }
+
+    if (backfilled > 0) {
+      console.log(`[JsonlReader] backfilled tokens for ${backfilled} session(s)`);
+    }
   }
 }
