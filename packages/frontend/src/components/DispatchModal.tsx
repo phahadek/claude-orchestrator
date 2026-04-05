@@ -48,7 +48,7 @@ export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, bo
     if (tasksReady) setLoading(false);
   }, [tasksReady]);
 
-  const ready = tasks.filter((t) => t.task.status === '🗂️ Ready' && !t.blocked && !t.nonCode);
+  const ready = tasks.filter((t) => t.task.status === '🗂️ Ready' && !t.blocked && !t.nonCode && t.task.type === '💻 Code');
   const blocked = tasks.filter((t) => t.task.status === '🗂️ Ready' && (t.blocked || t.nonCode));
   const inProgress = tasks.filter((t) => t.task.status === '🔄 In Progress');
   const inReview = tasks.filter((t) => t.task.status === '👀 In Review');

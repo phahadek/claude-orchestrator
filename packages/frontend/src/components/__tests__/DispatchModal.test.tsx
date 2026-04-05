@@ -58,13 +58,13 @@ describe('DispatchModal', () => {
   it('fires fetch_tasks on mount with projectId and no boardId when boardId prop is omitted', () => {
     renderModal([], false, send, onClose, resetTasks);
     expect(send).toHaveBeenCalledOnce();
-    expect(send).toHaveBeenCalledWith({ type: 'fetch_tasks', projectId: PROJECT_ID, boardId: undefined });
+    expect(send).toHaveBeenCalledWith({ type: 'fetch_tasks', projectId: PROJECT_ID, boardId: undefined, skipCache: true });
   });
 
   it('fires fetch_tasks on mount with the boardId prop value when provided', () => {
     renderModal([], false, send, onClose, resetTasks, 'custom-board-id');
     expect(send).toHaveBeenCalledOnce();
-    expect(send).toHaveBeenCalledWith({ type: 'fetch_tasks', projectId: PROJECT_ID, boardId: 'custom-board-id' });
+    expect(send).toHaveBeenCalledWith({ type: 'fetch_tasks', projectId: PROJECT_ID, boardId: 'custom-board-id', skipCache: true });
   });
 
   it('calls resetTasks before fetch_tasks on mount', () => {
@@ -116,6 +116,29 @@ describe('DispatchModal', () => {
     renderModal(tasks, true, send, onClose);
     expect(screen.queryByRole('checkbox')).toBeNull();
     expect(screen.getByText('non-code')).toBeTruthy();
+  });
+
+  it('ready filter requires task.type === "💻 Code" — Planning and Testing tasks are excluded even if nonCode is false', () => {
+    const planningTask = makeTask('p1', 'Planning Task', {
+      task: { id: 'p1', title: 'Planning Task', status: '🗂️ Ready', type: '📋 Planning', dependsOn: [], notionUrl: 'https://notion.so/p1' },
+      nonCode: false,
+    });
+    const testingTask = makeTask('q1', 'Testing Task', {
+      task: { id: 'q1', title: 'Testing Task', status: '🗂️ Ready', type: '🧪 Testing', dependsOn: [], notionUrl: 'https://notion.so/q1' },
+      nonCode: false,
+    });
+    const codeTask = makeTask('c1', 'Code Task');
+    renderModal([planningTask, testingTask, codeTask], true, send, onClose);
+    // Only the Code task should have a checkbox (i.e., appear in the ready section)
+    const checkboxes = screen.getAllByRole('checkbox');
+    expect(checkboxes).toHaveLength(1);
+    // Code Task is in ready section
+    expect(screen.getByText('Code Task')).toBeTruthy();
+    // Ready count shows only 1
+    expect(screen.getByRole('button', { name: /✅ Ready \(1\)/ })).toBeTruthy();
+    // Planning and Testing tasks are not in the ready section (no checkbox for them)
+    expect(screen.queryByText('Planning Task')).toBeNull();
+    expect(screen.queryByText('Testing Task')).toBeNull();
   });
 
   it('Launch button is disabled when no tasks are selected', () => {
