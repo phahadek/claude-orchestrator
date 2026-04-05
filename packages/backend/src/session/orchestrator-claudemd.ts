@@ -166,9 +166,12 @@ Optimize for speed and token efficiency:
 
 Run in order — all must pass before opening the PR:
 
-1. Rebase onto \`${targetBranch}\` and resolve any conflicts.
-2. \`${resolvedPrGate.typeCheck}\` — must pass.
-3. \`${resolvedPrGate.build}\` — must pass without errors.
+1. Stash CLAUDE.md before rebasing: \`git stash push CLAUDE.md\`
+2. Rebase onto \`${targetBranch}\` and resolve any conflicts.
+3. Restore CLAUDE.md: \`git stash pop\`
+4. \`${resolvedPrGate.typeCheck}\` — must pass.
+5. \`${resolvedPrGate.build}\` — must pass without errors.
+6. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.
 
 ---
 
@@ -179,7 +182,7 @@ Run in order — all must pass before opening the PR:
 - Never delete branches that live outside this worktree
 - Never run \`git reset --hard\` on the main repository directory
 - Never skip pre-commit hooks (\`--no-verify\`)
-- Never stage or commit files inside the \`.claude/\` directory — it is gitignored and managed by the orchestrator.
+- Never stage or commit \`CLAUDE.md\` — it contains orchestrator-injected content that must not appear in PRs. Use \`git add <specific files>\` instead of \`git add .\`.
 
 ---
 
