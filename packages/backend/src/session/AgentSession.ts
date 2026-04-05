@@ -166,32 +166,29 @@ You are a Claude Code session managed by the Claude Code Dashboard.
 
 ## Task
 Task page: ${this.taskUrl}
-Project context: ${this.projectContextUrl}
 
-Fetch both Notion pages, then begin the task.
+Read CLAUDE.md in the repo root — it contains the full task spec and all rules.
+Begin implementing the task immediately. Do NOT fetch Notion pages.
 
-## Lifecycle — follow these steps exactly
-1. Fetch the project context page and the task page from Notion.
-2. Read CLAUDE.md in the repo root for project-specific conventions.
-3. Create a feature branch from the project's base branch.
-4. Implement the task per the acceptance criteria on the task page.
-5. Pass the pre-PR gate as specified in CLAUDE.md.
-6. Open a draft PR as specified in CLAUDE.md.
-7. After the PR is open, WAIT. Do not merge. Do not close the session.
-   The dashboard will send you review feedback as follow-up messages.
-   Address any review findings by pushing additional commits, then wait again.
+## Lifecycle
+1. Read CLAUDE.md for the task spec, orchestrator rules, and project conventions.
+2. Create a feature branch from the project's base branch.
+3. Implement the task per the acceptance criteria in the Task Spec section of CLAUDE.md.
+4. Pass the pre-PR gate as specified in CLAUDE.md.
+5. Open a draft PR as specified in CLAUDE.md.
+6. After the PR is open, WAIT. Do not merge.
+   The dashboard will send review feedback as follow-up messages.
+   Address findings by pushing additional commits, then wait again.
 
 ## What the dashboard handles (do NOT do these yourself)
-- Task status updates (In Progress, In Review, Done) — the backend manages these.
-- Session logging — do not write to any Session Log or update the Master File Index.
-- PR review — an automated review will run after you publish the PR.
+- Task status updates — the backend manages these.
+- PR review — automated after you publish the PR.
 
 ## Rules
 - One task per session. No scope creep.
 - Never commit to the base branch directly.
 - Never merge your own PR.
-- Never move the task status yourself.
-- If something is unclear in the task spec, stop and ask via the session transcript.
+- Never fetch Notion pages — the task spec is already in CLAUDE.md.
 `.trim();
 
     // Backoff schedule for transient API errors: 5s, 10s, 20s, 40s, 80s (5 attempts).
