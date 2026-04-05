@@ -46,6 +46,7 @@ function makePr(overrides?: Partial<NonNullable<TaskView['pr']>>): NonNullable<T
     baseBranch: 'dev',
     state: 'open',
     draft: false,
+    mergeState: null,
     ...overrides,
   };
 }
@@ -140,6 +141,16 @@ describe('TaskCard', () => {
   it('does not render verdict badge when review.verdict is null', () => {
     render(<TaskCard task={makeTask({ review: makeReview({ verdict: null }) })} selected={false} onClick={vi.fn()} send={noop} project={makeProject()} />);
     expect(screen.queryByText(/Approved|Needs changes|Incomplete/)).toBeNull();
+  });
+
+  it('renders conflict badge when pr.mergeState is "dirty"', () => {
+    render(<TaskCard task={makeTask({ pr: makePr({ mergeState: 'dirty' }) })} selected={false} onClick={vi.fn()} send={noop} project={makeProject()} />);
+    expect(screen.getByText('⚠ Conflict')).toBeDefined();
+  });
+
+  it('does not render conflict badge when pr.mergeState is null', () => {
+    render(<TaskCard task={makeTask({ pr: makePr({ mergeState: null }) })} selected={false} onClick={vi.fn()} send={noop} project={makeProject()} />);
+    expect(screen.queryByText('⚠ Conflict')).toBeNull();
   });
 
   it('renders Notion link when notionUrl is set', () => {
