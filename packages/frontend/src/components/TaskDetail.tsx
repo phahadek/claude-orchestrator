@@ -135,6 +135,7 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
   const [mergeInFlight, setMergeInFlight] = useState(false);
   const [fixConflictsInFlight, setFixConflictsInFlight] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
+  const [optimisticDisplayStatus, setOptimisticDisplayStatus] = useState<DisplayStatus | null>(null);
 
   // Reset state when task changes
   useEffect(() => {
@@ -142,6 +143,7 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
     setShowReviewDimensions(false);
     setReviewError(null);
     setFixConflictsInFlight(false);
+    setOptimisticDisplayStatus(null);
   }, [task.taskId]);
 
   // Look up live session state for event transcripts
@@ -155,8 +157,9 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
   const isCodeActive =
     task.codeSession?.status === 'running' || task.codeSession?.status === 'needs_permission';
 
-  const displayStatusLabel = DISPLAY_STATUS_LABELS[task.displayStatus] ?? task.displayStatus;
-  const displayStatusClass = DISPLAY_STATUS_CSS_KEYS[task.displayStatus] ?? '';
+  const effectiveDisplayStatus = optimisticDisplayStatus ?? task.displayStatus;
+  const displayStatusLabel = DISPLAY_STATUS_LABELS[effectiveDisplayStatus] ?? effectiveDisplayStatus;
+  const displayStatusClass = DISPLAY_STATUS_CSS_KEYS[effectiveDisplayStatus] ?? '';
 
   async function handleRunReview() {
     if (!task.pr) return;
@@ -215,6 +218,8 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
       if (!res.ok) {
         const body = await res.json().catch(() => ({})) as { error?: string };
         setReviewError(body.error ?? `HTTP ${res.status}`);
+      } else {
+        setOptimisticDisplayStatus('done');
       }
     } catch (err) {
       setReviewError(err instanceof Error ? err.message : 'Network error');
