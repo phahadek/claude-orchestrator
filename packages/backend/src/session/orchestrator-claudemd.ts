@@ -21,6 +21,11 @@ export interface OrchestratorClaudeMdParams {
    * to skip Notion fetch steps and read tasks.yaml instead.
    */
   taskBackend?: 'notion' | 'local';
+  /**
+   * Pre-fetched task spec markdown. When provided, the task content is injected
+   * directly into the CLAUDE.md and the session skips Notion fetching entirely.
+   */
+  taskContent?: string;
 }
 
 /**
@@ -44,7 +49,7 @@ export interface OrchestratorClaudeMdParams {
  * 11. Separator + "# Project Instructions (from project CLAUDE.md)" (added by caller)
  */
 export function buildOrchestratorClaudeMd(params: OrchestratorClaudeMdParams): string {
-  const { taskName, taskUrl, projectContextUrl, targetBranch, worktreePath, prGate, bashRules, taskBackend = 'notion' } = params;
+  const { taskName, taskUrl, projectContextUrl, targetBranch, worktreePath, prGate, bashRules, taskBackend = 'notion', taskContent } = params;
 
   const resolvedPrGate = prGate ?? { typeCheck: 'npx tsc --noEmit', build: 'npx vite build' };
   const resolvedBashRules = bashRules ?? [
@@ -82,7 +87,13 @@ export function buildOrchestratorClaudeMd(params: OrchestratorClaudeMdParams): s
 
 Follow these steps in order — every session:
 
-${taskBackend === 'local'
+${taskContent
+  ? `> **Task spec is pre-loaded below.** Do NOT fetch Notion pages — the task content has
+> already been injected by the orchestrator. Proceed directly to implementation.
+
+1. Read the **Task Spec** section below — it contains the full task specification.
+2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
+  : taskBackend === 'local'
   ? `> ⚠️ **TASK_BACKEND=local**: Task context comes from \`tasks.yaml\` in the project root, not Notion.
 > Skip steps 1 (Notion fetch) and instead read \`tasks.yaml\` for task context.
 
@@ -90,7 +101,7 @@ ${taskBackend === 'local'
 2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
   : `1. Fetch the Notion task page and project context page.
 2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`}
-3. Implement the task per the acceptance criteria on the task page.
+3. Implement the task per the acceptance criteria.
 4. Pass the pre-PR gate (see Pre-PR Gate section below).
 5. Open a draft PR targeting \`${targetBranch}\` using the required body template.
 6. **Stop and wait.** The dashboard sends review feedback as follow-up messages.
@@ -191,7 +202,16 @@ For multiline commit messages, use \`git commit -F <file>\` and write the file w
 **Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
 Use the Write tool for any file creation. Never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
 
-${bashRulesText}`.trimEnd();
+${bashRulesText}${taskContent ? `
+
+---
+
+## Task Spec
+
+> This is the full task specification, pre-fetched by the orchestrator.
+> Do NOT re-fetch this from Notion — use the content below as your source of truth.
+
+${taskContent}` : ''}`.trimEnd();
 }
 
 /**
