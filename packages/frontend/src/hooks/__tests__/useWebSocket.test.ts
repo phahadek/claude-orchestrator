@@ -32,6 +32,44 @@ describe('useWebSocket', () => {
     vi.restoreAllMocks();
   });
 
+  it('send() returns true when socket is OPEN and message is sent', () => {
+    const onMessage = vi.fn();
+    const instances: MockWebSocket[] = [];
+    const TrackingWS = class extends MockWebSocket {
+      constructor(url: string) {
+        super(url);
+        this.readyState = MockWebSocket.OPEN;
+        instances.push(this);
+      }
+    };
+    vi.stubGlobal('WebSocket', TrackingWS);
+
+    const { result } = renderHook(() => useWebSocket(onMessage));
+    const returned = result.current.send({ type: 'fetch_tasks', projectId: 'p1' });
+
+    expect(returned).toBe(true);
+    expect(instances[0]?.send).toHaveBeenCalled();
+  });
+
+  it('send() returns false when socket is not OPEN', () => {
+    const onMessage = vi.fn();
+    const instances: MockWebSocket[] = [];
+    const TrackingWS = class extends MockWebSocket {
+      constructor(url: string) {
+        super(url);
+        this.readyState = 0; // CONNECTING
+        instances.push(this);
+      }
+    };
+    vi.stubGlobal('WebSocket', TrackingWS);
+
+    const { result } = renderHook(() => useWebSocket(onMessage));
+    const returned = result.current.send({ type: 'fetch_tasks', projectId: 'p1' });
+
+    expect(returned).toBe(false);
+    expect(instances[0]?.send).not.toHaveBeenCalled();
+  });
+
   it('send() no-ops silently when socket is not OPEN', () => {
     const onMessage = vi.fn();
     const { result } = renderHook(() => useWebSocket(onMessage));
