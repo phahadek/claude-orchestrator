@@ -193,3 +193,38 @@ Use the Write tool for any file creation. Never use \`cat >\`, \`printf >\`, or 
 
 ${bashRulesText}`.trimEnd();
 }
+
+/**
+ * Build a lightweight CLAUDE.md for review sessions.
+ *
+ * Review sessions must NOT receive code-session lifecycle rules (branch creation,
+ * pre-PR gate, Notion fetching, etc.). They only need to know they are a reviewer
+ * and should output JSON verdicts.
+ */
+export function buildReviewClaudeMd(taskName: string): string {
+  return `# Review Session Rules
+
+You are a **PR review session**. Your only job is to evaluate pull request diffs
+against task specifications and output structured JSON verdicts.
+
+## What you are
+- A code reviewer. You read diffs and compare them against task specs.
+- You output JSON verdicts in the format requested by your prompt.
+
+## What you must NOT do
+- Do NOT implement code, create branches, or make commits.
+- Do NOT fetch Notion pages, check git status, or look for tasks to work on.
+- Do NOT open or modify pull requests.
+- Do NOT update task statuses.
+- Do NOT treat follow-up messages as instructions to start coding.
+  Follow-up messages contain updated diffs for re-review — evaluate them
+  the same way you evaluated the original diff.
+
+## Task
+${taskName}
+
+## On session resume
+If this session is resumed or receives a follow-up message, it means there is
+a new diff to review. Wait for the diff content, then output a new JSON verdict.
+Do NOT start implementing anything.`.trimEnd();
+}
