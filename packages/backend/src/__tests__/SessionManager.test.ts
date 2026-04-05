@@ -182,6 +182,19 @@ describe('SessionManager.start() — StartOptions', () => {
     expect(source).toMatch(/sessionType/);
     expect(source).toMatch(/session_started/);
   });
+
+  it('includes totalInputTokens and totalOutputTokens in session_started message', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+      'utf-8',
+    );
+
+    // Find the session_started broadcast block and verify token fields are present
+    const sessionStartedBlock = source.match(/type:\s*['"]session_started['"][\s\S]*?satisfies ServerMessage/);
+    expect(sessionStartedBlock).not.toBeNull();
+    expect(sessionStartedBlock![0]).toMatch(/totalInputTokens/);
+    expect(sessionStartedBlock![0]).toMatch(/totalOutputTokens/);
+  });
 });
 
 // ── AC: normalizePath converts Git Bash paths to Windows-native ─────────────
