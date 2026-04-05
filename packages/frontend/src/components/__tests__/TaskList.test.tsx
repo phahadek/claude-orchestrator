@@ -22,7 +22,7 @@ function makeTask(overrides: Partial<TaskView> & { taskId: string; displayStatus
   };
 }
 
-const noop = vi.fn();
+const noop = vi.fn().mockReturnValue(true);
 
 function mockFetch(tasks: TaskView[]) {
   (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -612,7 +612,7 @@ describe('TaskList', () => {
 
   it('Sync button sends fetch_tasks WS message on click', async () => {
     mockFetch([makeTask({ taskId: 't1', taskName: 'Task', displayStatus: 'in_progress' })]);
-    const sendFn = vi.fn();
+    const sendFn = vi.fn().mockReturnValue(true);
     render(
       <TaskList activeProjectId="proj-1" boardId="board-1" selectedTaskId={null} onSelectTask={vi.fn()} send={sendFn} project={null} />,
     );
@@ -636,7 +636,7 @@ describe('TaskList', () => {
       .mockReturnValueOnce(new Promise(() => { /* never resolves */ }));
 
     render(
-      <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={vi.fn()} project={null} />,
+      <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={vi.fn().mockReturnValue(true)} project={null} />,
     );
 
     await waitFor(() => {
@@ -681,5 +681,62 @@ describe('TaskList', () => {
     expect(screen.queryByTestId('ready-section')).toBeNull();
     expect(screen.getByTestId('group-header-in_progress')).toBeDefined();
     expect(screen.getByText('Task Alpha')).toBeDefined();
+  });
+
+  describe('Sync button — send() boolean return and safety timeout', () => {
+    it('clears syncing immediately when send() returns false (WS disconnected)', async () => {
+      mockFetch([makeTask({ taskId: 't1', taskName: 'Task', displayStatus: 'in_progress' })]);
+      const disconnectedSend = vi.fn().mockReturnValue(false);
+
+      render(
+        <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={disconnectedSend} project={null} />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByTestId('sync-btn')).toBeDefined();
+      });
+
+      const syncBtn = screen.getByTestId('sync-btn') as HTMLButtonElement;
+      await act(async () => {
+        fireEvent.click(syncBtn);
+      });
+
+      // send() returned false — syncing cleared immediately, button not stuck
+      expect(syncBtn.getAttribute('aria-busy')).toBe('false');
+      expect(syncBtn.disabled).toBe(false);
+    });
+
+    it('clears syncing after 5-second safety timeout when no tasks_ready arrives', async () => {
+      mockFetch([makeTask({ taskId: 't1', taskName: 'Task', displayStatus: 'in_progress' })]);
+      const connectedSend = vi.fn().mockReturnValue(true);
+
+      render(
+        <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={connectedSend} project={null} />,
+      );
+
+      // Wait for initial render with real timers
+      await waitFor(() => {
+        expect(screen.getByTestId('sync-btn')).toBeDefined();
+      });
+
+      const syncBtn = screen.getByTestId('sync-btn') as HTMLButtonElement;
+
+      // Switch to fake timers only after component is ready
+      vi.useFakeTimers();
+      try {
+        fireEvent.click(syncBtn);
+        expect(syncBtn.getAttribute('aria-busy')).toBe('true');
+
+        // Advance 5 seconds — safety timeout should clear syncing
+        await act(async () => {
+          vi.advanceTimersByTime(5000);
+        });
+
+        expect(syncBtn.getAttribute('aria-busy')).toBe('false');
+        expect(syncBtn.disabled).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
