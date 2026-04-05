@@ -1,5 +1,3 @@
-import fs from 'fs';
-import path from 'path';
 import { buildOrchestratorClaudeMd } from './orchestrator-claudemd';
 
 export interface BuildSessionContextParams {
@@ -61,7 +59,6 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     taskUrl,
     projectContextUrl,
     targetBranch,
-    projectDir,
     worktreePath,
     prGate,
     bashRules,

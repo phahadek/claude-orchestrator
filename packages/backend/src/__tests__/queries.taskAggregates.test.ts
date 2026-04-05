@@ -245,3 +245,46 @@ describe('getActiveTaskAggregates — notion_task_id format matching', () => {
     expect(rows).toHaveLength(0);
   });
 });
+
+describe('getActiveTaskAggregates — review session token fields', () => {
+  it('returns review_session_input_tokens and review_session_output_tokens for a review session', async () => {
+    const { db } = await import('../db/db.js');
+    upsertTaskCache(DASHED_UUID, JSON.stringify({ id: DASHED_UUID, title: 'Token Task', status: '🔍 In Review' }));
+    insertSession(makeSession({ session_id: 'code-sess', notion_task_id: DASHLESS_UUID, session_type: 'standard' }));
+    insertSession(makeSession({ session_id: 'review-sess', notion_task_id: DASHLESS_UUID, session_type: 'review' }));
+    db.prepare('UPDATE sessions SET total_input_tokens = 200, total_output_tokens = 100 WHERE session_id = ?').run('review-sess');
+
+    const rows = getActiveTaskAggregates([DASHED_UUID]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].review_session_id).toBe('review-sess');
+    expect(rows[0].review_session_input_tokens).toBe(200);
+    expect(rows[0].review_session_output_tokens).toBe(100);
+  });
+
+  it('returns null review token fields when no review session exists', () => {
+    upsertTaskCache(DASHED_UUID, JSON.stringify({ id: DASHED_UUID, title: 'Token Task', status: '🗂️ Ready' }));
+    insertSession(makeSession({ session_id: 'code-only', notion_task_id: DASHLESS_UUID, session_type: 'standard' }));
+
+    const rows = getActiveTaskAggregates([DASHED_UUID]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].review_session_id).toBeNull();
+    expect(rows[0].review_session_input_tokens).toBeNull();
+    expect(rows[0].review_session_output_tokens).toBeNull();
+  });
+
+  it('returns both code and review session tokens independently', async () => {
+    const { db } = await import('../db/db.js');
+    upsertTaskCache(DASHED_UUID, JSON.stringify({ id: DASHED_UUID, title: 'Token Task', status: '🔍 In Review' }));
+    insertSession(makeSession({ session_id: 'code-sess-2', notion_task_id: DASHLESS_UUID, session_type: 'standard' }));
+    insertSession(makeSession({ session_id: 'review-sess-2', notion_task_id: DASHLESS_UUID, session_type: 'review' }));
+    db.prepare('UPDATE sessions SET total_input_tokens = 500, total_output_tokens = 300 WHERE session_id = ?').run('code-sess-2');
+    db.prepare('UPDATE sessions SET total_input_tokens = 150, total_output_tokens = 75 WHERE session_id = ?').run('review-sess-2');
+
+    const rows = getActiveTaskAggregates([DASHED_UUID]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].code_session_input_tokens).toBe(500);
+    expect(rows[0].code_session_output_tokens).toBe(300);
+    expect(rows[0].review_session_input_tokens).toBe(150);
+    expect(rows[0].review_session_output_tokens).toBe(75);
+  });
+});
