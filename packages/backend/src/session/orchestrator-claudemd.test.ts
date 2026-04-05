@@ -206,7 +206,7 @@ describe('orchestrator CLAUDE.md merge logic (section 10)', () => {
     expect(written).not.toContain('# Project Instructions');
   });
 
-  it('when project has a CLAUDE.md, it appears after the orchestrator section with a separator', () => {
+  it('when project has a CLAUDE.md, output contains only orchestrator content (no merge)', () => {
     const projectContent = '# Project Rules\n\nDo stuff the project way.';
     fs.writeFileSync(path.join(projectDir, 'CLAUDE.md'), projectContent, 'utf-8');
 
@@ -214,20 +214,15 @@ describe('orchestrator CLAUDE.md merge logic (section 10)', () => {
 
     const written = fs.readFileSync(path.join(worktreePath, 'CLAUDE.md'), 'utf-8');
 
-    // Orchestrator section comes first
-    const orchestratorIdx = written.indexOf('# Orchestrator Rules');
-    const separatorIdx = written.indexOf('---\n\n# Project Instructions');
-    const projectIdx = written.indexOf('# Project Rules');
+    // Orchestrator section is present
+    expect(written).toContain('# Orchestrator Rules');
 
-    expect(orchestratorIdx).toBeGreaterThanOrEqual(0);
-    expect(separatorIdx).toBeGreaterThan(orchestratorIdx);
-    expect(projectIdx).toBeGreaterThan(separatorIdx);
-
-    // Project content is present verbatim
-    expect(written).toContain(projectContent);
+    // Project content is NOT merged — Claude Code reads the project's own
+    // CLAUDE.md separately from the worktree root's original file.
+    expect(written).not.toContain('# Project Rules');
   });
 
-  it('original project CLAUDE.md is unchanged after merge', () => {
+  it('original project CLAUDE.md is unchanged after context build', () => {
     const original = '# My Project\n\nOriginal content here.';
     fs.writeFileSync(path.join(projectDir, 'CLAUDE.md'), original, 'utf-8');
 
@@ -317,8 +312,7 @@ describe('buildSessionContext strips polluted project CLAUDE.md', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('strips stale orchestrator header from project CLAUDE.md before embedding', () => {
-    // Simulate a polluted project CLAUDE.md (written by a previous escaped session)
+  it('does not include project CLAUDE.md content (no merge)', () => {
     const polluted = [
       '# Orchestrator Rules (DO NOT OVERRIDE)',
       '',
@@ -347,15 +341,15 @@ describe('buildSessionContext strips polluted project CLAUDE.md', () => {
     const orchestratorCount = (result.match(/# Orchestrator Rules \(DO NOT OVERRIDE\)/g) || []).length;
     expect(orchestratorCount).toBe(1);
 
-    // Should NOT contain the stale task reference
-    expect(result).not.toContain('Old stale task');
-
-    // Should contain the current task and the real project instructions
+    // Should contain the current task
     expect(result).toContain('Current task');
-    expect(result).toContain('Actual project instructions.');
+
+    // Should NOT contain project instructions (no merge — Claude Code reads them separately)
+    expect(result).not.toContain('Old stale task');
+    expect(result).not.toContain('Actual project instructions.');
   });
 
-  it('leaves clean project CLAUDE.md unchanged', () => {
+  it('returns only orchestrator content regardless of project CLAUDE.md', () => {
     const clean = '# My Game\n\nProject instructions here.';
     fs.writeFileSync(path.join(projectDir, 'CLAUDE.md'), clean, 'utf-8');
 
@@ -368,9 +362,10 @@ describe('buildSessionContext strips polluted project CLAUDE.md', () => {
       worktreePath: '/fake/worktree',
     });
 
-    expect(result).toContain('# Project Instructions');
-    expect(result).toContain('# My Game');
-    expect(result).toContain('Project instructions here.');
+    expect(result).toContain('# Orchestrator Rules');
+    expect(result).toContain('Task X');
+    // Project content is NOT merged
+    expect(result).not.toContain('# My Game');
   });
 });
 
