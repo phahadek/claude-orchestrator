@@ -179,7 +179,7 @@ Run in order — all must pass before opening the PR:
 - Never delete branches that live outside this worktree
 - Never run \`git reset --hard\` on the main repository directory
 - Never skip pre-commit hooks (\`--no-verify\`)
-- **Never touch \`CLAUDE.md\` with any git command.** It is managed by the orchestrator and has a protective index flag. Do not run \`git add\`, \`git diff\`, \`git checkout\`, \`git stash\`, \`git show\`, \`git update-index\`, or \`git rm\` on \`CLAUDE.md\`. Do not investigate or remove the flag. Exclude \`CLAUDE.md\` from all glob patterns (e.g. use \`git add <specific files>\` instead of \`git add .\`). If a git operation (cherry-pick, rebase, merge) conflicts on CLAUDE.md, abort, reset, and redo the operation excluding CLAUDE.md.
+- Never stage or commit files inside the \`.claude/\` directory — it is gitignored and managed by the orchestrator.
 
 ---
 
