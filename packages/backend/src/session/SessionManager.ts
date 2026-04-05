@@ -317,15 +317,14 @@ export class SessionManager extends EventEmitter {
       }
 
       if (sessionMode === 'cli' && sessionContextContent) {
-        // Write to .claude/CLAUDE.md instead of the root CLAUDE.md.
-        // Claude Code reads both locations, and .claude/ is gitignored — so the
-        // orchestrator content is invisible to git. This avoids the assume-unchanged
-        // flag that blocked git checkout/rebase/merge operations.
+        // Write orchestrator content to root CLAUDE.md in the worktree.
+        // No assume-unchanged (blocked rebase/checkout). No .claude/CLAUDE.md
+        // (worktrees don't resolve project-level CLAUDE.md correctly).
+        // The modified file is unstaged — git checkout -b works fine.
+        // For rebase, the pre-PR gate tells sessions to stash first.
         try {
-          const claudeDir = path.join(worktreePath, '.claude');
-          fs.mkdirSync(claudeDir, { recursive: true });
-          fs.writeFileSync(path.join(claudeDir, 'CLAUDE.md'), sessionContextContent, 'utf-8');
-          console.log(`[SessionManager] orchestrator .claude/CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`);
+          fs.writeFileSync(path.join(worktreePath, 'CLAUDE.md'), sessionContextContent, 'utf-8');
+          console.log(`[SessionManager] orchestrator CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`);
         } catch (err) {
           console.error(`[SessionManager] failed to write orchestrator CLAUDE.md for ${sessionId}: ${err}`);
         }
