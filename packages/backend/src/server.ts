@@ -154,6 +154,23 @@ sessionManager.on('push_detected', ({ sessionId: codingSessionId }: { sessionId:
     }
 
     const maxIter = getMaxReviewIterations();
+
+    // Escalation cap reached — emit review_escalated before bailing out.
+    // shouldAutoReview() also catches this, but it returns a plain boolean
+    // with no way to distinguish cap-reached vs same-SHA, so we check explicitly.
+    if (prRow.review_iteration >= maxIter) {
+      const message = `Review loop for PR #${prRow.pr_number} reached ${maxIter} iterations without approval. Manual intervention needed.`;
+      console.warn(`[server] ${message}`);
+      sessionManager.emit('message', {
+        type: 'review_escalated',
+        prNumber: prRow.pr_number,
+        repo: prRow.repo,
+        message,
+      });
+      pendingReReviews.delete(codingSessionId);
+      return;
+    }
+
     if (!shouldAutoReview(
       { reviewIteration: prRow.review_iteration, headSha, lastReviewedSha: prRow.last_reviewed_sha },
       maxIter,
