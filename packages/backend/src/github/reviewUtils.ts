@@ -41,6 +41,10 @@ export function formatReviewFeedback(result: PRReviewResult, iteration: number):
     `### Issues found:\n${dimensionLines}\n\n` +
     `**Overall:** ${result.summary}\n\n` +
     `Please address these issues and push your changes. ` +
-    `The orchestrator will automatically re-review.`
+    `The orchestrator will automatically re-review.\n\n` +
+    `**Important:** Do NOT rebase onto dev or merge dev into your branch. ` +
+    `Just commit your fixes and push directly to your feature branch. ` +
+    `Rebasing or merging would pull in unrelated changes from other merged PRs ` +
+    `and pollute the PR diff.`
   );
 }
