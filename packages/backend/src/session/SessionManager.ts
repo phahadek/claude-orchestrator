@@ -4,6 +4,7 @@ import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
 import { AgentSession, parseNotionPageId } from './AgentSession';
 import { buildSessionContext } from './ContextBuilder';
+import { buildReviewClaudeMd } from './orchestrator-claudemd';
 import { loadOrchestratorConfig } from './orchestrator-config';
 import { CliSessionRunner } from './CliSessionRunner';
 import { ApiSessionRunner } from './ApiSessionRunner';
@@ -203,24 +204,28 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // Build the merged session context (orchestrator rules + project CLAUDE.md).
-    // In CLI mode: write it to CLAUDE.md in the worktree so the subprocess picks it up.
-    // In API mode: pass it as systemPromptContent to inject via the Agent SDK instead.
+    // Build the session context to inject into the worktree's CLAUDE.md.
+    // Code sessions get the full orchestrator rules + project CLAUDE.md.
+    // Review sessions get a lightweight review-only identity document.
     let sessionContextContent: string | undefined;
-    try {
-      sessionContextContent = buildSessionContext({
-        taskName: taskName ?? taskUrl,
-        taskUrl,
-        projectContextUrl,
-        targetBranch: 'dev',
-        projectDir,
-        worktreePath,
-        prGate: orchConfig.prGate,
-        bashRules: orchConfig.bashRules,
-        taskBackend: TASK_BACKEND,
-      });
-    } catch (err) {
-      console.error(`[SessionManager] failed to build session context for ${sessionId}: ${err}`);
+    if (sessionType === 'review') {
+      sessionContextContent = buildReviewClaudeMd(taskName ?? taskUrl);
+    } else {
+      try {
+        sessionContextContent = buildSessionContext({
+          taskName: taskName ?? taskUrl,
+          taskUrl,
+          projectContextUrl,
+          targetBranch: 'dev',
+          projectDir,
+          worktreePath,
+          prGate: orchConfig.prGate,
+          bashRules: orchConfig.bashRules,
+          taskBackend: TASK_BACKEND,
+        });
+      } catch (err) {
+        console.error(`[SessionManager] failed to build session context for ${sessionId}: ${err}`);
+      }
     }
 
     const sessionMode = runtimeSettings.session_mode;
@@ -229,11 +234,18 @@ export class SessionManager extends EventEmitter {
       // CLI mode: write CLAUDE.md to worktree so the subprocess reads it.
       try {
         fs.writeFileSync(path.join(worktreePath, 'CLAUDE.md'), sessionContextContent, 'utf-8');
+        // Mark CLAUDE.md as assume-unchanged so sessions cannot accidentally
+        // stage/commit the orchestrator-injected content in their PRs.
+        try {
+          execSync('git update-index --assume-unchanged CLAUDE.md', { cwd: worktreePath });
+        } catch (assumeErr) {
+          console.warn(`[SessionManager] failed to mark CLAUDE.md assume-unchanged: ${assumeErr}`);
+        }
         console.log(`[SessionManager] orchestrator CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`);
       } catch (err) {
         console.error(`[SessionManager] failed to write orchestrator CLAUDE.md for ${sessionId}: ${err}`);
       }
-    } else if (sessionMode === 'api') {
+    } else if (sessionMode === 'api' && sessionContextContent) {
       console.log(`[SessionManager] API mode: session context will be injected as system prompt for ${sessionId.slice(0, 8)}`);
     }
 
@@ -411,7 +423,7 @@ export class SessionManager extends EventEmitter {
       row.notion_task_id ?? '',
       row.session_id,           // resumeSessionId — passes --resume to CLI / SDK
       undefined,
-      'standard',
+      row.session_type ?? 'standard',
       this,
       this.githubClient,
       orchConfig.allowedTools,
@@ -471,9 +483,10 @@ export class SessionManager extends EventEmitter {
     this.wireSession(row.session_id, session, projectDir, branchName, worktreePath);
 
     // Send the nudge after a short delay so the CLI process is ready to receive
-    // stdin before we write to it.
+    // stdin before we write to it. Review sessions should not receive the
+    // code-session nudge — they wait for a re-review prompt with a diff instead.
     const nudgeDelay = setTimeout(() => {
-      if (!session.hasEnded) {
+      if (!session.hasEnded && row.session_type !== 'review') {
         this.send(row.session_id, RESUME_NUDGE_MESSAGE);
       }
     }, RESUME_NUDGE_DELAY_MS);
@@ -704,7 +717,7 @@ export class SessionManager extends EventEmitter {
       taskId,
       sessionId, // resumeSessionId — restores conversation history via --resume / SDK resume
       undefined,
-      'standard',
+      row.session_type ?? 'standard',
       this,
       this.githubClient,
       orchConfigResume.allowedTools,
