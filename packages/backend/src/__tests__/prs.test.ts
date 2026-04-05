@@ -432,6 +432,47 @@ describe('POST /api/prs/:prNumber/merge', () => {
     expect(res.status).toBe(200);
     expect(vi.mocked(tasksRoute.emitTaskUpdated)).not.toHaveBeenCalled();
   });
+
+  it('broadcasts task_status_changed and calls emitTaskUpdated before res.json() resolves', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+
+    const callOrder: string[] = [];
+
+    const notionClient = makeMockNotionClient();
+    vi.mocked(notionClient.updateStatus).mockImplementation(async () => {
+      callOrder.push('updateStatus');
+    });
+
+    setPRBroadcast((msg) => {
+      callOrder.push(`broadcast:${(msg as { type: string }).type}`);
+    });
+
+    vi.mocked(tasksRoute.emitTaskUpdated).mockImplementation(() => {
+      callOrder.push('emitTaskUpdated');
+    });
+
+    const res = await supertest(
+      buildApp(makeMockGitHub(), makeMockPRReviewService(), makeMockSessionManager(), notionClient),
+    )
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+
+    // push after supertest resolves — by this point res.json() has already fired
+    callOrder.push('response');
+
+    expect(res.status).toBe(200);
+
+    const taskStatusIdx = callOrder.indexOf('broadcast:task_status_changed');
+    const emitIdx = callOrder.indexOf('emitTaskUpdated');
+    const responseIdx = callOrder.indexOf('response');
+
+    expect(taskStatusIdx).toBeGreaterThanOrEqual(0);
+    expect(emitIdx).toBeGreaterThanOrEqual(0);
+    expect(taskStatusIdx).toBeLessThan(responseIdx);
+    expect(emitIdx).toBeLessThan(responseIdx);
+
+    setPRBroadcast(() => {});
+  });
 });
 
 // ── POST /api/prs/:prNumber/re-review ─────────────────────────────────────────
