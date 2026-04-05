@@ -411,6 +411,8 @@ export class SessionManager extends EventEmitter {
       ...(reviewCodeSessionId != null && { codeSessionId: reviewCodeSessionId }),
       started_at: startedAt,
       project_id: projectId,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
     } satisfies ServerMessage);
 
     return sessionId;
