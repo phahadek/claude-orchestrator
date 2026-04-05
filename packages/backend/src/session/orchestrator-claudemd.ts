@@ -117,6 +117,18 @@ The orchestrator backend handles all status transitions (In Progress → In Revi
 
 ---
 
+## Efficiency Rules
+
+This session runs in \`--print\` mode with no human watching the output.
+Optimize for speed and token efficiency:
+
+- **Do NOT use TodoWrite.** No one sees the todo list. Track your progress internally.
+- **Do NOT use Agent subagents for exploration.** Use Glob and Grep directly.
+- **Minimize tool calls.** Batch independent reads. Don't re-read files you already read.
+- **Keep commit messages and PR descriptions concise.** One sentence summaries, not essays.
+
+---
+
 ## PR Format Standards
 
 - **Title**: \`feat: <task-name>\` — no scope prefix like \`(backend)\`, no milestone tags.
