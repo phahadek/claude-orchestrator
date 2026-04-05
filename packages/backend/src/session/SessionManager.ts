@@ -231,10 +231,15 @@ export class SessionManager extends EventEmitter {
     }
 
     try {
-      // Always branch from `dev` so sessions start from the correct base
-      // regardless of what branch the main working directory happens to be on.
-      // Using HEAD caused sessions to start from stale `main` commits when a
-      // previous session had changed the main repo's checked-out branch.
+      // Fetch latest dev so sessions don't branch from a stale local ref.
+      // Without this, sessions started after other PRs merge would base their
+      // work on an outdated dev, causing avoidable merge conflicts.
+      execSync('git fetch origin dev:dev', { cwd: projectDir, timeout: 30_000 });
+    } catch (err) {
+      console.warn(`[SessionManager] git fetch origin dev failed (continuing with local dev): ${err}`);
+    }
+
+    try {
       execSync(`git worktree add "${worktreePath}" -b "${branchName}" dev`, {
         cwd: projectDir,
       });
@@ -486,6 +491,11 @@ export class SessionManager extends EventEmitter {
       branchName = `worktree-resume-${row.session_id.slice(0, 8)}`;
       worktreePath = path.join(projectDir, '.claude', 'worktrees', row.session_id);
       console.log(`[SessionManager] resumeSession ${row.session_id}: creating new worktree ${worktreePath} (branch=${branchName})`);
+      try {
+        execSync('git fetch origin dev:dev', { cwd: projectDir, timeout: 30_000 });
+      } catch (fetchErr) {
+        console.warn(`[SessionManager] resumeSession: git fetch origin dev failed (continuing with local dev): ${fetchErr}`);
+      }
       execSync(`git worktree add "${worktreePath}" -b "${branchName}" dev`, {
         cwd: projectDir,
       });
@@ -764,6 +774,12 @@ export class SessionManager extends EventEmitter {
       console.log(`[SessionManager] sendOrResume main branch before session: ${mainBranchResume}`);
     } catch (err) {
       console.warn(`[SessionManager] sendOrResume: could not determine main branch: ${err}`);
+    }
+
+    try {
+      execSync('git fetch origin dev:dev', { cwd: projectDir, timeout: 30_000 });
+    } catch (err) {
+      console.warn(`[SessionManager] sendOrResume: git fetch origin dev failed (continuing with local dev): ${err}`);
     }
 
     try {
