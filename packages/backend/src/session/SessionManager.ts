@@ -423,7 +423,7 @@ export class SessionManager extends EventEmitter {
       row.notion_task_id ?? '',
       row.session_id,           // resumeSessionId — passes --resume to CLI / SDK
       undefined,
-      'standard',
+      row.session_type ?? 'standard',
       this,
       this.githubClient,
       orchConfig.allowedTools,
@@ -483,9 +483,10 @@ export class SessionManager extends EventEmitter {
     this.wireSession(row.session_id, session, projectDir, branchName, worktreePath);
 
     // Send the nudge after a short delay so the CLI process is ready to receive
-    // stdin before we write to it.
+    // stdin before we write to it. Review sessions should not receive the
+    // code-session nudge — they wait for a re-review prompt with a diff instead.
     const nudgeDelay = setTimeout(() => {
-      if (!session.hasEnded) {
+      if (!session.hasEnded && row.session_type !== 'review') {
         this.send(row.session_id, RESUME_NUDGE_MESSAGE);
       }
     }, RESUME_NUDGE_DELAY_MS);
@@ -716,7 +717,7 @@ export class SessionManager extends EventEmitter {
       taskId,
       sessionId, // resumeSessionId — restores conversation history via --resume / SDK resume
       undefined,
-      'standard',
+      row.session_type ?? 'standard',
       this,
       this.githubClient,
       orchConfigResume.allowedTools,
