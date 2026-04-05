@@ -291,6 +291,24 @@ describe('TaskDetail', () => {
     vi.unstubAllGlobals();
   });
 
+  // ── Token aggregation display ──
+
+  it('displays aggregated token count badge when totalTokens > 0', () => {
+    render(<TaskDetail task={makeTask({ totalTokens: { input: 1000, output: 500 } })} send={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByText('1.5k tokens')).toBeTruthy();
+  });
+
+  it('does not display token badge when totalTokens is zero', () => {
+    render(<TaskDetail task={makeTask({ totalTokens: { input: 0, output: 0 } })} send={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.queryByText(/tokens/)).toBeNull();
+  });
+
+  it('displays review session token count when review has tokens', () => {
+    const review = makeReview({ verdict: 'approved', inputTokens: 200, outputTokens: 100 });
+    render(<TaskDetail task={makeTask({ review })} send={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByText('300 tokens')).toBeTruthy();
+  });
+
   // ── EventTranscript integration ──
 
   it('renders EventTranscript for code session when sessions prop includes matching session', () => {
