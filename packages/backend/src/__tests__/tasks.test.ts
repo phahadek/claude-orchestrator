@@ -58,6 +58,8 @@ function makeAggregate(
     code_session_output_tokens: null,
     review_session_id: null,
     review_session_status: null,
+    review_session_input_tokens: null,
+    review_session_output_tokens: null,
     pr_number: null,
     pr_url: null,
     pr_title: null,
@@ -67,6 +69,7 @@ function makeAggregate(
     pr_draft: null,
     pr_review_result: null,
     pr_review_iteration: null,
+    pr_merge_state: null,
     ...overrides,
   };
 }
@@ -163,6 +166,70 @@ describe('GET /api/tasks/active', () => {
   it('returns 404 when project is not found', async () => {
     const res = await supertest(buildApp()).get('/api/tasks/active?projectId=unknown');
     expect(res.status).toBe(404);
+  });
+});
+
+// ── totalTokens aggregation ────────────────────────────────────────────────────
+
+describe('buildTaskViewFromRow — totalTokens', () => {
+  it('sums code and review session tokens into totalTokens', async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-tokens', '🔄 In Progress', {
+        code_session_id: 'cs-1',
+        code_session_status: 'done',
+        code_session_started_at: 1000,
+        code_session_input_tokens: 400,
+        code_session_output_tokens: 200,
+        review_session_id: 'rs-1',
+        review_session_status: 'done',
+        review_session_input_tokens: 100,
+        review_session_output_tokens: 50,
+      }),
+    ]);
+
+    const res = await supertest(buildApp()).get('/api/tasks/active?projectId=proj-1');
+    expect(res.status).toBe(200);
+    const task = res.body.find((t: { taskId: string }) => t.taskId === 'task-tokens');
+    expect(task.totalTokens.input).toBe(500);
+    expect(task.totalTokens.output).toBe(250);
+  });
+
+  it('totalTokens counts only code session when review is absent', async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-code-only', '🔄 In Progress', {
+        code_session_id: 'cs-2',
+        code_session_status: 'done',
+        code_session_started_at: 1000,
+        code_session_input_tokens: 300,
+        code_session_output_tokens: 150,
+        review_session_id: null,
+        review_session_input_tokens: null,
+        review_session_output_tokens: null,
+      }),
+    ]);
+
+    const res = await supertest(buildApp()).get('/api/tasks/active?projectId=proj-1');
+    expect(res.status).toBe(200);
+    const task = res.body.find((t: { taskId: string }) => t.taskId === 'task-code-only');
+    expect(task.totalTokens.input).toBe(300);
+    expect(task.totalTokens.output).toBe(150);
+  });
+
+  it('review.inputTokens and review.outputTokens are populated from row', async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-review-tokens', '🔍 In Review', {
+        review_session_id: 'rs-2',
+        review_session_status: 'done',
+        review_session_input_tokens: 80,
+        review_session_output_tokens: 40,
+      }),
+    ]);
+
+    const res = await supertest(buildApp()).get('/api/tasks/active?projectId=proj-1');
+    expect(res.status).toBe(200);
+    const task = res.body.find((t: { taskId: string }) => t.taskId === 'task-review-tokens');
+    expect(task.review.inputTokens).toBe(80);
+    expect(task.review.outputTokens).toBe(40);
   });
 });
 
