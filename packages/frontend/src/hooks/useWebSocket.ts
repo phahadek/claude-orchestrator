@@ -5,7 +5,7 @@ export type ConnectionState = 'connected' | 'disconnected' | 'reconnecting';
 
 export function useWebSocket(
   onMessage: (msg: ServerMessage) => void,
-  onOpen?: (send: (msg: ClientMessage) => void) => void
+  onOpen?: (send: (msg: ClientMessage) => boolean) => void
 ) {
   const ws = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -59,7 +59,7 @@ export function useWebSocket(
     socket.onopen = () => {
       reconnectDelay.current = 1000;
       setConnectionState('connected');
-      onOpenRef.current?.((msg) => socket.send(JSON.stringify(msg)));
+      onOpenRef.current?.((msg) => { socket.send(JSON.stringify(msg)); return true; });
     };
   }, []);
 
@@ -82,10 +82,12 @@ export function useWebSocket(
     };
   }, [connect]);
 
-  const send = useCallback((msg: ClientMessage) => {
+  const send = useCallback((msg: ClientMessage): boolean => {
     if (ws.current?.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify(msg));
+      return true;
     }
+    return false;
   }, []);
 
   return { send, connectionState };

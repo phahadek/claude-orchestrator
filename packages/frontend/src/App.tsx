@@ -20,7 +20,7 @@ import { Notifications } from './components/Notifications';
 import { ShortcutHint } from './components/ShortcutHint';
 import { SessionFilterBar } from './components/SessionFilterBar';
 import type { NotificationItem } from './components/Notifications';
-import type { ClientMessage, ServerMessage } from '@claude-dashboard/backend/src/ws/types';
+import type { ServerMessage } from '@claude-dashboard/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
 import { calculateCost } from '@claude-dashboard/backend/src/utils/usage';
 import type { TaskView } from '@claude-dashboard/backend/src/routes/tasks';
@@ -64,7 +64,7 @@ export default function App() {
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  const { send, connectionState } = useWebSocket(dispatch, (sendNow: (msg: ClientMessage) => void) => {
+  const { send, connectionState } = useWebSocket(dispatch, (sendNow) => {
     // Called each time the WS (re)connects — fetch tasks if projectId is already known
     if (activeProjectIdRef.current) {
       sendNow({ type: 'fetch_tasks', projectId: activeProjectIdRef.current, boardId: activeBoardIdRef.current ?? undefined });

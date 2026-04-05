@@ -16,7 +16,7 @@ interface Props {
   lastTaskUpdate?: TaskView | null;
   /** Incremented when a review session starts or pr_review_complete arrives — triggers a full re-fetch. */
   reviewRefreshTrigger?: number;
-  send: (msg: ClientMessage) => void;
+  send: (msg: ClientMessage) => boolean;
   project: ProjectConfig | null;
 }
 
@@ -77,7 +77,7 @@ function ReadySection({
   tasks: TaskView[];
   nonCodeTasks: TaskView[];
   onSelectTask: (taskId: string) => void;
-  send: (msg: ClientMessage) => void;
+  send: (msg: ClientMessage) => boolean;
   project: ProjectConfig | null;
   isExpanded: boolean;
   onToggleCollapse: () => void;
@@ -280,6 +280,10 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
     if (!reviewRefreshTrigger) return;
     const clearSyncing = syncPendingRef.current;
     syncPendingRef.current = false;
+    if (syncTimeoutRef.current) {
+      clearTimeout(syncTimeoutRef.current);
+      syncTimeoutRef.current = null;
+    }
     void fetchTasks().finally(() => {
       if (clearSyncing) setSyncing(false);
     });
@@ -309,6 +313,8 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
     ));
   }, []);
 
+  const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Send WS fetch_tasks with skipCache=true and wait for the tasks_ready response before
   // reading from the REST endpoint. The reviewRefreshTrigger effect handles the actual
   // REST fetch once the cache is fresh (sequential, not parallel).
@@ -316,7 +322,22 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
     if (!activeProjectId || syncing) return;
     setSyncing(true);
     syncPendingRef.current = true;
-    send({ type: 'fetch_tasks', projectId: activeProjectId, boardId: boardId ?? undefined, skipCache: true });
+    const sent = send({ type: 'fetch_tasks', projectId: activeProjectId, boardId: boardId ?? undefined, skipCache: true });
+    if (!sent) {
+      // WS not open — clear immediately so the button doesn't stay stuck
+      syncPendingRef.current = false;
+      setSyncing(false);
+      return;
+    }
+    // Safety timeout: clear syncing if no tasks_ready arrives within 5 seconds
+    if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+    syncTimeoutRef.current = setTimeout(() => {
+      syncTimeoutRef.current = null;
+      if (syncPendingRef.current) {
+        syncPendingRef.current = false;
+        setSyncing(false);
+      }
+    }, 5000);
   }, [activeProjectId, boardId, syncing, send]);
 
   const syncButton = (
