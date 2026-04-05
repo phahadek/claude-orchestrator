@@ -69,7 +69,10 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     taskContent,
   } = params;
 
-  const orchestratorMd = buildOrchestratorClaudeMd({
+  // Return only orchestrator content. Since we now write to .claude/CLAUDE.md
+  // (gitignored), the project's own root CLAUDE.md is read independently by
+  // Claude Code — no merging needed.
+  return buildOrchestratorClaudeMd({
     taskName,
     taskUrl,
     projectContextUrl,
@@ -80,16 +83,4 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     taskBackend,
     taskContent,
   });
-
-  const projectMdPath = path.join(projectDir, 'CLAUDE.md');
-  let projectMd = fs.existsSync(projectMdPath) ? fs.readFileSync(projectMdPath, 'utf-8') : '';
-
-  // Strip stale orchestrator rules that a previous escaped session may have
-  // written to the project's CLAUDE.md. Without this, every session would see
-  // double orchestrator rules — one correct, one stale.
-  projectMd = stripOrchestratorHeader(projectMd);
-
-  return projectMd
-    ? `${orchestratorMd}\n\n---\n\n# Project Instructions\n\n${projectMd}`
-    : orchestratorMd;
 }
