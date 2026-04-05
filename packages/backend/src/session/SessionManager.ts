@@ -204,23 +204,27 @@ export class SessionManager extends EventEmitter {
     }
 
     // Build the merged session context (orchestrator rules + project CLAUDE.md).
+    // Review sessions skip this — they use only their customPrompt (the review spec)
+    // and don't need lifecycle, branch, or pre-PR gate rules.
     // In CLI mode: write it to CLAUDE.md in the worktree so the subprocess picks it up.
     // In API mode: pass it as systemPromptContent to inject via the Agent SDK instead.
     let sessionContextContent: string | undefined;
-    try {
-      sessionContextContent = buildSessionContext({
-        taskName: taskName ?? taskUrl,
-        taskUrl,
-        projectContextUrl,
-        targetBranch: 'dev',
-        projectDir,
-        worktreePath,
-        prGate: orchConfig.prGate,
-        bashRules: orchConfig.bashRules,
-        taskBackend: TASK_BACKEND,
-      });
-    } catch (err) {
-      console.error(`[SessionManager] failed to build session context for ${sessionId}: ${err}`);
+    if (sessionType !== 'review') {
+      try {
+        sessionContextContent = buildSessionContext({
+          taskName: taskName ?? taskUrl,
+          taskUrl,
+          projectContextUrl,
+          targetBranch: 'dev',
+          projectDir,
+          worktreePath,
+          prGate: orchConfig.prGate,
+          bashRules: orchConfig.bashRules,
+          taskBackend: TASK_BACKEND,
+        });
+      } catch (err) {
+        console.error(`[SessionManager] failed to build session context for ${sessionId}: ${err}`);
+      }
     }
 
     const sessionMode = runtimeSettings.session_mode;
@@ -229,11 +233,18 @@ export class SessionManager extends EventEmitter {
       // CLI mode: write CLAUDE.md to worktree so the subprocess reads it.
       try {
         fs.writeFileSync(path.join(worktreePath, 'CLAUDE.md'), sessionContextContent, 'utf-8');
+        // Mark CLAUDE.md as assume-unchanged so sessions cannot accidentally
+        // stage/commit the orchestrator-injected content in their PRs.
+        try {
+          execSync('git update-index --assume-unchanged CLAUDE.md', { cwd: worktreePath });
+        } catch (assumeErr) {
+          console.warn(`[SessionManager] failed to mark CLAUDE.md assume-unchanged: ${assumeErr}`);
+        }
         console.log(`[SessionManager] orchestrator CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`);
       } catch (err) {
         console.error(`[SessionManager] failed to write orchestrator CLAUDE.md for ${sessionId}: ${err}`);
       }
-    } else if (sessionMode === 'api') {
+    } else if (sessionMode === 'api' && sessionContextContent) {
       console.log(`[SessionManager] API mode: session context will be injected as system prompt for ${sessionId.slice(0, 8)}`);
     }
 
