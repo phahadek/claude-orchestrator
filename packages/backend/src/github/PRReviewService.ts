@@ -43,11 +43,25 @@ export class PRReviewService {
 
     const existingReviewSessionId = prRow.review_session_id;
 
-    // Case 1: Live review session exists — send follow-up, do not spawn a new session.
+    // Case 1: Live review session exists — send follow-up with updated diff.
     // review_session_id is intentionally NOT updated in this path.
     if (existingReviewSessionId && this.sessionManager.isAlive(existingReviewSessionId)) {
+      const diffData = await this.github.fetchDiff(prNumber);
+
+      const followUp = [
+        `The code session has pushed new commits to PR #${prNumber}.`,
+        `Please re-review the updated diff against the same task spec.`,
+        ``,
+        `### Updated Diff`,
+        '```',
+        diffData.diff,
+        '```',
+        ``,
+        `Respond with the same JSON review format as before.`,
+      ].join('\n');
+
       const verdictPromise = this.waitForVerdict(existingReviewSessionId, prNumber, repo);
-      this.sessionManager.send(existingReviewSessionId, 'The PR has been updated. Please re-review the latest changes.');
+      this.sessionManager.send(existingReviewSessionId, followUp);
       const aiResult = await verdictPromise;
       const { mergeable } = await this.github.getMergeability(prNumber, repo);
       const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
@@ -166,10 +180,6 @@ export class PRReviewService {
     }
 
     const diffData = await this.github.fetchDiff(prNumber, repo);
-    const MAX_DIFF_CHARS = 12000;
-    const truncatedDiff = diffData.diff.length > MAX_DIFF_CHARS
-      ? diffData.diff.slice(0, MAX_DIFF_CHARS) + '\n\n[diff truncated]'
-      : diffData.diff;
 
     const followUp = [
       `The code session has pushed new commits to PR #${prNumber}.`,
@@ -177,7 +187,7 @@ export class PRReviewService {
       ``,
       `### Updated Diff`,
       '```',
-      truncatedDiff,
+      diffData.diff,
       '```',
       ``,
       `Respond with the same JSON review format as before.`,
@@ -367,11 +377,7 @@ export class PRReviewService {
   }
 
   buildPrompt(pr: PullRequest, diff: PRDiff, taskBody: string): string {
-    const MAX_DIFF_CHARS = 12000;
-    let diffText = diff.diff;
-    if (diffText.length > MAX_DIFF_CHARS) {
-      diffText = diffText.slice(0, MAX_DIFF_CHARS) + '\n\n[diff truncated — exceeded 12000 characters]';
-    }
+    const diffText = diff.diff;
 
     return `You are a code reviewer. Compare the following GitHub PR against its task specification.
 Respond ONLY with a JSON object — no preamble, no markdown fences.
