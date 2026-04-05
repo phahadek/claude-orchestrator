@@ -4,6 +4,7 @@ import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
 import { AgentSession, parseNotionPageId } from './AgentSession';
 import { buildSessionContext } from './ContextBuilder';
+import { buildReviewClaudeMd } from './orchestrator-claudemd';
 import { loadOrchestratorConfig } from './orchestrator-config';
 import { CliSessionRunner } from './CliSessionRunner';
 import { ApiSessionRunner } from './ApiSessionRunner';
@@ -203,13 +204,13 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // Build the merged session context (orchestrator rules + project CLAUDE.md).
-    // Review sessions skip this — they use only their customPrompt (the review spec)
-    // and don't need lifecycle, branch, or pre-PR gate rules.
-    // In CLI mode: write it to CLAUDE.md in the worktree so the subprocess picks it up.
-    // In API mode: pass it as systemPromptContent to inject via the Agent SDK instead.
+    // Build the session context to inject into the worktree's CLAUDE.md.
+    // Code sessions get the full orchestrator rules + project CLAUDE.md.
+    // Review sessions get a lightweight review-only identity document.
     let sessionContextContent: string | undefined;
-    if (sessionType !== 'review') {
+    if (sessionType === 'review') {
+      sessionContextContent = buildReviewClaudeMd(taskName ?? taskUrl);
+    } else {
       try {
         sessionContextContent = buildSessionContext({
           taskName: taskName ?? taskUrl,
