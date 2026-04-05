@@ -17,6 +17,62 @@ import type { ServerMessage } from '../ws/types';
 import { deriveDisplayStatusFromDb } from '../tasks/TaskStatusEngine';
 import type { DisplayStatus } from '../tasks/TaskStatusEngine';
 import { emitTaskUpdated } from '../routes/tasks';
+import { parseSection } from '../notion/NotionClient';
+
+/** Max chars per file snippet to avoid bloating the CLAUDE.md. */
+const MAX_FILE_CHARS = 8_000;
+/** Max total chars for all file snippets combined. */
+const MAX_TOTAL_SNIPPET_CHARS = 40_000;
+
+/**
+ * Parse file paths from the task spec's "Files" section, read each file from
+ * the project directory, and return a markdown block with their contents.
+ * Returns undefined if no files are found or all reads fail.
+ */
+function readTaskFiles(taskMarkdown: string, projectDir: string): string | undefined {
+  const filesSection = parseSection(taskMarkdown, 'files');
+  if (!filesSection.trim()) return undefined;
+
+  const filePaths = filesSection
+    .split('\n')
+    .map((line) => line.replace(/^[-*\s]+/, '').trim())
+    // Extract just the path portion — strip trailing descriptions after whitespace or dash
+    .map((line) => line.replace(/\s+[-—–].*$/, '').replace(/\s*\(.*\)$/, '').trim())
+    .filter((line) => line.includes('/') || line.includes('.'));
+
+  if (filePaths.length === 0) return undefined;
+
+  const snippets: string[] = [];
+  let totalChars = 0;
+
+  for (const filePath of filePaths) {
+    if (totalChars >= MAX_TOTAL_SNIPPET_CHARS) break;
+
+    const fullPath = path.join(projectDir, filePath);
+    try {
+      if (!fs.existsSync(fullPath)) continue;
+      const stat = fs.statSync(fullPath);
+      if (!stat.isFile()) continue;
+
+      let content = fs.readFileSync(fullPath, 'utf-8');
+      if (content.length > MAX_FILE_CHARS) {
+        content = content.slice(0, MAX_FILE_CHARS) + '\n[... truncated]';
+      }
+
+      snippets.push(`### \`${filePath}\`\n\`\`\`\n${content}\n\`\`\``);
+      totalChars += content.length;
+    } catch {
+      // Skip unreadable files silently
+    }
+  }
+
+  if (snippets.length === 0) return undefined;
+
+  return `## Referenced Files\n\n` +
+    `> These are the current contents of files listed in the task spec.\n` +
+    `> They were pre-read by the orchestrator so you can skip exploration.\n\n` +
+    snippets.join('\n\n');
+}
 
 export interface StartOptions {
   taskType?: string;
@@ -221,6 +277,19 @@ export class SessionManager extends EventEmitter {
           console.log(`[SessionManager] pre-fetched task content for ${sessionId.slice(0, 8)} (${taskContent.length} chars)`);
         } catch (err) {
           console.warn(`[SessionManager] failed to pre-fetch task content for ${sessionId.slice(0, 8)} — session will fetch from Notion: ${err}`);
+        }
+      }
+
+      // Pre-read files listed in the task spec so the session can skip exploration.
+      if (taskContent) {
+        try {
+          const fileSnippets = readTaskFiles(taskContent, projectDir);
+          if (fileSnippets) {
+            taskContent += '\n\n' + fileSnippets;
+            console.log(`[SessionManager] appended file snippets for ${sessionId.slice(0, 8)}`);
+          }
+        } catch (err) {
+          console.warn(`[SessionManager] failed to read task files for ${sessionId.slice(0, 8)}: ${err}`);
         }
       }
 
