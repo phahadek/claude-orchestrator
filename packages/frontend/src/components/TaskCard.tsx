@@ -101,6 +101,9 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
             #{pr.prNumber}
           </a>
           <span className={styles.prState}>{pr.draft ? 'draft' : pr.state}</span>
+          {pr.mergeState === 'dirty' && (
+            <span className={styles.conflictBadge} title="PR has merge conflicts">⚠ Conflict</span>
+          )}
           {review?.verdict && (
             <span className={`${styles.verdict} ${styles[`verdict-${review.verdict.replace(/_/g, '-')}`] ?? ''}`}>
               {verdictLabel(review.verdict)}

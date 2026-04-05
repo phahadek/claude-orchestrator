@@ -35,6 +35,7 @@ export interface TaskView {
     baseBranch: string;
     state: string;
     draft: boolean;
+    mergeState: string | null;
   } | null;
   review: {
     sessionId: string;
