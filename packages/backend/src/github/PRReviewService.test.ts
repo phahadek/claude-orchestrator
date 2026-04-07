@@ -299,7 +299,7 @@ describe('PRReviewService.buildPrompt()', () => {
     expect(prompt).toContain('Fail only if the PR touches files unrelated to the task');
   });
 
-  it('truncates diffs longer than 12000 characters and appends a truncation notice', () => {
+  it('includes the full diff without truncation', () => {
     const longDiff: PRDiff = { ...mockDiff, diff: 'A'.repeat(13000) };
     const service = new PRReviewService(
       makeMockGitHub(),
@@ -310,8 +310,8 @@ describe('PRReviewService.buildPrompt()', () => {
     );
     const prompt = service.buildPrompt(mockPR, longDiff, mockTaskBody);
 
-    expect(prompt).toContain('[diff truncated');
-    expect(prompt).not.toContain('A'.repeat(13000));
+    expect(prompt).toContain('A'.repeat(13000));
+    expect(prompt).not.toContain('[diff truncated');
   });
 });
 
