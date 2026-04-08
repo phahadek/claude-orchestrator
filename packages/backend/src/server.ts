@@ -114,11 +114,12 @@ function getMaxReviewIterations(): number {
 
 
 sessionManager.on('push_detected', ({ sessionId: codingSessionId }: { sessionId: string }) => {
-  if (!AUTO_REVIEW_ENABLED) return;
-  if (pendingReReviews.has(codingSessionId)) return;
+  console.log(`[server] push_detected from session ${codingSessionId.slice(0, 8)}`);
+  if (!AUTO_REVIEW_ENABLED) { console.log('[server] push_detected: auto-review disabled'); return; }
+  if (pendingReReviews.has(codingSessionId)) { console.log('[server] push_detected: already pending for this session'); return; }
 
   const prRow = getPRBySessionId(codingSessionId);
-  if (!prRow || prRow.state !== 'open') return;
+  if (!prRow || prRow.state !== 'open') { console.log(`[server] push_detected: no open PR for session (found=${!!prRow})`); return; }
   if (!prRow.review_session_id) {
     // Initial review hasn't started yet — queue the push so it triggers
     // re-review after the initial review session is established.
@@ -171,10 +172,12 @@ sessionManager.on('push_detected', ({ sessionId: codingSessionId }: { sessionId:
       return;
     }
 
-    if (!shouldAutoReview(
+    const autoReviewOk = shouldAutoReview(
       { reviewIteration: prRow.review_iteration, headSha, lastReviewedSha: prRow.last_reviewed_sha },
       maxIter,
-    )) {
+    );
+    console.log(`[server] shouldAutoReview: iter=${prRow.review_iteration}/${maxIter} head=${headSha?.slice(0,7)} lastReviewed=${prRow.last_reviewed_sha?.slice(0,7)} → ${autoReviewOk}`);
+    if (!autoReviewOk) {
       pendingReReviews.delete(codingSessionId);
       return;
     }

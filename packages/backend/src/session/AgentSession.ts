@@ -364,8 +364,15 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       }
     }
 
-    // Extract permission_denials from result event and broadcast to UI
+    // Extract permission_denials from result event and broadcast to UI.
+    // Also signal turn completion so the server can check for new commits.
     if (rawType === 'result') {
+      const pr = getPRBySessionId(this.sessionId);
+      if (pr?.review_session_id) {
+        sessionLog(this.sessionId, `turn complete — PR #${pr.pr_number} has review session, signalling push_detected`);
+        this.handlePushDetected();
+      }
+
       const denials = event.permission_denials as PermissionDenial[] | undefined;
       sessionLog(this.sessionId, `RESULT stop_reason=${event.stop_reason} denials=${JSON.stringify(denials)}`);
       if (denials && denials.length > 0) {

@@ -232,15 +232,16 @@ export class SessionManager extends EventEmitter {
 
     try {
       // Fetch latest dev so sessions don't branch from a stale local ref.
-      // Without this, sessions started after other PRs merge would base their
-      // work on an outdated dev, causing avoidable merge conflicts.
-      execSync('git fetch origin dev:dev', { cwd: projectDir, timeout: 30_000 });
+      // Uses `git fetch origin dev` (not dev:dev) because dev:dev fails when
+      // the local dev branch is checked out in the main repo or any worktree.
+      // The worktree is then based on origin/dev which is always up-to-date.
+      execSync('git fetch origin dev', { cwd: projectDir, timeout: 30_000 });
     } catch (err) {
-      console.warn(`[SessionManager] git fetch origin dev failed (continuing with local dev): ${err}`);
+      console.warn(`[SessionManager] git fetch origin dev failed (continuing with local ref): ${err}`);
     }
 
     try {
-      execSync(`git worktree add "${worktreePath}" -b "${branchName}" dev`, {
+      execSync(`git worktree add "${worktreePath}" -b "${branchName}" origin/dev`, {
         cwd: projectDir,
       });
     } catch (err) {
@@ -492,11 +493,11 @@ export class SessionManager extends EventEmitter {
       worktreePath = path.join(projectDir, '.claude', 'worktrees', row.session_id);
       console.log(`[SessionManager] resumeSession ${row.session_id}: creating new worktree ${worktreePath} (branch=${branchName})`);
       try {
-        execSync('git fetch origin dev:dev', { cwd: projectDir, timeout: 30_000 });
+        execSync('git fetch origin dev', { cwd: projectDir, timeout: 30_000 });
       } catch (fetchErr) {
-        console.warn(`[SessionManager] resumeSession: git fetch origin dev failed (continuing with local dev): ${fetchErr}`);
+        console.warn(`[SessionManager] resumeSession: git fetch origin dev failed (continuing with local ref): ${fetchErr}`);
       }
-      execSync(`git worktree add "${worktreePath}" -b "${branchName}" dev`, {
+      execSync(`git worktree add "${worktreePath}" -b "${branchName}" origin/dev`, {
         cwd: projectDir,
       });
     }
@@ -777,13 +778,13 @@ export class SessionManager extends EventEmitter {
     }
 
     try {
-      execSync('git fetch origin dev:dev', { cwd: projectDir, timeout: 30_000 });
+      execSync('git fetch origin dev', { cwd: projectDir, timeout: 30_000 });
     } catch (err) {
-      console.warn(`[SessionManager] sendOrResume: git fetch origin dev failed (continuing with local dev): ${err}`);
+      console.warn(`[SessionManager] sendOrResume: git fetch origin dev failed (continuing with local ref): ${err}`);
     }
 
     try {
-      execSync(`git worktree add "${worktreePath}" -b "${branchName}" dev`, {
+      execSync(`git worktree add "${worktreePath}" -b "${branchName}" origin/dev`, {
         cwd: projectDir,
       });
     } catch (err) {
