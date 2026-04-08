@@ -43,14 +43,23 @@ export class PRReviewService {
 
     const existingReviewSessionId = prRow.review_session_id;
 
-    // Case 1: Live review session exists — send follow-up with updated diff.
+    // Case 1: Live review session exists — send follow-up with diff, do not spawn a new session.
     // review_session_id is intentionally NOT updated in this path.
     if (existingReviewSessionId && this.sessionManager.isAlive(existingReviewSessionId)) {
-      const diffData = await this.github.fetchDiff(prNumber);
-
+      // Register listener BEFORE sending to avoid missing a fast verdict.
+      const verdictPromise = this.waitForVerdict(existingReviewSessionId, prNumber, repo);
+      const prData = await this.github.fetchPR(repo, prNumber);
+      const diffData = await this.github.fetchDiff(
+        prNumber, repo,
+        { base: prData.baseBranch, head: prData.headBranch },
+      );
       const followUp = [
         `The code session has pushed new commits to PR #${prNumber}.`,
         `Please re-review the updated diff against the same task spec.`,
+        ``,
+        `### Updated PR Metadata`,
+        `Title: ${prData.title}`,
+        `Description: ${prData.body ?? '(none)'}`,
         ``,
         `### Updated Diff`,
         '```',
@@ -59,8 +68,6 @@ export class PRReviewService {
         ``,
         `Respond with the same JSON review format as before.`,
       ].join('\n');
-
-      const verdictPromise = this.waitForVerdict(existingReviewSessionId, prNumber, repo);
       this.sessionManager.send(existingReviewSessionId, followUp);
       const aiResult = await verdictPromise;
       const { mergeable } = await this.github.getMergeability(prNumber, repo);
@@ -72,14 +79,11 @@ export class PRReviewService {
       return finalResult;
     }
 
-    const [prData, diffData] = await Promise.all([
-      this.github.listOpenPRs(repo).then((prs) => {
-        const found = prs.find((p) => p.id === prNumber);
-        if (!found) throw new Error(`PR #${prNumber} not found on GitHub`);
-        return found;
-      }),
-      this.github.fetchDiff(prNumber, repo),
-    ]);
+    const prData = await this.github.fetchPR(repo, prNumber);
+    const diffData = await this.github.fetchDiff(
+      prNumber, repo,
+      { base: prData.baseBranch, head: prData.headBranch },
+    );
 
     if (!prRow.notion_task_id) {
       throw new Error(`PR #${prNumber} has no linked Notion task`);
@@ -179,11 +183,19 @@ export class PRReviewService {
       return this.reviewPR(prNumber, repo, projectId, projectContextUrl);
     }
 
-    const diffData = await this.github.fetchDiff(prNumber, repo);
+    const prData = await this.github.fetchPR(repo, prNumber);
+    const branches = prData.baseBranch && prData.headBranch
+      ? { base: prData.baseBranch, head: prData.headBranch }
+      : undefined;
+    const diffData = await this.github.fetchDiff(prNumber, repo, branches);
 
     const followUp = [
       `The code session has pushed new commits to PR #${prNumber}.`,
       `Please re-review the updated diff against the same task spec.`,
+      ``,
+      `### Updated PR Metadata`,
+      `Title: ${prData.title}`,
+      `Description: ${prData.body ?? '(none)'}`,
       ``,
       `### Updated Diff`,
       '```',
@@ -377,8 +389,6 @@ export class PRReviewService {
   }
 
   buildPrompt(pr: PullRequest, diff: PRDiff, taskBody: string): string {
-    const diffText = diff.diff;
-
     return `You are a code reviewer. Compare the following GitHub PR against its task specification.
 Respond ONLY with a JSON object — no preamble, no markdown fences.
 
@@ -388,7 +398,7 @@ Description: ${pr.body ?? '(none)'}
 Head branch: ${pr.headBranch}
 
 ## PR Diff
-${diffText}
+${diff.diff}
 
 ## Task Specification
 ${taskBody}

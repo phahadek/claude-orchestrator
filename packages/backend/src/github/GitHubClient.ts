@@ -46,12 +46,21 @@ export class GitHubClient {
     };
   }
 
-  async fetchDiff(prId: number, repo?: string): Promise<PRDiff> {
+  async fetchDiff(prId: number, repo?: string, branches?: { base: string; head: string }): Promise<PRDiff> {
     const r = repo ?? GITHUB_REPO;
-    const diff = await this.request<string>(
-      `/repos/${r}/pulls/${prId}`,
-      { headers: { ...this.headers, 'Accept': 'application/vnd.github.diff' } }
-    );
+    let diff: string;
+    if (branches) {
+      // Explicit three-dot compare endpoint — guarantees merge-base semantics
+      diff = await this.request<string>(
+        `/repos/${r}/compare/${branches.base}...${branches.head}`,
+        { headers: { ...this.headers, 'Accept': 'application/vnd.github.diff' } }
+      );
+    } else {
+      diff = await this.request<string>(
+        `/repos/${r}/pulls/${prId}`,
+        { headers: { ...this.headers, 'Accept': 'application/vnd.github.diff' } }
+      );
+    }
     const filesChanged = parseDiffFiles(diff);
     return { prId, diff, filesChanged };
   }
