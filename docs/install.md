@@ -1,0 +1,144 @@
+# Install & Configure
+
+Detailed setup, Docker, and configuration reference for the Claude Code Dashboard. For a 4-line happy-path quickstart, see the project [README](../README.md).
+
+## Prerequisites
+
+- Node.js 20 LTS and npm
+- [`claude`](https://docs.anthropic.com/en/docs/claude-code) CLI installed and authenticated (`claude login`)
+- Notion integration token, if using Notion as a task source — [create an integration](https://www.notion.so/my-integrations)
+- GitHub personal access token with `repo` scope, for PR tracking
+
+## Local development
+
+```bash
+git clone https://github.com/phahadek/claude-orchestrator.git
+cd claude-orchestrator
+npm install
+
+cp packages/backend/.env.example packages/backend/.env
+# Edit packages/backend/.env — see the env var reference below
+
+# Optional: Notion context page URL and board ID for the frontend
+cp packages/frontend/.env.example packages/frontend/.env
+
+npm run dev
+```
+
+The dashboard listens on `http://localhost:3000` (combined backend + frontend). In dev mode Vite serves the frontend on `http://localhost:5173` with hot reload; the backend on `:3000` proxies API + WebSocket traffic.
+
+### Restart helpers
+
+```bash
+npm run restart           # kill port 3000, restart both backend and frontend
+npm run restart:backend   # backend only (cross-platform)
+
+# Windows PowerShell
+.\restart.ps1             # restart both (background, streams output)
+.\restart.ps1 -backend    # backend only
+.\restart.ps1 -frontend   # frontend only
+.\stop.ps1                # stop both
+.\restart-backend.ps1     # foreground backend restart
+```
+
+### Production build
+
+```bash
+npm run build   # compiles backend, builds frontend bundle into packages/backend/dist/public/
+npm start       # node packages/backend/dist/server.js
+```
+
+## Docker
+
+### Production
+
+```bash
+cp packages/backend/.env.example packages/backend/.env   # edit values
+# In docker-compose.yml:
+#   1. Set CLAUDE_BIN to your claude CLI path (run: which claude)
+#   2. Add a volume mount for each project directory referenced in PROJECTS
+mkdir -p data
+docker compose up -d
+```
+
+### Development (hot reload)
+
+```bash
+docker compose -f docker-compose.dev.yml up
+```
+
+### Claude CLI auth in Docker
+
+The container mounts two host paths:
+
+1. **The `claude` binary** — read-only at `/usr/local/bin/claude`
+2. **`~/.claude/`** — your Claude credentials directory at `/root/.claude/`
+
+> **Security note:** the `~/.claude` mount grants the container full access to your Claude credentials, API keys, and session history. Only run containers you trust.
+
+## Configuration reference
+
+All configuration lives in `packages/backend/.env`. See `packages/backend/.env.example` for a complete template.
+
+| Variable | Required | Description | Example |
+|---|---|---|---|
+| `TASK_BACKEND` | No | Task source: `notion` (default) or `local` (YAML) | `notion` |
+| `NOTION_API_KEY` | If `TASK_BACKEND=notion` | Notion integration token | `ntn_...` |
+| `GITHUB_TOKEN` | Yes | GitHub PAT with `repo` scope | `ghp_...` |
+| `GITHUB_REPO` | Yes | Default repo for PR sync | `owner/repo` |
+| `PROJECTS` | Yes | JSON array of project configs (see below) | |
+| `PORT` | No | Backend HTTP port | `3000` |
+| `DB_PATH` | No | SQLite database file | `./dashboard.db` |
+| `SESSIONS_DIR` | No | Claude CLI sessions directory | `~/.claude/projects` |
+| `AUTO_REVIEW` | No | Enable automated PR review | `true` |
+| `AUTO_REVIEW_CONCURRENCY` | No | Parallel review sessions | `1` |
+
+### `PROJECTS` JSON format
+
+The `PROJECTS` env var is a JSON array. Each entry:
+
+```json
+[
+  {
+    "id": "my-project",
+    "name": "My Project",
+    "projectDir": "/path/to/repo",
+    "contextUrl": "https://www.notion.so/<context-page-id>",
+    "boardId": "<notion-database-id>",
+    "githubRepo": "owner/repo"
+  }
+]
+```
+
+For multiple Notion boards (one per milestone) on the same project, add a `boards` array:
+
+```json
+{
+  "id": "my-project",
+  "boards": [
+    { "id": "<m1-database-id>", "name": "M1" },
+    { "id": "<m2-database-id>", "name": "M2" }
+  ]
+}
+```
+
+For the local YAML task backend (`TASK_BACKEND=local`), `contextUrl` and `boardId` are optional; the backend reads tasks from `<projectDir>/tasks.yaml`.
+
+## Notion workspace setup
+
+If you want to use Notion as your task backend, the dashboard expects a specific page + database structure. See [`notion-template.md`](notion-template.md) for step-by-step setup.
+
+## Development
+
+```bash
+# Tests
+npm run test -w packages/backend
+npm run test -w packages/frontend
+
+# Type-check
+npx tsc --noEmit -p packages/backend
+npx tsc --noEmit -p packages/frontend
+
+# Build
+npm run build
+```
