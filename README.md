@@ -56,6 +56,22 @@ npm run dev
 
 The dashboard is available at http://localhost:3000 (backend API + frontend in dev mode at http://localhost:5173).
 
+### Stop and restart
+
+```bash
+# Stop both servers
+npm run restart          # kill port 3000 and restart both
+
+# Restart backend only (cross-platform)
+npm run restart:backend
+
+# Windows PowerShell scripts
+.\restart.ps1            # restart both (background, streams output)
+.\restart.ps1 -backend  # restart backend only
+.\restart.ps1 -frontend # restart frontend only
+.\stop.ps1               # stop both
+```
+
 ### Production build
 
 ```bash
