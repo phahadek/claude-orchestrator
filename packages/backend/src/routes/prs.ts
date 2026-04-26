@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { getProjectById, config } from '../config';
+import { getProjectById, getProjectByGithubRepo } from '../config';
 import {
   getPRs,
   getPRByNumber,
@@ -266,7 +266,7 @@ export function createPrsRouter(
     // Reset iteration counter so the orchestrator won't block on the cap
     resetReviewIteration(prNumber, repo);
 
-    const project = config.projects.find((p) => p.githubRepo === repo);
+    const project = getProjectByGithubRepo(repo);
     if (!project) {
       res.status(422).json({ error: `No project configured for repo ${repo}` });
       return;

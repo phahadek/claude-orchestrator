@@ -11,12 +11,21 @@ vi.mock('../db/queries.js', () => ({
   updatePRDraftStatus: vi.fn(),
 }));
 
+const projectFixture = {
+  id: 'proj-1',
+  name: 'Project 1',
+  githubRepo: 'owner/repo',
+  projectDir: '/tmp',
+  contextUrl: 'https://notion.so/ctx',
+  boardId: 'board-1',
+};
+
 vi.mock('../config.js', () => ({
-  config: {
-    projects: [
-      { id: 'proj-1', name: 'Project 1', githubRepo: 'owner/repo', projectDir: '/tmp', contextUrl: 'https://notion.so/ctx', boardId: 'board-1' },
-    ],
-  },
+  getProjectByGithubRepo: vi.fn((repo: string) =>
+    repo === 'owner/repo' ? projectFixture : undefined,
+  ),
+  getAllProjects: vi.fn(() => [projectFixture]),
+  getProjectById: vi.fn((id: string) => (id === 'proj-1' ? projectFixture : undefined)),
 }));
 
 import { ReviewOrchestrator } from './ReviewOrchestrator';

@@ -12,6 +12,10 @@ import type {
   NewPermissionDenialRow,
   TaskCache,
   PullRequestRow,
+  ProjectRow,
+  NewProjectRow,
+  MilestoneRow,
+  NewMilestoneRow,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -835,4 +839,152 @@ export function getLatestCodeSessionByNotionTaskId(notionTaskId: string): Sessio
     ORDER BY started_at DESC
     LIMIT 1
   `).get({ notion_task_id: notionTaskId }) as Session | undefined;
+}
+
+// ─── projects ──────────────────────────────────────────────────────────────
+
+export function insertProject(p: NewProjectRow): ProjectRow {
+  const now = Date.now();
+  db.prepare<NewProjectRow>(`
+    INSERT INTO projects
+      (id, name, project_dir, context_url, github_repo, task_source, created_at, updated_at)
+    VALUES
+      (@id, @name, @project_dir, @context_url, @github_repo, @task_source, @created_at, @updated_at)
+  `).run({
+    ...p,
+    created_at: p.created_at ?? now,
+    updated_at: p.updated_at ?? now,
+  });
+  return getProjectRowById(p.id)!;
+}
+
+export function getProjectRowById(id: string): ProjectRow | undefined {
+  return db.prepare<{ id: string }>(`SELECT * FROM projects WHERE id = @id`)
+    .get({ id }) as ProjectRow | undefined;
+}
+
+export function listProjectRows(): ProjectRow[] {
+  return db.prepare(`SELECT * FROM projects ORDER BY created_at ASC`).all() as ProjectRow[];
+}
+
+export function countProjects(): number {
+  const row = db.prepare(`SELECT COUNT(*) AS n FROM projects`).get() as { n: number };
+  return row.n;
+}
+
+export interface ProjectPatch {
+  name?: string;
+  project_dir?: string;
+  context_url?: string | null;
+  github_repo?: string | null;
+  task_source?: 'notion' | 'yaml';
+}
+
+export function updateProject(id: string, patch: ProjectPatch): ProjectRow | undefined {
+  const existing = getProjectRowById(id);
+  if (!existing) return undefined;
+  const now = Date.now();
+  db.prepare<{
+    id: string;
+    name: string;
+    project_dir: string;
+    context_url: string | null;
+    github_repo: string | null;
+    task_source: string;
+    updated_at: number;
+  }>(`
+    UPDATE projects
+    SET name = @name,
+        project_dir = @project_dir,
+        context_url = @context_url,
+        github_repo = @github_repo,
+        task_source = @task_source,
+        updated_at = @updated_at
+    WHERE id = @id
+  `).run({
+    id,
+    name: patch.name ?? existing.name,
+    project_dir: patch.project_dir ?? existing.project_dir,
+    context_url: patch.context_url !== undefined ? patch.context_url : existing.context_url,
+    github_repo: patch.github_repo !== undefined ? patch.github_repo : existing.github_repo,
+    task_source: patch.task_source ?? existing.task_source,
+    updated_at: now,
+  });
+  return getProjectRowById(id);
+}
+
+export function deleteProject(id: string): boolean {
+  const result = db.prepare<{ id: string }>(`DELETE FROM projects WHERE id = @id`)
+    .run({ id });
+  return result.changes > 0;
+}
+
+// ─── milestones ────────────────────────────────────────────────────────────
+
+export function insertMilestone(m: NewMilestoneRow): MilestoneRow {
+  const now = Date.now();
+  db.prepare<NewMilestoneRow>(`
+    INSERT INTO milestones
+      (id, project_id, name, source_id, display_order, created_at, updated_at)
+    VALUES
+      (@id, @project_id, @name, @source_id, @display_order, @created_at, @updated_at)
+  `).run({
+    ...m,
+    display_order: m.display_order ?? 0,
+    created_at: m.created_at ?? now,
+    updated_at: m.updated_at ?? now,
+  });
+  return getMilestoneById(m.id)!;
+}
+
+export function getMilestoneById(id: string): MilestoneRow | undefined {
+  return db.prepare<{ id: string }>(`SELECT * FROM milestones WHERE id = @id`)
+    .get({ id }) as MilestoneRow | undefined;
+}
+
+export function listMilestonesByProject(projectId: string): MilestoneRow[] {
+  return db.prepare<{ project_id: string }>(`
+    SELECT * FROM milestones
+    WHERE project_id = @project_id
+    ORDER BY display_order ASC, created_at ASC
+  `).all({ project_id: projectId }) as MilestoneRow[];
+}
+
+export interface MilestonePatch {
+  name?: string;
+  source_id?: string | null;
+  display_order?: number;
+}
+
+export function updateMilestone(id: string, patch: MilestonePatch): MilestoneRow | undefined {
+  const existing = getMilestoneById(id);
+  if (!existing) return undefined;
+  const now = Date.now();
+  db.prepare<{
+    id: string;
+    name: string;
+    source_id: string | null;
+    display_order: number;
+    updated_at: number;
+  }>(`
+    UPDATE milestones
+    SET name = @name,
+        source_id = @source_id,
+        display_order = @display_order,
+        updated_at = @updated_at
+    WHERE id = @id
+  `).run({
+    id,
+    name: patch.name ?? existing.name,
+    source_id: patch.source_id !== undefined ? patch.source_id : existing.source_id,
+    display_order: patch.display_order ?? existing.display_order,
+    updated_at: now,
+  });
+  return getMilestoneById(id);
+}
+
+export function deleteMilestone(id: string): boolean {
+  const result = db.prepare<{ id: string }>(`DELETE FROM milestones WHERE id = @id`)
+    .run({ id });
+  return result.changes > 0;
 }

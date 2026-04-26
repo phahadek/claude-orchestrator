@@ -14,20 +14,9 @@ export interface ProjectConfig {
   name: string;
   projectDir: string;  // absolute path to the repo root
   contextUrl: string;
-  boardId: string;     // default/active board (backwards compat)
-  boards?: Board[];    // optional multi-milestone support
+  boardId: string;     // default/active board (backwards compat — first milestone)
+  boards?: Board[];    // multi-milestone support — derived from milestones table
   githubRepo?: string; // "owner/repo" — optional; enables PR features
-}
-
-function parseProjects(): ProjectConfig[] {
-  const raw = process.env.PROJECTS;
-  if (!raw) return [];
-  try {
-    return JSON.parse(raw) as ProjectConfig[];
-  } catch (err) {
-    console.error('[config] Failed to parse PROJECTS env var:', err);
-    return [];
-  }
 }
 
 function resolveClaudePath(): string {
@@ -60,7 +49,6 @@ export const config = {
   sqlitePath: process.env.DB_PATH ?? './dashboard.db',
   port: Number(process.env.PORT ?? 3000),
   projectDir: normalizePath(process.env.PROJECT_DIR ?? process.cwd()),
-  projects: parseProjects(),
   claudePath: resolveClaudePath(),
   maxConcurrentCodeSessions: Number(process.env.MAX_CONCURRENT_CODE_SESSIONS ?? 20),
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
@@ -83,8 +71,36 @@ export const ALLOWED_TOOLS = [
   'mcp__claude_ai_Asana__*', 'mcp__claude_ai_Google_Calendar__*',
 ];
 
+function hydrateProject(p: { id: string; name: string; projectDir: string; contextUrl: string | null; githubRepo: string | null; milestones: { sourceId: string | null; name: string }[] }): ProjectConfig {
+  const boards: Board[] = p.milestones
+    .filter((m): m is { sourceId: string; name: string } => typeof m.sourceId === 'string' && m.sourceId.length > 0)
+    .map((m) => ({ id: m.sourceId, name: m.name }));
+  const config: ProjectConfig = {
+    id: p.id,
+    name: p.name,
+    projectDir: p.projectDir,
+    contextUrl: p.contextUrl ?? '',
+    boardId: boards[0]?.id ?? '',
+  };
+  if (boards.length > 0) config.boards = boards;
+  if (p.githubRepo) config.githubRepo = p.githubRepo;
+  return config;
+}
+
 export function getProjectById(id: string): ProjectConfig | undefined {
-  return config.projects.find((p) => p.id === id);
+  // Lazy import avoids a circular dependency between config <-> ProjectService.
+  const { ProjectService } = require('./projects/ProjectService') as typeof import('./projects/ProjectService');
+  const project = ProjectService.getById(id);
+  return project ? hydrateProject(project) : undefined;
+}
+
+export function getAllProjects(): ProjectConfig[] {
+  const { ProjectService } = require('./projects/ProjectService') as typeof import('./projects/ProjectService');
+  return ProjectService.list().map(hydrateProject);
+}
+
+export function getProjectByGithubRepo(githubRepo: string): ProjectConfig | undefined {
+  return getAllProjects().find((p) => p.githubRepo === githubRepo);
 }
 
 export interface RuntimeSettings {

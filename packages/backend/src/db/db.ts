@@ -85,6 +85,26 @@ db.exec(`
     updated_at      TEXT    NOT NULL,
     synced_at       TEXT    NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS projects (
+    id           TEXT    PRIMARY KEY,
+    name         TEXT    NOT NULL,
+    project_dir  TEXT    NOT NULL,
+    context_url  TEXT,
+    github_repo  TEXT,
+    task_source  TEXT    NOT NULL DEFAULT 'notion',
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS milestones (
+    id            TEXT    PRIMARY KEY,
+    project_id    TEXT    NOT NULL,
+    name          TEXT    NOT NULL,
+    source_id     TEXT,
+    display_order INTEGER NOT NULL DEFAULT 0,
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+  );
 `);
 
 // ── Migrations (idempotent column additions for existing databases) ──────────

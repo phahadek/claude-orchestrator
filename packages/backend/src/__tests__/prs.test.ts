@@ -23,26 +23,25 @@ vi.mock('../db/queries.js', () => ({
   updatePRDraftStatus: vi.fn(),
 }));
 
-vi.mock('../config.js', () => ({
-  config: {
-    projects: [
-      {
-        id: 'proj-1',
-        name: 'Test Project',
-        projectDir: '/test',
-        contextUrl: 'https://notion.so/ctx',
-        boardId: 'board-1',
-        githubRepo: 'owner/repo',
-      },
-      {
-        id: 'proj-no-repo',
-        name: 'No Repo Project',
-        projectDir: '/test2',
-        contextUrl: 'https://notion.so/ctx2',
-        boardId: 'board-2',
-      },
-    ],
+const mockProjectsByGithubRepo: Record<string, {
+  id: string;
+  name: string;
+  projectDir: string;
+  contextUrl: string;
+  boardId: string;
+  githubRepo: string;
+}> = {
+  'owner/repo': {
+    id: 'proj-1',
+    name: 'Test Project',
+    projectDir: '/test',
+    contextUrl: 'https://notion.so/ctx',
+    boardId: 'board-1',
+    githubRepo: 'owner/repo',
   },
+};
+
+vi.mock('../config.js', () => ({
   getProjectById: vi.fn((id: string) => {
     if (id === 'proj-1') {
       return {
@@ -65,6 +64,8 @@ vi.mock('../config.js', () => ({
     }
     return undefined;
   }),
+  getProjectByGithubRepo: vi.fn((repo: string) => mockProjectsByGithubRepo[repo]),
+  getAllProjects: vi.fn(() => Object.values(mockProjectsByGithubRepo)),
 }));
 
 import { createPrsRouter, setPRBroadcast } from '../routes/prs.js';

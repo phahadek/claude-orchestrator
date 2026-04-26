@@ -1,4 +1,4 @@
-import { config } from '../config';
+import { getProjectByGithubRepo } from '../config';
 import { setPRReviewResult, getSetting, getPRByNumber, setPendingPush } from '../db/queries';
 import type { PRReviewService, PRReviewResult } from './PRReviewService';
 import type { SessionManager } from '../session/SessionManager';
@@ -54,7 +54,7 @@ export class ReviewOrchestrator {
   }
 
   private async executeReview(job: ReviewJob): Promise<void> {
-    const project = config.projects.find((p) => p.githubRepo === job.repo);
+    const project = getProjectByGithubRepo(job.repo);
     if (!project) {
       console.warn(`[ReviewOrchestrator] PR #${job.prNumber}: no project found for repo ${job.repo} — skipping`);
       return;
