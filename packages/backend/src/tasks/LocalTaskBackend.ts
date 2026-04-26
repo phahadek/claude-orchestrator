@@ -36,8 +36,18 @@ const STATUS_DISPLAY: Record<string, string> = {
   'Done':        '✅ Done',
 };
 
+const TYPE_DISPLAY: Record<string, string> = {
+  'Code':     '💻 Code',
+  'Planning': '📋 Planning',
+  'Testing':  '🧪 Testing',
+};
+
 function toDisplayStatus(status: string): string {
   return STATUS_DISPLAY[status] ?? status;
+}
+
+function toDisplayType(type: string): string {
+  return TYPE_DISPLAY[type] ?? type;
 }
 
 function fromDisplayStatus(display: string): string {
@@ -80,7 +90,7 @@ export class LocalTaskBackend implements TaskTrackerBackend {
       id: t.id,
       title: t.name,
       status: toDisplayStatus(t.status),
-      type: t.type ?? 'Code',
+      type: toDisplayType(t.type ?? 'Code'),
       dependsOn: t.depends_on ?? [],
       notionUrl: '',
       prUrl: t.pr_url ?? undefined,

@@ -32,8 +32,7 @@
  *   node notion-query.mjs 4c30510b... --no-done --json
  *
  * Global install (symlink):
- *   ln -s /c/Users/phadek/IdeaProjects/claude-dashboard/scripts/notion-query.mjs \
- *         /c/Users/phadek/.claude/scripts/notion-query.mjs
+ *   ln -s <repo>/scripts/notion-query.mjs ~/.claude/scripts/notion-query.mjs
  */
 
 import { readFileSync } from 'fs';
