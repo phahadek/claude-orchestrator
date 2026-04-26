@@ -25,21 +25,56 @@ claude-orchestrator/
       tsconfig.json
       src/
         server.ts            ← entry point: Express setup, WS server, static file serving
+        config.ts            ← env var loading, runtime settings, ALLOWED_TOOLS allowlist
         session/
-          SessionManager.ts  ← owns Map<sessionId, AgentSession>, start/kill/send/resume
-          AgentSession.ts    ← wraps a single query() call, streams events to WS
+          SessionManager.ts        ← owns Map<sessionId, AgentSession>, start/kill/send/resume
+          AgentSession.ts          ← wraps a single CLI/SDK session, streams events to WS
+          SessionRunner.ts         ← I/O adapter interface for AgentSession
+          CliSessionRunner.ts      ← stdin/stdout JSONL adapter for `claude` subprocess
+          ApiSessionRunner.ts      ← Agent SDK adapter (SESSION_MODE=api)
+          SessionAuditor.ts        ← post-session compliance checks
+          ContextBuilder.ts        ← builds session context from Notion + project state
+          JsonlReader.ts           ← reads historical sessions from ~/.claude/projects/*.jsonl
+          orchestrator-claudemd.ts ← merges orchestrator rules + project CLAUDE.md
+          orchestrator-config.ts   ← orchestrator runtime configuration
         permissions/
-          PermissionEngine.ts ← deny list → allow list → pattern rules → escalate
-          types.ts            ← PermissionRule, RuleMatch, Decision types
+          PermissionEngine.ts      ← deny list → allow list → pattern rules → escalate
+          types.ts                 ← PermissionRule, RuleMatch, Decision types
         notion/
-          NotionClient.ts    ← REST API wrapper: fetch tasks, update status
-          DependencyResolver.ts ← depth-first traversal of Depends On relations
+          NotionClient.ts          ← REST API wrapper: fetch tasks, update status
+          DependencyResolver.ts    ← depth-first traversal of Depends On relations
+          types.ts                 ← Task, ResolvedTask types
+        github/
+          GitHubClient.ts          ← REST wrapper: list/fetch/diff/merge PRs
+          PRReviewService.ts       ← spawns/manages persistent review sessions per PR
+          ReviewOrchestrator.ts    ← serial queue + review-feedback-re-review loop
+          PRMergeWatcher.ts        ← lightweight 5-min poll for direct-on-GitHub merges
+          reviewUtils.ts           ← shouldAutoReview, formatReviewFeedback helpers
+          types.ts                 ← PullRequest, ReviewJob types
+        tasks/
+          TaskTrackerBackend.ts    ← interface for task source backends
+          NotionTaskBackend.ts     ← Notion-backed implementation
+          LocalTaskBackend.ts      ← YAML-backed implementation (TASK_BACKEND=local)
+          TaskStatusEngine.ts      ← derives display status from PR + session state
+        routes/
+          sessions.ts              ← /api/sessions REST endpoints
+          tasks.ts                 ← /api/tasks endpoints + WS task_updated bridge
+          prs.ts                   ← /api/prs endpoints (review, merge, sync)
+          rules.ts                 ← permission events / denials / rules CRUD
+          settings.ts              ← runtime settings get/set
+          analytics.ts             ← per-project token & cost aggregations
+          config.ts                ← /api/config (project list for the frontend)
         db/
-          schema.ts          ← table definitions, migrations
-          queries.ts         ← typed query helpers (sessions, events, rules, cache)
+          schema.ts                ← table definitions, migrations
+          queries.ts               ← typed query helpers (sessions, events, rules, cache, PRs)
+          db.ts                    ← better-sqlite3 instance + late ALTER migrations
+          types.ts                 ← Session, SessionEvent, PullRequestRow, etc.
+        utils/
+          eventFilters.ts          ← isSystemOnlyUserEvent — filters orchestrator-injected events
+          usage.ts                 ← per-model token/cost calculation
         ws/
-          router.ts          ← routes incoming WS messages to handlers
-          types.ts           ← ClientMessage / ServerMessage discriminated unions (source of truth)
+          router.ts                ← routes incoming WS messages to handlers
+          types.ts                 ← ClientMessage / ServerMessage discriminated unions (source of truth)
     frontend/
       package.json
       vite.config.ts
@@ -47,16 +82,16 @@ claude-orchestrator/
       src/
         App.tsx
         components/
-          SessionGrid.tsx     ← card list, attention sorting
-          SessionCard.tsx     ← individual card with status badge
-          SessionDetail.tsx   ← transcript + permission responder + composer
-          DispatchModal.tsx   ← Notion task picker, dependency grouping, launch
-          PermissionRules.tsx ← settings screen for rule management
+          SessionGrid.tsx          ← card list, attention sorting
+          SessionCard.tsx          ← individual card with status badge
+          SessionDetail.tsx        ← transcript + permission responder + composer
+          DispatchModal.tsx        ← Notion task picker, dependency grouping, launch
+          PermissionRules.tsx      ← settings screen for rule management
         hooks/
-          useWebSocket.ts     ← single persistent WS connection, reconnect logic
-          useSessionStore.ts  ← React state driven by WS events
+          useWebSocket.ts          ← single persistent WS connection, reconnect logic
+          useSessionStore.ts       ← React state driven by WS events
         types/
-          ws.ts               ← re-exports from backend/src/ws/types.ts (symlink or shared package)
+          ws.ts                    ← re-exports from backend/src/ws/types.ts (path alias)
 ```
 
 ---
@@ -81,7 +116,7 @@ Wraps a single `claude` CLI subprocess. Streams all events to registered WebSock
 
 - Spawned with `child_process.spawn('claude', ['--print', '--output-format', 'stream-json', '--input-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits', '--allowed-tools', ...], { cwd: worktreePath })`
 - Reads stdout line-by-line; each line is a JSONL event object — parsed and forwarded over WebSocket
-- **Structured lifecycle prompt:** The initial prompt includes a full 6-step lifecycle (branch from dev → implement → pre-PR gate → draft PR → wait for review). Sessions are explicitly told not to update task status or write session logs — the backend handles those.
+- **Structured lifecycle prompt:** The initial prompt includes a full 6-step lifecycle (read CLAUDE.md → branch from dev → implement → pre-PR gate → draft PR → wait for review). Sessions are explicitly told not to update task status or write session logs — the backend handles those.
 - **Permission model:** Uses `--permission-mode acceptEdits` + granular `--allowed-tools Bash(<prefix>:*)` patterns. No mid-session permission approval (CLI limitation).
 - Writes every event to `session_events` table in SQLite
 - **Push detection:** Watches for `Bash` tool calls matching `git push` — emits `push_detected` event consumed by ReviewOrchestrator to trigger re-reviews
@@ -234,7 +269,18 @@ CREATE TABLE sessions (
   status TEXT,  -- starting | running | needs_permission | done | error | killed
   started_at INTEGER,
   ended_at INTEGER,
-  pr_url TEXT
+  pr_url TEXT,
+  worktree_path TEXT,
+  project_id TEXT,
+  session_type TEXT DEFAULT 'standard',  -- 'standard' | 'review'
+  archived INTEGER NOT NULL DEFAULT 0,
+  favorited INTEGER NOT NULL DEFAULT 0,
+  note TEXT,
+  tags TEXT,  -- JSON array
+  total_input_tokens INTEGER NOT NULL DEFAULT 0,
+  total_output_tokens INTEGER NOT NULL DEFAULT 0,
+  model TEXT,
+  task_name TEXT
 );
 
 CREATE TABLE session_events (
@@ -272,22 +318,32 @@ CREATE TABLE task_cache (
 );
 
 CREATE TABLE pull_requests (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  pr_number     INTEGER NOT NULL,
-  pr_url        TEXT NOT NULL UNIQUE,
-  notion_task_id TEXT,
-  session_id    TEXT,
-  repo          TEXT NOT NULL,
-  title         TEXT,
-  body          TEXT,
-  head_branch   TEXT,
-  base_branch   TEXT,
-  state         TEXT DEFAULT 'open',
-  review_result TEXT,           -- JSON blob from PRReviewService
-  review_at     TEXT,
-  created_at    TEXT,
-  updated_at    TEXT,
-  synced_at     TEXT NOT NULL
+  id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+  pr_number              INTEGER NOT NULL,
+  pr_url                 TEXT NOT NULL UNIQUE,
+  notion_task_id         TEXT,
+  session_id             TEXT,
+  repo                   TEXT NOT NULL,
+  title                  TEXT,
+  body                   TEXT,
+  head_branch            TEXT,
+  base_branch            TEXT,
+  state                  TEXT DEFAULT 'open',
+  draft                  INTEGER NOT NULL DEFAULT 0,
+  review_result          TEXT,           -- JSON blob from PRReviewService
+  review_at              TEXT,
+  created_at             TEXT,
+  updated_at             TEXT,
+  synced_at              TEXT NOT NULL,
+  review_session_id      TEXT,           -- paired persistent review session
+  review_iteration       INTEGER NOT NULL DEFAULT 0,
+  head_sha               TEXT,
+  last_reviewed_sha      TEXT,
+  node_id                TEXT,           -- GitHub GraphQL global ID
+  mergeable              INTEGER,        -- 0 | 1 | NULL (NULL = unknown)
+  merge_state            TEXT,           -- 'clean' | 'dirty' | 'blocked' | 'unknown' | NULL
+  merge_state_checked_at TEXT,           -- ISO timestamp
+  pending_push           INTEGER NOT NULL DEFAULT 0  -- 1 if a push arrived before initial review completed
 );
 
 CREATE TABLE session_audits (
@@ -305,23 +361,6 @@ CREATE TABLE settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-
--- Columns added to sessions table over time:
---   worktree_path TEXT
---   project_id TEXT
---   notion_task_id TEXT
---   session_mode TEXT DEFAULT 'standard'
---   session_type TEXT DEFAULT 'standard'
---   archived INTEGER NOT NULL DEFAULT 0
---   note TEXT
---   tags TEXT  -- JSON array
---   total_input_tokens INTEGER DEFAULT 0
---   total_output_tokens INTEGER DEFAULT 0
-
--- Columns added to pull_requests table:
---   review_session_id TEXT    — paired persistent review session
---   review_iteration INTEGER DEFAULT 0
---   head_sha TEXT
 ```
 
 ---

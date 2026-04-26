@@ -4,7 +4,7 @@
 
 Claude Code Orchestrator is an **opinionated** tool for running a parallelized, Claude Code-driven development workflow. It owns the full task lifecycle from dispatch through PR merge — not just monitoring, but actively enforcing lifecycle compliance, automating PR reviews, and routing feedback to sessions.
 
-The unit of work is: **task → session → PR → review → merge**. The dashboard dispatches, monitors, reviews, and closes N of those simultaneously, from any machine on the LAN.
+The unit of work is: **task → session → PR → review → merge**. The orchestrator dispatches, monitors, reviews, and closes N of those simultaneously. The dashboard is one surface of the orchestrator — the observability and intervention layer; the orchestrator does the work whether the dashboard is open or not.
 
 > **Evolution note (M2a):** The project scope expanded from a passive session browser (M1) to an active orchestrator that owns task status transitions, injects lifecycle instructions into sessions, and automates the PR review loop. Sessions no longer manage their own lifecycle — the backend does.
 
@@ -29,11 +29,11 @@ The unit of work is: **task → session → PR → review → merge**. The dashb
 
 ## Network & deployment model
 
-- Backend runs on the **remote server** (the machine that runs Claude Code sessions)
-- Dashboard is served on a LAN port (e.g. `http://server:3000`)
-- Accessible from **any browser on the same network** — laptop, desktop, tablet
-- No reverse proxy, no TLS required for LAN use
-- Single process: backend + static UI served together
+- The orchestrator (backend + dashboard) runs as a single process on the **host machine** — the machine where Claude Code sessions execute.
+- Served on a LAN port (e.g. `http://host:3000`).
+- Accessible from **any browser on the same LAN** — laptop, desktop, tablet — so you can monitor and intervene from a different device than the one running sessions.
+- No reverse proxy, no TLS required for LAN use.
+- Single process: backend + static UI served together.
 
 ---
 
@@ -44,7 +44,7 @@ The unit of work is: **task → session → PR → review → merge**. The dashb
 1. User opens dashboard → navigates to **Dispatch** view
 2. Dashboard fetches Notion task board (via Notion MCP / API), shows tasks filtered to `Status = 🗂️ Ready` and `Type = 💻 Code`
 3. User selects N tasks via checkboxes
-4. User clicks **Launch selected** — dashboard spawns one Agent SDK session per task, each seeded with the task's Notion page content as context
+4. User clicks **Launch selected** — the orchestrator spawns one Agent SDK session per task, each seeded with the task's Notion page content as context
 5. Modal closes immediately — new session cards appear in the grid with status `Starting`
 6. Notion task statuses are updated to `🔄 In Progress` automatically **by the backend** (server-side, not by the session)
 
@@ -64,14 +64,14 @@ The unit of work is: **task → session → PR → review → merge**. The dashb
 1. Session card shows amber badge: **Needs permission**
 2. User clicks card → **Session detail** panel slides in
 3. Panel shows: full transcript, the pending permission request, approve/deny buttons
-4. User approves → dashboard sends decision back to Agent SDK session
+4. User approves → the orchestrator sends the decision back to the Agent SDK session
 5. Session resumes; card returns to normal state
 6. Same panel allows: send a follow-up message, kill/cancel session
 
 ### Workflow 4 — PR review and merge cycle
 
 1. Session publishes a PR → card shows amber badge: **Awaiting review**
-2. Dashboard automatically triggers an AI review (ReviewOrchestrator) — a 🔍 Review session appears in the grid
+2. The orchestrator automatically triggers an AI review (via `ReviewOrchestrator`) — a 🔍 Review session appears in the grid
 3. Review completes → PR card in the PRPanel shows verdict badge (✅ Approved / ⚠️ Needs changes / ❌ Incomplete)
 4. Review session stays alive (paired with the PR) — accumulates context across review passes
 5. If review finds issues → findings are routed to the originating coding session as a follow-up message → session addresses them and pushes
@@ -205,7 +205,7 @@ The backend performs a depth-first traversal of `Depends On` relations when comp
 
 ### Non-Code tasks in the dependency chain
 
-`📈 Planning` and `🧪 Testing` tasks can legitimately appear in the dependency chain of Code tasks. The Dispatch modal handles this as follows:
+`📋 Planning` and `🧪 Testing` tasks can legitimately appear in the dependency chain of Code tasks. The Dispatch modal handles this as follows:
 
 - **All task types** are fetched and used for dependency resolution
 - Only `💻 Code` tasks are rendered as selectable checkboxes in the Ready to launch section
@@ -232,7 +232,7 @@ Notion API is called intentionally, not in a hot loop:
 
 Required addition to task board schema: a `Depends On` relation property linking tasks to each other within the same board.
 
-### Local SQLite — dashboard runtime state
+### Local SQLite — orchestrator runtime state
 
 A local SQLite database (file-based, zero setup) stores everything Notion doesn't hold:
 
@@ -243,7 +243,7 @@ A local SQLite database (file-based, zero setup) stores everything Notion doesn'
 | `permission_events` | session_id, tool_name, proposed_action, decision, decided_at |
 | `task_cache` | notion_task_id, fetched_at, raw_json — short-lived cache (TTL ~5 min) to avoid redundant API calls |
 
-This keeps the dashboard fast and resilient: if Notion is temporarily unreachable, active sessions and their state remain fully visible.
+This keeps the orchestrator fast and resilient: if Notion is temporarily unreachable, active sessions and their state remain fully visible.
 
 ## Resolved design questions
 
