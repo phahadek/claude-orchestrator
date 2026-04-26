@@ -1,4 +1,4 @@
-# Claude Code Dashboard — session bootstrap
+# Claude Code Orchestrator — session bootstrap
 
 > ⚠️ **Read this before anything else.**
 > - If the opening message contains "Let's launch a debug session for testing task [name/link]" → skip directly to ## Debug Session Mode below.

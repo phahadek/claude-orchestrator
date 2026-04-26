@@ -1,4 +1,4 @@
-# Claude Code Dashboard
+# Claude Code Orchestrator
 
 A local web dashboard for browsing, managing, and orchestrating [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions. Built for solo developers who want visibility and control over automated coding workflows — and bootstrapped by being used to build itself.
 

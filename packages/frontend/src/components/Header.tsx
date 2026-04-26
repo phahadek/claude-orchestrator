@@ -27,7 +27,7 @@ export function Header({ projects, activeProjectId, onProjectChange, activeBoard
 
   return (
     <header className={styles.header}>
-      <span className={styles.appName}>Claude Code Dashboard</span>
+      <span className={styles.appName}>Claude Code Orchestrator</span>
       <nav className={styles.nav}>
         <button
           type="button"
