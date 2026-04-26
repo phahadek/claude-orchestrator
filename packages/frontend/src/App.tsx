@@ -24,7 +24,20 @@ import type { ServerMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { calculateCost } from '@claude-orchestrator/backend/src/utils/usage';
 import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
+import type { Session, EventType } from '@claude-orchestrator/backend/src/db/types';
 import styles from './App.module.css';
+
+interface ArchivedSessionEvent {
+  eventType: EventType;
+  content: string;
+  timestamp: number;
+  messageId?: string;
+}
+
+interface ArchivedSessionResponse {
+  session: Session;
+  events: ArchivedSessionEvent[];
+}
 
 const DEFAULT_DETAIL_WIDTH = 40;
 const MIN_DETAIL_WIDTH_PCT = 20;
@@ -315,7 +328,7 @@ export default function App() {
     fetch(`/api/sessions/${selectedId}/events`)
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json() as Promise<{ session: any; events: any[] }>;
+        return r.json() as Promise<ArchivedSessionResponse>;
       })
       .then(({ session, events }) => {
         dispatch({
@@ -368,7 +381,7 @@ export default function App() {
       fetch(`/api/sessions/${sessionId}/events`)
         .then((r) => {
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          return r.json() as Promise<{ session: any; events: any[] }>;
+          return r.json() as Promise<ArchivedSessionResponse>;
         })
         .then(({ session, events }) => {
           dispatch({

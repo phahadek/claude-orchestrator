@@ -54,8 +54,10 @@ console.log(`[server] task backend: ${taskBackend.type}`);
 
 const sessionManager = new SessionManager(taskBackend, githubClient);
 const prReviewService = new PRReviewService(githubClient, taskBackend, sessionManager);
+// Constructed for its side effect: subscribes to sessionManager 'pr_opened' events.
+// The reference is intentionally not retained (kept alive via the event listener).
 const reviewOrchestrator = new ReviewOrchestrator(
-  prReviewService, sessionManager, githubClient, taskBackend, AUTO_REVIEW_CONCURRENCY, AUTO_REVIEW_ENABLED,
+  prReviewService, sessionManager, AUTO_REVIEW_CONCURRENCY, AUTO_REVIEW_ENABLED,
 );
 
 const PORT = parseInt(process.env.PORT ?? '3000');

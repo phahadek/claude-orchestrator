@@ -41,6 +41,8 @@ export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, bo
   useEffect(() => {
     resetTasks();
     send({ type: 'fetch_tasks', projectId: project.id, boardId, skipCache: true });
+    // Run once on modal open. project/boardId are fixed for this modal instance,
+    // and including send/resetTasks would refetch on every parent render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

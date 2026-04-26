@@ -200,6 +200,9 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       ? runtimeSettings.review_session_model
       : runtimeSettings.code_session_model;
 
+    // Loop is exited by an explicit return on every terminal path: clean exit,
+    // kill/spawn error, or non-transient failure. Only a transient API error
+    // continues to the next iteration to retry with backoff.
     // eslint-disable-next-line no-constant-condition
     while (true) {
       // Clear per-run pending tool-call maps so stale IDs from a previous run
