@@ -25,12 +25,12 @@ function Get-PortPid {
 }
 
 function Stop-ProcessSafely {
-    param([int]$Pid, [string]$Label)
-    if ($Pid -le 0) { return }
-    $proc = Get-Process -Id $Pid -ErrorAction SilentlyContinue
+    param([int]$ProcessId, [string]$Label)
+    if ($ProcessId -le 0) { return }
+    $proc = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
     if ($proc) {
-        Write-Host "[dashboard] Stopping $Label (PID $Pid)..." -ForegroundColor Yellow
-        Stop-Process -Id $Pid -Force -ErrorAction SilentlyContinue
+        Write-Host "[dashboard] Stopping $Label (PID $ProcessId)..." -ForegroundColor Yellow
+        Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
     }
 }
 

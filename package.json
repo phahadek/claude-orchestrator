@@ -10,6 +10,7 @@
     "build": "npm run build -w packages/frontend && npm run build -w packages/backend",
     "start": "node packages/backend/dist/server.js",
     "restart": "npx kill-port 3000 && npm run dev",
+    "restart:backend": "npx kill-port 3000 && npm run dev -w packages/backend",
     "test": "echo \"Error: no test specified\" && exit 1",
     "start:win": "powershell -ExecutionPolicy Bypass -File start.ps1",
     "stop:win": "powershell -ExecutionPolicy Bypass -File stop.ps1",
