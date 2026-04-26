@@ -1,6 +1,6 @@
 # Install & Configure
 
-Detailed setup, Docker, and configuration reference for the Claude Code Dashboard. For a 4-line happy-path quickstart, see the project [README](../README.md).
+Detailed setup, Docker, and configuration reference for Claude Code Orchestrator. For a 4-line happy-path quickstart, see the project [README](../README.md).
 
 ## Prerequisites
 
@@ -29,16 +29,18 @@ The dashboard listens on `http://localhost:3000` (combined backend + frontend). 
 
 ### Restart helpers
 
-```bash
-npm run restart           # kill port 3000, restart both backend and frontend
-npm run restart:backend   # backend only (cross-platform)
+`npm run dev` is the normal happy-path command. Use the restart helpers when port `3000` is held by an orphaned dev process (common after a crashed terminal, Docker exit, or `Ctrl+C` that didn't fully clean up):
 
-# Windows PowerShell
+```bash
+npm run restart           # kill whatever is bound to port 3000, then npm run dev
+npm run restart:backend   # same, but only for the backend (frontend Vite reload is normally enough)
+
+# Windows PowerShell — same intent, plus per-process control
 .\restart.ps1             # restart both (background, streams output)
 .\restart.ps1 -backend    # backend only
 .\restart.ps1 -frontend   # frontend only
-.\stop.ps1                # stop both
-.\restart-backend.ps1     # foreground backend restart
+.\stop.ps1                # stop both without restarting
+.\restart-backend.ps1     # foreground backend restart (logs in current terminal)
 ```
 
 ### Production build
@@ -85,7 +87,7 @@ All configuration lives in `packages/backend/.env`. See `packages/backend/.env.e
 | `TASK_BACKEND` | No | Task source: `notion` (default) or `local` (YAML) | `notion` |
 | `NOTION_API_KEY` | If `TASK_BACKEND=notion` | Notion integration token | `ntn_...` |
 | `GITHUB_TOKEN` | Yes | GitHub PAT with `repo` scope | `ghp_...` |
-| `GITHUB_REPO` | Yes | Default repo for PR sync | `owner/repo` |
+| `GITHUB_REPO` | No | Fallback `owner/repo` used only when `GitHubClient` is called without a project context (e.g. CLI scripts). Per-project `githubRepo` (in `PROJECTS`) takes precedence and is required for the dashboard's PR features. | `owner/repo` |
 | `PROJECTS` | Yes | JSON array of project configs (see below) | |
 | `PORT` | No | Backend HTTP port | `3000` |
 | `DB_PATH` | No | SQLite database file | `./dashboard.db` |

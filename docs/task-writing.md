@@ -83,7 +83,7 @@ Always include this section, always leave it empty with `> To be filled in durin
 | **Type** | `💻 Code` for anything with a PR. `📋 Planning` for design/research tasks (non-dispatchable). `🧪 Testing` for manual test tasks (non-dispatchable). |
 | **Status** | See lifecycle below. New tasks always start at `🔲 Backlog`. |
 | **Priority** | `🔴 High` = blocks other tasks or is on the critical path. `🟡 Medium` = important but not blocking. `🟢 Low` = nice to have in this milestone. |
-| **Depends On** | A Notion self-relation property. Set as a relation to other tasks in the same board — not a text field. When creating a new milestone board, add the property immediately after creation using `notion-update-data-source`: `ADD COLUMN "Depends On" RELATION('<board_data_source_id>')`. Wire task dependencies as relation values (JSON array of page URLs) via `notion-update-page`. |
+| **Depends On** | A Notion Rich Text property storing pipe-delimited page IDs (e.g. `<id1>\|<id2>`). The orchestrator parses this field at fetch time. Rich Text is used instead of a native Relation property because the Notion API's multi-value relation writes via MCP tools are unreliable; see [`notion-template.md`](./notion-template.md#why-rich-text-for-depends-on) for the full rationale. |
 | **Notes** | One short sentence for human attention only. Examples: "Requires M0 Notion migration to be applied first." or "API key must be set before this can be tested." Leave blank otherwise. |
 
 ---

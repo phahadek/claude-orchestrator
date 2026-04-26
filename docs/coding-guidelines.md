@@ -1,6 +1,6 @@
 # Coding Guidelines
 
-This document captures architectural rules, patterns, and coding conventions for the Claude Code Dashboard project. It is a living document — update it when new constraints are established or patterns are agreed upon.
+This document captures architectural rules, patterns, and coding conventions for the Claude Code Orchestrator project. It is a living document — update it when new constraints are established or patterns are agreed upon.
 
 These guidelines exist to keep the codebase consistent across sessions and prevent architectural drift. Consult this page before writing new code in any session.
 
@@ -10,7 +10,7 @@ These guidelines exist to keep the codebase consistent across sessions and preve
 
 ### 1. Strict frontend / backend layer separation
 
-Notation flows in one direction only: **Backend → Frontend**. The frontend is a pure consumer of WebSocket events and REST responses — it never directly touches SQLite, spawns processes, or calls the Notion API.
+Information flows in one direction only: **Backend → Frontend**. The frontend is a pure consumer of WebSocket events and REST responses — it never directly touches SQLite, spawns processes, or calls the Notion API.
 
 | Layer | Contents | Allowed dependencies |
 |---|---|---|

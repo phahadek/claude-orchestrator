@@ -2,7 +2,7 @@
 
 ## Overview
 
-This dashboard is an **opinionated orchestrator** for running a parallelized, Claude Code-driven development workflow. It owns the full task lifecycle from dispatch through PR merge — not just monitoring, but actively enforcing lifecycle compliance, automating PR reviews, and routing feedback to sessions.
+Claude Code Orchestrator is an **opinionated** tool for running a parallelized, Claude Code-driven development workflow. It owns the full task lifecycle from dispatch through PR merge — not just monitoring, but actively enforcing lifecycle compliance, automating PR reviews, and routing feedback to sessions.
 
 The unit of work is: **task → session → PR → review → merge**. The dashboard dispatches, monitors, reviews, and closes N of those simultaneously, from any machine on the LAN.
 
@@ -159,7 +159,7 @@ The most critical UX surface. A session blocks on a permission request and the u
 
 - A persistent **attention badge** in the header shows count of sessions needing action (e.g. `⚠ 2`)
 - Sessions with pending attention are sorted to the **top of the grid** automatically
-- Browser tab title updates: `(2) Claude Code Dashboard` when attention count > 0
+- Browser tab title updates: `(2) Claude Code Orchestrator` when attention count > 0
 - Optional: browser notification (Web Notifications API) when a new attention event fires
 
 ---
