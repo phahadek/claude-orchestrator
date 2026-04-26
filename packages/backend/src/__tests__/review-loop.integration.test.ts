@@ -348,8 +348,6 @@ describe('ReviewOrchestrator.executeReview → pending_push → re-review', () =
     const orchestrator = new ReviewOrchestrator(
       reviewService,
       sessionManager as unknown as InstanceType<typeof import('../session/SessionManager.js').SessionManager>,
-      github,
-      taskBackend,
       1,
       true,
     );
@@ -577,8 +575,6 @@ describe('escalation at review iteration cap', () => {
     const orchestrator = new ReviewOrchestrator(
       reviewService,
       sessionManager as unknown as InstanceType<typeof import('../session/SessionManager.js').SessionManager>,
-      github,
-      taskBackend,
       1,
       true,
     );
