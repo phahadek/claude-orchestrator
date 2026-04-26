@@ -17,7 +17,7 @@
     "noFallthroughCasesInSwitch": true,
     "baseUrl": ".",
     "paths": {
-      "@claude-dashboard/backend/*": ["../backend/*"]
+      "@claude-orchestrator/backend/*": ["../backend/*"]
     }
   },
   "include": ["src", "vite.config.ts"]

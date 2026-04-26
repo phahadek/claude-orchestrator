@@ -10,7 +10,7 @@ export interface Board {
 }
 
 export interface ProjectConfig {
-  id: string;          // unique key, e.g. "claude-dashboard"
+  id: string;          // unique key, e.g. "claude-orchestrator"
   name: string;
   projectDir: string;  // absolute path to the repo root
   contextUrl: string;

@@ -1,8 +1,8 @@
 import type { TaskView, DisplayStatus } from '../types/taskView';
-import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
-import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
+import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { useDispatch } from '../hooks/useDispatch';
-import { formatTokenCount } from '@claude-dashboard/backend/src/utils/usage';
+import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
 import styles from './TaskCard.module.css';
 
 interface Props {

@@ -1,5 +1,5 @@
-import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
-import { formatTokenCount, formatCost } from '@claude-dashboard/backend/src/utils/usage';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
+import { formatTokenCount, formatCost } from '@claude-orchestrator/backend/src/utils/usage';
 import type { TaskView } from '../types/taskView';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { MilestoneProgress } from './MilestoneProgress';

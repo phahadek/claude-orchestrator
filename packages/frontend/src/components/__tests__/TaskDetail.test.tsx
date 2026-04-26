@@ -1,8 +1,8 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { TaskDetail } from '../TaskDetail';
-import type { TaskView } from '@claude-dashboard/backend/src/routes/tasks';
-import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
+import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
+import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { SessionState } from '../../hooks/useSessionStore';
 
 function makeTask(overrides?: Partial<TaskView>): TaskView {

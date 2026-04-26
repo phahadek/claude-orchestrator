@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { computeWaves } from '../computeWaves';
-import type { ResolvedTask } from '@claude-dashboard/backend/src/notion/types';
+import type { ResolvedTask } from '@claude-orchestrator/backend/src/notion/types';
 
 function makeTask(id: string, status: string, dependsOn: string[] = []): ResolvedTask {
   return {

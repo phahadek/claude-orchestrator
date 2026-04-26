@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
-import type { ServerMessage, ClientMessage } from '@claude-dashboard/backend/src/ws/types';
+import type { ServerMessage, ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 
 export type ConnectionState = 'connected' | 'disconnected' | 'reconnecting';
 

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
-import type { ResolvedTask } from '@claude-dashboard/backend/src/notion/types';
-import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
+import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
+import type { ResolvedTask } from '@claude-orchestrator/backend/src/notion/types';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { useDispatch } from '../hooks/useDispatch';
 import styles from './DispatchModal.module.css';
 

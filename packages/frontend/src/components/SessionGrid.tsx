@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { SessionState } from '../hooks/useSessionStore';
-import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { SessionCard } from './SessionCard';
 import styles from './SessionGrid.module.css';
 

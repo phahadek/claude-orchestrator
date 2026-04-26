@@ -1,7 +1,7 @@
 import { renderHook } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { useDispatch } from '../useDispatch';
-import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 
 function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
   return {

@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      '@claude-dashboard/backend': resolve(__dirname, '../backend'),
+      '@claude-orchestrator/backend': resolve(__dirname, '../backend'),
     },
   },
   server: {
