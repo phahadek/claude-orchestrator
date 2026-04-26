@@ -12,7 +12,7 @@
 
 Before doing anything else, fetch this page:
 
-https://www.notion.so/REDACTED
+https://www.notion.so/<your-project-context-page>
 
 It contains the master context, session instructions, active task board link,
 and the full file index. **If the fetch fails: stop and tell the human. Do not proceed.**
@@ -25,8 +25,8 @@ or 🗂️ Ready. Work only on the task you have been assigned.
 
 ## Step 3 — Fetch child pages only when your task needs them
 
-- Product Design Doc: https://www.notion.so/REDACTED
-- Technical Architecture: https://www.notion.so/REDACTED
+- Product Design Doc: https://www.notion.so/<your-design-doc>
+- Technical Architecture: https://www.notion.so/<your-architecture-doc>
 - Dev Setup & Git / Coding Guidelines: see Master File Index on the context page.
 
 ---

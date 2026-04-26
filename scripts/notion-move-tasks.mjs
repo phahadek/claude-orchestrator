@@ -33,13 +33,13 @@
  * Examples:
  *   # Move 3 tasks to M2a board
  *   node notion-move-tasks.mjs \
- *     --target REDACTED \
+ *     --target <your-database-id> \
  *     --tasks "abc123,def456,ghi789" \
  *     --env packages/backend/.env
  *
  *   # Dry run — see what would happen
  *   node notion-move-tasks.mjs \
- *     --target 19287f31... --tasks "abc123" --dry-run
+ *     --target <your-database-id> --tasks "abc123" --dry-run
  *
  *   # Move and reset status to Backlog
  *   node notion-move-tasks.mjs \

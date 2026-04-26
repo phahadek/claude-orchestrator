@@ -23,10 +23,10 @@
  *
  * Examples:
  *   # All tasks from a board
- *   NOTION_API_KEY=ntn_... node notion-query.mjs REDACTED
+ *   NOTION_API_KEY=ntn_... node notion-query.mjs <your-database-id>
  *
  *   # Only Ready tasks, loading key from .env
- *   node notion-query.mjs 4c30510b... --env packages/backend/.env --status "🗂️ Ready"
+ *   node notion-query.mjs <your-database-id> --env packages/backend/.env --status "🗂️ Ready"
  *
  *   # Exclude done tasks, JSON output
  *   node notion-query.mjs 4c30510b... --no-done --json
