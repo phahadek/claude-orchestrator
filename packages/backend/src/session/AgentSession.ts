@@ -162,7 +162,7 @@ export class AgentSession extends EventEmitter {
     updateSessionStatus(this.sessionId, 'running');
 
     const initialPrompt = this.customPrompt ?? `
-You are a Claude Code session managed by the Claude Code Dashboard.
+You are a Claude Code session managed by Claude Code Orchestrator.
 
 ## Task
 Task page: ${this.taskUrl}
