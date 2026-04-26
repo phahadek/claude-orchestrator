@@ -301,7 +301,6 @@ export class PRReviewService {
   ): { verdict: PRReviewResult['verdict']; dimensions: ReviewDimension[]; summary: string } | null {
     const candidate = this.extractJsonCandidate(text.trim());
     if (!candidate) {
-      console.debug('[PRReviewService] tryParseVerdict: no JSON candidate found in text block');
       return null;
     }
     try {
@@ -318,7 +317,7 @@ export class PRReviewService {
         };
       }
     } catch {
-      console.debug('[PRReviewService] tryParseVerdict: JSON.parse failed on candidate:', candidate.slice(0, 200));
+      // Not valid JSON — caller falls back to a default verdict
     }
     return null;
   }
