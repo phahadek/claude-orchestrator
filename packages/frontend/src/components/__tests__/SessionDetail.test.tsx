@@ -112,57 +112,17 @@ describe('SessionDetail', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('renders permission request section when pendingPermission is set', () => {
-    const session = makeSession({
-      status: 'needs_permission',
-      pendingPermission: { toolName: 'Bash', proposedAction: 'rm -rf /tmp/foo' },
-    });
-    render(<SessionDetail session={session} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
-    expect(screen.getByText(/Bash/)).toBeTruthy();
-    expect(screen.getByText('rm -rf /tmp/foo')).toBeTruthy();
-    expect(screen.getByText('✅ Approve')).toBeTruthy();
-    expect(screen.getByText('❌ Deny')).toBeTruthy();
-  });
+  // Permission engine UI (Approve/Deny/pendingPermission) was removed in favour of
+  // --permission-mode acceptEdits + --allowed-tools at spawn time. The CLI does
+  // not support mid-session permission prompts in --print mode, so those tests
+  // no longer apply.
 
-  it('does not render permission request when pendingPermission is absent', () => {
-    render(<SessionDetail session={makeSession()} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
-    expect(screen.queryByText('✅ Approve')).toBeNull();
-  });
-
-  it('Approve sends correct ClientMessage', () => {
-    const send = vi.fn();
-    const session = makeSession({
-      status: 'needs_permission',
-      pendingPermission: { toolName: 'Read', proposedAction: 'read /etc/hosts' },
-    });
-    render(<SessionDetail session={session} send={send} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
-    fireEvent.click(screen.getByText('✅ Approve'));
-    expect(send).toHaveBeenCalledWith<[ClientMessage]>({ type: 'approve', sessionId: 'sess-1' });
-  });
-
-  it('Deny sends correct ClientMessage', () => {
-    const send = vi.fn();
-    const session = makeSession({
-      status: 'needs_permission',
-      pendingPermission: { toolName: 'Bash', proposedAction: 'ls /' },
-    });
-    render(<SessionDetail session={session} send={send} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
-    fireEvent.click(screen.getByText('❌ Deny'));
-    expect(send).toHaveBeenCalledWith<[ClientMessage]>({
-      type: 'deny',
-      sessionId: 'sess-1',
-      reason: 'User denied',
-    });
-  });
-
-  it('Kill button with confirm sends kill and calls onClose', () => {
+  it('Kill button with confirm sends kill (does not auto-close — waits for session_ended)', () => {
     vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
     const send = vi.fn();
-    const onClose = vi.fn();
-    render(<SessionDetail session={makeSession({ status: 'running' })} send={send} onClose={onClose} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    render(<SessionDetail session={makeSession({ status: 'running' })} send={send} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
     fireEvent.click(screen.getByText('Kill'));
     expect(send).toHaveBeenCalledWith<[ClientMessage]>({ type: 'kill', sessionId: 'sess-1' });
-    expect(onClose).toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
 
@@ -250,23 +210,12 @@ describe('EventRow', () => {
     expect(screen.getByText('Hello from assistant')).toBeTruthy();
   });
 
-  it('renders tool_use event with tool name header and args (legacy format)', () => {
-    const content = JSON.stringify({ toolName: 'Bash', input: { command: 'ls' } });
-    render(<EventRow event={makeEvent('tool_use', content)} />);
-    expect(screen.getByText(/Bash/)).toBeTruthy();
-    expect(screen.getByText(/\"command\": \"ls\"/)).toBeTruthy();
-  });
-
-  it('renders tool_use event with Claude CLI name/input format', () => {
+  it('does not render standalone tool_use events (rendered via parent text event instead)', () => {
+    // tool_use events arrive embedded in `assistant`-typed text events. The
+    // standalone tool_use event_type renders nothing on its own.
     const content = JSON.stringify({ type: 'tool_use', name: 'Read', input: { file_path: '/foo' } });
-    render(<EventRow event={makeEvent('tool_use', content)} />);
-    expect(screen.getByText(/Read/)).toBeTruthy();
-    expect(screen.getByText(/\"file_path\": \"\/foo\"/)).toBeTruthy();
-  });
-
-  it('renders tool_use event with raw content when JSON is invalid', () => {
-    render(<EventRow event={makeEvent('tool_use', 'not-json')} />);
-    expect(screen.getByText('not-json')).toBeTruthy();
+    const { container } = render(<EventRow event={makeEvent('tool_use', content)} />);
+    expect(container.firstChild).toBeNull();
   });
 
   it('renders tool_result event as indented muted block (plain string)', () => {
@@ -285,10 +234,11 @@ describe('EventRow', () => {
     expect(screen.getByText('Session started')).toBeTruthy();
   });
 
-  it('renders system event extracting subtype from payload', () => {
+  it('hides system init event from transcript', () => {
     const content = JSON.stringify({ type: 'system', subtype: 'init' });
-    render(<EventRow event={makeEvent('system', content)} />);
-    expect(screen.getByText('[init]')).toBeTruthy();
+    const { container } = render(<EventRow event={makeEvent('system', content)} />);
+    // init is in the hidden-system-subtypes set — EventRow returns null
+    expect(container.firstChild).toBeNull();
   });
 
   it('renders user event with XML tags stripped', () => {
@@ -319,11 +269,18 @@ describe('EventRow', () => {
 
   it('extractToolUse: string input field is double-parsed into an object', () => {
     // The Claude CLI sometimes encodes input as a JSON string rather than an object.
-    // extractToolUse must parse it so JSON.stringify produces indented output.
+    // The parser must double-parse it so JSON.stringify produces indented output.
+    // tool_use blocks now arrive embedded in `assistant` text events.
     const innerInput = JSON.stringify({ file_path: '/foo/bar.ts' });
-    const content = JSON.stringify({ type: 'tool_use', name: 'Read', input: innerInput });
-    render(<EventRow event={makeEvent('tool_use', content)} />);
-    // If double-parse works, the rendered args contain the key with indentation
+    const content = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [{ type: 'tool_use', name: 'Read', input: innerInput }],
+      },
+    });
+    render(<EventRow event={makeEvent('text', content)} />);
+    // The CollapsibleToolUse body holds the pretty-printed JSON. The body is
+    // CSS-hidden when collapsed but still in the DOM, so the text is findable.
     expect(screen.getByText(/\"file_path\": \"\/foo\/bar\.ts\"/)).toBeTruthy();
   });
 
@@ -359,8 +316,11 @@ describe('EventRow', () => {
       },
     });
     render(<EventRow event={makeEvent('text', content)} />);
-    expect(screen.getByText(/Read/)).toBeTruthy();
-    expect(screen.getByText(/App\.tsx/)).toBeTruthy();
+    // Detail is rendered in a span like "(App.tsx)" alongside the tool name.
+    // The collapsed body also contains the file_path JSON, so the value
+    // appears more than once in the DOM — assert at least one match.
+    expect(screen.getAllByText(/Read/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/App\.tsx/).length).toBeGreaterThan(0);
   });
 
   it('tool_use event for Grep with pattern renders pattern detail in header', () => {
@@ -373,8 +333,8 @@ describe('EventRow', () => {
       },
     });
     render(<EventRow event={makeEvent('text', content)} />);
-    expect(screen.getByText(/Grep/)).toBeTruthy();
-    expect(screen.getByText(/fetchTasks/)).toBeTruthy();
+    expect(screen.getAllByText(/Grep/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/fetchTasks/).length).toBeGreaterThan(0);
   });
 
   it('tool_use event for unknown tool with no extractable detail renders bare tool name', () => {

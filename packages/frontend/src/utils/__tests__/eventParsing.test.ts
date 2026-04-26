@@ -124,22 +124,22 @@ describe('summarizeEvent', () => {
   });
 
   describe('system events', () => {
-    it('renders [init] for init subtype', () => {
+    it('hides init subtype from card preview', () => {
       const payload = { type: 'system', subtype: 'init' };
       const result = summarizeEvent(ev('system', JSON.stringify(payload)));
-      expect(result).toBe('[init]');
+      expect(result).toBe('');
     });
 
-    it('renders [rate limit] for rate_limit subtype', () => {
+    it('hides rate_limit subtype from card preview', () => {
       const payload = { type: 'system', subtype: 'rate_limit' };
       const result = summarizeEvent(ev('system', JSON.stringify(payload)));
-      expect(result).toBe('[rate limit]');
+      expect(result).toBe('');
     });
 
-    it('renders [done] for success subtype', () => {
+    it('renders a friendly label for success subtype', () => {
       const payload = { type: 'system', subtype: 'success' };
       const result = summarizeEvent(ev('system', JSON.stringify(payload)));
-      expect(result).toBe('[done]');
+      expect(result).toBe('Session complete');
     });
 
     it('falls back to raw content when payload is not parseable JSON', () => {

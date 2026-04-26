@@ -100,18 +100,9 @@ beforeEach(() => {
 // ── GET /api/tasks/active filtering ──────────────────────────────────────────
 
 describe('GET /api/tasks/active', () => {
-  it('does not include tasks with Done Notion status', async () => {
-    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
-      makeAggregate('task-ready', '🗂️ Ready'),
-      makeAggregate('task-done', '✅ Done'),
-    ]);
-
-    const res = await supertest(buildApp()).get('/api/tasks/active?projectId=proj-1');
-    expect(res.status).toBe(200);
-    const ids = res.body.map((t: { taskId: string }) => t.taskId);
-    expect(ids).not.toContain('task-done');
-    expect(ids).toContain('task-ready');
-  });
+  // Done tasks are excluded at the SQL layer (getActiveTaskAggregates) so they
+  // never reach the route. Backlog tasks are intentionally surfaced in the
+  // Tasks panel. Only Deferred is filtered at the route level.
 
   it('does not include tasks with Deferred Notion status', async () => {
     vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
@@ -126,23 +117,9 @@ describe('GET /api/tasks/active', () => {
     expect(ids).toContain('task-ready');
   });
 
-  it('does not include tasks with Backlog Notion status', async () => {
+  it('returns Ready, In Progress, and Backlog tasks while excluding Deferred', async () => {
     vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
       makeAggregate('task-ready', '🗂️ Ready'),
-      makeAggregate('task-backlog', '🔲 Backlog'),
-    ]);
-
-    const res = await supertest(buildApp()).get('/api/tasks/active?projectId=proj-1');
-    expect(res.status).toBe(200);
-    const ids = res.body.map((t: { taskId: string }) => t.taskId);
-    expect(ids).not.toContain('task-backlog');
-    expect(ids).toContain('task-ready');
-  });
-
-  it('returns only active tasks when mix of statuses present', async () => {
-    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
-      makeAggregate('task-ready', '🗂️ Ready'),
-      makeAggregate('task-done', '✅ Done'),
       makeAggregate('task-deferred', '⏸️ Deferred'),
       makeAggregate('task-backlog', '🔲 Backlog'),
       makeAggregate('task-in-progress', '🔄 In Progress'),
@@ -153,9 +130,8 @@ describe('GET /api/tasks/active', () => {
     const ids = res.body.map((t: { taskId: string }) => t.taskId);
     expect(ids).toContain('task-ready');
     expect(ids).toContain('task-in-progress');
-    expect(ids).not.toContain('task-done');
+    expect(ids).toContain('task-backlog');
     expect(ids).not.toContain('task-deferred');
-    expect(ids).not.toContain('task-backlog');
   });
 
   it('returns 400 when projectId is missing', async () => {

@@ -61,13 +61,15 @@ describe('TaskList', () => {
       makeTask({ taskId: 't2', taskName: 'Review Task',  displayStatus: 'in_review' }),
     ]);
     render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    // Status badges inside task cards also contain status text, so target the
+    // dedicated group-header testids rather than free-text matches.
     await waitFor(() => {
-      expect(screen.getByText(/in progress/i)).toBeDefined();
-      expect(screen.getByText(/in review/i)).toBeDefined();
+      expect(screen.getByTestId('group-header-in_progress')).toBeDefined();
+      expect(screen.getByTestId('group-header-in_review')).toBeDefined();
     });
     // No header for groups with no tasks
-    expect(screen.queryByText(/needs attention/i)).toBeNull();
-    expect(screen.queryByText(/ready to merge/i)).toBeNull();
+    expect(screen.queryByTestId('group-header-needs_attention')).toBeNull();
+    expect(screen.queryByTestId('group-header-ready_to_merge')).toBeNull();
   });
 
   it('shows Ready section header when there are ready tasks', async () => {
@@ -103,6 +105,8 @@ describe('TaskList', () => {
       expect(screen.getByTestId('wave-group-1')).toBeDefined();
       expect(screen.getByTestId('wave-group-2')).toBeDefined();
     });
+    // Wave 2+ groups start collapsed — expand to verify the task is grouped under it
+    fireEvent.click(screen.getByTestId('wave-header-2'));
     expect(screen.getByTestId('wave-group-1').textContent).toContain('Wave 1 Task');
     expect(screen.getByTestId('wave-group-2').textContent).toContain('Wave 2 Task');
   });
@@ -113,8 +117,9 @@ describe('TaskList', () => {
     ]);
     render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
     await waitFor(() => {
-      expect(screen.getByTestId('compact-task-card')).toBeDefined();
+      expect(screen.getByTestId('wave-header-2')).toBeDefined();
     });
+    fireEvent.click(screen.getByTestId('wave-header-2'));
     expect(screen.getByTestId('compact-task-card').className).toContain('blocked');
   });
 
@@ -124,8 +129,9 @@ describe('TaskList', () => {
     ]);
     render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
     await waitFor(() => {
-      expect(screen.getByTestId('blocker-names')).toBeDefined();
+      expect(screen.getByTestId('wave-header-2')).toBeDefined();
     });
+    fireEvent.click(screen.getByTestId('wave-header-2'));
     expect(screen.getByTestId('blocker-names').textContent).toContain('Task Alpha');
   });
 
@@ -135,8 +141,9 @@ describe('TaskList', () => {
     ]);
     render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
     await waitFor(() => {
-      expect(screen.getByTestId('compact-task-card')).toBeDefined();
+      expect(screen.getByTestId('wave-header-2')).toBeDefined();
     });
+    fireEvent.click(screen.getByTestId('wave-header-2'));
     expect(screen.queryByRole('checkbox')).toBeNull();
   });
 

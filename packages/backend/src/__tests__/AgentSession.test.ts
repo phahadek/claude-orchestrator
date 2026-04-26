@@ -42,13 +42,18 @@ vi.mock('../db/queries', () => ({
   insertPermissionDenial: vi.fn(),
   upsertPullRequest: vi.fn(),
   insertSessionAudit: vi.fn(),
+  incrementTokens: vi.fn(),
+  setSessionModel: vi.fn(),
+  getPRBySessionId: vi.fn(() => null),
+  getPRByNotionTaskId: vi.fn(() => null),
+  setHeadSha: vi.fn(),
 }));
 
 import { AgentSession } from '../session/AgentSession';
 import { spawn } from 'child_process';
 import type { NotionClient } from '../notion/NotionClient';
 import type { ServerMessage } from '../ws/types';
-import { getRules, getEventsBySession, updateSessionStatus, upsertSessionEvent } from '../db/queries';
+import { getRules, getEventsBySession, updateSessionStatus, upsertSessionEvent, getPRBySessionId } from '../db/queries';
 import type { PermissionRule } from '../db/types';
 
 function fakeNotionClient(): NotionClient {
@@ -630,6 +635,12 @@ describe('AgentSession', () => {
   it('emits push_detected when a Bash tool_use with git push command completes', async () => {
     const notion = fakeNotionClient();
     vi.mocked(getRules).mockReturnValue([]);
+    // handlePushDetected only broadcasts the WS message when a PR row exists
+    // for this session — provide a stub row so the broadcast path is exercised.
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      pr_number: 42,
+      repo: 'owner/repo',
+    } as never);
 
     const session = new AgentSession(
       'push-session',

@@ -129,12 +129,13 @@ describe('TaskCard', () => {
   });
 
   it('renders review verdict badge when review.verdict is present', () => {
-    render(<TaskCard task={makeTask({ review: makeReview({ verdict: 'approved' }) })} selected={false} onClick={vi.fn()} send={noop} project={makeProject()} />);
+    // Verdict badge is rendered alongside the PR section, so a PR must exist
+    render(<TaskCard task={makeTask({ pr: makePr(), review: makeReview({ verdict: 'approved' }) })} selected={false} onClick={vi.fn()} send={noop} project={makeProject()} />);
     expect(screen.getByText('✅ Approved')).toBeDefined();
   });
 
   it('renders needs_changes verdict label', () => {
-    render(<TaskCard task={makeTask({ review: makeReview({ verdict: 'needs_changes' }) })} selected={false} onClick={vi.fn()} send={noop} project={makeProject()} />);
+    render(<TaskCard task={makeTask({ pr: makePr(), review: makeReview({ verdict: 'needs_changes' }) })} selected={false} onClick={vi.fn()} send={noop} project={makeProject()} />);
     expect(screen.getByText('🔁 Needs changes')).toBeDefined();
   });
 

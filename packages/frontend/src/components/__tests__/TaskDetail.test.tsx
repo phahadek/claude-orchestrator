@@ -112,11 +112,13 @@ describe('TaskDetail', () => {
     expect(screen.queryByText('Code Session')).toBeNull();
   });
 
-  it('renders code session section with status and last message', () => {
-    const codeSession = makeCodeSession({ lastMessage: 'Implementing feature X' });
+  it('renders code session section header with status', () => {
+    const codeSession = makeCodeSession();
     render(<TaskDetail task={makeTask({ codeSession })} send={vi.fn()} onClose={vi.fn()} />);
     expect(screen.getByText('Code Session')).toBeTruthy();
-    expect(screen.getByText('Implementing feature X')).toBeTruthy();
+    // The full transcript replaces the lastMessage preview when the session is
+    // available in the sessions prop (otherwise a "not loaded" placeholder).
+    expect(screen.getByText(/Transcript not available/)).toBeTruthy();
   });
 
   it('renders elapsed time in code session section', () => {
@@ -148,19 +150,7 @@ describe('TaskDetail', () => {
     expect(send).toHaveBeenCalledWith({ type: 'send_message', sessionId: 'sess-abc', message: 'hello' } as ClientMessage);
   });
 
-  it('shows transcript toggle for code session', () => {
-    const codeSession = makeCodeSession();
-    render(<TaskDetail task={makeTask({ codeSession })} send={vi.fn()} onClose={vi.fn()} />);
-    expect(screen.getByText('▶ View full transcript')).toBeTruthy();
-  });
-
-  it('toggles code transcript visibility', () => {
-    const codeSession = makeCodeSession();
-    render(<TaskDetail task={makeTask({ codeSession })} send={vi.fn()} onClose={vi.fn()} />);
-    const toggle = screen.getByText('▶ View full transcript');
-    fireEvent.click(toggle);
-    expect(screen.getByText('▼ Hide transcript')).toBeTruthy();
-  });
+  // The full transcript is now always shown inline (no toggle button).
 
   // ── PR section ──
 
@@ -226,16 +216,13 @@ describe('TaskDetail', () => {
     expect(screen.getByText('⚠️ Needs Changes')).toBeTruthy();
   });
 
-  it('renders review summary', () => {
-    const review = makeReview({ verdict: 'approved', summary: 'All checks pass.' });
-    render(<TaskDetail task={makeTask({ review })} send={vi.fn()} onClose={vi.fn()} />);
-    expect(screen.getByText('All checks pass.')).toBeTruthy();
-  });
+  // Review summary string is no longer rendered — only the verdict pill +
+  // dimensions are surfaced (verdict pill is covered by sibling tests).
 
-  it('renders "Review in progress" when review session is running', () => {
+  it('renders "In progress…" pill when review session is running with no verdict', () => {
     const review = makeReview({ verdict: null, status: 'running' });
     render(<TaskDetail task={makeTask({ review })} send={vi.fn()} onClose={vi.fn()} />);
-    expect(screen.getByText('Review in progress…')).toBeTruthy();
+    expect(screen.getByText('In progress…')).toBeTruthy();
   });
 
   it('is hidden when review is null', () => {
@@ -311,19 +298,22 @@ describe('TaskDetail', () => {
 
   // ── EventTranscript integration ──
 
-  it('renders EventTranscript for code session when sessions prop includes matching session', () => {
+  it('renders EventTranscript inline for code session when sessions prop includes matching session', () => {
     const codeSession = makeCodeSession({ sessionId: 'sess-1' });
     const sessions: SessionState[] = [makeSessionState({ sessionId: 'sess-1', events: [] })];
     render(<TaskDetail task={makeTask({ codeSession })} send={vi.fn()} onClose={vi.fn()} sessions={sessions} />);
-    fireEvent.click(screen.getByText('▶ View full transcript'));
+    // Empty events render the EventTranscript empty-state text.
     expect(screen.getByText('No events yet.')).toBeTruthy();
   });
 
-  it('renders EventTranscript for review session when sessions prop includes matching session', () => {
+  it('renders EventTranscript for review session inside the review section', () => {
     const review = makeReview({ sessionId: 'review-sess-1' });
     const sessions: SessionState[] = [makeSessionState({ sessionId: 'review-sess-1', status: 'done', events: [] })];
     render(<TaskDetail task={makeTask({ review })} send={vi.fn()} onClose={vi.fn()} sessions={sessions} />);
-    fireEvent.click(screen.getByText('▶ View review transcript'));
+    // Review section is expanded by default; the empty transcript renders the
+    // EventTranscript empty-state. There are two transcripts (code + review)
+    // rendering the same empty-state when both have no events; the codeSession
+    // is null in this test, so only one is rendered.
     expect(screen.getByText('No events yet.')).toBeTruthy();
   });
 
@@ -336,7 +326,6 @@ describe('TaskDetail', () => {
       }),
     ];
     render(<TaskDetail task={makeTask({ codeSession })} send={vi.fn()} onClose={vi.fn()} sessions={sessions} />);
-    fireEvent.click(screen.getByText('▶ View full transcript'));
     expect(screen.getByText('Working on the fix…')).toBeTruthy();
   });
 });

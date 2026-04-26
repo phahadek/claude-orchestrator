@@ -10,6 +10,7 @@ vi.mock('../db/queries.js', () => ({
   setReviewSessionId: vi.fn(),
   updatePRDraftStatus: vi.fn(),
   incrementReviewIteration: vi.fn(),
+  setLastReviewedSha: vi.fn(),
 }));
 
 import { PRReviewService } from './PRReviewService';
@@ -76,6 +77,7 @@ const mockPRRow = {
 function makeMockGitHub(): GitHubClient {
   return {
     listOpenPRs: vi.fn().mockResolvedValue([mockPR]),
+    fetchPR: vi.fn().mockResolvedValue(mockPR),
     fetchDiff: vi.fn().mockResolvedValue(mockDiff),
     mergePR: vi.fn(),
     getMergeability: vi.fn().mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
