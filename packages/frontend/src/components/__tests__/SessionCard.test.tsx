@@ -67,7 +67,8 @@ describe('SessionCard', () => {
       events: [{ eventType: 'tool_use', content: JSON.stringify(payload), timestamp: Date.now() }],
     });
     render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
-    expect(screen.getByText('🔧 Read')).toBeDefined();
+    // Tool summary now includes the file detail in parentheses (e.g. "🔧 Read (main.ts)")
+    expect(screen.getByText(/🔧 Read\b/)).toBeDefined();
   });
 
   it('falls back to raw content when last event content is not parseable JSON', () => {

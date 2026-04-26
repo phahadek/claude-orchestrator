@@ -29,18 +29,23 @@ describe('useKeyboardShortcuts', () => {
     // clean up any lingering listeners between tests
   });
 
-  it('does NOT call handlers when event.target is an HTMLInputElement', () => {
+  it('does NOT call most handlers when event.target is an HTMLInputElement', () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
 
     const input = document.createElement('input');
     fireKey('N', input);
     fireKey('J', input);
-    fireKey('Escape', input);
 
     expect(handlers.onOpenDispatch).not.toHaveBeenCalled();
     expect(handlers.onSelectNext).not.toHaveBeenCalled();
-    expect(handlers.onDismiss).not.toHaveBeenCalled();
+  });
+
+  it('Escape fires onDismiss even when target is an input (clears search)', () => {
+    const handlers = makeHandlers();
+    renderHook(() => useKeyboardShortcuts(handlers));
+    fireKey('Escape', document.createElement('input'));
+    expect(handlers.onDismiss).toHaveBeenCalledTimes(1);
   });
 
   it('does NOT call handlers when event.target is an HTMLTextAreaElement', () => {
@@ -90,17 +95,24 @@ describe('useKeyboardShortcuts', () => {
     expect(handlers.onConfirmSelection).toHaveBeenCalledTimes(1);
   });
 
-  it('1 calls onSwitchView with "sessions"', () => {
+  it('1 calls onSwitchView with "tasks"', () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
     fireKey('1');
-    expect(handlers.onSwitchView).toHaveBeenCalledWith('sessions');
+    expect(handlers.onSwitchView).toHaveBeenCalledWith('tasks');
   });
 
-  it('2 calls onSwitchView with "prs"', () => {
+  it('2 calls onSwitchView with "sessions"', () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
     fireKey('2');
+    expect(handlers.onSwitchView).toHaveBeenCalledWith('sessions');
+  });
+
+  it('3 calls onSwitchView with "prs"', () => {
+    const handlers = makeHandlers();
+    renderHook(() => useKeyboardShortcuts(handlers));
+    fireKey('3');
     expect(handlers.onSwitchView).toHaveBeenCalledWith('prs');
   });
 

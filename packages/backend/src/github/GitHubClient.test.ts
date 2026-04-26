@@ -55,7 +55,7 @@ describe('GitHubClient constructor', () => {
 });
 
 describe('GitHubClient.listOpenPRs()', () => {
-  it('filters out draft PRs from the response', async () => {
+  it('returns all open PRs including drafts, with draft flag preserved', async () => {
     const rawPRs = [
       {
         node_id: 'PR_kwDOA1b2c3', number: 1, title: 'Open PR', body: null,
@@ -84,9 +84,12 @@ describe('GitHubClient.listOpenPRs()', () => {
     const client = new GitHubClient();
     const prs = await client.listOpenPRs();
 
-    expect(prs).toHaveLength(1);
-    expect(prs[0].id).toBe(1);
-    expect(prs[0].draft).toBe(false);
+    // listOpenPRs is used to reconcile state against GitHub; drafts are still
+    // open PRs and must remain in the result so reconciliation doesn't mark
+    // them stale.
+    expect(prs).toHaveLength(2);
+    expect(prs.find((p) => p.id === 1)?.draft).toBe(false);
+    expect(prs.find((p) => p.id === 2)?.draft).toBe(true);
   });
 });
 

@@ -105,7 +105,7 @@ describe('ToolCallGroup', () => {
       makeCallPair('Read', { file_path: '/b.ts' }, 'result b'),
     ];
     render(<ToolCallGroup toolName="Read" calls={calls} />);
-    const header = screen.getByRole('button', { name: /Read ×2/ });
+    const header = screen.getByRole('button', { name: /🔧 Read.*×2/ });
     fireEvent.click(header);
     // After expanding, call item headers with the file paths should appear
     expect(screen.getByText(/\/a\.ts/)).toBeTruthy();
@@ -119,7 +119,7 @@ describe('ToolCallGroup', () => {
     ];
     render(<ToolCallGroup toolName="Read" calls={calls} />);
     // Expand the group
-    fireEvent.click(screen.getByRole('button', { name: /Read ×2/ }));
+    fireEvent.click(screen.getByRole('button', { name: /🔧 Read.*×2/ }));
     // Expand the first call item
     const callButtons = screen.getAllByRole('button');
     // Find the one for /a.ts (not the group header)
@@ -135,7 +135,7 @@ describe('ToolCallGroup', () => {
       makeCallPair('Read', { file_path: '/y.ts' }, 'other result'),
     ];
     render(<ToolCallGroup toolName="Read" calls={calls} />);
-    const header = screen.getByRole('button', { name: /Read ×2/ });
+    const header = screen.getByRole('button', { name: /🔧 Read.*×2/ });
     fireEvent.click(header);
     expect(screen.getByText(/\/x\.ts/)).toBeTruthy();
     fireEvent.click(header);
@@ -148,7 +148,7 @@ describe('ToolCallGroup', () => {
       makeCallPair('Bash', { command: 'npm build' }, 'build output'),
     ];
     render(<ToolCallGroup toolName="Bash" calls={calls} />);
-    fireEvent.click(screen.getByRole('button', { name: /Bash ×2/ }));
+    fireEvent.click(screen.getByRole('button', { name: /🔧 Bash.*×2/ }));
     expect(screen.getByText(/\$ npm test/)).toBeTruthy();
     expect(screen.getByText(/\$ npm build/)).toBeTruthy();
   });
@@ -159,7 +159,7 @@ describe('ToolCallGroup', () => {
       makeCallPair('Read', { file_path: '/b.ts' }, 'r'),
     ];
     render(<ToolCallGroup toolName="Read" calls={calls} />);
-    const header = screen.getByRole('button', { name: /Read ×2/ });
+    const header = screen.getByRole('button', { name: /🔧 Read.*×2/ });
     expect(header.getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(header);
     expect(header.getAttribute('aria-expanded')).toBe('true');

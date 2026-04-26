@@ -77,6 +77,8 @@ vi.mock('../db/db.js', async () => {
       favorited           INTEGER NOT NULL DEFAULT 0,
       note                TEXT,
       tags                TEXT,
+      task_name           TEXT,
+      model               TEXT,
       total_input_tokens  INTEGER NOT NULL DEFAULT 0,
       total_output_tokens INTEGER NOT NULL DEFAULT 0
     );

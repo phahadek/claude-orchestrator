@@ -14,7 +14,7 @@ describe('ws/router.ts — fetch_tasks boardId handling', () => {
   });
 
   it('passes the resolved boardId to notion.fetchReadyTasks()', () => {
-    // Must call fetchReadyTasks with the local boardId variable
-    expect(routerSource).toMatch(/notion\.fetchReadyTasks\(boardId\)/);
+    // Must call fetchReadyTasks with the local boardId variable as the first arg
+    expect(routerSource).toMatch(/notion\s*\.\s*fetchReadyTasks\(boardId\b/s);
   });
 });

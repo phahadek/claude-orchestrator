@@ -22,7 +22,11 @@ vi.mock('../db/db.js', async () => {
       session_type        TEXT    NOT NULL DEFAULT 'standard',
       favorited           INTEGER NOT NULL DEFAULT 0,
       note                TEXT,
-      tags                TEXT
+      tags                TEXT,
+      task_name           TEXT,
+      model               TEXT,
+      total_input_tokens  INTEGER NOT NULL DEFAULT 0,
+      total_output_tokens INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS session_events (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,27 +71,32 @@ vi.mock('../db/db.js', async () => {
       raw_json       TEXT    NOT NULL
     );
     CREATE TABLE IF NOT EXISTS pull_requests (
-      id                INTEGER PRIMARY KEY AUTOINCREMENT,
-      pr_number         INTEGER NOT NULL,
-      pr_url            TEXT    NOT NULL UNIQUE,
-      notion_task_id    TEXT,
-      session_id        TEXT,
-      repo              TEXT    NOT NULL,
-      title             TEXT,
-      body              TEXT,
-      head_branch       TEXT,
-      base_branch       TEXT,
-      state             TEXT    NOT NULL DEFAULT 'open',
-      draft             INTEGER NOT NULL DEFAULT 0,
-      review_result     TEXT,
-      review_at         TEXT,
-      created_at        TEXT    NOT NULL,
-      updated_at        TEXT    NOT NULL,
-      synced_at         TEXT    NOT NULL,
-      review_session_id TEXT,
-      review_iteration  INTEGER NOT NULL DEFAULT 0,
-      head_sha          TEXT,
-      last_reviewed_sha TEXT
+      id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+      pr_number              INTEGER NOT NULL,
+      pr_url                 TEXT    NOT NULL UNIQUE,
+      notion_task_id         TEXT,
+      session_id             TEXT,
+      repo                   TEXT    NOT NULL,
+      title                  TEXT,
+      body                   TEXT,
+      head_branch            TEXT,
+      base_branch            TEXT,
+      state                  TEXT    NOT NULL DEFAULT 'open',
+      draft                  INTEGER NOT NULL DEFAULT 0,
+      review_result          TEXT,
+      review_at              TEXT,
+      created_at             TEXT    NOT NULL,
+      updated_at             TEXT    NOT NULL,
+      synced_at              TEXT    NOT NULL,
+      review_session_id      TEXT,
+      review_iteration       INTEGER NOT NULL DEFAULT 0,
+      head_sha               TEXT,
+      last_reviewed_sha      TEXT,
+      node_id                TEXT,
+      mergeable              INTEGER,
+      merge_state            TEXT,
+      merge_state_checked_at TEXT,
+      pending_push           INTEGER NOT NULL DEFAULT 0
     );
   `);
   return { db };
@@ -120,6 +129,10 @@ describe('upsertPullRequest + getPRByNumber', () => {
     review_session_id: null,
     head_sha: null,
     last_reviewed_sha: null,
+    node_id: null,
+    mergeable: null,
+    merge_state: null,
+    merge_state_checked_at: null,
   } as const;
 
   it('returns null/undefined when PR does not exist', () => {

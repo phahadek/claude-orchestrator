@@ -11,8 +11,15 @@ vi.mock('../../hooks/useSessionStore', () => ({
     readyCount: 0,
     blockedCount: 0,
     dispatch: vi.fn(),
+    resetTasks: vi.fn(),
     deleteSession: vi.fn(),
     setSessionArchived: vi.fn(),
+    setSessionFavorited: vi.fn(),
+    prRefreshTrigger: 0,
+    lastPrReviewEvent: null,
+    incompleteReviews: [],
+    lastTaskUpdate: null,
+    taskListRefreshTrigger: 0,
   }),
 }));
 

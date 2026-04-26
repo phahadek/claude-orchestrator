@@ -87,8 +87,8 @@ describe('NotionClient.fetchReadyTasks()', () => {
       path.join(__dirname, '..', 'notion', 'NotionClient.ts'),
       'utf-8',
     );
-    // Method signature must accept boardId
-    expect(source).toMatch(/fetchReadyTasks\(boardId:\s*string\)/);
+    // Method signature must accept boardId as the first parameter
+    expect(source).toMatch(/fetchReadyTasks\(boardId:\s*string/);
     // Must use boardId in the API call (not a hardcoded value)
     expect(source).toMatch(/\/databases\/\$\{boardId\}\/query/);
   });
