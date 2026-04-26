@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { TaskView, DisplayStatus } from '../types/taskView';
-import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
-import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
+import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { TaskCard } from './TaskCard';
 import { CompactTaskCard } from './CompactTaskCard';
 import { useDispatch } from '../hooks/useDispatch';

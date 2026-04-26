@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
-import type { ServerMessage, PermissionDenial } from '@claude-dashboard/backend/src/ws/types';
-import type { ResolvedTask } from '@claude-dashboard/backend/src/notion/types';
-import type { TaskView } from '@claude-dashboard/backend/src/routes/tasks';
+import type { ServerMessage, PermissionDenial } from '@claude-orchestrator/backend/src/ws/types';
+import type { ResolvedTask } from '@claude-orchestrator/backend/src/notion/types';
+import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
 
 const DISMISSED_DENIALS_KEY = 'permission_denials_dismissed';
 

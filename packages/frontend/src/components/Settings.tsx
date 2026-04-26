@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import styles from './Settings.module.css';
 
 const NOTIFICATIONS_ENABLED_KEY = 'notificationsEnabled';

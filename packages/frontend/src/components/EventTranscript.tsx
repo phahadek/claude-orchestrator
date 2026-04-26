@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import type { PermissionDenial } from '@claude-dashboard/backend/src/ws/types';
+import type { PermissionDenial } from '@claude-orchestrator/backend/src/ws/types';
 import {
   tryParseJson,
   extractText,

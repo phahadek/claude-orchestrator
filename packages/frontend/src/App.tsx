@@ -20,10 +20,10 @@ import { Notifications } from './components/Notifications';
 import { ShortcutHint } from './components/ShortcutHint';
 import { SessionFilterBar } from './components/SessionFilterBar';
 import type { NotificationItem } from './components/Notifications';
-import type { ServerMessage } from '@claude-dashboard/backend/src/ws/types';
-import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
-import { calculateCost } from '@claude-dashboard/backend/src/utils/usage';
-import type { TaskView } from '@claude-dashboard/backend/src/routes/tasks';
+import type { ServerMessage } from '@claude-orchestrator/backend/src/ws/types';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
+import { calculateCost } from '@claude-orchestrator/backend/src/utils/usage';
+import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
 import styles from './App.module.css';
 
 const DEFAULT_DETAIL_WIDTH = 40;

@@ -14,7 +14,7 @@ import {
   AreaChart,
   Area,
 } from 'recharts';
-import { formatTokenCount, formatCost } from '@claude-dashboard/backend/src/utils/usage';
+import { formatTokenCount, formatCost } from '@claude-orchestrator/backend/src/utils/usage';
 import styles from './AnalyticsPanel.module.css';
 
 // API response types — kept in sync with packages/backend/src/routes/analytics.ts

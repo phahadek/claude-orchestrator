@@ -1,9 +1,9 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DispatchModal } from '../DispatchModal';
-import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
-import type { ResolvedTask } from '@claude-dashboard/backend/src/notion/types';
-import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
+import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
+import type { ResolvedTask } from '@claude-orchestrator/backend/src/notion/types';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 
 const makeTask = (id: string, title: string, overrides: Partial<ResolvedTask> = {}): ResolvedTask => ({
   task: { id, title, status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: `https://notion.so/${id}` },

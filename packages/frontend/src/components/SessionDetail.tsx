@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 import type { SessionState } from '../hooks/useSessionStore';
-import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
+import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import { taskNameFromNotionUrl } from '../utils/notionUrl';
 import { calcElapsedMs, formatDuration } from '../utils/sessionTimer';
 import { StatusBadge } from './StatusBadge';
 import { formatModelName } from './SessionCard';
-import { formatTokenCount, formatCost, calculateCost } from '@claude-dashboard/backend/src/utils/usage';
+import { formatTokenCount, formatCost, calculateCost } from '@claude-orchestrator/backend/src/utils/usage';
 import { ReviewDetailView } from './ReviewDetailView';
 import { EventTranscript } from './EventTranscript';
 import { DiffViewer } from './DiffViewer';

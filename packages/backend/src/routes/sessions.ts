@@ -16,7 +16,7 @@ sessionsRouter.get('/archived', (_req: Request, res: Response) => {
   res.json(getArchivedSessions());
 });
 
-// GET /api/sessions?status=running,done&projectId=claude-dashboard
+// GET /api/sessions?status=running,done&projectId=claude-orchestrator
 sessionsRouter.get('/', (req: Request, res: Response) => {
   const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : '';
   const statusParam = typeof req.query.status === 'string' ? req.query.status : '';

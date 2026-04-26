@@ -1,4 +1,4 @@
-import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import styles from './ProjectSwitcher.module.css';
 
 interface Props {

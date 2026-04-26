@@ -1,4 +1,4 @@
-import type { ResolvedTask } from '@claude-dashboard/backend/src/notion/types';
+import type { ResolvedTask } from '@claude-orchestrator/backend/src/notion/types';
 import type { TaskView } from '../types/taskView';
 
 export interface TaskViewWaveResult {

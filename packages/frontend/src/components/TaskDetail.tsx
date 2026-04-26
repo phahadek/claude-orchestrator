@@ -1,12 +1,12 @@
 import { useState, useRef, useEffect } from 'react';
-import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
-import type { TaskView } from '@claude-dashboard/backend/src/routes/tasks';
-import type { DisplayStatus } from '@claude-dashboard/backend/src/tasks/TaskStatusEngine';
+import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
+import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
+import type { DisplayStatus } from '@claude-orchestrator/backend/src/tasks/TaskStatusEngine';
 import type { SessionState } from '../hooks/useSessionStore';
 import { StatusBadge } from './StatusBadge';
 import { EventTranscript } from './EventTranscript';
 import { parseReviewResultFromEvents } from './ReviewDetailView';
-import { formatTokenCount } from '@claude-dashboard/backend/src/utils/usage';
+import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
 import styles from './TaskDetail.module.css';
 
 // ── Display status helpers ─────────────────────────────────────────

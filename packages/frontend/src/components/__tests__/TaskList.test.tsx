@@ -2,7 +2,7 @@ import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TaskList } from '../TaskList';
 import type { TaskView, DisplayStatus } from '../../types/taskView';
-import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 
 function makeTask(overrides: Partial<TaskView> & { taskId: string; displayStatus: DisplayStatus }): TaskView {
   return {

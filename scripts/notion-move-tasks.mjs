@@ -46,7 +46,7 @@
  *     --target 19287f31... --tasks "abc123" --status "🔲 Backlog"
  *
  * Global location: ~/.claude/scripts/notion-move-tasks.mjs (symlink)
- * Source: scripts/notion-move-tasks.mjs in the claude-dashboard repo
+ * Source: scripts/notion-move-tasks.mjs in the claude-orchestrator repo
  */
 
 import { readFileSync } from 'fs';

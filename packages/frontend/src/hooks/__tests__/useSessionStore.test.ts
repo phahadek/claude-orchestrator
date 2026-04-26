@@ -1,7 +1,7 @@
 import { renderHook, act } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
 import { useSessionStore } from '../useSessionStore';
-import type { ServerMessage } from '@claude-dashboard/backend/src/ws/types';
+import type { ServerMessage } from '@claude-orchestrator/backend/src/ws/types';
 
 const SESSION_ID = 'test-session-1';
 

@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
-import type { ClientMessage } from '@claude-dashboard/backend/src/ws/types';
-import type { ProjectConfig } from '@claude-dashboard/backend/src/config';
+import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 
 /** Shared hook for dispatching one or more coding sessions via WebSocket. */
 export function useDispatch(

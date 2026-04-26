@@ -2,7 +2,7 @@ import type { SessionState } from '../hooks/useSessionStore';
 import { taskNameFromNotionUrl } from '../utils/notionUrl';
 import { formatElapsed } from '../utils/sessionTimer';
 import { summarizeEvent, isHiddenSystemEvent, tryParseJson } from '../utils/eventParsing';
-import { formatTokenCount, formatCost, calculateCost } from '@claude-dashboard/backend/src/utils/usage';
+import { formatTokenCount, formatCost, calculateCost } from '@claude-orchestrator/backend/src/utils/usage';
 import { StatusBadge } from './StatusBadge';
 import styles from './SessionCard.module.css';
 
