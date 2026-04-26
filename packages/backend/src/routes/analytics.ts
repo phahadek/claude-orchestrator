@@ -37,7 +37,7 @@ analyticsRouter.get('/tokens', (req: Request, res: Response) => {
   const fromMs = typeof req.query.from === 'string' ? parseInt(req.query.from, 10) : null;
   const toMs = typeof req.query.to === 'string' ? parseInt(req.query.to, 10) : null;
 
-  let query = `SELECT * FROM sessions WHERE archived = 0`;
+  let query = `SELECT * FROM sessions WHERE 1=1`;
   const params: (string | number)[] = [];
 
   if (projectId) {
