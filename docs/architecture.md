@@ -8,7 +8,7 @@
 | Backend | Node.js + Express (TypeScript) | Same language as frontend. Spawns and manages `claude` CLI subprocesses. |
 | Realtime transport | WebSocket — `ws` npm package | Bidirectional: UI→server for approve/deny/kill/send, server→UI for session output |
 | Database | SQLite — `better-sqlite3` | Synchronous API, zero-config, file-based. Stores runtime state only. |
-| Claude Code execution | `claude` CLI subprocess | Spawned via `child_process.spawn()` in the target project directory. Streams JSONL events on stdout. No Anthropic API key required — auth is handled by the CLI's own credentials. |
+| Claude Code execution | `claude` CLI subprocess | Spawned via `child_process.spawn()` in the target project directory. Streams JSONL events on stdout. In CLI mode (the default), no Anthropic API key is required — auth is handled by the CLI's own credentials. API mode (`SESSION_MODE=api`) uses the Agent SDK and requires a configured API key. |
 | Task source | Notion REST API (server-side only) | Direct HTTP to `api.notion.com`; API key never exposed to browser |
 | Package structure | npm workspaces monorepo | Shared WS message types between backend and frontend without duplication |
 

@@ -39,9 +39,12 @@ As an optional defense-in-depth, you can install a local pre-commit hook that re
 ```bash
 cat > .git/hooks/pre-commit <<'EOF'
 #!/usr/bin/env bash
-if git diff --cached -p | grep -qE "33[2-6]22f9152f38[0-9a-f]{19}"; then
-  echo "ERROR: commit contains Notion workspace IDs." >&2
-  echo "Move them to .claude/local-context.md (gitignored), or use --no-verify if intentional." >&2
+# Tune this regex to your workspace's ID prefix for fewer false positives.
+# The default below matches any 32-char lowercase hex string, which catches
+# all Notion page/database IDs but will also match unrelated UUIDs.
+if git diff --cached -p | grep -qE "[0-9a-f]{32}"; then
+  echo "ERROR: commit contains what looks like a Notion ID." >&2
+  echo "Move it to .claude/local-context.md (gitignored), or use --no-verify if intentional." >&2
   exit 1
 fi
 EOF
