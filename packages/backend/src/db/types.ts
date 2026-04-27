@@ -114,6 +114,44 @@ export interface TaskCache {
   raw_json: string;
 }
 
+// ─── projects ──────────────────────────────────────────────────────────────
+
+export type TaskSource = 'notion' | 'yaml';
+
+export interface ProjectRow {
+  id: string;
+  name: string;
+  project_dir: string;
+  context_url: string | null;
+  github_repo: string | null;
+  task_source: TaskSource;
+  created_at: number;
+  updated_at: number;
+}
+
+export type NewProjectRow = Omit<ProjectRow, 'created_at' | 'updated_at'> & {
+  created_at?: number;
+  updated_at?: number;
+};
+
+// ─── milestones ────────────────────────────────────────────────────────────
+
+export interface MilestoneRow {
+  id: string;
+  project_id: string;
+  name: string;
+  source_id: string | null;
+  display_order: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export type NewMilestoneRow = Omit<MilestoneRow, 'created_at' | 'updated_at' | 'display_order'> & {
+  display_order?: number;
+  created_at?: number;
+  updated_at?: number;
+};
+
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
 export interface PullRequestRow {

@@ -21,6 +21,8 @@ import { sessionsRouter, setBroadcast } from './routes/sessions';
 import { createPrsRouter, setPRBroadcast } from './routes/prs';
 import { createTasksRouter, setTaskBroadcast } from './routes/tasks';
 import { analyticsRouter } from './routes/analytics';
+import { projectsRouter } from './routes/projects';
+import { importProjectsFromEnv } from './projects/projectImport';
 import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
 import { ReviewOrchestrator } from './github/ReviewOrchestrator';
@@ -33,6 +35,7 @@ import type { PRReviewResult } from './github/PRReviewService';
 
 runMigrations();
 loadRuntimeSettingsFromDb();
+importProjectsFromEnv(process.env.PROJECTS);
 
 const ghostsRemoved = deleteGhostSessions();
 if (ghostsRemoved > 0) {
@@ -75,6 +78,7 @@ const prMergeWatcher = new PRMergeWatcher(githubClient, sessionManager, taskBack
 app.use('/api', createPrsRouter(githubClient, prReviewService, sessionManager, taskBackend, prMergeWatcher));
 app.use('/api', createTasksRouter());
 app.use('/api/analytics', analyticsRouter);
+app.use('/api', projectsRouter);
 app.use('/api', configRouter);
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>

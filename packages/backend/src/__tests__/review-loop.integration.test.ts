@@ -29,23 +29,24 @@ vi.mock('../db/queries.js', () => ({
   getSetting: vi.fn().mockReturnValue(null),
 }));
 
+const projectFixture = {
+  id: 'proj-1',
+  name: 'Test Project',
+  projectDir: '/test',
+  contextUrl: 'https://notion.so/ctx',
+  boardId: 'board-1',
+  githubRepo: 'owner/repo',
+};
+
 vi.mock('../config.js', () => ({
-  config: {
-    projects: [
-      {
-        id: 'proj-1',
-        name: 'Test Project',
-        projectDir: '/test',
-        contextUrl: 'https://notion.so/ctx',
-        boardId: 'board-1',
-        githubRepo: 'owner/repo',
-      },
-    ],
-  },
   AUTO_REVIEW_ENABLED: true,
   AUTO_REVIEW_CONCURRENCY: 1,
   TASK_BACKEND: 'local',
   getProjectById: vi.fn(),
+  getProjectByGithubRepo: vi.fn((repo: string) =>
+    repo === 'owner/repo' ? projectFixture : undefined,
+  ),
+  getAllProjects: vi.fn(() => [projectFixture]),
   normalizePath: (p: string) => p,
   runtimeSettings: {},
 }));
