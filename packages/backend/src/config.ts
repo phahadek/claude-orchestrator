@@ -1,11 +1,8 @@
-function requireEnv(name: string): string {
-  const val = process.env[name];
-  if (!val) throw new Error(`Missing required env var: ${name}`);
-  return val;
-}
-
 export interface Board {
+  /** Milestone row id — used as the milestoneId for WS fetch_tasks. */
   id: string;
+  /** Notion database id (milestone.source_id) — used internally by NotionTaskBackend. */
+  sourceId: string;
   name: string;
 }
 
@@ -17,6 +14,7 @@ export interface ProjectConfig {
   boardId: string;     // default/active board (backwards compat — first milestone)
   boards?: Board[];    // multi-milestone support — derived from milestones table
   githubRepo?: string; // "owner/repo" — optional; enables PR features
+  taskSource: 'notion' | 'yaml'; // honored by getTaskBackend(projectId)
 }
 
 function resolveClaudePath(): string {
@@ -42,10 +40,8 @@ export function normalizePath(p: string): string {
   return p;
 }
 
-export const TASK_BACKEND = (process.env.TASK_BACKEND ?? 'notion') as 'notion' | 'local';
-
 export const config = {
-  notionApiKey: TASK_BACKEND === 'notion' ? requireEnv('NOTION_API_KEY') : (process.env.NOTION_API_KEY ?? ''),
+  notionApiKey: process.env.NOTION_API_KEY ?? '',
   sqlitePath: process.env.DB_PATH ?? './dashboard.db',
   port: Number(process.env.PORT ?? 3000),
   projectDir: normalizePath(process.env.PROJECT_DIR ?? process.cwd()),
@@ -71,16 +67,22 @@ export const ALLOWED_TOOLS = [
   'mcp__claude_ai_Asana__*', 'mcp__claude_ai_Google_Calendar__*',
 ];
 
-function hydrateProject(p: { id: string; name: string; projectDir: string; contextUrl: string | null; githubRepo: string | null; milestones: { sourceId: string | null; name: string }[] }): ProjectConfig {
-  const boards: Board[] = p.milestones
-    .filter((m): m is { sourceId: string; name: string } => typeof m.sourceId === 'string' && m.sourceId.length > 0)
-    .map((m) => ({ id: m.sourceId, name: m.name }));
+function hydrateProject(p: { id: string; name: string; projectDir: string; contextUrl: string | null; githubRepo: string | null; taskSource: 'notion' | 'yaml'; milestones: { id: string; sourceId: string | null; name: string }[] }): ProjectConfig {
+  // boards[].id is now the milestone row id (used as milestoneId for fetch_tasks).
+  // boards[].sourceId is the Notion database id (used internally by NotionTaskBackend).
+  // YAML projects keep their milestones in boards as well — their sourceId is empty.
+  const boards: Board[] = p.milestones.map((m) => ({
+    id: m.id,
+    sourceId: m.sourceId ?? '',
+    name: m.name,
+  }));
   const config: ProjectConfig = {
     id: p.id,
     name: p.name,
     projectDir: p.projectDir,
     contextUrl: p.contextUrl ?? '',
     boardId: boards[0]?.id ?? '',
+    taskSource: p.taskSource,
   };
   if (boards.length > 0) config.boards = boards;
   if (p.githubRepo) config.githubRepo = p.githubRepo;

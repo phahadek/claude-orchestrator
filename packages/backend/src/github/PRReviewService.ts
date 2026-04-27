@@ -1,6 +1,7 @@
 import { getEventsBySession, setPRReviewResult, getPRByNumber, setReviewSessionId, updatePRDraftStatus, incrementReviewIteration, setLastReviewedSha } from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
-import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
+import { getTaskBackend } from '../tasks/TaskBackend';
+import type { TaskBackend } from '../tasks/TaskBackend';
 import type { SessionManager } from '../session/SessionManager';
 import type { PullRequest, PRDiff } from './types';
 import type { ServerMessage } from '../ws/types';
@@ -24,11 +25,20 @@ export interface PRReviewResult {
 export class PRReviewService {
   constructor(
     private github: GitHubClient,
-    private notion: TaskTrackerBackend,
+    /**
+     * Optional fixed task backend. When provided (typically by tests), all task
+     * fetches/status updates go through it. In production this is undefined and
+     * the backend is resolved per-call via getTaskBackend(projectId).
+     */
+    private taskBackendOverride: TaskBackend | undefined,
     private sessionManager: SessionManager,
     private readonly defaultProjectId: string = '',
     private readonly defaultProjectContextUrl: string = '',
   ) {}
+
+  private resolveBackend(projectId: string): TaskBackend {
+    return this.taskBackendOverride ?? getTaskBackend(projectId);
+  }
 
   async reviewPR(
     prNumber: number,
@@ -74,7 +84,7 @@ export class PRReviewService {
       const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
       setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
       if (finalResult.verdict === 'approved') {
-        await this.handleApprovedVerdict(prNumber, repo, prRow.notion_task_id);
+        await this.handleApprovedVerdict(prNumber, repo, prRow.notion_task_id, projectId);
       }
       return finalResult;
     }
@@ -89,7 +99,7 @@ export class PRReviewService {
       throw new Error(`PR #${prNumber} has no linked Notion task`);
     }
 
-    const taskBody = await this.notion.fetchTaskPage(prRow.notion_task_id);
+    const taskBody = await this.resolveBackend(projectId).fetchTaskPage(prRow.notion_task_id);
     const taskUrl = `https://www.notion.so/${prRow.notion_task_id}`;
     const prompt = this.buildPrompt(prData, diffData, taskBody);
 
@@ -104,7 +114,7 @@ export class PRReviewService {
       const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
       setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
       if (finalResult.verdict === 'approved') {
-        await this.handleApprovedVerdict(prNumber, repo, prRow.notion_task_id);
+        await this.handleApprovedVerdict(prNumber, repo, prRow.notion_task_id, projectId);
       }
       return finalResult;
     }
@@ -148,7 +158,7 @@ export class PRReviewService {
    * on GitHub, and update the Notion task status to 👀 In Review.
    * Returns true if the PR was successfully transitioned from draft to ready.
    */
-  async handleApprovedVerdict(prNumber: number, repo: string, taskId: string | null): Promise<boolean> {
+  async handleApprovedVerdict(prNumber: number, repo: string, taskId: string | null, projectId?: string): Promise<boolean> {
     let draftTransitioned = false;
     try {
       await this.github.markPRReady(repo, prNumber);
@@ -158,9 +168,12 @@ export class PRReviewService {
       console.warn(`[PRReviewService] markPRReady skipped for PR #${prNumber}:`, e);
     }
     if (taskId) {
-      await this.notion.updateStatus(taskId, '👀 In Review').catch((e: unknown) =>
-        console.error(`[PRReviewService] Notion updateStatus failed:`, e),
-      );
+      const resolvedProjectId = projectId ?? this.defaultProjectId;
+      try {
+        await this.resolveBackend(resolvedProjectId).updateStatus(taskId, '👀 In Review');
+      } catch (e: unknown) {
+        console.error(`[PRReviewService] task backend updateStatus failed:`, e);
+      }
     }
     return draftTransitioned;
   }

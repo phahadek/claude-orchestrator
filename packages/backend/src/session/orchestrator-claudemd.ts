@@ -94,8 +94,8 @@ ${taskContent
 1. Read the **Task Spec** section below — it contains the full task specification.
 2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
   : taskBackend === 'local'
-  ? `> ⚠️ **TASK_BACKEND=local**: Task context comes from \`tasks.yaml\` in the project root, not Notion.
-> Skip steps 1 (Notion fetch) and instead read \`tasks.yaml\` for task context.
+  ? `> ⚠️ **YAML task source**: Task context comes from \`tasks.yaml\` in the project root, not Notion.
+> Skip step 1 (Notion fetch) and instead read \`tasks.yaml\` for task context.
 
 1. Read \`tasks.yaml\` in the project root for task context (skip Notion fetch).
 2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`

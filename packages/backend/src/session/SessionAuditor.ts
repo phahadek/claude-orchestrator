@@ -1,4 +1,5 @@
-import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
+import { getTaskBackend } from '../tasks/TaskBackend';
+import type { TaskBackend } from '../tasks/TaskBackend';
 import { parseSection } from '../notion/NotionClient';
 import type { GitHubClient } from '../github/GitHubClient';
 import { getPRByNotionTaskId } from '../db/queries';
@@ -31,11 +32,24 @@ export interface AuditableSession {
 // ── SessionAuditor ───────────────────────────────────────────────────────────
 
 export class SessionAuditor {
+  /**
+   * The first parameter accepts either a TaskBackend (legacy injection — used by
+   * tests) or a project id (string). When it is a project id, the backend is
+   * resolved per-call via `getTaskBackend(projectId)`. This dual shape preserves
+   * the test pattern that pre-existed the per-project routing refactor.
+   */
   constructor(
-    private notionClient: TaskTrackerBackend,
+    private notionClientOrProjectId: TaskBackend | string,
     private githubClient?: GitHubClient,
     private sessionManager?: ISessionManager,
   ) {}
+
+  private resolveBackend(): TaskBackend {
+    if (typeof this.notionClientOrProjectId === 'string') {
+      return getTaskBackend(this.notionClientOrProjectId);
+    }
+    return this.notionClientOrProjectId;
+  }
 
   /**
    * Run all post-session checks and return a SessionAudit record.
@@ -138,7 +152,7 @@ export class SessionAuditor {
 
     let taskMarkdown: string | null = null;
     try {
-      taskMarkdown = await this.notionClient.fetchTaskPage(taskId);
+      taskMarkdown = await this.resolveBackend().fetchTaskPage(taskId);
     } catch (err) {
       console.warn(`[SessionAuditor] fetchTaskPage failed — skipping spec comparison: ${err}`);
       return null;

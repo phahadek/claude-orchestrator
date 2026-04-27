@@ -588,6 +588,7 @@ describe('TaskList', () => {
       projectDir: '/tmp/test',
       contextUrl: 'https://notion.so/ctx',
       boardId: 'board-1',
+      taskSource: 'notion',
     };
 
     render(
@@ -643,7 +644,7 @@ describe('TaskList', () => {
       .mockReturnValueOnce(new Promise(() => { /* never resolves */ }));
 
     render(
-      <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={vi.fn().mockReturnValue(true)} project={null} />,
+      <TaskList activeProjectId="proj-1" boardId="board-1" selectedTaskId={null} onSelectTask={vi.fn()} send={vi.fn().mockReturnValue(true)} project={null} />,
     );
 
     await waitFor(() => {
@@ -718,7 +719,7 @@ describe('TaskList', () => {
       const connectedSend = vi.fn().mockReturnValue(true);
 
       render(
-        <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={connectedSend} project={null} />,
+        <TaskList activeProjectId="proj-1" boardId="board-1" selectedTaskId={null} onSelectTask={vi.fn()} send={connectedSend} project={null} />,
       );
 
       // Wait for initial render with real timers

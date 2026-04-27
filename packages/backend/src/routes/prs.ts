@@ -21,7 +21,8 @@ import type { PRReviewService } from '../github/PRReviewService';
 import type { PRReviewResult } from '../github/PRReviewService';
 import type { PRMergeWatcher } from '../github/PRMergeWatcher';
 import type { SessionManager } from '../session/SessionManager';
-import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
+import { getTaskBackend } from '../tasks/TaskBackend';
+import type { TaskBackend } from '../tasks/TaskBackend';
 import type { ServerMessage } from '../ws/types';
 import { emitTaskUpdated } from './tasks';
 
@@ -34,10 +35,20 @@ export function createPrsRouter(
   github: GitHubClient,
   prReviewService: PRReviewService,
   sessionManager: SessionManager,
-  notionClient: TaskTrackerBackend,
+  /**
+   * Optional fixed task backend used by tests. In production this is undefined
+   * and the backend is resolved per-call via `getTaskBackend(project.id)`.
+   */
+  taskBackendOverride?: TaskBackend,
   mergeWatcher?: PRMergeWatcher,
 ): Router {
   const router = Router();
+
+  function resolveBackendForRepo(repo: string): TaskBackend | undefined {
+    if (taskBackendOverride) return taskBackendOverride;
+    const project = getProjectByGithubRepo(repo);
+    return project ? getTaskBackend(project.id) : undefined;
+  }
 
   // ── GET /api/prs?projectId=<id> ─────────────────────────────────────────────
   router.get('/prs', async (req: Request, res: Response) => {
@@ -200,15 +211,18 @@ export function createPrsRouter(
         sessionManager.endSession(prRow.review_session_id);
       }
 
-      // Update Notion task to Done and broadcast task_updated so the Tasks view refreshes
+      // Update task to Done via the project-scoped task backend and broadcast task_updated
       if (prRow?.notion_task_id) {
         const taskId = prRow.notion_task_id;
-        try {
-          await notionClient.updateStatus(taskId, '✅ Done');
-          _broadcast({ type: 'task_status_changed', notionTaskId: taskId, newStatus: '✅ Done' });
-          emitTaskUpdated(taskId);
-        } catch (err: unknown) {
-          console.warn('[prs] Notion updateStatus failed:', (err as Error).message);
+        const backend = resolveBackendForRepo(repo);
+        if (backend) {
+          try {
+            await backend.updateStatus(taskId, '✅ Done');
+            _broadcast({ type: 'task_status_changed', notionTaskId: taskId, newStatus: '✅ Done' });
+            emitTaskUpdated(taskId);
+          } catch (err: unknown) {
+            console.warn('[prs] task backend updateStatus failed:', (err as Error).message);
+          }
         }
       }
 
@@ -322,11 +336,14 @@ export function createPrsRouter(
       console.warn(`[prs] markPRReady skipped for PR #${prNumber}:`, e);
     }
 
-    // Update Notion task to In Review
+    // Update task status to In Review via the project-scoped task backend
     if (prRow.notion_task_id) {
-      await notionClient.updateStatus(prRow.notion_task_id, '👀 In Review').catch((e: unknown) =>
-        console.warn('[prs] Notion updateStatus failed:', (e as Error).message),
-      );
+      const backend = resolveBackendForRepo(repo);
+      if (backend) {
+        await backend.updateStatus(prRow.notion_task_id, '👀 In Review').catch((e: unknown) =>
+          console.warn('[prs] task backend updateStatus failed:', (e as Error).message),
+        );
+      }
     }
 
     _broadcast({

@@ -11,6 +11,7 @@ vi.mock('../db/queries.js', () => ({
   getActiveTaskAggregates: vi.fn(),
   getLatestNonSystemEventPayload: vi.fn().mockReturnValue(null),
   getSetting: vi.fn().mockReturnValue(null),
+  getMilestoneById: vi.fn().mockReturnValue(null),
 }));
 
 vi.mock('../config.js', () => ({

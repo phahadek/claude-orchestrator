@@ -1,21 +1,29 @@
-# tasks.yaml — place in project root alongside CLAUDE.md
-# Used when TASK_BACKEND=local in packages/backend/.env
-# Export from Notion: GET /api/tasks/export?format=yaml&projectId=<id>
-board_id: default   # arbitrary string, used as boardId
-tasks:
-  - id: task-001
-    name: "Implement feature X"
-    status: Ready          # Backlog | Ready | In Progress | In Review | Done
-    priority: High         # High | Medium | Low
-    type: Code             # Code | Planning | Testing
-    depends_on: []         # list of task IDs
-    pr_url: null
-    context: |
-      Full implementation spec goes here.
-      Supports multiline markdown.
-    acceptance_criteria: |
-      - [ ] Unit tests pass
-      - [ ] tsc --noEmit passes
-    files_affected:
-      - src/feature.ts (new)
-    notes: ""
+# tasks.yaml — place in a project root for projects with task_source: yaml.
+# The dashboard UI copies this file to <projectDir>/tasks.yaml when a YAML-source
+# project is created. Schema mirrors Notion's project → milestone → task hierarchy.
+project:
+  id: my-project
+  name: My Project
+milestones:
+  - id: m1
+    name: "M1 — MVP"
+    tasks:
+      - id: task-001
+        name: "Implement feature X"
+        status: Ready          # Backlog | Ready | In Progress | In Review | Done
+        priority: High         # High | Medium | Low
+        type: Code             # Code | Planning | Testing
+        depends_on: []         # list of task IDs (within this milestone)
+        pr_url: null
+        context: |
+          Full implementation spec goes here.
+          Supports multiline markdown.
+        acceptance_criteria: |
+          - [ ] Unit tests pass
+          - [ ] tsc --noEmit passes
+        files_affected:
+          - src/feature.ts (new)
+        notes: ""
+  - id: m2
+    name: "M2 — Polish"
+    tasks: []

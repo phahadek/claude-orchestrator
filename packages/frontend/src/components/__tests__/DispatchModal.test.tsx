@@ -21,6 +21,7 @@ const TEST_PROJECT: ProjectConfig = {
   projectDir: '/test/project',
   contextUrl: 'https://notion.so/context',
   boardId: 'test-board-id',
+  taskSource: 'notion',
 };
 
 function renderModal(
@@ -29,7 +30,7 @@ function renderModal(
   send: (msg: ClientMessage) => void,
   onClose = vi.fn(),
   resetTasks = vi.fn(),
-  boardId?: string,
+  milestoneId: string = 'test-milestone-id',
 ) {
   return render(
     <DispatchModal
@@ -38,7 +39,7 @@ function renderModal(
       send={send}
       resetTasks={resetTasks}
       project={TEST_PROJECT}
-      boardId={boardId}
+      milestoneId={milestoneId}
       onClose={onClose}
     />,
   );
@@ -55,16 +56,16 @@ describe('DispatchModal', () => {
     resetTasks = vi.fn();
   });
 
-  it('fires fetch_tasks on mount with projectId and no boardId when boardId prop is omitted', () => {
+  it('fires fetch_tasks on mount with projectId and the default milestoneId', () => {
     renderModal([], false, send, onClose, resetTasks);
     expect(send).toHaveBeenCalledOnce();
-    expect(send).toHaveBeenCalledWith({ type: 'fetch_tasks', projectId: PROJECT_ID, boardId: undefined, skipCache: true });
+    expect(send).toHaveBeenCalledWith({ type: 'fetch_tasks', projectId: PROJECT_ID, milestoneId: 'test-milestone-id', skipCache: true });
   });
 
-  it('fires fetch_tasks on mount with the boardId prop value when provided', () => {
-    renderModal([], false, send, onClose, resetTasks, 'custom-board-id');
+  it('fires fetch_tasks on mount with the milestoneId prop value when provided', () => {
+    renderModal([], false, send, onClose, resetTasks, 'custom-milestone-id');
     expect(send).toHaveBeenCalledOnce();
-    expect(send).toHaveBeenCalledWith({ type: 'fetch_tasks', projectId: PROJECT_ID, boardId: 'custom-board-id', skipCache: true });
+    expect(send).toHaveBeenCalledWith({ type: 'fetch_tasks', projectId: PROJECT_ID, milestoneId: 'custom-milestone-id', skipCache: true });
   });
 
   it('calls resetTasks before fetch_tasks on mount', () => {
@@ -85,7 +86,7 @@ describe('DispatchModal', () => {
     const { rerender } = renderModal([], false, send, onClose, resetTasks);
     expect(screen.getByText('Fetching tasks from Notion…')).toBeTruthy();
     rerender(
-      <DispatchModal tasks={[]} tasksReady={true} send={send} resetTasks={resetTasks} project={TEST_PROJECT} onClose={onClose} />,
+      <DispatchModal tasks={[]} tasksReady={true} send={send} resetTasks={resetTasks} project={TEST_PROJECT} milestoneId="test-milestone-id" onClose={onClose} />,
     );
     expect(screen.queryByText('Fetching tasks from Notion…')).toBeNull();
     expect(screen.getByText('No unblocked tasks.')).toBeTruthy();

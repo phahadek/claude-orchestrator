@@ -1,6 +1,8 @@
 import type { GitHubClient } from './GitHubClient';
 import type { SessionManager } from '../session/SessionManager';
-import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
+import { getTaskBackend } from '../tasks/TaskBackend';
+import type { TaskBackend } from '../tasks/TaskBackend';
+import { getProjectByGithubRepo } from '../config';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
 import { getAllOpenPRs, updatePRState, updateMergeState } from '../db/queries';
@@ -14,9 +16,24 @@ export class PRMergeWatcher {
   constructor(
     private github: GitHubClient,
     private sessions: SessionManager,
-    private notion: TaskTrackerBackend,
+    /**
+     * Optional fixed task backend. When provided (typically by tests), all status
+     * updates go through it. In production this is left undefined and the backend
+     * is resolved per-call via getTaskBackend(project.id).
+     */
+    private taskBackendOverride: TaskBackend | undefined,
     private broadcast: (msg: ServerMessage) => void,
   ) {}
+
+  private resolveBackendForRepo(repo: string): TaskBackend | undefined {
+    if (this.taskBackendOverride) return this.taskBackendOverride;
+    const project = getProjectByGithubRepo(repo);
+    if (!project) {
+      console.warn(`[PRMergeWatcher] no project found for repo ${repo} — skipping task backend update`);
+      return undefined;
+    }
+    return getTaskBackend(project.id);
+  }
 
 
   start(intervalMs: number = DEFAULT_INTERVAL_MS): void {
@@ -131,20 +148,23 @@ export class PRMergeWatcher {
       this.sessions.endSession(pr.review_session_id);
     }
 
-    // Update Notion task to Done
+    // Update task to Done via the project-scoped task backend
     if (pr.notion_task_id) {
-      await this.notion.updateStatus(pr.notion_task_id, '✅ Done')
-        .then(() => {
-          this.broadcast({
-            type: 'task_status_changed',
-            notionTaskId: pr.notion_task_id!,
-            newStatus: '✅ Done',
-          });
-          emitTaskUpdated(pr.notion_task_id!);
-        })
-        .catch((err: unknown) =>
-          console.warn(`[PRMergeWatcher] Notion updateStatus failed:`, (err as Error).message),
-        );
+      const backend = this.resolveBackendForRepo(pr.repo);
+      if (backend) {
+        await backend.updateStatus(pr.notion_task_id, '✅ Done')
+          .then(() => {
+            this.broadcast({
+              type: 'task_status_changed',
+              notionTaskId: pr.notion_task_id!,
+              newStatus: '✅ Done',
+            });
+            emitTaskUpdated(pr.notion_task_id!);
+          })
+          .catch((err: unknown) =>
+            console.warn(`[PRMergeWatcher] task backend updateStatus failed:`, (err as Error).message),
+          );
+      }
     }
 
     this.broadcast({

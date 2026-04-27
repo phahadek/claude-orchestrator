@@ -14,7 +14,8 @@ import {
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { emitTaskUpdated } from '../routes/tasks';
-import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
+import { getTaskBackend } from '../tasks/TaskBackend';
+import type { TaskBackend } from '../tasks/TaskBackend';
 import type { GitHubClient } from '../github/GitHubClient';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import { SessionAuditor } from './SessionAuditor';
@@ -132,7 +133,11 @@ export class AgentSession extends EventEmitter {
     public readonly sessionId: string,
     public readonly taskUrl: string,
     public readonly projectContextUrl: string,
-    private readonly notionClient: TaskTrackerBackend,
+    /**
+     * Optional fixed task backend used by tests. In production this is undefined
+     * and the backend is resolved per-call via `getTaskBackend(projectId)`.
+     */
+    private readonly taskBackendOverride: TaskBackend | undefined,
     private readonly worktreePath: string,
     public readonly taskId: string,
     private readonly resumeSessionId?: string,
@@ -152,9 +157,20 @@ export class AgentSession extends EventEmitter {
      * Pass an ApiSessionRunner instance when SESSION_MODE=api.
      */
     runner?: ISessionRunner,
+    /**
+     * Project id used to resolve the task backend at call time when
+     * `taskBackendOverride` is undefined. Appended at the end so legacy
+     * positional callers (tests) need not be touched.
+     */
+    public readonly projectId: string = '',
   ) {
     super();
     this.runner = runner ?? new CliSessionRunner(sessionId);
+  }
+
+  /** Resolve the per-project task backend, preferring the test override when present. */
+  private taskBackend(): TaskBackend {
+    return this.taskBackendOverride ?? getTaskBackend(this.projectId);
   }
 
   async run(): Promise<void> {
@@ -522,7 +538,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     this.prDetectedLive = true;
 
     if (this.sessionType === 'standard') {
-      this.notionClient.attachPR(this.taskId, prUrl).catch((e) =>
+      this.taskBackend().attachPR(this.taskId, prUrl).catch((e) =>
         console.error(`[AgentSession] attachPR failed: ${e}`),
       );
 
@@ -612,8 +628,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     if (this.sessionType === 'standard') {
       if (prUrl && !this.prDetectedLive) {
         // Fallback: live detection didn't fire (e.g. gh pr create via Bash).
-        // Attach the PR to Notion.
-        this.notionClient.attachPR(this.taskId, prUrl).catch((e) =>
+        this.taskBackend().attachPR(this.taskId, prUrl).catch((e) =>
           console.error(`[AgentSession] attachPR failed: ${e}`),
         );
       }
@@ -669,7 +684,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       }
 
       if (prUrl) {
-        this.notionClient.updateStatus(this.taskId, '👀 In Review')
+        this.taskBackend().updateStatus(this.taskId, '👀 In Review')
           .then(() => {
             this.broadcast({
               type: 'task_status_changed',
@@ -700,7 +715,11 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
    * Errors are logged but never thrown — the audit is always non-blocking.
    */
   private runAudit(exitCode: number | null): void {
-    const auditor = new SessionAuditor(this.notionClient, this.githubClient, this.sessionManager);
+    const auditor = new SessionAuditor(
+      this.taskBackendOverride ?? this.projectId,
+      this.githubClient,
+      this.sessionManager,
+    );
     auditor.audit(this, exitCode)
       .then((audit) => {
         insertSessionAudit({
