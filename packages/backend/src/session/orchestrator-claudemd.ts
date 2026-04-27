@@ -26,6 +26,13 @@ export interface OrchestratorClaudeMdParams {
    * directly into the CLAUDE.md and the session skips Notion fetching entirely.
    */
   taskContent?: string;
+  /**
+   * Optional contents of `.claude/local-context.md` from the project root.
+   * Appended to the merged CLAUDE.md so orchestrator-launched sessions see the
+   * same host-local context (Notion URLs, etc.) as direct Claude Code sessions.
+   * Omitted when the file is absent (e.g. fresh clone).
+   */
+  localContext?: string;
 }
 
 /**
@@ -49,7 +56,7 @@ export interface OrchestratorClaudeMdParams {
  * 11. Separator + "# Project Instructions (from project CLAUDE.md)" (added by caller)
  */
 export function buildOrchestratorClaudeMd(params: OrchestratorClaudeMdParams): string {
-  const { taskName, taskUrl, projectContextUrl, targetBranch, worktreePath, prGate, bashRules, taskBackend = 'notion', taskContent } = params;
+  const { taskName, taskUrl, projectContextUrl, targetBranch, worktreePath, prGate, bashRules, taskBackend = 'notion', taskContent, localContext } = params;
 
   const resolvedPrGate = prGate ?? { typeCheck: 'npx tsc --noEmit', build: 'npx vite build' };
   const resolvedBashRules = bashRules ?? [
@@ -226,7 +233,15 @@ ${bashRulesText}${taskContent ? `
 > This is the full task specification, pre-fetched by the orchestrator.
 > Do NOT re-fetch this from Notion — use the content below as your source of truth.
 
-${taskContent}` : ''}`.trimEnd();
+${taskContent}` : ''}${localContext ? `
+
+---
+
+## Local Context
+
+> Host-local context loaded from \`.claude/local-context.md\`.
+
+${localContext}` : ''}`.trimEnd();
 }
 
 /**
