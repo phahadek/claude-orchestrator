@@ -110,6 +110,7 @@ For Docker, production builds, the full env var reference, and Notion/local task
 - [Task Writing Guidelines](docs/task-writing.md) — how to scope and write Notion tasks for this orchestrator
 - [Install guide](docs/install.md) — production setup and full env var reference
 - [Notion template](docs/notion-template.md) — set up a Notion workspace compatible with this orchestrator
+- [Orchestrator project setup](docs/orchestrator-project-setup.md) — point the orchestrator at an external project (C#, Rust, Godot, …) via `.claude/orchestrator.json` and a bootstrap script
 
 ## License
 
