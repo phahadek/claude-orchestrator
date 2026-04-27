@@ -1,9 +1,118 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import yaml from 'js-yaml';
+
+// In-memory SQLite so the queries module can prepare statements without a real db file.
+vi.mock('../../src/db/db.js', async () => {
+  const { default: Database } = await import('better-sqlite3');
+  const db = new Database(':memory:');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      session_id          TEXT    PRIMARY KEY,
+      notion_task_id      TEXT,
+      notion_task_url     TEXT,
+      project_context_url TEXT,
+      status              TEXT    NOT NULL,
+      started_at          INTEGER NOT NULL,
+      ended_at            INTEGER,
+      pr_url              TEXT,
+      worktree_path       TEXT,
+      archived            INTEGER NOT NULL DEFAULT 0,
+      project_id          TEXT,
+      session_type        TEXT    NOT NULL DEFAULT 'standard',
+      favorited           INTEGER NOT NULL DEFAULT 0,
+      note                TEXT,
+      tags                TEXT,
+      task_name           TEXT,
+      total_input_tokens  INTEGER NOT NULL DEFAULT 0,
+      total_output_tokens INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS task_cache (
+      notion_task_id TEXT    PRIMARY KEY,
+      fetched_at     INTEGER NOT NULL,
+      raw_json       TEXT    NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS pull_requests (
+      id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+      pr_number              INTEGER NOT NULL,
+      pr_url                 TEXT    NOT NULL UNIQUE,
+      notion_task_id         TEXT,
+      session_id             TEXT,
+      repo                   TEXT    NOT NULL,
+      title                  TEXT,
+      body                   TEXT,
+      head_branch            TEXT,
+      base_branch            TEXT,
+      state                  TEXT    NOT NULL DEFAULT 'open',
+      draft                  INTEGER NOT NULL DEFAULT 0,
+      review_result          TEXT,
+      review_at              TEXT,
+      created_at             TEXT    NOT NULL,
+      updated_at             TEXT    NOT NULL,
+      synced_at              TEXT    NOT NULL,
+      review_session_id      TEXT,
+      review_iteration       INTEGER NOT NULL DEFAULT 0,
+      head_sha               TEXT,
+      last_reviewed_sha      TEXT,
+      node_id                TEXT,
+      mergeable              INTEGER,
+      merge_state            TEXT,
+      merge_state_checked_at TEXT,
+      pending_push           INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS session_events (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id   TEXT    NOT NULL,
+      event_type   TEXT    NOT NULL,
+      payload      TEXT    NOT NULL,
+      timestamp    INTEGER NOT NULL,
+      message_id   TEXT
+    );
+    CREATE TABLE IF NOT EXISTS permission_events (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id      TEXT    NOT NULL,
+      tool_name       TEXT    NOT NULL,
+      proposed_action TEXT,
+      decision        TEXT    NOT NULL,
+      rule_matched    TEXT,
+      decided_at      INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS permission_rules (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_index INTEGER NOT NULL,
+      pattern     TEXT    NOT NULL,
+      match_type  TEXT    NOT NULL,
+      decision    TEXT    NOT NULL,
+      label       TEXT,
+      enabled     INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE TABLE IF NOT EXISTS permission_denials (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id  TEXT    NOT NULL,
+      tool_name   TEXT    NOT NULL,
+      tool_use_id TEXT    NOT NULL,
+      tool_input  TEXT    NOT NULL,
+      timestamp   INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS projects (
+      id          TEXT PRIMARY KEY,
+      name        TEXT NOT NULL,
+      project_dir TEXT NOT NULL,
+      board_id    TEXT,
+      repo        TEXT
+    );
+  `);
+  return { db };
+});
+
 import { LocalTaskBackend } from '../../src/tasks/LocalTaskBackend';
+import { getTaskCache } from '../../src/db/queries';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -122,6 +231,24 @@ describe('LocalTaskBackend (milestone schema)', () => {
 
     it('throws when milestoneId is unknown', async () => {
       await expect(backend.fetchReadyTasks('does-not-exist')).rejects.toThrow(/milestone not found/);
+    });
+
+    it('writes a board:<milestoneId> row and one row per task to task_cache', async () => {
+      await backend.fetchReadyTasks('m1');
+
+      const board = getTaskCache('board:m1');
+      expect(board).toBeDefined();
+      const boardTasks = JSON.parse(board!.raw_json) as Array<{ id: string }>;
+      expect(boardTasks.map((t) => t.id).sort()).toEqual([
+        'task-done', 'task-in-progress', 'task-ready-1', 'task-ready-2',
+      ]);
+
+      for (const id of ['task-ready-1', 'task-ready-2', 'task-in-progress', 'task-done']) {
+        const row = getTaskCache(id);
+        expect(row, `missing per-task cache row for ${id}`).toBeDefined();
+        const cached = JSON.parse(row!.raw_json) as { id: string };
+        expect(cached.id).toBe(id);
+      }
     });
   });
 
