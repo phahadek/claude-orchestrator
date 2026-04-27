@@ -164,7 +164,9 @@ export class LocalTaskBackend implements TaskBackend {
       throw new Error(`[LocalTaskBackend] milestone not found in ${this.filePath}: ${milestoneId}`);
     }
     const allTasks = milestone.tasks.map((t) => this.mapToNotionTask(t));
-    return resolver.resolve(allTasks);
+    const readyDisplay = STATUS_DISPLAY['Ready'];
+    const resolved = resolver.resolve(allTasks);
+    return resolved.filter((r) => r.task.status === readyDisplay);
   }
 
   async attachPR(taskId: string, prUrl: string): Promise<void> {

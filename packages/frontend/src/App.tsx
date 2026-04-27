@@ -12,7 +12,7 @@ import { SessionDetail } from './components/SessionDetail';
 import { PRPanel } from './components/PRPanel';
 import { DispatchModal } from './components/DispatchModal';
 import { PermissionEventLog } from './components/PermissionEventLog';
-import { TasksPanel } from './components/TasksPanel/TasksPanel';
+import { TaskList } from './components/TaskList';
 import { TaskDetail } from './components/TaskDetail';
 import { Settings } from './components/Settings';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
@@ -488,7 +488,6 @@ export default function App() {
   const keyboardHighlightedId = selectedSessionIndex >= 0 ? kbSortedSessions[selectedSessionIndex]?.sessionId ?? null : null;
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
-  const activeMilestoneName = activeProject?.boards?.find((b) => b.id === activeBoardId)?.name ?? null;
 
   const anyDragging = isDragging;
 
@@ -581,20 +580,15 @@ export default function App() {
           <ErrorBoundary name="TasksView">
             <div className={styles.contentArea}>
               <div className={styles.leftPanel}>
-                <TasksPanel
-                  projectId={activeProjectId}
-                  milestoneId={activeBoardId}
-                  milestoneName={activeMilestoneName}
+                <TaskList
+                  activeProjectId={activeProjectId}
+                  boardId={activeBoardId}
                   selectedTaskId={selectedTaskId}
                   onSelectTask={setSelectedTaskId}
-                  onSelectSession={(sessionId) => {
-                    setTopView('sessions');
-                    setSelectedId(sessionId);
-                  }}
+                  lastTaskUpdate={lastTaskUpdate}
+                  reviewRefreshTrigger={taskListRefreshTrigger}
                   send={send}
-                  tasks={tasks}
-                  sessions={sessions}
-                  refreshTrigger={taskListRefreshTrigger}
+                  project={activeProject}
                 />
               </div>
 

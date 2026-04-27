@@ -60,8 +60,8 @@ vi.mock('../DispatchModal', () => ({
   DispatchModal: () => null,
 }));
 
-vi.mock('../TasksPanel/TasksPanel', () => ({
-  TasksPanel: () => <div data-testid="task-list">TasksPanel</div>,
+vi.mock('../TaskList', () => ({
+  TaskList: () => <div data-testid="task-list">TaskList</div>,
 }));
 
 vi.mock('../TaskDetail', () => ({
