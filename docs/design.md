@@ -143,7 +143,7 @@ Opens as an overlay when user clicks Dispatch button:
 - Tasks grouped into two sections:
   - **Ready to launch** — tasks with no unmet dependencies (can safely run in parallel immediately)
   - **Has dependencies** — tasks whose prerequisites are not yet done; shown greyed out with blocker names visible
-- Dependency state derived from a `Depends On` relation property in the Notion task board (self-referential relation; tasks link to their prerequisites within the same board)
+- Dependency state derived from the `Depends On` Rich Text property on each Notion task page (pipe-delimited prerequisite page IDs)
 - The backend fetches ALL task statuses (including ✅ Done) so the DependencyResolver can correctly determine which dependencies are satisfied.
 - Checkbox per task (disabled for dependency-blocked tasks); Select all / none controls apply only to unblocked tasks
 - Priority sub-grouping (High → Medium → Low) within each section
@@ -197,7 +197,7 @@ This is implemented entirely at the SDK layer in the backend. It does not depend
 
 ### Schema
 
-A `Depends On` self-referential relation property on the Notion task database. Tasks link directly to their prerequisites within the same board. No schema changes beyond adding this one property.
+A `Depends On` Rich Text property on the Notion task database, storing pipe-delimited page IDs of prerequisite tasks within the same board. See [notion-template.md](./notion-template.md#why-rich-text-for-depends-on) for why Rich Text instead of a native Relation.
 
 ### Transitive resolution
 
@@ -221,7 +221,7 @@ The backend performs a depth-first traversal of `Depends On` relations when comp
 Notion remains the single source of truth for:
 
 - Task definitions (name, description, priority, status)
-- Dependency relationships (`Depends On` relation property)
+- Dependency relationships (`Depends On` Rich Text property — pipe-delimited page IDs)
 - Status lifecycle (Ready → In Progress → In Review → Done)
 
 Notion API is called intentionally, not in a hot loop:
@@ -230,7 +230,7 @@ Notion API is called intentionally, not in a hot loop:
 - **On launch**: update selected tasks to 🔄 In Progress
 - **On session completion**: update task to 👀 In Review, attach PR link to Notes
 
-Required addition to task board schema: a `Depends On` relation property linking tasks to each other within the same board.
+Required addition to task board schema: a `Depends On` Rich Text property storing pipe-delimited prerequisite page IDs.
 
 ### Local SQLite — orchestrator runtime state
 
@@ -241,7 +241,13 @@ A local SQLite database (file-based, zero setup) stores everything Notion doesn'
 | `sessions` | session_id, notion_task_id, notion_task_url, project_context_url, status, started_at, ended_at, pr_url |
 | `session_events` | session_id, event_type, payload, timestamp — raw event log from Agent SDK |
 | `permission_events` | session_id, tool_name, proposed_action, decision, decided_at |
+| `permission_rules` | ordered list of glob/regex patterns with allow/deny decisions, managed via the Permission Rules settings UI |
+| `pull_requests` | PR metadata, review state, paired review session, merge state |
+| `session_audits` | post-session compliance check results |
+| `settings` | runtime settings key/value store |
 | `task_cache` | notion_task_id, fetched_at, raw_json — short-lived cache (TTL ~5 min) to avoid redundant API calls |
+
+(See [Technical Architecture](./architecture.md) for full column definitions.)
 
 This keeps the orchestrator fast and resilient: if Notion is temporarily unreachable, active sessions and their state remain fully visible.
 
@@ -264,7 +270,7 @@ This keeps the orchestrator fast and resilient: if Notion is temporarily unreach
 | Review session lifecycle | Persistent: one review session per PR, stays alive for the PR's lifetime. Receives re-review follow-ups instead of being killed and respawned. Accumulates context across review passes. |
 | Review-merge event model | Event-driven, not polling. Push detection from coding session events (`git push` tool calls). Verdict parsing from review session event stream. No GitHub API polling for review state. |
 | Orchestrator `CLAUDE.md` | Merged `CLAUDE.md` written to worktree at spawn: orchestrator rules first (authoritative), project `CLAUDE.md` appended (codebase context). Original never modified. |
-| Token/cost display model | Plan utilization % (not dollar cost per token). CLI doesn't expose plan cap; user-configured in Settings (`plan_token_cap`, default Max X5). Token counts always shown; % shown when cap is set. |
+| Token/cost display model | Per-session token counts plus estimated dollar cost (model-aware, computed from per-million input/output rates in `utils/usage.ts` — Opus $15/$75, Sonnet $3/$15, Haiku $0.80/$4). Plan utilization % shown when `plan_token_cap` is configured in Settings (originally the only display model — extended to dollar costs in M2a). |
 
 ## Related documentation
 

@@ -25,7 +25,7 @@ cp packages/frontend/.env.example packages/frontend/.env
 npm run dev
 ```
 
-The dashboard listens on `http://localhost:3000` (combined backend + frontend). In dev mode Vite serves the frontend on `http://localhost:5173` with hot reload; the backend on `:3000` proxies API + WebSocket traffic.
+In dev mode, open `http://localhost:5173` in your browser — that's Vite's frontend with hot reload. The backend runs on `:3000`; Vite proxies API + WebSocket traffic to it automatically. In production (`npm start`), both are served from `:3000` as a single process.
 
 ### Restart helpers
 
