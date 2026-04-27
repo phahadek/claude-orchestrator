@@ -99,6 +99,15 @@ npm run dev    # → http://localhost:3000
 
 For Docker, production builds, the full env var reference, and Notion/local task source setup, see [`docs/install.md`](docs/install.md).
 
+## Documentation
+
+- [Product Design](docs/design.md) — user goals, workflows, UI layout, and resolved design decisions
+- [Technical Architecture](docs/architecture.md) — stack, project structure, key systems, data flow, SQLite schema
+- [Coding Guidelines](docs/coding-guidelines.md) — architectural rules, naming, patterns, git etiquette
+- [Task Writing Guidelines](docs/task-writing.md) — how to scope and write Notion tasks for this orchestrator
+- [Install guide](docs/install.md) — production setup and full env var reference
+- [Notion template](docs/notion-template.md) — set up a Notion workspace compatible with this orchestrator
+
 ## License
 
 [MIT](LICENSE)

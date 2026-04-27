@@ -1,6 +1,6 @@
 # Notion Workspace Setup Guide
 
-This guide walks you through creating a Notion workspace that the Claude Code Dashboard can use as a task backend. The dashboard reads tasks from Notion databases and updates their status as sessions progress through the coding lifecycle.
+This guide walks you through creating a Notion workspace that Claude Code Orchestrator can use as a task backend. The orchestrator reads tasks from Notion databases and updates their status as sessions progress through the coding lifecycle.
 
 ---
 
