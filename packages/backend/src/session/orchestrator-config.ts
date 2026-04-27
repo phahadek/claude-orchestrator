@@ -9,7 +9,8 @@ export interface OrchestratorProjectConfig {
     typeCheck?: string;
     build?: string;
   };
-  /** Path to a script run in the worktree after creation (relative to the worktree root). */
+  /** Path to a script run after worktree creation. Resolved relative to the project root
+   *  (the script runs with `cwd` = project root, and receives the worktree path as `$1`). */
   bootstrapScript?: string;
   /** Replacement bash rules (Rule 5+). Each item is the full rule text. */
   bashRules?: string[];
