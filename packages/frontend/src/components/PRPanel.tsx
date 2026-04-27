@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { PRCard } from './PRCard';
 import type { PRListItem, PRReviewResult } from './PRCard';
+import { ErrorBoundary } from './ErrorBoundary';
 import styles from './PRPanel.module.css';
 
 interface Props {
@@ -356,25 +357,35 @@ export function PRPanel({ activeProjectId, onViewSession, onCollapse, refreshTri
       ) : (
         <div className={styles.prList}>
           {prs.map((pr) => (
-            <PRCard
+            <ErrorBoundary
               key={pr.prNumber}
-              pr={pr}
-              onReview={handleReview}
-              onMerge={handleMerge}
-              onRemove={handleRemovePR}
-              onViewSession={onViewSession}
-              onReReview={handleReReview}
-              onFixConflicts={handleFixConflicts}
-              onApprove={handleApprove}
-              reviewInFlight={reviewInFlight.has(pr.prNumber)}
-              mergeInFlight={mergeInFlight.has(pr.prNumber)}
-              removeInFlight={removeInFlight.has(pr.prNumber)}
-              reReviewInFlight={reReviewInFlight.has(pr.prNumber)}
-              fixConflictsInFlight={fixConflictsInFlight.has(pr.prNumber)}
-              approveInFlight={approveInFlight.has(pr.prNumber)}
-              reviewElapsed={reviewElapsed.get(pr.prNumber) ?? 0}
-              error={cardErrors.get(pr.prNumber) ?? null}
-            />
+              name={`PRCard:${pr.prNumber}`}
+              fallback={(_error, reset) => (
+                <div className={styles.cardError} role="alert">
+                  <span>PR card failed to render</span>
+                  <button type="button" onClick={reset}>Retry</button>
+                </div>
+              )}
+            >
+              <PRCard
+                pr={pr}
+                onReview={handleReview}
+                onMerge={handleMerge}
+                onRemove={handleRemovePR}
+                onViewSession={onViewSession}
+                onReReview={handleReReview}
+                onFixConflicts={handleFixConflicts}
+                onApprove={handleApprove}
+                reviewInFlight={reviewInFlight.has(pr.prNumber)}
+                mergeInFlight={mergeInFlight.has(pr.prNumber)}
+                removeInFlight={removeInFlight.has(pr.prNumber)}
+                reReviewInFlight={reReviewInFlight.has(pr.prNumber)}
+                fixConflictsInFlight={fixConflictsInFlight.has(pr.prNumber)}
+                approveInFlight={approveInFlight.has(pr.prNumber)}
+                reviewElapsed={reviewElapsed.get(pr.prNumber) ?? 0}
+                error={cardErrors.get(pr.prNumber) ?? null}
+              />
+            </ErrorBoundary>
           ))}
         </div>
       ))}

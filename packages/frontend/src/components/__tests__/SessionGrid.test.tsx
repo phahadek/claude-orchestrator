@@ -1,5 +1,5 @@
 import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SessionGrid } from '../SessionGrid';
 import type { SessionState } from '../../hooks/useSessionStore';
 
@@ -101,5 +101,53 @@ describe('SessionGrid', () => {
     render(<SessionGrid sessions={sessions} projects={[]} onSelect={onSelect} selectedId={null} keyboardSelectedId={null} synced={true} onArchiveAll={vi.fn()} />);
     fireEvent.click(screen.getByText('Clickable Task'));
     expect(onSelect).toHaveBeenCalledWith('abc123');
+  });
+});
+
+describe('SessionGrid — per-card ErrorBoundary isolation', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => { /* silence React's logged error */ });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.doUnmock('../SessionCard');
+    vi.resetModules();
+  });
+
+  it('a throw inside one SessionCard does not crash the grid; other cards still render; the failing card shows the fallback', async () => {
+    vi.resetModules();
+    vi.doMock('../SessionCard', () => ({
+      SessionCard: ({ session }: { session: SessionState }) => {
+        if (session.sessionId === 'broken') throw new Error('boom');
+        return <div data-testid={`card-${session.sessionId}`}>{session.taskName}</div>;
+      },
+    }));
+
+    const { SessionGrid: SessionGridIsolated } = await import('../SessionGrid');
+
+    const sessions = [
+      makeSession({ sessionId: 'ok-1', taskName: 'OK One', status: 'running' }),
+      makeSession({ sessionId: 'broken', taskName: 'Broken Card', status: 'running' }),
+      makeSession({ sessionId: 'ok-2', taskName: 'OK Two', status: 'running' }),
+    ];
+
+    render(
+      <SessionGridIsolated
+        sessions={sessions}
+        projects={[]}
+        onSelect={vi.fn()}
+        selectedId={null}
+        keyboardSelectedId={null}
+        synced={true}
+        onArchiveAll={vi.fn()}
+      />
+    );
+
+    expect(screen.getByTestId('card-ok-1')).toBeDefined();
+    expect(screen.getByTestId('card-ok-2')).toBeDefined();
+    expect(screen.queryByTestId('card-broken')).toBeNull();
+    expect(screen.getByText(/session card failed to render/i)).toBeDefined();
+    expect(screen.getByRole('button', { name: /retry/i })).toBeDefined();
   });
 });

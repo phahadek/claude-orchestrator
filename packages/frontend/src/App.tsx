@@ -553,19 +553,28 @@ export default function App() {
 
   return (
     <div className={`${styles.appContainer}${anyDragging ? ` ${styles.dragging}` : ''}`}>
-      <Header
-        projects={projects}
-        activeProjectId={activeProjectId}
-        onProjectChange={handleProjectChange}
-        activeBoardId={activeBoardId}
-        onBoardChange={handleBoardChange}
-        activeView={topView}
-        onViewChange={handleViewChange}
-        totalTokens={totalTokens}
-        totalCost={totalCost}
-        tasks={taskViews}
-        incompleteReviewCount={incompleteReviews.length}
-      />
+      <ErrorBoundary
+        name="Header"
+        fallback={(_error, reset) => (
+          <div className={styles.headerError} role="alert">
+            Header failed to render. <button type="button" onClick={reset}>Retry</button>
+          </div>
+        )}
+      >
+        <Header
+          projects={projects}
+          activeProjectId={activeProjectId}
+          onProjectChange={handleProjectChange}
+          activeBoardId={activeBoardId}
+          onBoardChange={handleBoardChange}
+          activeView={topView}
+          onViewChange={handleViewChange}
+          totalTokens={totalTokens}
+          totalCost={totalCost}
+          tasks={taskViews}
+          incompleteReviewCount={incompleteReviews.length}
+        />
+      </ErrorBoundary>
       <div className={styles.mainArea}>
         {topView === 'tasks' && (
           <ErrorBoundary name="TasksView">

@@ -92,6 +92,34 @@
   padding-right: 4px;
 }
 
+.cardError {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  background: #181825;
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: #a6adc8;
+  font-size: 0.85rem;
+}
+
+.cardError button {
+  background: transparent;
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  color: #cdd6f4;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 3px 10px;
+}
+
+.cardError button:hover {
+  background: #313244;
+  border-color: #585b70;
+}
+
 .collapseButton {
   font-size: 0.8rem;
   padding: 3px 8px;

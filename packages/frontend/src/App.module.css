@@ -97,6 +97,32 @@
   flex-direction: column;
 }
 
+.headerError {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: #f9e2af;
+  color: #1e1e2e;
+  font-size: 0.85rem;
+  border-bottom: 1px solid #45475a;
+}
+
+.headerError button {
+  background: transparent;
+  border: 1px solid #1e1e2e;
+  border-radius: 4px;
+  color: #1e1e2e;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 2px 8px;
+}
+
+.headerError button:hover {
+  background: rgba(30, 30, 46, 0.1);
+}
+
 .connectionBanner {
   position: fixed;
   top: 0;
