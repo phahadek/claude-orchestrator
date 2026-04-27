@@ -91,3 +91,50 @@ describe('PRPanel', () => {
     });
   });
 });
+
+describe('PRPanel — per-card ErrorBoundary isolation', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn());
+    vi.spyOn(console, 'error').mockImplementation(() => { /* silence React's logged error */ });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    vi.doUnmock('../PRCard');
+    vi.resetModules();
+  });
+
+  it('a throw inside one PRCard does not crash PRPanel; other PR cards still render', async () => {
+    const prs = [
+      makePR({ prNumber: 1, title: 'PR One' }),
+      makePR({ prNumber: 2, title: 'Broken PR' }),
+      makePR({ prNumber: 3, title: 'PR Three' }),
+    ];
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => prs,
+    });
+
+    vi.resetModules();
+    vi.doMock('../PRCard', () => ({
+      PRCard: ({ pr }: { pr: PRListItem }) => {
+        if (pr.prNumber === 2) throw new Error('boom');
+        return <div data-testid={`pr-${pr.prNumber}`}>{pr.title}</div>;
+      },
+    }));
+
+    const { PRPanel: PRPanelIsolated } = await import('../PRPanel');
+
+    render(<PRPanelIsolated activeProjectId="proj-1" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pr-1')).toBeDefined();
+      expect(screen.getByTestId('pr-3')).toBeDefined();
+    });
+    expect(screen.queryByTestId('pr-2')).toBeNull();
+    expect(screen.getByText(/pr card failed to render/i)).toBeDefined();
+    expect(screen.getByRole('button', { name: /retry/i })).toBeDefined();
+  });
+});
