@@ -1,9 +1,21 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import yaml from 'js-yaml';
+import { normalizePath } from '../config';
 import { ProjectService, type ProjectPatch, type MilestonePatch } from '../projects/ProjectService';
 
 export const projectsRouter = Router();
+
+function isExistingDirectory(p: string): boolean {
+  try {
+    return fs.statSync(normalizePath(p)).isDirectory();
+  } catch {
+    return false;
+  }
+}
 
 // ── Projects ─────────────────────────────────────────────────────────────────
 
@@ -22,6 +34,11 @@ projectsRouter.post('/projects', (req: Request, res: Response) => {
   const projectDir = typeof body.projectDir === 'string' ? body.projectDir : '';
   if (!name || !projectDir) {
     res.status(400).json({ error: 'name and projectDir are required' });
+    return;
+  }
+
+  if (!isExistingDirectory(projectDir)) {
+    res.status(400).json({ error: `projectDir '${projectDir}' does not exist on disk` });
     return;
   }
 
@@ -47,6 +64,11 @@ projectsRouter.post('/projects', (req: Request, res: Response) => {
 projectsRouter.patch('/projects/:id', (req: Request, res: Response) => {
   const id = String(req.params.id);
   const body = (req.body as Record<string, unknown>) ?? {};
+
+  if (typeof body.projectDir === 'string' && !isExistingDirectory(body.projectDir)) {
+    res.status(400).json({ error: `projectDir '${body.projectDir}' does not exist on disk` });
+    return;
+  }
 
   const patch: ProjectPatch = {};
   if (typeof body.name === 'string') patch.name = body.name;
@@ -147,4 +169,39 @@ projectsRouter.delete('/milestones/:id', (req: Request, res: Response) => {
     return;
   }
   res.status(204).send();
+});
+
+// ── tasks.yaml stub creation (YAML projects) ─────────────────────────────────
+
+projectsRouter.post('/projects/:id/tasks-yaml-stub', (req: Request, res: Response) => {
+  const projectId = String(req.params.id);
+  const project = ProjectService.getById(projectId);
+  if (!project) {
+    res.status(404).json({ error: `Project '${projectId}' not found` });
+    return;
+  }
+  if (project.taskSource !== 'yaml') {
+    res.status(400).json({ error: `Project '${projectId}' is not configured for YAML task source` });
+    return;
+  }
+
+  const dir = normalizePath(project.projectDir);
+  if (!isExistingDirectory(dir)) {
+    res.status(400).json({ error: `projectDir '${project.projectDir}' does not exist on disk` });
+    return;
+  }
+
+  const filePath = path.join(dir, 'tasks.yaml');
+  if (fs.existsSync(filePath)) {
+    res.status(409).json({ error: 'tasks.yaml already exists', path: filePath });
+    return;
+  }
+
+  const milestones = project.milestones.length > 0
+    ? project.milestones.map((m) => ({ id: m.sourceId ?? m.id, name: m.name, tasks: [] }))
+    : [{ id: 'm1', name: 'Default', tasks: [] }];
+
+  const stub = { project: { id: project.id, name: project.name }, milestones };
+  fs.writeFileSync(filePath, yaml.dump(stub, { lineWidth: 120 }), 'utf-8');
+  res.status(201).json({ path: filePath });
 });

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
+import { ProjectsSettingsPanel } from './Settings/ProjectsSettingsPanel';
 import styles from './Settings.module.css';
 
 const NOTIFICATIONS_ENABLED_KEY = 'notificationsEnabled';
@@ -25,7 +25,6 @@ const MODEL_OPTIONS = [
 
 interface Props {
   initialTab?: Tab;
-  projects: ProjectConfig[];
 }
 
 async function fetchSettings(): Promise<SettingsValues> {
@@ -43,7 +42,7 @@ async function patchSettings(patch: Partial<SettingsValues>): Promise<void> {
   if (!res.ok) throw new Error(`${res.status}`);
 }
 
-export function Settings({ initialTab = 'general', projects }: Props) {
+export function Settings({ initialTab = 'general' }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
   const [settings, setSettings] = useState<SettingsValues | null>(null);
   const [loading, setLoading] = useState(true);
@@ -229,32 +228,7 @@ export function Settings({ initialTab = 'general', projects }: Props) {
 
         {activeTab === 'projects' && (
           <div className={styles.section}>
-            <h3 className={styles.sectionTitle}>Configured Projects</h3>
-            <p className={styles.hint}>Projects are configured via the PROJECTS env variable. Add/remove in M3.</p>
-            {projects.length === 0 ? (
-              <p className={styles.muted}>No projects configured.</p>
-            ) : (
-              <table className={styles.projectTable}>
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Project Dir</th>
-                    <th>Board ID</th>
-                    <th>GitHub Repo</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {projects.map((p) => (
-                    <tr key={p.id}>
-                      <td>{p.name}</td>
-                      <td className={styles.mono}>{p.projectDir}</td>
-                      <td className={styles.mono}>{p.boardId}</td>
-                      <td className={styles.mono}>{p.githubRepo ?? '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+            <ProjectsSettingsPanel />
           </div>
         )}
       </div>
