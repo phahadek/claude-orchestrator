@@ -19,6 +19,7 @@ import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { Notifications } from './components/Notifications';
 import { ShortcutHint } from './components/ShortcutHint';
 import { SessionFilterBar } from './components/SessionFilterBar';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import type { NotificationItem } from './components/Notifications';
 import type { ServerMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
@@ -553,44 +554,49 @@ export default function App() {
       />
       <div className={styles.mainArea}>
         {topView === 'tasks' && (
-          <div className={styles.contentArea}>
-            <div className={styles.leftPanel}>
-              <TaskList
-                activeProjectId={activeProjectId}
-                boardId={activeBoardId}
-                selectedTaskId={selectedTaskId}
-                onSelectTask={setSelectedTaskId}
-                lastTaskUpdate={lastTaskUpdate}
-                reviewRefreshTrigger={taskListRefreshTrigger}
-                send={send}
-                project={activeProject}
-              />
-            </div>
-
-            <div
-              className={styles.resizeHandle}
-              onMouseDown={handleResizeMouseDown}
-            />
-
-            <div className={styles.rightPanel} style={{ width: `${detailWidthPct}%` }}>
-              {selectedTaskId && taskViews.find((t) => t.taskId === selectedTaskId) ? (
-                <TaskDetail
-                  task={taskViews.find((t) => t.taskId === selectedTaskId)!}
+          <ErrorBoundary name="TasksView">
+            <div className={styles.contentArea}>
+              <div className={styles.leftPanel}>
+                <TaskList
+                  activeProjectId={activeProjectId}
+                  boardId={activeBoardId}
+                  selectedTaskId={selectedTaskId}
+                  onSelectTask={setSelectedTaskId}
+                  lastTaskUpdate={lastTaskUpdate}
+                  reviewRefreshTrigger={taskListRefreshTrigger}
                   send={send}
-                  sessions={sessions}
-                  onClose={() => setSelectedTaskId(null)}
-                  projectId={activeProjectId ?? undefined}
+                  project={activeProject}
                 />
-              ) : (
-                <div className={styles.detailPlaceholder}>
-                  <p>Select a task to view details</p>
-                </div>
-              )}
+              </div>
+
+              <div
+                className={styles.resizeHandle}
+                onMouseDown={handleResizeMouseDown}
+              />
+
+              <div className={styles.rightPanel} style={{ width: `${detailWidthPct}%` }}>
+                {selectedTaskId && taskViews.find((t) => t.taskId === selectedTaskId) ? (
+                  <ErrorBoundary name="TaskDetail">
+                    <TaskDetail
+                      task={taskViews.find((t) => t.taskId === selectedTaskId)!}
+                      send={send}
+                      sessions={sessions}
+                      onClose={() => setSelectedTaskId(null)}
+                      projectId={activeProjectId ?? undefined}
+                    />
+                  </ErrorBoundary>
+                ) : (
+                  <div className={styles.detailPlaceholder}>
+                    <p>Select a task to view details</p>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
+          </ErrorBoundary>
         )}
 
         {topView === 'sessions' && (
+          <ErrorBoundary name="SessionsView">
           <div className={styles.contentArea}>
             <div className={styles.leftPanel}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
@@ -657,21 +663,23 @@ export default function App() {
 
             <div className={styles.rightPanel} style={{ width: `${detailWidthPct}%` }}>
               {selectedSession ? (
-                <SessionDetail
-                  session={selectedSession}
-                  send={send}
-                  onClose={() => setSelectedId(null)}
-                  onDelete={(sessionId) => {
-                    deleteSession(sessionId);
-                    setSelectedId(null);
-                  }}
-                  onArchive={(sessionId) => setSessionArchived(sessionId, true)}
-                  onUnarchive={(sessionId) => setSessionArchived(sessionId, false)}
-                  onFavorite={(sessionId) => setSessionFavorited(sessionId, true)}
-                  onUnfavorite={(sessionId) => setSessionFavorited(sessionId, false)}
-                  onResume={handleResume}
-                  sessionMode={sessionMode}
-                />
+                <ErrorBoundary name="SessionDetail">
+                  <SessionDetail
+                    session={selectedSession}
+                    send={send}
+                    onClose={() => setSelectedId(null)}
+                    onDelete={(sessionId) => {
+                      deleteSession(sessionId);
+                      setSelectedId(null);
+                    }}
+                    onArchive={(sessionId) => setSessionArchived(sessionId, true)}
+                    onUnarchive={(sessionId) => setSessionArchived(sessionId, false)}
+                    onFavorite={(sessionId) => setSessionFavorited(sessionId, true)}
+                    onUnfavorite={(sessionId) => setSessionFavorited(sessionId, false)}
+                    onResume={handleResume}
+                    sessionMode={sessionMode}
+                  />
+                </ErrorBoundary>
               ) : (
                 <div className={styles.detailPlaceholder}>
                   <p>Select a session to view details</p>
@@ -679,46 +687,55 @@ export default function App() {
               )}
             </div>
           </div>
+          </ErrorBoundary>
         )}
 
         {topView === 'prs' && (
-          <div className={styles.prFullView}>
-            <PRPanel
-              activeProjectId={activeProjectId}
-              onViewSession={(sessionId) => {
-                setTopView('sessions');
-                setSelectedId(sessionId);
-              }}
-              onCollapse={() => setTopView('sessions')}
-              refreshTrigger={prRefreshTrigger}
-              prReviewEvent={lastPrReviewEvent}
-            />
-          </div>
+          <ErrorBoundary name="PRsView">
+            <div className={styles.prFullView}>
+              <PRPanel
+                activeProjectId={activeProjectId}
+                onViewSession={(sessionId) => {
+                  setTopView('sessions');
+                  setSelectedId(sessionId);
+                }}
+                onCollapse={() => setTopView('sessions')}
+                refreshTrigger={prRefreshTrigger}
+                prReviewEvent={lastPrReviewEvent}
+              />
+            </div>
+          </ErrorBoundary>
         )}
 
         {topView === 'analytics' && (
-          <div className={styles.analyticsView}>
-            <AnalyticsPanel activeProjectId={activeProjectId} />
-          </div>
+          <ErrorBoundary name="AnalyticsView">
+            <div className={styles.analyticsView}>
+              <AnalyticsPanel activeProjectId={activeProjectId} />
+            </div>
+          </ErrorBoundary>
         )}
 
         {topView === 'settings' && (
-          <div className={styles.settingsView}>
-            <Settings initialTab={settingsInitialTab} projects={projects} />
-          </div>
+          <ErrorBoundary name="SettingsView">
+            <div className={styles.settingsView}>
+              <Settings initialTab={settingsInitialTab} projects={projects} />
+            </div>
+          </ErrorBoundary>
         )}
       </div>
 
       {showModal && activeProject && (
-        <DispatchModal
-          tasks={tasks}
-          tasksReady={tasksReady}
-          send={send}
-          resetTasks={resetTasks}
-          project={activeProject}
-          boardId={activeBoardId ?? undefined}
-          onClose={() => setShowModal(false)}
-        />
+        <ErrorBoundary name="DispatchModal" onReset={() => setShowModal(false)}>
+          <DispatchModal
+            tasks={tasks}
+            tasksReady={tasksReady}
+            send={send}
+            resetTasks={resetTasks}
+            project={activeProject}
+            boardId={activeBoardId ?? undefined}
+            onClose={() => setShowModal(false)}
+          />
+        </ErrorBoundary>
       )}
 
       <Notifications notifications={notifications} onDismiss={dismissNotification} />

@@ -1,0 +1,77 @@
+.boundary {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  margin: 8px;
+  border: 1px solid var(--ctp-red);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.title {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--ctp-red);
+}
+
+.message {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.actions button {
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: background 0.15s;
+}
+
+.actions button:hover {
+  background: var(--bg-hover);
+}
+
+.appRoot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  height: 100vh;
+  width: 100vw;
+  padding: 24px;
+  text-align: center;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.appRoot h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  color: var(--ctp-red);
+}
+
+.appRoot p {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  max-width: 600px;
+  word-break: break-word;
+}
