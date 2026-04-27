@@ -237,7 +237,7 @@ These rules apply to every Claude Code session without exception.
 - Write `process.env` access outside `config.ts`
 - Use `any` for WebSocket message payloads
 - Implement work outside the scope of the active task
-- Modify `CLAUDE.md` without explicit human instruction
+- Modify the project's `CLAUDE.md` at the repo root without explicit human instruction (note: the orchestrator writes a separate merged `CLAUDE.md` into each session's worktree at spawn — that file is generated and must not be hand-edited either; the original at repo root is never touched by the orchestrator)
 
 ### What Claude Code must always do
 

@@ -78,7 +78,7 @@ sequenceDiagram
 | Backend | Node.js + Express (TypeScript) | `packages/backend/` |
 | Transport | WebSocket (`ws`) | real-time session events |
 | Database | SQLite (`better-sqlite3`) | session metadata, PR tracking, permission rules |
-| Task source | Notion REST API or local YAML | configurable per project |
+| Task source | Notion REST API or local YAML | configured per project |
 | Session execution | `claude` CLI subprocess | one process per session, JSONL on stdout |
 
 ## Quickstart

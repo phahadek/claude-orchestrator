@@ -62,7 +62,7 @@ A table linking to child pages (design docs, architecture docs, coding guideline
 
 Each milestone is a separate Notion **database** (not a page). Create one as a child of the Project Context page, or anywhere else in the workspace your integration has access to.
 
-> **Important — copy the database ID, not the page ID.** When you connect a milestone to the dashboard later, you must paste the **data source ID** of the database itself. Pages have IDs too, but they are not interchangeable. Easiest way to get the right ID: open the database as a full page and copy the URL — `https://www.notion.so/<DATABASE_ID>?v=<view-id>`. The 32-character hex string before `?v=` is the database ID.
+> **Important — copy the database ID, not the page ID.** When you connect a milestone to the dashboard later, you must paste the **database ID** of the database itself. Pages have IDs too, but they are not interchangeable. Easiest way to get the right ID: open the database as a full page and copy the URL — `https://www.notion.so/<DATABASE_ID>?v=<view-id>`. The 32-character hex string before `?v=` is the database ID.
 
 **Database title:** `[YOUR_MILESTONE_NAME] Task Board`
 
