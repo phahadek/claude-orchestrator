@@ -2,7 +2,19 @@
   "name": "@claude-orchestrator/backend",
   "version": "1.0.0",
   "private": true,
+  "description": "Backend (Node.js + Express + WebSocket) for Claude Code Orchestrator.",
   "main": "dist/server.js",
+  "homepage": "https://github.com/phahadek/claude-orchestrator#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/phahadek/claude-orchestrator.git",
+    "directory": "packages/backend"
+  },
+  "bugs": {
+    "url": "https://github.com/phahadek/claude-orchestrator/issues"
+  },
+  "author": "Pedro Hadek <83268694+phahadek@users.noreply.github.com>",
+  "license": "MIT",
   "scripts": {
     "dev": "ts-node src/server.ts",
     "build": "tsc",
