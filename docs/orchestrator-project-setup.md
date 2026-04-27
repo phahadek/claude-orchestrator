@@ -239,7 +239,7 @@ would do.
 | **Source of truth** | Notion (or `tasks.yaml` for YAML projects) |
 | **Scope** | One task per session. No scope creep. |
 | **Branch naming** | `feature/<task-name>` from `dev` |
-| **When done** | Open draft PR → stop. |
+| **When done** | Open draft PR → stop and wait. The dashboard sends review feedback as follow-up messages; address findings by pushing additional commits, then wait again. |
 | **Pre-PR gate** | <your typeCheck>, <your build> |
 
 ## PR Format
@@ -294,7 +294,8 @@ place:
 2. **Watch the backend logs.** You should see:
    - `[SessionManager] worktree created: …`
    - `[SessionManager] bootstrap script completed for <session-id>` (if
-     configured), or a `bootstrap script failed` warning to debug.
+     configured), or a `bootstrap script failed for <session-id> (continuing)`
+     warning if it exited non-zero.
    - `[SessionManager] orchestrator CLAUDE.md written to worktree …`
 3. **Open the worktree's `CLAUDE.md`.** Confirm:
    - The `## Pre-PR Gate` section lists your custom `prGate.typeCheck` and
@@ -305,6 +306,14 @@ place:
    patterns should be appended to the base list. Any Bash command whose first
    token isn't covered will be silently denied (visible in the session's
    `permission_denials` events).
+
+> **Debugging silently-denied Bash commands.** When a session attempts a Bash
+> command whose first token isn't in the merged allowlist, the CLI denies it
+> silently and emits a `permission_denials` entry on the session's `result`
+> event. Surface those in the dashboard's session detail view (the permission
+> panel) — they're the fastest path from "why isn't this command running?"
+> to the missing `allowedTools` pattern. See [`architecture.md`](architecture.md#permissionengine)
+> for the full permission-evaluation order.
 
 If a session fails at the pre-PR gate, the most common culprits are:
 
