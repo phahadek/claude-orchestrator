@@ -1,6 +1,9 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import express from 'express';
 import supertest from 'supertest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 vi.mock('../../src/db/db.js', async () => {
   const Database = (await import('better-sqlite3')).default;
@@ -54,10 +57,20 @@ describe('GET /api/projects', () => {
 });
 
 describe('POST /api/projects', () => {
+  let realDir: string;
+
+  beforeEach(() => {
+    realDir = fs.mkdtempSync(path.join(os.tmpdir(), 'projects-route-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(realDir, { recursive: true, force: true });
+  });
+
   it('returns 201 with a server-generated UUID when id is omitted', async () => {
     const res = await supertest(buildApp())
       .post('/api/projects')
-      .send({ name: 'New', projectDir: '/n' });
+      .send({ name: 'New', projectDir: realDir });
     expect(res.status).toBe(201);
     expect(res.body.id).toBeTruthy();
     expect(res.body.name).toBe('New');
@@ -67,7 +80,7 @@ describe('POST /api/projects', () => {
   it('returns 400 when name is missing', async () => {
     const res = await supertest(buildApp())
       .post('/api/projects')
-      .send({ projectDir: '/x' });
+      .send({ projectDir: realDir });
     expect(res.status).toBe(400);
   });
 
@@ -76,6 +89,15 @@ describe('POST /api/projects', () => {
       .post('/api/projects')
       .send({ name: 'X' });
     expect(res.status).toBe(400);
+  });
+
+  it('returns 400 when projectDir does not exist on disk', async () => {
+    const missing = path.join(os.tmpdir(), `does-not-exist-${Date.now()}-${Math.random()}`);
+    const res = await supertest(buildApp())
+      .post('/api/projects')
+      .send({ name: 'X', projectDir: missing });
+    expect(res.status).toBe(400);
+    expect(String(res.body.error)).toMatch(/does not exist/);
   });
 });
 
@@ -201,6 +223,52 @@ describe('DELETE /api/milestones/:id', () => {
   it('returns 404 when missing', async () => {
     const res = await supertest(buildApp()).delete('/api/milestones/missing');
     expect(res.status).toBe(404);
+  });
+});
+
+describe('POST /api/projects/:id/tasks-yaml-stub', () => {
+  let realDir: string;
+
+  beforeEach(() => {
+    realDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yaml-stub-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(realDir, { recursive: true, force: true });
+  });
+
+  it('returns 404 when project does not exist', async () => {
+    const res = await supertest(buildApp()).post('/api/projects/missing/tasks-yaml-stub');
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 400 when project is not configured for YAML', async () => {
+    ProjectService.create({ id: 'p1', name: 'P', projectDir: realDir, taskSource: 'notion' });
+    const res = await supertest(buildApp()).post('/api/projects/p1/tasks-yaml-stub');
+    expect(res.status).toBe(400);
+    expect(String(res.body.error)).toMatch(/YAML/);
+  });
+
+  it('writes a milestone-schema tasks.yaml when missing in projectDir', async () => {
+    ProjectService.create({ id: 'p1', name: 'P', projectDir: realDir, taskSource: 'yaml' });
+    ProjectService.createMilestone({ id: 'p1:m1', projectId: 'p1', name: 'M1', sourceId: 'm1' });
+
+    const res = await supertest(buildApp()).post('/api/projects/p1/tasks-yaml-stub');
+    expect(res.status).toBe(201);
+
+    const stubPath = path.join(realDir, 'tasks.yaml');
+    expect(fs.existsSync(stubPath)).toBe(true);
+    const content = fs.readFileSync(stubPath, 'utf-8');
+    expect(content).toMatch(/milestones:/);
+    expect(content).toMatch(/M1/);
+  });
+
+  it('returns 409 when tasks.yaml already exists', async () => {
+    ProjectService.create({ id: 'p1', name: 'P', projectDir: realDir, taskSource: 'yaml' });
+    fs.writeFileSync(path.join(realDir, 'tasks.yaml'), 'milestones: []\n');
+
+    const res = await supertest(buildApp()).post('/api/projects/p1/tasks-yaml-stub');
+    expect(res.status).toBe(409);
   });
 });
 

@@ -741,7 +741,7 @@ export default function App() {
         {topView === 'settings' && (
           <ErrorBoundary name="SettingsView">
             <div className={styles.settingsView}>
-              <Settings initialTab={settingsInitialTab} projects={projects} />
+              <Settings initialTab={settingsInitialTab} />
             </div>
           </ErrorBoundary>
         )}
