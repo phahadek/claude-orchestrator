@@ -322,7 +322,11 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
     if (!activeProjectId || syncing) return;
     setSyncing(true);
     syncPendingRef.current = true;
-    const sent = send({ type: 'fetch_tasks', projectId: activeProjectId, boardId: boardId ?? undefined, skipCache: true });
+    if (!boardId) {
+      setSyncing(false);
+      return;
+    }
+    const sent = send({ type: 'fetch_tasks', projectId: activeProjectId, milestoneId: boardId, skipCache: true });
     if (!sent) {
       // WS not open — clear immediately so the button doesn't stay stuck
       syncPendingRef.current = false;

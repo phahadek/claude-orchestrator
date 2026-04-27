@@ -8,10 +8,10 @@ import { buildReviewClaudeMd } from './orchestrator-claudemd';
 import { loadOrchestratorConfig } from './orchestrator-config';
 import { CliSessionRunner } from './CliSessionRunner';
 import { ApiSessionRunner } from './ApiSessionRunner';
-import { config, getProjectById, normalizePath, runtimeSettings, TASK_BACKEND } from '../config';
+import { config, getProjectById, normalizePath, runtimeSettings } from '../config';
 import { insertSession, updateSessionStatus, insertEvent, getSession, getSessionsByStatus, getPRByNotionTaskId, getEventsBySession, getPRByNumber } from '../db/queries';
 import type { Session } from '../db/types';
-import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
+import { getTaskBackend } from '../tasks/TaskBackend';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { ServerMessage } from '../ws/types';
 import { deriveDisplayStatusFromDb } from '../tasks/TaskStatusEngine';
@@ -109,7 +109,6 @@ export class SessionManager extends EventEmitter {
   private _inTaskUpdate = false;
 
   constructor(
-    private readonly notionClient: TaskTrackerBackend,
     private readonly githubClient?: GitHubClient,
   ) {
     super();
@@ -283,10 +282,10 @@ export class SessionManager extends EventEmitter {
       let taskContent: string | undefined;
       if (sessionType !== 'review' && notionTaskId) {
         try {
-          taskContent = await this.notionClient.fetchTaskPage(notionTaskId);
+          taskContent = await getTaskBackend(projectId).fetchTaskPage(notionTaskId);
           console.log(`[SessionManager] pre-fetched task content for ${sessionId.slice(0, 8)} (${taskContent.length} chars)`);
         } catch (err) {
-          console.warn(`[SessionManager] failed to pre-fetch task content for ${sessionId.slice(0, 8)} — session will fetch from Notion: ${err}`);
+          console.warn(`[SessionManager] failed to pre-fetch task content for ${sessionId.slice(0, 8)} — session will fetch from task backend: ${err}`);
         }
       }
 
@@ -318,7 +317,7 @@ export class SessionManager extends EventEmitter {
             worktreePath,
             prGate: orchConfig.prGate,
             bashRules: orchConfig.bashRules,
-            taskBackend: TASK_BACKEND,
+            taskBackend: project.taskSource === 'yaml' ? 'local' : 'notion',
             taskContent,
           });
         } catch (err) {
@@ -344,7 +343,7 @@ export class SessionManager extends EventEmitter {
         sessionId,
         taskUrl,
         projectContextUrl,
-        this.notionClient,
+        undefined, // taskBackendOverride — production resolves via getTaskBackend(projectId)
         worktreePath,
         notionTaskId,
         undefined,
@@ -355,6 +354,7 @@ export class SessionManager extends EventEmitter {
         orchConfig.allowedTools,
         sessionMode === 'api' ? sessionContextContent : undefined,
         runner,
+        projectId,
       );
 
       this.sessions.set(sessionId, session);
@@ -386,7 +386,7 @@ export class SessionManager extends EventEmitter {
     });
 
     if (sessionType === 'standard') {
-      this.notionClient.updateStatus(notionTaskId, '🔄 In Progress')
+      getTaskBackend(projectId).updateStatus(notionTaskId, '🔄 In Progress')
         .then(() => {
           this.emit('message', {
             type: 'task_status_changed',
@@ -515,7 +515,7 @@ export class SessionManager extends EventEmitter {
       row.session_id,           // keep original ID — same card, same transcript
       row.notion_task_url ?? '',
       row.project_context_url ?? '',
-      this.notionClient,
+      undefined,                // taskBackendOverride — production resolves via getTaskBackend
       worktreePath,
       row.notion_task_id ?? '',
       row.session_id,           // resumeSessionId — passes --resume to CLI / SDK
@@ -526,6 +526,7 @@ export class SessionManager extends EventEmitter {
       orchConfig.allowedTools,
       undefined,                // no systemPromptContent for resume (session already has context)
       resumeRunner,
+      row.project_id ?? '',
     );
 
     this.sessions.set(row.session_id, session);
@@ -815,7 +816,7 @@ export class SessionManager extends EventEmitter {
       newSessionId,
       taskUrl,
       projectContextUrl,
-      this.notionClient,
+      undefined,                // taskBackendOverride — production resolves via getTaskBackend
       worktreePath,
       taskId,
       sessionId, // resumeSessionId — restores conversation history via --resume / SDK resume
@@ -826,6 +827,7 @@ export class SessionManager extends EventEmitter {
       orchConfigResume.allowedTools,
       undefined, // no systemPromptContent for resume
       sendOrResumeRunner,
+      row.project_id ?? '',
     );
 
     const startedAt = Date.now();

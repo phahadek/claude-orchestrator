@@ -45,7 +45,7 @@ describe('useWebSocket', () => {
     vi.stubGlobal('WebSocket', TrackingWS);
 
     const { result } = renderHook(() => useWebSocket(onMessage));
-    const returned = result.current.send({ type: 'fetch_tasks', projectId: 'p1' });
+    const returned = result.current.send({ type: 'fetch_tasks', projectId: 'p1', milestoneId: 'm1' });
 
     expect(returned).toBe(true);
     expect(instances[0]?.send).toHaveBeenCalled();
@@ -64,7 +64,7 @@ describe('useWebSocket', () => {
     vi.stubGlobal('WebSocket', TrackingWS);
 
     const { result } = renderHook(() => useWebSocket(onMessage));
-    const returned = result.current.send({ type: 'fetch_tasks', projectId: 'p1' });
+    const returned = result.current.send({ type: 'fetch_tasks', projectId: 'p1', milestoneId: 'm1' });
 
     expect(returned).toBe(false);
     expect(instances[0]?.send).not.toHaveBeenCalled();
@@ -86,7 +86,7 @@ describe('useWebSocket', () => {
     if (mockInstance) mockInstance.readyState = 0; // CONNECTING
 
     expect(() => {
-      ws.send({ type: 'fetch_tasks', projectId: 'board-1' });
+      ws.send({ type: 'fetch_tasks', projectId: 'board-1', milestoneId: 'm1' });
     }).not.toThrow();
   });
 
@@ -122,10 +122,10 @@ describe('useWebSocket', () => {
     vi.stubGlobal('WebSocket', TrackingWS);
 
     const { result } = renderHook(() => useWebSocket(onMessage));
-    result.current.send({ type: 'fetch_tasks', projectId: 'b1' });
+    result.current.send({ type: 'fetch_tasks', projectId: 'b1', milestoneId: 'm1' });
 
     expect(instances[0]?.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: 'fetch_tasks', projectId: 'b1' })
+      JSON.stringify({ type: 'fetch_tasks', projectId: 'b1', milestoneId: 'm1' })
     );
   });
 

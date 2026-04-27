@@ -79,9 +79,9 @@ export default function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const { send, connectionState } = useWebSocket(dispatch, (sendNow) => {
-    // Called each time the WS (re)connects — fetch tasks if projectId is already known
-    if (activeProjectIdRef.current) {
-      sendNow({ type: 'fetch_tasks', projectId: activeProjectIdRef.current, boardId: activeBoardIdRef.current ?? undefined });
+    // Called each time the WS (re)connects — fetch tasks if projectId+milestoneId are known
+    if (activeProjectIdRef.current && activeBoardIdRef.current) {
+      sendNow({ type: 'fetch_tasks', projectId: activeProjectIdRef.current, milestoneId: activeBoardIdRef.current });
     }
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -189,7 +189,7 @@ export default function App() {
         activeBoardIdRef.current = boardId;
         setActiveProjectId(validProjectId);
         setActiveBoardId(boardId);
-        send({ type: 'fetch_tasks', projectId: validProjectId, boardId });
+        if (boardId) send({ type: 'fetch_tasks', projectId: validProjectId, milestoneId: boardId });
       })
       .catch(() => {/* leave projects empty — DispatchModal handles the empty case */});
   }, []);
@@ -202,7 +202,7 @@ export default function App() {
     activeBoardIdRef.current = boardId;
     setActiveProjectId(id);
     setActiveBoardId(boardId);
-    send({ type: 'fetch_tasks', projectId: id, boardId: boardId ?? undefined });
+    if (boardId) send({ type: 'fetch_tasks', projectId: id, milestoneId: boardId });
   }, [send, projects]);
 
   const handleBoardChange = useCallback((boardId: string) => {
@@ -210,7 +210,7 @@ export default function App() {
     localStorage.setItem(getMilestoneKey(activeProjectIdRef.current), boardId);
     activeBoardIdRef.current = boardId;
     setActiveBoardId(boardId);
-    send({ type: 'fetch_tasks', projectId: activeProjectIdRef.current, boardId });
+    send({ type: 'fetch_tasks', projectId: activeProjectIdRef.current, milestoneId: boardId });
   }, [send]);
 
   // Fetch TaskView list whenever tasks are ready, project/board changes, or a review session starts
@@ -747,7 +747,7 @@ export default function App() {
         )}
       </div>
 
-      {showModal && activeProject && (
+      {showModal && activeProject && activeBoardId && (
         <ErrorBoundary name="DispatchModal" onReset={() => setShowModal(false)}>
           <DispatchModal
             tasks={tasks}
@@ -755,7 +755,7 @@ export default function App() {
             send={send}
             resetTasks={resetTasks}
             project={activeProject}
-            boardId={activeBoardId ?? undefined}
+            milestoneId={activeBoardId}
             onClose={() => setShowModal(false)}
           />
         </ErrorBoundary>

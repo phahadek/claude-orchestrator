@@ -3,32 +3,30 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { normalizePath } from '../config';
 
-// ── AC: SessionManager.start() calls notionClient.updateStatus In Progress ──
+// ── AC: SessionManager.start() updates task status to In Progress ──────────
 describe('SessionManager.start() — In Progress status', () => {
   const source = fs.readFileSync(
     path.join(__dirname, '..', 'session', 'SessionManager.ts'),
     'utf-8',
   );
 
-  it('calls notionClient.updateStatus with In Progress after insertSession()', () => {
-    // Must contain the updateStatus call for In Progress
-    expect(source).toMatch(/notionClient\.updateStatus\s*\(\s*notionTaskId\s*,\s*'🔄 In Progress'\s*\)/);
+  it('routes updateStatus through getTaskBackend(projectId) for In Progress', () => {
+    // Must call getTaskBackend(projectId).updateStatus(notionTaskId, In Progress)
+    expect(source).toMatch(
+      /getTaskBackend\(projectId\)\.updateStatus\s*\(\s*notionTaskId\s*,\s*'🔄 In Progress'\s*\)/,
+    );
   });
 
   it('In Progress call is fire-and-forget with .catch() error handler', () => {
-    // Allow either direct `.catch(...)` chained on updateStatus(...) or
-    // an intermediate `.then(...).catch(...)` chain (multi-line OK).
     expect(source).toMatch(
-      /notionClient\.updateStatus\s*\(\s*notionTaskId\s*,\s*'🔄 In Progress'\s*\)[\s\S]*?\.catch\b/,
+      /getTaskBackend\(projectId\)\.updateStatus\s*\(\s*notionTaskId\s*,\s*'🔄 In Progress'\s*\)[\s\S]*?\.catch\b/,
     );
   });
 
   it('In Progress call is gated on sessionType === standard', () => {
-    // Must be inside a sessionType === 'standard' check
     expect(source).toMatch(/sessionType\s*===\s*'standard'/);
-    // The updateStatus In Progress call must appear after the sessionType check in the source
     const gateIdx = source.indexOf("sessionType === 'standard'");
-    const inProgressIdx = source.indexOf("notionClient.updateStatus(notionTaskId, '🔄 In Progress')");
+    const inProgressIdx = source.indexOf("getTaskBackend(projectId).updateStatus(notionTaskId, '🔄 In Progress')");
     expect(inProgressIdx).toBeGreaterThan(gateIdx);
   });
 });

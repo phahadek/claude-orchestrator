@@ -18,13 +18,14 @@ interface Props {
   send: (msg: ClientMessage) => void;
   resetTasks: () => void;
   project: ProjectConfig;
-  boardId?: string;
+  /** Milestone row id — sent as `milestoneId` in fetch_tasks. */
+  milestoneId: string;
   onClose: () => void;
 }
 
 type GroupKey = 'ready' | 'inProgress' | 'inReview' | 'blocked';
 
-export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, boardId, onClose }: Props) {
+export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, milestoneId, onClose }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [collapsed, setCollapsed] = useState<Set<GroupKey>>(new Set());
@@ -40,8 +41,8 @@ export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, bo
 
   useEffect(() => {
     resetTasks();
-    send({ type: 'fetch_tasks', projectId: project.id, boardId, skipCache: true });
-    // Run once on modal open. project/boardId are fixed for this modal instance,
+    send({ type: 'fetch_tasks', projectId: project.id, milestoneId, skipCache: true });
+    // Run once on modal open. project/milestoneId are fixed for this modal instance,
     // and including send/resetTasks would refetch on every parent render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

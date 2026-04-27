@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { getProjectById } from '../config';
+import { ProjectService } from '../projects/ProjectService';
 import { getTaskCache, getActiveTaskAggregates, getLatestNonSystemEventPayload, getSetting } from '../db/queries';
 import type { TaskAggregateRow } from '../db/queries';
 import { deriveDisplayStatus } from '../tasks/TaskStatusEngine';
@@ -10,6 +11,18 @@ import type { PRReviewResult } from '../github/PRReviewService';
 import type { ServerMessage, TaskView } from '../ws/types';
 import yaml from 'js-yaml';
 export type { TaskView } from '../ws/types';
+
+/**
+ * The frontend sends milestone row ids as `boardId` after the milestone schema migration.
+ * Resolve to the milestone's `source_id` (the Notion database id) for cache key lookup.
+ * Falls back to the input value when no matching milestone exists (back-compat for callers
+ * that still pass a raw source_id).
+ */
+function resolveBoardCacheKey(boardId: string): string {
+  const milestone = ProjectService.getMilestone(boardId);
+  if (milestone?.sourceId) return milestone.sourceId;
+  return boardId;
+}
 
 const DEFAULT_MAX_REVIEW_ITERATIONS = 3;
 
@@ -213,8 +226,8 @@ export function createTasksRouter(): Router {
       return;
     }
 
-    const boardCacheKey = `board:${boardId}`;
-    const boardCacheRow = getTaskCache(boardCacheKey);
+    const cacheKey = `board:${resolveBoardCacheKey(boardId)}`;
+    const boardCacheRow = getTaskCache(cacheKey);
     if (!boardCacheRow) {
       res.status(404).json({ error: 'Board not found in cache. Fetch tasks first.' });
       return;
@@ -273,9 +286,10 @@ export function createTasksRouter(): Router {
         ? req.query.boardId
         : project.boardId;
 
-    // Read the board cache to get the list of task IDs for this board
-    const boardCacheKey = `board:${boardId}`;
-    const boardCacheRow = getTaskCache(boardCacheKey);
+    // Read the board cache to get the list of task IDs for this board.
+    // boardId arrives as the milestone row id; resolve to the underlying source_id.
+    const cacheKey = `board:${resolveBoardCacheKey(boardId)}`;
+    const boardCacheRow = getTaskCache(cacheKey);
     let taskIds: string[] = [];
 
     if (boardCacheRow) {

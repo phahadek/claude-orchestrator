@@ -1,14 +1,13 @@
 import { WebSocket } from 'ws';
 import { ClientMessage } from './types';
 import { SessionManager } from '../session/SessionManager';
-import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
+import { getTaskBackend } from '../tasks/TaskBackend';
 import { getProjectById } from '../config';
 
 export function handleMessage(
   ws: WebSocket,
   raw: string,
   sessions: SessionManager,
-  notion: TaskTrackerBackend
 ): void {
   let msg: ClientMessage;
   try {
@@ -50,14 +49,37 @@ export function handleMessage(
       sessions.endSession(msg.sessionId);
       break;
     case 'fetch_tasks': {
+      const rawMsg = msg as Record<string, unknown>;
+      // Reject the legacy { boardId } payload with a clear error so callers update.
+      if ('boardId' in rawMsg && !('milestoneId' in rawMsg)) {
+        ws.send(JSON.stringify({
+          type: 'error',
+          message: 'fetch_tasks payload changed: send { projectId, milestoneId }, not { boardId }',
+        }));
+        break;
+      }
+      if (typeof msg.projectId !== 'string' || !msg.projectId) {
+        ws.send(JSON.stringify({ type: 'error', message: 'fetch_tasks requires projectId' }));
+        break;
+      }
+      if (typeof msg.milestoneId !== 'string' || !msg.milestoneId) {
+        ws.send(JSON.stringify({ type: 'error', message: 'fetch_tasks requires milestoneId' }));
+        break;
+      }
       const project = getProjectById(msg.projectId);
       if (!project) {
         ws.send(JSON.stringify({ type: 'error', message: `Project not found: ${msg.projectId}` }));
         break;
       }
-      const boardId = msg.boardId ?? project.boardId;
-      notion
-        .fetchReadyTasks(boardId, msg.skipCache)
+      let backend;
+      try {
+        backend = getTaskBackend(msg.projectId);
+      } catch (e) {
+        ws.send(JSON.stringify({ type: 'error', message: String(e) }));
+        break;
+      }
+      backend
+        .fetchReadyTasks(msg.milestoneId, msg.skipCache)
         .then((tasks) => ws.send(JSON.stringify({ type: 'tasks_ready', tasks })))
         .catch((e) => ws.send(JSON.stringify({ type: 'error', message: String(e) })));
       break;

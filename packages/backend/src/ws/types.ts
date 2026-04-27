@@ -109,5 +109,5 @@ export type ClientMessage =
   | { type: 'send_message'; sessionId: string; message: string }
   | { type: 'kill';         sessionId: string }
   | { type: 'end_session';  sessionId: string }
-  | { type: 'fetch_tasks';  projectId: string; boardId?: string; skipCache?: boolean };
+  | { type: 'fetch_tasks';  projectId: string; milestoneId: string; skipCache?: boolean };
 
