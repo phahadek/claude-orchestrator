@@ -54,7 +54,7 @@ claude-orchestrator/
         tasks/
           TaskTrackerBackend.ts    ← interface for task source backends
           NotionTaskBackend.ts     ← Notion-backed implementation
-          LocalTaskBackend.ts      ← YAML-backed implementation (TASK_BACKEND=local)
+          LocalTaskBackend.ts      ← YAML-backed implementation (selected via project.task_source = 'yaml')
           TaskStatusEngine.ts      ← derives display status from PR + session state
         routes/
           sessions.ts              ← /api/sessions REST endpoints

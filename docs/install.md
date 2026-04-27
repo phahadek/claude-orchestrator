@@ -107,8 +107,7 @@ All configuration lives in `packages/backend/.env`. See `packages/backend/.env.e
 
 | Variable | Required | Description | Example |
 |---|---|---|---|
-| `TASK_BACKEND` | No | Task source: `notion` (default) or `local` (YAML) | `notion` |
-| `NOTION_API_KEY` | If `TASK_BACKEND=notion` | Notion integration token | `ntn_...` |
+| `NOTION_API_KEY` | If any project's `task_source` is `notion` | Notion integration token | `ntn_...` |
 | `GITHUB_TOKEN` | Yes | GitHub PAT with `repo` scope | `ghp_...` |
 | `GITHUB_REPO` | No | Fallback `owner/repo` used only when `GitHubClient` is called without a project context (e.g. CLI scripts). Per-project `githubRepo` (in `PROJECTS`) takes precedence and is required for the dashboard's PR features. | `owner/repo` |
 | `PROJECTS` | Yes | JSON array of project configs (see below) | |
@@ -147,7 +146,7 @@ For multiple Notion boards (one per milestone) on the same project, add a `board
 }
 ```
 
-For the local YAML task backend (`TASK_BACKEND=local`), `contextUrl` and `boardId` are optional; the backend reads tasks from `<projectDir>/tasks.yaml`.
+Task source (`notion` or `yaml`) is configured per-project in the dashboard at **Settings → Projects → Add project**. For YAML projects, `contextUrl` and `boardId` are optional; the backend reads tasks from `<projectDir>/tasks.yaml`, and the Settings UI offers a "Create empty tasks.yaml" affordance when no file exists.
 
 ## Notion workspace setup
 
