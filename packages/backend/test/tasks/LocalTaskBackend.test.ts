@@ -104,14 +104,14 @@ describe('LocalTaskBackend (milestone schema)', () => {
   });
 
   describe('fetchReadyTasks(milestoneId)', () => {
-    it('returns only Ready tasks within the requested milestone', async () => {
+    it('returns every task within the requested milestone regardless of status', async () => {
       const resolved = await backend.fetchReadyTasks('m1');
       const ids = resolved.map((r) => r.task.id);
 
       expect(ids).toContain('task-ready-1');
       expect(ids).toContain('task-ready-2');
-      expect(ids).not.toContain('task-in-progress');
-      expect(ids).not.toContain('task-done');
+      expect(ids).toContain('task-in-progress');
+      expect(ids).toContain('task-done');
       expect(ids).not.toContain('task-other-milestone');
     });
 
@@ -202,7 +202,7 @@ describe('LocalTaskBackend (milestone schema)', () => {
 
         const flatBackend = new LocalTaskBackend(flatDir);
         const ready = await flatBackend.fetchReadyTasks('m1');
-        expect(ready.map((r) => r.task.id)).toEqual(['t1']);
+        expect(ready.map((r) => r.task.id).sort()).toEqual(['t1', 't2']);
 
         // Disk file is now in milestone schema
         const onDisk = readTasksFile(flatDir) as Record<string, unknown>;
