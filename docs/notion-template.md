@@ -1,6 +1,10 @@
 # Notion Workspace Setup Guide
 
-This guide walks you through creating a Notion workspace that Claude Code Orchestrator can use as a task backend. The orchestrator reads tasks from Notion databases and updates their status as sessions progress through the coding lifecycle.
+This guide walks you through creating a Notion workspace that Claude Code Orchestrator can use as a task backend, and then connecting that workspace to a project from the dashboard UI.
+
+The orchestrator reads tasks from Notion databases (one per milestone) and updates their status as sessions progress through the coding lifecycle. Project and milestone configuration lives in the dashboard's SQLite database — there is no `PROJECTS` env var to edit.
+
+> **Prefer YAML?** Notion is one of two task sources. If you'd rather keep tasks in version control, see [`tasks.yaml.example`](../tasks.yaml.example) at the repo root and select **YAML** when adding the project. The rest of this guide assumes Notion.
 
 ---
 
@@ -8,7 +12,8 @@ This guide walks you through creating a Notion workspace that Claude Code Orches
 
 - A [Notion](https://www.notion.so) account
 - A [Notion integration](https://www.notion.so/my-integrations) with read/write access to your workspace
-- The integration's API key (starts with `ntn_`)
+- The integration's API key (starts with `ntn_`) — set as `NOTION_API_KEY` in `packages/backend/.env`
+- The dashboard running locally (see the [Install guide](install.md))
 
 ---
 
@@ -26,15 +31,15 @@ A brief description of your project, its current status, and what milestone you'
 
 ### Active Task Board
 
-A callout or paragraph linking to the task board database (created in Step 2). The dashboard looks for this link to find your tasks.
+A callout or paragraph linking to the currently active milestone's task board database (see Step 2). Sessions read this link to find their tasks.
 
 > **Current phase**: [YOUR_MILESTONE_NAME]
 >
-> **Active task board**: [link to task board database]
+> **Active task board**: [link to milestone database]
 
 ### Session Instructions
 
-Document your session workflow here. The dashboard's orchestrator injects these instructions into the `CLAUDE.md` file for each coding session. Include:
+Document your session workflow here. The orchestrator injects these instructions into the `CLAUDE.md` file for each coding session. Include:
 
 - Branch naming conventions (e.g., `feature/<task-name>` from `dev`)
 - PR requirements (target branch, draft vs. ready)
@@ -53,9 +58,11 @@ A table linking to child pages (design docs, architecture docs, coding guideline
 
 ---
 
-## Step 2: Create a Task Board database
+## Step 2: Create one Task Board database per milestone
 
-Create an **inline database** (or a full-page database) as a child of your project context page.
+Each milestone is a separate Notion **database** (not a page). Create one as a child of the Project Context page, or anywhere else in the workspace your integration has access to.
+
+> **Important — copy the database ID, not the page ID.** When you connect a milestone to the dashboard later, you must paste the **data source ID** of the database itself. Pages have IDs too, but they are not interchangeable. Easiest way to get the right ID: open the database as a full page and copy the URL — `https://www.notion.so/<DATABASE_ID>?v=<view-id>`. The 32-character hex string before `?v=` is the database ID.
 
 **Database title:** `[YOUR_MILESTONE_NAME] Task Board`
 
@@ -94,7 +101,7 @@ The Notion API does not support writing multi-value relation properties via MCP 
 
 ## Step 3: Create task pages
 
-Each task is a page inside the task board database. Use this template for the page body:
+Each task is a page inside a milestone database. Use this template for the page body:
 
 ```markdown
 ## Summary
@@ -132,37 +139,51 @@ Design rationale, implementation spec, code skeletons, constraints.
 - **Specific acceptance criteria.** "Works correctly" is not testable. "`npm run build` passes without errors" is.
 - **List every file.** Prevents sessions from accidentally editing unrelated files.
 
----
-
-## Step 4: Configure the dashboard
-
-Once your Notion workspace is set up:
-
-1. Copy the **Project Context page ID** from its URL:
-   `https://www.notion.so/[YOUR_PAGE_ID]`
-
-2. Copy the **Task Board database ID** from its URL:
-   `https://www.notion.so/[YOUR_DATABASE_ID]`
-
-3. Add them to your `packages/backend/.env`:
-
-```env
-NOTION_API_KEY=ntn_[YOUR_TOKEN]
-PROJECTS=[{"id":"my-project","name":"My Project","projectDir":"/path/to/repo","contextUrl":"https://www.notion.so/[YOUR_PAGE_ID]","boardId":"[YOUR_DATABASE_ID]"}]
-```
-
-4. Share the Project Context page and Task Board with your Notion integration (click "..." > "Connections" > add your integration).
+See also [`task-writing.md`](task-writing.md) for the full task-writing guidelines.
 
 ---
 
-## Step 5: Verify
+## Step 4: Share the workspace with your integration
 
-Start the dashboard and check:
+For each page and database the dashboard needs to read:
 
-1. The Tasks panel loads your task board
-2. Tasks show correct status, priority, and type
-3. Launching a session from a Ready task moves it to In Progress
-4. Opening a PR moves the task to In Review
+1. Open it in Notion.
+2. Click **…** (top-right) → **Connections** → add your integration.
+
+Sharing the Project Context page typically propagates to its child pages and databases, but it doesn't always. If the dashboard reports a 404 when fetching a milestone, double-check that the database itself is shared.
+
+---
+
+## Step 5: Add the project from the dashboard UI
+
+With the dashboard running, project and milestone configuration is done entirely in the UI. There is no `PROJECTS` env var to edit and no restart required.
+
+1. Open the dashboard at `http://localhost:5173` (dev) or `http://localhost:3000` (production).
+2. Go to **Settings → Projects → Add project**.
+3. Fill in:
+   - **Name** — display name shown in the project switcher.
+   - **Project directory** — absolute path to the local repo this project tracks (sessions are spawned in worktrees under `<projectDir>/.claude/worktrees/`).
+   - **GitHub repo** — `owner/repo` for the project's PRs.
+   - **Task source** — choose **Notion**.
+   - **Context page URL** — the URL of the Project Context page from Step 1.
+4. Save the project. The project now appears in the switcher in the top bar.
+5. Open **Settings → Milestones → Add milestone** and, for each milestone:
+   - **Name** — display name (e.g. `M1 — MVP`).
+   - **Notion database ID** — the database ID from Step 2 (32-character hex, **not** a page ID).
+6. Mark exactly one milestone as **Active**. The dashboard's Tasks panel filters to that milestone by default.
+
+The project record is persisted to the dashboard's SQLite database (`dashboard.db`) and survives restarts. Edit or remove projects and milestones from the same Settings screens at any time.
+
+---
+
+## Step 6: Verify
+
+1. The Tasks panel loads tasks from the active milestone.
+2. Tasks show correct status, priority, and type.
+3. Launching a session from a `🗂️ Ready` task moves it to `🔄 In Progress`.
+4. Opening a PR moves the task to `👀 In Review`.
+
+If tasks don't appear, check the backend log for Notion API errors — the most common causes are an unshared database or a page ID accidentally pasted in place of a database ID.
 
 ---
 
@@ -174,9 +195,12 @@ Start the dashboard and check:
 ├── Technical Architecture              (optional)
 ├── Coding Guidelines                   (optional)
 ├── Task Writing Guidelines             (optional)
-└── [Milestone] Task Board              (database)
-    ├── Task 1                          (database page)
-    ├── Task 2                          (database page)
+├── [M1] Task Board                     (database — one per milestone)
+│   ├── Task 1                          (database page)
+│   └── Task 2
+├── [M2] Task Board                     (database)
+│   └── ...
+└── [M3] Task Board                     (database)
     └── ...
 ```
 
@@ -193,5 +217,5 @@ Backlog -> Ready -> In Progress -> In Review -> Done
 
 - New tasks always start at **Backlog**
 - Move to **Ready** only after human review confirms scope
-- The dashboard orchestrator handles **In Progress** and **In Review** transitions automatically
+- The orchestrator handles **In Progress** and **In Review** transitions automatically
 - **Done** is set after PR merge
