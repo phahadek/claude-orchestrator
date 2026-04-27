@@ -52,6 +52,12 @@ vi.mock('../db/db.js', async () => {
     VALUES (?, ?, 'done', ?, 'standard', 0, 0, ?)
   `).run('s4', 'proj-a', 3_000_000, 'Zero-token task');
 
+  // Archived session — must still appear in analytics (analytics is historical)
+  db.prepare(`
+    INSERT INTO sessions (session_id, project_id, status, started_at, session_type, total_input_tokens, total_output_tokens, model, task_name, archived)
+    VALUES (?, ?, 'done', ?, 'standard', ?, ?, ?, ?, 1)
+  `).run('s5', 'proj-a', 4_000_000, 800, 400, 'claude-sonnet-4-6', 'Archived task');
+
   return { db };
 });
 
@@ -69,27 +75,39 @@ beforeEach(() => {
 });
 
 describe('GET /api/analytics/tokens', () => {
-  it('returns all non-archived sessions with correct aggregation', async () => {
+  it('returns all sessions (including archived) with correct aggregation', async () => {
     const res = await supertest(buildApp()).get('/api/analytics/tokens');
     expect(res.status).toBe(200);
-    expect(res.body.sessions).toHaveLength(4);
-    expect(res.body.totals.sessionCount).toBe(4);
-    expect(res.body.totals.inputTokens).toBe(1000 + 500 + 300 + 0);
-    expect(res.body.totals.outputTokens).toBe(500 + 200 + 150 + 0);
-    expect(res.body.totals.totalTokens).toBe(1500 + 700 + 450 + 0);
+    expect(res.body.sessions).toHaveLength(5);
+    expect(res.body.totals.sessionCount).toBe(5);
+    expect(res.body.totals.inputTokens).toBe(1000 + 500 + 300 + 0 + 800);
+    expect(res.body.totals.outputTokens).toBe(500 + 200 + 150 + 0 + 400);
+    expect(res.body.totals.totalTokens).toBe(1500 + 700 + 450 + 0 + 1200);
     expect(typeof res.body.totals.totalCost).toBe('number');
   });
 
-  it('filters by projectId correctly', async () => {
+  it('includes archived sessions in the response', async () => {
+    const res = await supertest(buildApp()).get('/api/analytics/tokens');
+    expect(res.status).toBe(200);
+    const ids = res.body.sessions.map((s: { sessionId: string }) => s.sessionId);
+    expect(ids).toContain('s5');
+    const archived = res.body.sessions.find((s: { sessionId: string }) => s.sessionId === 's5');
+    expect(archived).toBeDefined();
+    expect(archived.inputTokens).toBe(800);
+    expect(archived.outputTokens).toBe(400);
+    expect(archived.totalTokens).toBe(1200);
+  });
+
+  it('filters by projectId correctly (archived included)', async () => {
     const res = await supertest(buildApp()).get('/api/analytics/tokens?projectId=proj-a');
     expect(res.status).toBe(200);
-    expect(res.body.sessions).toHaveLength(3);
+    expect(res.body.sessions).toHaveLength(4);
     for (const s of res.body.sessions) {
       // All sessions should be from proj-a (proj-b sessions excluded)
-      expect(['s1', 's2', 's4']).toContain(s.sessionId);
+      expect(['s1', 's2', 's4', 's5']).toContain(s.sessionId);
     }
-    expect(res.body.totals.inputTokens).toBe(1000 + 500 + 0);
-    expect(res.body.totals.outputTokens).toBe(500 + 200 + 0);
+    expect(res.body.totals.inputTokens).toBe(1000 + 500 + 0 + 800);
+    expect(res.body.totals.outputTokens).toBe(500 + 200 + 0 + 400);
   });
 
   it('filters by date range', async () => {
