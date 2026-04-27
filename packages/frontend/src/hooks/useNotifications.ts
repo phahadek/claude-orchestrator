@@ -39,6 +39,7 @@ interface SessionSnapshot {
 
 export function useNotifications(sessions: SessionState[], prReviewEvent?: { prNumber: number; verdict: string; summary: string } | null): void {
   const prevRef = useRef<Map<string, SessionSnapshot>>(new Map());
+  const initialSyncDoneRef = useRef(false);
   const prevReviewEventRef = useRef<typeof prReviewEvent>(null);
 
   useEffect(() => {
@@ -46,6 +47,22 @@ export function useNotifications(sessions: SessionState[], prReviewEvent?: { prN
   }, []);
 
   useEffect(() => {
+    // First non-empty render = WebSocket initial sync. Snapshot existing sessions
+    // into prevRef without firing notifications so we don't toast every active
+    // done/error session on every dashboard load.
+    if (!initialSyncDoneRef.current && sessions.length > 0) {
+      const initial = new Map<string, SessionSnapshot>();
+      for (const session of sessions) {
+        const pendingPermissionKey = session.pendingPermission
+          ? `${session.pendingPermission.toolName}:${session.pendingPermission.proposedAction}`
+          : null;
+        initial.set(session.sessionId, { status: session.status, pendingPermissionKey });
+      }
+      prevRef.current = initial;
+      initialSyncDoneRef.current = true;
+      return;
+    }
+
     const prev = prevRef.current;
     const next = new Map<string, SessionSnapshot>();
 
