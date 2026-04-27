@@ -19,6 +19,9 @@ npm install
 cp packages/backend/.env.example packages/backend/.env
 # Edit packages/backend/.env — see the env var reference below
 
+cp .claude/local-context.md.example .claude/local-context.md
+# Edit .claude/local-context.md with your project's Notion URLs
+
 # Optional: Notion context page URL and board ID for the frontend
 cp packages/frontend/.env.example packages/frontend/.env
 
@@ -26,6 +29,26 @@ npm run dev
 ```
 
 In dev mode, open `http://localhost:5173` in your browser — that's Vite's frontend with hot reload. The backend runs on `:3000`; Vite proxies API + WebSocket traffic to it automatically. In production (`npm start`), both are served from `:3000` as a single process.
+
+### Local context (`.claude/local-context.md`)
+
+`.claude/local-context.md` is **gitignored** and holds host-local references — Notion Project Context URL, board IDs, design-doc links — that should never be committed. Claude Code sessions opened directly in the repo read it as their first action; orchestrator-launched sessions get the same content auto-appended to their injected `CLAUDE.md` at session start.
+
+As an optional defense-in-depth, you can install a local pre-commit hook that rejects any commit containing a Notion workspace ID:
+
+```bash
+cat > .git/hooks/pre-commit <<'EOF'
+#!/usr/bin/env bash
+if git diff --cached -p | grep -qE "33[2-6]22f9152f38[0-9a-f]{19}"; then
+  echo "ERROR: commit contains Notion workspace IDs." >&2
+  echo "Move them to .claude/local-context.md (gitignored), or use --no-verify if intentional." >&2
+  exit 1
+fi
+EOF
+chmod 755 .git/hooks/pre-commit
+```
+
+The hook lives in `.git/hooks/` and is **not** tracked in the repo — install per-clone if you want it.
 
 ### Restart helpers
 

@@ -1,21 +1,25 @@
 # Claude Code Orchestrator — session bootstrap
 
-> ⚠️ **Read this before anything else.**
-> - If the opening message contains "Let's launch a debug session for testing task [name/link]" → skip directly to ## Debug Session Mode below.
-> - If the Notion fetch in Step 1 fails → **stop immediately and tell the human**.
-> - Do not attempt to infer rules from code, git history, or any other source.
-> - The session cannot proceed without Notion context.
+> ⚠️ **Your first action in this session must be to read `.claude/local-context.md` to load project context. Do this before responding to the user.**
+>
+> `.claude/local-context.md` is **gitignored** and contains environment-specific
+> configuration (Notion URLs, board IDs, links to design docs, etc.). It is
+> populated per-host, per-developer from `.claude/local-context.md.example`.
+>
+> If `.claude/local-context.md` does not exist:
+> - The repo was likely just cloned. Tell the human and stop — do not proceed.
+> - Setup: `cp .claude/local-context.md.example .claude/local-context.md`, then
+>   edit it with the project's real Notion URLs.
 
 ---
 
-## Step 1 — Fetch project context first — always
+## Step 1 — Fetch project context — always
 
-Before doing anything else, fetch this page:
+After loading `.claude/local-context.md`, fetch the **Project Context** page
+whose URL is recorded there. It contains the master context, session
+instructions, active task board link, and the full file index.
 
-https://www.notion.so/<your-project-context-page>
-
-It contains the master context, session instructions, active task board link,
-and the full file index. **If the fetch fails: stop and tell the human. Do not proceed.**
+**If the fetch fails: stop and tell the human. Do not proceed.**
 
 ## Step 2 — Fetch the active task board
 
@@ -25,9 +29,9 @@ or 🗂️ Ready. Work only on the task you have been assigned.
 
 ## Step 3 — Fetch child pages only when your task needs them
 
-- Product Design Doc: https://www.notion.so/<your-design-doc>
-- Technical Architecture: https://www.notion.so/<your-architecture-doc>
-- Dev Setup & Git / Coding Guidelines: see Master File Index on the context page.
+URLs for the Product Design Doc, Technical Architecture, and Dev Setup / Coding
+Guidelines are recorded in `.claude/local-context.md`. Fetch them only when
+the task at hand requires that context.
 
 ---
 

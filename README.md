@@ -93,9 +93,12 @@ sequenceDiagram
 ```bash
 git clone https://github.com/phahadek/claude-orchestrator.git && cd claude-orchestrator
 npm install
-cp packages/backend/.env.example packages/backend/.env  # then edit
+cp packages/backend/.env.example packages/backend/.env       # then edit
+cp .claude/local-context.md.example .claude/local-context.md # gitignored — add your Notion URLs
 npm run dev    # → http://localhost:3000
 ```
+
+`.claude/local-context.md` is gitignored and holds host-local references (Notion URLs, board IDs). Sessions read it as their first action. See [`docs/install.md`](docs/install.md) for details and an optional pre-commit hook that blocks workspace-ID leaks.
 
 For Docker, production builds, the full env var reference, and Notion/local task source setup, see [`docs/install.md`](docs/install.md).
 

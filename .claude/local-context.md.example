@@ -1,0 +1,40 @@
+# Local Context — host-specific configuration
+
+This file is **gitignored**. It contains environment-specific URLs, IDs, and
+references that should never be committed to the repo. Copy this template to
+`.claude/local-context.md` and fill in the real values for your workspace:
+
+```bash
+cp .claude/local-context.md.example .claude/local-context.md
+# then edit .claude/local-context.md with your real Notion URLs / IDs
+```
+
+The orchestrator backend automatically appends the contents of
+`.claude/local-context.md` to the merged `CLAUDE.md` written into each session
+worktree, so dashboard-launched sessions see the same context as Claude Code
+sessions opened directly in this repo.
+
+---
+
+## Project Context
+
+- **Project Context page** (Notion): https://www.notion.so/<your-project-context-page>
+- **Active Task Board** (Notion): https://www.notion.so/<your-active-task-board>
+
+## Design & Architecture
+
+- **Product Design Doc**: https://www.notion.so/<your-design-doc>
+- **Technical Architecture**: https://www.notion.so/<your-architecture-doc>
+- **Coding Guidelines**: https://www.notion.so/<your-coding-guidelines>
+
+## Boards (per milestone, if applicable)
+
+- **M1 board**: https://www.notion.so/<m1-board>
+- **M2 board**: https://www.notion.so/<m2-board>
+
+## Notes
+
+Add any other host-local context the session needs — for example:
+- Local-only API keys you reference by name (never the value)
+- Per-developer task assignments
+- Workspace-specific conventions

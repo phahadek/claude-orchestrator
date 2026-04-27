@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { buildOrchestratorClaudeMd } from './orchestrator-claudemd';
 
 export interface BuildSessionContextParams {
@@ -59,12 +61,26 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     taskUrl,
     projectContextUrl,
     targetBranch,
+    projectDir,
     worktreePath,
     prGate,
     bashRules,
     taskBackend,
     taskContent,
   } = params;
+
+  // Read project-level local context (Notion URLs, board IDs, etc.) if present.
+  // Gitignored, populated per-host by the developer. Falls through silently
+  // when the file is absent — e.g. on a fresh clone before setup.
+  let localContext: string | undefined;
+  try {
+    const localContextPath = path.join(projectDir, '.claude', 'local-context.md');
+    if (fs.existsSync(localContextPath)) {
+      localContext = fs.readFileSync(localContextPath, 'utf-8');
+    }
+  } catch {
+    // Ignore — fall through without local context.
+  }
 
   // Return only orchestrator content. Since we now write to .claude/CLAUDE.md
   // (gitignored), the project's own root CLAUDE.md is read independently by
@@ -79,5 +95,6 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     bashRules,
     taskBackend,
     taskContent,
+    localContext,
   });
 }
