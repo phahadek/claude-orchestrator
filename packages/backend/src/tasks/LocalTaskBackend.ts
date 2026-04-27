@@ -4,6 +4,7 @@ import yaml from 'js-yaml';
 import type { TaskBackend } from './TaskBackend';
 import type { ResolvedTask, NotionTask } from '../notion/types';
 import { DependencyResolver } from '../notion/DependencyResolver';
+import { upsertTaskCache } from '../db/queries';
 
 // ── tasks.yaml schema ────────────────────────────────────────────────────────
 
@@ -164,6 +165,10 @@ export class LocalTaskBackend implements TaskBackend {
       throw new Error(`[LocalTaskBackend] milestone not found in ${this.filePath}: ${milestoneId}`);
     }
     const allTasks = milestone.tasks.map((t) => this.mapToNotionTask(t));
+    upsertTaskCache(`board:${milestoneId}`, JSON.stringify(allTasks));
+    for (const task of allTasks) {
+      upsertTaskCache(task.id, JSON.stringify(task));
+    }
     return resolver.resolve(allTasks);
   }
 
