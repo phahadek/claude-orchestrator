@@ -99,8 +99,8 @@ describe('DependencyResolver', () => {
 
   it('matches dependencies stored without hyphens against page IDs with hyphens', () => {
     const tasks = [
-      makeTask({ id: '33522f91-52f3-812d-ad88-ce65dbf27f83', status: '🗂️ Ready' }),
-      makeTask({ id: 'b', dependsOn: ['33522f9152f3812dad88ce65dbf27f83'] }),
+      makeTask({ id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', status: '🗂️ Ready' }),
+      makeTask({ id: 'b', dependsOn: ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'] }),
     ];
     const resolved = resolver.resolve(tasks);
     const task = resolved.find((r) => r.task.id === 'b')!;
