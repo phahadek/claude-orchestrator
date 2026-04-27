@@ -167,10 +167,10 @@ With the dashboard running, project and milestone configuration is done entirely
    - **Task source** — choose **Notion**.
    - **Context page URL** — the URL of the Project Context page from Step 1.
 4. Save the project. The project now appears in the switcher in the top bar.
-5. Open **Settings → Milestones → Add milestone** and, for each milestone:
+5. Open **Settings → Milestones → Add milestone** and, for each milestone you want to track:
    - **Name** — display name (e.g. `M1 — MVP`).
    - **Notion database ID** — the database ID from Step 2 (32-character hex, **not** a page ID).
-6. Mark exactly one milestone as **Active**. The dashboard's Tasks panel filters to that milestone by default.
+6. The Tasks panel shows the active milestone's tasks. The default active milestone is the first one in display order; once a project has more than one milestone, a milestone selector appears in the header next to the project switcher. The selection is remembered per browser via `localStorage` (key `activeMilestone_<projectId>`) — there is no server-side "Active" flag.
 
 The project record is persisted to the dashboard's SQLite database (`dashboard.db`) and survives restarts. Edit or remove projects and milestones from the same Settings screens at any time.
 

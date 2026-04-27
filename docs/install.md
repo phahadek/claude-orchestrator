@@ -146,7 +146,7 @@ Earlier versions of the dashboard read project configs from a `PROJECTS` JSON en
 ]
 ```
 
-After the first successful boot, the backend logs `Imported N project(s) from PROJECTS env. PROJECTS env can now be removed from .env.` — you can then delete `PROJECTS` from `.env`. Subsequent edits should be made through the Settings UI; the env var is ignored once SQLite has any project rows.
+After the first successful boot, the backend logs `[startup] Imported N project(s) from PROJECTS env. PROJECTS env can now be removed from .env.` — you can then delete `PROJECTS` from `.env`. Subsequent edits should be made through the Settings UI; the env var is ignored once SQLite has any project rows.
 
 New installations should skip this entirely and add their projects from Settings.
 

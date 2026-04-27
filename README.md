@@ -97,7 +97,7 @@ git clone https://github.com/phahadek/claude-orchestrator.git && cd claude-orche
 npm install
 cp packages/backend/.env.example packages/backend/.env       # then edit
 cp .claude/local-context.md.example .claude/local-context.md # gitignored — add your Notion URLs
-npm run dev    # → http://localhost:3000
+npm run dev    # → http://localhost:5173 (dev; Vite proxies API/WS to backend on :3000)
 ```
 
 `.claude/local-context.md` is gitignored and holds host-local references (Notion URLs, board IDs). Sessions read it as their first action. See [`docs/install.md`](docs/install.md) for details and an optional pre-commit hook that blocks workspace-ID leaks.
@@ -110,10 +110,10 @@ Projects and milestones are managed entirely from the dashboard UI — there is 
 
 1. Open the dashboard, then go to **Settings → Projects → Add project**.
 2. Fill in the project name, the absolute path to its local repo (`projectDir`), the GitHub `owner/repo`, and choose a **Task source**:
-   - **Notion** — paste the URL of the Project Context page. See [`docs/notion-template.md`](docs/notion-template.md) for the workspace structure the dashboard expects.
+   - **Notion** — the Settings form labels Context URL as optional, but Notion projects in practice need it: paste the URL of the Project Context page. See [`docs/notion-template.md`](docs/notion-template.md) for the workspace structure the dashboard expects.
    - **YAML** — tasks live in `<projectDir>/tasks.yaml` (gitignored by default). Use [`tasks.yaml.example`](tasks.yaml.example) as a starting point; the Settings UI also offers a "Create empty tasks.yaml" affordance when no file exists.
-3. Open **Settings → Milestones → Add milestone** for each milestone. For Notion projects, paste the **database ID** of the milestone's task board (a 32-character hex string — pages and databases both have IDs, and they are not interchangeable; copy from the database URL, not a parent page). Mark exactly one milestone as **Active**.
-4. Tasks from the active milestone now appear in the Tasks panel. Click **Dispatch** on any `🗂️ Ready` task to spawn a Claude session in a worktree.
+3. Open **Settings → Milestones → Add milestone** and add as many milestones as you need. For Notion projects, paste the **database ID** of each milestone's task board (a 32-character hex string — pages and databases both have IDs, and they are not interchangeable; copy from the database URL, not a parent page).
+4. The Tasks panel shows the active milestone's tasks. The default active milestone is the first one in display order; if a project has more than one milestone, a milestone selector appears in the header next to the project switcher, and your choice is remembered per browser via `localStorage`. Click **Dispatch** on any `🗂️ Ready` task to spawn a Claude session in a worktree.
 
 ![Token & cost analytics](docs/screenshots/analytics.png)
 
