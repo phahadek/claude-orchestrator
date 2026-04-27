@@ -81,7 +81,10 @@ npm start       # node packages/backend/dist/server.js
 cp packages/backend/.env.example packages/backend/.env   # edit values
 # In docker-compose.yml:
 #   1. Set CLAUDE_BIN to your claude CLI path (run: which claude)
-#   2. Add a volume mount for each project directory referenced in PROJECTS
+#   2. Add a volume mount for each project directory you'll register in
+#      Settings → Projects (the dashboard spawns sessions in worktrees under
+#      <projectDir>/.claude/worktrees/, so the host path must be visible to
+#      the container)
 mkdir -p data
 docker compose up -d
 ```
@@ -107,19 +110,24 @@ All configuration lives in `packages/backend/.env`. See `packages/backend/.env.e
 
 | Variable | Required | Description | Example |
 |---|---|---|---|
-| `NOTION_API_KEY` | If any project's `task_source` is `notion` | Notion integration token | `ntn_...` |
+| `NOTION_API_KEY` | If any project's task source is `notion` | Notion integration token | `ntn_...` |
 | `GITHUB_TOKEN` | Yes | GitHub PAT with `repo` scope | `ghp_...` |
-| `GITHUB_REPO` | No | Fallback `owner/repo` used only when `GitHubClient` is called without a project context (e.g. CLI scripts). Per-project `githubRepo` (in `PROJECTS`) takes precedence and is required for the dashboard's PR features. | `owner/repo` |
-| `PROJECTS` | Yes | JSON array of project configs (see below) | |
+| `GITHUB_REPO` | No | Fallback `owner/repo` used only when `GitHubClient` is called without a project context (e.g. CLI scripts). Each project's own `githubRepo` (set in **Settings → Projects**) takes precedence and is required for the dashboard's PR features. | `owner/repo` |
 | `PORT` | No | Backend HTTP port | `3000` |
 | `DB_PATH` | No | SQLite database file | `./dashboard.db` |
 | `SESSIONS_DIR` | No | Claude CLI sessions directory | `~/.claude/projects` |
 | `AUTO_REVIEW` | No | Enable automated PR review | `true` |
 | `AUTO_REVIEW_CONCURRENCY` | No | Parallel review sessions | `1` |
 
-### `PROJECTS` JSON format
+## Project & milestone configuration
 
-The `PROJECTS` env var is a JSON array. Each entry:
+Projects and milestones are configured **in the dashboard UI**, not via env vars. Open **Settings → Projects → Add project**, choose a task source (`notion` or `yaml`), and add one milestone per task board.
+
+The configuration is persisted to the SQLite database (`DB_PATH`, default `./dashboard.db`) and survives restarts. For the full Notion workspace structure the dashboard expects, see [`notion-template.md`](notion-template.md). For YAML projects, see [`tasks.yaml.example`](../tasks.yaml.example) at the repo root — the Settings UI also offers a "Create empty tasks.yaml" affordance when no file exists.
+
+### Migrating from the legacy `PROJECTS` env var
+
+Earlier versions of the dashboard read project configs from a `PROJECTS` JSON env var. That mechanism still exists as a **one-shot importer**: on startup, if the projects table is empty, the backend reads `PROJECTS` and seeds SQLite from it. The format is unchanged:
 
 ```json
 [
@@ -128,25 +136,19 @@ The `PROJECTS` env var is a JSON array. Each entry:
     "name": "My Project",
     "projectDir": "/path/to/repo",
     "contextUrl": "https://www.notion.so/<context-page-id>",
-    "boardId": "<notion-database-id>",
-    "githubRepo": "owner/repo"
+    "githubRepo": "owner/repo",
+    "taskSource": "notion",
+    "boards": [
+      { "id": "<m1-database-id>", "name": "M1" },
+      { "id": "<m2-database-id>", "name": "M2" }
+    ]
   }
 ]
 ```
 
-For multiple Notion boards (one per milestone) on the same project, add a `boards` array:
+After the first successful boot, the backend logs `[startup] Imported N project(s) from PROJECTS env. PROJECTS env can now be removed from .env.` — you can then delete `PROJECTS` from `.env`. Subsequent edits should be made through the Settings UI; the env var is ignored once SQLite has any project rows.
 
-```json
-{
-  "id": "my-project",
-  "boards": [
-    { "id": "<m1-database-id>", "name": "M1" },
-    { "id": "<m2-database-id>", "name": "M2" }
-  ]
-}
-```
-
-Task source (`notion` or `yaml`) is configured per-project in the dashboard at **Settings → Projects → Add project**. For YAML projects, `contextUrl` and `boardId` are optional; the backend reads tasks from `<projectDir>/tasks.yaml`, and the Settings UI offers a "Create empty tasks.yaml" affordance when no file exists.
+New installations should skip this entirely and add their projects from Settings.
 
 ## Notion workspace setup
 
