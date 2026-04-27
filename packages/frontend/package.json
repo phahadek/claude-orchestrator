@@ -2,6 +2,18 @@
   "name": "@claude-orchestrator/frontend",
   "version": "1.0.0",
   "private": true,
+  "description": "Frontend (React + Vite) for Claude Code Orchestrator.",
+  "homepage": "https://github.com/phahadek/claude-orchestrator#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/phahadek/claude-orchestrator.git",
+    "directory": "packages/frontend"
+  },
+  "bugs": {
+    "url": "https://github.com/phahadek/claude-orchestrator/issues"
+  },
+  "author": "Pedro Hadek <83268694+phahadek@users.noreply.github.com>",
+  "license": "MIT",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
