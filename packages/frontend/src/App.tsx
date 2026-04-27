@@ -88,6 +88,7 @@ export default function App() {
   const [activeView, setActiveView] = useState<'sessions' | 'history' | 'denials'>('sessions');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const notifiedRef = useRef<Set<string>>(new Set());
+  const initialSessionSyncDoneRef = useRef(false);
   const [showReconnected, setShowReconnected] = useState(false);
   const hasConnectedOnce = useRef(false);
   const prevConnectionState = useRef<ConnectionState>('disconnected');
@@ -235,6 +236,19 @@ export default function App() {
   }, [lastTaskUpdate]);
 
   useEffect(() => {
+    // First non-empty render = WebSocket initial sync. Mark every existing
+    // done/error session as already-notified so we don't toast them on dashboard
+    // load — they completed in some prior session and the user has already seen them.
+    if (!initialSessionSyncDoneRef.current && sessions.length > 0) {
+      for (const session of sessions) {
+        if (session.status === 'done' || session.status === 'error') {
+          notifiedRef.current.add(session.sessionId);
+        }
+      }
+      initialSessionSyncDoneRef.current = true;
+      return;
+    }
+
     for (const session of sessions) {
       if (
         (session.status === 'done' || session.status === 'error') &&

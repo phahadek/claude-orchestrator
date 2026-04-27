@@ -171,6 +171,48 @@ describe('useNotifications', () => {
     expect(NotificationSpy.mock.calls.length).toBe(firstCallCount);
   });
 
+  it('does NOT fire on initial WebSocket sync when sessions arrive already in done/error state', () => {
+    const sessionsAtConnect: SessionState[] = [
+      makeSession({ sessionId: 'a', status: 'done', taskName: 'A' }),
+      makeSession({ sessionId: 'b', status: 'error', taskName: 'B' }),
+      makeSession({ sessionId: 'c', status: 'done', taskName: 'C' }),
+      makeSession({ sessionId: 'd', status: 'running', taskName: 'D' }),
+    ];
+
+    renderHook(({ s }) => useNotifications(s), {
+      initialProps: { s: sessionsAtConnect },
+    });
+
+    expect(NotificationSpy).not.toHaveBeenCalled();
+  });
+
+  it('still fires for a fresh running→done transition after initial sync', () => {
+    const initial: SessionState[] = [
+      makeSession({ sessionId: 'a', status: 'done', taskName: 'A' }),
+      makeSession({ sessionId: 'b', status: 'running', taskName: 'B' }),
+    ];
+
+    const { rerender } = renderHook(({ s }) => useNotifications(s), {
+      initialProps: { s: initial },
+    });
+    expect(NotificationSpy).not.toHaveBeenCalled();
+
+    act(() => {
+      rerender({
+        s: [
+          initial[0],
+          { ...initial[1], status: 'done' },
+        ],
+      });
+    });
+
+    expect(NotificationSpy).toHaveBeenCalledTimes(1);
+    expect(NotificationSpy).toHaveBeenCalledWith(
+      '✅ Session done',
+      expect.objectContaining({ body: 'B finished successfully.' }),
+    );
+  });
+
   it('does not fire when notificationsEnabled is false in localStorage', () => {
     localStorage.setItem('notificationsEnabled', 'false');
 
