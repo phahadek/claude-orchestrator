@@ -109,6 +109,18 @@ async function notionRequest<T>(
 
 // ─── Page mapper ────────────────────────────────────────────────────────────
 
+/**
+ * Parse the Depends On field into a list of task IDs.
+ *
+ * `|` is the canonical delimiter; `,` is accepted leniently because it's a
+ * common authoring mistake that previously caused the whole field to be
+ * silently treated as a single unparseable ID.
+ */
+export function parseDependsOn(raw: string): string[] {
+  if (!raw) return [];
+  return raw.split(/[|,]/).map((id) => id.trim()).filter(Boolean);
+}
+
 function mapPageToTask(page: NotionPage): NotionTask {
   const titleItems = page.properties['Task Name']?.title ?? [];
   const title = titleItems.map((t) => t.text.content).join('');
@@ -119,9 +131,7 @@ function mapPageToTask(page: NotionPage): NotionTask {
 
   const dependsOnRaw =
     page.properties['Depends On']?.rich_text?.[0]?.text?.content ?? '';
-  const dependsOn = dependsOnRaw
-    ? dependsOnRaw.split('|').map((id) => id.trim()).filter(Boolean)
-    : [];
+  const dependsOn = parseDependsOn(dependsOnRaw);
 
   const prUrl = page.properties['PR']?.url ?? undefined;
 
