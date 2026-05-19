@@ -22,6 +22,28 @@ export interface PRReviewResult {
   reviewedAt: string;
 }
 
+/**
+ * Shared review-instructions block: the JSON schema, verdict rules, and the
+ * Changed-files dimension guidance. Used by both the initial prompt and the
+ * re-review follow-ups so the two stay in sync.
+ */
+const REVIEW_JSON_SCHEMA_BLOCK = `Respond ONLY with a JSON object — no preamble, no markdown fences.
+
+Evaluate the PR across exactly these 4 dimensions and respond with this JSON schema:
+{
+  "verdict": "approved" | "needs_changes" | "incomplete",
+  "dimensions": [
+    { "name": "Title and description vs task Summary",        "passed": bool, "notes": "..." },
+    { "name": "Diff vs Context spec",                         "passed": bool, "notes": "..." },
+    { "name": "Diff vs Acceptance Criteria",                  "passed": bool, "notes": "..." },
+    { "name": "Changed files vs Files/paths affected list",   "passed": bool, "notes": "..." }
+  ],
+  "summary": "2–4 sentence overall assessment"
+}
+verdict rules: "approved" = all 4 passed. "needs_changes" = 1–3 passed. "incomplete" = 0 passed.
+
+For the "Changed files vs Files/paths affected list" dimension: Pass if all changed files are either listed in the task OR are necessary downstream updates caused by the listed changes (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports). Fail only if the PR touches files unrelated to the task's intent.`;
+
 export class PRReviewService {
   constructor(
     private github: GitHubClient,
@@ -76,7 +98,7 @@ export class PRReviewService {
         diffData.diff,
         '```',
         ``,
-        `Respond with the same JSON review format as before.`,
+        REVIEW_JSON_SCHEMA_BLOCK,
       ].join('\n');
       this.sessionManager.send(existingReviewSessionId, followUp);
       const aiResult = await verdictPromise;
@@ -215,7 +237,7 @@ export class PRReviewService {
       diffData.diff,
       '```',
       ``,
-      `Respond with the same JSON review format as before.`,
+      REVIEW_JSON_SCHEMA_BLOCK,
     ].join('\n');
 
     // Increment iteration before sending so the DB reflects the new iteration
@@ -402,7 +424,6 @@ export class PRReviewService {
 
   buildPrompt(pr: PullRequest, diff: PRDiff, taskBody: string): string {
     return `You are a code reviewer. Compare the following GitHub PR against its task specification.
-Respond ONLY with a JSON object — no preamble, no markdown fences.
 
 ## PR Metadata
 Title: ${pr.title}
@@ -416,20 +437,7 @@ ${diff.diff}
 ${taskBody}
 
 ## Your task
-Evaluate the PR across exactly these 4 dimensions and respond with this JSON schema:
-{
-  "verdict": "approved" | "needs_changes" | "incomplete",
-  "dimensions": [
-    { "name": "Title and description vs task Summary",        "passed": bool, "notes": "..." },
-    { "name": "Diff vs Context spec",                         "passed": bool, "notes": "..." },
-    { "name": "Diff vs Acceptance Criteria",                  "passed": bool, "notes": "..." },
-    { "name": "Changed files vs Files/paths affected list",   "passed": bool, "notes": "..." }
-  ],
-  "summary": "2–4 sentence overall assessment"
-}
-verdict rules: "approved" = all 4 passed. "needs_changes" = 1–3 passed. "incomplete" = 0 passed.
-
-For the "Changed files vs Files/paths affected list" dimension: Pass if all changed files are either listed in the task OR are necessary downstream updates caused by the listed changes (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports). Fail only if the PR touches files unrelated to the task's intent.`;
+${REVIEW_JSON_SCHEMA_BLOCK}`;
   }
 
   parseReviewResult(events: SessionEvent[], prNumber: number, repo: string): PRReviewResult {
