@@ -122,6 +122,12 @@ export interface RuntimeSettings {
   auto_launch_concurrency: number;
   /** AutoLauncher poll interval in milliseconds. */
   auto_launch_poll_interval_ms: number;
+  /** Stuck-session timer: seconds before emitting a notify toast. */
+  session_notify_threshold_seconds: number;
+  /** Stuck-session timer: seconds before injecting a pause message. */
+  session_pause_threshold_seconds: number;
+  /** After pause, seconds during which a tool_use triggers a hard-stop. */
+  session_hard_stop_window_seconds: number;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -135,4 +141,7 @@ export const runtimeSettings: RuntimeSettings = {
   session_mode: (process.env.SESSION_MODE === 'api' ? 'api' : 'cli'),
   auto_launch_concurrency: Number(process.env.AUTO_LAUNCH_CONCURRENCY ?? 1),
   auto_launch_poll_interval_ms: Number(process.env.AUTO_LAUNCH_POLL_INTERVAL_MS ?? 60_000),
+  session_notify_threshold_seconds: Number(process.env.SESSION_NOTIFY_THRESHOLD_SECONDS ?? 3600),
+  session_pause_threshold_seconds: Number(process.env.SESSION_PAUSE_THRESHOLD_SECONDS ?? 7200),
+  session_hard_stop_window_seconds: Number(process.env.SESSION_HARD_STOP_WINDOW_SECONDS ?? 60),
 };

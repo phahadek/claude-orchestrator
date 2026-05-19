@@ -15,6 +15,9 @@ const SETTING_KEYS = [
   'session_mode',
   'auto_launch_concurrency',
   'auto_launch_poll_interval_ms',
+  'session_notify_threshold_seconds',
+  'session_pause_threshold_seconds',
+  'session_hard_stop_window_seconds',
 ] as const;
 
 type SettingKey = (typeof SETTING_KEYS)[number];
@@ -38,6 +41,12 @@ function applyToRuntime(key: SettingKey, value: string): void {
     runtimeSettings.auto_launch_concurrency = Number(value);
   } else if (key === 'auto_launch_poll_interval_ms') {
     runtimeSettings.auto_launch_poll_interval_ms = Number(value);
+  } else if (key === 'session_notify_threshold_seconds') {
+    runtimeSettings.session_notify_threshold_seconds = Number(value);
+  } else if (key === 'session_pause_threshold_seconds') {
+    runtimeSettings.session_pause_threshold_seconds = Number(value);
+  } else if (key === 'session_hard_stop_window_seconds') {
+    runtimeSettings.session_hard_stop_window_seconds = Number(value);
   }
 }
 
@@ -73,6 +82,9 @@ function runtimeSettingsAsRecord(): Record<SettingKey, string> {
     session_mode: runtimeSettings.session_mode,
     auto_launch_concurrency: String(runtimeSettings.auto_launch_concurrency),
     auto_launch_poll_interval_ms: String(runtimeSettings.auto_launch_poll_interval_ms),
+    session_notify_threshold_seconds: String(runtimeSettings.session_notify_threshold_seconds),
+    session_pause_threshold_seconds: String(runtimeSettings.session_pause_threshold_seconds),
+    session_hard_stop_window_seconds: String(runtimeSettings.session_hard_stop_window_seconds),
   };
 }
 

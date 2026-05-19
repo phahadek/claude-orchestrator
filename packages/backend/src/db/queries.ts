@@ -764,6 +764,12 @@ export function updateMergeState(
   });
 }
 
+/**
+ * Reset the review counter and clear any pause_reason on a PR row. Called from
+ * the re-review pathway in routes/prs.ts; clearing pause_reason here is what
+ * lets the stuck-session resume mechanism unblock auto-launch and auto-merge
+ * via the same call that resets the iteration counter.
+ */
 export function resetReviewIteration(prNumber: number, repo: string): void {
   db.prepare<{ pr_number: number; repo: string }>(`
     UPDATE pull_requests
@@ -782,9 +788,34 @@ export function setPauseReason(
   `).run({ pr_number: prNumber, repo, pause_reason: reason });
 }
 
+/**
+ * Returns the pause_reason of the most recent PR for the given Notion task id,
+ * or null if no PR exists or the PR is not paused. Used by auto-runner
+ * components to skip tasks paused by stuck_timeout (or any other reason).
+ */
+export function getPausedPrReasonForTask(notionTaskId: string): PauseReason | null {
+  const norm = notionTaskId.replace(/-/g, '');
+  const row = db.prepare<{ notion_task_id: string }>(`
+    SELECT pause_reason FROM pull_requests
+    WHERE REPLACE(COALESCE(notion_task_id, ''), '-', '') = @notion_task_id
+      AND pause_reason IS NOT NULL
+    ORDER BY pr_number DESC
+    LIMIT 1
+  `).get({ notion_task_id: norm }) as { pause_reason: string | null } | undefined;
+  return (row?.pause_reason as PauseReason | null) ?? null;
+}
+
+/**
+ * Approved + open PRs that are eligible to be auto-merged. Excludes PRs paused
+ * via any pause_reason (e.g. stuck_timeout) so the Auto-merger skips tasks that
+ * a human needs to look at first — see AC under "Stuck session timer".
+ */
 export function getApprovedOpenPRs(): PullRequestRow[] {
   return db.prepare(`
-    SELECT * FROM pull_requests WHERE state = 'open' AND review_result LIKE '%approved%'
+    SELECT * FROM pull_requests
+    WHERE state = 'open'
+      AND review_result LIKE '%approved%'
+      AND pause_reason IS NULL
   `).all() as PullRequestRow[];
 }
 

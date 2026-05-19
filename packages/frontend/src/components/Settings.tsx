@@ -14,6 +14,9 @@ interface SettingsValues {
   code_session_model: string;
   review_session_model: string;
   session_mode: string;
+  session_notify_threshold_seconds: string;
+  session_pause_threshold_seconds: string;
+  session_hard_stop_window_seconds: string;
 }
 
 const MODEL_OPTIONS = [
@@ -75,7 +78,7 @@ export function Settings({ initialTab = 'general' }: Props) {
     }
   }
 
-  function numInput(key: keyof SettingsValues, label: string, min = 0, max = 999) {
+  function numInput(key: keyof SettingsValues, label: string, min = 0, max = 999, step = 1) {
     const val = Number(settings?.[key] ?? 0);
     return (
       <div className={styles.field}>
@@ -84,7 +87,7 @@ export function Settings({ initialTab = 'general' }: Props) {
           <button
             type="button"
             className={styles.stepBtn}
-            onClick={() => handleChange(key, String(Math.max(min, val - 1)))}
+            onClick={() => handleChange(key, String(Math.max(min, val - step)))}
             disabled={val <= min}
           >−</button>
           <input
@@ -93,12 +96,13 @@ export function Settings({ initialTab = 'general' }: Props) {
             value={val}
             min={min}
             max={max}
+            step={step}
             onChange={(e) => handleChange(key, e.target.value)}
           />
           <button
             type="button"
             className={styles.stepBtn}
-            onClick={() => handleChange(key, String(Math.min(max, val + 1)))}
+            onClick={() => handleChange(key, String(Math.min(max, val + step)))}
             disabled={val >= max}
           >+</button>
         </div>
@@ -199,6 +203,15 @@ export function Settings({ initialTab = 'general' }: Props) {
                     ))}
                   </select>
                 </div>
+
+                <h3 className={styles.sectionTitle}>Stuck-session Timer</h3>
+                <p className={styles.hint}>
+                  Wall-clock thresholds (in seconds) measured since the later of
+                  session start and last review event. Set to 0 to disable.
+                </p>
+                {numInput('session_notify_threshold_seconds', 'Notify threshold (seconds)', 0, 86400, 60)}
+                {numInput('session_pause_threshold_seconds', 'Pause threshold (seconds)', 0, 86400, 60)}
+                {numInput('session_hard_stop_window_seconds', 'Hard-stop window after pause (seconds)', 0, 3600, 10)}
 
                 <h3 className={styles.sectionTitle}>Notifications</h3>
                 <div className={styles.field}>

@@ -26,6 +26,7 @@ import { ReviewOrchestrator } from './github/ReviewOrchestrator';
 import { PRMergeWatcher } from './github/PRMergeWatcher';
 import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
 import { AutoLauncher } from './orchestration/AutoLauncher';
+import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
 import { deleteGhostSessions, getPRBySessionId, setPRReviewResult, setLastReviewedSha, setHeadSha, getSetting, setPendingPush } from './db/queries';
 import { shouldAutoReview, formatReviewFeedback } from './github/reviewUtils';
 import type { PRReviewResult } from './github/PRReviewService';
@@ -263,6 +264,10 @@ wss.on('connection', (ws) => {
 // reservations (orphan resume reserves slots from this.sessions.size).
 const autoLauncher = new AutoLauncher(sessionManager, broadcast);
 
+// Stuck-session timer: notify → pause → hard-stop. Wires itself to SessionManager
+// events on construction; lifetime tied to the process.
+const stuckSessionMonitor = new StuckSessionMonitor(sessionManager, broadcast);
+
 jsonlReader.importAll().then(async () => {
   jsonlReader.backfillTokens();
 
@@ -288,6 +293,7 @@ jsonlReader.importAll().then(async () => {
 async function gracefulShutdown(signal: string) {
   console.log(`[server] ${signal} received — shutting down`);
   autoLauncher.stop();
+  stuckSessionMonitor.stop();
   wss.close();
   await sessionManager.shutdownAll();
   server.close();

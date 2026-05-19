@@ -22,6 +22,7 @@ beforeEach(() => {
   db.prepare('DELETE FROM sessions').run();
   db.prepare('DELETE FROM milestones').run();
   db.prepare('DELETE FROM projects').run();
+  db.prepare('DELETE FROM pull_requests').run();
   runtimeSettings.auto_launch_concurrency = 1;
   runtimeSettings.auto_launch_poll_interval_ms = 60_000;
 });
@@ -211,6 +212,29 @@ describe('AutoLauncher', () => {
     const sm = makeMockSessionManager();
     const task = makeTask();
     (task as { pause_reason?: string | null }).pause_reason = 'investigating';
+    const backend = makeMockBackend([makeResolved(task)]);
+
+    const launcher = new AutoLauncher(sm, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+    expect((sm as unknown as { start: ReturnType<typeof vi.fn> }).start).not.toHaveBeenCalled();
+  });
+
+  it('skips tasks whose PR has a non-null pause_reason in SQLite', async () => {
+    const sm = makeMockSessionManager();
+    const task = makeTask({ id: 'paused-task' });
+    db.prepare(`
+      INSERT INTO pull_requests
+        (pr_number, pr_url, notion_task_id, session_id, repo, state,
+         created_at, updated_at, synced_at, pause_reason)
+      VALUES
+        (1, 'https://github.com/o/r/pull/1', @notion_task_id, NULL, 'o/r', 'open',
+         'now', 'now', 'now', 'stuck_timeout')
+    `).run({ notion_task_id: task.id });
     const backend = makeMockBackend([makeResolved(task)]);
 
     const launcher = new AutoLauncher(sm, undefined, {

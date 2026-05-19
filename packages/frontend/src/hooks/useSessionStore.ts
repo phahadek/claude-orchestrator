@@ -77,6 +77,9 @@ export function useSessionStore() {
   const [prRefreshTrigger, setPrRefreshTrigger] = useState(0);
   const [lastPrReviewEvent, setLastPrReviewEvent] = useState<{ prNumber: number; repo: string; verdict: string; summary: string; replay?: boolean } | null>(null);
   const [lastReviewEscalation, setLastReviewEscalation] = useState<{ prNumber: number; repo: string; message: string; receivedAt: number } | null>(null);
+  const [lastStuckNotification, setLastStuckNotification] = useState<{ sessionId: string; taskName: string; message: string; receivedAt: number } | null>(null);
+  const [lastStuckPaused, setLastStuckPaused] = useState<{ sessionId: string; taskName: string; receivedAt: number } | null>(null);
+  const [lastStuckKilled, setLastStuckKilled] = useState<{ sessionId: string; taskName: string; receivedAt: number } | null>(null);
   const [incompleteReviews, setIncompleteReviews] = useState<IncompleteReview[]>([]);
   const [lastTaskUpdate, setLastTaskUpdate] = useState<TaskView | null>(null);
   const [taskListRefreshTrigger, setTaskListRefreshTrigger] = useState(0);
@@ -261,6 +264,17 @@ export function useSessionStore() {
       setLastReviewEscalation({ prNumber: msg.prNumber, repo: msg.repo, message: msg.message, receivedAt: Date.now() });
       setTaskListRefreshTrigger((n) => n + 1);
     }
+    if (msg.type === 'stuck_session_notified') {
+      setLastStuckNotification({ sessionId: msg.sessionId, taskName: msg.taskName, message: msg.message, receivedAt: Date.now() });
+    }
+    if (msg.type === 'stuck_session_paused') {
+      setLastStuckPaused({ sessionId: msg.sessionId, taskName: msg.taskName, receivedAt: Date.now() });
+      setTaskListRefreshTrigger((n) => n + 1);
+    }
+    if (msg.type === 'stuck_session_killed') {
+      setLastStuckKilled({ sessionId: msg.sessionId, taskName: msg.taskName, receivedAt: Date.now() });
+      setTaskListRefreshTrigger((n) => n + 1);
+    }
   }, []);
 
   const resetTasks = useCallback(() => {
@@ -338,5 +352,5 @@ export function useSessionStore() {
   const readyCount = tasks.filter((t) => !t.blocked && t.task.status === '🗂️ Ready').length;
   const blockedCount = tasks.filter((t) => t.blocked).length;
 
-  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials, clearSessionDenials, prRefreshTrigger, lastPrReviewEvent, lastReviewEscalation, incompleteReviews, dismissIncompleteReviews, lastTaskUpdate, taskListRefreshTrigger };
+  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials, clearSessionDenials, prRefreshTrigger, lastPrReviewEvent, lastReviewEscalation, lastStuckNotification, lastStuckPaused, lastStuckKilled, incompleteReviews, dismissIncompleteReviews, lastTaskUpdate, taskListRefreshTrigger };
 }

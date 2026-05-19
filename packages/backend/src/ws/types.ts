@@ -100,6 +100,9 @@ export type ServerMessage =
   | { type: 'pr_mergeability_changed'; prNumber: number; repo: string; mergeable: boolean | null; mergeState: string | null; failingChecks?: string[] | null }
   | { type: 'review_escalated';      prNumber: number; repo: string; message: string }
   | { type: 'review_incomplete';     prNumber: number; repo: string; message: string }
+  | { type: 'stuck_session_notified'; sessionId: string; taskName: string; message: string }
+  | { type: 'stuck_session_paused';   sessionId: string; taskName: string; prNumber?: number; repo?: string }
+  | { type: 'stuck_session_killed';   sessionId: string; taskName: string }
   | { type: 'session_audit';         sessionId: string; prOpened: boolean; prTargetsBranch: string | null; violations: string[]; specMismatch: string | null; auditedAt: string }
   | { type: 'task_status_changed';   notionTaskId: string; newStatus: string }
   | { type: 'task_updated';          task: TaskView }
