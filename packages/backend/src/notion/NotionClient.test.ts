@@ -169,7 +169,9 @@ describe('parseExpectedSize()', () => {
   });
 
   it('returns undefined when the section is empty or non-numeric', () => {
-    expect(parseExpectedSize(`## Expected size\n\n## Summary\nx`)).toBeUndefined();
+    expect(
+      parseExpectedSize(`## Expected size\n\n## Summary\nx`),
+    ).toBeUndefined();
     expect(parseExpectedSize(`## Expected size\nlarge\n`)).toBeUndefined();
   });
 });
