@@ -898,6 +898,34 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
     expect(result.verdict).toBe('approved');
   });
 
+  it('live-session follow-up inlines the full JSON schema (not a reference to "same format")', async () => {
+    const prRowWithLiveSession = { ...mockPRRow, review_session_id: 'existing-review-session-id' };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithLiveSession as any);
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    (mockSM.send as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+      setImmediate(() =>
+        mockSM.emit('message', makeSessionEventMessage('existing-review-session-id', JSON.stringify(claudePayload))),
+      );
+    });
+
+    const service = new PRReviewService(makeMockGitHub(), makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    await service.reviewPR(42, 'owner/repo');
+
+    const [, followUp] = (mockSM.send as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(followUp).not.toContain('same JSON review format as before');
+    expect(followUp).toContain('"verdict"');
+    expect(followUp).toContain('"dimensions"');
+    expect(followUp).toContain('Title and description vs task Summary');
+    expect(followUp).toContain('Diff vs Context spec');
+    expect(followUp).toContain('Diff vs Acceptance Criteria');
+    expect(followUp).toContain('Changed files vs Files/paths affected list');
+    expect(followUp).toContain('verdict rules:');
+    expect(followUp).toContain('necessary downstream updates caused by the listed changes');
+  });
+
   it('does not overwrite review_session_id when reusing an existing live session', async () => {
     const prRowWithLiveSession = { ...mockPRRow, review_session_id: 'existing-review-session-id' };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithLiveSession as any);
@@ -1003,5 +1031,32 @@ describe('PRReviewService.reReviewPR()', () => {
     await service.reReviewPR(42, 'owner/repo');
 
     expect(vi.mocked(setReviewSessionId)).toHaveBeenCalledWith(42, 'owner/repo', 'new-review-session');
+  });
+
+  it('follow-up inlines the full JSON schema (not a reference to "same format")', async () => {
+    const prRowWithSession = { ...mockPRRow, review_session_id: 'review-session-abc' };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(async (sessionId: string) => {
+      setImmediate(() =>
+        mockSM.emit('message', makeSessionEventMessage(sessionId, JSON.stringify(claudePayload))),
+      );
+      return sessionId;
+    });
+
+    const service = new PRReviewService(makeMockGitHub(), makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    await service.reReviewPR(42, 'owner/repo');
+
+    const [, followUp] = (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(followUp).not.toContain('same JSON review format as before');
+    expect(followUp).toContain('"verdict"');
+    expect(followUp).toContain('"dimensions"');
+    expect(followUp).toContain('Title and description vs task Summary');
+    expect(followUp).toContain('Diff vs Context spec');
+    expect(followUp).toContain('Diff vs Acceptance Criteria');
+    expect(followUp).toContain('Changed files vs Files/paths affected list');
+    expect(followUp).toContain('verdict rules:');
+    expect(followUp).toContain('necessary downstream updates caused by the listed changes');
   });
 });
