@@ -46,6 +46,7 @@ vi.mock('../db/queries', () => ({
   setSessionModel: vi.fn(),
   getPRBySessionId: vi.fn(() => null),
   getPRByNotionTaskId: vi.fn(() => null),
+  getPRByNumber: vi.fn(() => null),
   setHeadSha: vi.fn(),
 }));
 
@@ -53,7 +54,7 @@ import { AgentSession } from '../session/AgentSession';
 import { spawn } from 'child_process';
 import type { NotionClient } from '../notion/NotionClient';
 import type { ServerMessage } from '../ws/types';
-import { getRules, getEventsBySession, updateSessionStatus, upsertSessionEvent, getPRBySessionId } from '../db/queries';
+import { getRules, getEventsBySession, updateSessionStatus, upsertSessionEvent, getPRBySessionId, getPRByNumber } from '../db/queries';
 import type { PermissionRule } from '../db/types';
 
 function fakeNotionClient(): NotionClient {
@@ -459,6 +460,83 @@ describe('AgentSession', () => {
     await runPromise;
 
     expect(notion.updateStatus).toHaveBeenCalledWith('task-id', '👀 In Review');
+  });
+
+  // ── AC: handleCleanExit() does NOT regress a merged PR back to In Review ──
+  // After a Merge click, the merge flow sets the local PR row to state='merged'
+  // and the Notion task to '✅ Done'. handleCleanExit then fires for the ended
+  // session and must NOT write '👀 In Review' on top of that.
+  it('does NOT call updateStatus In Review when the PR row is already merged', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'merged-pr-session',
+        event_type: 'text',
+        payload: JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'PR: https://github.com/owner/repo/pull/9' }] } }),
+        timestamp: Date.now(),
+        message_id: null,
+      },
+    ]);
+    vi.mocked(getPRByNumber).mockReturnValue({ pr_number: 9, repo: 'owner/repo', state: 'merged' } as never);
+
+    const session = new AgentSession(
+      'merged-pr-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const messages: ServerMessage[] = [];
+    session.on('message', (msg: ServerMessage) => messages.push(msg));
+
+    const runPromise = session.run();
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    expect(notion.updateStatus).not.toHaveBeenCalled();
+    const statusBroadcasts = messages.filter((m) => m.type === 'task_status_changed');
+    expect(statusBroadcasts).toHaveLength(0);
+  });
+
+  it('does NOT call updateStatus In Review when the PR row is closed', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'closed-pr-session',
+        event_type: 'text',
+        payload: JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'PR: https://github.com/owner/repo/pull/10' }] } }),
+        timestamp: Date.now(),
+        message_id: null,
+      },
+    ]);
+    vi.mocked(getPRByNumber).mockReturnValue({ pr_number: 10, repo: 'owner/repo', state: 'closed' } as never);
+
+    const session = new AgentSession(
+      'closed-pr-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const runPromise = session.run();
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    expect(notion.updateStatus).not.toHaveBeenCalled();
   });
 
   // ── AC: handleCleanExit() does NOT call updateStatus In Review when no PR ──
