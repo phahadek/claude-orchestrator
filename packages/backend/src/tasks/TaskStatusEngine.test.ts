@@ -1,10 +1,10 @@
-import { describe, it, expect } from 'vitest';
-import { deriveDisplayStatus } from './TaskStatusEngine';
-import type { TaskStatusInput } from './TaskStatusEngine';
+import { describe, it, expect } from "vitest";
+import { deriveDisplayStatus } from "./TaskStatusEngine";
+import type { TaskStatusInput } from "./TaskStatusEngine";
 
 function makeInput(overrides: Partial<TaskStatusInput> = {}): TaskStatusInput {
   return {
-    notionStatus: '🗂️ Ready',
+    notionStatus: "🗂️ Ready",
     codeSessionStatus: null,
     prState: null,
     prDraft: false,
@@ -15,89 +15,116 @@ function makeInput(overrides: Partial<TaskStatusInput> = {}): TaskStatusInput {
   };
 }
 
-describe('deriveDisplayStatus', () => {
+describe("deriveDisplayStatus", () => {
   // ─── Notion status as primary source of truth ──────────────────────────────
 
   it("returns 'in_progress' when Notion says In Progress even with an open PR", () => {
     expect(
       deriveDisplayStatus(
-        makeInput({ notionStatus: '🔄 In Progress', prState: 'open' }),
+        makeInput({ notionStatus: "🔄 In Progress", prState: "open" }),
       ),
-    ).toBe('in_progress');
+    ).toBe("in_progress");
   });
 
   it("returns 'in_review' when Notion says In Review and no open PR", () => {
     expect(
       deriveDisplayStatus(
-        makeInput({ notionStatus: '👀 In Review', prState: null }),
+        makeInput({ notionStatus: "👀 In Review", prState: null }),
       ),
-    ).toBe('in_review');
+    ).toBe("in_review");
   });
 
   it("returns 'in_progress' when Notion says In Progress and session is running", () => {
     expect(
       deriveDisplayStatus(
-        makeInput({ notionStatus: '🔄 In Progress', codeSessionStatus: 'running' }),
+        makeInput({
+          notionStatus: "🔄 In Progress",
+          codeSessionStatus: "running",
+        }),
       ),
-    ).toBe('in_progress');
+    ).toBe("in_progress");
   });
 
   it("returns 'ready' when Notion says Ready even if session is running", () => {
     expect(
       deriveDisplayStatus(
-        makeInput({ notionStatus: '🗂️ Ready', codeSessionStatus: 'running' }),
+        makeInput({ notionStatus: "🗂️ Ready", codeSessionStatus: "running" }),
       ),
-    ).toBe('ready');
+    ).toBe("ready");
   });
 
   it("returns 'ready' when Notion says Ready even if PR is open", () => {
     expect(
       deriveDisplayStatus(
-        makeInput({ notionStatus: '🗂️ Ready', prState: 'open' }),
+        makeInput({ notionStatus: "🗂️ Ready", prState: "open" }),
       ),
-    ).toBe('ready');
+    ).toBe("ready");
   });
 
   // ─── ready ─────────────────────────────────────────────────────────────────
 
   it("returns 'ready' when notionStatus is '🗂️ Ready' and codeSessionStatus is null", () => {
-    expect(deriveDisplayStatus(makeInput())).toBe('ready');
+    expect(deriveDisplayStatus(makeInput())).toBe("ready");
   });
 
   it("returns 'ready' when all inputs indicate no active work", () => {
     expect(
       deriveDisplayStatus(
-        makeInput({ notionStatus: '🗂️ Ready', codeSessionStatus: null, prState: null }),
+        makeInput({
+          notionStatus: "🗂️ Ready",
+          codeSessionStatus: null,
+          prState: null,
+        }),
       ),
-    ).toBe('ready');
+    ).toBe("ready");
   });
 
   // ─── in_progress ───────────────────────────────────────────────────────────
 
   it("returns 'in_progress' when notionStatus is '🔄 In Progress' and no running session", () => {
     expect(
-      deriveDisplayStatus(makeInput({ notionStatus: '🔄 In Progress', codeSessionStatus: null, prState: null })),
-    ).toBe('in_progress');
+      deriveDisplayStatus(
+        makeInput({
+          notionStatus: "🔄 In Progress",
+          codeSessionStatus: null,
+          prState: null,
+        }),
+      ),
+    ).toBe("in_progress");
   });
 
   // ─── in_review ─────────────────────────────────────────────────────────────
 
   it("returns 'in_review' when notionStatus is '👀 In Review' and PR is open", () => {
     expect(
-      deriveDisplayStatus(makeInput({ notionStatus: '👀 In Review', prState: 'open' })),
-    ).toBe('in_review');
+      deriveDisplayStatus(
+        makeInput({ notionStatus: "👀 In Review", prState: "open" }),
+      ),
+    ).toBe("in_review");
   });
 
   it("returns 'in_review' when notionStatus is '👀 In Review' and reviewVerdict is 'needs_changes'", () => {
     expect(
-      deriveDisplayStatus(makeInput({ notionStatus: '👀 In Review', prState: 'open', reviewVerdict: 'needs_changes' })),
-    ).toBe('in_review');
+      deriveDisplayStatus(
+        makeInput({
+          notionStatus: "👀 In Review",
+          prState: "open",
+          reviewVerdict: "needs_changes",
+        }),
+      ),
+    ).toBe("in_review");
   });
 
   it("returns 'in_review' when notionStatus is '👀 In Review' and reviewVerdict is 'incomplete'", () => {
     expect(
-      deriveDisplayStatus(makeInput({ notionStatus: '👀 In Review', prState: 'open', reviewVerdict: 'incomplete' })),
-    ).toBe('in_review');
+      deriveDisplayStatus(
+        makeInput({
+          notionStatus: "👀 In Review",
+          prState: "open",
+          reviewVerdict: "incomplete",
+        }),
+      ),
+    ).toBe("in_review");
   });
 
   // ─── needs_attention ───────────────────────────────────────────────────────
@@ -105,33 +132,54 @@ describe('deriveDisplayStatus', () => {
   it("returns 'needs_attention' when notionStatus is '👀 In Review' and reviewIterationCount >= reviewIterationCap", () => {
     expect(
       deriveDisplayStatus(
-        makeInput({ notionStatus: '👀 In Review', prState: 'open', reviewIterationCount: 3, reviewIterationCap: 3 }),
+        makeInput({
+          notionStatus: "👀 In Review",
+          prState: "open",
+          reviewIterationCount: 3,
+          reviewIterationCap: 3,
+        }),
       ),
-    ).toBe('needs_attention');
+    ).toBe("needs_attention");
   });
 
   it("returns 'needs_attention' when notionStatus is '👀 In Review' and count exceeds cap", () => {
     expect(
       deriveDisplayStatus(
-        makeInput({ notionStatus: '👀 In Review', prState: 'open', reviewIterationCount: 5, reviewIterationCap: 3 }),
+        makeInput({
+          notionStatus: "👀 In Review",
+          prState: "open",
+          reviewIterationCount: 5,
+          reviewIterationCap: 3,
+        }),
       ),
-    ).toBe('needs_attention');
+    ).toBe("needs_attention");
   });
 
   it("does NOT return 'needs_attention' when count is below cap", () => {
     expect(
       deriveDisplayStatus(
-        makeInput({ notionStatus: '👀 In Review', prState: 'open', reviewIterationCount: 2, reviewIterationCap: 3 }),
+        makeInput({
+          notionStatus: "👀 In Review",
+          prState: "open",
+          reviewIterationCount: 2,
+          reviewIterationCap: 3,
+        }),
       ),
-    ).toBe('in_review');
+    ).toBe("in_review");
   });
 
   // ─── ready_to_merge ────────────────────────────────────────────────────────
 
   it("returns 'ready_to_merge' when notionStatus is '👀 In Review', reviewVerdict is 'approved' and prState is 'open'", () => {
     expect(
-      deriveDisplayStatus(makeInput({ notionStatus: '👀 In Review', prState: 'open', reviewVerdict: 'approved' })),
-    ).toBe('ready_to_merge');
+      deriveDisplayStatus(
+        makeInput({
+          notionStatus: "👀 In Review",
+          prState: "open",
+          reviewVerdict: "approved",
+        }),
+      ),
+    ).toBe("ready_to_merge");
   });
 
   it("returns 'ready_to_merge' even when iteration cap is reached if verdict is approved", () => {
@@ -139,89 +187,114 @@ describe('deriveDisplayStatus', () => {
     expect(
       deriveDisplayStatus(
         makeInput({
-          notionStatus: '👀 In Review',
-          prState: 'open',
-          reviewVerdict: 'approved',
+          notionStatus: "👀 In Review",
+          prState: "open",
+          reviewVerdict: "approved",
           reviewIterationCount: 5,
           reviewIterationCap: 3,
         }),
       ),
-    ).toBe('ready_to_merge');
+    ).toBe("ready_to_merge");
   });
 
   // ─── done ──────────────────────────────────────────────────────────────────
 
   it("returns 'done' when prState is 'merged'", () => {
-    expect(deriveDisplayStatus(makeInput({ prState: 'merged' }))).toBe('done');
+    expect(deriveDisplayStatus(makeInput({ prState: "merged" }))).toBe("done");
   });
 
   it("returns 'done' when prState is 'closed'", () => {
-    expect(deriveDisplayStatus(makeInput({ prState: 'closed' }))).toBe('done');
+    expect(deriveDisplayStatus(makeInput({ prState: "closed" }))).toBe("done");
   });
 
   it("returns 'done' even when reviewVerdict is 'approved' if PR is merged", () => {
     expect(
-      deriveDisplayStatus(makeInput({ prState: 'merged', reviewVerdict: 'approved' })),
-    ).toBe('done');
+      deriveDisplayStatus(
+        makeInput({ prState: "merged", reviewVerdict: "approved" }),
+      ),
+    ).toBe("done");
   });
 
   it("returns 'done' when prState is 'merged' regardless of Notion status", () => {
     expect(
-      deriveDisplayStatus(makeInput({ notionStatus: '🔄 In Progress', prState: 'merged' })),
-    ).toBe('done');
+      deriveDisplayStatus(
+        makeInput({ notionStatus: "🔄 In Progress", prState: "merged" }),
+      ),
+    ).toBe("done");
   });
 
   // ─── Notion status fallback ────────────────────────────────────────────────
 
   it("returns 'done' when notionStatus is '✅ Done' and no PR/session", () => {
     expect(
-      deriveDisplayStatus(makeInput({ notionStatus: '✅ Done', codeSessionStatus: null, prState: null })),
-    ).toBe('done');
+      deriveDisplayStatus(
+        makeInput({
+          notionStatus: "✅ Done",
+          codeSessionStatus: null,
+          prState: null,
+        }),
+      ),
+    ).toBe("done");
   });
 
   it("returns 'in_review' when notionStatus is '👀 In Review' and no PR", () => {
     expect(
-      deriveDisplayStatus(makeInput({ notionStatus: '👀 In Review', codeSessionStatus: null, prState: null })),
-    ).toBe('in_review');
+      deriveDisplayStatus(
+        makeInput({
+          notionStatus: "👀 In Review",
+          codeSessionStatus: null,
+          prState: null,
+        }),
+      ),
+    ).toBe("in_review");
   });
 
   // ─── priority ordering ─────────────────────────────────────────────────────
 
-  it('done (merged PR) takes priority over Notion In Progress', () => {
+  it("done (merged PR) takes priority over Notion In Progress", () => {
     expect(
       deriveDisplayStatus(
-        makeInput({ notionStatus: '🔄 In Progress', prState: 'merged' }),
+        makeInput({ notionStatus: "🔄 In Progress", prState: "merged" }),
       ),
-    ).toBe('done');
+    ).toBe("done");
   });
 
-  it('done (merged PR) takes priority over ready_to_merge', () => {
-    expect(
-      deriveDisplayStatus(
-        makeInput({ notionStatus: '👀 In Review', prState: 'merged', reviewVerdict: 'approved' }),
-      ),
-    ).toBe('done');
-  });
-
-  it('ready_to_merge takes priority over needs_attention (within In Review)', () => {
+  it("done (merged PR) takes priority over ready_to_merge", () => {
     expect(
       deriveDisplayStatus(
         makeInput({
-          notionStatus: '👀 In Review',
-          prState: 'open',
-          reviewVerdict: 'approved',
+          notionStatus: "👀 In Review",
+          prState: "merged",
+          reviewVerdict: "approved",
+        }),
+      ),
+    ).toBe("done");
+  });
+
+  it("ready_to_merge takes priority over needs_attention (within In Review)", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({
+          notionStatus: "👀 In Review",
+          prState: "open",
+          reviewVerdict: "approved",
           reviewIterationCount: 10,
           reviewIterationCap: 3,
         }),
       ),
-    ).toBe('ready_to_merge');
+    ).toBe("ready_to_merge");
   });
 
-  it('needs_attention takes priority over in_review (within In Review)', () => {
+  it("needs_attention takes priority over in_review (within In Review)", () => {
     expect(
       deriveDisplayStatus(
-        makeInput({ notionStatus: '👀 In Review', prState: 'open', reviewIterationCount: 3, reviewIterationCap: 3 }),
+        makeInput({
+          notionStatus: "👀 In Review",
+          prState: "open",
+          reviewIterationCount: 3,
+          reviewIterationCap: 3,
+        }),
       ),
-    ).toBe('needs_attention');
+    ).toBe("needs_attention");
   });
 });

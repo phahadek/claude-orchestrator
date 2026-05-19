@@ -1,12 +1,12 @@
 // ─── sessions ──────────────────────────────────────────────────────────────
 
 export type SessionStatus =
-  | 'starting'
-  | 'running'
-  | 'needs_permission'
-  | 'done'
-  | 'error'
-  | 'killed';
+  | "starting"
+  | "running"
+  | "needs_permission"
+  | "done"
+  | "error"
+  | "killed";
 
 export interface Session {
   session_id: string;
@@ -30,7 +30,21 @@ export interface Session {
   task_name: string | null;
 }
 
-export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path' | 'archived' | 'favorited' | 'project_id' | 'session_type' | 'note' | 'tags' | 'total_input_tokens' | 'total_output_tokens' | 'task_name'> & {
+export type NewSession = Omit<
+  Session,
+  | "ended_at"
+  | "pr_url"
+  | "worktree_path"
+  | "archived"
+  | "favorited"
+  | "project_id"
+  | "session_type"
+  | "note"
+  | "tags"
+  | "total_input_tokens"
+  | "total_output_tokens"
+  | "task_name"
+> & {
   ended_at?: number | null;
   pr_url?: string | null;
   worktree_path?: string | null;
@@ -47,7 +61,13 @@ export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path' |
 
 // ─── session_events ────────────────────────────────────────────────────────
 
-export type EventType = 'text' | 'tool_use' | 'tool_result' | 'system' | 'error' | 'user_message';
+export type EventType =
+  | "text"
+  | "tool_use"
+  | "tool_result"
+  | "system"
+  | "error"
+  | "user_message";
 
 export interface SessionEvent {
   id: number;
@@ -58,11 +78,15 @@ export interface SessionEvent {
   message_id?: string | null;
 }
 
-export type NewSessionEvent = Omit<SessionEvent, 'id'>;
+export type NewSessionEvent = Omit<SessionEvent, "id">;
 
 // ─── permission_events ─────────────────────────────────────────────────────
 
-export type PermissionDecision = 'auto_allow' | 'auto_deny' | 'approved' | 'denied';
+export type PermissionDecision =
+  | "auto_allow"
+  | "auto_deny"
+  | "approved"
+  | "denied";
 
 export interface PermissionEvent {
   id: number;
@@ -74,12 +98,12 @@ export interface PermissionEvent {
   decided_at: number;
 }
 
-export type NewPermissionEvent = Omit<PermissionEvent, 'id'>;
+export type NewPermissionEvent = Omit<PermissionEvent, "id">;
 
 // ─── permission_rules ──────────────────────────────────────────────────────
 
-export type MatchType = 'glob' | 'regex';
-export type RuleDecision = 'allow' | 'deny';
+export type MatchType = "glob" | "regex";
+export type RuleDecision = "allow" | "deny";
 
 export interface PermissionRule {
   id: number;
@@ -91,7 +115,7 @@ export interface PermissionRule {
   enabled: number; // 0 | 1 (SQLite boolean)
 }
 
-export type NewPermissionRule = Omit<PermissionRule, 'id'>;
+export type NewPermissionRule = Omit<PermissionRule, "id">;
 
 // ─── permission_denials ─────────────────────────────────────────────────────
 
@@ -104,7 +128,7 @@ export interface PermissionDenialRow {
   timestamp: number;
 }
 
-export type NewPermissionDenialRow = Omit<PermissionDenialRow, 'id'>;
+export type NewPermissionDenialRow = Omit<PermissionDenialRow, "id">;
 
 // ─── task_cache ────────────────────────────────────────────────────────────
 
@@ -116,7 +140,7 @@ export interface TaskCache {
 
 // ─── projects ──────────────────────────────────────────────────────────────
 
-export type TaskSource = 'notion' | 'yaml';
+export type TaskSource = "notion" | "yaml";
 
 export interface ProjectRow {
   id: string;
@@ -131,7 +155,13 @@ export interface ProjectRow {
   updated_at: number;
 }
 
-export type NewProjectRow = Omit<ProjectRow, 'created_at' | 'updated_at' | 'auto_launch_enabled' | 'auto_launch_milestone_id'> & {
+export type NewProjectRow = Omit<
+  ProjectRow,
+  | "created_at"
+  | "updated_at"
+  | "auto_launch_enabled"
+  | "auto_launch_milestone_id"
+> & {
   auto_launch_enabled?: number;
   auto_launch_milestone_id?: string | null;
   created_at?: number;
@@ -150,7 +180,10 @@ export interface MilestoneRow {
   updated_at: number;
 }
 
-export type NewMilestoneRow = Omit<MilestoneRow, 'created_at' | 'updated_at' | 'display_order'> & {
+export type NewMilestoneRow = Omit<
+  MilestoneRow,
+  "created_at" | "updated_at" | "display_order"
+> & {
   display_order?: number;
   created_at?: number;
   updated_at?: number;
@@ -170,7 +203,7 @@ export interface PullRequestRow {
   head_branch: string | null;
   base_branch: string | null;
   state: string;
-  draft: number;              // 0 | 1 (SQLite boolean)
+  draft: number; // 0 | 1 (SQLite boolean)
   review_result: string | null; // JSON
   review_at: string | null;
   created_at: string | null;
@@ -180,9 +213,9 @@ export interface PullRequestRow {
   review_iteration: number;
   head_sha: string | null;
   last_reviewed_sha: string | null;
-  node_id: string | null;     // GitHub GraphQL global ID
-  mergeable: number | null;   // 0 | 1 | NULL (SQLite boolean, NULL = unknown)
+  node_id: string | null; // GitHub GraphQL global ID
+  mergeable: number | null; // 0 | 1 | NULL (SQLite boolean, NULL = unknown)
   merge_state: string | null; // 'clean' | 'dirty' | 'blocked' | 'unknown' | null
   merge_state_checked_at: string | null; // ISO timestamp
-  pending_push: number;       // 0 | 1 — push arrived before initial review completed
+  pending_push: number; // 0 | 1 — push arrived before initial review completed
 }

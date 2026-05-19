@@ -48,8 +48,8 @@
  *   node scripts/jira-export.mjs export --env packages/backend/.env
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { resolve } from 'path';
+import { readFileSync, writeFileSync, existsSync } from "fs";
+import { resolve } from "path";
 
 // ── Arg parsing ───────────────────────────────────────────────────────────────
 
@@ -70,18 +70,20 @@ function option(name) {
   return val;
 }
 
-const envPath = option('--env');
-const configPath = option('--config') ?? 'jira-config.yaml';
-const outputPath = option('--output') ?? 'tasks.yaml';
-const inputPath = option('--input') ?? 'tasks.yaml';
-const jqlOverride = option('--jql');
-const dryRun = flag('--dry-run');
+const envPath = option("--env");
+const configPath = option("--config") ?? "jira-config.yaml";
+const outputPath = option("--output") ?? "tasks.yaml";
+const inputPath = option("--input") ?? "tasks.yaml";
+const jqlOverride = option("--jql");
+const dryRun = flag("--dry-run");
 
 // First positional arg is the direction
-const direction = args[0] ?? 'export';
+const direction = args[0] ?? "export";
 
-if (direction !== 'export' && direction !== 'sync') {
-  console.error(`Error: unknown direction "${direction}". Use "export" or "sync".`);
+if (direction !== "export" && direction !== "sync") {
+  console.error(
+    `Error: unknown direction "${direction}". Use "export" or "sync".`,
+  );
   process.exit(1);
 }
 
@@ -90,11 +92,11 @@ if (direction !== 'export' && direction !== 'sync') {
 if (envPath) {
   try {
     const abs = resolve(process.cwd(), envPath);
-    const lines = readFileSync(abs, 'utf8').split('\n');
+    const lines = readFileSync(abs, "utf8").split("\n");
     for (const line of lines) {
       const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.+)\s*$/);
       if (m && !process.env[m[1]]) {
-        process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+        process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
       }
     }
   } catch (e) {
@@ -104,13 +106,15 @@ if (envPath) {
 
 // ── Validate credentials ──────────────────────────────────────────────────────
 
-const JIRA_BASE_URL = (process.env.JIRA_BASE_URL ?? '').replace(/\/$/, '');
-const JIRA_EMAIL = process.env.JIRA_EMAIL ?? '';
-const JIRA_API_TOKEN = process.env.JIRA_API_TOKEN ?? '';
-const JIRA_PAT = process.env.JIRA_PAT ?? '';
+const JIRA_BASE_URL = (process.env.JIRA_BASE_URL ?? "").replace(/\/$/, "");
+const JIRA_EMAIL = process.env.JIRA_EMAIL ?? "";
+const JIRA_API_TOKEN = process.env.JIRA_API_TOKEN ?? "";
+const JIRA_PAT = process.env.JIRA_PAT ?? "";
 
 if (!JIRA_BASE_URL) {
-  console.error('Error: JIRA_BASE_URL is required (e.g. https://myorg.atlassian.net)');
+  console.error(
+    "Error: JIRA_BASE_URL is required (e.g. https://myorg.atlassian.net)",
+  );
   process.exit(1);
 }
 
@@ -118,17 +122,21 @@ const isCloud = !!(JIRA_EMAIL && JIRA_API_TOKEN);
 const isServer = !!JIRA_PAT;
 
 if (!isCloud && !isServer) {
-  console.error('Error: set either JIRA_EMAIL + JIRA_API_TOKEN (Cloud) or JIRA_PAT (Server/DC)');
+  console.error(
+    "Error: set either JIRA_EMAIL + JIRA_API_TOKEN (Cloud) or JIRA_PAT (Server/DC)",
+  );
   process.exit(1);
 }
 
 // Use API v3 for Cloud, v2 for Server (ADF vs plain text descriptions)
-const API_VERSION = isCloud ? '3' : '2';
+const API_VERSION = isCloud ? "3" : "2";
 const API_BASE = `${JIRA_BASE_URL}/rest/api/${API_VERSION}`;
 
 function authHeader() {
   if (isCloud) {
-    const encoded = Buffer.from(`${JIRA_EMAIL}:${JIRA_API_TOKEN}`).toString('base64');
+    const encoded = Buffer.from(`${JIRA_EMAIL}:${JIRA_API_TOKEN}`).toString(
+      "base64",
+    );
     return `Basic ${encoded}`;
   }
   return `Bearer ${JIRA_PAT}`;
@@ -144,7 +152,7 @@ function authHeader() {
 //
 
 function unquote(str) {
-  if (str === undefined || str === null) return '';
+  if (str === undefined || str === null) return "";
   str = String(str).trim();
   if (
     (str.startsWith('"') && str.endsWith('"')) ||
@@ -160,13 +168,13 @@ function getIndent(line) {
 }
 
 function parseYaml(text) {
-  const lines = text.split('\n');
+  const lines = text.split("\n");
   let i = 0;
 
   function peek() {
     while (i < lines.length) {
       const t = lines[i].trim();
-      if (t && !t.startsWith('#')) return lines[i];
+      if (t && !t.startsWith("#")) return lines[i];
       i++;
     }
     return null;
@@ -181,8 +189,11 @@ function parseYaml(text) {
       if (indent < minIndent) break;
 
       const trimmed = line.trim();
-      const colonIdx = trimmed.indexOf(':');
-      if (colonIdx === -1) { i++; continue; }
+      const colonIdx = trimmed.indexOf(":");
+      if (colonIdx === -1) {
+        i++;
+        continue;
+      }
 
       const key = unquote(trimmed.slice(0, colonIdx).trim());
       const rest = trimmed.slice(colonIdx + 1).trim();
@@ -199,7 +210,7 @@ function parseYaml(text) {
         } else {
           const nextIndent = getIndent(nextLine);
           if (nextIndent > indent) {
-            if (nextLine.trim().startsWith('- ')) {
+            if (nextLine.trim().startsWith("- ")) {
               obj[key] = parseList(nextIndent);
             } else {
               obj[key] = parseMap(nextIndent);
@@ -222,12 +233,12 @@ function parseYaml(text) {
       if (indent < minIndent) break;
 
       const trimmed = line.trim();
-      if (!trimmed.startsWith('- ')) break;
+      if (!trimmed.startsWith("- ")) break;
 
       i++; // consume the list-item line
 
       const rest = trimmed.slice(2).trim();
-      const colonIdx = rest.indexOf(':');
+      const colonIdx = rest.indexOf(":");
 
       if (colonIdx === -1) {
         items.push(unquote(rest));
@@ -245,11 +256,11 @@ function parseYaml(text) {
         const propLine = peek();
         if (!propLine) break;
         if (getIndent(propLine) < propsIndent) break;
-        if (propLine.trim().startsWith('- ')) break;
+        if (propLine.trim().startsWith("- ")) break;
 
         const propTrimmed = propLine.trim();
         i++;
-        const pColon = propTrimmed.indexOf(':');
+        const pColon = propTrimmed.indexOf(":");
         if (pColon !== -1) {
           const pk = unquote(propTrimmed.slice(0, pColon).trim());
           const pv = unquote(propTrimmed.slice(pColon + 1).trim());
@@ -270,19 +281,22 @@ function yamlQuote(str) {
   if (str === null || str === undefined) return '""';
   const s = String(str);
   // Always quote to keep output safe and consistent
-  const escaped = s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+  const escaped = s
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n");
   return `"${escaped}"`;
 }
 
 function serializeYaml(obj, indent = 0) {
-  const pad = ' '.repeat(indent);
-  let out = '';
+  const pad = " ".repeat(indent);
+  let out = "";
 
   for (const [key, val] of Object.entries(obj)) {
     if (Array.isArray(val)) {
       out += `${pad}${key}:\n`;
       for (const item of val) {
-        if (typeof item === 'object' && item !== null) {
+        if (typeof item === "object" && item !== null) {
           const entries = Object.entries(item);
           if (entries.length === 0) {
             out += `${pad}  - {}\n`;
@@ -297,7 +311,7 @@ function serializeYaml(obj, indent = 0) {
           out += `${pad}  - ${yamlQuote(item)}\n`;
         }
       }
-    } else if (typeof val === 'object' && val !== null) {
+    } else if (typeof val === "object" && val !== null) {
       out += `${pad}${key}:\n`;
       out += serializeYaml(val, indent + 2);
     } else {
@@ -311,9 +325,9 @@ function serializeYaml(obj, indent = 0) {
 // ── Load jira-config.yaml ─────────────────────────────────────────────────────
 
 let config = {
-  project_key: '',
-  issue_type: 'Task',
-  jql_filter: '',
+  project_key: "",
+  issue_type: "Task",
+  jql_filter: "",
   status_map: {},
   priority_map: {},
   reverse_status_map: {},
@@ -323,13 +337,13 @@ let config = {
 const absConfigPath = resolve(process.cwd(), configPath);
 if (existsSync(absConfigPath)) {
   try {
-    const raw = readFileSync(absConfigPath, 'utf8');
+    const raw = readFileSync(absConfigPath, "utf8");
     const parsed = parseYaml(raw);
     config = { ...config, ...parsed };
   } catch (e) {
     console.error(`Warning: could not parse ${configPath}: ${e.message}`);
   }
-} else if (configPath !== 'jira-config.yaml') {
+} else if (configPath !== "jira-config.yaml") {
   console.error(`Error: config file not found: ${configPath}`);
   process.exit(1);
 }
@@ -340,9 +354,9 @@ async function jiraFetch(method, path, body) {
   const opts = {
     method,
     headers: {
-      'Authorization': authHeader(),
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
+      Authorization: authHeader(),
+      "Content-Type": "application/json",
+      Accept: "application/json",
     },
   };
   if (body !== undefined) opts.body = JSON.stringify(body);
@@ -351,8 +365,10 @@ async function jiraFetch(method, path, body) {
   const res = await fetch(url, opts);
 
   if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`Jira API ${method} ${path} → ${res.status}: ${text.slice(0, 300)}`);
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `Jira API ${method} ${path} → ${res.status}: ${text.slice(0, 300)}`,
+    );
   }
 
   if (res.status === 204) return null;
@@ -366,28 +382,39 @@ async function jiraFetch(method, path, body) {
  * Only handles common node types — enough for round-tripping descriptions.
  */
 function adfToText(node) {
-  if (!node) return '';
-  if (typeof node === 'string') return node;
+  if (!node) return "";
+  if (typeof node === "string") return node;
 
   if (Array.isArray(node)) {
-    return node.map(adfToText).join('');
+    return node.map(adfToText).join("");
   }
 
-  const children = node.content ? adfToText(node.content) : '';
+  const children = node.content ? adfToText(node.content) : "";
 
   switch (node.type) {
-    case 'doc': return children;
-    case 'paragraph': return children + '\n';
-    case 'heading': return children + '\n';
-    case 'text': return node.text ?? '';
-    case 'hardBreak': return '\n';
-    case 'bulletList':
-    case 'orderedList': return children;
-    case 'listItem': return `- ${children.trim()}\n`;
-    case 'codeBlock': return children;
-    case 'blockquote': return children;
-    case 'rule': return '---\n';
-    default: return children;
+    case "doc":
+      return children;
+    case "paragraph":
+      return children + "\n";
+    case "heading":
+      return children + "\n";
+    case "text":
+      return node.text ?? "";
+    case "hardBreak":
+      return "\n";
+    case "bulletList":
+    case "orderedList":
+      return children;
+    case "listItem":
+      return `- ${children.trim()}\n`;
+    case "codeBlock":
+      return children;
+    case "blockquote":
+      return children;
+    case "rule":
+      return "---\n";
+    default:
+      return children;
   }
 }
 
@@ -396,20 +423,20 @@ function adfToText(node) {
  * Paragraphs are split on double newlines; single newlines within become hardBreaks.
  */
 function textToAdf(text) {
-  const paragraphs = (text ?? '').split(/\n{2,}/).filter(Boolean);
+  const paragraphs = (text ?? "").split(/\n{2,}/).filter(Boolean);
   return {
-    type: 'doc',
+    type: "doc",
     version: 1,
     content: paragraphs.length
       ? paragraphs.map((para) => ({
-          type: 'paragraph',
-          content: para.split('\n').flatMap((line, idx, arr) => {
-            const nodes = [{ type: 'text', text: line }];
-            if (idx < arr.length - 1) nodes.push({ type: 'hardBreak' });
+          type: "paragraph",
+          content: para.split("\n").flatMap((line, idx, arr) => {
+            const nodes = [{ type: "text", text: line }];
+            if (idx < arr.length - 1) nodes.push({ type: "hardBreak" });
             return nodes;
           }),
         }))
-      : [{ type: 'paragraph', content: [] }],
+      : [{ type: "paragraph", content: [] }],
   };
 }
 
@@ -417,25 +444,25 @@ function textToAdf(text) {
 
 function extractDescription(issue) {
   const desc = issue.fields?.description;
-  if (!desc) return '';
+  if (!desc) return "";
 
-  if (isCloud && typeof desc === 'object') {
+  if (isCloud && typeof desc === "object") {
     // ADF format (Cloud v3)
     return adfToText(desc).trim();
   }
 
   // Plain text (Server v2)
-  return typeof desc === 'string' ? desc.trim() : '';
+  return typeof desc === "string" ? desc.trim() : "";
 }
 
 // ── Map Jira issue → task object ──────────────────────────────────────────────
 
 function issueToTask(issue) {
-  const key = issue.key ?? '';
-  const summary = issue.fields?.summary ?? '';
-  const rawStatus = issue.fields?.status?.name ?? '';
-  const rawPriority = issue.fields?.priority?.name ?? '';
-  const issueType = issue.fields?.issuetype?.name ?? '';
+  const key = issue.key ?? "";
+  const summary = issue.fields?.summary ?? "";
+  const rawStatus = issue.fields?.status?.name ?? "";
+  const rawPriority = issue.fields?.priority?.name ?? "";
+  const issueType = issue.fields?.issuetype?.name ?? "";
   const description = extractDescription(issue);
 
   const statusMap = config.reverse_status_map;
@@ -447,12 +474,12 @@ function issueToTask(issue) {
   return {
     name: summary,
     jira_key: key,
-    jira_id: issue.id ?? '',
+    jira_id: issue.id ?? "",
     status,
     priority,
     type: issueType,
     context: description,
-    acceptance_criteria: '',
+    acceptance_criteria: "",
   };
 }
 
@@ -462,13 +489,15 @@ async function runExport() {
   const jql = jqlOverride || config.jql_filter;
 
   if (!jql) {
-    console.error('Error: no JQL filter. Set jql_filter in jira-config.yaml or pass --jql "<query>"');
+    console.error(
+      'Error: no JQL filter. Set jql_filter in jira-config.yaml or pass --jql "<query>"',
+    );
     process.exit(1);
   }
 
   console.log(`Exporting Jira issues → ${outputPath}`);
   console.log(`JQL: ${jql}`);
-  if (dryRun) console.log('[DRY RUN — no file will be written]\n');
+  if (dryRun) console.log("[DRY RUN — no file will be written]\n");
 
   const tasks = [];
   let startAt = 0;
@@ -477,9 +506,9 @@ async function runExport() {
 
   while (startAt < total) {
     const encodedJql = encodeURIComponent(jql);
-    const fields = 'summary,description,status,priority,issuetype';
+    const fields = "summary,description,status,priority,issuetype";
     const data = await jiraFetch(
-      'GET',
+      "GET",
       `/search?jql=${encodedJql}&fields=${fields}&maxResults=${maxResults}&startAt=${startAt}`,
     );
 
@@ -496,15 +525,15 @@ async function runExport() {
     process.stdout.write(`  fetched ${startAt}/${total}\r`);
   }
 
-  process.stdout.write('\n');
+  process.stdout.write("\n");
   console.log(`Found ${tasks.length} issue(s)`);
 
   if (tasks.length === 0) {
-    console.log('No issues matched the JQL filter — nothing to write.');
+    console.log("No issues matched the JQL filter — nothing to write.");
     return;
   }
 
-  const timestamp = new Date().toISOString().split('T')[0];
+  const timestamp = new Date().toISOString().split("T")[0];
   const header =
     `# tasks.yaml — exported from Jira on ${timestamp}\n` +
     `# Source: ${JIRA_BASE_URL}\n` +
@@ -513,13 +542,13 @@ async function runExport() {
   const yaml = header + serializeYaml({ tasks });
 
   if (dryRun) {
-    console.log('\n--- tasks.yaml preview ---');
+    console.log("\n--- tasks.yaml preview ---");
     console.log(yaml.slice(0, 2000));
-    if (yaml.length > 2000) console.log('... (truncated)');
+    if (yaml.length > 2000) console.log("... (truncated)");
     return;
   }
 
-  writeFileSync(resolve(process.cwd(), outputPath), yaml, 'utf8');
+  writeFileSync(resolve(process.cwd(), outputPath), yaml, "utf8");
   console.log(`Written to ${outputPath}`);
 }
 
@@ -534,7 +563,7 @@ async function runSync() {
 
   let tasks;
   try {
-    const raw = readFileSync(absInput, 'utf8');
+    const raw = readFileSync(absInput, "utf8");
     const parsed = parseYaml(raw);
     tasks = parsed.tasks;
   } catch (e) {
@@ -543,18 +572,18 @@ async function runSync() {
   }
 
   if (!Array.isArray(tasks) || tasks.length === 0) {
-    console.log('No tasks found in input file.');
+    console.log("No tasks found in input file.");
     return;
   }
 
   const projectKey = config.project_key;
   if (!projectKey) {
-    console.error('Error: project_key is required in jira-config.yaml');
+    console.error("Error: project_key is required in jira-config.yaml");
     process.exit(1);
   }
 
   console.log(`Syncing ${tasks.length} task(s) → Jira project ${projectKey}`);
-  if (dryRun) console.log('[DRY RUN — no changes will be made]\n');
+  if (dryRun) console.log("[DRY RUN — no changes will be made]\n");
 
   const statusMap = config.status_map;
   const priorityMap = config.priority_map;
@@ -564,20 +593,23 @@ async function runSync() {
   let failed = 0;
 
   for (const task of tasks) {
-    const name = task.name ?? '';
-    const jiraKey = task.jira_key ?? '';
-    const rawStatus = task.status ?? '';
-    const rawPriority = task.priority ?? '';
-    const context = task.context ?? '';
-    const ac = task.acceptance_criteria ?? '';
+    const name = task.name ?? "";
+    const jiraKey = task.jira_key ?? "";
+    const rawStatus = task.status ?? "";
+    const rawPriority = task.priority ?? "";
+    const context = task.context ?? "";
+    const ac = task.acceptance_criteria ?? "";
 
     const jiraStatus = statusMap[rawStatus] || rawStatus;
     const jiraPriority = priorityMap[rawPriority] || rawPriority;
-    const issueType = task.type || config.issue_type || 'Task';
+    const issueType = task.type || config.issue_type || "Task";
 
     // Build description text
     let descText = context;
-    if (ac) descText += (descText ? '\n\nAcceptance Criteria:\n' : 'Acceptance Criteria:\n') + ac;
+    if (ac)
+      descText +=
+        (descText ? "\n\nAcceptance Criteria:\n" : "Acceptance Criteria:\n") +
+        ac;
 
     // Build description field (ADF for Cloud, plain text for Server)
     const descriptionField = isCloud ? textToAdf(descText) : descText;
@@ -597,7 +629,7 @@ async function runSync() {
         if (dryRun) {
           console.log(`[update] ${jiraKey}: ${name}`);
         } else {
-          await jiraFetch('PUT', `/issue/${jiraKey}`, { fields });
+          await jiraFetch("PUT", `/issue/${jiraKey}`, { fields });
           console.log(`✅ Updated ${jiraKey}: ${name}`);
 
           // Transition status if changed
@@ -609,9 +641,11 @@ async function runSync() {
       } else {
         // Create new issue
         if (dryRun) {
-          console.log(`[create] ${name} (${issueType}, ${jiraPriority || 'no priority'})`);
+          console.log(
+            `[create] ${name} (${issueType}, ${jiraPriority || "no priority"})`,
+          );
         } else {
-          const created_issue = await jiraFetch('POST', '/issue', { fields });
+          const created_issue = await jiraFetch("POST", "/issue", { fields });
           console.log(`✅ Created ${created_issue.key}: ${name}`);
 
           if (jiraStatus) {
@@ -626,7 +660,9 @@ async function runSync() {
     }
   }
 
-  console.log(`\nDone: ${created} created, ${updated} updated, ${failed} failed`);
+  console.log(
+    `\nDone: ${created} created, ${updated} updated, ${failed} failed`,
+  );
   if (failed > 0) process.exit(1);
 }
 
@@ -636,27 +672,29 @@ async function runSync() {
  */
 async function transitionIssue(issueKey, targetStatus) {
   try {
-    const data = await jiraFetch('GET', `/issue/${issueKey}/transitions`);
+    const data = await jiraFetch("GET", `/issue/${issueKey}/transitions`);
     const transitions = data.transitions ?? [];
     const match = transitions.find(
       (t) => t.name?.toLowerCase() === targetStatus.toLowerCase(),
     );
     if (!match) return; // No matching transition — issue may already be in that status
-    await jiraFetch('POST', `/issue/${issueKey}/transitions`, {
+    await jiraFetch("POST", `/issue/${issueKey}/transitions`, {
       transition: { id: match.id },
     });
   } catch (e) {
-    console.warn(`  ⚠ Could not transition ${issueKey} to "${targetStatus}": ${e.message}`);
+    console.warn(
+      `  ⚠ Could not transition ${issueKey} to "${targetStatus}": ${e.message}`,
+    );
   }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const authType = isCloud ? 'Cloud (Basic auth)' : 'Server/DC (Bearer token)';
+  const authType = isCloud ? "Cloud (Basic auth)" : "Server/DC (Bearer token)";
   console.log(`Jira: ${JIRA_BASE_URL} [${authType}, API v${API_VERSION}]`);
 
-  if (direction === 'export') {
+  if (direction === "export") {
     await runExport();
   } else {
     await runSync();

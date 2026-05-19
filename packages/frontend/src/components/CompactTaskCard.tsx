@@ -1,5 +1,5 @@
-import type { TaskView } from '../types/taskView';
-import styles from './CompactTaskCard.module.css';
+import type { TaskView } from "../types/taskView";
+import styles from "./CompactTaskCard.module.css";
 
 interface Props {
   task: TaskView;
@@ -11,22 +11,36 @@ interface Props {
 }
 
 const PRIORITY_ICONS: Record<string, string> = {
-  '🔴 High': '🔴',
-  '🟡 Medium': '🟡',
-  '🟢 Low': '🟢',
+  "🔴 High": "🔴",
+  "🟡 Medium": "🟡",
+  "🟢 Low": "🟢",
 };
 
-export function CompactTaskCard({ task, showCheckbox, checked, onCheckChange, onClick }: Props) {
-  const priorityIcon = PRIORITY_ICONS[task.priority] ?? '';
+export function CompactTaskCard({
+  task,
+  showCheckbox,
+  checked,
+  onCheckChange,
+  onClick,
+}: Props) {
+  const priorityIcon = PRIORITY_ICONS[task.priority] ?? "";
   const isBlocked = task.blocked;
 
   return (
     <div
-      className={`${styles.row}${isBlocked ? ` ${styles.blocked}` : ''}`}
+      className={`${styles.row}${isBlocked ? ` ${styles.blocked}` : ""}`}
       data-status={task.displayStatus}
       data-testid="compact-task-card"
     >
-      <div className={styles.main} onClick={onClick} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onClick(); }}>
+      <div
+        className={styles.main}
+        onClick={onClick}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") onClick();
+        }}
+      >
         {showCheckbox ? (
           <input
             type="checkbox"
@@ -43,18 +57,26 @@ export function CompactTaskCard({ task, showCheckbox, checked, onCheckChange, on
           <span className={styles.checkboxPlaceholder} aria-hidden="true" />
         )}
 
-        <span className={styles.priorityDot} aria-label={task.priority}>{priorityIcon}</span>
-        <span className={styles.typeIcon} aria-hidden="true">{task.taskType.split(' ')[0]}</span>
+        <span className={styles.priorityDot} aria-label={task.priority}>
+          {priorityIcon}
+        </span>
+        <span className={styles.typeIcon} aria-hidden="true">
+          {task.taskType.split(" ")[0]}
+        </span>
         <span className={styles.taskName}>{task.taskName}</span>
       </div>
 
       {isBlocked && task.blockerNames.length > 0 && (
         <div className={styles.blockers} data-testid="blocker-names">
           {task.blockerNames.slice(0, 2).map((name, i) => (
-            <span key={i} className={styles.blockerName}>↳ blocked by: {name}</span>
+            <span key={i} className={styles.blockerName}>
+              ↳ blocked by: {name}
+            </span>
           ))}
           {task.blockerNames.length > 2 && (
-            <span className={styles.blockerName}>↳ +{task.blockerNames.length - 2} more</span>
+            <span className={styles.blockerName}>
+              ↳ +{task.blockerNames.length - 2} more
+            </span>
           )}
         </div>
       )}

@@ -1,4 +1,4 @@
-export type TaskSource = 'notion' | 'yaml';
+export type TaskSource = "notion" | "yaml";
 
 export interface ProjectMilestone {
   id: string;
@@ -76,28 +76,28 @@ async function request<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
 
 export const projectsApi = {
   list(): Promise<Project[]> {
-    return request<Project[]>('/api/projects');
+    return request<Project[]>("/api/projects");
   },
 
   create(input: CreateProjectInput): Promise<Project> {
-    return request<Project>('/api/projects', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    return request<Project>("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
     });
   },
 
   update(id: string, patch: UpdateProjectInput): Promise<Project> {
     return request<Project>(`/api/projects/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     });
   },
 
   delete(id: string): Promise<void> {
     return request<void>(`/api/projects/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
+      method: "DELETE",
     });
   },
 
@@ -107,35 +107,44 @@ export const projectsApi = {
     );
   },
 
-  createMilestone(projectId: string, input: CreateMilestoneInput): Promise<ProjectMilestone> {
+  createMilestone(
+    projectId: string,
+    input: CreateMilestoneInput,
+  ): Promise<ProjectMilestone> {
     return request<ProjectMilestone>(
       `/api/projects/${encodeURIComponent(projectId)}/milestones`,
       {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(input),
       },
     );
   },
 
-  updateMilestone(milestoneId: string, patch: UpdateMilestoneInput): Promise<ProjectMilestone> {
-    return request<ProjectMilestone>(`/api/milestones/${encodeURIComponent(milestoneId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    });
+  updateMilestone(
+    milestoneId: string,
+    patch: UpdateMilestoneInput,
+  ): Promise<ProjectMilestone> {
+    return request<ProjectMilestone>(
+      `/api/milestones/${encodeURIComponent(milestoneId)}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      },
+    );
   },
 
   deleteMilestone(milestoneId: string): Promise<void> {
     return request<void>(`/api/milestones/${encodeURIComponent(milestoneId)}`, {
-      method: 'DELETE',
+      method: "DELETE",
     });
   },
 
   createTasksYamlStub(projectId: string): Promise<{ path: string }> {
     return request<{ path: string }>(
       `/api/projects/${encodeURIComponent(projectId)}/tasks-yaml-stub`,
-      { method: 'POST' },
+      { method: "POST" },
     );
   },
 };

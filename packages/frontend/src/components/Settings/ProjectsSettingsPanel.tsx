@@ -1,9 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
-import { ErrorBoundary } from '../ErrorBoundary';
-import { projectsApi, type Project } from '../../api/projects';
-import { ProjectFormModal, type ProjectFormValues } from './ProjectFormModal';
-import { MilestonesSubPanel } from './MilestonesSubPanel';
-import styles from './ProjectsSettingsPanel.module.css';
+import { useState, useEffect, useCallback } from "react";
+import { ErrorBoundary } from "../ErrorBoundary";
+import { projectsApi, type Project } from "../../api/projects";
+import { ProjectFormModal, type ProjectFormValues } from "./ProjectFormModal";
+import { MilestonesSubPanel } from "./MilestonesSubPanel";
+import styles from "./ProjectsSettingsPanel.module.css";
 
 function toCreatePayload(values: ProjectFormValues) {
   return {
@@ -40,7 +40,7 @@ function ProjectsSettingsPanelInner() {
         return data.find((p) => p.id === current.id) ?? null;
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load projects');
+      setError(err instanceof Error ? err.message : "Failed to load projects");
     } finally {
       setLoading(false);
     }
@@ -71,7 +71,7 @@ function ProjectsSettingsPanelInner() {
       await projectsApi.delete(target.id);
       await reload();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete project');
+      setError(err instanceof Error ? err.message : "Failed to delete project");
     }
   }
 
@@ -82,7 +82,9 @@ function ProjectsSettingsPanelInner() {
       const result = await projectsApi.createTasksYamlStub(p.id);
       setStubMessage(`Created ${result.path}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create tasks.yaml');
+      setError(
+        err instanceof Error ? err.message : "Failed to create tasks.yaml",
+      );
     } finally {
       setStubBusy(null);
     }
@@ -118,7 +120,8 @@ function ProjectsSettingsPanelInner() {
         <p className={styles.muted}>Loading…</p>
       ) : projects.length === 0 ? (
         <p className={styles.muted}>
-          No projects configured yet. Click <strong>+ Add project</strong> to create one.
+          No projects configured yet. Click <strong>+ Add project</strong> to
+          create one.
         </p>
       ) : (
         <table className={styles.table}>
@@ -148,19 +151,21 @@ function ProjectsSettingsPanelInner() {
                 <td className={styles.mono}>{p.projectDir}</td>
                 <td>
                   <span className={styles.badge}>{p.taskSource}</span>
-                  {p.taskSource === 'yaml' && (
+                  {p.taskSource === "yaml" && (
                     <button
                       type="button"
                       className={styles.linkBtn}
                       disabled={stubBusy === p.id}
                       onClick={() => void handleCreateStub(p)}
                     >
-                      {stubBusy === p.id ? 'Creating…' : 'Create empty tasks.yaml'}
+                      {stubBusy === p.id
+                        ? "Creating…"
+                        : "Create empty tasks.yaml"}
                     </button>
                   )}
                 </td>
                 <td>{p.milestones.length}</td>
-                <td className={styles.mono}>{p.githubRepo ?? '—'}</td>
+                <td className={styles.mono}>{p.githubRepo ?? "—"}</td>
                 <td className={styles.actionsCol}>
                   <button
                     type="button"
@@ -209,8 +214,9 @@ function ProjectsSettingsPanelInner() {
           <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
             <h3 className={styles.modalTitle}>Delete project?</h3>
             <p className={styles.muted}>
-              This will remove the project <strong>{confirmDelete.name}</strong> and all of its
-              milestones from the dashboard. The project files on disk are not touched.
+              This will remove the project <strong>{confirmDelete.name}</strong>{" "}
+              and all of its milestones from the dashboard. The project files on
+              disk are not touched.
             </p>
             <div className={styles.modalActions}>
               <button

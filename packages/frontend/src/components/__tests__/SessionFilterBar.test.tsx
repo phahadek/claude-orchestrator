@@ -1,8 +1,8 @@
-import { render, screen, fireEvent, act } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { SessionFilterBar } from '../SessionFilterBar';
+import { render, screen, fireEvent, act } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { SessionFilterBar } from "../SessionFilterBar";
 
-describe('SessionFilterBar', () => {
+describe("SessionFilterBar", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -11,7 +11,7 @@ describe('SessionFilterBar', () => {
     vi.useRealTimers();
   });
 
-  it('calls onSearchChange after debounce when typing in search input', async () => {
+  it("calls onSearchChange after debounce when typing in search input", async () => {
     const onSearchChange = vi.fn();
     render(
       <SessionFilterBar
@@ -23,18 +23,20 @@ describe('SessionFilterBar', () => {
         onTagChange={vi.fn()}
         availableTags={[]}
         resultCount={5}
-      />
+      />,
     );
 
-    const input = screen.getByPlaceholderText('Search sessions...');
-    fireEvent.change(input, { target: { value: 'my task' } });
+    const input = screen.getByPlaceholderText("Search sessions...");
+    fireEvent.change(input, { target: { value: "my task" } });
     expect(onSearchChange).not.toHaveBeenCalled();
 
-    act(() => { vi.advanceTimersByTime(150); });
-    expect(onSearchChange).toHaveBeenCalledWith('my task');
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
+    expect(onSearchChange).toHaveBeenCalledWith("my task");
   });
 
-  it('calls onStatusChange when status dropdown changes', () => {
+  it("calls onStatusChange when status dropdown changes", () => {
     const onStatusChange = vi.fn();
     render(
       <SessionFilterBar
@@ -46,12 +48,12 @@ describe('SessionFilterBar', () => {
         onTagChange={vi.fn()}
         availableTags={[]}
         resultCount={3}
-      />
+      />,
     );
 
-    const selects = screen.getAllByRole('combobox');
-    fireEvent.change(selects[0], { target: { value: 'running' } });
-    expect(onStatusChange).toHaveBeenCalledWith('running');
+    const selects = screen.getAllByRole("combobox");
+    fireEvent.change(selects[0], { target: { value: "running" } });
+    expect(onStatusChange).toHaveBeenCalledWith("running");
   });
 
   it('calls onStatusChange with null when "All" is selected', () => {
@@ -66,15 +68,15 @@ describe('SessionFilterBar', () => {
         onTagChange={vi.fn()}
         availableTags={[]}
         resultCount={0}
-      />
+      />,
     );
 
-    const selects = screen.getAllByRole('combobox');
-    fireEvent.change(selects[0], { target: { value: '' } });
+    const selects = screen.getAllByRole("combobox");
+    fireEvent.change(selects[0], { target: { value: "" } });
     expect(onStatusChange).toHaveBeenCalledWith(null);
   });
 
-  it('renders the correct result count', () => {
+  it("renders the correct result count", () => {
     render(
       <SessionFilterBar
         searchText=""
@@ -85,9 +87,9 @@ describe('SessionFilterBar', () => {
         onTagChange={vi.fn()}
         availableTags={[]}
         resultCount={7}
-      />
+      />,
     );
-    expect(screen.getByText('7 sessions')).toBeDefined();
+    expect(screen.getByText("7 sessions")).toBeDefined();
   });
 
   it('renders singular "1 session" when resultCount is 1', () => {
@@ -101,12 +103,12 @@ describe('SessionFilterBar', () => {
         onTagChange={vi.fn()}
         availableTags={[]}
         resultCount={1}
-      />
+      />,
     );
-    expect(screen.getByText('1 session')).toBeDefined();
+    expect(screen.getByText("1 session")).toBeDefined();
   });
 
-  it('tag dropdown is populated from availableTags', () => {
+  it("tag dropdown is populated from availableTags", () => {
     render(
       <SessionFilterBar
         searchText=""
@@ -115,16 +117,16 @@ describe('SessionFilterBar', () => {
         onStatusChange={vi.fn()}
         tagFilter={null}
         onTagChange={vi.fn()}
-        availableTags={['bugfix', 'auth', 'refactor']}
+        availableTags={["bugfix", "auth", "refactor"]}
         resultCount={3}
-      />
+      />,
     );
-    expect(screen.getByText('bugfix')).toBeDefined();
-    expect(screen.getByText('auth')).toBeDefined();
-    expect(screen.getByText('refactor')).toBeDefined();
+    expect(screen.getByText("bugfix")).toBeDefined();
+    expect(screen.getByText("auth")).toBeDefined();
+    expect(screen.getByText("refactor")).toBeDefined();
   });
 
-  it('calls onTagChange when a tag is selected', () => {
+  it("calls onTagChange when a tag is selected", () => {
     const onTagChange = vi.fn();
     render(
       <SessionFilterBar
@@ -134,13 +136,13 @@ describe('SessionFilterBar', () => {
         onStatusChange={vi.fn()}
         tagFilter={null}
         onTagChange={onTagChange}
-        availableTags={['bugfix', 'auth']}
+        availableTags={["bugfix", "auth"]}
         resultCount={2}
-      />
+      />,
     );
-    const selects = screen.getAllByRole('combobox');
-    fireEvent.change(selects[1], { target: { value: 'bugfix' } });
-    expect(onTagChange).toHaveBeenCalledWith('bugfix');
+    const selects = screen.getAllByRole("combobox");
+    fireEvent.change(selects[1], { target: { value: "bugfix" } });
+    expect(onTagChange).toHaveBeenCalledWith("bugfix");
   });
 
   it('calls onTagChange with null when "All tags" is selected', () => {
@@ -153,19 +155,25 @@ describe('SessionFilterBar', () => {
         onStatusChange={vi.fn()}
         tagFilter="bugfix"
         onTagChange={onTagChange}
-        availableTags={['bugfix']}
+        availableTags={["bugfix"]}
         resultCount={1}
-      />
+      />,
     );
-    const selects = screen.getAllByRole('combobox');
-    fireEvent.change(selects[1], { target: { value: '' } });
+    const selects = screen.getAllByRole("combobox");
+    fireEvent.change(selects[1], { target: { value: "" } });
     expect(onTagChange).toHaveBeenCalledWith(null);
   });
 });
 
 // Filter logic tests — these validate the filtering algorithm used in App.tsx
-describe('session filtering logic', () => {
-  type MinSession = { taskName: string; status: string; project_id?: string | null; archived?: boolean; tags?: string[] };
+describe("session filtering logic", () => {
+  type MinSession = {
+    taskName: string;
+    status: string;
+    project_id?: string | null;
+    archived?: boolean;
+    tags?: string[];
+  };
 
   function applyFilters(
     sessions: MinSession[],
@@ -176,79 +184,83 @@ describe('session filtering logic', () => {
   ): MinSession[] {
     return sessions
       .filter((s) => !s.archived)
-      .filter((s) => !searchText || s.taskName.toLowerCase().includes(searchText.toLowerCase()))
+      .filter(
+        (s) =>
+          !searchText ||
+          s.taskName.toLowerCase().includes(searchText.toLowerCase()),
+      )
       .filter((s) => !statusFilter || s.status === statusFilter)
       .filter((s) => !tagFilter || s.tags?.includes(tagFilter))
       .filter((s) => !activeProjectId || s.project_id === activeProjectId);
   }
 
-  it('filters by searchText case-insensitively', () => {
+  it("filters by searchText case-insensitively", () => {
     const sessions = [
-      { taskName: 'Deploy frontend', status: 'running' },
-      { taskName: 'Fix login bug', status: 'done' },
+      { taskName: "Deploy frontend", status: "running" },
+      { taskName: "Fix login bug", status: "done" },
     ];
-    const result = applyFilters(sessions, 'DEPLOY', null, null, null);
+    const result = applyFilters(sessions, "DEPLOY", null, null, null);
     expect(result).toHaveLength(1);
-    expect(result[0].taskName).toBe('Deploy frontend');
+    expect(result[0].taskName).toBe("Deploy frontend");
   });
 
-  it('filters out sessions that do not include searchText', () => {
+  it("filters out sessions that do not include searchText", () => {
     const sessions = [
-      { taskName: 'Task A', status: 'running' },
-      { taskName: 'Task B', status: 'done' },
-      { taskName: 'Task C', status: 'error' },
+      { taskName: "Task A", status: "running" },
+      { taskName: "Task B", status: "done" },
+      { taskName: "Task C", status: "error" },
     ];
-    const result = applyFilters(sessions, 'Task A', null, null, null);
+    const result = applyFilters(sessions, "Task A", null, null, null);
     expect(result).toHaveLength(1);
   });
 
-  it('filters by statusFilter — removes sessions with a different status', () => {
+  it("filters by statusFilter — removes sessions with a different status", () => {
     const sessions = [
-      { taskName: 'Task 1', status: 'running' },
-      { taskName: 'Task 2', status: 'done' },
-      { taskName: 'Task 3', status: 'error' },
+      { taskName: "Task 1", status: "running" },
+      { taskName: "Task 2", status: "done" },
+      { taskName: "Task 3", status: "error" },
     ];
-    const result = applyFilters(sessions, '', 'running', null, null);
+    const result = applyFilters(sessions, "", "running", null, null);
     expect(result).toHaveLength(1);
-    expect(result[0].taskName).toBe('Task 1');
+    expect(result[0].taskName).toBe("Task 1");
   });
 
-  it('returns all sessions when statusFilter is null', () => {
+  it("returns all sessions when statusFilter is null", () => {
     const sessions = [
-      { taskName: 'Task 1', status: 'running' },
-      { taskName: 'Task 2', status: 'done' },
+      { taskName: "Task 1", status: "running" },
+      { taskName: "Task 2", status: "done" },
     ];
-    const result = applyFilters(sessions, '', null, null, null);
+    const result = applyFilters(sessions, "", null, null, null);
     expect(result).toHaveLength(2);
   });
 
-  it('excludes archived sessions regardless of filters', () => {
+  it("excludes archived sessions regardless of filters", () => {
     const sessions = [
-      { taskName: 'Active Task', status: 'running', archived: false },
-      { taskName: 'Archived Task', status: 'running', archived: true },
+      { taskName: "Active Task", status: "running", archived: false },
+      { taskName: "Archived Task", status: "running", archived: true },
     ];
-    const result = applyFilters(sessions, '', null, null, null);
+    const result = applyFilters(sessions, "", null, null, null);
     expect(result).toHaveLength(1);
-    expect(result[0].taskName).toBe('Active Task');
+    expect(result[0].taskName).toBe("Active Task");
   });
 
-  it('filters by tagFilter — returns only sessions with the given tag', () => {
+  it("filters by tagFilter — returns only sessions with the given tag", () => {
     const sessions = [
-      { taskName: 'Task A', status: 'running', tags: ['bugfix', 'auth'] },
-      { taskName: 'Task B', status: 'done', tags: ['refactor'] },
-      { taskName: 'Task C', status: 'running', tags: [] },
+      { taskName: "Task A", status: "running", tags: ["bugfix", "auth"] },
+      { taskName: "Task B", status: "done", tags: ["refactor"] },
+      { taskName: "Task C", status: "running", tags: [] },
     ];
-    const result = applyFilters(sessions, '', null, 'bugfix', null);
+    const result = applyFilters(sessions, "", null, "bugfix", null);
     expect(result).toHaveLength(1);
-    expect(result[0].taskName).toBe('Task A');
+    expect(result[0].taskName).toBe("Task A");
   });
 
-  it('returns all sessions when tagFilter is null', () => {
+  it("returns all sessions when tagFilter is null", () => {
     const sessions = [
-      { taskName: 'Task A', status: 'running', tags: ['bugfix'] },
-      { taskName: 'Task B', status: 'done', tags: [] },
+      { taskName: "Task A", status: "running", tags: ["bugfix"] },
+      { taskName: "Task B", status: "done", tags: [] },
     ];
-    const result = applyFilters(sessions, '', null, null, null);
+    const result = applyFilters(sessions, "", null, null, null);
     expect(result).toHaveLength(2);
   });
 });

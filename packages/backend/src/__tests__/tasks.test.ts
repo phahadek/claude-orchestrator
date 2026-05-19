@@ -1,12 +1,12 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import express from 'express';
-import supertest from 'supertest';
-import yaml from 'js-yaml';
-import type { TaskAggregateRow } from '../db/queries.js';
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import express from "express";
+import supertest from "supertest";
+import yaml from "js-yaml";
+import type { TaskAggregateRow } from "../db/queries.js";
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
-vi.mock('../db/queries.js', () => ({
+vi.mock("../db/queries.js", () => ({
   getTaskCache: vi.fn(),
   getActiveTaskAggregates: vi.fn(),
   getLatestNonSystemEventPayload: vi.fn().mockReturnValue(null),
@@ -14,24 +14,24 @@ vi.mock('../db/queries.js', () => ({
   getMilestoneById: vi.fn().mockReturnValue(null),
 }));
 
-vi.mock('../config.js', () => ({
+vi.mock("../config.js", () => ({
   getProjectById: vi.fn((id: string) => {
-    if (id === 'proj-1') {
+    if (id === "proj-1") {
       return {
-        id: 'proj-1',
-        name: 'Test Project',
-        projectDir: '/test',
-        contextUrl: 'https://notion.so/ctx',
-        boardId: 'board-1',
+        id: "proj-1",
+        name: "Test Project",
+        projectDir: "/test",
+        contextUrl: "https://notion.so/ctx",
+        boardId: "board-1",
       };
     }
     return undefined;
   }),
 }));
 
-import { createTasksRouter } from '../routes/tasks.js';
-import * as queries from '../db/queries.js';
-import type { NotionTask } from '../notion/types.js';
+import { createTasksRouter } from "../routes/tasks.js";
+import * as queries from "../db/queries.js";
+import type { NotionTask } from "../notion/types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -44,7 +44,7 @@ function makeAggregate(
     id: notionTaskId,
     title: `Task ${notionTaskId}`,
     status: notionStatus,
-    type: '💻 Code',
+    type: "💻 Code",
     dependsOn: [],
     notionUrl: `https://notion.so/${notionTaskId}`,
   };
@@ -78,7 +78,7 @@ function makeAggregate(
 function buildApp() {
   const app = express();
   app.use(express.json());
-  app.use('/api', createTasksRouter());
+  app.use("/api", createTasksRouter());
   return app;
 }
 
@@ -86,13 +86,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   // Default: board cache returns three task IDs
   vi.mocked(queries.getTaskCache).mockReturnValue({
-    cache_key: 'board:board-1',
+    cache_key: "board:board-1",
     raw_json: JSON.stringify([
-      { id: 'task-ready' },
-      { id: 'task-done' },
-      { id: 'task-deferred' },
-      { id: 'task-backlog' },
-      { id: 'task-in-progress' },
+      { id: "task-ready" },
+      { id: "task-done" },
+      { id: "task-deferred" },
+      { id: "task-backlog" },
+      { id: "task-in-progress" },
     ]),
     fetched_at: Date.now(),
   } as never);
@@ -100,82 +100,92 @@ beforeEach(() => {
 
 // ── GET /api/tasks/active filtering ──────────────────────────────────────────
 
-describe('GET /api/tasks/active', () => {
+describe("GET /api/tasks/active", () => {
   // Done tasks are excluded at the SQL layer (getActiveTaskAggregates) so they
   // never reach the route. Backlog tasks are intentionally surfaced in the
   // Tasks panel. Only Deferred is filtered at the route level.
 
-  it('does not include tasks with Deferred Notion status', async () => {
+  it("does not include tasks with Deferred Notion status", async () => {
     vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
-      makeAggregate('task-ready', '🗂️ Ready'),
-      makeAggregate('task-deferred', '⏸️ Deferred'),
+      makeAggregate("task-ready", "🗂️ Ready"),
+      makeAggregate("task-deferred", "⏸️ Deferred"),
     ]);
 
-    const res = await supertest(buildApp()).get('/api/tasks/active?projectId=proj-1');
+    const res = await supertest(buildApp()).get(
+      "/api/tasks/active?projectId=proj-1",
+    );
     expect(res.status).toBe(200);
     const ids = res.body.map((t: { taskId: string }) => t.taskId);
-    expect(ids).not.toContain('task-deferred');
-    expect(ids).toContain('task-ready');
+    expect(ids).not.toContain("task-deferred");
+    expect(ids).toContain("task-ready");
   });
 
-  it('returns Ready, In Progress, and Backlog tasks while excluding Deferred', async () => {
+  it("returns Ready, In Progress, and Backlog tasks while excluding Deferred", async () => {
     vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
-      makeAggregate('task-ready', '🗂️ Ready'),
-      makeAggregate('task-deferred', '⏸️ Deferred'),
-      makeAggregate('task-backlog', '🔲 Backlog'),
-      makeAggregate('task-in-progress', '🔄 In Progress'),
+      makeAggregate("task-ready", "🗂️ Ready"),
+      makeAggregate("task-deferred", "⏸️ Deferred"),
+      makeAggregate("task-backlog", "🔲 Backlog"),
+      makeAggregate("task-in-progress", "🔄 In Progress"),
     ]);
 
-    const res = await supertest(buildApp()).get('/api/tasks/active?projectId=proj-1');
+    const res = await supertest(buildApp()).get(
+      "/api/tasks/active?projectId=proj-1",
+    );
     expect(res.status).toBe(200);
     const ids = res.body.map((t: { taskId: string }) => t.taskId);
-    expect(ids).toContain('task-ready');
-    expect(ids).toContain('task-in-progress');
-    expect(ids).toContain('task-backlog');
-    expect(ids).not.toContain('task-deferred');
+    expect(ids).toContain("task-ready");
+    expect(ids).toContain("task-in-progress");
+    expect(ids).toContain("task-backlog");
+    expect(ids).not.toContain("task-deferred");
   });
 
-  it('returns 400 when projectId is missing', async () => {
-    const res = await supertest(buildApp()).get('/api/tasks/active');
+  it("returns 400 when projectId is missing", async () => {
+    const res = await supertest(buildApp()).get("/api/tasks/active");
     expect(res.status).toBe(400);
   });
 
-  it('returns 404 when project is not found', async () => {
-    const res = await supertest(buildApp()).get('/api/tasks/active?projectId=unknown');
+  it("returns 404 when project is not found", async () => {
+    const res = await supertest(buildApp()).get(
+      "/api/tasks/active?projectId=unknown",
+    );
     expect(res.status).toBe(404);
   });
 });
 
 // ── totalTokens aggregation ────────────────────────────────────────────────────
 
-describe('buildTaskViewFromRow — totalTokens', () => {
-  it('sums code and review session tokens into totalTokens', async () => {
+describe("buildTaskViewFromRow — totalTokens", () => {
+  it("sums code and review session tokens into totalTokens", async () => {
     vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
-      makeAggregate('task-tokens', '🔄 In Progress', {
-        code_session_id: 'cs-1',
-        code_session_status: 'done',
+      makeAggregate("task-tokens", "🔄 In Progress", {
+        code_session_id: "cs-1",
+        code_session_status: "done",
         code_session_started_at: 1000,
         code_session_input_tokens: 400,
         code_session_output_tokens: 200,
-        review_session_id: 'rs-1',
-        review_session_status: 'done',
+        review_session_id: "rs-1",
+        review_session_status: "done",
         review_session_input_tokens: 100,
         review_session_output_tokens: 50,
       }),
     ]);
 
-    const res = await supertest(buildApp()).get('/api/tasks/active?projectId=proj-1');
+    const res = await supertest(buildApp()).get(
+      "/api/tasks/active?projectId=proj-1",
+    );
     expect(res.status).toBe(200);
-    const task = res.body.find((t: { taskId: string }) => t.taskId === 'task-tokens');
+    const task = res.body.find(
+      (t: { taskId: string }) => t.taskId === "task-tokens",
+    );
     expect(task.totalTokens.input).toBe(500);
     expect(task.totalTokens.output).toBe(250);
   });
 
-  it('totalTokens counts only code session when review is absent', async () => {
+  it("totalTokens counts only code session when review is absent", async () => {
     vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
-      makeAggregate('task-code-only', '🔄 In Progress', {
-        code_session_id: 'cs-2',
-        code_session_status: 'done',
+      makeAggregate("task-code-only", "🔄 In Progress", {
+        code_session_id: "cs-2",
+        code_session_status: "done",
         code_session_started_at: 1000,
         code_session_input_tokens: 300,
         code_session_output_tokens: 150,
@@ -185,26 +195,34 @@ describe('buildTaskViewFromRow — totalTokens', () => {
       }),
     ]);
 
-    const res = await supertest(buildApp()).get('/api/tasks/active?projectId=proj-1');
+    const res = await supertest(buildApp()).get(
+      "/api/tasks/active?projectId=proj-1",
+    );
     expect(res.status).toBe(200);
-    const task = res.body.find((t: { taskId: string }) => t.taskId === 'task-code-only');
+    const task = res.body.find(
+      (t: { taskId: string }) => t.taskId === "task-code-only",
+    );
     expect(task.totalTokens.input).toBe(300);
     expect(task.totalTokens.output).toBe(150);
   });
 
-  it('review.inputTokens and review.outputTokens are populated from row', async () => {
+  it("review.inputTokens and review.outputTokens are populated from row", async () => {
     vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
-      makeAggregate('task-review-tokens', '🔍 In Review', {
-        review_session_id: 'rs-2',
-        review_session_status: 'done',
+      makeAggregate("task-review-tokens", "🔍 In Review", {
+        review_session_id: "rs-2",
+        review_session_status: "done",
         review_session_input_tokens: 80,
         review_session_output_tokens: 40,
       }),
     ]);
 
-    const res = await supertest(buildApp()).get('/api/tasks/active?projectId=proj-1');
+    const res = await supertest(buildApp()).get(
+      "/api/tasks/active?projectId=proj-1",
+    );
     expect(res.status).toBe(200);
-    const task = res.body.find((t: { taskId: string }) => t.taskId === 'task-review-tokens');
+    const task = res.body.find(
+      (t: { taskId: string }) => t.taskId === "task-review-tokens",
+    );
     expect(task.review.inputTokens).toBe(80);
     expect(task.review.outputTokens).toBe(40);
   });
@@ -212,66 +230,79 @@ describe('buildTaskViewFromRow — totalTokens', () => {
 
 // ── GET /api/tasks/export?format=yaml ─────────────────────────────────────────
 
-describe('GET /api/tasks/export?format=yaml', () => {
+describe("GET /api/tasks/export?format=yaml", () => {
   const boardTasks = [
     {
-      id: 'task-a',
-      title: 'Task A',
-      status: '🗂️ Ready',
-      type: '💻 Code',
-      priority: '🔴 High',
+      id: "task-a",
+      title: "Task A",
+      status: "🗂️ Ready",
+      type: "💻 Code",
+      priority: "🔴 High",
       dependsOn: [],
-      notionUrl: 'https://notion.so/task-a',
+      notionUrl: "https://notion.so/task-a",
     },
     {
-      id: 'task-b',
-      title: 'Task B',
-      status: '⏭️ Deferred',
-      type: '💻 Code',
-      priority: '🟡 Medium',
+      id: "task-b",
+      title: "Task B",
+      status: "⏭️ Deferred",
+      type: "💻 Code",
+      priority: "🟡 Medium",
       dependsOn: [],
-      notionUrl: 'https://notion.so/task-b',
+      notionUrl: "https://notion.so/task-b",
     },
   ];
 
   beforeEach(() => {
     vi.mocked(queries.getTaskCache).mockReturnValue({
-      cache_key: 'board:board-1',
+      cache_key: "board:board-1",
       raw_json: JSON.stringify(boardTasks),
       fetched_at: Date.now(),
     } as never);
   });
 
-  it('returns 200 with Content-Type application/yaml', async () => {
-    const res = await supertest(buildApp()).get('/api/tasks/export?format=yaml&boardId=board-1');
+  it("returns 200 with Content-Type application/yaml", async () => {
+    const res = await supertest(buildApp()).get(
+      "/api/tasks/export?format=yaml&boardId=board-1",
+    );
     expect(res.status).toBe(200);
-    expect(res.headers['content-type']).toMatch(/yaml/);
+    expect(res.headers["content-type"]).toMatch(/yaml/);
   });
 
-  it('returns valid YAML parseable by js-yaml', async () => {
-    const res = await supertest(buildApp()).get('/api/tasks/export?format=yaml&boardId=board-1');
+  it("returns valid YAML parseable by js-yaml", async () => {
+    const res = await supertest(buildApp()).get(
+      "/api/tasks/export?format=yaml&boardId=board-1",
+    );
     expect(() => yaml.load(res.text)).not.toThrow();
-    const parsed = yaml.load(res.text) as { board_id: string; tasks: unknown[] };
-    expect(parsed).toHaveProperty('tasks');
+    const parsed = yaml.load(res.text) as {
+      board_id: string;
+      tasks: unknown[];
+    };
+    expect(parsed).toHaveProperty("tasks");
     expect(Array.isArray(parsed.tasks)).toBe(true);
   });
 
-  it('excludes Deferred tasks from the export', async () => {
-    const res = await supertest(buildApp()).get('/api/tasks/export?format=yaml&boardId=board-1');
+  it("excludes Deferred tasks from the export", async () => {
+    const res = await supertest(buildApp()).get(
+      "/api/tasks/export?format=yaml&boardId=board-1",
+    );
     const parsed = yaml.load(res.text) as { tasks: Array<{ id: string }> };
     const ids = parsed.tasks.map((t) => t.id);
-    expect(ids).toContain('task-a');
-    expect(ids).not.toContain('task-b');
+    expect(ids).toContain("task-a");
+    expect(ids).not.toContain("task-b");
   });
 
-  it('returns 400 when format is unsupported', async () => {
-    const res = await supertest(buildApp()).get('/api/tasks/export?format=json&boardId=board-1');
+  it("returns 400 when format is unsupported", async () => {
+    const res = await supertest(buildApp()).get(
+      "/api/tasks/export?format=json&boardId=board-1",
+    );
     expect(res.status).toBe(400);
   });
 
-  it('returns 404 when board is not found in cache', async () => {
+  it("returns 404 when board is not found in cache", async () => {
     vi.mocked(queries.getTaskCache).mockReturnValue(null);
-    const res = await supertest(buildApp()).get('/api/tasks/export?format=yaml&boardId=unknown-board');
+    const res = await supertest(buildApp()).get(
+      "/api/tasks/export?format=yaml&boardId=unknown-board",
+    );
     expect(res.status).toBe(404);
   });
 });

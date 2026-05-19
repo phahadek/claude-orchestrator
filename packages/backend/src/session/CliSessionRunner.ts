@@ -1,7 +1,11 @@
-import { spawn, ChildProcess, execSync } from 'child_process';
-import { createInterface } from 'readline';
-import { config } from '../config';
-import type { ISessionRunner, RawSessionEvent, SessionRunnerOptions } from './SessionRunner';
+import { spawn, ChildProcess, execSync } from "child_process";
+import { createInterface } from "readline";
+import { config } from "../config";
+import type {
+  ISessionRunner,
+  RawSessionEvent,
+  SessionRunnerOptions,
+} from "./SessionRunner";
 
 function log(sessionId: string, ...args: unknown[]) {
   console.log(`[CliSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
@@ -32,61 +36,63 @@ export class CliSessionRunner implements ISessionRunner {
     const { worktreePath, model, allowedTools } = options;
 
     const spawnArgs = [
-      ...(resumeSessionId ? ['--resume', resumeSessionId] : []),
-      '--print',
-      '--output-format', 'stream-json',
-      '--input-format', 'stream-json',
-      '--verbose',
-      '--permission-mode', 'acceptEdits',
-      ...(model ? ['--model', model] : []),
-      '--allowed-tools',
+      ...(resumeSessionId ? ["--resume", resumeSessionId] : []),
+      "--print",
+      "--output-format",
+      "stream-json",
+      "--input-format",
+      "stream-json",
+      "--verbose",
+      "--permission-mode",
+      "acceptEdits",
+      ...(model ? ["--model", model] : []),
+      "--allowed-tools",
       ...allowedTools,
     ];
 
-    const envKeys = ['PROJECT_DIR', 'SESSIONS_DIR', 'DB_PATH'] as const;
+    const envKeys = ["PROJECT_DIR", "SESSIONS_DIR", "DB_PATH"] as const;
     const envStr = envKeys
       .filter((k) => process.env[k] !== undefined)
       .map((k) => `${k}=${process.env[k]}`)
-      .join(', ');
+      .join(", ");
     log(
       this.sessionId,
-      `spawning: cwd=${worktreePath} cmd=${config.claudePath} ${spawnArgs.join(' ')} env={${envStr}}`,
+      `spawning: cwd=${worktreePath} cmd=${config.claudePath} ${spawnArgs.join(" ")} env={${envStr}}`,
     );
 
-    this.proc = spawn(
-      config.claudePath,
-      spawnArgs,
-      {
-        cwd: worktreePath,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        ...(process.platform !== 'win32' && { detached: true }),
-      },
-    );
+    this.proc = spawn(config.claudePath, spawnArgs, {
+      cwd: worktreePath,
+      stdio: ["pipe", "pipe", "pipe"],
+      ...(process.platform !== "win32" && { detached: true }),
+    });
 
     // Send initial prompt via stdin (required by --input-format stream-json).
     // Resumed sessions skip the initial prompt — the caller delivers via sendMessage().
     if (!resumeSessionId && initialPrompt) {
       this.proc.stdin!.write(
-        JSON.stringify({ type: 'user', message: { role: 'user', content: initialPrompt } }) + '\n',
+        JSON.stringify({
+          type: "user",
+          message: { role: "user", content: initialPrompt },
+        }) + "\n",
       );
     }
 
-    this.proc.on('error', (err) => {
+    this.proc.on("error", (err) => {
       this._hasSpawnError = true;
       console.error(`[CliSessionRunner] spawn error: ${err.message}`);
     });
 
     // Pipe stderr to console for diagnostics
-    this.proc.stderr!.on('data', (chunk: Buffer) => {
+    this.proc.stderr!.on("data", (chunk: Buffer) => {
       log(this.sessionId, `stderr: ${chunk.toString().trimEnd()}`);
     });
 
     const rl = createInterface({ input: this.proc.stdout! });
 
     // Capture readline completion early so we can drain after exit.
-    const rlDone = new Promise<void>((resolve) => rl.once('close', resolve));
+    const rlDone = new Promise<void>((resolve) => rl.once("close", resolve));
 
-    rl.on('line', (line) => {
+    rl.on("line", (line) => {
       if (!line.trim()) return;
       let event: Record<string, unknown>;
       try {
@@ -99,13 +105,18 @@ export class CliSessionRunner implements ISessionRunner {
 
     // Wait for the subprocess to exit.
     const exitCode = await new Promise<number | null>((resolve) => {
-      this.proc!.once('exit', (code) => resolve(code));
+      this.proc!.once("exit", (code) => resolve(code));
     });
 
     // Drain remaining buffered lines (5s guard).
     await Promise.race([
       rlDone,
-      new Promise<void>((resolve) => setTimeout(() => { rl.close(); resolve(); }, 5_000)),
+      new Promise<void>((resolve) =>
+        setTimeout(() => {
+          rl.close();
+          resolve();
+        }, 5_000),
+      ),
     ]);
 
     return exitCode;
@@ -114,7 +125,10 @@ export class CliSessionRunner implements ISessionRunner {
   sendMessage(message: string): void {
     if (!this.proc?.stdin?.writable) return;
     this.proc.stdin.write(
-      JSON.stringify({ type: 'user', message: { role: 'user', content: message } }) + '\n',
+      JSON.stringify({
+        type: "user",
+        message: { role: "user", content: message },
+      }) + "\n",
     );
   }
 
@@ -140,7 +154,7 @@ export class CliSessionRunner implements ISessionRunner {
         }
         resolve();
       }, 15_000);
-      this.proc!.once('exit', () => {
+      this.proc!.once("exit", () => {
         clearTimeout(timeout);
         resolve();
       });
@@ -148,15 +162,15 @@ export class CliSessionRunner implements ISessionRunner {
   }
 
   private killProcessTree(pid: number): void {
-    if (process.platform === 'win32') {
+    if (process.platform === "win32") {
       try {
-        execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' });
+        execSync(`taskkill /pid ${pid} /T /F`, { stdio: "ignore" });
       } catch {
         // Process may have already exited
       }
     } else {
       try {
-        process.kill(-pid, 'SIGTERM');
+        process.kill(-pid, "SIGTERM");
       } catch {
         // ESRCH = process already gone
       }

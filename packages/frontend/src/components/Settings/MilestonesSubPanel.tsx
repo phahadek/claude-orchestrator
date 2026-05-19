@@ -1,8 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
-import type { FormEvent } from 'react';
-import { ErrorBoundary } from '../ErrorBoundary';
-import { projectsApi, type Project, type ProjectMilestone } from '../../api/projects';
-import styles from './ProjectsSettingsPanel.module.css';
+import { useState, useEffect, useCallback } from "react";
+import type { FormEvent } from "react";
+import { ErrorBoundary } from "../ErrorBoundary";
+import {
+  projectsApi,
+  type Project,
+  type ProjectMilestone,
+} from "../../api/projects";
+import styles from "./ProjectsSettingsPanel.module.css";
 
 interface Props {
   project: Project;
@@ -16,9 +20,13 @@ interface MilestoneDraft {
   displayOrder: number;
 }
 
-const EMPTY_DRAFT: MilestoneDraft = { name: '', sourceId: '', displayOrder: 0 };
+const EMPTY_DRAFT: MilestoneDraft = { name: "", sourceId: "", displayOrder: 0 };
 
-function MilestonesSubPanelInner({ project, onBack, onMilestonesChanged }: Props) {
+function MilestonesSubPanelInner({
+  project,
+  onBack,
+  onMilestonesChanged,
+}: Props) {
   const [milestones, setMilestones] = useState<ProjectMilestone[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -27,7 +35,9 @@ function MilestonesSubPanelInner({ project, onBack, onMilestonesChanged }: Props
   const [draft, setDraft] = useState<MilestoneDraft>(EMPTY_DRAFT);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState<ProjectMilestone | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<ProjectMilestone | null>(
+    null,
+  );
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -36,7 +46,9 @@ function MilestonesSubPanelInner({ project, onBack, onMilestonesChanged }: Props
       const data = await projectsApi.listMilestones(project.id);
       setMilestones(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load milestones');
+      setError(
+        err instanceof Error ? err.message : "Failed to load milestones",
+      );
     } finally {
       setLoading(false);
     }
@@ -47,9 +59,10 @@ function MilestonesSubPanelInner({ project, onBack, onMilestonesChanged }: Props
   }, [reload]);
 
   function openAdd() {
-    const nextOrder = milestones.length === 0
-      ? 0
-      : Math.max(...milestones.map((m) => m.displayOrder)) + 1;
+    const nextOrder =
+      milestones.length === 0
+        ? 0
+        : Math.max(...milestones.map((m) => m.displayOrder)) + 1;
     setEditing(null);
     setDraft({ ...EMPTY_DRAFT, displayOrder: nextOrder });
     setFormError(null);
@@ -60,7 +73,7 @@ function MilestonesSubPanelInner({ project, onBack, onMilestonesChanged }: Props
     setEditing(m);
     setDraft({
       name: m.name,
-      sourceId: m.sourceId ?? '',
+      sourceId: m.sourceId ?? "",
       displayOrder: m.displayOrder,
     });
     setFormError(null);
@@ -77,7 +90,7 @@ function MilestonesSubPanelInner({ project, onBack, onMilestonesChanged }: Props
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!draft.name.trim()) {
-      setFormError('Name is required');
+      setFormError("Name is required");
       return;
     }
     setSubmitting(true);
@@ -86,13 +99,13 @@ function MilestonesSubPanelInner({ project, onBack, onMilestonesChanged }: Props
       if (editing) {
         await projectsApi.updateMilestone(editing.id, {
           name: draft.name,
-          sourceId: draft.sourceId.trim() === '' ? null : draft.sourceId.trim(),
+          sourceId: draft.sourceId.trim() === "" ? null : draft.sourceId.trim(),
           displayOrder: draft.displayOrder,
         });
       } else {
         await projectsApi.createMilestone(project.id, {
           name: draft.name,
-          sourceId: draft.sourceId.trim() === '' ? null : draft.sourceId.trim(),
+          sourceId: draft.sourceId.trim() === "" ? null : draft.sourceId.trim(),
           displayOrder: draft.displayOrder,
         });
       }
@@ -100,7 +113,9 @@ function MilestonesSubPanelInner({ project, onBack, onMilestonesChanged }: Props
       await reload();
       onMilestonesChanged?.();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Failed to save milestone');
+      setFormError(
+        err instanceof Error ? err.message : "Failed to save milestone",
+      );
     } finally {
       setSubmitting(false);
     }
@@ -115,12 +130,18 @@ function MilestonesSubPanelInner({ project, onBack, onMilestonesChanged }: Props
       await reload();
       onMilestonesChanged?.();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to delete milestone');
+      setError(
+        err instanceof Error ? err.message : "Failed to delete milestone",
+      );
     }
   }
 
-  const sourceLabel = project.taskSource === 'yaml' ? 'YAML milestone id' : 'Notion data source ID';
-  const sourcePlaceholder = project.taskSource === 'yaml' ? 'm1' : 'paste from Notion URL';
+  const sourceLabel =
+    project.taskSource === "yaml"
+      ? "YAML milestone id"
+      : "Notion data source ID";
+  const sourcePlaceholder =
+    project.taskSource === "yaml" ? "m1" : "paste from Notion URL";
 
   return (
     <div className={styles.subPanel}>
@@ -130,9 +151,13 @@ function MilestonesSubPanelInner({ project, onBack, onMilestonesChanged }: Props
         </button>
         <div className={styles.subPanelTitleGroup}>
           <h3 className={styles.sectionTitle}>{project.name} — Milestones</h3>
-          <p className={styles.hint}>Source: {project.taskSource === 'yaml' ? 'YAML' : 'Notion'}</p>
+          <p className={styles.hint}>
+            Source: {project.taskSource === "yaml" ? "YAML" : "Notion"}
+          </p>
         </div>
-        <button type="button" className={styles.btnPrimary} onClick={openAdd}>+ Add milestone</button>
+        <button type="button" className={styles.btnPrimary} onClick={openAdd}>
+          + Add milestone
+        </button>
       </div>
 
       {error && <p className={styles.error}>{error}</p>}
@@ -155,7 +180,7 @@ function MilestonesSubPanelInner({ project, onBack, onMilestonesChanged }: Props
             {milestones.map((m) => (
               <tr key={m.id}>
                 <td>{m.name}</td>
-                <td className={styles.mono}>{m.sourceId ?? '—'}</td>
+                <td className={styles.mono}>{m.sourceId ?? "—"}</td>
                 <td>{m.displayOrder}</td>
                 <td className={styles.actionsCol}>
                   <button
@@ -184,14 +209,18 @@ function MilestonesSubPanelInner({ project, onBack, onMilestonesChanged }: Props
           className={styles.modalOverlay}
           role="dialog"
           aria-modal="true"
-          aria-label={editing ? 'Edit milestone' : 'Add milestone'}
+          aria-label={editing ? "Edit milestone" : "Add milestone"}
           onClick={closeForm}
         >
           <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
-            <h3 className={styles.modalTitle}>{editing ? 'Edit milestone' : 'Add milestone'}</h3>
+            <h3 className={styles.modalTitle}>
+              {editing ? "Edit milestone" : "Add milestone"}
+            </h3>
             <form onSubmit={(e) => void handleSubmit(e)}>
               <div className={styles.formField}>
-                <label htmlFor="ms-name" className={styles.formLabel}>Name</label>
+                <label htmlFor="ms-name" className={styles.formLabel}>
+                  Name
+                </label>
                 <input
                   id="ms-name"
                   type="text"
@@ -202,24 +231,35 @@ function MilestonesSubPanelInner({ project, onBack, onMilestonesChanged }: Props
                 />
               </div>
               <div className={styles.formField}>
-                <label htmlFor="ms-source" className={styles.formLabel}>{sourceLabel}</label>
+                <label htmlFor="ms-source" className={styles.formLabel}>
+                  {sourceLabel}
+                </label>
                 <input
                   id="ms-source"
                   type="text"
                   className={styles.input}
                   value={draft.sourceId}
-                  onChange={(e) => setDraft({ ...draft, sourceId: e.target.value })}
+                  onChange={(e) =>
+                    setDraft({ ...draft, sourceId: e.target.value })
+                  }
                   placeholder={sourcePlaceholder}
                 />
               </div>
               <div className={styles.formField}>
-                <label htmlFor="ms-order" className={styles.formLabel}>Display Order</label>
+                <label htmlFor="ms-order" className={styles.formLabel}>
+                  Display Order
+                </label>
                 <input
                   id="ms-order"
                   type="number"
                   className={styles.input}
                   value={draft.displayOrder}
-                  onChange={(e) => setDraft({ ...draft, displayOrder: Number(e.target.value) || 0 })}
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      displayOrder: Number(e.target.value) || 0,
+                    })
+                  }
                 />
               </div>
               {formError && <p className={styles.serverError}>{formError}</p>}
@@ -232,8 +272,12 @@ function MilestonesSubPanelInner({ project, onBack, onMilestonesChanged }: Props
                 >
                   Cancel
                 </button>
-                <button type="submit" className={styles.btnPrimary} disabled={submitting}>
-                  {submitting ? 'Saving…' : editing ? 'Save' : 'Create'}
+                <button
+                  type="submit"
+                  className={styles.btnPrimary}
+                  disabled={submitting}
+                >
+                  {submitting ? "Saving…" : editing ? "Save" : "Create"}
                 </button>
               </div>
             </form>
@@ -252,7 +296,8 @@ function MilestonesSubPanelInner({ project, onBack, onMilestonesChanged }: Props
           <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
             <h3 className={styles.modalTitle}>Delete milestone?</h3>
             <p className={styles.muted}>
-              This will remove the milestone <strong>{confirmDelete.name}</strong> from{' '}
+              This will remove the milestone{" "}
+              <strong>{confirmDelete.name}</strong> from{" "}
               <strong>{project.name}</strong>. This cannot be undone.
             </p>
             <div className={styles.modalActions}>

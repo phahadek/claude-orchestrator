@@ -1,5 +1,5 @@
-import type { ResolvedTask } from '@claude-orchestrator/backend/src/notion/types';
-import type { TaskView } from '../types/taskView';
+import type { ResolvedTask } from "@claude-orchestrator/backend/src/notion/types";
+import type { TaskView } from "../types/taskView";
 
 export interface TaskViewWaveResult {
   waves: TaskView[][];
@@ -14,9 +14,11 @@ export interface TaskViewWaveResult {
  * Uses the pre-computed `wave` field from the backend rather than re-deriving from dependsOn.
  * Deferred tasks are excluded from the counts and wave display.
  */
-export function computeProgressFromTaskViews(tasks: TaskView[]): TaskViewWaveResult {
-  const DEFERRED = '⏭️ Deferred';
-  const DONE = '✅ Done';
+export function computeProgressFromTaskViews(
+  tasks: TaskView[],
+): TaskViewWaveResult {
+  const DEFERRED = "⏭️ Deferred";
+  const DONE = "✅ Done";
 
   const deferred = tasks.filter((t) => t.notionStatus === DEFERRED);
   const nonDeferred = tasks.filter((t) => t.notionStatus !== DEFERRED);
@@ -64,8 +66,8 @@ export interface WaveResult {
  * Deferred tasks are excluded from waves and progress.
  */
 export function computeWaves(tasks: ResolvedTask[]): WaveResult {
-  const DEFERRED = '⏭️ Deferred';
-  const DONE = '✅ Done';
+  const DEFERRED = "⏭️ Deferred";
+  const DONE = "✅ Done";
 
   const deferred = tasks.filter((t) => t.task.status === DEFERRED);
   const nonDeferred = tasks.filter((t) => t.task.status !== DEFERRED);
@@ -83,7 +85,9 @@ export function computeWaves(tasks: ResolvedTask[]): WaveResult {
   //   - Done (status === DONE), or
   //   - Already placed in a previous wave
   const placed = new Set<string>(); // IDs of tasks already assigned to a wave
-  const doneIds = new Set(nonDeferred.filter((t) => t.task.status === DONE).map((t) => t.task.id));
+  const doneIds = new Set(
+    nonDeferred.filter((t) => t.task.status === DONE).map((t) => t.task.id),
+  );
   const nonDoneNonDeferred = nonDeferred.filter((t) => t.task.status !== DONE);
 
   const waves: ResolvedTask[][] = [];
@@ -98,7 +102,9 @@ export function computeWaves(tasks: ResolvedTask[]): WaveResult {
     const nextRemaining: ResolvedTask[] = [];
 
     for (const t of remaining) {
-      const allDepsSatisfied = t.task.dependsOn.every((depId) => placed.has(depId) || doneIds.has(depId));
+      const allDepsSatisfied = t.task.dependsOn.every(
+        (depId) => placed.has(depId) || doneIds.has(depId),
+      );
       if (allDepsSatisfied) {
         wave.push(t);
       } else {

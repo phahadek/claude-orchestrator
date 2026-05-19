@@ -1,8 +1,8 @@
-import { NotionTask, ResolvedTask } from './types';
+import { NotionTask, ResolvedTask } from "./types";
 
 /** Strip hyphens so both dashed and dashless Notion UUIDs match. */
 function stripHyphens(id: string): string {
-  return id.replace(/-/g, '');
+  return id.replace(/-/g, "");
 }
 
 export class DependencyResolver {
@@ -18,7 +18,7 @@ export class DependencyResolver {
         task,
         blocked: blockers.length > 0,
         blockers,
-        nonCode: task.type === '📋 Planning' || task.type === '🧪 Testing',
+        nonCode: task.type === "📋 Planning" || task.type === "🧪 Testing",
         wave,
       };
     });
@@ -43,7 +43,7 @@ export class DependencyResolver {
     let maxDepWave = 0;
     for (const depId of task.dependsOn) {
       const dep = byId.get(stripHyphens(depId));
-      if (!dep || dep.status === '✅ Done') continue; // satisfied deps don't affect wave
+      if (!dep || dep.status === "✅ Done") continue; // satisfied deps don't affect wave
       const depWave = this.computeWave(dep, byId, cache);
       if (depWave > maxDepWave) maxDepWave = depWave;
     }
@@ -56,7 +56,7 @@ export class DependencyResolver {
   private findBlockers(
     task: NotionTask,
     byId: Map<string, NotionTask>,
-    visited: Set<string>
+    visited: Set<string>,
   ): NotionTask[] {
     const normId = stripHyphens(task.id);
     if (visited.has(normId)) return []; // cycle guard
@@ -66,7 +66,7 @@ export class DependencyResolver {
     for (const depId of task.dependsOn) {
       const dep = byId.get(stripHyphens(depId));
       if (!dep) continue; // dependency outside this board — treat as satisfied
-      if (dep.status !== '✅ Done') {
+      if (dep.status !== "✅ Done") {
         blockers.push(dep);
         // recurse — a blocker's own blockers are also blockers
         blockers.push(...this.findBlockers(dep, byId, visited));

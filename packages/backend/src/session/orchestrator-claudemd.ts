@@ -20,7 +20,7 @@ export interface OrchestratorClaudeMdParams {
    * Task backend type. When 'local', the lifecycle instructions are adjusted
    * to skip Notion fetch steps and read tasks.yaml instead.
    */
-  taskBackend?: 'notion' | 'local';
+  taskBackend?: "notion" | "local";
   /**
    * Pre-fetched task spec markdown. When provided, the task content is injected
    * directly into the CLAUDE.md and the session skips Notion fetching entirely.
@@ -55,23 +55,39 @@ export interface OrchestratorClaudeMdParams {
  * 10. Bash rules (permission system)
  * 11. Separator + "# Project Instructions (from project CLAUDE.md)" (added by caller)
  */
-export function buildOrchestratorClaudeMd(params: OrchestratorClaudeMdParams): string {
-  const { taskName, taskUrl, projectContextUrl, targetBranch, worktreePath, prGate, bashRules, taskBackend = 'notion', taskContent, localContext } = params;
+export function buildOrchestratorClaudeMd(
+  params: OrchestratorClaudeMdParams,
+): string {
+  const {
+    taskName,
+    taskUrl,
+    projectContextUrl,
+    targetBranch,
+    worktreePath,
+    prGate,
+    bashRules,
+    taskBackend = "notion",
+    taskContent,
+    localContext,
+  } = params;
 
-  const resolvedPrGate = prGate ?? { typeCheck: 'npx tsc --noEmit', build: 'npx vite build' };
+  const resolvedPrGate = prGate ?? {
+    typeCheck: "npx tsc --noEmit",
+    build: "npx vite build",
+  };
   const resolvedBashRules = bashRules ?? [
-    'Use `npx` instead of bare tool names.\n`tsc` → `npx tsc`. Bare commands may not be on PATH.',
+    "Use `npx` instead of bare tool names.\n`tsc` → `npx tsc`. Bare commands may not be on PATH.",
   ];
 
   const bashRulesText = resolvedBashRules
     .map((rule, i) => {
       const ruleNum = i + 5;
-      const lines = rule.split('\n');
+      const lines = rule.split("\n");
       const heading = lines[0];
-      const body = lines.slice(1).join('\n');
-      return `**Rule ${ruleNum} — ${heading}**${body ? '\n' + body : ''}`;
+      const body = lines.slice(1).join("\n");
+      return `**Rule ${ruleNum} — ${heading}**${body ? "\n" + body : ""}`;
     })
-    .join('\n\n');
+    .join("\n\n");
 
   // Sections 1-9 — returned by this function.
   // Section 10 (separator + project instructions heading) is written by the caller.
@@ -94,20 +110,22 @@ export function buildOrchestratorClaudeMd(params: OrchestratorClaudeMdParams): s
 
 Follow these steps in order — every session:
 
-${taskContent
-  ? `> **Task spec is pre-loaded below.** Do NOT fetch Notion pages — the task content has
+${
+  taskContent
+    ? `> **Task spec is pre-loaded below.** Do NOT fetch Notion pages — the task content has
 > already been injected by the orchestrator. Proceed directly to implementation.
 
 1. Read the **Task Spec** section below — it contains the full task specification.
 2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
-  : taskBackend === 'local'
-  ? `> ⚠️ **YAML task source**: Task context comes from \`tasks.yaml\` in the project root, not Notion.
+    : taskBackend === "local"
+      ? `> ⚠️ **YAML task source**: Task context comes from \`tasks.yaml\` in the project root, not Notion.
 > Skip step 1 (Notion fetch) and instead read \`tasks.yaml\` for task context.
 
 1. Read \`tasks.yaml\` in the project root for task context (skip Notion fetch).
 2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
-  : `1. Fetch the Notion task page and project context page.
-2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`}
+      : `1. Fetch the Notion task page and project context page.
+2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
+}
 3. Implement the task per the acceptance criteria.
 4. Pass the pre-PR gate (see Pre-PR Gate section below).
 5. Open a draft PR targeting \`${targetBranch}\` using the required body template.
@@ -224,7 +242,9 @@ For multiline commit messages, use \`git commit -F <file>\` and write the file w
 **Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
 Use the Write tool for any file creation. Never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
 
-${bashRulesText}${taskContent ? `
+${bashRulesText}${
+    taskContent
+      ? `
 
 ---
 
@@ -233,7 +253,11 @@ ${bashRulesText}${taskContent ? `
 > This is the full task specification, pre-fetched by the orchestrator.
 > Do NOT re-fetch this from Notion — use the content below as your source of truth.
 
-${taskContent}` : ''}${localContext ? `
+${taskContent}`
+      : ""
+  }${
+    localContext
+      ? `
 
 ---
 
@@ -241,7 +265,9 @@ ${taskContent}` : ''}${localContext ? `
 
 > Host-local context loaded from \`.claude/local-context.md\`.
 
-${localContext}` : ''}`.trimEnd();
+${localContext}`
+      : ""
+  }`.trimEnd();
 }
 
 /**

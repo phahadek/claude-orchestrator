@@ -1,9 +1,12 @@
-import { useState, useCallback } from 'react';
-import type { ServerMessage, PermissionDenial } from '@claude-orchestrator/backend/src/ws/types';
-import type { ResolvedTask } from '@claude-orchestrator/backend/src/notion/types';
-import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
+import { useState, useCallback } from "react";
+import type {
+  ServerMessage,
+  PermissionDenial,
+} from "@claude-orchestrator/backend/src/ws/types";
+import type { ResolvedTask } from "@claude-orchestrator/backend/src/notion/types";
+import type { TaskView } from "@claude-orchestrator/backend/src/routes/tasks";
 
-const DISMISSED_DENIALS_KEY = 'permission_denials_dismissed';
+const DISMISSED_DENIALS_KEY = "permission_denials_dismissed";
 
 function loadDismissedFromStorage(): Map<string, Set<string>> {
   try {
@@ -21,7 +24,9 @@ function saveDismissedToStorage(map: Map<string, Set<string>>): void {
     const obj: Record<string, string[]> = {};
     for (const [k, v] of map) obj[k] = [...v];
     localStorage.setItem(DISMISSED_DENIALS_KEY, JSON.stringify(obj));
-  } catch { /* quota or private browsing */ }
+  } catch {
+    /* quota or private browsing */
+  }
 }
 
 export interface SessionState {
@@ -31,7 +36,12 @@ export interface SessionState {
   taskType?: string;
   sessionType?: string;
   status: string;
-  events: { eventType: string; content: string; timestamp: number; messageId?: string }[];
+  events: {
+    eventType: string;
+    content: string;
+    timestamp: number;
+    messageId?: string;
+  }[];
   pendingPermission?: { toolName: string; proposedAction: string };
   permissionDenials?: PermissionDenial[];
   prUrl?: string;
@@ -62,14 +72,25 @@ export interface IncompleteReview {
 }
 
 export function useSessionStore() {
-  const [sessions, setSessions] = useState<Map<string, SessionState>>(new Map());
+  const [sessions, setSessions] = useState<Map<string, SessionState>>(
+    new Map(),
+  );
   const [tasks, setTasks] = useState<ResolvedTask[]>([]);
   const [tasksReady, setTasksReady] = useState(false);
   const [synced, setSynced] = useState(false);
-  const [dismissedDenialIds, setDismissedDenialIds] = useState<Map<string, Set<string>>>(loadDismissedFromStorage);
+  const [dismissedDenialIds, setDismissedDenialIds] = useState<
+    Map<string, Set<string>>
+  >(loadDismissedFromStorage);
   const [prRefreshTrigger, setPrRefreshTrigger] = useState(0);
-  const [lastPrReviewEvent, setLastPrReviewEvent] = useState<{ prNumber: number; repo: string; verdict: string; summary: string } | null>(null);
-  const [incompleteReviews, setIncompleteReviews] = useState<IncompleteReview[]>([]);
+  const [lastPrReviewEvent, setLastPrReviewEvent] = useState<{
+    prNumber: number;
+    repo: string;
+    verdict: string;
+    summary: string;
+  } | null>(null);
+  const [incompleteReviews, setIncompleteReviews] = useState<
+    IncompleteReview[]
+  >([]);
   const [lastTaskUpdate, setLastTaskUpdate] = useState<TaskView | null>(null);
   const [taskListRefreshTrigger, setTaskListRefreshTrigger] = useState(0);
 
@@ -78,14 +99,14 @@ export function useSessionStore() {
     setSessions((prev) => {
       const next = new Map(prev);
       switch (msg.type) {
-        case 'session_started':
+        case "session_started":
           next.set(msg.sessionId, {
             sessionId: msg.sessionId,
             taskName: msg.taskName,
             notionTaskUrl: msg.notionTaskUrl,
             taskType: msg.taskType,
             sessionType: msg.sessionType,
-            status: 'starting',
+            status: "starting",
             events: [],
             started_at: msg.started_at,
             ended_at: msg.ended_at,
@@ -102,24 +123,42 @@ export function useSessionStore() {
             prUrl: msg.prUrl,
           });
           break;
-        case 'session_event': {
+        case "session_event": {
           const s = next.get(msg.sessionId);
           if (s) {
             let isRateLimited = s.isRateLimited;
             try {
-              const payload = JSON.parse(msg.content) as Record<string, unknown>;
-              if (payload && typeof payload === 'object' && payload.type === 'rate_limit_event') {
-                const info = payload.rate_limit_info as Record<string, unknown> | undefined;
-                if (info?.status === 'rate_limited') isRateLimited = true;
-                else if (info?.status === 'resumed') isRateLimited = false;
+              const payload = JSON.parse(msg.content) as Record<
+                string,
+                unknown
+              >;
+              if (
+                payload &&
+                typeof payload === "object" &&
+                payload.type === "rate_limit_event"
+              ) {
+                const info = payload.rate_limit_info as
+                  | Record<string, unknown>
+                  | undefined;
+                if (info?.status === "rate_limited") isRateLimited = true;
+                else if (info?.status === "resumed") isRateLimited = false;
               }
-            } catch { /* not JSON */ }
-            const newEvent = { eventType: msg.eventType, content: msg.content, timestamp: Date.now(), messageId: msg.messageId };
+            } catch {
+              /* not JSON */
+            }
+            const newEvent = {
+              eventType: msg.eventType,
+              content: msg.content,
+              timestamp: Date.now(),
+              messageId: msg.messageId,
+            };
             let events: typeof s.events;
             // Upsert by messageId: if we already have an event with this messageId,
             // replace it in-place instead of appending a duplicate.
             if (msg.messageId) {
-              const idx = s.events.findIndex((e) => e.messageId === msg.messageId);
+              const idx = s.events.findIndex(
+                (e) => e.messageId === msg.messageId,
+              );
               if (idx >= 0) {
                 events = [...s.events];
                 events[idx] = newEvent;
@@ -133,23 +172,26 @@ export function useSessionStore() {
           }
           break;
         }
-        case 'session_status': {
+        case "session_status": {
           const s = next.get(msg.sessionId);
           if (s) next.set(msg.sessionId, { ...s, status: msg.status });
           break;
         }
-        case 'permission_request': {
+        case "permission_request": {
           const s = next.get(msg.sessionId);
           if (s) {
             next.set(msg.sessionId, {
               ...s,
-              status: 'needs_permission',
-              pendingPermission: { toolName: msg.toolName, proposedAction: msg.proposedAction },
+              status: "needs_permission",
+              pendingPermission: {
+                toolName: msg.toolName,
+                proposedAction: msg.proposedAction,
+              },
             });
           }
           break;
         }
-        case 'permission_denials': {
+        case "permission_denials": {
           const s = next.get(msg.sessionId);
           if (s) {
             next.set(msg.sessionId, {
@@ -159,7 +201,7 @@ export function useSessionStore() {
           }
           break;
         }
-        case 'session_ended': {
+        case "session_ended": {
           const s = next.get(msg.sessionId);
           if (s) {
             next.set(msg.sessionId, {
@@ -171,21 +213,29 @@ export function useSessionStore() {
           }
           break;
         }
-        case 'session_updated': {
+        case "session_updated": {
           const s = next.get(msg.sessionId);
           if (s) {
             next.set(msg.sessionId, {
               ...s,
-              ...(Object.prototype.hasOwnProperty.call(msg, 'note') && { note: msg.note }),
-              ...(Object.prototype.hasOwnProperty.call(msg, 'tags') && { tags: msg.tags }),
-              ...(msg.totalInputTokens != null && { totalInputTokens: msg.totalInputTokens }),
-              ...(msg.totalOutputTokens != null && { totalOutputTokens: msg.totalOutputTokens }),
+              ...(Object.prototype.hasOwnProperty.call(msg, "note") && {
+                note: msg.note,
+              }),
+              ...(Object.prototype.hasOwnProperty.call(msg, "tags") && {
+                tags: msg.tags,
+              }),
+              ...(msg.totalInputTokens != null && {
+                totalInputTokens: msg.totalInputTokens,
+              }),
+              ...(msg.totalOutputTokens != null && {
+                totalOutputTokens: msg.totalOutputTokens,
+              }),
               ...(msg.model != null && { model: msg.model }),
             });
           }
           break;
         }
-        case 'pr_created': {
+        case "pr_created": {
           const s = next.get(msg.sessionId);
           if (s) next.set(msg.sessionId, { ...s, prUrl: msg.prUrl });
           break;
@@ -196,56 +246,66 @@ export function useSessionStore() {
       return next;
     });
 
-    if (msg.type === 'tasks_ready') {
+    if (msg.type === "tasks_ready") {
       setTasks(msg.tasks);
       setTasksReady(true);
       setTaskListRefreshTrigger((n) => n + 1);
     }
-    if (msg.type === 'task_status_changed') {
-      setTasks((prev) => prev.map((t) =>
-        t.task.id === msg.notionTaskId
-          ? { ...t, task: { ...t.task, status: msg.newStatus } }
-          : t,
-      ));
+    if (msg.type === "task_status_changed") {
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.task.id === msg.notionTaskId
+            ? { ...t, task: { ...t.task, status: msg.newStatus } }
+            : t,
+        ),
+      );
     }
-    if (msg.type === 'pr_created') {
+    if (msg.type === "pr_created") {
       setPrRefreshTrigger((n) => n + 1);
       setTaskListRefreshTrigger((n) => n + 1);
     }
-    if (msg.type === 'pr_review_complete') {
-      setLastPrReviewEvent({ prNumber: msg.prNumber, repo: msg.repo, verdict: msg.verdict, summary: msg.summary });
+    if (msg.type === "pr_review_complete") {
+      setLastPrReviewEvent({
+        prNumber: msg.prNumber,
+        repo: msg.repo,
+        verdict: msg.verdict,
+        summary: msg.summary,
+      });
       setTaskListRefreshTrigger((n) => n + 1);
     }
-    if (msg.type === 'session_started') {
+    if (msg.type === "session_started") {
       setTaskListRefreshTrigger((n) => n + 1);
     }
-    if (msg.type === 'session_ended') {
+    if (msg.type === "session_ended") {
       setTaskListRefreshTrigger((n) => n + 1);
     }
-    if (msg.type === 'task_status_changed') {
+    if (msg.type === "task_status_changed") {
       setTaskListRefreshTrigger((n) => n + 1);
     }
-    if (msg.type === 'task_updated') {
+    if (msg.type === "task_updated") {
       setLastTaskUpdate(msg.task);
     }
-    if (msg.type === 'pr_merged') {
+    if (msg.type === "pr_merged") {
       setTaskListRefreshTrigger((n) => n + 1);
       setPrRefreshTrigger((n) => n + 1);
     }
-    if (msg.type === 'pr_closed') {
+    if (msg.type === "pr_closed") {
       setTaskListRefreshTrigger((n) => n + 1);
       setPrRefreshTrigger((n) => n + 1);
     }
-    if (msg.type === 'pr_state_changed') {
+    if (msg.type === "pr_state_changed") {
       setTaskListRefreshTrigger((n) => n + 1);
       setPrRefreshTrigger((n) => n + 1);
     }
-    if (msg.type === 'pr_mergeability_changed') {
+    if (msg.type === "pr_mergeability_changed") {
       setTaskListRefreshTrigger((n) => n + 1);
       setPrRefreshTrigger((n) => n + 1);
     }
-    if (msg.type === 'review_incomplete') {
-      setIncompleteReviews((prev) => [...prev, { prNumber: msg.prNumber, repo: msg.repo, message: msg.message }]);
+    if (msg.type === "review_incomplete") {
+      setIncompleteReviews((prev) => [
+        ...prev,
+        { prNumber: msg.prNumber, repo: msg.repo, message: msg.message },
+      ]);
     }
   }, []);
 
@@ -262,25 +322,31 @@ export function useSessionStore() {
     });
   }, []);
 
-  const setSessionArchived = useCallback((sessionId: string, archived: boolean) => {
-    setSessions((prev) => {
-      const s = prev.get(sessionId);
-      if (!s) return prev;
-      const next = new Map(prev);
-      next.set(sessionId, { ...s, archived });
-      return next;
-    });
-  }, []);
+  const setSessionArchived = useCallback(
+    (sessionId: string, archived: boolean) => {
+      setSessions((prev) => {
+        const s = prev.get(sessionId);
+        if (!s) return prev;
+        const next = new Map(prev);
+        next.set(sessionId, { ...s, archived });
+        return next;
+      });
+    },
+    [],
+  );
 
-  const setSessionFavorited = useCallback((sessionId: string, favorited: boolean) => {
-    setSessions((prev) => {
-      const s = prev.get(sessionId);
-      if (!s) return prev;
-      const next = new Map(prev);
-      next.set(sessionId, { ...s, favorited });
-      return next;
-    });
-  }, []);
+  const setSessionFavorited = useCallback(
+    (sessionId: string, favorited: boolean) => {
+      setSessions((prev) => {
+        const s = prev.get(sessionId);
+        if (!s) return prev;
+        const next = new Map(prev);
+        next.set(sessionId, { ...s, favorited });
+        return next;
+      });
+    },
+    [],
+  );
 
   const dismissDenial = useCallback((sessionId: string, toolUseId: string) => {
     setDismissedDenialIds((prev) => {
@@ -292,14 +358,17 @@ export function useSessionStore() {
     });
   }, []);
 
-  const dismissAllDenials = useCallback((sessionId: string, toolUseIds: string[]) => {
-    setDismissedDenialIds((prev) => {
-      const next = new Map(prev);
-      next.set(sessionId, new Set(toolUseIds));
-      saveDismissedToStorage(next);
-      return next;
-    });
-  }, []);
+  const dismissAllDenials = useCallback(
+    (sessionId: string, toolUseIds: string[]) => {
+      setDismissedDenialIds((prev) => {
+        const next = new Map(prev);
+        next.set(sessionId, new Set(toolUseIds));
+        saveDismissedToStorage(next);
+        return next;
+      });
+    },
+    [],
+  );
 
   const clearSessionDenials = useCallback((sessionId: string) => {
     setSessions((prev) => {
@@ -321,8 +390,32 @@ export function useSessionStore() {
     setIncompleteReviews([]);
   }, []);
 
-  const readyCount = tasks.filter((t) => !t.blocked && t.task.status === '🗂️ Ready').length;
+  const readyCount = tasks.filter(
+    (t) => !t.blocked && t.task.status === "🗂️ Ready",
+  ).length;
   const blockedCount = tasks.filter((t) => t.blocked).length;
 
-  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials, clearSessionDenials, prRefreshTrigger, lastPrReviewEvent, incompleteReviews, dismissIncompleteReviews, lastTaskUpdate, taskListRefreshTrigger };
+  return {
+    sessions: [...sessions.values()],
+    tasks,
+    tasksReady,
+    synced,
+    readyCount,
+    blockedCount,
+    dispatch,
+    resetTasks,
+    deleteSession,
+    setSessionArchived,
+    setSessionFavorited,
+    dismissedDenialIds,
+    dismissDenial,
+    dismissAllDenials,
+    clearSessionDenials,
+    prRefreshTrigger,
+    lastPrReviewEvent,
+    incompleteReviews,
+    dismissIncompleteReviews,
+    lastTaskUpdate,
+    taskListRefreshTrigger,
+  };
 }

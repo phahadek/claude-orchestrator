@@ -1,11 +1,11 @@
 export type DisplayStatus =
-  | 'ready'
-  | 'in_progress'
-  | 'in_review'
-  | 'needs_attention'
-  | 'ready_to_merge'
-  | 'done'
-  | 'backlog';
+  | "ready"
+  | "in_progress"
+  | "in_review"
+  | "needs_attention"
+  | "ready_to_merge"
+  | "done"
+  | "backlog";
 
 export interface TaskView {
   taskId: string;

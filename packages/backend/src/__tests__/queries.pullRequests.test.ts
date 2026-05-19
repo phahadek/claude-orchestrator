@@ -1,11 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi } from "vitest";
 
 // ── In-memory DB setup ────────────────────────────────────────────────────────
 // vi.mock() is hoisted by vitest, so the factory must create the database
 // inline without referencing outer-scope variables.
-vi.mock('../db/db.js', async () => {
-  const { default: Database } = await import('better-sqlite3');
-  const db = new Database(':memory:');
+vi.mock("../db/db.js", async () => {
+  const { default: Database } = await import("better-sqlite3");
+  const db = new Database(":memory:");
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       session_id          TEXT    PRIMARY KEY,
@@ -102,23 +102,23 @@ vi.mock('../db/db.js', async () => {
   return { db };
 });
 
-import { upsertPullRequest, getPRByNumber } from '../db/queries.js';
+import { upsertPullRequest, getPRByNumber } from "../db/queries.js";
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe('upsertPullRequest + getPRByNumber', () => {
-  const now = '2024-01-01T00:00:00Z';
+describe("upsertPullRequest + getPRByNumber", () => {
+  const now = "2024-01-01T00:00:00Z";
   const baseRow = {
     pr_number: 10,
-    pr_url: 'https://github.com/owner/repo/pull/10',
+    pr_url: "https://github.com/owner/repo/pull/10",
     notion_task_id: null,
     session_id: null,
-    repo: 'owner/repo',
-    title: 'feat: initial',
+    repo: "owner/repo",
+    title: "feat: initial",
     body: null,
-    head_branch: 'feature/foo',
-    base_branch: 'dev',
-    state: 'open',
+    head_branch: "feature/foo",
+    base_branch: "dev",
+    state: "open",
     draft: 0,
     review_result: null,
     review_at: null,
@@ -135,37 +135,57 @@ describe('upsertPullRequest + getPRByNumber', () => {
     merge_state_checked_at: null,
   } as const;
 
-  it('returns null/undefined when PR does not exist', () => {
-    expect(getPRByNumber(999, 'owner/repo')).toBeFalsy();
+  it("returns null/undefined when PR does not exist", () => {
+    expect(getPRByNumber(999, "owner/repo")).toBeFalsy();
   });
 
-  it('returns the correct row after upsertPullRequest', () => {
+  it("returns the correct row after upsertPullRequest", () => {
     upsertPullRequest(baseRow);
-    const row = getPRByNumber(10, 'owner/repo');
+    const row = getPRByNumber(10, "owner/repo");
     expect(row).not.toBeNull();
     expect(row!.pr_number).toBe(10);
-    expect(row!.repo).toBe('owner/repo');
-    expect(row!.title).toBe('feat: initial');
+    expect(row!.repo).toBe("owner/repo");
+    expect(row!.title).toBe("feat: initial");
     expect(row!.notion_task_id).toBeNull();
   });
 
-  it('preserves existing notion_task_id when upserted with null', () => {
+  it("preserves existing notion_task_id when upserted with null", () => {
     // First upsert sets notion_task_id
-    upsertPullRequest({ ...baseRow, pr_url: 'https://github.com/owner/repo/pull/11', pr_number: 11, notion_task_id: 'task-abc' });
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: "https://github.com/owner/repo/pull/11",
+      pr_number: 11,
+      notion_task_id: "task-abc",
+    });
     // Second upsert (e.g. from PRSyncJob) passes null — should not overwrite
-    upsertPullRequest({ ...baseRow, pr_url: 'https://github.com/owner/repo/pull/11', pr_number: 11, notion_task_id: null });
-    const row = getPRByNumber(11, 'owner/repo');
-    expect(row!.notion_task_id).toBe('task-abc');
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: "https://github.com/owner/repo/pull/11",
+      pr_number: 11,
+      notion_task_id: null,
+    });
+    const row = getPRByNumber(11, "owner/repo");
+    expect(row!.notion_task_id).toBe("task-abc");
   });
 
-  it('updates notion_task_id when upserted with a non-null value', () => {
+  it("updates notion_task_id when upserted with a non-null value", () => {
     // Row created by PRSyncJob without notion_task_id
-    upsertPullRequest({ ...baseRow, pr_url: 'https://github.com/owner/repo/pull/12', pr_number: 12 });
-    expect(getPRByNumber(12, 'owner/repo')!.notion_task_id).toBeNull();
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: "https://github.com/owner/repo/pull/12",
+      pr_number: 12,
+    });
+    expect(getPRByNumber(12, "owner/repo")!.notion_task_id).toBeNull();
     // Session ends and links the task
-    upsertPullRequest({ ...baseRow, pr_url: 'https://github.com/owner/repo/pull/12', pr_number: 12, notion_task_id: 'task-xyz', session_id: 'sess-1' });
-    const row = getPRByNumber(12, 'owner/repo');
-    expect(row!.notion_task_id).toBe('task-xyz');
-    expect(row!.session_id).toBe('sess-1');
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: "https://github.com/owner/repo/pull/12",
+      pr_number: 12,
+      notion_task_id: "task-xyz",
+      session_id: "sess-1",
+    });
+    const row = getPRByNumber(12, "owner/repo");
+    expect(row!.notion_task_id).toBe("task-xyz");
+    expect(row!.session_id).toBe("sess-1");
   });
 });

@@ -1,4 +1,4 @@
-import { db } from './db';
+import { db } from "./db";
 
 export function runMigrations(): void {
   db.exec(`
@@ -101,20 +101,98 @@ export function runMigrations(): void {
   `);
 
   // Idempotent column additions for existing databases
-  try { db.exec(`ALTER TABLE sessions ADD COLUMN worktree_path TEXT`); } catch { /* already exists */ }
-  try { db.exec(`ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
-  try { db.exec(`ALTER TABLE sessions ADD COLUMN project_id TEXT`); } catch { /* already exists */ }
-  try { db.exec(`ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'standard'`); } catch { /* already exists */ }
-  try { db.exec(`ALTER TABLE sessions ADD COLUMN note TEXT`); } catch { /* already exists */ }
-  try { db.exec(`ALTER TABLE sessions ADD COLUMN tags TEXT`); } catch { /* already exists */ }
-  try { db.exec(`ALTER TABLE session_events ADD COLUMN message_id TEXT`); } catch { /* already exists */ }
-  try { db.exec(`ALTER TABLE sessions ADD COLUMN favorited INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
-  try { db.exec(`ALTER TABLE sessions ADD COLUMN total_input_tokens INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
-  try { db.exec(`ALTER TABLE sessions ADD COLUMN total_output_tokens INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
-  try { db.exec(`ALTER TABLE pull_requests ADD COLUMN review_session_id TEXT`); } catch { /* already exists */ }
-  try { db.exec(`ALTER TABLE pull_requests ADD COLUMN review_iteration INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
-  try { db.exec(`ALTER TABLE pull_requests ADD COLUMN head_sha TEXT`); } catch { /* already exists */ }
-  try { db.exec(`ALTER TABLE pull_requests ADD COLUMN last_reviewed_sha TEXT`); } catch { /* already exists */ }
-  try { db.exec(`ALTER TABLE projects ADD COLUMN auto_launch_enabled INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
-  try { db.exec(`ALTER TABLE projects ADD COLUMN auto_launch_milestone_id TEXT`); } catch { /* already exists */ }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN worktree_path TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN project_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'standard'`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN note TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN tags TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE session_events ADD COLUMN message_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN favorited INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN total_input_tokens INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN total_output_tokens INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN review_session_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE pull_requests ADD COLUMN review_iteration INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN head_sha TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN last_reviewed_sha TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE projects ADD COLUMN auto_launch_enabled INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE projects ADD COLUMN auto_launch_milestone_id TEXT`);
+  } catch {
+    /* already exists */
+  }
 }

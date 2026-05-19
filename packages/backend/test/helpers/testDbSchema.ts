@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3';
+import type Database from "better-sqlite3";
 
 /**
  * Applies the full table schema needed for queries.ts prepared statements

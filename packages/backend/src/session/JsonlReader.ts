@@ -1,6 +1,6 @@
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
+import fs from "fs";
+import path from "path";
+import os from "os";
 import {
   getAllSessionIds,
   insertSessionOrIgnore,
@@ -8,8 +8,8 @@ import {
   getZeroTokenSessions,
   getEventsBySession,
   incrementTokens,
-} from '../db/queries';
-import type { EventType, NewSession } from '../db/types';
+} from "../db/queries";
+import type { EventType, NewSession } from "../db/types";
 
 export interface RawSessionEvent {
   type: EventType;
@@ -17,42 +17,46 @@ export interface RawSessionEvent {
   timestamp?: number;
 }
 
-export const DEFAULT_SESSIONS_DIR = path.join(os.homedir(), '.claude', 'projects');
+export const DEFAULT_SESSIONS_DIR = path.join(
+  os.homedir(),
+  ".claude",
+  "projects",
+);
 
 // Includes both our internal types and the real types emitted by the Claude CLI.
 const VALID_EVENT_TYPES: ReadonlySet<string> = new Set([
-  'text',
-  'tool_use',
-  'tool_result',
-  'system',
-  'error',
+  "text",
+  "tool_use",
+  "tool_result",
+  "system",
+  "error",
   // Real Claude CLI event types
-  'user',
-  'assistant',
-  'message',
-  'file-history-snapshot',
-  'result',
+  "user",
+  "assistant",
+  "message",
+  "file-history-snapshot",
+  "result",
 ]);
 
 /** Map raw Claude CLI event type strings to our internal EventType union. */
 function toEventType(raw: string): EventType {
   switch (raw) {
-    case 'assistant':
-    case 'text':
-    case 'message':
-      return 'text';
-    case 'tool_use':
-      return 'tool_use';
-    case 'tool_result':
-      return 'tool_result';
-    case 'system':
-    case 'user':
-    case 'file-history-snapshot':
-      return 'system';
-    case 'error':
-      return 'error';
+    case "assistant":
+    case "text":
+    case "message":
+      return "text";
+    case "tool_use":
+      return "tool_use";
+    case "tool_result":
+      return "tool_result";
+    case "system":
+    case "user":
+    case "file-history-snapshot":
+      return "system";
+    case "error":
+      return "error";
     default:
-      return 'system';
+      return "system";
   }
 }
 
@@ -70,13 +74,13 @@ export class JsonlReader {
 
     const files = fs
       .readdirSync(this.sessionsDir)
-      .filter((f) => f.endsWith('.jsonl'));
+      .filter((f) => f.endsWith(".jsonl"));
 
     let newSessions = 0;
     let newEvents = 0;
 
     for (const file of files) {
-      const sessionId = path.basename(file, '.jsonl');
+      const sessionId = path.basename(file, ".jsonl");
       if (known.has(sessionId)) continue;
 
       const filePath = path.join(this.sessionsDir, file);
@@ -91,7 +95,7 @@ export class JsonlReader {
         notion_task_id: null,
         notion_task_url: null,
         project_context_url: null,
-        status: 'done',
+        status: "done",
         started_at: startedAt,
         ended_at: null,
         pr_url: null,
@@ -117,7 +121,7 @@ export class JsonlReader {
 
   /** Parse a single .jsonl file into an array of raw events. */
   parseFile(filePath: string): RawSessionEvent[] {
-    const lines = fs.readFileSync(filePath, 'utf8').split('\n');
+    const lines = fs.readFileSync(filePath, "utf8").split("\n");
     const events: RawSessionEvent[] = [];
 
     for (const line of lines) {
@@ -134,7 +138,7 @@ export class JsonlReader {
         continue;
       }
 
-      if (typeof obj.type !== 'string' || !VALID_EVENT_TYPES.has(obj.type)) {
+      if (typeof obj.type !== "string" || !VALID_EVENT_TYPES.has(obj.type)) {
         console.warn(
           `[JsonlReader] unknown event type "${String(obj.type)}" in ${filePath} — skipping`,
         );
@@ -145,7 +149,7 @@ export class JsonlReader {
         type: toEventType(obj.type),
         content: obj.content ?? obj.message ?? obj,
         timestamp:
-          typeof obj.timestamp === 'number' ? obj.timestamp : undefined,
+          typeof obj.timestamp === "number" ? obj.timestamp : undefined,
       });
     }
 
@@ -176,8 +180,10 @@ export class JsonlReader {
       for (const event of events) {
         try {
           const payload = JSON.parse(event.payload) as Record<string, unknown>;
-          if (payload.type === 'result') {
-            const usage = payload.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+          if (payload.type === "result") {
+            const usage = payload.usage as
+              | { input_tokens?: number; output_tokens?: number }
+              | undefined;
             if (usage) {
               totalInput = usage.input_tokens ?? 0;
               totalOutput = usage.output_tokens ?? 0;
@@ -185,20 +191,29 @@ export class JsonlReader {
               break;
             }
           }
-        } catch { /* ignore malformed payloads */ }
+        } catch {
+          /* ignore malformed payloads */
+        }
       }
 
       // Second pass: if no result event, sum usage from all events (e.g. assistant message events).
       if (!foundResultEvent) {
         for (const event of events) {
           try {
-            const payload = JSON.parse(event.payload) as Record<string, unknown>;
-            const usage = payload.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+            const payload = JSON.parse(event.payload) as Record<
+              string,
+              unknown
+            >;
+            const usage = payload.usage as
+              | { input_tokens?: number; output_tokens?: number }
+              | undefined;
             if (usage) {
               totalInput += usage.input_tokens ?? 0;
               totalOutput += usage.output_tokens ?? 0;
             }
-          } catch { /* ignore malformed payloads */ }
+          } catch {
+            /* ignore malformed payloads */
+          }
         }
       }
 
@@ -209,7 +224,9 @@ export class JsonlReader {
     }
 
     if (backfilled > 0) {
-      console.log(`[JsonlReader] backfilled tokens for ${backfilled} session(s)`);
+      console.log(
+        `[JsonlReader] backfilled tokens for ${backfilled} session(s)`,
+      );
     }
   }
 }

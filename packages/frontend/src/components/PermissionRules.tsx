@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import styles from './PermissionRules.module.css';
+import { useState, useEffect } from "react";
+import styles from "./PermissionRules.module.css";
 
 interface PermissionRule {
   id: number;
@@ -17,7 +17,7 @@ export function PermissionRules() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('/api/permission-rules')
+    fetch("/api/permission-rules")
       .then((r) => {
         if (!r.ok) throw new Error(`${r.status}`);
         return r.json() as Promise<PermissionRule[]>;
@@ -26,7 +26,7 @@ export function PermissionRules() {
         setRules(data);
         setError(null);
       })
-      .catch(() => setError('Failed to load permission rules'))
+      .catch(() => setError("Failed to load permission rules"))
       .finally(() => setLoading(false));
   }, []);
 
@@ -51,13 +51,17 @@ export function PermissionRules() {
         </thead>
         <tbody>
           {rules.map((r) => (
-            <tr key={r.id} className={r.enabled ? '' : styles.disabled}>
+            <tr key={r.id} className={r.enabled ? "" : styles.disabled}>
               <td>{r.order_index}</td>
               <td className={styles.pattern}>{r.pattern}</td>
               <td>{r.match_type}</td>
-              <td className={r.decision === 'allow' ? styles.allow : styles.deny}>{r.decision}</td>
-              <td>{r.label ?? '—'}</td>
-              <td>{r.enabled ? '✓' : '✗'}</td>
+              <td
+                className={r.decision === "allow" ? styles.allow : styles.deny}
+              >
+                {r.decision}
+              </td>
+              <td>{r.label ?? "—"}</td>
+              <td>{r.enabled ? "✓" : "✗"}</td>
             </tr>
           ))}
         </tbody>

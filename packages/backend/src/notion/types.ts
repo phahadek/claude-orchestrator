@@ -12,9 +12,9 @@ export interface NotionTask {
 export interface ResolvedTask {
   task: NotionTask;
   blocked: boolean;
-  blockers: NotionTask[];  // direct + transitive blockers still not Done
-  nonCode: boolean;        // true if type is Planning or Testing
-  wave: number;            // dispatch wave: 1 = immediately launchable, 2+ = blocked by lower waves
+  blockers: NotionTask[]; // direct + transitive blockers still not Done
+  nonCode: boolean; // true if type is Planning or Testing
+  wave: number; // dispatch wave: 1 = immediately launchable, 2+ = blocked by lower waves
 }
 
 export class NotionApiError extends Error {
@@ -23,6 +23,6 @@ export class NotionApiError extends Error {
     message: string,
   ) {
     super(message);
-    this.name = 'NotionApiError';
+    this.name = "NotionApiError";
   }
 }

@@ -1,4 +1,8 @@
-import type { ISessionRunner, RawSessionEvent, SessionRunnerOptions } from './SessionRunner';
+import type {
+  ISessionRunner,
+  RawSessionEvent,
+  SessionRunnerOptions,
+} from "./SessionRunner";
 
 /**
  * A push-based async iterable used to stream follow-up messages into the Agent SDK's
@@ -72,11 +76,11 @@ export class ApiSessionRunner implements ISessionRunner {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       this._hasSpawnError = true;
-      throw new Error('ANTHROPIC_API_KEY is required for API session mode');
+      throw new Error("ANTHROPIC_API_KEY is required for API session mode");
     }
 
     // Lazy import so the package is only required when actually used in API mode.
-    const { query } = require('@anthropic-ai/claude-agent-sdk') as {
+    const { query } = require("@anthropic-ai/claude-agent-sdk") as {
       query: (params: {
         prompt: string | AsyncIterable<unknown>;
         options?: Record<string, unknown>;
@@ -89,31 +93,38 @@ export class ApiSessionRunner implements ISessionRunner {
     // For new sessions, push the initial prompt into the stream immediately.
     if (initialPrompt) {
       this.messageQueue.push({
-        type: 'user',
-        message: { role: 'user', content: initialPrompt },
+        type: "user",
+        message: { role: "user", content: initialPrompt },
         parent_tool_use_id: null,
-        session_id: '',
+        session_id: "",
       });
     }
 
     const sdkOptions: Record<string, unknown> = {
       cwd: options.worktreePath,
-      permissionMode: 'acceptEdits',
+      permissionMode: "acceptEdits",
       allowedTools: options.allowedTools,
       abortController: this.abortController,
       // Load user MCP server configs from ~/.claude/settings.json so the same
       // MCP tools (Notion, GitHub, etc.) are available as in CLI mode.
-      settingSources: ['user'],
+      settingSources: ["user"],
       canUseTool: async (
         toolName: string,
         input: Record<string, unknown>,
         _ctx: Record<string, unknown>,
-      ): Promise<{ behavior: 'allow' } | { behavior: 'deny'; message: string }> => {
+      ): Promise<
+        { behavior: "allow" } | { behavior: "deny"; message: string }
+      > => {
         // All tools in the allowedTools list are pre-approved by the SDK's allowedTools option.
         // canUseTool only fires for tools NOT in that list — deny them.
-        console.log(`[ApiSessionRunner ${this.sessionId.slice(0, 8)}] canUseTool: ${toolName} — not in allowedTools, denying`);
+        console.log(
+          `[ApiSessionRunner ${this.sessionId.slice(0, 8)}] canUseTool: ${toolName} — not in allowedTools, denying`,
+        );
         void input;
-        return { behavior: 'deny', message: `Tool '${toolName}' is not in the allowed tools list` };
+        return {
+          behavior: "deny",
+          message: `Tool '${toolName}' is not in the allowed tools list`,
+        };
       },
     };
 
@@ -129,8 +140,8 @@ export class ApiSessionRunner implements ISessionRunner {
     if (options.systemPrompt) {
       // Use the claude_code preset as the base and append our orchestrator rules.
       sdkOptions.systemPrompt = {
-        type: 'preset',
-        preset: 'claude_code',
+        type: "preset",
+        preset: "claude_code",
         append: options.systemPrompt,
       };
     }
@@ -149,7 +160,10 @@ export class ApiSessionRunner implements ISessionRunner {
         // Abort was intentional — treat as clean kill
         return null;
       }
-      console.error(`[ApiSessionRunner ${this.sessionId.slice(0, 8)}] error:`, err);
+      console.error(
+        `[ApiSessionRunner ${this.sessionId.slice(0, 8)}] error:`,
+        err,
+      );
       this._hasSpawnError = true;
       throw err;
     }
@@ -158,10 +172,10 @@ export class ApiSessionRunner implements ISessionRunner {
   sendMessage(message: string): void {
     if (!this.messageQueue) return;
     this.messageQueue.push({
-      type: 'user',
-      message: { role: 'user', content: message },
+      type: "user",
+      message: { role: "user", content: message },
       parent_tool_use_id: null,
-      session_id: '',
+      session_id: "",
     });
   }
 

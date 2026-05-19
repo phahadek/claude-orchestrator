@@ -17,7 +17,7 @@ Guidelines for writing well-scoped, implementation-ready tasks. Follow this when
 
 Every task page must have these sections in this order:
 
-### ~~Status~~ *(removed)*
+### ~~Status~~ _(removed)_
 
 Do **not** include a Status section in the page body. Status lives exclusively in the **Status property** (database metadata). A body Status section duplicates it and creates a maintenance burden — the two fall out of sync as the task progresses.
 
@@ -77,28 +77,28 @@ Always include this section, always leave it empty with `> To be filled in durin
 
 ## Properties reference
 
-| Property | Guidance |
-|---|---|
-| **Task Name** | Verb phrase starting with an action word: *Implement*, *Scaffold*, *Add*, *Fix*, *Migrate*. Include the primary file or class name. |
-| **Type** | `💻 Code` for anything with a PR. `📋 Planning` for design/research tasks (non-dispatchable). `🧪 Testing` for manual test tasks (non-dispatchable). |
-| **Status** | See lifecycle below. New tasks always start at `🔲 Backlog`. |
-| **Priority** | `🔴 High` = blocks other tasks or is on the critical path. `🟡 Medium` = important but not blocking. `🟢 Low` = nice to have in this milestone. |
+| Property       | Guidance                                                                                                                                                                                                                                                                                                                                                                              |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Task Name**  | Verb phrase starting with an action word: _Implement_, _Scaffold_, _Add_, _Fix_, _Migrate_. Include the primary file or class name.                                                                                                                                                                                                                                                   |
+| **Type**       | `💻 Code` for anything with a PR. `📋 Planning` for design/research tasks (non-dispatchable). `🧪 Testing` for manual test tasks (non-dispatchable).                                                                                                                                                                                                                                  |
+| **Status**     | See lifecycle below. New tasks always start at `🔲 Backlog`.                                                                                                                                                                                                                                                                                                                          |
+| **Priority**   | `🔴 High` = blocks other tasks or is on the critical path. `🟡 Medium` = important but not blocking. `🟢 Low` = nice to have in this milestone.                                                                                                                                                                                                                                       |
 | **Depends On** | A Notion Rich Text property storing pipe-delimited page IDs (e.g. `<id1>\|<id2>`). The orchestrator parses this field at fetch time. Rich Text is used instead of a native Relation property because the Notion API's multi-value relation writes via MCP tools are unreliable; see [`notion-template.md`](./notion-template.md#why-rich-text-for-depends-on) for the full rationale. |
-| **Notes** | One short sentence for human attention only. Examples: "Requires M0 Notion migration to be applied first." or "API key must be set before this can be tested." Leave blank otherwise. |
+| **Notes**      | One short sentence for human attention only. Examples: "Requires M0 Notion migration to be applied first." or "API key must be set before this can be tested." Leave blank otherwise.                                                                                                                                                                                                 |
 
 ---
 
 ## Status lifecycle
 
-| Value | Meaning |
-|---|---|
-| `🔲 Backlog` | Defined but not yet validated. Default for all new tasks. |
-| `🗂️ Ready` | Scoped, reviewed, and ready to be picked up in the next session. |
-| `🔄 In Progress` | Actively being worked on. Only one task should be In Progress at a time. |
-| `👀 In Review` | Work complete; PR open, awaiting review or merge. |
-| `✅ Done` | Merged, verified, and closed. |
-| `🚫 Blocked` | Cannot proceed — blocker must be documented in Notes. |
-| `⏭️ Deferred` | Moved out of this milestone's scope. Add to 🔭 Future Scope if worth keeping. |
+| Value            | Meaning                                                                       |
+| ---------------- | ----------------------------------------------------------------------------- |
+| `🔲 Backlog`     | Defined but not yet validated. Default for all new tasks.                     |
+| `🗂️ Ready`       | Scoped, reviewed, and ready to be picked up in the next session.              |
+| `🔄 In Progress` | Actively being worked on. Only one task should be In Progress at a time.      |
+| `👀 In Review`   | Work complete; PR open, awaiting review or merge.                             |
+| `✅ Done`        | Merged, verified, and closed.                                                 |
+| `🚫 Blocked`     | Cannot proceed — blocker must be documented in Notes.                         |
+| `⏭️ Deferred`    | Moved out of this milestone's scope. Add to 🔭 Future Scope if worth keeping. |
 
 New tasks created during planning always start at `🔲 Backlog`. A task moves to `🗂️ Ready` only after:
 
@@ -143,7 +143,7 @@ Include **only** items verifiable without a running app: unit tests, compiler ch
 - One per milestone, or one per logical cluster if the milestone is large enough to warrant an intermediate check.
 - Lists every runtime behaviour item stripped from the code tasks, grouped by source task.
 - **`Depends On`**: leave empty. The gate's dependency on all code tasks is implicit from its wave placement and documented in Notes. Wiring every code task ID adds maintenance burden without value.
-- **`Notes`**: *"Run after all Wave N code tasks are merged. Do not begin tasks that depend on these outcomes until this passes."*
+- **`Notes`**: _"Run after all Wave N code tasks are merged. Do not begin tasks that depend on these outcomes until this passes."_
 - **Implementation Notes**: filled in after the session — record pass/fail per item and link to any follow-up bug tasks created.
 
 ### Wave placement

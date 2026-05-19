@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
-import { taskNameFromNotionUrl } from '../utils/notionUrl';
-import { StatusBadge } from './StatusBadge';
-import styles from './HistoryGrid.module.css';
+import { useState, useEffect } from "react";
+import { taskNameFromNotionUrl } from "../utils/notionUrl";
+import { StatusBadge } from "./StatusBadge";
+import styles from "./HistoryGrid.module.css";
 
 interface ArchivedSession {
   session_id: string;
@@ -22,7 +22,7 @@ export function HistoryGrid({ onSelect }: HistoryGridProps) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('/api/sessions/archived')
+    fetch("/api/sessions/archived")
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json() as Promise<ArchivedSession[]>;
@@ -59,15 +59,19 @@ export function HistoryGrid({ onSelect }: HistoryGridProps) {
         const taskName = s.notion_task_url
           ? taskNameFromNotionUrl(s.notion_task_url)
           : s.session_id.slice(0, 8);
-        const duration = s.started_at != null
-          ? formatDuration((s.ended_at ?? s.started_at) - s.started_at)
-          : null;
-        const endDate = s.ended_at != null
-          ? new Date(s.ended_at).toLocaleDateString()
-          : null;
+        const duration =
+          s.started_at != null
+            ? formatDuration((s.ended_at ?? s.started_at) - s.started_at)
+            : null;
+        const endDate =
+          s.ended_at != null ? new Date(s.ended_at).toLocaleDateString() : null;
 
         return (
-          <div key={s.session_id} className={styles.row} onClick={() => onSelect(s.session_id)}>
+          <div
+            key={s.session_id}
+            className={styles.row}
+            onClick={() => onSelect(s.session_id)}
+          >
             <div className={styles.rowMain}>
               <span className={styles.taskName}>{taskName}</span>
               <StatusBadge status={s.status} />
@@ -76,7 +80,12 @@ export function HistoryGrid({ onSelect }: HistoryGridProps) {
               {endDate && <span>{endDate}</span>}
               {duration && <span>{duration}</span>}
               {s.pr_url && (
-                <a href={s.pr_url} target="_blank" rel="noreferrer" className={styles.prLink}>
+                <a
+                  href={s.pr_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={styles.prLink}
+                >
                   PR ↗
                 </a>
               )}
@@ -89,7 +98,7 @@ export function HistoryGrid({ onSelect }: HistoryGridProps) {
 }
 
 function formatDuration(ms: number): string {
-  if (ms <= 0) return '—';
+  if (ms <= 0) return "—";
   const totalSeconds = Math.floor(ms / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;

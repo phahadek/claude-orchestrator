@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from "react";
 import {
   BarChart,
   Bar,
@@ -13,9 +13,12 @@ import {
   Cell,
   AreaChart,
   Area,
-} from 'recharts';
-import { formatTokenCount, formatCost } from '@claude-orchestrator/backend/src/utils/usage';
-import styles from './AnalyticsPanel.module.css';
+} from "recharts";
+import {
+  formatTokenCount,
+  formatCost,
+} from "@claude-orchestrator/backend/src/utils/usage";
+import styles from "./AnalyticsPanel.module.css";
 
 // API response types — kept in sync with packages/backend/src/routes/analytics.ts
 interface TokenAnalyticsSession {
@@ -46,39 +49,43 @@ interface Props {
   activeProjectId: string | null;
 }
 
-type DateRange = '7d' | '30d' | '90d' | 'all';
+type DateRange = "7d" | "30d" | "90d" | "all";
 
 function dateRangeToMs(range: DateRange): number | null {
   const now = Date.now();
   switch (range) {
-    case '7d': return now - 7 * 24 * 60 * 60 * 1000;
-    case '30d': return now - 30 * 24 * 60 * 60 * 1000;
-    case '90d': return now - 90 * 24 * 60 * 60 * 1000;
-    case 'all': return null;
+    case "7d":
+      return now - 7 * 24 * 60 * 60 * 1000;
+    case "30d":
+      return now - 30 * 24 * 60 * 60 * 1000;
+    case "90d":
+      return now - 90 * 24 * 60 * 60 * 1000;
+    case "all":
+      return null;
   }
 }
 
 function shortLabel(session: TokenAnalyticsSession): string {
   const name = session.taskName ?? session.sessionId.slice(0, 8);
-  return name.length > 20 ? name.slice(0, 20) + '…' : name;
+  return name.length > 20 ? name.slice(0, 20) + "…" : name;
 }
 
-const PIE_COLORS = ['#89b4fa', '#cba6f7', '#a6e3a1', '#fab387'];
+const PIE_COLORS = ["#89b4fa", "#cba6f7", "#a6e3a1", "#fab387"];
 
 export function AnalyticsPanel({ activeProjectId }: Props) {
   const [data, setData] = useState<TokenAnalyticsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [dateRange, setDateRange] = useState<DateRange>('30d');
+  const [dateRange, setDateRange] = useState<DateRange>("30d");
 
   const fetchData = useCallback(() => {
     setLoading(true);
     setError(null);
 
     const params = new URLSearchParams();
-    if (activeProjectId) params.set('projectId', activeProjectId);
+    if (activeProjectId) params.set("projectId", activeProjectId);
     const fromMs = dateRangeToMs(dateRange);
-    if (fromMs != null) params.set('from', String(fromMs));
+    if (fromMs != null) params.set("from", String(fromMs));
 
     fetch(`/api/analytics/tokens?${params}`)
       .then((r) => {
@@ -90,7 +97,9 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
         setLoading(false);
       })
       .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : 'Failed to load analytics');
+        setError(
+          err instanceof Error ? err.message : "Failed to load analytics",
+        );
         setLoading(false);
       });
   }, [activeProjectId, dateRange]);
@@ -100,7 +109,8 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
   }, [fetchData]);
 
   // Sessions with tokens only — zero-token historical sessions are excluded from all charts/tables
-  const sessionsWithTokens = data?.sessions.filter((s) => s.totalTokens > 0) ?? [];
+  const sessionsWithTokens =
+    data?.sessions.filter((s) => s.totalTokens > 0) ?? [];
 
   // Bar chart: last 20 sessions with tokens, in chronological order
   const chartSessions = [...sessionsWithTokens]
@@ -117,7 +127,7 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
   // Pie chart: token breakdown by session type
   const typeMap = new Map<string, number>();
   for (const s of sessionsWithTokens) {
-    const key = s.sessionType === 'review' ? 'Review' : 'Code';
+    const key = s.sessionType === "review" ? "Review" : "Code";
     typeMap.set(key, (typeMap.get(key) ?? 0) + s.totalTokens);
   }
   const pieData = [...typeMap.entries()]
@@ -144,14 +154,14 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
         <h2 className={styles.title}>Token & Cost Analytics</h2>
         <div className={styles.filters}>
           <span className={styles.filterLabel}>Date range:</span>
-          {(['7d', '30d', '90d', 'all'] as DateRange[]).map((r) => (
+          {(["7d", "30d", "90d", "all"] as DateRange[]).map((r) => (
             <button
               key={r}
               type="button"
-              className={`${styles.rangeBtn}${dateRange === r ? ` ${styles.rangeBtnActive}` : ''}`}
+              className={`${styles.rangeBtn}${dateRange === r ? ` ${styles.rangeBtnActive}` : ""}`}
               onClick={() => setDateRange(r)}
             >
-              {r === 'all' ? 'All time' : r}
+              {r === "all" ? "All time" : r}
             </button>
           ))}
         </div>
@@ -165,65 +175,98 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
           {/* ── Summary stat cards ── */}
           <div className={styles.summaryRow}>
             <div className={styles.summaryCard}>
-              <div className={styles.summaryValue}>{data.totals.sessionCount}</div>
+              <div className={styles.summaryValue}>
+                {data.totals.sessionCount}
+              </div>
               <div className={styles.summaryLabel}>Sessions</div>
             </div>
             <div className={styles.summaryCard}>
-              <div className={styles.summaryValue}>{formatTokenCount(data.totals.totalTokens)}</div>
+              <div className={styles.summaryValue}>
+                {formatTokenCount(data.totals.totalTokens)}
+              </div>
               <div className={styles.summaryLabel}>Total tokens</div>
             </div>
             <div className={styles.summaryCard}>
-              <div className={styles.summaryValue}>{formatTokenCount(data.totals.inputTokens)}</div>
+              <div className={styles.summaryValue}>
+                {formatTokenCount(data.totals.inputTokens)}
+              </div>
               <div className={styles.summaryLabel}>Input tokens</div>
             </div>
             <div className={styles.summaryCard}>
-              <div className={styles.summaryValue}>{formatTokenCount(data.totals.outputTokens)}</div>
+              <div className={styles.summaryValue}>
+                {formatTokenCount(data.totals.outputTokens)}
+              </div>
               <div className={styles.summaryLabel}>Output tokens</div>
             </div>
             <div className={styles.summaryCard}>
-              <div className={styles.summaryValue}>{formatCost(data.totals.totalCost)}</div>
+              <div className={styles.summaryValue}>
+                {formatCost(data.totals.totalCost)}
+              </div>
               <div className={styles.summaryLabel}>Est. cost</div>
             </div>
           </div>
 
           {sessionsWithTokens.length === 0 ? (
-            <div className={styles.emptyChart}>No token data in this date range.</div>
+            <div className={styles.emptyChart}>
+              No token data in this date range.
+            </div>
           ) : (
             <>
               {/* ── Token usage bar chart ── */}
               <div className={styles.chartSection}>
-                <h3 className={styles.sectionTitle}>Token usage per session (last {barChartData.length})</h3>
+                <h3 className={styles.sectionTitle}>
+                  Token usage per session (last {barChartData.length})
+                </h3>
                 <div className={styles.chartContainer}>
                   <ResponsiveContainer width="100%" height={280}>
-                    <BarChart data={barChartData} margin={{ top: 8, right: 16, left: 0, bottom: 60 }}>
+                    <BarChart
+                      data={barChartData}
+                      margin={{ top: 8, right: 16, left: 0, bottom: 60 }}
+                    >
                       <CartesianGrid strokeDasharray="3 3" stroke="#313244" />
                       <XAxis
                         dataKey="name"
-                        tick={{ fill: '#a6adc8', fontSize: 11 }}
+                        tick={{ fill: "#a6adc8", fontSize: 11 }}
                         angle={-40}
                         textAnchor="end"
                         interval={0}
                       />
                       <YAxis
                         tickFormatter={(v: number) => formatTokenCount(v)}
-                        tick={{ fill: '#a6adc8', fontSize: 11 }}
+                        tick={{ fill: "#a6adc8", fontSize: 11 }}
                         width={55}
                       />
                       <Tooltip
-                        contentStyle={{ background: '#1e1e2e', border: '1px solid #45475a', borderRadius: 6 }}
-                        labelStyle={{ color: '#cdd6f4', marginBottom: 4 }}
-                        itemStyle={{ color: '#cdd6f4' }}
+                        contentStyle={{
+                          background: "#1e1e2e",
+                          border: "1px solid #45475a",
+                          borderRadius: 6,
+                        }}
+                        labelStyle={{ color: "#cdd6f4", marginBottom: 4 }}
+                        itemStyle={{ color: "#cdd6f4" }}
                         formatter={(value: number, name: string) => [
                           formatTokenCount(value),
-                          name === 'inputTokens' ? 'Input' : 'Output',
+                          name === "inputTokens" ? "Input" : "Output",
                         ]}
                       />
                       <Legend
-                        formatter={(value: string) => value === 'inputTokens' ? 'Input' : 'Output'}
-                        wrapperStyle={{ color: '#a6adc8', fontSize: 12 }}
+                        formatter={(value: string) =>
+                          value === "inputTokens" ? "Input" : "Output"
+                        }
+                        wrapperStyle={{ color: "#a6adc8", fontSize: 12 }}
                       />
-                      <Bar dataKey="inputTokens" stackId="a" fill="#89b4fa" name="inputTokens" />
-                      <Bar dataKey="outputTokens" stackId="a" fill="#cba6f7" name="outputTokens" />
+                      <Bar
+                        dataKey="inputTokens"
+                        stackId="a"
+                        fill="#89b4fa"
+                        name="inputTokens"
+                      />
+                      <Bar
+                        dataKey="outputTokens"
+                        stackId="a"
+                        fill="#cba6f7"
+                        name="outputTokens"
+                      />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -234,8 +277,12 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
                 {/* Session-type breakdown pie */}
                 {pieData.length > 0 && (
                   <div className={styles.chartSection}>
-                    <h3 className={styles.sectionTitle}>Tokens by session type</h3>
-                    <div className={`${styles.chartContainer} ${styles.pieContainer}`}>
+                    <h3 className={styles.sectionTitle}>
+                      Tokens by session type
+                    </h3>
+                    <div
+                      className={`${styles.chartContainer} ${styles.pieContainer}`}
+                    >
                       <ResponsiveContainer width="100%" height={220}>
                         <PieChart>
                           <Pie
@@ -245,19 +292,33 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
                             cx="50%"
                             cy="50%"
                             outerRadius={80}
-                            label={({ name, percent }: { name: string; percent: number }) =>
-                              `${name} ${Math.round(percent * 100)}%`
-                            }
-                            labelLine={{ stroke: '#585b70' }}
+                            label={({
+                              name,
+                              percent,
+                            }: {
+                              name: string;
+                              percent: number;
+                            }) => `${name} ${Math.round(percent * 100)}%`}
+                            labelLine={{ stroke: "#585b70" }}
                           >
                             {pieData.map((_entry, index) => (
-                              <Cell key={index} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                              <Cell
+                                key={index}
+                                fill={PIE_COLORS[index % PIE_COLORS.length]}
+                              />
                             ))}
                           </Pie>
                           <Tooltip
-                            contentStyle={{ background: '#1e1e2e', border: '1px solid #45475a', borderRadius: 6 }}
-                            itemStyle={{ color: '#cdd6f4' }}
-                            formatter={(value: number) => [formatTokenCount(value), 'Tokens']}
+                            contentStyle={{
+                              background: "#1e1e2e",
+                              border: "1px solid #45475a",
+                              borderRadius: 6,
+                            }}
+                            itemStyle={{ color: "#cdd6f4" }}
+                            formatter={(value: number) => [
+                              formatTokenCount(value),
+                              "Tokens",
+                            ]}
                           />
                         </PieChart>
                       </ResponsiveContainer>
@@ -268,28 +329,57 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
                 {/* Cumulative token trend */}
                 {cumulativeData.length > 1 && (
                   <div className={styles.chartSection}>
-                    <h3 className={styles.sectionTitle}>Cumulative token usage</h3>
+                    <h3 className={styles.sectionTitle}>
+                      Cumulative token usage
+                    </h3>
                     <div className={styles.chartContainer}>
                       <ResponsiveContainer width="100%" height={220}>
-                        <AreaChart data={cumulativeData} margin={{ top: 8, right: 16, left: 0, bottom: 8 }}>
+                        <AreaChart
+                          data={cumulativeData}
+                          margin={{ top: 8, right: 16, left: 0, bottom: 8 }}
+                        >
                           <defs>
-                            <linearGradient id="cumulativeGrad" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%" stopColor="#89b4fa" stopOpacity={0.3} />
-                              <stop offset="95%" stopColor="#89b4fa" stopOpacity={0} />
+                            <linearGradient
+                              id="cumulativeGrad"
+                              x1="0"
+                              y1="0"
+                              x2="0"
+                              y2="1"
+                            >
+                              <stop
+                                offset="5%"
+                                stopColor="#89b4fa"
+                                stopOpacity={0.3}
+                              />
+                              <stop
+                                offset="95%"
+                                stopColor="#89b4fa"
+                                stopOpacity={0}
+                              />
                             </linearGradient>
                           </defs>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#313244" />
+                          <CartesianGrid
+                            strokeDasharray="3 3"
+                            stroke="#313244"
+                          />
                           <XAxis dataKey="name" hide />
                           <YAxis
                             tickFormatter={(v: number) => formatTokenCount(v)}
-                            tick={{ fill: '#a6adc8', fontSize: 11 }}
+                            tick={{ fill: "#a6adc8", fontSize: 11 }}
                             width={55}
                           />
                           <Tooltip
-                            contentStyle={{ background: '#1e1e2e', border: '1px solid #45475a', borderRadius: 6 }}
-                            labelStyle={{ color: '#cdd6f4', marginBottom: 4 }}
-                            itemStyle={{ color: '#cdd6f4' }}
-                            formatter={(value: number) => [formatTokenCount(value), 'Cumulative']}
+                            contentStyle={{
+                              background: "#1e1e2e",
+                              border: "1px solid #45475a",
+                              borderRadius: 6,
+                            }}
+                            labelStyle={{ color: "#cdd6f4", marginBottom: 4 }}
+                            itemStyle={{ color: "#cdd6f4" }}
+                            formatter={(value: number) => [
+                              formatTokenCount(value),
+                              "Cumulative",
+                            ]}
                           />
                           <Area
                             type="monotone"
@@ -309,7 +399,9 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
               {/* ── Top sessions table ── */}
               {topSessions.length > 0 && (
                 <div className={styles.tableSection}>
-                  <h3 className={styles.sectionTitle}>Top sessions by token usage</h3>
+                  <h3 className={styles.sectionTitle}>
+                    Top sessions by token usage
+                  </h3>
                   <table className={styles.table}>
                     <thead>
                       <tr>
@@ -324,7 +416,10 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
                     <tbody>
                       {topSessions.map((s) => (
                         <tr key={s.sessionId}>
-                          <td className={styles.taskNameCell} title={s.taskName ?? s.sessionId}>
+                          <td
+                            className={styles.taskNameCell}
+                            title={s.taskName ?? s.sessionId}
+                          >
                             {s.taskName ?? s.sessionId.slice(0, 8)}
                           </td>
                           <td>{s.sessionType}</td>

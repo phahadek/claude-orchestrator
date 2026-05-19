@@ -1,22 +1,27 @@
-import { getPRByNotionTaskId, getLatestCodeSessionByNotionTaskId, getSetting, getTaskCache } from '../db/queries';
+import {
+  getPRByNotionTaskId,
+  getLatestCodeSessionByNotionTaskId,
+  getSetting,
+  getTaskCache,
+} from "../db/queries";
 
 export type DisplayStatus =
-  | 'ready'
-  | 'in_progress'
-  | 'in_review'
-  | 'needs_attention'
-  | 'ready_to_merge'
-  | 'done'
-  | 'backlog';
+  | "ready"
+  | "in_progress"
+  | "in_review"
+  | "needs_attention"
+  | "ready_to_merge"
+  | "done"
+  | "backlog";
 
 export interface TaskStatusInput {
-  notionStatus: string;             // raw Notion status string
+  notionStatus: string; // raw Notion status string
   codeSessionStatus: string | null; // 'running' | 'done' | 'error' | null
-  prState: string | null;           // 'open' | 'merged' | 'closed' | null
-  prDraft: boolean;                 // true if PR is draft
-  reviewVerdict: string | null;     // 'approved' | 'needs_changes' | 'incomplete' | null
-  reviewIterationCount: number;     // how many review cycles
-  reviewIterationCap: number;       // configurable cap from settings
+  prState: string | null; // 'open' | 'merged' | 'closed' | null
+  prDraft: boolean; // true if PR is draft
+  reviewVerdict: string | null; // 'approved' | 'needs_changes' | 'incomplete' | null
+  reviewIterationCount: number; // how many review cycles
+  reviewIterationCap: number; // configurable cap from settings
 }
 
 /**
@@ -36,35 +41,38 @@ export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
   } = input;
 
   // 1. done — PR merged or closed (terminal override, takes precedence over Notion)
-  if (prState === 'merged' || prState === 'closed') {
-    return 'done';
+  if (prState === "merged" || prState === "closed") {
+    return "done";
   }
 
   // 2. Notion status is the primary source of truth for grouping
-  if (notionStatus.includes('Done')) return 'done';
+  if (notionStatus.includes("Done")) return "done";
 
-  if (notionStatus.includes('In Review')) {
+  if (notionStatus.includes("In Review")) {
     // Enrich with review-specific sub-states within the In Review group
-    if (reviewVerdict === 'approved' && prState === 'open') return 'ready_to_merge';
-    if (reviewIterationCount >= reviewIterationCap) return 'needs_attention';
-    return 'in_review';
+    if (reviewVerdict === "approved" && prState === "open")
+      return "ready_to_merge";
+    if (reviewIterationCount >= reviewIterationCap) return "needs_attention";
+    return "in_review";
   }
 
-  if (notionStatus.includes('In Progress')) return 'in_progress';
+  if (notionStatus.includes("In Progress")) return "in_progress";
 
-  if (notionStatus.includes('Backlog')) return 'backlog';
+  if (notionStatus.includes("Backlog")) return "backlog";
 
   // 3. ready — default (includes 🗂️ Ready and any unrecognized status)
-  return 'ready';
+  return "ready";
 }
 
 const DEFAULT_MAX_REVIEW_ITERATIONS = 3;
 
 function getReviewIterationCap(): number {
-  const raw = getSetting('max_review_iterations');
+  const raw = getSetting("max_review_iterations");
   if (!raw) return DEFAULT_MAX_REVIEW_ITERATIONS;
   const parsed = parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_REVIEW_ITERATIONS;
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_MAX_REVIEW_ITERATIONS;
 }
 
 /**
@@ -75,12 +83,12 @@ export function deriveDisplayStatusFromDb(notionTaskId: string): DisplayStatus {
   const prRow = getPRByNotionTaskId(notionTaskId);
   const sessionRow = getLatestCodeSessionByNotionTaskId(notionTaskId);
 
-  let notionStatus = '';
+  let notionStatus = "";
   const taskCacheRow = getTaskCache(notionTaskId);
   if (taskCacheRow) {
     try {
       const task = JSON.parse(taskCacheRow.raw_json) as { status?: string };
-      notionStatus = task.status ?? '';
+      notionStatus = task.status ?? "";
     } catch {
       // ignore malformed cache
     }
@@ -106,4 +114,3 @@ export function deriveDisplayStatusFromDb(notionTaskId: string): DisplayStatus {
     reviewIterationCap: getReviewIterationCap(),
   });
 }
-

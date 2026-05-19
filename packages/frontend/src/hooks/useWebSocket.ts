@@ -1,11 +1,14 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
-import type { ServerMessage, ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
+import { useEffect, useRef, useCallback, useState } from "react";
+import type {
+  ServerMessage,
+  ClientMessage,
+} from "@claude-orchestrator/backend/src/ws/types";
 
-export type ConnectionState = 'connected' | 'disconnected' | 'reconnecting';
+export type ConnectionState = "connected" | "disconnected" | "reconnecting";
 
 export function useWebSocket(
   onMessage: (msg: ServerMessage) => void,
-  onOpen?: (send: (msg: ClientMessage) => boolean) => void
+  onOpen?: (send: (msg: ClientMessage) => boolean) => void,
 ) {
   const ws = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -16,7 +19,8 @@ export function useWebSocket(
   onMessageRef.current = onMessage;
   const onOpenRef = useRef(onOpen);
   onOpenRef.current = onOpen;
-  const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
+  const [connectionState, setConnectionState] =
+    useState<ConnectionState>("disconnected");
 
   const connect = useCallback(() => {
     if (disposed.current) return;
@@ -49,7 +53,7 @@ export function useWebSocket(
 
     socket.onclose = () => {
       if (disposed.current) return;
-      setConnectionState('reconnecting');
+      setConnectionState("reconnecting");
       reconnectTimer.current = setTimeout(() => {
         reconnectDelay.current = Math.min(reconnectDelay.current * 2, 30_000);
         connect();
@@ -58,8 +62,11 @@ export function useWebSocket(
 
     socket.onopen = () => {
       reconnectDelay.current = 1000;
-      setConnectionState('connected');
-      onOpenRef.current?.((msg) => { socket.send(JSON.stringify(msg)); return true; });
+      setConnectionState("connected");
+      onOpenRef.current?.((msg) => {
+        socket.send(JSON.stringify(msg));
+        return true;
+      });
     };
   }, []);
 

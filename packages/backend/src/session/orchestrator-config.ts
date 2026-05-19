@@ -1,5 +1,5 @@
-import fs from 'fs';
-import path from 'path';
+import fs from "fs";
+import path from "path";
 
 export interface OrchestratorProjectConfig {
   /** Extra Bash tool permission patterns merged with the base ALLOWED_TOOLS set. */
@@ -29,16 +29,16 @@ export interface ResolvedOrchestratorConfig {
 /** Default Rule 5: Node.js/npx convention. Stored as a single string; the first
  *  line becomes the bold heading, the rest becomes the body paragraph. */
 const DEFAULT_BASH_RULES = [
-  'Use `npx` instead of bare tool names.\n`tsc` → `npx tsc`. Bare commands may not be on PATH.',
+  "Use `npx` instead of bare tool names.\n`tsc` → `npx tsc`. Bare commands may not be on PATH.",
 ];
 
 const DEFAULTS: ResolvedOrchestratorConfig = {
   allowedTools: [],
   prGate: {
-    typeCheck: 'npx tsc --noEmit',
-    build: 'npx vite build',
+    typeCheck: "npx tsc --noEmit",
+    build: "npx vite build",
   },
-  bootstrapScript: '',
+  bootstrapScript: "",
   bashRules: DEFAULT_BASH_RULES,
 };
 
@@ -47,13 +47,15 @@ const DEFAULTS: ResolvedOrchestratorConfig = {
  * Falls back to Node.js/Vite defaults if the file does not exist or is invalid.
  * The file is read fresh on every call — no server restart needed to pick up changes.
  */
-export function loadOrchestratorConfig(projectDir: string): ResolvedOrchestratorConfig {
-  const configPath = path.join(projectDir, '.claude', 'orchestrator.json');
+export function loadOrchestratorConfig(
+  projectDir: string,
+): ResolvedOrchestratorConfig {
+  const configPath = path.join(projectDir, ".claude", "orchestrator.json");
   if (!fs.existsSync(configPath)) {
     return DEFAULTS;
   }
   try {
-    const raw = fs.readFileSync(configPath, 'utf-8');
+    const raw = fs.readFileSync(configPath, "utf-8");
     const parsed = JSON.parse(raw) as OrchestratorProjectConfig;
     return {
       allowedTools: parsed.allowedTools ?? DEFAULTS.allowedTools,
@@ -65,7 +67,9 @@ export function loadOrchestratorConfig(projectDir: string): ResolvedOrchestrator
       bashRules: parsed.bashRules ?? DEFAULTS.bashRules,
     };
   } catch (err) {
-    console.warn(`[orchestrator-config] failed to parse ${configPath}: ${err} — using defaults`);
+    console.warn(
+      `[orchestrator-config] failed to parse ${configPath}: ${err} — using defaults`,
+    );
     return DEFAULTS;
   }
 }

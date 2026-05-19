@@ -1,16 +1,21 @@
-import { Router } from 'express';
-import type { Request, Response } from 'express';
-import { getProjectById } from '../config';
-import { ProjectService } from '../projects/ProjectService';
-import { getTaskCache, getActiveTaskAggregates, getLatestNonSystemEventPayload, getSetting } from '../db/queries';
-import type { TaskAggregateRow } from '../db/queries';
-import { deriveDisplayStatus } from '../tasks/TaskStatusEngine';
-import type { NotionTask } from '../notion/types';
-import { DependencyResolver } from '../notion/DependencyResolver';
-import type { PRReviewResult } from '../github/PRReviewService';
-import type { ServerMessage, TaskView } from '../ws/types';
-import yaml from 'js-yaml';
-export type { TaskView } from '../ws/types';
+import { Router } from "express";
+import type { Request, Response } from "express";
+import { getProjectById } from "../config";
+import { ProjectService } from "../projects/ProjectService";
+import {
+  getTaskCache,
+  getActiveTaskAggregates,
+  getLatestNonSystemEventPayload,
+  getSetting,
+} from "../db/queries";
+import type { TaskAggregateRow } from "../db/queries";
+import { deriveDisplayStatus } from "../tasks/TaskStatusEngine";
+import type { NotionTask } from "../notion/types";
+import { DependencyResolver } from "../notion/DependencyResolver";
+import type { PRReviewResult } from "../github/PRReviewService";
+import type { ServerMessage, TaskView } from "../ws/types";
+import yaml from "js-yaml";
+export type { TaskView } from "../ws/types";
 
 /**
  * The frontend sends milestone row ids as `boardId` after the milestone schema migration.
@@ -27,10 +32,12 @@ function resolveBoardCacheKey(boardId: string): string {
 const DEFAULT_MAX_REVIEW_ITERATIONS = 3;
 
 function getReviewIterationCap(): number {
-  const raw = getSetting('max_review_iterations');
+  const raw = getSetting("max_review_iterations");
   if (!raw) return DEFAULT_MAX_REVIEW_ITERATIONS;
   const parsed = parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_REVIEW_ITERATIONS;
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_MAX_REVIEW_ITERATIONS;
 }
 
 // ── Broadcast infrastructure ─────────────────────────────────────────────────
@@ -44,7 +51,7 @@ export function setTaskBroadcast(fn: (msg: ServerMessage) => void): void {
 export function emitTaskUpdated(notionTaskId: string): void {
   if (!taskBroadcastFn) return;
   const task = buildTaskView(notionTaskId);
-  if (task) taskBroadcastFn({ type: 'task_updated', task });
+  if (task) taskBroadcastFn({ type: "task_updated", task });
 }
 
 /** Build a TaskView for a single notionTaskId from current DB state. Returns null if not found. */
@@ -64,17 +71,17 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     notionTask = null;
   }
 
-  const notionStatus = notionTask?.status ?? '';
-  const priority = notionTask?.priority ?? '';
+  const notionStatus = notionTask?.status ?? "";
+  const priority = notionTask?.priority ?? "";
 
-  let codeSession: TaskView['codeSession'] = null;
+  let codeSession: TaskView["codeSession"] = null;
   if (row.code_session_id) {
-    let lastMessage = '';
+    let lastMessage = "";
     const eventPayload = getLatestNonSystemEventPayload(row.code_session_id);
     if (eventPayload) lastMessage = summarizeEvent(eventPayload);
     codeSession = {
       sessionId: row.code_session_id,
-      status: row.code_session_status ?? '',
+      status: row.code_session_status ?? "",
       startedAt: row.code_session_started_at ?? 0,
       endedAt: row.code_session_ended_at ?? null,
       lastMessage,
@@ -83,21 +90,21 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     };
   }
 
-  let pr: TaskView['pr'] = null;
+  let pr: TaskView["pr"] = null;
   if (row.pr_number != null && row.pr_url) {
     pr = {
       prNumber: row.pr_number,
       prUrl: row.pr_url,
-      title: row.pr_title ?? '',
-      headBranch: row.pr_head_branch ?? '',
-      baseBranch: row.pr_base_branch ?? '',
-      state: row.pr_state ?? '',
+      title: row.pr_title ?? "",
+      headBranch: row.pr_head_branch ?? "",
+      baseBranch: row.pr_base_branch ?? "",
+      state: row.pr_state ?? "",
       draft: row.pr_draft === 1,
       mergeState: row.pr_merge_state ?? null,
     };
   }
 
-  let review: TaskView['review'] = null;
+  let review: TaskView["review"] = null;
   let reviewVerdict: string | null = null;
   let reviewSummary: string | null = null;
   if (row.review_session_id) {
@@ -112,7 +119,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     }
     review = {
       sessionId: row.review_session_id,
-      status: row.review_session_status ?? '',
+      status: row.review_session_status ?? "",
       verdict: reviewVerdict,
       summary: reviewSummary,
       iterationCount: row.pr_review_iteration ?? 0,
@@ -132,8 +139,12 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
   });
 
   const totalTokens = {
-    input: (row.code_session_input_tokens ?? 0) + (row.review_session_input_tokens ?? 0),
-    output: (row.code_session_output_tokens ?? 0) + (row.review_session_output_tokens ?? 0),
+    input:
+      (row.code_session_input_tokens ?? 0) +
+      (row.review_session_input_tokens ?? 0),
+    output:
+      (row.code_session_output_tokens ?? 0) +
+      (row.review_session_output_tokens ?? 0),
   };
 
   return {
@@ -142,8 +153,8 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     notionStatus,
     displayStatus,
     priority,
-    notionUrl: notionTask?.notionUrl ?? '',
-    taskType: notionTask?.type ?? '',
+    notionUrl: notionTask?.notionUrl ?? "",
+    taskType: notionTask?.type ?? "",
     blocked: false,
     blockerNames: [],
     wave: 1,
@@ -163,7 +174,7 @@ function summarizeEvent(payload: string): string {
     return payload.slice(0, 120);
   }
 
-  if (typeof parsed !== 'object' || parsed === null) {
+  if (typeof parsed !== "object" || parsed === null) {
     return String(parsed).slice(0, 120);
   }
 
@@ -175,61 +186,73 @@ function summarizeEvent(payload: string): string {
 
   if (Array.isArray(content)) {
     for (const block of content) {
-      if (typeof block !== 'object' || block === null) continue;
+      if (typeof block !== "object" || block === null) continue;
       const b = block as Record<string, unknown>;
-      if (b.type === 'text' && typeof b.text === 'string' && b.text.trim().length > 0) {
-        const text = b.text.trim().replace(/\s+/g, ' ');
-        return text.length > 120 ? text.slice(0, 117) + '…' : text;
+      if (
+        b.type === "text" &&
+        typeof b.text === "string" &&
+        b.text.trim().length > 0
+      ) {
+        const text = b.text.trim().replace(/\s+/g, " ");
+        return text.length > 120 ? text.slice(0, 117) + "…" : text;
       }
-      if (b.type === 'tool_use' && typeof b.name === 'string') {
+      if (b.type === "tool_use" && typeof b.name === "string") {
         const label = `[${b.name}]`;
-        return label.length > 120 ? label.slice(0, 117) + '…' : label;
+        return label.length > 120 ? label.slice(0, 117) + "…" : label;
       }
     }
   }
 
-  if (typeof content === 'string' && content.trim().length > 0) {
-    const text = content.trim().replace(/\s+/g, ' ');
-    return text.length > 120 ? text.slice(0, 117) + '…' : text;
+  if (typeof content === "string" && content.trim().length > 0) {
+    const text = content.trim().replace(/\s+/g, " ");
+    return text.length > 120 ? text.slice(0, 117) + "…" : text;
   }
 
   // tool_use event: { type: 'tool_use', name: '...', input: {...} }
-  if (typeof p.name === 'string') {
+  if (typeof p.name === "string") {
     const label = `[${p.name}]`;
-    return label.length > 120 ? label.slice(0, 117) + '…' : label;
+    return label.length > 120 ? label.slice(0, 117) + "…" : label;
   }
 
-  return '';
+  return "";
 }
 
 export function createTasksRouter(): Router {
   const router = Router();
 
   // ── GET /api/tasks/export?format=yaml&projectId=<id>&boardId=<id> ────────
-  router.get('/tasks/export', (req: Request, res: Response) => {
-    const format = typeof req.query.format === 'string' ? req.query.format : 'yaml';
-    if (format !== 'yaml') {
-      res.status(400).json({ error: 'Only format=yaml is supported' });
+  router.get("/tasks/export", (req: Request, res: Response) => {
+    const format =
+      typeof req.query.format === "string" ? req.query.format : "yaml";
+    if (format !== "yaml") {
+      res.status(400).json({ error: "Only format=yaml is supported" });
       return;
     }
 
-    const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : '';
+    const projectId =
+      typeof req.query.projectId === "string" ? req.query.projectId : "";
     const project = projectId ? getProjectById(projectId) : null;
     const boardId = project
-      ? (typeof req.query.boardId === 'string' && req.query.boardId
-          ? req.query.boardId
-          : project.boardId)
-      : (typeof req.query.boardId === 'string' ? req.query.boardId : '');
+      ? typeof req.query.boardId === "string" && req.query.boardId
+        ? req.query.boardId
+        : project.boardId
+      : typeof req.query.boardId === "string"
+        ? req.query.boardId
+        : "";
 
     if (!boardId) {
-      res.status(400).json({ error: 'boardId or projectId query param is required' });
+      res
+        .status(400)
+        .json({ error: "boardId or projectId query param is required" });
       return;
     }
 
     const cacheKey = `board:${resolveBoardCacheKey(boardId)}`;
     const boardCacheRow = getTaskCache(cacheKey);
     if (!boardCacheRow) {
-      res.status(404).json({ error: 'Board not found in cache. Fetch tasks first.' });
+      res
+        .status(404)
+        .json({ error: "Board not found in cache. Fetch tasks first." });
       return;
     }
 
@@ -237,24 +260,24 @@ export function createTasksRouter(): Router {
     try {
       notionTasks = JSON.parse(boardCacheRow.raw_json) as NotionTask[];
     } catch {
-      res.status(500).json({ error: 'Failed to parse board cache' });
+      res.status(500).json({ error: "Failed to parse board cache" });
       return;
     }
 
     const exportedTasks = notionTasks
-      .filter((t) => !t.status.includes('Deferred'))
+      .filter((t) => !t.status.includes("Deferred"))
       .map((t) => ({
         id: t.id,
         name: t.title,
-        status: t.status.replace(/^[^\s]+ /, ''), // strip emoji prefix
-        priority: t.priority?.replace(/^[^\s]+ /, '') ?? '',
-        type: t.type ?? 'Code',
+        status: t.status.replace(/^[^\s]+ /, ""), // strip emoji prefix
+        priority: t.priority?.replace(/^[^\s]+ /, "") ?? "",
+        type: t.type ?? "Code",
         depends_on: t.dependsOn ?? [],
         pr_url: t.prUrl ?? null,
-        context: '',
-        acceptance_criteria: '',
+        context: "",
+        acceptance_criteria: "",
         files_affected: [],
-        notes: '',
+        notes: "",
       }));
 
     const output = yaml.dump(
@@ -262,15 +285,16 @@ export function createTasksRouter(): Router {
       { lineWidth: 120 },
     );
 
-    res.setHeader('Content-Type', 'application/yaml');
+    res.setHeader("Content-Type", "application/yaml");
     res.send(output);
   });
 
   // ── GET /api/tasks/active?projectId=<id>&boardId=<id> ────────────────────
-  router.get('/tasks/active', (req: Request, res: Response) => {
-    const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : '';
+  router.get("/tasks/active", (req: Request, res: Response) => {
+    const projectId =
+      typeof req.query.projectId === "string" ? req.query.projectId : "";
     if (!projectId) {
-      res.status(400).json({ error: 'projectId query param is required' });
+      res.status(400).json({ error: "projectId query param is required" });
       return;
     }
 
@@ -282,7 +306,7 @@ export function createTasksRouter(): Router {
 
     // Determine boardId: prefer explicit query param, fall back to project default
     const boardId =
-      typeof req.query.boardId === 'string' && req.query.boardId
+      typeof req.query.boardId === "string" && req.query.boardId
         ? req.query.boardId
         : project.boardId;
 
@@ -305,12 +329,14 @@ export function createTasksRouter(): Router {
     const cap = getReviewIterationCap();
     const views: TaskView[] = aggregates
       .map((row) => buildTaskViewFromRow(row, cap))
-      .filter((v) => !v.notionStatus.includes('Deferred'));
+      .filter((v) => !v.notionStatus.includes("Deferred"));
 
     // Resolve blocked status from the full board task list
     if (boardCacheRow) {
       try {
-        const allBoardTasks = JSON.parse(boardCacheRow.raw_json) as NotionTask[];
+        const allBoardTasks = JSON.parse(
+          boardCacheRow.raw_json,
+        ) as NotionTask[];
         const resolver = new DependencyResolver();
         const resolved = resolver.resolve(allBoardTasks);
         const resolvedMap = new Map(resolved.map((r) => [r.task.id, r]));

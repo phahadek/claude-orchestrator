@@ -1,5 +1,5 @@
-import { EventEmitter } from 'events';
-import { ALLOWED_TOOLS, runtimeSettings } from '../config';
+import { EventEmitter } from "events";
+import { ALLOWED_TOOLS, runtimeSettings } from "../config";
 import {
   upsertSessionEvent,
   updateSessionStatus,
@@ -12,17 +12,17 @@ import {
   getPRBySessionId,
   getPRByNumber,
   setHeadSha,
-} from '../db/queries';
-import type { ServerMessage, PermissionDenial } from '../ws/types';
-import { emitTaskUpdated } from '../routes/tasks';
-import { getTaskBackend } from '../tasks/TaskBackend';
-import type { TaskBackend } from '../tasks/TaskBackend';
-import type { GitHubClient } from '../github/GitHubClient';
-import { isSystemOnlyUserEvent } from '../utils/eventFilters';
-import { SessionAuditor } from './SessionAuditor';
-import type { ISessionManager } from './SessionAuditor';
-import type { ISessionRunner } from './SessionRunner';
-import { CliSessionRunner } from './CliSessionRunner';
+} from "../db/queries";
+import type { ServerMessage, PermissionDenial } from "../ws/types";
+import { emitTaskUpdated } from "../routes/tasks";
+import { getTaskBackend } from "../tasks/TaskBackend";
+import type { TaskBackend } from "../tasks/TaskBackend";
+import type { GitHubClient } from "../github/GitHubClient";
+import { isSystemOnlyUserEvent } from "../utils/eventFilters";
+import { SessionAuditor } from "./SessionAuditor";
+import type { ISessionManager } from "./SessionAuditor";
+import type { ISessionRunner } from "./SessionRunner";
+import { CliSessionRunner } from "./CliSessionRunner";
 
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
 
@@ -31,8 +31,13 @@ const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
  * Exported for unit testing.
  */
 export function isPushCommand(toolName: string, toolInput: string): boolean {
-  if (toolName === 'mcp__github__push_files') return true;
-  if (toolName === 'Bash' && /git\s+push/.test(toolInput) && !toolInput.includes('--dry-run')) return true;
+  if (toolName === "mcp__github__push_files") return true;
+  if (
+    toolName === "Bash" &&
+    /git\s+push/.test(toolInput) &&
+    !toolInput.includes("--dry-run")
+  )
+    return true;
   return false;
 }
 
@@ -45,7 +50,7 @@ export function parseNotionPageId(url: string): string {
   const match = url.match(/([a-f0-9]{32})$/i);
   if (match) return match[1];
   const uuidMatch = url.match(/([0-9a-f-]{36})$/i);
-  if (uuidMatch) return uuidMatch[1].replace(/-/g, '');
+  if (uuidMatch) return uuidMatch[1].replace(/-/g, "");
   return url;
 }
 
@@ -60,8 +65,8 @@ function mergeAssistantContent(
   existing: Array<Record<string, unknown>>,
   incoming: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
-  const existingText = existing.filter((b) => b.type === 'text');
-  const incomingText = incoming.filter((b) => b.type === 'text');
+  const existingText = existing.filter((b) => b.type === "text");
+  const incomingText = incoming.filter((b) => b.type === "text");
 
   // Prefer incoming text blocks (they contain the most up-to-date streamed content).
   // If the incoming event has no text blocks, preserve the existing ones.
@@ -70,34 +75,38 @@ function mergeAssistantContent(
   // Merge tool_use blocks by id so we don't duplicate them across streaming events.
   const toolUseById = new Map<string, Record<string, unknown>>();
   for (const b of existing) {
-    if (b.type === 'tool_use' && typeof b.id === 'string') toolUseById.set(b.id, b);
+    if (b.type === "tool_use" && typeof b.id === "string")
+      toolUseById.set(b.id, b);
   }
   for (const b of incoming) {
-    if (b.type === 'tool_use' && typeof b.id === 'string') toolUseById.set(b.id, b);
+    if (b.type === "tool_use" && typeof b.id === "string")
+      toolUseById.set(b.id, b);
   }
 
   return [...textBlocks, ...toolUseById.values()];
 }
 
 /** Map raw claude CLI event type strings to our DB EventType union. */
-function toEventType(raw: string): 'text' | 'tool_use' | 'tool_result' | 'system' | 'error' {
+function toEventType(
+  raw: string,
+): "text" | "tool_use" | "tool_result" | "system" | "error" {
   switch (raw) {
-    case 'assistant':
-    case 'text':
-    case 'message':
-      return 'text';
-    case 'tool_use':
-      return 'tool_use';
-    case 'tool_result':
-      return 'tool_result';
-    case 'system':
-    case 'user':
-    case 'file-history-snapshot':
-      return 'system';
-    case 'error':
-      return 'error';
+    case "assistant":
+    case "text":
+    case "message":
+      return "text";
+    case "tool_use":
+      return "tool_use";
+    case "tool_result":
+      return "tool_result";
+    case "system":
+    case "user":
+    case "file-history-snapshot":
+      return "system";
+    case "error":
+      return "error";
     default:
-      return 'system';
+      return "system";
   }
 }
 
@@ -143,7 +152,7 @@ export class AgentSession extends EventEmitter {
     public readonly taskId: string,
     private readonly resumeSessionId?: string,
     private readonly customPrompt?: string,
-    public readonly sessionType: string = 'standard',
+    public readonly sessionType: string = "standard",
     private readonly sessionManager?: ISessionManager,
     private readonly githubClient?: GitHubClient,
     private readonly extraAllowedTools: string[] = [],
@@ -163,7 +172,7 @@ export class AgentSession extends EventEmitter {
      * `taskBackendOverride` is undefined. Appended at the end so legacy
      * positional callers (tests) need not be touched.
      */
-    public readonly projectId: string = '',
+    public readonly projectId: string = "",
   ) {
     super();
     this.runner = runner ?? new CliSessionRunner(sessionId);
@@ -175,10 +184,16 @@ export class AgentSession extends EventEmitter {
   }
 
   async run(): Promise<void> {
-    this.broadcast({ type: 'session_status', sessionId: this.sessionId, status: 'running' });
-    updateSessionStatus(this.sessionId, 'running');
+    this.broadcast({
+      type: "session_status",
+      sessionId: this.sessionId,
+      status: "running",
+    });
+    updateSessionStatus(this.sessionId, "running");
 
-    const initialPrompt = this.customPrompt ?? `
+    const initialPrompt =
+      this.customPrompt ??
+      `
 You are a Claude Code session managed by Claude Code Orchestrator.
 
 ## Task
@@ -213,9 +228,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     // resumeIdForSpawn: undefined on first run, set to this.sessionId on each retry.
     let resumeIdForSpawn: string | undefined = this.resumeSessionId;
 
-    const modelSetting = this.sessionType === 'review'
-      ? runtimeSettings.review_session_model
-      : runtimeSettings.code_session_model;
+    const modelSetting =
+      this.sessionType === "review"
+        ? runtimeSettings.review_session_model
+        : runtimeSettings.code_session_model;
 
     // Loop is exited by an explicit return on every terminal path: clean exit,
     // kill/spawn error, or non-transient failure. Only a transient API error
@@ -258,19 +274,37 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       // (500 api_error or 529 overloaded_error). If so, retry with exponential backoff
       // using --resume to restore conversation history. Non-transient errors (bad config,
       // permission issues, etc.) fall through to permanent error immediately.
-      if (this.retryCount < BACKOFF_DELAYS_MS.length && this.isTransientApiError()) {
+      if (
+        this.retryCount < BACKOFF_DELAYS_MS.length &&
+        this.isTransientApiError()
+      ) {
         const delay = BACKOFF_DELAYS_MS[this.retryCount];
         this.retryCount++;
-        sessionLog(this.sessionId, `transient API error — retry ${this.retryCount}/${BACKOFF_DELAYS_MS.length} after ${delay}ms`);
-        this.broadcast({ type: 'session_status', sessionId: this.sessionId, status: 'retrying' });
+        sessionLog(
+          this.sessionId,
+          `transient API error — retry ${this.retryCount}/${BACKOFF_DELAYS_MS.length} after ${delay}ms`,
+        );
+        this.broadcast({
+          type: "session_status",
+          sessionId: this.sessionId,
+          status: "retrying",
+        });
         await new Promise<void>((resolve) => setTimeout(resolve, delay));
         if (this.isKilling) return;
         resumeIdForSpawn = this.sessionId;
-        this.broadcast({ type: 'session_status', sessionId: this.sessionId, status: 'running' });
+        this.broadcast({
+          type: "session_status",
+          sessionId: this.sessionId,
+          status: "running",
+        });
       } else {
-        const status = exitCode === null ? 'killed' : 'error';
+        const status = exitCode === null ? "killed" : "error";
         updateSessionStatus(this.sessionId, status, Date.now());
-        this.broadcast({ type: 'session_ended', sessionId: this.sessionId, status });
+        this.broadcast({
+          type: "session_ended",
+          sessionId: this.sessionId,
+          status,
+        });
         return;
       }
     }
@@ -287,9 +321,11 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     const events = getEventsBySession(this.sessionId);
     if (events.length === 0) return false;
     const lastEvent = events[events.length - 1];
-    if (lastEvent.event_type !== 'error') return false;
+    if (lastEvent.event_type !== "error") return false;
     const payload = lastEvent.payload.toLowerCase();
-    return payload.includes('api_error') || payload.includes('overloaded_error');
+    return (
+      payload.includes("api_error") || payload.includes("overloaded_error")
+    );
   }
 
   /**
@@ -297,23 +333,26 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
    * This is called for each event by both CliSessionRunner and ApiSessionRunner.
    */
   private handleRawEvent(event: Record<string, unknown>): void {
-    const rawType = (event.type as string) ?? 'unknown';
+    const rawType = (event.type as string) ?? "unknown";
 
     // Debug logging
-    sessionLog(this.sessionId, `event type=${rawType} subtype=${event.subtype ?? '-'}`);
+    sessionLog(
+      this.sessionId,
+      `event type=${rawType} subtype=${event.subtype ?? "-"}`,
+    );
 
-    if (rawType === 'system' && (event.subtype as string) === 'init') {
+    if (rawType === "system" && (event.subtype as string) === "init") {
       sessionLog(this.sessionId, `INIT permissionMode=${event.permissionMode}`);
     }
 
     // Extract model name from first assistant event
-    if (rawType === 'assistant' && this.model === null && event.message) {
+    if (rawType === "assistant" && this.model === null && event.message) {
       const msgForModel = event.message as Record<string, unknown>;
-      if (typeof msgForModel.model === 'string' && msgForModel.model) {
+      if (typeof msgForModel.model === "string" && msgForModel.model) {
         this.model = msgForModel.model;
         setSessionModel(this.sessionId, this.model);
         this.broadcast({
-          type: 'session_updated',
+          type: "session_updated",
           sessionId: this.sessionId,
           model: this.model,
         });
@@ -321,21 +360,32 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     }
 
     // Log tool_use blocks from assistant messages and track PR creation tool calls
-    if (rawType === 'assistant' && event.message) {
+    if (rawType === "assistant" && event.message) {
       const msg = event.message as Record<string, unknown>;
       const content = msg.content as Array<Record<string, unknown>> | undefined;
       if (content) {
         for (const block of content) {
-          if (block.type === 'tool_use') {
-            sessionLog(this.sessionId, `TOOL_USE name=${block.name} id=${block.id}`);
-            if (block.name === 'mcp__github__create_pull_request' && typeof block.id === 'string') {
+          if (block.type === "tool_use") {
+            sessionLog(
+              this.sessionId,
+              `TOOL_USE name=${block.name} id=${block.id}`,
+            );
+            if (
+              block.name === "mcp__github__create_pull_request" &&
+              typeof block.id === "string"
+            ) {
               this.pendingGHToolUseIds.set(block.id, block.name as string);
             }
-            if (block.name === 'Bash' && typeof block.id === 'string') {
-              const cmd = ((block.input as Record<string, unknown>)?.command as string) ?? '';
+            if (block.name === "Bash" && typeof block.id === "string") {
+              const cmd =
+                ((block.input as Record<string, unknown>)?.command as string) ??
+                "";
               this.pendingBashCommands.set(block.id, cmd);
             }
-            if (block.name === 'mcp__github__push_files' && typeof block.id === 'string') {
+            if (
+              block.name === "mcp__github__push_files" &&
+              typeof block.id === "string"
+            ) {
               this.pendingPushFileToolUseIds.add(block.id);
             }
           }
@@ -345,11 +395,13 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 
     // Real-time PR detection: handle tool_result events for mcp__github__create_pull_request
     // Also detect git push for push_detected event.
-    if (rawType === 'tool_result') {
+    if (rawType === "tool_result") {
       const toolUseId = event.tool_use_id as string | undefined;
       if (toolUseId && this.pendingGHToolUseIds.has(toolUseId)) {
         this.pendingGHToolUseIds.delete(toolUseId);
-        const content = event.content as Array<Record<string, unknown>> | undefined;
+        const content = event.content as
+          | Array<Record<string, unknown>>
+          | undefined;
         this.handlePRCreatedFromContent(content ?? []);
       }
       if (toolUseId && this.pendingPushFileToolUseIds.has(toolUseId)) {
@@ -359,23 +411,27 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       if (toolUseId && this.pendingBashCommands.has(toolUseId)) {
         const cmd = this.pendingBashCommands.get(toolUseId)!;
         this.pendingBashCommands.delete(toolUseId);
-        if (isPushCommand('Bash', cmd)) {
+        if (isPushCommand("Bash", cmd)) {
           this.handlePushDetected();
         }
       }
     }
 
     // Also handle tool_result blocks embedded in user events
-    if (rawType === 'user' && !this.prDetectedLive) {
+    if (rawType === "user" && !this.prDetectedLive) {
       const msg = event.message as Record<string, unknown> | undefined;
-      const content = (msg?.content ?? event.content) as Array<Record<string, unknown>> | undefined;
+      const content = (msg?.content ?? event.content) as
+        | Array<Record<string, unknown>>
+        | undefined;
       if (Array.isArray(content)) {
         for (const block of content) {
-          if (block.type === 'tool_result') {
+          if (block.type === "tool_result") {
             const toolUseId = block.tool_use_id as string | undefined;
             if (toolUseId && this.pendingGHToolUseIds.has(toolUseId)) {
               this.pendingGHToolUseIds.delete(toolUseId);
-              const innerContent = block.content as Array<Record<string, unknown>> | undefined;
+              const innerContent = block.content as
+                | Array<Record<string, unknown>>
+                | undefined;
               this.handlePRCreatedFromContent(innerContent ?? []);
             }
           }
@@ -385,15 +441,23 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 
     // Extract permission_denials from result event and broadcast to UI.
     // Also signal turn completion so the server can check for new commits.
-    if (rawType === 'result') {
+    if (rawType === "result") {
       const pr = getPRBySessionId(this.sessionId);
       if (pr?.review_session_id) {
-        sessionLog(this.sessionId, `turn complete — PR #${pr.pr_number} has review session, signalling push_detected`);
+        sessionLog(
+          this.sessionId,
+          `turn complete — PR #${pr.pr_number} has review session, signalling push_detected`,
+        );
         this.handlePushDetected();
       }
 
-      const denials = event.permission_denials as PermissionDenial[] | undefined;
-      sessionLog(this.sessionId, `RESULT stop_reason=${event.stop_reason} denials=${JSON.stringify(denials)}`);
+      const denials = event.permission_denials as
+        | PermissionDenial[]
+        | undefined;
+      sessionLog(
+        this.sessionId,
+        `RESULT stop_reason=${event.stop_reason} denials=${JSON.stringify(denials)}`,
+      );
       if (denials && denials.length > 0) {
         const ts = Date.now();
         for (const d of denials) {
@@ -406,7 +470,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           });
         }
         this.broadcast({
-          type: 'permission_denials',
+          type: "permission_denials",
           sessionId: this.sessionId,
           denials,
         });
@@ -421,29 +485,45 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     // The Claude CLI emits multiple incremental streaming events per message,
     // all sharing the same message.id. We keep only the latest payload.
     let messageId: string | undefined;
-    if (rawType === 'assistant' || rawType === 'message') {
+    if (rawType === "assistant" || rawType === "message") {
       const msg = event.message as Record<string, unknown> | undefined;
-      if (msg?.id && typeof msg.id === 'string') {
+      if (msg?.id && typeof msg.id === "string") {
         messageId = msg.id;
       }
     }
 
     // Merge content blocks for assistant events: accumulate text and tool_use
     // across all streaming events for this message so neither is dropped.
-    if (messageId != null && (rawType === 'assistant' || rawType === 'message')) {
+    if (
+      messageId != null &&
+      (rawType === "assistant" || rawType === "message")
+    ) {
       const msg = event.message as Record<string, unknown> | undefined;
       if (msg && Array.isArray(msg.content)) {
         const incomingContent = msg.content as Array<Record<string, unknown>>;
         const existingContent = this.messageContentMap.get(messageId) ?? [];
-        const mergedContent = mergeAssistantContent(existingContent, incomingContent);
+        const mergedContent = mergeAssistantContent(
+          existingContent,
+          incomingContent,
+        );
         this.messageContentMap.set(messageId, mergedContent);
-        payload = JSON.stringify({ ...event, message: { ...msg, content: mergedContent } });
+        payload = JSON.stringify({
+          ...event,
+          message: { ...msg, content: mergedContent },
+        });
       }
     }
 
-    const existingRowId = messageId != null ? this.messageIdMap.get(messageId) : undefined;
+    const existingRowId =
+      messageId != null ? this.messageIdMap.get(messageId) : undefined;
     const rowId = upsertSessionEvent(
-      { session_id: this.sessionId, event_type: eventType, payload, timestamp: Date.now(), message_id: messageId ?? null },
+      {
+        session_id: this.sessionId,
+        event_type: eventType,
+        payload,
+        timestamp: Date.now(),
+        message_id: messageId ?? null,
+      },
       existingRowId,
     );
     if (messageId != null) {
@@ -452,8 +532,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 
     // After each result event (one per turn), increment token counters and broadcast
     // session_updated so the frontend receives live totals during execution.
-    if (rawType === 'result') {
-      const usageData = event.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+    if (rawType === "result") {
+      const usageData = event.usage as
+        | { input_tokens?: number; output_tokens?: number }
+        | undefined;
       const inputTokens = usageData?.input_tokens ?? 0;
       const outputTokens = usageData?.output_tokens ?? 0;
       if (inputTokens > 0 || outputTokens > 0) {
@@ -461,7 +543,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         this.totalOutputTokens += outputTokens;
         incrementTokens(this.sessionId, inputTokens, outputTokens);
         this.broadcast({
-          type: 'session_updated',
+          type: "session_updated",
           sessionId: this.sessionId,
           totalInputTokens: this.totalInputTokens,
           totalOutputTokens: this.totalOutputTokens,
@@ -472,14 +554,14 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     // Skip broadcasting user events that contain only system-injected content
     // (CLAUDE.md bootstrap, system reminders). They are stored in DB for debugging
     // but are noise in the transcript UI.
-    if (rawType === 'user' && isSystemOnlyUserEvent(payload)) {
+    if (rawType === "user" && isSystemOnlyUserEvent(payload)) {
       return;
     }
 
     this.broadcast({
-      type: 'session_event',
+      type: "session_event",
       sessionId: this.sessionId,
-      eventType: eventType as 'text' | 'tool_use' | 'tool_result' | 'system',
+      eventType: eventType as "text" | "tool_use" | "tool_result" | "system",
       content: payload,
       ...(messageId != null && { messageId }),
     });
@@ -489,13 +571,15 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
    * Parse PR data from the content blocks of a mcp__github__create_pull_request tool_result,
    * upsert the PR to SQLite with full metadata, and broadcast pr_created.
    */
-  private handlePRCreatedFromContent(contentBlocks: Array<Record<string, unknown>>): void {
+  private handlePRCreatedFromContent(
+    contentBlocks: Array<Record<string, unknown>>,
+  ): void {
     if (this.prDetectedLive) return;
 
     // Extract text from content blocks
-    let text = '';
+    let text = "";
     for (const block of contentBlocks) {
-      if (block.type === 'text' && typeof block.text === 'string') {
+      if (block.type === "text" && typeof block.text === "string") {
         text += block.text;
       }
     }
@@ -516,7 +600,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     let prShape: GitHubPRShape = {};
     try {
       const parsed = JSON.parse(text) as GitHubPRShape;
-      if (parsed && typeof parsed === 'object' && parsed.html_url) {
+      if (parsed && typeof parsed === "object" && parsed.html_url) {
         prShape = parsed;
       }
     } catch {
@@ -537,10 +621,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     this.prUrl = prUrl;
     this.prDetectedLive = true;
 
-    if (this.sessionType === 'standard') {
-      this.taskBackend().attachPR(this.taskId, prUrl).catch((e) =>
-        console.error(`[AgentSession] attachPR failed: ${e}`),
-      );
+    if (this.sessionType === "standard") {
+      this.taskBackend()
+        .attachPR(this.taskId, prUrl)
+        .catch((e) => console.error(`[AgentSession] attachPR failed: ${e}`));
 
       upsertPullRequest({
         pr_number: prNumber,
@@ -552,7 +636,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         body: prShape.body ?? null,
         head_branch: prShape.head?.ref ?? null,
         base_branch: prShape.base?.ref ?? null,
-        state: prShape.state ?? 'open',
+        state: prShape.state ?? "open",
         draft: prShape.draft ? 1 : 0,
         review_result: null,
         review_at: null,
@@ -574,14 +658,17 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               setHeadSha(prNumber, repo, freshPR.headSha);
             }
           } catch (e) {
-            console.warn(`[AgentSession] handlePRCreatedFromContent: failed to fetch head_sha for PR #${prNumber}:`, e);
+            console.warn(
+              `[AgentSession] handlePRCreatedFromContent: failed to fetch head_sha for PR #${prNumber}:`,
+              e,
+            );
           }
         })();
       }
     }
 
-    this.broadcast({ type: 'pr_created', sessionId: this.sessionId, prUrl });
-    this.emit('pr_opened', {
+    this.broadcast({ type: "pr_created", sessionId: this.sessionId, prUrl });
+    this.emit("pr_opened", {
       prNumber,
       repo,
       taskId: this.taskId,
@@ -597,11 +684,11 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
    * with prNumber and repo included.
    */
   private handlePushDetected(): void {
-    this.emit('push_detected', { sessionId: this.sessionId });
+    this.emit("push_detected", { sessionId: this.sessionId });
     const pr = getPRBySessionId(this.sessionId);
     if (pr) {
       this.broadcast({
-        type: 'push_detected',
+        type: "push_detected",
         sessionId: this.sessionId,
         prNumber: pr.pr_number,
         repo: pr.repo,
@@ -623,14 +710,14 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     }
 
     this.prUrl = prUrl;
-    updateSessionStatus(this.sessionId, 'done', Date.now());
+    updateSessionStatus(this.sessionId, "done", Date.now());
 
-    if (this.sessionType === 'standard') {
+    if (this.sessionType === "standard") {
       if (prUrl && !this.prDetectedLive) {
         // Fallback: live detection didn't fire (e.g. gh pr create via Bash).
-        this.taskBackend().attachPR(this.taskId, prUrl).catch((e) =>
-          console.error(`[AgentSession] attachPR failed: ${e}`),
-        );
+        this.taskBackend()
+          .attachPR(this.taskId, prUrl)
+          .catch((e) => console.error(`[AgentSession] attachPR failed: ${e}`));
       }
 
       // Always upsert notion_task_id and session_id onto the PR row when a
@@ -652,7 +739,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               const freshPR = await this.githubClient.fetchPR(repo, prNumber);
               headSha = freshPR.headSha ?? null;
             } catch (e) {
-              console.warn(`[AgentSession] handleCleanExit: failed to fetch PR #${prNumber} from GitHub for head_sha:`, e);
+              console.warn(
+                `[AgentSession] handleCleanExit: failed to fetch PR #${prNumber} from GitHub for head_sha:`,
+                e,
+              );
             }
           }
           upsertPullRequest({
@@ -665,7 +755,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             body: null,
             head_branch: null,
             base_branch: null,
-            state: 'open',
+            state: "open",
             draft: 0,
             review_result: null,
             review_at: null,
@@ -676,7 +766,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             head_sha: headSha,
           });
           if (!this.prDetectedLive) {
-            this.emit('pr_opened', {
+            this.emit("pr_opened", {
               prNumber,
               repo,
               taskId: this.taskId,
@@ -690,28 +780,35 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       // Skip the "In Review" write when the PR is already merged or closed.
       // The merge flow ends the session and sets the Notion task to "Done";
       // without this guard handleCleanExit would race and regress the status.
-      if (prUrl && existingPrState !== 'merged' && existingPrState !== 'closed') {
-        this.taskBackend().updateStatus(this.taskId, '👀 In Review')
+      if (
+        prUrl &&
+        existingPrState !== "merged" &&
+        existingPrState !== "closed"
+      ) {
+        this.taskBackend()
+          .updateStatus(this.taskId, "👀 In Review")
           .then(() => {
             this.broadcast({
-              type: 'task_status_changed',
+              type: "task_status_changed",
               notionTaskId: this.taskId,
-              newStatus: '👀 In Review',
+              newStatus: "👀 In Review",
             });
             emitTaskUpdated(this.taskId);
           })
-          .catch((e) => console.error(`[AgentSession] updateStatus failed: ${e}`));
+          .catch((e) =>
+            console.error(`[AgentSession] updateStatus failed: ${e}`),
+          );
       }
     }
 
     this.broadcast({
-      type: 'session_ended',
+      type: "session_ended",
       sessionId: this.sessionId,
-      status: 'done',
+      status: "done",
       ...(prUrl ? { prUrl } : {}),
     });
 
-    if (this.sessionType !== 'review') {
+    if (this.sessionType !== "review") {
       this.runAudit(0);
     }
   }
@@ -727,7 +824,8 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       this.githubClient,
       this.sessionManager,
     );
-    auditor.audit(this, exitCode)
+    auditor
+      .audit(this, exitCode)
       .then((audit) => {
         insertSessionAudit({
           session_id: audit.sessionId,
@@ -739,7 +837,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           audited_at: audit.auditedAt,
         });
         this.broadcast({
-          type: 'session_audit',
+          type: "session_audit",
           sessionId: audit.sessionId,
           prOpened: audit.prOpened,
           prTargetsBranch: audit.prTargetsBranch,
@@ -749,7 +847,9 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         });
       })
       .catch((err) => {
-        console.error(`[AgentSession] audit failed for ${this.sessionId}: ${err}`);
+        console.error(
+          `[AgentSession] audit failed for ${this.sessionId}: ${err}`,
+        );
       });
   }
 
@@ -778,13 +878,17 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     if (this.isKilling) return;
     this.isKilling = true;
     await this.runner.kill();
-    updateSessionStatus(this.sessionId, 'killed', Date.now());
-    this.broadcast({ type: 'session_ended', sessionId: this.sessionId, status: 'killed' });
+    updateSessionStatus(this.sessionId, "killed", Date.now());
+    this.broadcast({
+      type: "session_ended",
+      sessionId: this.sessionId,
+      status: "killed",
+    });
   }
 
   /** Persist to SQLite first, then emit. Caller (SessionManager) listens and broadcasts. */
   private broadcast(msg: ServerMessage): void {
-    if (msg.type === 'session_ended') this.hasEnded = true;
-    this.emit('message', msg);
+    if (msg.type === "session_ended") this.hasEnded = true;
+    this.emit("message", msg);
   }
 }

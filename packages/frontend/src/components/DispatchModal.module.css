@@ -96,7 +96,7 @@
   background: var(--bg-hover);
 }
 
-.ready-task input[type='checkbox'] {
+.ready-task input[type="checkbox"] {
   cursor: pointer;
 }
 

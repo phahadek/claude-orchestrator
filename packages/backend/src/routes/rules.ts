@@ -1,25 +1,25 @@
-import { Router } from 'express';
-import type { Request, Response } from 'express';
+import { Router } from "express";
+import type { Request, Response } from "express";
 import {
   getRecentPermissionEvents,
   clearPermissionEvents,
   getRecentPermissionDenials,
   clearPermissionDenials,
   getAllRules,
-} from '../db/queries';
+} from "../db/queries";
 
 // ─── Permission events router ───────────────────────────────────────────────
 
 export const permissionEventsRouter = Router();
 
 // GET /api/permission-events
-permissionEventsRouter.get('/', (_req: Request, res: Response) => {
+permissionEventsRouter.get("/", (_req: Request, res: Response) => {
   const rows = getRecentPermissionEvents(200);
   res.json(rows);
 });
 
 // DELETE /api/permission-events
-permissionEventsRouter.delete('/', (_req: Request, res: Response) => {
+permissionEventsRouter.delete("/", (_req: Request, res: Response) => {
   clearPermissionEvents();
   res.status(200).json({ cleared: true });
 });
@@ -29,13 +29,13 @@ permissionEventsRouter.delete('/', (_req: Request, res: Response) => {
 export const permissionDenialsRouter = Router();
 
 // GET /api/permission-denials
-permissionDenialsRouter.get('/', (_req: Request, res: Response) => {
+permissionDenialsRouter.get("/", (_req: Request, res: Response) => {
   const rows = getRecentPermissionDenials(200);
   res.json(rows);
 });
 
 // DELETE /api/permission-denials
-permissionDenialsRouter.delete('/', (_req: Request, res: Response) => {
+permissionDenialsRouter.delete("/", (_req: Request, res: Response) => {
   clearPermissionDenials();
   res.status(200).json({ cleared: true });
 });
@@ -45,7 +45,7 @@ permissionDenialsRouter.delete('/', (_req: Request, res: Response) => {
 export const permissionRulesRouter = Router();
 
 // GET /api/permission-rules
-permissionRulesRouter.get('/', (_req: Request, res: Response) => {
+permissionRulesRouter.get("/", (_req: Request, res: Response) => {
   const rows = getAllRules();
   res.json(rows);
 });

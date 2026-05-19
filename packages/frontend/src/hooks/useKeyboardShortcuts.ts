@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef } from "react";
 
 export interface ShortcutHandlers {
   onOpenDispatch: () => void;
@@ -6,7 +6,9 @@ export interface ShortcutHandlers {
   onSelectNext: () => void;
   onSelectPrev: () => void;
   onConfirmSelection: () => void;
-  onSwitchView: (view: 'tasks' | 'sessions' | 'prs' | 'analytics' | 'settings') => void;
+  onSwitchView: (
+    view: "tasks" | "sessions" | "prs" | "analytics" | "settings",
+  ) => void;
   onFocusSearch: () => void;
 }
 
@@ -26,7 +28,7 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): void {
       const h = handlersRef.current;
 
       // ESC fires even from input fields (e.g. to clear search and blur)
-      if (event.key === 'Escape') {
+      if (event.key === "Escape") {
         h.onDismiss();
         return;
       }
@@ -34,47 +36,47 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): void {
       if (isInputField) return;
 
       switch (event.key) {
-        case 'n':
-        case 'N':
+        case "n":
+        case "N":
           event.preventDefault();
           h.onOpenDispatch();
           break;
-        case 'j':
-        case 'J':
+        case "j":
+        case "J":
           event.preventDefault();
           h.onSelectNext();
           break;
-        case 'k':
-        case 'K':
+        case "k":
+        case "K":
           event.preventDefault();
           h.onSelectPrev();
           break;
-        case 'Enter':
+        case "Enter":
           h.onConfirmSelection();
           break;
-        case '1':
-          h.onSwitchView('tasks');
+        case "1":
+          h.onSwitchView("tasks");
           break;
-        case '2':
-          h.onSwitchView('sessions');
+        case "2":
+          h.onSwitchView("sessions");
           break;
-        case '3':
-          h.onSwitchView('prs');
+        case "3":
+          h.onSwitchView("prs");
           break;
-        case '4':
-          h.onSwitchView('analytics');
+        case "4":
+          h.onSwitchView("analytics");
           break;
-        case '5':
-          h.onSwitchView('settings');
+        case "5":
+          h.onSwitchView("settings");
           break;
-        case '/':
+        case "/":
           event.preventDefault();
           h.onFocusSearch();
           break;
       }
     }
 
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 }

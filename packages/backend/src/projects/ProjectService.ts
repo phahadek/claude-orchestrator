@@ -12,8 +12,8 @@ import {
   deleteMilestone,
   type ProjectPatch,
   type MilestonePatch,
-} from '../db/queries';
-import type { MilestoneRow, ProjectRow, TaskSource } from '../db/types';
+} from "../db/queries";
+import type { MilestoneRow, ProjectRow, TaskSource } from "../db/types";
 
 export interface ProjectMilestone {
   id: string;
@@ -89,7 +89,9 @@ function rowToProject(row: ProjectRow, milestones: MilestoneRow[]): Project {
 export const ProjectService = {
   list(): Project[] {
     const rows = listProjectRows();
-    return rows.map((row) => rowToProject(row, listMilestonesByProject(row.id)));
+    return rows.map((row) =>
+      rowToProject(row, listMilestonesByProject(row.id)),
+    );
   },
 
   count(): number {
@@ -113,7 +115,7 @@ export const ProjectService = {
       project_dir: input.projectDir,
       context_url: input.contextUrl ?? null,
       github_repo: input.githubRepo ?? null,
-      task_source: input.taskSource ?? 'notion',
+      task_source: input.taskSource ?? "notion",
       auto_launch_enabled: input.autoLaunchEnabled ? 1 : 0,
       auto_launch_milestone_id: input.autoLaunchMilestoneId ?? null,
     });
@@ -150,7 +152,10 @@ export const ProjectService = {
     return rowToMilestone(row);
   },
 
-  updateMilestone(id: string, patch: MilestonePatch): ProjectMilestone | undefined {
+  updateMilestone(
+    id: string,
+    patch: MilestonePatch,
+  ): ProjectMilestone | undefined {
     const row = updateMilestone(id, patch);
     return row ? rowToMilestone(row) : undefined;
   },

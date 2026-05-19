@@ -1,42 +1,42 @@
-import { Router } from 'express';
-import type { Request, Response } from 'express';
-import { getSetting, setSetting, getAllSettings } from '../db/queries';
-import { runtimeSettings } from '../config';
+import { Router } from "express";
+import type { Request, Response } from "express";
+import { getSetting, setSetting, getAllSettings } from "../db/queries";
+import { runtimeSettings } from "../config";
 
 const router = Router();
 
 const SETTING_KEYS = [
-  'max_concurrent_code_sessions',
-  'auto_review_concurrency',
-  'auto_review',
-  'card_preview_lines',
-  'code_session_model',
-  'review_session_model',
-  'session_mode',
-  'auto_launch_concurrency',
-  'auto_launch_poll_interval_ms',
+  "max_concurrent_code_sessions",
+  "auto_review_concurrency",
+  "auto_review",
+  "card_preview_lines",
+  "code_session_model",
+  "review_session_model",
+  "session_mode",
+  "auto_launch_concurrency",
+  "auto_launch_poll_interval_ms",
 ] as const;
 
 type SettingKey = (typeof SETTING_KEYS)[number];
 
 function applyToRuntime(key: SettingKey, value: string): void {
-  if (key === 'max_concurrent_code_sessions') {
+  if (key === "max_concurrent_code_sessions") {
     runtimeSettings.max_concurrent_code_sessions = Number(value);
-  } else if (key === 'auto_review_concurrency') {
+  } else if (key === "auto_review_concurrency") {
     runtimeSettings.auto_review_concurrency = Number(value);
-  } else if (key === 'auto_review') {
-    runtimeSettings.auto_review = value !== 'false';
-  } else if (key === 'card_preview_lines') {
+  } else if (key === "auto_review") {
+    runtimeSettings.auto_review = value !== "false";
+  } else if (key === "card_preview_lines") {
     runtimeSettings.card_preview_lines = Number(value);
-  } else if (key === 'code_session_model') {
+  } else if (key === "code_session_model") {
     runtimeSettings.code_session_model = value;
-  } else if (key === 'review_session_model') {
+  } else if (key === "review_session_model") {
     runtimeSettings.review_session_model = value;
-  } else if (key === 'session_mode') {
-    runtimeSettings.session_mode = value === 'api' ? 'api' : 'cli';
-  } else if (key === 'auto_launch_concurrency') {
+  } else if (key === "session_mode") {
+    runtimeSettings.session_mode = value === "api" ? "api" : "cli";
+  } else if (key === "auto_launch_concurrency") {
     runtimeSettings.auto_launch_concurrency = Number(value);
-  } else if (key === 'auto_launch_poll_interval_ms') {
+  } else if (key === "auto_launch_poll_interval_ms") {
     runtimeSettings.auto_launch_poll_interval_ms = Number(value);
   }
 }
@@ -50,9 +50,13 @@ export function loadRuntimeSettingsFromDb(): void {
     } else {
       // Persist the env-seeded default so future reads are consistent
       let defaultVal: string;
-      if (key === 'auto_review') {
+      if (key === "auto_review") {
         defaultVal = String(runtimeSettings.auto_review);
-      } else if (key === 'code_session_model' || key === 'review_session_model' || key === 'session_mode') {
+      } else if (
+        key === "code_session_model" ||
+        key === "review_session_model" ||
+        key === "session_mode"
+      ) {
         defaultVal = runtimeSettings[key];
       } else {
         defaultVal = String(runtimeSettings[key]);
@@ -64,7 +68,9 @@ export function loadRuntimeSettingsFromDb(): void {
 
 function runtimeSettingsAsRecord(): Record<SettingKey, string> {
   return {
-    max_concurrent_code_sessions: String(runtimeSettings.max_concurrent_code_sessions),
+    max_concurrent_code_sessions: String(
+      runtimeSettings.max_concurrent_code_sessions,
+    ),
     auto_review_concurrency: String(runtimeSettings.auto_review_concurrency),
     auto_review: String(runtimeSettings.auto_review),
     card_preview_lines: String(runtimeSettings.card_preview_lines),
@@ -72,17 +78,19 @@ function runtimeSettingsAsRecord(): Record<SettingKey, string> {
     review_session_model: runtimeSettings.review_session_model,
     session_mode: runtimeSettings.session_mode,
     auto_launch_concurrency: String(runtimeSettings.auto_launch_concurrency),
-    auto_launch_poll_interval_ms: String(runtimeSettings.auto_launch_poll_interval_ms),
+    auto_launch_poll_interval_ms: String(
+      runtimeSettings.auto_launch_poll_interval_ms,
+    ),
   };
 }
 
 // GET /api/settings
-router.get('/', (_req: Request, res: Response) => {
+router.get("/", (_req: Request, res: Response) => {
   res.json(runtimeSettingsAsRecord());
 });
 
 // PATCH /api/settings
-router.patch('/', (req: Request, res: Response) => {
+router.patch("/", (req: Request, res: Response) => {
   const body = req.body as Record<string, unknown>;
   const updated: Partial<Record<SettingKey, string>> = {};
 
@@ -92,7 +100,6 @@ router.patch('/', (req: Request, res: Response) => {
       setSetting(key, value);
       applyToRuntime(key, value);
       updated[key] = value;
-  
     }
   }
 
@@ -100,7 +107,7 @@ router.patch('/', (req: Request, res: Response) => {
 });
 
 // Merge all settings from DB (used after startup to override env defaults)
-router.get('/all-raw', (_req: Request, res: Response) => {
+router.get("/all-raw", (_req: Request, res: Response) => {
   res.json(getAllSettings());
 });
 

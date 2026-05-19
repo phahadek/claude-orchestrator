@@ -1,8 +1,8 @@
-import type { ResolvedTask } from '../notion/types';
-import { ProjectService } from '../projects/ProjectService';
-import { NotionClient } from '../notion/NotionClient';
-import { NotionTaskBackend } from './NotionTaskBackend';
-import { LocalTaskBackend } from './LocalTaskBackend';
+import type { ResolvedTask } from "../notion/types";
+import { ProjectService } from "../projects/ProjectService";
+import { NotionClient } from "../notion/NotionClient";
+import { NotionTaskBackend } from "./NotionTaskBackend";
+import { LocalTaskBackend } from "./LocalTaskBackend";
 
 /**
  * Project-scoped task tracker. An instance is bound to a single project via the
@@ -10,7 +10,7 @@ import { LocalTaskBackend } from './LocalTaskBackend';
  */
 export interface TaskBackend {
   /** Backend identifier; reflects the project's task_source. */
-  readonly type: 'notion' | 'local';
+  readonly type: "notion" | "local";
 
   /**
    * Fetch tasks that are ready to be dispatched for the given milestone.
@@ -18,7 +18,10 @@ export interface TaskBackend {
    * (the Notion database ID). For YAML projects, it filters tasks by milestone in
    * the per-project tasks.yaml.
    */
-  fetchReadyTasks(milestoneId: string, skipCache?: boolean): Promise<ResolvedTask[]>;
+  fetchReadyTasks(
+    milestoneId: string,
+    skipCache?: boolean,
+  ): Promise<ResolvedTask[]>;
 
   /** Mark a task as in-review and attach a PR URL. */
   attachPR(taskId: string, prUrl: string): Promise<void>;
@@ -54,7 +57,7 @@ export function getTaskBackend(projectId: string): TaskBackend {
   if (!project) {
     throw new Error(`[getTaskBackend] project not found: ${projectId}`);
   }
-  if (project.taskSource === 'yaml') {
+  if (project.taskSource === "yaml") {
     return new LocalTaskBackend(project.projectDir);
   }
   return getNotionBackend();

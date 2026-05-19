@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
-import { taskNameFromNotionUrl } from '../utils/notionUrl';
-import styles from './PermissionEventLog.module.css';
+import { useState, useEffect } from "react";
+import { taskNameFromNotionUrl } from "../utils/notionUrl";
+import styles from "./PermissionEventLog.module.css";
 
 interface PermissionDenialRow {
   id: number;
@@ -34,24 +34,26 @@ function formatRowsForClipboard(rows: PermissionDenialRow[]): string {
       : row.session_id.slice(0, 8);
     return `[denied] ${tool} | ${input} | session: ${session}`;
   });
-  return [header, '', ...lines].join('\n');
+  return [header, "", ...lines].join("\n");
 }
 
 export function PermissionEventLog() {
   const [rows, setRows] = useState<PermissionDenialRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [copyFeedback, setCopyFeedback] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [copyFeedback, setCopyFeedback] = useState<
+    "idle" | "copied" | "failed"
+  >("idle");
   const [showClearModal, setShowClearModal] = useState(false);
 
   async function fetchDenials() {
     try {
-      const res = await fetch('/api/permission-denials');
+      const res = await fetch("/api/permission-denials");
       if (!res.ok) throw new Error(`${res.status}`);
       setRows((await res.json()) as PermissionDenialRow[]);
       setError(null);
     } catch {
-      setError('Failed to load permission denials');
+      setError("Failed to load permission denials");
     } finally {
       setLoading(false);
     }
@@ -65,11 +67,11 @@ export function PermissionEventLog() {
 
   async function handleClear() {
     try {
-      const res = await fetch('/api/permission-denials', { method: 'DELETE' });
+      const res = await fetch("/api/permission-denials", { method: "DELETE" });
       if (!res.ok) throw new Error(`${res.status}`);
       setRows([]);
     } catch {
-      setError('Failed to clear denials');
+      setError("Failed to clear denials");
     } finally {
       setShowClearModal(false);
     }
@@ -79,12 +81,12 @@ export function PermissionEventLog() {
     const text = formatRowsForClipboard(rows);
     navigator.clipboard.writeText(text).then(
       () => {
-        setCopyFeedback('copied');
-        setTimeout(() => setCopyFeedback('idle'), 1500);
+        setCopyFeedback("copied");
+        setTimeout(() => setCopyFeedback("idle"), 1500);
       },
       () => {
-        setCopyFeedback('failed');
-        setTimeout(() => setCopyFeedback('idle'), 1500);
+        setCopyFeedback("failed");
+        setTimeout(() => setCopyFeedback("idle"), 1500);
       },
     );
   }
@@ -92,7 +94,9 @@ export function PermissionEventLog() {
   return (
     <div className={styles.container}>
       <div className={styles.header}>
-        <span className={styles.count}>{rows.length} denial{rows.length !== 1 ? 's' : ''}</span>
+        <span className={styles.count}>
+          {rows.length} denial{rows.length !== 1 ? "s" : ""}
+        </span>
         <div className={styles.headerActions}>
           <button
             type="button"
@@ -100,7 +104,11 @@ export function PermissionEventLog() {
             onClick={handleCopy}
             disabled={rows.length === 0}
           >
-            {copyFeedback === 'copied' ? '✓ Copied' : copyFeedback === 'failed' ? '✗ Failed' : 'Copy'}
+            {copyFeedback === "copied"
+              ? "✓ Copied"
+              : copyFeedback === "failed"
+                ? "✗ Failed"
+                : "Copy"}
           </button>
           <button
             type="button"
@@ -139,16 +147,28 @@ export function PermissionEventLog() {
       )}
 
       {showClearModal && (
-        <div className={styles.modalOverlay} onClick={() => setShowClearModal(false)}>
+        <div
+          className={styles.modalOverlay}
+          onClick={() => setShowClearModal(false)}
+        >
           <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
             <p className={styles.modalMessage}>
-              Clear {rows.length} denial{rows.length !== 1 ? 's' : ''}? This cannot be undone.
+              Clear {rows.length} denial{rows.length !== 1 ? "s" : ""}? This
+              cannot be undone.
             </p>
             <div className={styles.modalActions}>
-              <button type="button" className={styles.modalCancel} onClick={() => setShowClearModal(false)}>
+              <button
+                type="button"
+                className={styles.modalCancel}
+                onClick={() => setShowClearModal(false)}
+              >
                 Cancel
               </button>
-              <button type="button" className={styles.modalDelete} onClick={() => void handleClear()}>
+              <button
+                type="button"
+                className={styles.modalDelete}
+                onClick={() => void handleClear()}
+              >
                 Clear all
               </button>
             </div>
@@ -169,17 +189,23 @@ function DenialRow({ row }: { row: PermissionDenialRow }) {
     }
   })();
   const truncated = inputText.length > 80 && !expanded;
-  const displayInput = truncated ? inputText.slice(0, 80) + '…' : inputText;
+  const displayInput = truncated ? inputText.slice(0, 80) + "…" : inputText;
   const sessionName = row.notion_task_url
     ? taskNameFromNotionUrl(row.notion_task_url)
     : row.session_id.slice(0, 8);
 
   return (
     <tr>
-      <td className={styles.timeCell} title={new Date(row.timestamp).toISOString()}>
+      <td
+        className={styles.timeCell}
+        title={new Date(row.timestamp).toISOString()}
+      >
         {relativeTime(row.timestamp)}
       </td>
-      <td className={styles.sessionCell} title={row.notion_task_url ?? row.session_id}>
+      <td
+        className={styles.sessionCell}
+        title={row.notion_task_url ?? row.session_id}
+      >
         {sessionName}
       </td>
       <td className={styles.toolCell}>{row.tool_name}</td>
@@ -191,7 +217,7 @@ function DenialRow({ row }: { row: PermissionDenialRow }) {
             className={styles.expandBtn}
             onClick={() => setExpanded((v) => !v)}
           >
-            {expanded ? 'less' : 'more'}
+            {expanded ? "less" : "more"}
           </button>
         )}
       </td>

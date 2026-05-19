@@ -1,4 +1,4 @@
-const TERMINAL_STATUSES = new Set(['done', 'error', 'killed']);
+const TERMINAL_STATUSES = new Set(["done", "error", "killed"]);
 
 export type TimerSession = {
   status: string;
@@ -44,7 +44,7 @@ export function calcElapsedMs(session: TimerSession): number | null {
 }
 
 export function formatDuration(ms: number): string {
-  if (ms < 1000) return '< 1s';
+  if (ms < 1000) return "< 1s";
   const totalSeconds = Math.floor(ms / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
@@ -54,5 +54,5 @@ export function formatDuration(ms: number): string {
 
 export function formatElapsed(session: TimerSession): string {
   const ms = calcElapsedMs(session);
-  return ms != null ? formatDuration(ms) : '—';
+  return ms != null ? formatDuration(ms) : "—";
 }

@@ -11,31 +11,31 @@ export function isSystemOnlyUserEvent(payload: string): boolean {
   } catch {
     return false;
   }
-  if (typeof parsed !== 'object' || parsed === null) return false;
+  if (typeof parsed !== "object" || parsed === null) return false;
 
   const p = parsed as Record<string, unknown>;
-  if (p.type !== 'user') return false;
+  if (p.type !== "user") return false;
 
   const msg = p.message as Record<string, unknown> | undefined;
   const content = msg?.content ?? p.content;
 
-  if (typeof content === 'string') {
+  if (typeof content === "string") {
     // Strip paired tag+content blocks first, then remaining standalone tags
     const stripped = content
-      .replace(/<([a-zA-Z][a-zA-Z0-9_-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g, '')
-      .replace(/<[^>]+>/g, '')
+      .replace(/<([a-zA-Z][a-zA-Z0-9_-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g, "")
+      .replace(/<[^>]+>/g, "")
       .trim();
     return stripped.length === 0;
   }
 
   if (Array.isArray(content)) {
     for (const block of content) {
-      if (typeof block !== 'object' || block === null) continue;
+      if (typeof block !== "object" || block === null) continue;
       const b = block as Record<string, unknown>;
-      if (b.type === 'text' && typeof b.text === 'string') {
+      if (b.type === "text" && typeof b.text === "string") {
         const stripped = b.text
-          .replace(/<([a-zA-Z][a-zA-Z0-9_-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g, '')
-          .replace(/<[^>]+>/g, '')
+          .replace(/<([a-zA-Z][a-zA-Z0-9_-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g, "")
+          .replace(/<[^>]+>/g, "")
           .trim();
         if (stripped.length > 0) return false;
       }

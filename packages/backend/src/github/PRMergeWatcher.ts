@@ -1,12 +1,17 @@
-import type { GitHubClient } from './GitHubClient';
-import type { SessionManager } from '../session/SessionManager';
-import { getTaskBackend } from '../tasks/TaskBackend';
-import type { TaskBackend } from '../tasks/TaskBackend';
-import { getProjectByGithubRepo } from '../config';
-import type { ServerMessage } from '../ws/types';
-import type { PullRequestRow } from '../db/types';
-import { getAllOpenPRs, updatePRState, updateMergeState, getPRByNumber } from '../db/queries';
-import { emitTaskUpdated } from '../routes/tasks';
+import type { GitHubClient } from "./GitHubClient";
+import type { SessionManager } from "../session/SessionManager";
+import { getTaskBackend } from "../tasks/TaskBackend";
+import type { TaskBackend } from "../tasks/TaskBackend";
+import { getProjectByGithubRepo } from "../config";
+import type { ServerMessage } from "../ws/types";
+import type { PullRequestRow } from "../db/types";
+import {
+  getAllOpenPRs,
+  updatePRState,
+  updateMergeState,
+  getPRByNumber,
+} from "../db/queries";
+import { emitTaskUpdated } from "../routes/tasks";
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -29,18 +34,19 @@ export class PRMergeWatcher {
     if (this.taskBackendOverride) return this.taskBackendOverride;
     const project = getProjectByGithubRepo(repo);
     if (!project) {
-      console.warn(`[PRMergeWatcher] no project found for repo ${repo} — skipping task backend update`);
+      console.warn(
+        `[PRMergeWatcher] no project found for repo ${repo} — skipping task backend update`,
+      );
       return undefined;
     }
     return getTaskBackend(project.id);
   }
 
-
   start(intervalMs: number = DEFAULT_INTERVAL_MS): void {
     if (this.timer) return;
     this.timer = setInterval(() => {
       this.poll().catch((err: unknown) =>
-        console.warn('[PRMergeWatcher] poll error:', (err as Error).message),
+        console.warn("[PRMergeWatcher] poll error:", (err as Error).message),
       );
     }, intervalMs);
     console.log(`[PRMergeWatcher] started (interval=${intervalMs}ms)`);
@@ -65,15 +71,22 @@ export class PRMergeWatcher {
     try {
       state = await this.github.getPRState(pr.pr_number, pr.repo);
     } catch (err) {
-      console.warn(`[PRMergeWatcher] getPRState failed for PR #${pr.pr_number}:`, (err as Error).message);
+      console.warn(
+        `[PRMergeWatcher] getPRState failed for PR #${pr.pr_number}:`,
+        (err as Error).message,
+      );
       return;
     }
 
-    if (state === 'merged') {
+    if (state === "merged") {
       await this.handleMerged(pr, null);
-    } else if (state === 'closed') {
-      updatePRState(pr.pr_number, pr.repo, 'closed');
-      this.broadcast({ type: 'pr_closed', prNumber: pr.pr_number, repo: pr.repo });
+    } else if (state === "closed") {
+      updatePRState(pr.pr_number, pr.repo, "closed");
+      this.broadcast({
+        type: "pr_closed",
+        prNumber: pr.pr_number,
+        repo: pr.repo,
+      });
     } else {
       // PR is still open — check mergeability for approved PRs
       await this.checkMergeability(pr);
@@ -90,7 +103,7 @@ export class PRMergeWatcher {
     } catch {
       return;
     }
-    if (verdict !== 'approved') return;
+    if (verdict !== "approved") return;
     await this.runMergeabilityCheck(pr);
   }
 
@@ -109,16 +122,20 @@ export class PRMergeWatcher {
     let mergeable: boolean | null;
     let mergeableState: string | null;
     try {
-      ({ mergeable, mergeableState } = await this.github.getMergeabilityWithRetry(pr.pr_number, pr.repo));
+      ({ mergeable, mergeableState } =
+        await this.github.getMergeabilityWithRetry(pr.pr_number, pr.repo));
     } catch (err) {
-      console.warn(`[PRMergeWatcher] getMergeability failed for PR #${pr.pr_number}:`, (err as Error).message);
+      console.warn(
+        `[PRMergeWatcher] getMergeability failed for PR #${pr.pr_number}:`,
+        (err as Error).message,
+      );
       return;
     }
 
     // Skip if GitHub hasn't computed mergeability yet (retries exhausted)
     if (mergeable === null && mergeableState === null) return;
 
-    const mergeableInt = mergeable === null ? null : (mergeable ? 1 : 0);
+    const mergeableInt = mergeable === null ? null : mergeable ? 1 : 0;
     const prevMergeState = pr.merge_state;
     const newMergeState = mergeableState;
 
@@ -127,7 +144,7 @@ export class PRMergeWatcher {
 
     updateMergeState(pr.pr_number, pr.repo, mergeableInt, newMergeState);
     this.broadcast({
-      type: 'pr_mergeability_changed',
+      type: "pr_mergeability_changed",
       prNumber: pr.pr_number,
       repo: pr.repo,
       mergeable,
@@ -137,20 +154,27 @@ export class PRMergeWatcher {
       emitTaskUpdated(pr.notion_task_id);
     }
 
-    if (newMergeState === 'dirty') {
-      console.log(`[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has merge conflicts`);
+    if (newMergeState === "dirty") {
+      console.log(
+        `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has merge conflicts`,
+      );
       if (pr.session_id) {
-        const baseBranch = pr.base_branch ?? 'dev';
+        const baseBranch = pr.base_branch ?? "dev";
         const msg = `PR #${pr.pr_number} has merge conflicts with the base branch. Rebase onto \`${baseBranch}\`, resolve the conflicts, and push the fixed branch.`;
-        this.sessions.sendOrResume(pr.session_id, msg).catch((err: unknown) =>
-          console.warn(`[PRMergeWatcher] sendOrResume failed for session ${pr.session_id}:`, (err as Error).message),
-        );
+        this.sessions
+          .sendOrResume(pr.session_id, msg)
+          .catch((err: unknown) =>
+            console.warn(
+              `[PRMergeWatcher] sendOrResume failed for session ${pr.session_id}:`,
+              (err as Error).message,
+            ),
+          );
       }
     }
   }
 
   async handleMerged(pr: PullRequestRow, sha: string | null): Promise<void> {
-    updatePRState(pr.pr_number, pr.repo, 'merged');
+    updatePRState(pr.pr_number, pr.repo, "merged");
 
     // End coding session gracefully (stdin close → clean CLI exit)
     if (pr.session_id) {
@@ -166,26 +190,30 @@ export class PRMergeWatcher {
     if (pr.notion_task_id) {
       const backend = this.resolveBackendForRepo(pr.repo);
       if (backend) {
-        await backend.updateStatus(pr.notion_task_id, '✅ Done')
+        await backend
+          .updateStatus(pr.notion_task_id, "✅ Done")
           .then(() => {
             this.broadcast({
-              type: 'task_status_changed',
+              type: "task_status_changed",
               notionTaskId: pr.notion_task_id!,
-              newStatus: '✅ Done',
+              newStatus: "✅ Done",
             });
             emitTaskUpdated(pr.notion_task_id!);
           })
           .catch((err: unknown) =>
-            console.warn(`[PRMergeWatcher] task backend updateStatus failed:`, (err as Error).message),
+            console.warn(
+              `[PRMergeWatcher] task backend updateStatus failed:`,
+              (err as Error).message,
+            ),
           );
       }
     }
 
     this.broadcast({
-      type: 'pr_merged',
+      type: "pr_merged",
       prNumber: pr.pr_number,
       repo: pr.repo,
-      sha: sha ?? '',
+      sha: sha ?? "",
     });
   }
 }

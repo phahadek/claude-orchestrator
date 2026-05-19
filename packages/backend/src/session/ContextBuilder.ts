@@ -1,6 +1,6 @@
-import fs from 'fs';
-import path from 'path';
-import { buildOrchestratorClaudeMd } from './orchestrator-claudemd';
+import fs from "fs";
+import path from "path";
+import { buildOrchestratorClaudeMd } from "./orchestrator-claudemd";
 
 export interface BuildSessionContextParams {
   taskName: string;
@@ -11,7 +11,7 @@ export interface BuildSessionContextParams {
   worktreePath: string;
   prGate?: { typeCheck: string; build: string };
   bashRules?: string[];
-  taskBackend?: 'notion' | 'local';
+  taskBackend?: "notion" | "local";
   /** Pre-fetched task spec markdown. Passed through to orchestrator CLAUDE.md. */
   taskContent?: string;
 }
@@ -28,21 +28,21 @@ export interface BuildSessionContextParams {
  * Exported for testing.
  */
 export function stripOrchestratorHeader(md: string): string {
-  if (!md.startsWith('# Orchestrator Rules')) return md;
+  if (!md.startsWith("# Orchestrator Rules")) return md;
 
   // The orchestrator block ends at "# Project Instructions" — the separator
   // added by buildSessionContext when the orchestrator was originally injected.
-  const marker = '# Project Instructions';
+  const marker = "# Project Instructions";
   const idx = md.indexOf(marker);
   if (idx === -1) {
     // No "# Project Instructions" found — the entire file is orchestrator content.
     // Return empty so the session only sees its own injected orchestrator rules.
-    return '';
+    return "";
   }
 
   // Skip the "# Project Instructions" heading and any blank lines after it.
   let rest = md.slice(idx + marker.length);
-  rest = rest.replace(/^\n+/, '');
+  rest = rest.replace(/^\n+/, "");
   return rest;
 }
 
@@ -74,9 +74,13 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
   // when the file is absent — e.g. on a fresh clone before setup.
   let localContext: string | undefined;
   try {
-    const localContextPath = path.join(projectDir, '.claude', 'local-context.md');
+    const localContextPath = path.join(
+      projectDir,
+      ".claude",
+      "local-context.md",
+    );
     if (fs.existsSync(localContextPath)) {
-      localContext = fs.readFileSync(localContextPath, 'utf-8');
+      localContext = fs.readFileSync(localContextPath, "utf-8");
     }
   } catch {
     // Ignore — fall through without local context.

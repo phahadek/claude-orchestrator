@@ -1,7 +1,7 @@
-import { renderHook } from '@testing-library/react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { useKeyboardShortcuts } from '../useKeyboardShortcuts';
-import type { ShortcutHandlers } from '../useKeyboardShortcuts';
+import { renderHook } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { useKeyboardShortcuts } from "../useKeyboardShortcuts";
+import type { ShortcutHandlers } from "../useKeyboardShortcuts";
 
 function makeHandlers(overrides?: Partial<ShortcutHandlers>): ShortcutHandlers {
   return {
@@ -17,117 +17,117 @@ function makeHandlers(overrides?: Partial<ShortcutHandlers>): ShortcutHandlers {
 }
 
 function fireKey(key: string, target?: EventTarget) {
-  const event = new KeyboardEvent('keydown', { key, bubbles: true });
+  const event = new KeyboardEvent("keydown", { key, bubbles: true });
   if (target) {
-    Object.defineProperty(event, 'target', { value: target, writable: false });
+    Object.defineProperty(event, "target", { value: target, writable: false });
   }
   window.dispatchEvent(event);
 }
 
-describe('useKeyboardShortcuts', () => {
+describe("useKeyboardShortcuts", () => {
   beforeEach(() => {
     // clean up any lingering listeners between tests
   });
 
-  it('does NOT call most handlers when event.target is an HTMLInputElement', () => {
+  it("does NOT call most handlers when event.target is an HTMLInputElement", () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
 
-    const input = document.createElement('input');
-    fireKey('N', input);
-    fireKey('J', input);
+    const input = document.createElement("input");
+    fireKey("N", input);
+    fireKey("J", input);
 
     expect(handlers.onOpenDispatch).not.toHaveBeenCalled();
     expect(handlers.onSelectNext).not.toHaveBeenCalled();
   });
 
-  it('Escape fires onDismiss even when target is an input (clears search)', () => {
+  it("Escape fires onDismiss even when target is an input (clears search)", () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
-    fireKey('Escape', document.createElement('input'));
+    fireKey("Escape", document.createElement("input"));
     expect(handlers.onDismiss).toHaveBeenCalledTimes(1);
   });
 
-  it('does NOT call handlers when event.target is an HTMLTextAreaElement', () => {
+  it("does NOT call handlers when event.target is an HTMLTextAreaElement", () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
 
-    const textarea = document.createElement('textarea');
-    fireKey('N', textarea);
-    fireKey('K', textarea);
+    const textarea = document.createElement("textarea");
+    fireKey("N", textarea);
+    fireKey("K", textarea);
 
     expect(handlers.onOpenDispatch).not.toHaveBeenCalled();
     expect(handlers.onSelectPrev).not.toHaveBeenCalled();
   });
 
-  it('N key calls onOpenDispatch', () => {
+  it("N key calls onOpenDispatch", () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
-    fireKey('N');
+    fireKey("N");
     expect(handlers.onOpenDispatch).toHaveBeenCalledTimes(1);
   });
 
-  it('Escape calls onDismiss', () => {
+  it("Escape calls onDismiss", () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
-    fireKey('Escape');
+    fireKey("Escape");
     expect(handlers.onDismiss).toHaveBeenCalledTimes(1);
   });
 
-  it('J calls onSelectNext', () => {
+  it("J calls onSelectNext", () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
-    fireKey('J');
+    fireKey("J");
     expect(handlers.onSelectNext).toHaveBeenCalledTimes(1);
   });
 
-  it('K calls onSelectPrev', () => {
+  it("K calls onSelectPrev", () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
-    fireKey('K');
+    fireKey("K");
     expect(handlers.onSelectPrev).toHaveBeenCalledTimes(1);
   });
 
-  it('Enter calls onConfirmSelection', () => {
+  it("Enter calls onConfirmSelection", () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
-    fireKey('Enter');
+    fireKey("Enter");
     expect(handlers.onConfirmSelection).toHaveBeenCalledTimes(1);
   });
 
   it('1 calls onSwitchView with "tasks"', () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
-    fireKey('1');
-    expect(handlers.onSwitchView).toHaveBeenCalledWith('tasks');
+    fireKey("1");
+    expect(handlers.onSwitchView).toHaveBeenCalledWith("tasks");
   });
 
   it('2 calls onSwitchView with "sessions"', () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
-    fireKey('2');
-    expect(handlers.onSwitchView).toHaveBeenCalledWith('sessions');
+    fireKey("2");
+    expect(handlers.onSwitchView).toHaveBeenCalledWith("sessions");
   });
 
   it('3 calls onSwitchView with "prs"', () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
-    fireKey('3');
-    expect(handlers.onSwitchView).toHaveBeenCalledWith('prs');
+    fireKey("3");
+    expect(handlers.onSwitchView).toHaveBeenCalledWith("prs");
   });
 
-  it('/ calls onFocusSearch', () => {
+  it("/ calls onFocusSearch", () => {
     const handlers = makeHandlers();
     renderHook(() => useKeyboardShortcuts(handlers));
-    fireKey('/');
+    fireKey("/");
     expect(handlers.onFocusSearch).toHaveBeenCalledTimes(1);
   });
 
-  it('removes keydown listener on unmount', () => {
+  it("removes keydown listener on unmount", () => {
     const handlers = makeHandlers();
     const { unmount } = renderHook(() => useKeyboardShortcuts(handlers));
     unmount();
-    fireKey('N');
+    fireKey("N");
     expect(handlers.onOpenDispatch).not.toHaveBeenCalled();
   });
 });

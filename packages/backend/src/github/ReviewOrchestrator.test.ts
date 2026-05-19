@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { EventEmitter } from 'events';
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { EventEmitter } from "events";
 
 // ── Mocks (must come before imports of the modules under test) ──────────────
 
-vi.mock('../db/queries.js', () => ({
+vi.mock("../db/queries.js", () => ({
   setPRReviewResult: vi.fn(),
   getPRByNumber: vi.fn(),
   getSetting: vi.fn().mockReturnValue(undefined),
@@ -12,52 +12,62 @@ vi.mock('../db/queries.js', () => ({
 }));
 
 const projectFixture = {
-  id: 'proj-1',
-  name: 'Project 1',
-  githubRepo: 'owner/repo',
-  projectDir: '/tmp',
-  contextUrl: 'https://notion.so/ctx',
-  boardId: 'board-1',
+  id: "proj-1",
+  name: "Project 1",
+  githubRepo: "owner/repo",
+  projectDir: "/tmp",
+  contextUrl: "https://notion.so/ctx",
+  boardId: "board-1",
 };
 
-vi.mock('../config.js', () => ({
+vi.mock("../config.js", () => ({
   getProjectByGithubRepo: vi.fn((repo: string) =>
-    repo === 'owner/repo' ? projectFixture : undefined,
+    repo === "owner/repo" ? projectFixture : undefined,
   ),
   getAllProjects: vi.fn(() => [projectFixture]),
-  getProjectById: vi.fn((id: string) => (id === 'proj-1' ? projectFixture : undefined)),
+  getProjectById: vi.fn((id: string) =>
+    id === "proj-1" ? projectFixture : undefined,
+  ),
 }));
 
-import { ReviewOrchestrator } from './ReviewOrchestrator';
-import { setPRReviewResult, getPRByNumber, updatePRDraftStatus } from '../db/queries';
-import type { PRReviewService } from './PRReviewService';
-import type { GitHubClient } from './GitHubClient';
-import type { PullRequest } from './types';
-import type { ReviewJob } from './types';
+import { ReviewOrchestrator } from "./ReviewOrchestrator";
+import {
+  setPRReviewResult,
+  getPRByNumber,
+  updatePRDraftStatus,
+} from "../db/queries";
+import type { PRReviewService } from "./PRReviewService";
+import type { GitHubClient } from "./GitHubClient";
+import type { PullRequest } from "./types";
+import type { ReviewJob } from "./types";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const baseFreshPR: PullRequest = {
-  nodeId: 'node-1',
+  nodeId: "node-1",
   id: 1,
-  title: 'feat: test',
+  title: "feat: test",
   body: null,
-  url: 'https://github.com/owner/repo/pull/1',
-  apiUrl: 'https://api.github.com/repos/owner/repo/pulls/1',
-  headBranch: 'feature/test',
-  headSha: 'sha-abc',
-  baseBranch: 'dev',
-  state: 'open',
-  createdAt: '2024-01-01T00:00:00Z',
-  updatedAt: '2024-01-01T00:00:00Z',
+  url: "https://github.com/owner/repo/pull/1",
+  apiUrl: "https://api.github.com/repos/owner/repo/pulls/1",
+  headBranch: "feature/test",
+  headSha: "sha-abc",
+  baseBranch: "dev",
+  state: "open",
+  createdAt: "2024-01-01T00:00:00Z",
+  updatedAt: "2024-01-01T00:00:00Z",
   mergeableState: null,
   draft: false,
 };
 
-function makeMockGitHubClient(fetchPRResolveWith?: Partial<PullRequest>): GitHubClient {
+function makeMockGitHubClient(
+  fetchPRResolveWith?: Partial<PullRequest>,
+): GitHubClient {
   return {
     markPRReady: vi.fn().mockResolvedValue(undefined),
-    fetchPR: vi.fn().mockResolvedValue({ ...baseFreshPR, ...fetchPRResolveWith }),
+    fetchPR: vi
+      .fn()
+      .mockResolvedValue({ ...baseFreshPR, ...fetchPRResolveWith }),
   } as unknown as GitHubClient;
 }
 
@@ -77,48 +87,50 @@ function makeMockSessionManager() {
 function makeMockReviewService(resolveWith?: object): PRReviewService {
   const defaultResult = {
     prNumber: 1,
-    repo: 'owner/repo',
-    verdict: 'approved',
+    repo: "owner/repo",
+    verdict: "approved",
     dimensions: [],
-    summary: 'All good.',
+    summary: "All good.",
     reviewedAt: new Date().toISOString(),
   };
   return {
     reviewPR: vi.fn().mockResolvedValue(resolveWith ?? defaultResult),
-    sendReReview: vi.fn().mockResolvedValue({ ...defaultResult, summary: 'Fixed.' }),
+    sendReReview: vi
+      .fn()
+      .mockResolvedValue({ ...defaultResult, summary: "Fixed." }),
     reReviewPR: vi.fn().mockResolvedValue(resolveWith ?? defaultResult),
   } as unknown as PRReviewService;
 }
 
 const baseJob: ReviewJob = {
   prNumber: 1,
-  repo: 'owner/repo',
-  taskId: 'task-abc',
-  taskUrl: 'https://notion.so/task',
-  contextUrl: 'https://notion.so/ctx',
+  repo: "owner/repo",
+  taskId: "task-abc",
+  taskUrl: "https://notion.so/task",
+  contextUrl: "https://notion.so/ctx",
 };
 
 const basePRRow = {
   id: 1,
   pr_number: 1,
-  pr_url: 'https://github.com/owner/repo/pull/1',
-  notion_task_id: 'task-abc',
-  session_id: 'coding-session-id',
-  repo: 'owner/repo',
-  title: 'feat: test',
+  pr_url: "https://github.com/owner/repo/pull/1",
+  notion_task_id: "task-abc",
+  session_id: "coding-session-id",
+  repo: "owner/repo",
+  title: "feat: test",
   body: null,
-  head_branch: 'feature/test',
-  base_branch: 'dev',
-  state: 'open',
+  head_branch: "feature/test",
+  base_branch: "dev",
+  state: "open",
   draft: 0,
   review_result: null,
   review_at: null,
-  created_at: '2024-01-01T00:00:00Z',
-  updated_at: '2024-01-01T00:00:00Z',
-  synced_at: '2024-01-01T00:00:00Z',
-  review_session_id: 'review-session-id',
+  created_at: "2024-01-01T00:00:00Z",
+  updated_at: "2024-01-01T00:00:00Z",
+  synced_at: "2024-01-01T00:00:00Z",
+  review_session_id: "review-session-id",
   review_iteration: 0,
-  head_sha: 'sha-abc',
+  head_sha: "sha-abc",
   last_reviewed_sha: null,
   node_id: null,
 };
@@ -129,29 +141,28 @@ beforeEach(() => {
 
 // ── Disabled orchestrator ─────────────────────────────────────────────────────
 
-describe('ReviewOrchestrator — disabled', () => {
-  it('does not enqueue when enabled === false', async () => {
+describe("ReviewOrchestrator — disabled", () => {
+  it("does not enqueue when enabled === false", async () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
     new ReviewOrchestrator(rs, sm as any, 1, false);
 
-    sm.emit('pr_opened', baseJob);
+    sm.emit("pr_opened", baseJob);
     await new Promise((r) => setTimeout(r, 20));
 
     expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
   });
-
 });
 
 // ── Missing taskId ────────────────────────────────────────────────────────────
 
-describe('ReviewOrchestrator — missing taskId', () => {
-  it('does not enqueue when job.taskId is empty', async () => {
+describe("ReviewOrchestrator — missing taskId", () => {
+  it("does not enqueue when job.taskId is empty", async () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
     new ReviewOrchestrator(rs, sm as any, 1, true);
 
-    sm.emit('pr_opened', { ...baseJob, taskId: '' });
+    sm.emit("pr_opened", { ...baseJob, taskId: "" });
     await new Promise((r) => setTimeout(r, 20));
 
     expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
@@ -160,8 +171,8 @@ describe('ReviewOrchestrator — missing taskId', () => {
 
 // ── Concurrency ───────────────────────────────────────────────────────────────
 
-describe('ReviewOrchestrator — concurrency', () => {
-  it('respects maxConcurrency=1 (second job waits for first to complete)', async () => {
+describe("ReviewOrchestrator — concurrency", () => {
+  it("respects maxConcurrency=1 (second job waits for first to complete)", async () => {
     const sm = makeMockSessionManager();
 
     let resolveFirst!: () => void;
@@ -175,16 +186,31 @@ describe('ReviewOrchestrator — concurrency', () => {
 
     const callOrder: number[] = [];
     const rs = {
-      reviewPR: vi.fn()
+      reviewPR: vi
+        .fn()
         .mockImplementationOnce(async () => {
           callOrder.push(1);
           resolveFirst();
           await firstComplete;
-          return { prNumber: 1, repo: 'owner/repo', verdict: 'approved', dimensions: [], summary: 'ok', reviewedAt: '' };
+          return {
+            prNumber: 1,
+            repo: "owner/repo",
+            verdict: "approved",
+            dimensions: [],
+            summary: "ok",
+            reviewedAt: "",
+          };
         })
         .mockImplementationOnce(async () => {
           callOrder.push(2);
-          return { prNumber: 2, repo: 'owner/repo', verdict: 'approved', dimensions: [], summary: 'ok', reviewedAt: '' };
+          return {
+            prNumber: 2,
+            repo: "owner/repo",
+            verdict: "approved",
+            dimensions: [],
+            summary: "ok",
+            reviewedAt: "",
+          };
         }),
       sendReReview: vi.fn(),
       reReviewPR: vi.fn(),
@@ -192,8 +218,8 @@ describe('ReviewOrchestrator — concurrency', () => {
 
     new ReviewOrchestrator(rs, sm as any, 1, true);
 
-    sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
-    sm.emit('pr_opened', { ...baseJob, prNumber: 2 });
+    sm.emit("pr_opened", { ...baseJob, prNumber: 1 });
+    sm.emit("pr_opened", { ...baseJob, prNumber: 2 });
 
     // Wait for first job to start
     await firstStarted;
@@ -211,82 +237,88 @@ describe('ReviewOrchestrator — concurrency', () => {
 
 // ── pr_review_complete broadcast ──────────────────────────────────────────────
 
-describe('ReviewOrchestrator — pr_review_complete broadcast', () => {
-  it('broadcasts pr_review_complete after review completes', async () => {
+describe("ReviewOrchestrator — pr_review_complete broadcast", () => {
+  it("broadcasts pr_review_complete after review completes", async () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService({
       prNumber: 1,
-      repo: 'owner/repo',
-      verdict: 'approved',
+      repo: "owner/repo",
+      verdict: "approved",
       dimensions: [],
-      summary: 'Looks good.',
+      summary: "Looks good.",
       reviewedAt: new Date().toISOString(),
     });
 
     new ReviewOrchestrator(rs, sm as any, 1, true);
 
     const messages: object[] = [];
-    sm.on('message', (msg: object) => messages.push(msg));
+    sm.on("message", (msg: object) => messages.push(msg));
 
-    sm.emit('pr_opened', baseJob);
+    sm.emit("pr_opened", baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({
-      type: 'pr_review_complete',
+      type: "pr_review_complete",
       prNumber: 1,
-      repo: 'owner/repo',
-      verdict: 'approved',
-      summary: 'Looks good.',
+      repo: "owner/repo",
+      verdict: "approved",
+      summary: "Looks good.",
     });
   });
 });
 
 // ── Feedback routing ──────────────────────────────────────────────────────────
 
-describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
-  it('sends feedback to coding session when verdict is needs_changes', async () => {
+describe("ReviewOrchestrator — feedback routing on needs_changes", () => {
+  it("sends feedback to coding session when verdict is needs_changes", async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService({
       prNumber: 1,
-      repo: 'owner/repo',
-      verdict: 'needs_changes',
-      dimensions: [{ name: 'Diff vs Context spec', passed: false, notes: 'Missing export.' }],
-      summary: 'One dimension failed.',
+      repo: "owner/repo",
+      verdict: "needs_changes",
+      dimensions: [
+        {
+          name: "Diff vs Context spec",
+          passed: false,
+          notes: "Missing export.",
+        },
+      ],
+      summary: "One dimension failed.",
       reviewedAt: new Date().toISOString(),
     });
 
     new ReviewOrchestrator(rs, sm as any, 1, true);
 
-    sm.emit('pr_opened', baseJob);
+    sm.emit("pr_opened", baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(sm.send)).toHaveBeenCalledOnce();
     const [sessionId, message] = vi.mocked(sm.send).mock.calls[0];
-    expect(sessionId).toBe('coding-session-id');
-    expect(message).toContain('Review Feedback');
-    expect(message).toContain('Needs changes');
-    expect(message).toContain('Missing export.');
+    expect(sessionId).toBe("coding-session-id");
+    expect(message).toContain("Review Feedback");
+    expect(message).toContain("Needs changes");
+    expect(message).toContain("Missing export.");
   });
 
-  it('does not send feedback when verdict is approved', async () => {
+  it("does not send feedback when verdict is approved", async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService({
       prNumber: 1,
-      repo: 'owner/repo',
-      verdict: 'approved',
+      repo: "owner/repo",
+      verdict: "approved",
       dimensions: [],
-      summary: 'All good.',
+      summary: "All good.",
       reviewedAt: new Date().toISOString(),
     });
 
     new ReviewOrchestrator(rs, sm as any, 1, true);
 
-    sm.emit('pr_opened', baseJob);
+    sm.emit("pr_opened", baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(sm.send)).not.toHaveBeenCalled();
@@ -298,23 +330,25 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
 // See packages/backend/src/server.ts for the push_detected listener and
 // reReviewPR() tests in PRReviewService.test.ts.
 
-describe('ReviewOrchestrator — push_detected triggers re-review', () => {
+describe("ReviewOrchestrator — push_detected triggers re-review", () => {
   // Tests removed: push_detected wiring moved to server.ts.
   // See packages/backend/src/server.ts and PRReviewService.test.ts for coverage.
 
-  it('placeholder — push_detected handled in server.ts, not ReviewOrchestrator', () => {
+  it("placeholder — push_detected handled in server.ts, not ReviewOrchestrator", () => {
     // The push_detected listener now lives in server.ts.
     // This describe block is kept for documentation purposes only.
     expect(true).toBe(true);
   });
 });
 
-
 // ── Iteration cap escalation ──────────────────────────────────────────────────
 
-describe('ReviewOrchestrator — iteration cap escalation', () => {
-  it('emits review_escalated and skips review when iteration cap is hit', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, review_iteration: 3 } as any);
+describe("ReviewOrchestrator — iteration cap escalation", () => {
+  it("emits review_escalated and skips review when iteration cap is hit", async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: 3,
+    } as any);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
@@ -322,22 +356,25 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
     new ReviewOrchestrator(rs, sm as any, 1, true);
 
     const messages: object[] = [];
-    sm.on('message', (msg: object) => messages.push(msg));
+    sm.on("message", (msg: object) => messages.push(msg));
 
-    sm.emit('pr_opened', baseJob);
+    sm.emit("pr_opened", baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({
-      type: 'review_escalated',
+      type: "review_escalated",
       prNumber: 1,
-      repo: 'owner/repo',
+      repo: "owner/repo",
     });
   });
 
-  it('does not escalate when iteration is below cap', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, review_iteration: 2 } as any);
+  it("does not escalate when iteration is below cap", async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: 2,
+    } as any);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
@@ -345,59 +382,62 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
     new ReviewOrchestrator(rs, sm as any, 1, true);
 
     const messages: object[] = [];
-    sm.on('message', (msg: object) => messages.push(msg));
+    sm.on("message", (msg: object) => messages.push(msg));
 
-    sm.emit('pr_opened', baseJob);
+    sm.emit("pr_opened", baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
-    expect(messages.find((m: any) => m.type === 'review_escalated')).toBeUndefined();
+    expect(
+      messages.find((m: any) => m.type === "review_escalated"),
+    ).toBeUndefined();
   });
 });
 
 // ── Incomplete verdict handling ───────────────────────────────────────────────
 
-describe('ReviewOrchestrator — incomplete verdict', () => {
-  it('broadcasts review_incomplete and does NOT call sendFeedbackToCodingSession when verdict is incomplete', async () => {
+describe("ReviewOrchestrator — incomplete verdict", () => {
+  it("broadcasts review_incomplete and does NOT call sendFeedbackToCodingSession when verdict is incomplete", async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService({
       prNumber: 1,
-      repo: 'owner/repo',
-      verdict: 'incomplete',
+      repo: "owner/repo",
+      verdict: "incomplete",
       dimensions: [],
-      summary: 'Could not assess the PR.',
+      summary: "Could not assess the PR.",
       reviewedAt: new Date().toISOString(),
     });
 
     new ReviewOrchestrator(rs, sm as any, 1, true);
 
     const messages: object[] = [];
-    sm.on('message', (msg: object) => messages.push(msg));
+    sm.on("message", (msg: object) => messages.push(msg));
 
-    sm.emit('pr_opened', baseJob);
+    sm.emit("pr_opened", baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
     // Must NOT send feedback to coding session
     expect(vi.mocked(sm.send)).not.toHaveBeenCalled();
 
     // Must broadcast review_incomplete
-    const incompleteMsg = messages.find((m: any) => m.type === 'review_incomplete');
+    const incompleteMsg = messages.find(
+      (m: any) => m.type === "review_incomplete",
+    );
     expect(incompleteMsg).toBeDefined();
     expect(incompleteMsg).toMatchObject({
-      type: 'review_incomplete',
+      type: "review_incomplete",
       prNumber: 1,
-      repo: 'owner/repo',
+      repo: "owner/repo",
     });
   });
-
 });
 
 // ── Timeout handling ──────────────────────────────────────────────────────────
 
-describe('ReviewOrchestrator — timeout', () => {
-  it('stores error verdict and broadcasts error event on timeout', async () => {
+describe("ReviewOrchestrator — timeout", () => {
+  it("stores error verdict and broadcasts error event on timeout", async () => {
     vi.useFakeTimers();
 
     const sm = makeMockSessionManager();
@@ -410,83 +450,103 @@ describe('ReviewOrchestrator — timeout', () => {
     new ReviewOrchestrator(rs, sm as any, 1, true);
 
     const messages: object[] = [];
-    sm.on('message', (msg: object) => messages.push(msg));
+    sm.on("message", (msg: object) => messages.push(msg));
 
-    sm.emit('pr_opened', baseJob);
+    sm.emit("pr_opened", baseJob);
 
     // Advance past the 120s timeout
     await vi.advanceTimersByTimeAsync(121_000);
 
     expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledOnce();
-    const [prNum, repo, resultJson] = vi.mocked(setPRReviewResult).mock.calls[0];
+    const [prNum, repo, resultJson] =
+      vi.mocked(setPRReviewResult).mock.calls[0];
     expect(prNum).toBe(1);
-    expect(repo).toBe('owner/repo');
-    const stored = JSON.parse(resultJson as string) as { verdict: string; summary: string; dimensions: unknown };
-    expect(stored.verdict).toBe('error');
-    expect(stored.summary).toContain('timed out');
+    expect(repo).toBe("owner/repo");
+    const stored = JSON.parse(resultJson as string) as {
+      verdict: string;
+      summary: string;
+      dimensions: unknown;
+    };
+    expect(stored.verdict).toBe("error");
+    expect(stored.summary).toContain("timed out");
     expect(Array.isArray(stored.dimensions)).toBe(true);
 
     expect(messages).toHaveLength(1);
     expect(messages[0]).toMatchObject({
-      type: 'pr_review_complete',
-      verdict: 'error',
+      type: "pr_review_complete",
+      verdict: "error",
     });
 
     vi.useRealTimers();
   });
 
-  it('stores error verdict with dimensions: [] when executeReview catches a non-timeout error', async () => {
+  it("stores error verdict with dimensions: [] when executeReview catches a non-timeout error", async () => {
     const sm = makeMockSessionManager();
     const rs = {
-      reviewPR: vi.fn().mockRejectedValue(new Error('GitHub API unreachable')),
+      reviewPR: vi.fn().mockRejectedValue(new Error("GitHub API unreachable")),
       sendReReview: vi.fn(),
     } as unknown as PRReviewService;
 
     new ReviewOrchestrator(rs, sm as any, 1, true);
 
-    sm.emit('pr_opened', baseJob);
+    sm.emit("pr_opened", baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledOnce();
     const [, , resultJson] = vi.mocked(setPRReviewResult).mock.calls[0];
-    const stored = JSON.parse(resultJson as string) as { verdict: string; dimensions: unknown };
-    expect(stored.verdict).toBe('error');
+    const stored = JSON.parse(resultJson as string) as {
+      verdict: string;
+      dimensions: unknown;
+    };
+    expect(stored.verdict).toBe("error");
     expect(Array.isArray(stored.dimensions)).toBe(true);
   });
-
 });
 
 // ── Merge conflict dimension routing ─────────────────────────────────────────
 
-describe('ReviewOrchestrator — merge conflict causes needs_changes', () => {
-  it('routes feedback to coding session when all AI dims pass but conflict dim fails', async () => {
+describe("ReviewOrchestrator — merge conflict causes needs_changes", () => {
+  it("routes feedback to coding session when all AI dims pass but conflict dim fails", async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService({
       prNumber: 1,
-      repo: 'owner/repo',
-      verdict: 'needs_changes',
+      repo: "owner/repo",
+      verdict: "needs_changes",
       dimensions: [
-        { name: 'Title and description vs task Summary', passed: true, notes: 'ok' },
-        { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
-        { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
-        { name: 'Changed files vs Files/paths affected list', passed: true, notes: 'ok' },
-        { name: 'Merge conflicts', passed: false, notes: 'PR has merge conflicts with base branch. Rebase and resolve before re-review.' },
+        {
+          name: "Title and description vs task Summary",
+          passed: true,
+          notes: "ok",
+        },
+        { name: "Diff vs Context spec", passed: true, notes: "ok" },
+        { name: "Diff vs Acceptance Criteria", passed: true, notes: "ok" },
+        {
+          name: "Changed files vs Files/paths affected list",
+          passed: true,
+          notes: "ok",
+        },
+        {
+          name: "Merge conflicts",
+          passed: false,
+          notes:
+            "PR has merge conflicts with base branch. Rebase and resolve before re-review.",
+        },
       ],
-      summary: 'Merge conflicts detected.',
+      summary: "Merge conflicts detected.",
       reviewedAt: new Date().toISOString(),
     });
 
     new ReviewOrchestrator(rs, sm as any, 1, true);
 
-    sm.emit('pr_opened', baseJob);
+    sm.emit("pr_opened", baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(sm.send)).toHaveBeenCalledOnce();
     const [sessionId, message] = vi.mocked(sm.send).mock.calls[0];
-    expect(sessionId).toBe('coding-session-id');
-    expect(message).toContain('Merge conflicts');
+    expect(sessionId).toBe("coding-session-id");
+    expect(message).toContain("Merge conflicts");
   });
 });
 
@@ -495,27 +555,27 @@ describe('ReviewOrchestrator — merge conflict causes needs_changes', () => {
 // which is called from reviewPR(). The orchestrator derives the draftTransitioned flag from
 // the pre-review prRow to include draft: false in the broadcast when applicable.
 
-describe('ReviewOrchestrator — draft PR transition on approved verdict', () => {
-  it('broadcasts draft: false when approved verdict on a draft PR (transition delegated to PRReviewService)', async () => {
+describe("ReviewOrchestrator — draft PR transition on approved verdict", () => {
+  it("broadcasts draft: false when approved verdict on a draft PR (transition delegated to PRReviewService)", async () => {
     vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, draft: 1 } as any);
 
     const sm = makeMockSessionManager();
     const gc = makeMockGitHubClient();
     const rs = makeMockReviewService({
       prNumber: 1,
-      repo: 'owner/repo',
-      verdict: 'approved',
+      repo: "owner/repo",
+      verdict: "approved",
       dimensions: [],
-      summary: 'All good.',
+      summary: "All good.",
       reviewedAt: new Date().toISOString(),
     });
 
     new ReviewOrchestrator(rs, sm as any, 1, true);
 
     const messages: object[] = [];
-    sm.on('message', (msg: object) => messages.push(msg));
+    sm.on("message", (msg: object) => messages.push(msg));
 
-    sm.emit('pr_opened', baseJob);
+    sm.emit("pr_opened", baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
     // markPRReady is no longer called by the orchestrator — it is handled by
@@ -523,32 +583,32 @@ describe('ReviewOrchestrator — draft PR transition on approved verdict', () =>
     // reads the pre-review draft status and includes draft: false in the broadcast.
     expect(vi.mocked(gc.markPRReady)).not.toHaveBeenCalled();
     expect(messages[0]).toMatchObject({
-      type: 'pr_review_complete',
-      verdict: 'approved',
+      type: "pr_review_complete",
+      verdict: "approved",
       draft: false,
     });
   });
 
-  it('does not include draft: false in broadcast when approved verdict on a non-draft PR', async () => {
+  it("does not include draft: false in broadcast when approved verdict on a non-draft PR", async () => {
     vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, draft: 0 } as any);
 
     const sm = makeMockSessionManager();
     const gc = makeMockGitHubClient();
     const rs = makeMockReviewService({
       prNumber: 1,
-      repo: 'owner/repo',
-      verdict: 'approved',
+      repo: "owner/repo",
+      verdict: "approved",
       dimensions: [],
-      summary: 'All good.',
+      summary: "All good.",
       reviewedAt: new Date().toISOString(),
     });
 
     new ReviewOrchestrator(rs, sm as any, 1, true);
 
     const messages: object[] = [];
-    sm.on('message', (msg: object) => messages.push(msg));
+    sm.on("message", (msg: object) => messages.push(msg));
 
-    sm.emit('pr_opened', baseJob);
+    sm.emit("pr_opened", baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(gc.markPRReady)).not.toHaveBeenCalled();
@@ -563,30 +623,36 @@ describe('ReviewOrchestrator — draft PR transition on approved verdict', () =>
 // Verifies that after a review with needs_changes, the orchestrator routes
 // formatted findings to the originating coding session via sessionManager.send().
 
-describe('Break 4 (AC) — auto findings routing: sessionManager.send() called on needs_changes', () => {
-  it('calls sessionManager.send() with formatted findings when verdict is needs_changes', async () => {
+describe("Break 4 (AC) — auto findings routing: sessionManager.send() called on needs_changes", () => {
+  it("calls sessionManager.send() with formatted findings when verdict is needs_changes", async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService({
       prNumber: 1,
-      repo: 'owner/repo',
-      verdict: 'needs_changes',
-      dimensions: [{ name: 'Diff vs Acceptance Criteria', passed: false, notes: 'Unit tests missing.' }],
-      summary: 'Please add tests.',
+      repo: "owner/repo",
+      verdict: "needs_changes",
+      dimensions: [
+        {
+          name: "Diff vs Acceptance Criteria",
+          passed: false,
+          notes: "Unit tests missing.",
+        },
+      ],
+      summary: "Please add tests.",
       reviewedAt: new Date().toISOString(),
     });
 
     new ReviewOrchestrator(rs, sm as any, 1, true);
-    sm.emit('pr_opened', baseJob);
+    sm.emit("pr_opened", baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(sm.send)).toHaveBeenCalledOnce();
     const [sessionId, message] = vi.mocked(sm.send).mock.calls[0];
-    expect(sessionId).toBe('coding-session-id');
-    expect(message).toContain('Review Feedback');
-    expect(message).toContain('Unit tests missing.');
-    expect(message).toContain('Please add tests.');
+    expect(sessionId).toBe("coding-session-id");
+    expect(message).toContain("Review Feedback");
+    expect(message).toContain("Unit tests missing.");
+    expect(message).toContain("Please add tests.");
   });
 });
 
@@ -595,27 +661,34 @@ describe('Break 4 (AC) — auto findings routing: sessionManager.send() called o
 // Verifies that push_detected increments review_iteration and sends re-review,
 // and that the orchestrator escalates when the cap is exceeded.
 
-describe('Break 5 (AC) — re-review trigger: re-review called on push_detected', () => {
+describe("Break 5 (AC) — re-review trigger: re-review called on push_detected", () => {
   // 'calls reReviewPR on push_detected' test removed: push_detected is now wired
   // in server.ts, not ReviewOrchestrator. See PRReviewService.test.ts for reReviewPR coverage.
 
-  it('emits review_escalated when review_iteration exceeds max_review_iterations', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, review_iteration: 3 } as any);
+  it("emits review_escalated when review_iteration exceeds max_review_iterations", async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: 3,
+    } as any);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
     new ReviewOrchestrator(rs, sm as any, 1, true);
 
     const messages: object[] = [];
-    sm.on('message', (msg: object) => messages.push(msg));
+    sm.on("message", (msg: object) => messages.push(msg));
 
-    sm.emit('pr_opened', baseJob);
+    sm.emit("pr_opened", baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
-    const escalated = messages.find((m: any) => m.type === 'review_escalated');
+    const escalated = messages.find((m: any) => m.type === "review_escalated");
     expect(escalated).toBeDefined();
-    expect(escalated).toMatchObject({ type: 'review_escalated', prNumber: 1, repo: 'owner/repo' });
+    expect(escalated).toMatchObject({
+      type: "review_escalated",
+      prNumber: 1,
+      repo: "owner/repo",
+    });
   });
 });
 
@@ -623,24 +696,24 @@ describe('Break 5 (AC) — re-review trigger: re-review called on push_detected'
 // Notion updateStatus is now delegated to PRReviewService.handleApprovedVerdict().
 // The orchestrator no longer calls notionClient directly — see PRReviewService.test.ts.
 
-describe('ReviewOrchestrator — Notion status update on approved verdict', () => {
-  it('does NOT call notionClient.updateStatus directly when verdict is approved (delegated to PRReviewService)', async () => {
+describe("ReviewOrchestrator — Notion status update on approved verdict", () => {
+  it("does NOT call notionClient.updateStatus directly when verdict is approved (delegated to PRReviewService)", async () => {
     vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, draft: 0 } as any);
 
     const sm = makeMockSessionManager();
     const nc = makeMockNotionClient();
     const rs = makeMockReviewService({
       prNumber: 1,
-      repo: 'owner/repo',
-      verdict: 'approved',
+      repo: "owner/repo",
+      verdict: "approved",
       dimensions: [],
-      summary: 'All good.',
+      summary: "All good.",
       reviewedAt: new Date().toISOString(),
     });
 
     new ReviewOrchestrator(rs, sm as any, 1, true);
 
-    sm.emit('pr_opened', baseJob);
+    sm.emit("pr_opened", baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
     // The orchestrator no longer calls notionClient.updateStatus — this is now
@@ -648,23 +721,23 @@ describe('ReviewOrchestrator — Notion status update on approved verdict', () =
     expect(vi.mocked(nc.updateStatus)).not.toHaveBeenCalled();
   });
 
-  it('does NOT call notionClient.updateStatus when verdict is not approved', async () => {
+  it("does NOT call notionClient.updateStatus when verdict is not approved", async () => {
     vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, draft: 0 } as any);
 
     const sm = makeMockSessionManager();
     const nc = makeMockNotionClient();
     const rs = makeMockReviewService({
       prNumber: 1,
-      repo: 'owner/repo',
-      verdict: 'needs_changes',
+      repo: "owner/repo",
+      verdict: "needs_changes",
       dimensions: [],
-      summary: 'Please fix.',
+      summary: "Please fix.",
       reviewedAt: new Date().toISOString(),
     });
 
     new ReviewOrchestrator(rs, sm as any, 1, true);
 
-    sm.emit('pr_opened', baseJob);
+    sm.emit("pr_opened", baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(nc.updateStatus)).not.toHaveBeenCalled();

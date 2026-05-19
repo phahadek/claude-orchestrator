@@ -1,13 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ── In-memory SQLite mock ─────────────────────────────────────────────────────
 // vi.mock is hoisted before imports, so the factory runs first and the
 // queries module picks up the in-memory database instead of the real file.
 
-vi.mock('../db/db.js', async () => {
-  const Database = (await import('better-sqlite3')).default;
-  const memDb = new Database(':memory:');
-  memDb.pragma('foreign_keys = ON');
+vi.mock("../db/db.js", async () => {
+  const Database = (await import("better-sqlite3")).default;
+  const memDb = new Database(":memory:");
+  memDb.pragma("foreign_keys = ON");
   memDb.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       session_id          TEXT    PRIMARY KEY,
@@ -101,13 +101,26 @@ vi.mock('../db/db.js', async () => {
   return { db: memDb };
 });
 
-import { upsertPullRequest, deletePR, deleteMergedAndClosedPRs, getPRByNumber, getOpenPRs } from '../db/queries.js';
+import {
+  upsertPullRequest,
+  deletePR,
+  deleteMergedAndClosedPRs,
+  getPRByNumber,
+  getOpenPRs,
+} from "../db/queries.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function makePR(overrides: Partial<{ pr_number: number; repo: string; state: string; pr_url: string }> = {}) {
+function makePR(
+  overrides: Partial<{
+    pr_number: number;
+    repo: string;
+    state: string;
+    pr_url: string;
+  }> = {},
+) {
   const pr_number = overrides.pr_number ?? 1;
-  const repo = overrides.repo ?? 'owner/repo';
+  const repo = overrides.repo ?? "owner/repo";
   return {
     pr_number,
     pr_url: overrides.pr_url ?? `https://github.com/${repo}/pull/${pr_number}`,
@@ -116,15 +129,15 @@ function makePR(overrides: Partial<{ pr_number: number; repo: string; state: str
     repo,
     title: `PR ${pr_number}`,
     body: null,
-    head_branch: 'feature/x',
-    base_branch: 'dev',
-    state: overrides.state ?? 'open',
+    head_branch: "feature/x",
+    base_branch: "dev",
+    state: overrides.state ?? "open",
     draft: 0,
     review_result: null,
     review_at: null,
-    created_at: '2024-01-01T00:00:00Z',
-    updated_at: '2024-01-01T00:00:00Z',
-    synced_at: '2024-01-01T00:00:00Z',
+    created_at: "2024-01-01T00:00:00Z",
+    updated_at: "2024-01-01T00:00:00Z",
+    synced_at: "2024-01-01T00:00:00Z",
     review_iteration: 0,
     review_session_id: null,
     head_sha: null,
@@ -138,66 +151,116 @@ function makePR(overrides: Partial<{ pr_number: number; repo: string; state: str
 
 beforeEach(async () => {
   // Clear pull_requests before each test
-  const { db } = await import('../db/db.js');
-  db.prepare('DELETE FROM pull_requests').run();
+  const { db } = await import("../db/db.js");
+  db.prepare("DELETE FROM pull_requests").run();
 });
 
 // ── deletePR ──────────────────────────────────────────────────────────────────
 
-describe('deletePR()', () => {
-  it('removes the row and subsequent getPRByNumber returns null', () => {
-    upsertPullRequest(makePR({ pr_number: 10, repo: 'owner/repo' }));
-    expect(getPRByNumber(10, 'owner/repo')).not.toBeNull();
+describe("deletePR()", () => {
+  it("removes the row and subsequent getPRByNumber returns null", () => {
+    upsertPullRequest(makePR({ pr_number: 10, repo: "owner/repo" }));
+    expect(getPRByNumber(10, "owner/repo")).not.toBeNull();
 
-    const deleted = deletePR(10, 'owner/repo');
+    const deleted = deletePR(10, "owner/repo");
     expect(deleted).toBe(true);
-    expect(getPRByNumber(10, 'owner/repo')).toBeFalsy();
+    expect(getPRByNumber(10, "owner/repo")).toBeFalsy();
   });
 
-  it('returns false when the PR does not exist', () => {
-    expect(deletePR(999, 'owner/repo')).toBe(false);
+  it("returns false when the PR does not exist", () => {
+    expect(deletePR(999, "owner/repo")).toBe(false);
   });
 
-  it('only deletes the matching repo', () => {
-    upsertPullRequest(makePR({ pr_number: 10, repo: 'owner/repo', pr_url: 'https://github.com/owner/repo/pull/10' }));
-    upsertPullRequest(makePR({ pr_number: 10, repo: 'other/repo', pr_url: 'https://github.com/other/repo/pull/10' }));
+  it("only deletes the matching repo", () => {
+    upsertPullRequest(
+      makePR({
+        pr_number: 10,
+        repo: "owner/repo",
+        pr_url: "https://github.com/owner/repo/pull/10",
+      }),
+    );
+    upsertPullRequest(
+      makePR({
+        pr_number: 10,
+        repo: "other/repo",
+        pr_url: "https://github.com/other/repo/pull/10",
+      }),
+    );
 
-    deletePR(10, 'owner/repo');
+    deletePR(10, "owner/repo");
 
-    expect(getPRByNumber(10, 'owner/repo')).toBeFalsy();
-    expect(getPRByNumber(10, 'other/repo')).not.toBeNull();
+    expect(getPRByNumber(10, "owner/repo")).toBeFalsy();
+    expect(getPRByNumber(10, "other/repo")).not.toBeNull();
   });
 });
 
 // ── deleteMergedAndClosedPRs ──────────────────────────────────────────────────
 
-describe('deleteMergedAndClosedPRs()', () => {
-  it('removes only merged and closed PRs, leaves open PRs intact', () => {
-    upsertPullRequest(makePR({ pr_number: 1, state: 'open',   pr_url: 'https://github.com/owner/repo/pull/1' }));
-    upsertPullRequest(makePR({ pr_number: 2, state: 'merged', pr_url: 'https://github.com/owner/repo/pull/2' }));
-    upsertPullRequest(makePR({ pr_number: 3, state: 'closed', pr_url: 'https://github.com/owner/repo/pull/3' }));
+describe("deleteMergedAndClosedPRs()", () => {
+  it("removes only merged and closed PRs, leaves open PRs intact", () => {
+    upsertPullRequest(
+      makePR({
+        pr_number: 1,
+        state: "open",
+        pr_url: "https://github.com/owner/repo/pull/1",
+      }),
+    );
+    upsertPullRequest(
+      makePR({
+        pr_number: 2,
+        state: "merged",
+        pr_url: "https://github.com/owner/repo/pull/2",
+      }),
+    );
+    upsertPullRequest(
+      makePR({
+        pr_number: 3,
+        state: "closed",
+        pr_url: "https://github.com/owner/repo/pull/3",
+      }),
+    );
 
-    const count = deleteMergedAndClosedPRs('owner/repo');
+    const count = deleteMergedAndClosedPRs("owner/repo");
     expect(count).toBe(2);
 
-    expect(getPRByNumber(1, 'owner/repo')).toBeTruthy();
-    expect(getPRByNumber(2, 'owner/repo')).toBeFalsy();
-    expect(getPRByNumber(3, 'owner/repo')).toBeFalsy();
+    expect(getPRByNumber(1, "owner/repo")).toBeTruthy();
+    expect(getPRByNumber(2, "owner/repo")).toBeFalsy();
+    expect(getPRByNumber(3, "owner/repo")).toBeFalsy();
   });
 
-  it('returns 0 when there are no merged/closed PRs', () => {
-    upsertPullRequest(makePR({ pr_number: 1, state: 'open', pr_url: 'https://github.com/owner/repo/pull/1' }));
-    expect(deleteMergedAndClosedPRs('owner/repo')).toBe(0);
-    expect(getOpenPRs('owner/repo')).toHaveLength(1);
+  it("returns 0 when there are no merged/closed PRs", () => {
+    upsertPullRequest(
+      makePR({
+        pr_number: 1,
+        state: "open",
+        pr_url: "https://github.com/owner/repo/pull/1",
+      }),
+    );
+    expect(deleteMergedAndClosedPRs("owner/repo")).toBe(0);
+    expect(getOpenPRs("owner/repo")).toHaveLength(1);
   });
 
-  it('only deletes from the specified repo', () => {
-    upsertPullRequest(makePR({ pr_number: 1, state: 'merged', repo: 'owner/repo',  pr_url: 'https://github.com/owner/repo/pull/1' }));
-    upsertPullRequest(makePR({ pr_number: 1, state: 'merged', repo: 'other/repo',  pr_url: 'https://github.com/other/repo/pull/1' }));
+  it("only deletes from the specified repo", () => {
+    upsertPullRequest(
+      makePR({
+        pr_number: 1,
+        state: "merged",
+        repo: "owner/repo",
+        pr_url: "https://github.com/owner/repo/pull/1",
+      }),
+    );
+    upsertPullRequest(
+      makePR({
+        pr_number: 1,
+        state: "merged",
+        repo: "other/repo",
+        pr_url: "https://github.com/other/repo/pull/1",
+      }),
+    );
 
-    deleteMergedAndClosedPRs('owner/repo');
+    deleteMergedAndClosedPRs("owner/repo");
 
-    expect(getPRByNumber(1, 'owner/repo')).toBeFalsy();
-    expect(getPRByNumber(1, 'other/repo')).toBeTruthy();
+    expect(getPRByNumber(1, "owner/repo")).toBeFalsy();
+    expect(getPRByNumber(1, "other/repo")).toBeTruthy();
   });
 });

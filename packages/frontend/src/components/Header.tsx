@@ -1,11 +1,14 @@
-import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
-import { formatTokenCount, formatCost } from '@claude-orchestrator/backend/src/utils/usage';
-import type { TaskView } from '../types/taskView';
-import { ProjectSwitcher } from './ProjectSwitcher';
-import { MilestoneProgress } from './MilestoneProgress';
-import styles from './Header.module.css';
+import type { ProjectConfig } from "@claude-orchestrator/backend/src/config";
+import {
+  formatTokenCount,
+  formatCost,
+} from "@claude-orchestrator/backend/src/utils/usage";
+import type { TaskView } from "../types/taskView";
+import { ProjectSwitcher } from "./ProjectSwitcher";
+import { MilestoneProgress } from "./MilestoneProgress";
+import styles from "./Header.module.css";
 
-export type TopView = 'tasks' | 'sessions' | 'prs' | 'analytics' | 'settings';
+export type TopView = "tasks" | "sessions" | "prs" | "analytics" | "settings";
 
 interface Props {
   projects: ProjectConfig[];
@@ -21,7 +24,19 @@ interface Props {
   incompleteReviewCount?: number;
 }
 
-export function Header({ projects, activeProjectId, onProjectChange, activeBoardId, onBoardChange, activeView, onViewChange, totalTokens, totalCost, tasks, incompleteReviewCount }: Props) {
+export function Header({
+  projects,
+  activeProjectId,
+  onProjectChange,
+  activeBoardId,
+  onBoardChange,
+  activeView,
+  onViewChange,
+  totalTokens,
+  totalCost,
+  tasks,
+  incompleteReviewCount,
+}: Props) {
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
   const boards = activeProject?.boards ?? [];
 
@@ -31,39 +46,44 @@ export function Header({ projects, activeProjectId, onProjectChange, activeBoard
       <nav className={styles.nav}>
         <button
           type="button"
-          className={`${styles.navLink}${activeView === 'tasks' ? ` ${styles.navLinkActive}` : ''}`}
-          onClick={() => onViewChange('tasks')}
+          className={`${styles.navLink}${activeView === "tasks" ? ` ${styles.navLinkActive}` : ""}`}
+          onClick={() => onViewChange("tasks")}
         >
           Tasks
         </button>
         <button
           type="button"
-          className={`${styles.navLink}${activeView === 'sessions' ? ` ${styles.navLinkActive}` : ''}`}
-          onClick={() => onViewChange('sessions')}
+          className={`${styles.navLink}${activeView === "sessions" ? ` ${styles.navLinkActive}` : ""}`}
+          onClick={() => onViewChange("sessions")}
         >
           Sessions
         </button>
         <button
           type="button"
-          className={`${styles.navLink}${activeView === 'prs' ? ` ${styles.navLinkActive}` : ''}`}
-          onClick={() => onViewChange('prs')}
+          className={`${styles.navLink}${activeView === "prs" ? ` ${styles.navLinkActive}` : ""}`}
+          onClick={() => onViewChange("prs")}
         >
           PRs
           {incompleteReviewCount != null && incompleteReviewCount > 0 && (
-            <span className={styles.incompleteBadge} title="Incomplete review — needs attention">{incompleteReviewCount}</span>
+            <span
+              className={styles.incompleteBadge}
+              title="Incomplete review — needs attention"
+            >
+              {incompleteReviewCount}
+            </span>
           )}
         </button>
         <button
           type="button"
-          className={`${styles.navLink}${activeView === 'analytics' ? ` ${styles.navLinkActive}` : ''}`}
-          onClick={() => onViewChange('analytics')}
+          className={`${styles.navLink}${activeView === "analytics" ? ` ${styles.navLinkActive}` : ""}`}
+          onClick={() => onViewChange("analytics")}
         >
           Analytics
         </button>
         <button
           type="button"
-          className={`${styles.navLink}${activeView === 'settings' ? ` ${styles.navLinkActive}` : ''}`}
-          onClick={() => onViewChange('settings')}
+          className={`${styles.navLink}${activeView === "settings" ? ` ${styles.navLinkActive}` : ""}`}
+          onClick={() => onViewChange("settings")}
         >
           Settings
         </button>
@@ -79,11 +99,13 @@ export function Header({ projects, activeProjectId, onProjectChange, activeBoard
           <div className={styles.divider} />
           <select
             className={styles.milestoneSelect}
-            value={activeBoardId ?? ''}
+            value={activeBoardId ?? ""}
             onChange={(e) => onBoardChange(e.target.value)}
           >
             {boards.map((b) => (
-              <option key={b.id} value={b.id}>{b.name}</option>
+              <option key={b.id} value={b.id}>
+                {b.name}
+              </option>
             ))}
           </select>
         </>
@@ -100,11 +122,13 @@ export function Header({ projects, activeProjectId, onProjectChange, activeBoard
           <button
             type="button"
             className={styles.tokenSummary}
-            onClick={() => onViewChange('analytics')}
+            onClick={() => onViewChange("analytics")}
             title="View token analytics"
           >
             {formatTokenCount(totalTokens)} tokens
-            {totalCost != null && totalCost > 0 ? ` (~${formatCost(totalCost)})` : ''}
+            {totalCost != null && totalCost > 0
+              ? ` (~${formatCost(totalCost)})`
+              : ""}
           </button>
         </>
       )}

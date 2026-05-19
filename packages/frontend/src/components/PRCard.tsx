@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import styles from './PRCard.module.css';
+import { useState } from "react";
+import styles from "./PRCard.module.css";
 
 export interface PRReviewDimension {
   name: string;
@@ -8,7 +8,7 @@ export interface PRReviewDimension {
 }
 
 export interface PRReviewResult {
-  verdict: 'approved' | 'needs_changes' | 'incomplete' | 'error';
+  verdict: "approved" | "needs_changes" | "incomplete" | "error";
   dimensions?: PRReviewDimension[];
   summary: string;
 }
@@ -56,10 +56,10 @@ export interface PRCardProps {
 }
 
 const VERDICT_LABELS: Record<string, string> = {
-  approved: '✅ Approved',
-  needs_changes: '⚠️ Needs Changes',
-  incomplete: '❌ Incomplete',
-  error: '⚠️ Review Error',
+  approved: "✅ Approved",
+  needs_changes: "⚠️ Needs Changes",
+  incomplete: "❌ Incomplete",
+  error: "⚠️ Review Error",
 };
 
 export function PRCard({
@@ -83,10 +83,11 @@ export function PRCard({
 }: PRCardProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
 
-  const isFinished = pr.state === 'merged' || pr.state === 'closed';
+  const isFinished = pr.state === "merged" || pr.state === "closed";
   const verdict = pr.reviewResult?.verdict ?? null;
-  const hasConflicts = !isFinished && pr.mergeState === 'dirty';
-  const canMerge = pr.state === 'open' && verdict === 'approved' && !hasConflicts;
+  const hasConflicts = !isFinished && pr.mergeState === "dirty";
+  const canMerge =
+    pr.state === "open" && verdict === "approved" && !hasConflicts;
   const sessionAlive = pr.sessionId !== null;
   // Single context-aware review action:
   // - finished → no button
@@ -94,26 +95,32 @@ export function PRCard({
   // - approved (no conflicts) → no button
   // - needs_changes/incomplete + session alive → "Re-review" (sends findings + queues re-review)
   // - everything else (no review yet, or session dead) → "Run Review"
-  const reviewAction: 'run-review' | 're-review' | 'fix-conflicts' | null =
+  const reviewAction: "run-review" | "re-review" | "fix-conflicts" | null =
     isFinished
       ? null
       : hasConflicts
-        ? 'fix-conflicts'
-        : verdict === 'approved'
+        ? "fix-conflicts"
+        : verdict === "approved"
           ? null
-          : (verdict === 'needs_changes' || verdict === 'incomplete') && sessionAlive
-            ? 're-review'
-            : 'run-review';
-  const showApproveButton = !isFinished && verdict !== 'approved' && !hasConflicts;
+          : (verdict === "needs_changes" || verdict === "incomplete") &&
+              sessionAlive
+            ? "re-review"
+            : "run-review";
+  const showApproveButton =
+    !isFinished && verdict !== "approved" && !hasConflicts;
 
   const verdictClass = isFinished
     ? styles[`state-${pr.state}`]
     : verdict
-      ? styles[`verdict-${verdict.replace('_', '-')}`]
-      : styles['verdict-none'];
+      ? styles[`verdict-${verdict.replace("_", "-")}`]
+      : styles["verdict-none"];
   const verdictLabel = isFinished
-    ? pr.state === 'merged' ? '✓ Merged' : '✕ Closed'
-    : verdict ? VERDICT_LABELS[verdict] : '— Not reviewed';
+    ? pr.state === "merged"
+      ? "✓ Merged"
+      : "✕ Closed"
+    : verdict
+      ? VERDICT_LABELS[verdict]
+      : "— Not reviewed";
 
   const handleMerge = () => {
     const confirmed = window.confirm(
@@ -148,7 +155,7 @@ export function PRCard({
                 <span className={styles.notionLabel}>Task:</span>
                 {pr.notionTaskId ? (
                   <a
-                    href={`https://notion.so/${pr.notionTaskId.replace(/-/g, '')}`}
+                    href={`https://notion.so/${pr.notionTaskId.replace(/-/g, "")}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className={styles.notionLink}
@@ -156,7 +163,9 @@ export function PRCard({
                     {pr.notionTaskTitle} ↗
                   </a>
                 ) : (
-                  <span className={styles.notionTitle}>{pr.notionTaskTitle}</span>
+                  <span className={styles.notionTitle}>
+                    {pr.notionTaskTitle}
+                  </span>
                 )}
               </div>
             )}
@@ -183,9 +192,13 @@ export function PRCard({
       </div>
 
       <div className={styles.cardActions}>
-        <span className={`${styles.verdictBadge} ${verdictClass}`}>{verdictLabel}</span>
+        <span className={`${styles.verdictBadge} ${verdictClass}`}>
+          {verdictLabel}
+        </span>
         {hasConflicts && (
-          <span className={styles.conflictBadge} title="PR has merge conflicts">⚠ Merge Conflicts</span>
+          <span className={styles.conflictBadge} title="PR has merge conflicts">
+            ⚠ Merge Conflicts
+          </span>
         )}
 
         <div className={styles.buttons}>
@@ -196,10 +209,10 @@ export function PRCard({
             onClick={() => onRemove(pr.prNumber)}
             title="Remove from list"
           >
-            {removeInFlight ? '…' : '✕'}
+            {removeInFlight ? "…" : "✕"}
           </button>
 
-          {reviewAction === 'run-review' && (
+          {reviewAction === "run-review" && (
             <button
               type="button"
               className={styles.reviewButton}
@@ -207,12 +220,12 @@ export function PRCard({
               onClick={() => onReview(pr.prNumber)}
             >
               {reviewInFlight
-                ? `Reviewing...${reviewElapsed > 0 ? ` (${reviewElapsed}s)` : ''}`
-                : 'Run Review'}
+                ? `Reviewing...${reviewElapsed > 0 ? ` (${reviewElapsed}s)` : ""}`
+                : "Run Review"}
             </button>
           )}
 
-          {reviewAction === 're-review' && (
+          {reviewAction === "re-review" && (
             <button
               type="button"
               className={styles.reReviewButton}
@@ -220,11 +233,11 @@ export function PRCard({
               onClick={() => onReReview(pr.prNumber)}
               title="Send findings to session and queue re-review after next push"
             >
-              {reReviewInFlight ? 'Reviewing...' : '↺ Re-review'}
+              {reReviewInFlight ? "Reviewing..." : "↺ Re-review"}
             </button>
           )}
 
-          {reviewAction === 'fix-conflicts' && (
+          {reviewAction === "fix-conflicts" && (
             <button
               type="button"
               className={styles.fixButton}
@@ -232,7 +245,7 @@ export function PRCard({
               onClick={() => onFixConflicts(pr.prNumber)}
               title="Send rebase instructions to the code session to resolve merge conflicts"
             >
-              {fixConflictsInFlight ? 'Fixing...' : '↺ Fix Conflicts'}
+              {fixConflictsInFlight ? "Fixing..." : "↺ Fix Conflicts"}
             </button>
           )}
 
@@ -244,7 +257,7 @@ export function PRCard({
               onClick={() => onApprove(pr.prNumber)}
               title="Manually approve this PR"
             >
-              {approveInFlight ? 'Approving...' : '✓ Approve'}
+              {approveInFlight ? "Approving..." : "✓ Approve"}
             </button>
           )}
 
@@ -255,10 +268,10 @@ export function PRCard({
             onClick={handleMerge}
           >
             {checkingMergeability
-              ? 'Checking mergeability...'
+              ? "Checking mergeability..."
               : mergeInFlight
-                ? 'Merging...'
-                : 'Merge ↓'}
+                ? "Merging..."
+                : "Merge ↓"}
           </button>
         </div>
       </div>
@@ -272,22 +285,28 @@ export function PRCard({
             className={styles.detailsToggle}
             onClick={() => setDetailsOpen((o) => !o)}
           >
-            {detailsOpen ? '▼' : '▶'} Review details
+            {detailsOpen ? "▼" : "▶"} Review details
           </button>
           {detailsOpen && (
             <div className={styles.detailsBody}>
-              {pr.reviewResult.verdict === 'error' ? (
-                <div className={styles.reviewError}>Review failed: {pr.reviewResult.summary}</div>
+              {pr.reviewResult.verdict === "error" ? (
+                <div className={styles.reviewError}>
+                  Review failed: {pr.reviewResult.summary}
+                </div>
               ) : (
                 <>
                   {(pr.reviewResult.dimensions ?? []).map((dim) => (
                     <div key={dim.name} className={styles.dimension}>
-                      <span className={styles.dimIcon}>{dim.passed ? '✅' : '⚠️'}</span>
+                      <span className={styles.dimIcon}>
+                        {dim.passed ? "✅" : "⚠️"}
+                      </span>
                       <span className={styles.dimName}>{dim.name}</span>
                       <span className={styles.dimNotes}>{dim.notes}</span>
                     </div>
                   ))}
-                  <div className={styles.reviewSummary}>{pr.reviewResult.summary}</div>
+                  <div className={styles.reviewSummary}>
+                    {pr.reviewResult.summary}
+                  </div>
                 </>
               )}
             </div>

@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // ── In-memory SQLite mock ─────────────────────────────────────────────────────
-vi.mock('../db/db.js', async () => {
-  const { default: Database } = await import('better-sqlite3');
-  const db = new Database(':memory:');
+vi.mock("../db/db.js", async () => {
+  const { default: Database } = await import("better-sqlite3");
+  const db = new Database(":memory:");
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       session_id          TEXT    PRIMARY KEY,
@@ -107,12 +107,17 @@ vi.mock('../db/db.js', async () => {
   return { db };
 });
 
-import { getActiveTaskAggregates, upsertTaskCache, insertSession, upsertPullRequest } from '../db/queries.js';
+import {
+  getActiveTaskAggregates,
+  upsertTaskCache,
+  insertSession,
+  upsertPullRequest,
+} from "../db/queries.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const DASHED_UUID = '33722f91-52f3-816b-967f-c7f230b215ca';
-const DASHLESS_UUID = '33722f9152f3816b967fc7f230b215ca';
+const DASHED_UUID = "33722f91-52f3-816b-967f-c7f230b215ca";
+const DASHLESS_UUID = "33722f9152f3816b967fc7f230b215ca";
 
 function makeSession(overrides: {
   session_id: string;
@@ -124,14 +129,14 @@ function makeSession(overrides: {
     session_id: overrides.session_id,
     notion_task_id: overrides.notion_task_id,
     notion_task_url: `https://www.notion.so/${overrides.notion_task_id}`,
-    project_context_url: 'https://www.notion.so/context',
-    project_id: 'proj-1',
-    status: 'completed',
+    project_context_url: "https://www.notion.so/context",
+    project_id: "proj-1",
+    status: "completed",
     started_at: overrides.started_at ?? 1000,
     ended_at: null,
     pr_url: null,
     worktree_path: null,
-    session_type: overrides.session_type ?? 'standard',
+    session_type: overrides.session_type ?? "standard",
     task_name: null,
   };
 }
@@ -141,18 +146,18 @@ function makePR(overrides: {
   notion_task_id: string;
   session_id?: string;
 }) {
-  const now = '2024-01-01T00:00:00Z';
+  const now = "2024-01-01T00:00:00Z";
   return {
     pr_number: overrides.pr_number,
     pr_url: `https://github.com/owner/repo/pull/${overrides.pr_number}`,
     notion_task_id: overrides.notion_task_id,
     session_id: overrides.session_id ?? null,
-    repo: 'owner/repo',
+    repo: "owner/repo",
     title: `PR ${overrides.pr_number}`,
     body: null,
-    head_branch: 'feature/x',
-    base_branch: 'dev',
-    state: 'open',
+    head_branch: "feature/x",
+    base_branch: "dev",
+    state: "open",
     draft: 0,
     review_result: null,
     review_at: null,
@@ -168,37 +173,70 @@ function makePR(overrides: {
 }
 
 beforeEach(async () => {
-  const { db } = await import('../db/db.js');
-  db.prepare('DELETE FROM sessions').run();
-  db.prepare('DELETE FROM task_cache').run();
-  db.prepare('DELETE FROM pull_requests').run();
+  const { db } = await import("../db/db.js");
+  db.prepare("DELETE FROM sessions").run();
+  db.prepare("DELETE FROM task_cache").run();
+  db.prepare("DELETE FROM pull_requests").run();
 });
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe('getActiveTaskAggregates — notion_task_id format matching', () => {
-  it('returns non-null code_session_id when session uses dashless UUID and task_cache uses dashed UUID', () => {
+describe("getActiveTaskAggregates — notion_task_id format matching", () => {
+  it("returns non-null code_session_id when session uses dashless UUID and task_cache uses dashed UUID", () => {
     // task_cache stores dashed UUID (as returned by Notion API)
-    upsertTaskCache(DASHED_UUID, JSON.stringify({ id: DASHED_UUID, title: 'Test Task', status: '🔄 In Progress' }));
+    upsertTaskCache(
+      DASHED_UUID,
+      JSON.stringify({
+        id: DASHED_UUID,
+        title: "Test Task",
+        status: "🔄 In Progress",
+      }),
+    );
     // session stores dashless UUID (as produced by parseNotionPageId)
-    insertSession(makeSession({ session_id: 'sess-001', notion_task_id: DASHLESS_UUID, session_type: 'standard' }));
+    insertSession(
+      makeSession({
+        session_id: "sess-001",
+        notion_task_id: DASHLESS_UUID,
+        session_type: "standard",
+      }),
+    );
 
     const rows = getActiveTaskAggregates([DASHED_UUID]);
     expect(rows).toHaveLength(1);
-    expect(rows[0].code_session_id).toBe('sess-001');
+    expect(rows[0].code_session_id).toBe("sess-001");
   });
 
-  it('returns non-null code_session_id when both use dashless UUID', () => {
-    upsertTaskCache(DASHLESS_UUID, JSON.stringify({ id: DASHLESS_UUID, title: 'Test Task', status: '🔄 In Progress' }));
-    insertSession(makeSession({ session_id: 'sess-002', notion_task_id: DASHLESS_UUID, session_type: 'standard' }));
+  it("returns non-null code_session_id when both use dashless UUID", () => {
+    upsertTaskCache(
+      DASHLESS_UUID,
+      JSON.stringify({
+        id: DASHLESS_UUID,
+        title: "Test Task",
+        status: "🔄 In Progress",
+      }),
+    );
+    insertSession(
+      makeSession({
+        session_id: "sess-002",
+        notion_task_id: DASHLESS_UUID,
+        session_type: "standard",
+      }),
+    );
 
     const rows = getActiveTaskAggregates([DASHLESS_UUID]);
     expect(rows).toHaveLength(1);
-    expect(rows[0].code_session_id).toBe('sess-002');
+    expect(rows[0].code_session_id).toBe("sess-002");
   });
 
-  it('returns non-null pr_number when PR uses dashless UUID and task_cache uses dashed UUID', () => {
-    upsertTaskCache(DASHED_UUID, JSON.stringify({ id: DASHED_UUID, title: 'Test Task', status: '🔄 In Progress' }));
+  it("returns non-null pr_number when PR uses dashless UUID and task_cache uses dashed UUID", () => {
+    upsertTaskCache(
+      DASHED_UUID,
+      JSON.stringify({
+        id: DASHED_UUID,
+        title: "Test Task",
+        status: "🔄 In Progress",
+      }),
+    );
     upsertPullRequest(makePR({ pr_number: 42, notion_task_id: DASHLESS_UUID }));
 
     const rows = getActiveTaskAggregates([DASHED_UUID]);
@@ -206,27 +244,54 @@ describe('getActiveTaskAggregates — notion_task_id format matching', () => {
     expect(rows[0].pr_number).toBe(42);
   });
 
-  it('returns non-null pr_url when PR uses dashless UUID and task_cache uses dashed UUID', () => {
-    upsertTaskCache(DASHED_UUID, JSON.stringify({ id: DASHED_UUID, title: 'Test Task', status: '🔄 In Progress' }));
+  it("returns non-null pr_url when PR uses dashless UUID and task_cache uses dashed UUID", () => {
+    upsertTaskCache(
+      DASHED_UUID,
+      JSON.stringify({
+        id: DASHED_UUID,
+        title: "Test Task",
+        status: "🔄 In Progress",
+      }),
+    );
     upsertPullRequest(makePR({ pr_number: 43, notion_task_id: DASHLESS_UUID }));
 
     const rows = getActiveTaskAggregates([DASHED_UUID]);
     expect(rows).toHaveLength(1);
-    expect(rows[0].pr_url).toBe('https://github.com/owner/repo/pull/43');
+    expect(rows[0].pr_url).toBe("https://github.com/owner/repo/pull/43");
   });
 
-  it('handles dashed UUID normalization — both dashed in task_cache and sessions', () => {
+  it("handles dashed UUID normalization — both dashed in task_cache and sessions", () => {
     // If both happen to use dashed format, it still works
-    upsertTaskCache(DASHED_UUID, JSON.stringify({ id: DASHED_UUID, title: 'Test Task', status: '🔄 In Progress' }));
-    insertSession(makeSession({ session_id: 'sess-003', notion_task_id: DASHED_UUID, session_type: 'standard' }));
+    upsertTaskCache(
+      DASHED_UUID,
+      JSON.stringify({
+        id: DASHED_UUID,
+        title: "Test Task",
+        status: "🔄 In Progress",
+      }),
+    );
+    insertSession(
+      makeSession({
+        session_id: "sess-003",
+        notion_task_id: DASHED_UUID,
+        session_type: "standard",
+      }),
+    );
 
     const rows = getActiveTaskAggregates([DASHED_UUID]);
     expect(rows).toHaveLength(1);
-    expect(rows[0].code_session_id).toBe('sess-003');
+    expect(rows[0].code_session_id).toBe("sess-003");
   });
 
-  it('returns null code_session_id when no session exists for the task', () => {
-    upsertTaskCache(DASHED_UUID, JSON.stringify({ id: DASHED_UUID, title: 'Test Task', status: '🗂️ Ready' }));
+  it("returns null code_session_id when no session exists for the task", () => {
+    upsertTaskCache(
+      DASHED_UUID,
+      JSON.stringify({
+        id: DASHED_UUID,
+        title: "Test Task",
+        status: "🗂️ Ready",
+      }),
+    );
 
     const rows = getActiveTaskAggregates([DASHED_UUID]);
     expect(rows).toHaveLength(1);
@@ -234,40 +299,95 @@ describe('getActiveTaskAggregates — notion_task_id format matching', () => {
     expect(rows[0].pr_number).toBeNull();
   });
 
-  it('picks the most recent session when multiple exist for the same task', () => {
-    upsertTaskCache(DASHED_UUID, JSON.stringify({ id: DASHED_UUID, title: 'Test Task', status: '🔄 In Progress' }));
-    insertSession(makeSession({ session_id: 'sess-old', notion_task_id: DASHLESS_UUID, session_type: 'standard', started_at: 1000 }));
-    insertSession(makeSession({ session_id: 'sess-new', notion_task_id: DASHLESS_UUID, session_type: 'standard', started_at: 2000 }));
+  it("picks the most recent session when multiple exist for the same task", () => {
+    upsertTaskCache(
+      DASHED_UUID,
+      JSON.stringify({
+        id: DASHED_UUID,
+        title: "Test Task",
+        status: "🔄 In Progress",
+      }),
+    );
+    insertSession(
+      makeSession({
+        session_id: "sess-old",
+        notion_task_id: DASHLESS_UUID,
+        session_type: "standard",
+        started_at: 1000,
+      }),
+    );
+    insertSession(
+      makeSession({
+        session_id: "sess-new",
+        notion_task_id: DASHLESS_UUID,
+        session_type: "standard",
+        started_at: 2000,
+      }),
+    );
 
     const rows = getActiveTaskAggregates([DASHED_UUID]);
     expect(rows).toHaveLength(1);
-    expect(rows[0].code_session_id).toBe('sess-new');
+    expect(rows[0].code_session_id).toBe("sess-new");
   });
 
-  it('returns empty array when taskIds is empty', () => {
+  it("returns empty array when taskIds is empty", () => {
     const rows = getActiveTaskAggregates([]);
     expect(rows).toHaveLength(0);
   });
 });
 
-describe('getActiveTaskAggregates — review session token fields', () => {
-  it('returns review_session_input_tokens and review_session_output_tokens for a review session', async () => {
-    const { db } = await import('../db/db.js');
-    upsertTaskCache(DASHED_UUID, JSON.stringify({ id: DASHED_UUID, title: 'Token Task', status: '🔍 In Review' }));
-    insertSession(makeSession({ session_id: 'code-sess', notion_task_id: DASHLESS_UUID, session_type: 'standard' }));
-    insertSession(makeSession({ session_id: 'review-sess', notion_task_id: DASHLESS_UUID, session_type: 'review' }));
-    db.prepare('UPDATE sessions SET total_input_tokens = 200, total_output_tokens = 100 WHERE session_id = ?').run('review-sess');
+describe("getActiveTaskAggregates — review session token fields", () => {
+  it("returns review_session_input_tokens and review_session_output_tokens for a review session", async () => {
+    const { db } = await import("../db/db.js");
+    upsertTaskCache(
+      DASHED_UUID,
+      JSON.stringify({
+        id: DASHED_UUID,
+        title: "Token Task",
+        status: "🔍 In Review",
+      }),
+    );
+    insertSession(
+      makeSession({
+        session_id: "code-sess",
+        notion_task_id: DASHLESS_UUID,
+        session_type: "standard",
+      }),
+    );
+    insertSession(
+      makeSession({
+        session_id: "review-sess",
+        notion_task_id: DASHLESS_UUID,
+        session_type: "review",
+      }),
+    );
+    db.prepare(
+      "UPDATE sessions SET total_input_tokens = 200, total_output_tokens = 100 WHERE session_id = ?",
+    ).run("review-sess");
 
     const rows = getActiveTaskAggregates([DASHED_UUID]);
     expect(rows).toHaveLength(1);
-    expect(rows[0].review_session_id).toBe('review-sess');
+    expect(rows[0].review_session_id).toBe("review-sess");
     expect(rows[0].review_session_input_tokens).toBe(200);
     expect(rows[0].review_session_output_tokens).toBe(100);
   });
 
-  it('returns null review token fields when no review session exists', () => {
-    upsertTaskCache(DASHED_UUID, JSON.stringify({ id: DASHED_UUID, title: 'Token Task', status: '🗂️ Ready' }));
-    insertSession(makeSession({ session_id: 'code-only', notion_task_id: DASHLESS_UUID, session_type: 'standard' }));
+  it("returns null review token fields when no review session exists", () => {
+    upsertTaskCache(
+      DASHED_UUID,
+      JSON.stringify({
+        id: DASHED_UUID,
+        title: "Token Task",
+        status: "🗂️ Ready",
+      }),
+    );
+    insertSession(
+      makeSession({
+        session_id: "code-only",
+        notion_task_id: DASHLESS_UUID,
+        session_type: "standard",
+      }),
+    );
 
     const rows = getActiveTaskAggregates([DASHED_UUID]);
     expect(rows).toHaveLength(1);
@@ -276,13 +396,36 @@ describe('getActiveTaskAggregates — review session token fields', () => {
     expect(rows[0].review_session_output_tokens).toBeNull();
   });
 
-  it('returns both code and review session tokens independently', async () => {
-    const { db } = await import('../db/db.js');
-    upsertTaskCache(DASHED_UUID, JSON.stringify({ id: DASHED_UUID, title: 'Token Task', status: '🔍 In Review' }));
-    insertSession(makeSession({ session_id: 'code-sess-2', notion_task_id: DASHLESS_UUID, session_type: 'standard' }));
-    insertSession(makeSession({ session_id: 'review-sess-2', notion_task_id: DASHLESS_UUID, session_type: 'review' }));
-    db.prepare('UPDATE sessions SET total_input_tokens = 500, total_output_tokens = 300 WHERE session_id = ?').run('code-sess-2');
-    db.prepare('UPDATE sessions SET total_input_tokens = 150, total_output_tokens = 75 WHERE session_id = ?').run('review-sess-2');
+  it("returns both code and review session tokens independently", async () => {
+    const { db } = await import("../db/db.js");
+    upsertTaskCache(
+      DASHED_UUID,
+      JSON.stringify({
+        id: DASHED_UUID,
+        title: "Token Task",
+        status: "🔍 In Review",
+      }),
+    );
+    insertSession(
+      makeSession({
+        session_id: "code-sess-2",
+        notion_task_id: DASHLESS_UUID,
+        session_type: "standard",
+      }),
+    );
+    insertSession(
+      makeSession({
+        session_id: "review-sess-2",
+        notion_task_id: DASHLESS_UUID,
+        session_type: "review",
+      }),
+    );
+    db.prepare(
+      "UPDATE sessions SET total_input_tokens = 500, total_output_tokens = 300 WHERE session_id = ?",
+    ).run("code-sess-2");
+    db.prepare(
+      "UPDATE sessions SET total_input_tokens = 150, total_output_tokens = 75 WHERE session_id = ?",
+    ).run("review-sess-2");
 
     const rows = getActiveTaskAggregates([DASHED_UUID]);
     expect(rows).toHaveLength(1);

@@ -34,7 +34,9 @@
   color: var(--text-muted);
   padding: 4px 12px;
   border-radius: 999px;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .navLink:hover {
@@ -86,7 +88,9 @@
   cursor: pointer;
   padding: 2px 4px;
   border-radius: 4px;
-  transition: color 0.15s, background 0.15s;
+  transition:
+    color 0.15s,
+    background 0.15s;
 }
 
 .tokenSummary:hover {

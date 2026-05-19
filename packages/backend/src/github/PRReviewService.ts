@@ -1,12 +1,20 @@
-import { getEventsBySession, setPRReviewResult, getPRByNumber, setReviewSessionId, updatePRDraftStatus, incrementReviewIteration, setLastReviewedSha } from '../db/queries';
-import type { GitHubClient } from './GitHubClient';
-import { getTaskBackend } from '../tasks/TaskBackend';
-import type { TaskBackend } from '../tasks/TaskBackend';
-import type { SessionManager } from '../session/SessionManager';
-import type { PullRequest, PRDiff } from './types';
-import type { ServerMessage } from '../ws/types';
-import type { SessionEvent } from '../db/types';
-import type { PRMergeWatcher } from './PRMergeWatcher';
+import {
+  getEventsBySession,
+  setPRReviewResult,
+  getPRByNumber,
+  setReviewSessionId,
+  updatePRDraftStatus,
+  incrementReviewIteration,
+  setLastReviewedSha,
+} from "../db/queries";
+import type { GitHubClient } from "./GitHubClient";
+import { getTaskBackend } from "../tasks/TaskBackend";
+import type { TaskBackend } from "../tasks/TaskBackend";
+import type { SessionManager } from "../session/SessionManager";
+import type { PullRequest, PRDiff } from "./types";
+import type { ServerMessage } from "../ws/types";
+import type { SessionEvent } from "../db/types";
+import type { PRMergeWatcher } from "./PRMergeWatcher";
 
 export interface ReviewDimension {
   name: string;
@@ -17,7 +25,7 @@ export interface ReviewDimension {
 export interface PRReviewResult {
   prNumber: number;
   repo: string;
-  verdict: 'approved' | 'needs_changes' | 'incomplete' | 'error';
+  verdict: "approved" | "needs_changes" | "incomplete" | "error";
   dimensions?: ReviewDimension[];
   summary: string;
   reviewedAt: string;
@@ -55,8 +63,8 @@ export class PRReviewService {
      */
     private taskBackendOverride: TaskBackend | undefined,
     private sessionManager: SessionManager,
-    private readonly defaultProjectId: string = '',
-    private readonly defaultProjectContextUrl: string = '',
+    private readonly defaultProjectId: string = "",
+    private readonly defaultProjectContextUrl: string = "",
   ) {}
 
   // Optional reference to PRMergeWatcher used to trigger an immediate mergeability
@@ -87,51 +95,71 @@ export class PRReviewService {
 
     // Case 1: Live review session exists — send follow-up with diff, do not spawn a new session.
     // review_session_id is intentionally NOT updated in this path.
-    if (existingReviewSessionId && this.sessionManager.isAlive(existingReviewSessionId)) {
+    if (
+      existingReviewSessionId &&
+      this.sessionManager.isAlive(existingReviewSessionId)
+    ) {
       // Register listener BEFORE sending to avoid missing a fast verdict.
-      const verdictPromise = this.waitForVerdict(existingReviewSessionId, prNumber, repo);
-      const prData = await this.github.fetchPR(repo, prNumber);
-      const diffData = await this.github.fetchDiff(
-        prNumber, repo,
-        { base: prData.baseBranch, head: prData.headBranch },
+      const verdictPromise = this.waitForVerdict(
+        existingReviewSessionId,
+        prNumber,
+        repo,
       );
+      const prData = await this.github.fetchPR(repo, prNumber);
+      const diffData = await this.github.fetchDiff(prNumber, repo, {
+        base: prData.baseBranch,
+        head: prData.headBranch,
+      });
       const followUp = [
         `The code session has pushed new commits to PR #${prNumber}.`,
         `Please re-review the updated diff against the same task spec.`,
         ``,
         `### Updated PR Metadata`,
         `Title: ${prData.title}`,
-        `Description: ${prData.body ?? '(none)'}`,
+        `Description: ${prData.body ?? "(none)"}`,
         ``,
         `### Updated Diff`,
-        '```',
+        "```",
         diffData.diff,
-        '```',
+        "```",
         ``,
         REVIEW_JSON_SCHEMA_BLOCK,
-      ].join('\n');
+      ].join("\n");
       this.sessionManager.send(existingReviewSessionId, followUp);
       const aiResult = await verdictPromise;
-      const { mergeable } = await this.github.getMergeabilityWithRetry(prNumber, repo);
-      const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
+      const { mergeable } = await this.github.getMergeabilityWithRetry(
+        prNumber,
+        repo,
+      );
+      const finalResult = this.appendMergeConflictDimension(
+        aiResult,
+        mergeable,
+      );
       setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
-      if (finalResult.verdict === 'approved') {
-        await this.handleApprovedVerdict(prNumber, repo, prRow.notion_task_id, projectId);
+      if (finalResult.verdict === "approved") {
+        await this.handleApprovedVerdict(
+          prNumber,
+          repo,
+          prRow.notion_task_id,
+          projectId,
+        );
       }
       return finalResult;
     }
 
     const prData = await this.github.fetchPR(repo, prNumber);
-    const diffData = await this.github.fetchDiff(
-      prNumber, repo,
-      { base: prData.baseBranch, head: prData.headBranch },
-    );
+    const diffData = await this.github.fetchDiff(prNumber, repo, {
+      base: prData.baseBranch,
+      head: prData.headBranch,
+    });
 
     if (!prRow.notion_task_id) {
       throw new Error(`PR #${prNumber} has no linked Notion task`);
     }
 
-    const taskBody = await this.resolveBackend(projectId).fetchTaskPage(prRow.notion_task_id);
+    const taskBody = await this.resolveBackend(projectId).fetchTaskPage(
+      prRow.notion_task_id,
+    );
     const taskUrl = `https://www.notion.so/${prRow.notion_task_id}`;
     const prompt = this.buildPrompt(prData, diffData, taskBody);
 
@@ -139,14 +167,32 @@ export class PRReviewService {
     // original session ID (do NOT generate a new one here). The returned value
     // is the actual session ID used (may be a new resumed session ID).
     if (existingReviewSessionId) {
-      const resumedSessionId = await this.sessionManager.sendOrResume(existingReviewSessionId, prompt);
+      const resumedSessionId = await this.sessionManager.sendOrResume(
+        existingReviewSessionId,
+        prompt,
+      );
       setReviewSessionId(prNumber, repo, resumedSessionId);
-      const aiResult = await this.waitForVerdict(resumedSessionId, prNumber, repo);
-      const { mergeable } = await this.github.getMergeabilityWithRetry(prNumber, repo);
-      const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
+      const aiResult = await this.waitForVerdict(
+        resumedSessionId,
+        prNumber,
+        repo,
+      );
+      const { mergeable } = await this.github.getMergeabilityWithRetry(
+        prNumber,
+        repo,
+      );
+      const finalResult = this.appendMergeConflictDimension(
+        aiResult,
+        mergeable,
+      );
       setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
-      if (finalResult.verdict === 'approved') {
-        await this.handleApprovedVerdict(prNumber, repo, prRow.notion_task_id, projectId);
+      if (finalResult.verdict === "approved") {
+        await this.handleApprovedVerdict(
+          prNumber,
+          repo,
+          prRow.notion_task_id,
+          projectId,
+        );
       }
       return finalResult;
     }
@@ -164,7 +210,7 @@ export class PRReviewService {
     // 2. Start session with the pre-generated ID.
     this.sessionManager.start(taskUrl, projectContextUrl, {
       sessionId,
-      sessionType: 'review',
+      sessionType: "review",
       customPrompt: prompt,
       projectId,
       taskName: `#${prData.id} ${prData.title}`,
@@ -174,13 +220,21 @@ export class PRReviewService {
     setReviewSessionId(prNumber, repo, sessionId);
 
     const aiResult = await verdictPromise;
-    const { mergeable } = await this.github.getMergeabilityWithRetry(prNumber, repo);
+    const { mergeable } = await this.github.getMergeabilityWithRetry(
+      prNumber,
+      repo,
+    );
     const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
     // Set last_reviewed_sha so the next push_detected can compare correctly.
     setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
-    if (finalResult.verdict === 'approved') {
-      await this.handleApprovedVerdict(prNumber, repo, prRow.notion_task_id, projectId);
+    if (finalResult.verdict === "approved") {
+      await this.handleApprovedVerdict(
+        prNumber,
+        repo,
+        prRow.notion_task_id,
+        projectId,
+      );
     }
     return finalResult;
   }
@@ -190,19 +244,30 @@ export class PRReviewService {
    * on GitHub, and update the Notion task status to 👀 In Review.
    * Returns true if the PR was successfully transitioned from draft to ready.
    */
-  async handleApprovedVerdict(prNumber: number, repo: string, taskId: string | null, projectId?: string): Promise<boolean> {
+  async handleApprovedVerdict(
+    prNumber: number,
+    repo: string,
+    taskId: string | null,
+    projectId?: string,
+  ): Promise<boolean> {
     let draftTransitioned = false;
     try {
       await this.github.markPRReady(repo, prNumber);
       updatePRDraftStatus(prNumber, repo, 0);
       draftTransitioned = true;
     } catch (e) {
-      console.warn(`[PRReviewService] markPRReady skipped for PR #${prNumber}:`, e);
+      console.warn(
+        `[PRReviewService] markPRReady skipped for PR #${prNumber}:`,
+        e,
+      );
     }
     if (taskId) {
       const resolvedProjectId = projectId ?? this.defaultProjectId;
       try {
-        await this.resolveBackend(resolvedProjectId).updateStatus(taskId, '👀 In Review');
+        await this.resolveBackend(resolvedProjectId).updateStatus(
+          taskId,
+          "👀 In Review",
+        );
       } catch (e: unknown) {
         console.error(`[PRReviewService] task backend updateStatus failed:`, e);
       }
@@ -210,9 +275,14 @@ export class PRReviewService {
     // Trigger an immediate mergeability check so the watcher's DB merge_state and
     // WS event reflect current state — don't wait for the next 5-min poll.
     if (this.mergeWatcher) {
-      this.mergeWatcher.checkMergeabilityNow(prNumber, repo).catch((err: unknown) =>
-        console.warn(`[PRReviewService] checkMergeabilityNow failed for PR #${prNumber}:`, (err as Error).message),
-      );
+      this.mergeWatcher
+        .checkMergeabilityNow(prNumber, repo)
+        .catch((err: unknown) =>
+          console.warn(
+            `[PRReviewService] checkMergeabilityNow failed for PR #${prNumber}:`,
+            (err as Error).message,
+          ),
+        );
     }
     return draftTransitioned;
   }
@@ -236,9 +306,10 @@ export class PRReviewService {
     }
 
     const prData = await this.github.fetchPR(repo, prNumber);
-    const branches = prData.baseBranch && prData.headBranch
-      ? { base: prData.baseBranch, head: prData.headBranch }
-      : undefined;
+    const branches =
+      prData.baseBranch && prData.headBranch
+        ? { base: prData.baseBranch, head: prData.headBranch }
+        : undefined;
     const diffData = await this.github.fetchDiff(prNumber, repo, branches);
 
     const followUp = [
@@ -247,27 +318,37 @@ export class PRReviewService {
       ``,
       `### Updated PR Metadata`,
       `Title: ${prData.title}`,
-      `Description: ${prData.body ?? '(none)'}`,
+      `Description: ${prData.body ?? "(none)"}`,
       ``,
       `### Updated Diff`,
-      '```',
+      "```",
       diffData.diff,
-      '```',
+      "```",
       ``,
       REVIEW_JSON_SCHEMA_BLOCK,
-    ].join('\n');
+    ].join("\n");
 
     // Increment iteration before sending so the DB reflects the new iteration
     incrementReviewIteration(prNumber, repo);
 
     // Send to the existing review session (resumes via --resume if it has exited)
-    const resumedSessionId = await this.sessionManager.sendOrResume(pr.review_session_id, followUp);
+    const resumedSessionId = await this.sessionManager.sendOrResume(
+      pr.review_session_id,
+      followUp,
+    );
     if (resumedSessionId !== pr.review_session_id) {
       setReviewSessionId(prNumber, repo, resumedSessionId);
     }
 
-    const aiResult = await this.waitForVerdict(resumedSessionId, prNumber, repo);
-    const { mergeable } = await this.github.getMergeabilityWithRetry(prNumber, repo);
+    const aiResult = await this.waitForVerdict(
+      resumedSessionId,
+      prNumber,
+      repo,
+    );
+    const { mergeable } = await this.github.getMergeabilityWithRetry(
+      prNumber,
+      repo,
+    );
     const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
     setLastReviewedSha(prNumber, repo, pr.head_sha ?? null);
@@ -279,17 +360,25 @@ export class PRReviewService {
    * first verdict JSON block found in an assistant message.
    * Falls back to parseReviewResult over stored events if session_ended fires first.
    */
-  private waitForVerdict(sessionId: string, prNumber: number, repo: string): Promise<PRReviewResult> {
+  private waitForVerdict(
+    sessionId: string,
+    prNumber: number,
+    repo: string,
+  ): Promise<PRReviewResult> {
     return new Promise<PRReviewResult>((resolve) => {
       const cleanup = () => {
-        this.sessionManager.off('message', handler);
+        this.sessionManager.off("message", handler);
       };
 
       const handler = (msg: ServerMessage) => {
-        if (!('sessionId' in msg) || msg.sessionId !== sessionId) return;
+        if (!("sessionId" in msg) || msg.sessionId !== sessionId) return;
 
-        if (msg.type === 'session_event' && msg.eventType === 'text') {
-          const result = this.tryParseVerdictFromRawEvent(msg.content, prNumber, repo);
+        if (msg.type === "session_event" && msg.eventType === "text") {
+          const result = this.tryParseVerdictFromRawEvent(
+            msg.content,
+            prNumber,
+            repo,
+          );
           if (result) {
             cleanup();
             resolve(result);
@@ -297,7 +386,7 @@ export class PRReviewService {
           return;
         }
 
-        if (msg.type === 'session_ended') {
+        if (msg.type === "session_ended") {
           cleanup();
           // Fallback: parse from stored events
           const events = getEventsBySession(sessionId);
@@ -306,7 +395,7 @@ export class PRReviewService {
         }
       };
 
-      this.sessionManager.on('message', handler);
+      this.sessionManager.on("message", handler);
     });
   }
 
@@ -321,13 +410,15 @@ export class PRReviewService {
   ): PRReviewResult | null {
     try {
       const event = JSON.parse(rawEventPayload) as Record<string, unknown>;
-      if (event.type !== 'assistant') return null;
+      if (event.type !== "assistant") return null;
       const msg = event.message as Record<string, unknown> | undefined;
-      const content = msg?.content as Array<Record<string, unknown>> | undefined;
+      const content = msg?.content as
+        | Array<Record<string, unknown>>
+        | undefined;
       if (!content) return null;
 
       for (const block of content) {
-        if (block.type === 'text' && typeof block.text === 'string') {
+        if (block.type === "text" && typeof block.text === "string") {
           const parsed = this.tryParseVerdict(block.text);
           if (parsed) {
             return {
@@ -348,9 +439,11 @@ export class PRReviewService {
   }
 
   /** Try to parse a JSON verdict object from a text string. Returns null on failure. */
-  private tryParseVerdict(
-    text: string,
-  ): { verdict: PRReviewResult['verdict']; dimensions: ReviewDimension[]; summary: string } | null {
+  private tryParseVerdict(text: string): {
+    verdict: PRReviewResult["verdict"];
+    dimensions: ReviewDimension[];
+    summary: string;
+  } | null {
     const candidate = this.extractJsonCandidate(text.trim());
     if (!candidate) {
       return null;
@@ -358,12 +451,12 @@ export class PRReviewService {
     try {
       const parsed = JSON.parse(candidate) as Record<string, unknown>;
       if (
-        typeof parsed.verdict === 'string' &&
+        typeof parsed.verdict === "string" &&
         Array.isArray(parsed.dimensions) &&
-        typeof parsed.summary === 'string'
+        typeof parsed.summary === "string"
       ) {
         return {
-          verdict: parsed.verdict as PRReviewResult['verdict'],
+          verdict: parsed.verdict as PRReviewResult["verdict"],
           dimensions: parsed.dimensions as ReviewDimension[],
           summary: parsed.summary,
         };
@@ -386,7 +479,7 @@ export class PRReviewService {
     }
 
     // Find first '{' and walk brace depth to extract complete object
-    const start = text.indexOf('{');
+    const start = text.indexOf("{");
     if (start === -1) return null;
 
     let depth = 0;
@@ -394,12 +487,21 @@ export class PRReviewService {
     let escape = false;
     for (let i = start; i < text.length; i++) {
       const ch = text[i];
-      if (escape) { escape = false; continue; }
-      if (ch === '\\' && inString) { escape = true; continue; }
-      if (ch === '"') { inString = !inString; continue; }
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch === "\\" && inString) {
+        escape = true;
+        continue;
+      }
+      if (ch === '"') {
+        inString = !inString;
+        continue;
+      }
       if (inString) continue;
-      if (ch === '{') depth++;
-      else if (ch === '}') {
+      if (ch === "{") depth++;
+      else if (ch === "}") {
         depth--;
         if (depth === 0) return text.slice(start, i + 1);
       }
@@ -407,7 +509,10 @@ export class PRReviewService {
     return null;
   }
 
-  private appendMergeConflictDimension(result: PRReviewResult, mergeable: boolean | null): PRReviewResult {
+  private appendMergeConflictDimension(
+    result: PRReviewResult,
+    mergeable: boolean | null,
+  ): PRReviewResult {
     // When GitHub returns null, mergeability is still being computed — skip the dimension entirely.
     if (mergeable === null) {
       return result;
@@ -415,25 +520,25 @@ export class PRReviewService {
 
     const passed = mergeable === true;
     const conflictDim: ReviewDimension = {
-      name: 'Merge conflicts',
+      name: "Merge conflicts",
       passed,
       notes: passed
-        ? 'No merge conflicts detected.'
-        : 'PR has merge conflicts with base branch. Rebase and resolve before re-review.',
+        ? "No merge conflicts detected."
+        : "PR has merge conflicts with base branch. Rebase and resolve before re-review.",
     };
 
     const dimensions = [...(result.dimensions ?? []), conflictDim];
     const passedCount = dimensions.filter((d) => d.passed).length;
 
-    let verdict: PRReviewResult['verdict'];
-    if (result.verdict === 'error' || result.verdict === 'incomplete') {
-      verdict = result.verdict;  // Never override error/incomplete
+    let verdict: PRReviewResult["verdict"];
+    if (result.verdict === "error" || result.verdict === "incomplete") {
+      verdict = result.verdict; // Never override error/incomplete
     } else if (passedCount === dimensions.length) {
-      verdict = 'approved';
+      verdict = "approved";
     } else if (passedCount === 0) {
-      verdict = 'incomplete';
+      verdict = "incomplete";
     } else {
-      verdict = 'needs_changes';
+      verdict = "needs_changes";
     }
 
     return { ...result, dimensions, verdict };
@@ -444,7 +549,7 @@ export class PRReviewService {
 
 ## PR Metadata
 Title: ${pr.title}
-Description: ${pr.body ?? '(none)'}
+Description: ${pr.body ?? "(none)"}
 Head branch: ${pr.headBranch}
 
 ## PR Diff
@@ -457,16 +562,22 @@ ${taskBody}
 ${REVIEW_JSON_SCHEMA_BLOCK}`;
   }
 
-  parseReviewResult(events: SessionEvent[], prNumber: number, repo: string): PRReviewResult {
+  parseReviewResult(
+    events: SessionEvent[],
+    prNumber: number,
+    repo: string,
+  ): PRReviewResult {
     // Only use text blocks from the LAST assistant message to avoid pollution
     // from earlier tool-call assistant events.
     let lastAssistantContent: Array<Record<string, unknown>> | null = null;
     for (const ev of events) {
       try {
         const parsed = JSON.parse(ev.payload) as Record<string, unknown>;
-        if (parsed.type === 'assistant') {
+        if (parsed.type === "assistant") {
           const msg = parsed.message as Record<string, unknown> | undefined;
-          const content = msg?.content as Array<Record<string, unknown>> | undefined;
+          const content = msg?.content as
+            | Array<Record<string, unknown>>
+            | undefined;
           if (content) lastAssistantContent = content;
         }
       } catch {
@@ -477,13 +588,13 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     const textParts: string[] = [];
     if (lastAssistantContent) {
       for (const block of lastAssistantContent) {
-        if (block.type === 'text' && typeof block.text === 'string') {
+        if (block.type === "text" && typeof block.text === "string") {
           textParts.push(block.text);
         }
       }
     }
 
-    const combined = textParts.join('').trim();
+    const combined = textParts.join("").trim();
     const parsed = this.tryParseVerdict(combined);
     if (parsed) {
       return {
@@ -499,7 +610,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     return {
       prNumber,
       repo,
-      verdict: 'incomplete',
+      verdict: "incomplete",
       dimensions: [],
       summary: `Failed to parse Claude output as JSON. Raw output: ${combined.slice(0, 500)}`,
       reviewedAt: new Date().toISOString(),

@@ -27,15 +27,15 @@ A real excerpt from `packages/backend/src/permissions/PermissionEngine.ts`:
 
 ```ts
 const HARD_DENY = [
-  'Bash *rm -rf*',
-  'Bash *git push --force*main*',
-  'Bash *chmod -R 777*',
+  "Bash *rm -rf*",
+  "Bash *git push --force*main*",
+  "Bash *chmod -R 777*",
 ];
 const HARD_ALLOW = [
-  'Read *',
-  'Bash *git status*',
-  'Bash *npx tsc*',
-  'Bash *npm run *',
+  "Read *",
+  "Bash *git status*",
+  "Bash *npx tsc*",
+  "Bash *npm run *",
 ];
 // 1. hard-deny → 2. hard-allow → 3. user rules from SQLite → 4. escalate to UI
 ```
@@ -72,14 +72,14 @@ sequenceDiagram
     end
 ```
 
-| Layer | Tech | Path |
-|---|---|---|
-| Frontend | React 19 + Vite (TypeScript) | `packages/frontend/` |
-| Backend | Node.js + Express (TypeScript) | `packages/backend/` |
-| Transport | WebSocket (`ws`) | real-time session events |
-| Database | SQLite (`better-sqlite3`) | session metadata, PR tracking, permission rules |
-| Task source | Notion REST API or local YAML | configured per project |
-| Session execution | `claude` CLI subprocess | one process per session, JSONL on stdout |
+| Layer             | Tech                           | Path                                            |
+| ----------------- | ------------------------------ | ----------------------------------------------- |
+| Frontend          | React 19 + Vite (TypeScript)   | `packages/frontend/`                            |
+| Backend           | Node.js + Express (TypeScript) | `packages/backend/`                             |
+| Transport         | WebSocket (`ws`)               | real-time session events                        |
+| Database          | SQLite (`better-sqlite3`)      | session metadata, PR tracking, permission rules |
+| Task source       | Notion REST API or local YAML  | configured per project                          |
+| Session execution | `claude` CLI subprocess        | one process per session, JSONL on stdout        |
 
 ## Quickstart
 

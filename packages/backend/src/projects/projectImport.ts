@@ -1,4 +1,4 @@
-import { ProjectService } from './ProjectService';
+import { ProjectService } from "./ProjectService";
 
 interface RawBoard {
   id: string;
@@ -11,7 +11,7 @@ interface RawProjectEntry {
   projectDir?: string;
   contextUrl?: string;
   githubRepo?: string;
-  taskSource?: 'notion' | 'yaml';
+  taskSource?: "notion" | "yaml";
   boardId?: string;
   boards?: RawBoard[];
 }
@@ -30,7 +30,7 @@ export function importProjectsFromEnv(rawEnv: string | undefined): number {
   try {
     parsed = JSON.parse(rawEnv) as RawProjectEntry[];
   } catch (err) {
-    console.error('[projectImport] Failed to parse PROJECTS env var:', err);
+    console.error("[projectImport] Failed to parse PROJECTS env var:", err);
     return 0;
   }
 
@@ -39,7 +39,10 @@ export function importProjectsFromEnv(rawEnv: string | undefined): number {
   let imported = 0;
   for (const entry of parsed) {
     if (!entry.id || !entry.name || !entry.projectDir) {
-      console.warn('[projectImport] Skipping invalid PROJECTS entry (missing id/name/projectDir):', entry);
+      console.warn(
+        "[projectImport] Skipping invalid PROJECTS entry (missing id/name/projectDir):",
+        entry,
+      );
       continue;
     }
 
@@ -49,7 +52,7 @@ export function importProjectsFromEnv(rawEnv: string | undefined): number {
       projectDir: entry.projectDir,
       contextUrl: entry.contextUrl ?? null,
       githubRepo: entry.githubRepo ?? null,
-      taskSource: entry.taskSource ?? 'notion',
+      taskSource: entry.taskSource ?? "notion",
     });
 
     // Build the milestone list. boards (multi) takes precedence; fall back to boardId (single).

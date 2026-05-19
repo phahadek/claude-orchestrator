@@ -1,13 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
-import styles from './SessionFilterBar.module.css';
+import { useEffect, useRef, useState } from "react";
+import styles from "./SessionFilterBar.module.css";
 
 const STATUS_OPTIONS: { label: string; value: string | null }[] = [
-  { label: 'All', value: null },
-  { label: 'Running', value: 'running' },
-  { label: 'Idle', value: 'idle' },
-  { label: 'Error', value: 'error' },
-  { label: 'Killed', value: 'killed' },
-  { label: 'Pending', value: 'pending' },
+  { label: "All", value: null },
+  { label: "Running", value: "running" },
+  { label: "Idle", value: "idle" },
+  { label: "Error", value: "error" },
+  { label: "Killed", value: "killed" },
+  { label: "Pending", value: "pending" },
 ];
 
 interface SessionFilterBarProps {
@@ -65,11 +65,13 @@ export function SessionFilterBar({
 
       <select
         className={styles.dropdown}
-        value={statusFilter ?? ''}
-        onChange={(e) => onStatusChange(e.target.value === '' ? null : e.target.value)}
+        value={statusFilter ?? ""}
+        onChange={(e) =>
+          onStatusChange(e.target.value === "" ? null : e.target.value)
+        }
       >
         {STATUS_OPTIONS.map((opt) => (
-          <option key={opt.value ?? '__all'} value={opt.value ?? ''}>
+          <option key={opt.value ?? "__all"} value={opt.value ?? ""}>
             {opt.label}
           </option>
         ))}
@@ -77,18 +79,24 @@ export function SessionFilterBar({
 
       <select
         className={styles.dropdown}
-        value={tagFilter ?? ''}
-        onChange={(e) => onTagChange(e.target.value === '' ? null : e.target.value)}
+        value={tagFilter ?? ""}
+        onChange={(e) =>
+          onTagChange(e.target.value === "" ? null : e.target.value)
+        }
         disabled={availableTags.length === 0}
       >
-        <option value="">{availableTags.length === 0 ? 'No tags yet' : 'All tags'}</option>
+        <option value="">
+          {availableTags.length === 0 ? "No tags yet" : "All tags"}
+        </option>
         {availableTags.map((tag) => (
-          <option key={tag} value={tag}>{tag}</option>
+          <option key={tag} value={tag}>
+            {tag}
+          </option>
         ))}
       </select>
 
       <span className={styles.resultCount}>
-        {resultCount === 1 ? '1 session' : `${resultCount} sessions`}
+        {resultCount === 1 ? "1 session" : `${resultCount} sessions`}
       </span>
     </div>
   );

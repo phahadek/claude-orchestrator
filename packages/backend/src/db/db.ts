@@ -1,11 +1,11 @@
-import Database from 'better-sqlite3';
-import path from 'path';
+import Database from "better-sqlite3";
+import path from "path";
 
-const dbPath = process.env.DB_PATH ?? path.join(process.cwd(), 'dashboard.db');
+const dbPath = process.env.DB_PATH ?? path.join(process.cwd(), "dashboard.db");
 
 export const db = new Database(dbPath);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+db.pragma("journal_mode = WAL");
+db.pragma("foreign_keys = ON");
 
 // Run migrations immediately so prepared statements in queries.ts compile at import time.
 db.exec(`
@@ -108,20 +108,74 @@ db.exec(`
 `);
 
 // ── Migrations (idempotent column additions for existing databases) ──────────
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN draft INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
+try {
+  db.exec(
+    `ALTER TABLE pull_requests ADD COLUMN draft INTEGER NOT NULL DEFAULT 0`,
+  );
+} catch {
+  /* already exists */
+}
 // review_iteration and review_session_id support the auto re-review loop:
 // review_iteration tracks how many times a PR has been reviewed (caps escalation).
 // review_session_id is the session ID of the paired review session for sendOrResume.
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN review_iteration INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN review_session_id TEXT`); } catch { /* already exists */ }
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN head_sha TEXT`); } catch { /* already exists */ }
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN last_reviewed_sha TEXT`); } catch { /* already exists */ }
-try { db.exec(`ALTER TABLE sessions ADD COLUMN model TEXT`); } catch { /* already exists */ }
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN node_id TEXT`); } catch { /* already exists */ }
-try { db.exec(`ALTER TABLE sessions ADD COLUMN task_name TEXT`); } catch { /* already exists */ }
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN mergeable INTEGER`); } catch { /* already exists */ }
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN merge_state TEXT`); } catch { /* already exists */ }
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN merge_state_checked_at TEXT`); } catch { /* already exists */ }
+try {
+  db.exec(
+    `ALTER TABLE pull_requests ADD COLUMN review_iteration INTEGER NOT NULL DEFAULT 0`,
+  );
+} catch {
+  /* already exists */
+}
+try {
+  db.exec(`ALTER TABLE pull_requests ADD COLUMN review_session_id TEXT`);
+} catch {
+  /* already exists */
+}
+try {
+  db.exec(`ALTER TABLE pull_requests ADD COLUMN head_sha TEXT`);
+} catch {
+  /* already exists */
+}
+try {
+  db.exec(`ALTER TABLE pull_requests ADD COLUMN last_reviewed_sha TEXT`);
+} catch {
+  /* already exists */
+}
+try {
+  db.exec(`ALTER TABLE sessions ADD COLUMN model TEXT`);
+} catch {
+  /* already exists */
+}
+try {
+  db.exec(`ALTER TABLE pull_requests ADD COLUMN node_id TEXT`);
+} catch {
+  /* already exists */
+}
+try {
+  db.exec(`ALTER TABLE sessions ADD COLUMN task_name TEXT`);
+} catch {
+  /* already exists */
+}
+try {
+  db.exec(`ALTER TABLE pull_requests ADD COLUMN mergeable INTEGER`);
+} catch {
+  /* already exists */
+}
+try {
+  db.exec(`ALTER TABLE pull_requests ADD COLUMN merge_state TEXT`);
+} catch {
+  /* already exists */
+}
+try {
+  db.exec(`ALTER TABLE pull_requests ADD COLUMN merge_state_checked_at TEXT`);
+} catch {
+  /* already exists */
+}
 // pending_push: 1 when a push arrives before the initial review session is established.
 // Cleared and re-review triggered after the initial review completes.
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN pending_push INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
+try {
+  db.exec(
+    `ALTER TABLE pull_requests ADD COLUMN pending_push INTEGER NOT NULL DEFAULT 0`,
+  );
+} catch {
+  /* already exists */
+}

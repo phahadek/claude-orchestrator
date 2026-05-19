@@ -12,11 +12,11 @@ These guidelines exist to keep the codebase consistent across sessions and preve
 
 Information flows in one direction only: **Backend → Frontend**. The frontend is a pure consumer of WebSocket events and REST responses — it never directly touches SQLite, spawns processes, or calls the Notion API.
 
-| Layer | Contents | Allowed dependencies |
-|---|---|---|
-| **Backend** | Express server, SessionManager, AgentSession, PermissionEngine, NotionClient, SQLite queries | Node.js, `ws`, `better-sqlite3`, `child_process`. No browser APIs. |
-| **Frontend** | React components, hooks, UI state | React, Vite, WebSocket client. No Node.js built-ins, no `better-sqlite3`, no direct Notion calls. |
-| **Shared** | WS message types (`backend/src/ws/types.ts`) | Pure TypeScript types only. Zero runtime dependencies. |
+| Layer        | Contents                                                                                     | Allowed dependencies                                                                              |
+| ------------ | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| **Backend**  | Express server, SessionManager, AgentSession, PermissionEngine, NotionClient, SQLite queries | Node.js, `ws`, `better-sqlite3`, `child_process`. No browser APIs.                                |
+| **Frontend** | React components, hooks, UI state                                                            | React, Vite, WebSocket client. No Node.js built-ins, no `better-sqlite3`, no direct Notion calls. |
+| **Shared**   | WS message types (`backend/src/ws/types.ts`)                                                 | Pure TypeScript types only. Zero runtime dependencies.                                            |
 
 **Rules:**
 
@@ -69,16 +69,16 @@ Only `AgentSession` spawns and manages the `claude` CLI subprocess. Nothing else
 
 ## Naming conventions
 
-| Thing | Convention | Example |
-|---|---|---|
-| React components | PascalCase, noun or noun phrase | `SessionCard`, `DispatchModal` |
-| React hooks | camelCase, `use` prefix | `useWebSocket`, `useSessionStore` |
-| Backend classes | PascalCase | `SessionManager`, `PermissionEngine` |
-| Backend files | PascalCase for classes, camelCase for modules | `AgentSession.ts`, `queries.ts` |
-| WS message types | `snake_case` for the `type` discriminant | `session_started`, `permission_request` |
-| SQLite table names | `snake_case`, plural | `sessions`, `session_events` |
-| Environment variables | `SCREAMING_SNAKE_CASE` | `NOTION_API_KEY`, `SQLITE_PATH` |
-| CSS Modules | camelCase matching component name | `SessionCard.module.css` |
+| Thing                 | Convention                                    | Example                                 |
+| --------------------- | --------------------------------------------- | --------------------------------------- |
+| React components      | PascalCase, noun or noun phrase               | `SessionCard`, `DispatchModal`          |
+| React hooks           | camelCase, `use` prefix                       | `useWebSocket`, `useSessionStore`       |
+| Backend classes       | PascalCase                                    | `SessionManager`, `PermissionEngine`    |
+| Backend files         | PascalCase for classes, camelCase for modules | `AgentSession.ts`, `queries.ts`         |
+| WS message types      | `snake_case` for the `type` discriminant      | `session_started`, `permission_request` |
+| SQLite table names    | `snake_case`, plural                          | `sessions`, `session_events`            |
+| Environment variables | `SCREAMING_SNAKE_CASE`                        | `NOTION_API_KEY`, `SQLITE_PATH`         |
+| CSS Modules           | camelCase matching component name             | `SessionCard.module.css`                |
 
 ---
 
@@ -92,10 +92,14 @@ Use exhaustive switch statements on the `type` discriminant for all WS message r
 // ws/router.ts
 function handleMessage(msg: ClientMessage) {
   switch (msg.type) {
-    case 'dispatch': return handleDispatch(msg);
-    case 'approve':  return handleApprove(msg);
-    case 'deny':     return handleDeny(msg);
-    case 'kill':     return handleKill(msg);
+    case "dispatch":
+      return handleDispatch(msg);
+    case "approve":
+      return handleApprove(msg);
+    case "deny":
+      return handleDeny(msg);
+    case "kill":
+      return handleKill(msg);
     default: {
       const _exhaustive: never = msg;
       throw new Error(`Unhandled message type`);
@@ -111,13 +115,13 @@ The frontend holds no authoritative state of its own — all state is derived fr
 ```typescript
 // hooks/useSessionStore.ts
 // Correct: state is updated only on incoming WS events
-onMessage(event => {
+onMessage((event) => {
   const msg: ServerMessage = JSON.parse(event.data);
   dispatch(msg); // reducer updates state
 });
 
 // Wrong: mutating local state optimistically without a WS event
-setSessions(prev => [...prev, newSession]); // do not do this
+setSessions((prev) => [...prev, newSession]); // do not do this
 ```
 
 ### SQLite queries are typed and centralised
@@ -144,9 +148,9 @@ All environment variables are read once at startup in a single `config.ts` modul
 ```typescript
 // config.ts
 export const config = {
-  notionApiKey: requireEnv('NOTION_API_KEY'),
-  sqlitePath:   process.env.SQLITE_PATH ?? './data/dashboard.db',
-  port:         Number(process.env.PORT ?? 3000),
+  notionApiKey: requireEnv("NOTION_API_KEY"),
+  sqlitePath: process.env.SQLITE_PATH ?? "./data/dashboard.db",
+  port: Number(process.env.PORT ?? 3000),
 };
 ```
 
@@ -156,10 +160,10 @@ export const config = {
 
 ### Branch naming
 
-| Type | Pattern | Example |
-|---|---|---|
-| Feature | `feature/<task-name>` | `feature/session-manager-core` |
-| Bug fix | `fix/<short-description>` | `fix/ws-reconnect-loop` |
+| Type            | Pattern                     | Example                        |
+| --------------- | --------------------------- | ------------------------------ |
+| Feature         | `feature/<task-name>`       | `feature/session-manager-core` |
+| Bug fix         | `fix/<short-description>`   | `fix/ws-reconnect-loop`        |
 | Chore / tooling | `chore/<short-description>` | `chore/update-tsconfig-strict` |
 
 All branches cut from `dev`. Never from `main`.
@@ -168,14 +172,14 @@ All branches cut from `dev`. Never from `main`.
 
 Use Conventional Commits: `<type>(<scope>): <short description>`
 
-| Type | When to use |
-|---|---|
-| `feat` | New functionality |
-| `fix` | Bug fix |
-| `chore` | Tooling, config, scaffolding |
-| `test` | Adding or updating tests |
+| Type       | When to use                            |
+| ---------- | -------------------------------------- |
+| `feat`     | New functionality                      |
+| `fix`      | Bug fix                                |
+| `chore`    | Tooling, config, scaffolding           |
+| `test`     | Adding or updating tests               |
 | `refactor` | Restructuring without behaviour change |
-| `docs` | Comments, README, `CLAUDE.md` |
+| `docs`     | Comments, README, `CLAUDE.md`          |
 
 Examples:
 
@@ -186,7 +190,7 @@ chore(db): add migration runner to schema.ts
 ```
 
 - Subject line: imperative mood, ≤72 chars, no trailing period
-- Body (optional): explain *why*, not *what*
+- Body (optional): explain _why_, not _what_
 - Reference task: append `Refs: <task page URL>` in the body
 
 ### PR expectations
@@ -220,12 +224,12 @@ These rules apply to every Claude Code session without exception.
 
 ### Task lifecycle rules
 
-| Action | When |
-|---|---|
-| Move task to **🔄 In Progress** | When you begin implementation |
-| Move task to **👀 In Review** | When you open a draft PR |
-| Move task to **🚫 Blocked** | When you cannot proceed — document the blocker on the task page |
-| **Never** move task to ✅ Done | Done is set by the human after merging only |
+| Action                          | When                                                            |
+| ------------------------------- | --------------------------------------------------------------- |
+| Move task to **🔄 In Progress** | When you begin implementation                                   |
+| Move task to **👀 In Review**   | When you open a draft PR                                        |
+| Move task to **🚫 Blocked**     | When you cannot proceed — document the blocker on the task page |
+| **Never** move task to ✅ Done  | Done is set by the human after merging only                     |
 
 ### What Claude Code must never do
 
@@ -251,9 +255,9 @@ These rules apply to every Claude Code session without exception.
 
 ## Resolved decisions
 
-| Decision | Resolution |
-|---|---|
-| CSS approach | CSS Modules. Vite-native, zero extra tooling, scoped per component. Files named `ComponentName.module.css`. |
+| Decision                | Resolution                                                                                                                                                                                      |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CSS approach            | CSS Modules. Vite-native, zero extra tooling, scoped per component. Files named `ComponentName.module.css`.                                                                                     |
 | Error boundary strategy | Per-component boundaries. Each major component (`SessionCard`, `SessionDetail`, `DispatchModal`, etc.) wraps its own `ErrorBoundary` so failures are isolated and don't cascade to the full UI. |
 
 ## Related documentation

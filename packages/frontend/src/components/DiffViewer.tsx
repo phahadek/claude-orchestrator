@@ -1,9 +1,14 @@
-import { useState, useEffect, useCallback } from 'react';
-import styles from './DiffViewer.module.css';
+import { useState, useEffect, useCallback } from "react";
+import styles from "./DiffViewer.module.css";
 
 // ── Diff line classification ───────────────────────────────────────
 
-export type DiffLineKind = 'added' | 'removed' | 'hunk' | 'file-header' | 'context';
+export type DiffLineKind =
+  | "added"
+  | "removed"
+  | "hunk"
+  | "file-header"
+  | "context";
 
 export interface DiffLine {
   kind: DiffLineKind;
@@ -12,17 +17,21 @@ export interface DiffLine {
 }
 
 export function classifyDiffLine(line: string): DiffLineKind {
-  if (line.startsWith('diff --git') || line.startsWith('--- ') || line.startsWith('+++ ')) {
-    return 'file-header';
+  if (
+    line.startsWith("diff --git") ||
+    line.startsWith("--- ") ||
+    line.startsWith("+++ ")
+  ) {
+    return "file-header";
   }
-  if (line.startsWith('@@')) return 'hunk';
-  if (line.startsWith('+')) return 'added';
-  if (line.startsWith('-')) return 'removed';
-  return 'context';
+  if (line.startsWith("@@")) return "hunk";
+  if (line.startsWith("+")) return "added";
+  if (line.startsWith("-")) return "removed";
+  return "context";
 }
 
 export function parseDiffLines(raw: string): DiffLine[] {
-  return raw.split('\n').map((content, i) => ({
+  return raw.split("\n").map((content, i) => ({
     kind: classifyDiffLine(content),
     content,
     lineNum: i + 1,
@@ -43,7 +52,7 @@ export function DiffViewer({ prNumber, projectId }: Props) {
 
   const fetchDiff = useCallback(async () => {
     if (!projectId) {
-      setError('No project ID available');
+      setError("No project ID available");
       return;
     }
     setLoading(true);
@@ -53,11 +62,13 @@ export function DiffViewer({ prNumber, projectId }: Props) {
         `/api/prs/${prNumber}/diff?projectId=${encodeURIComponent(projectId)}`,
       );
       if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
+        const body = (await res
+          .json()
+          .catch(() => ({ error: res.statusText }))) as { error?: string };
         setError(body.error ?? res.statusText);
         return;
       }
-      const data = await res.json() as { diff: string };
+      const data = (await res.json()) as { diff: string };
       setDiff(data.diff);
     } catch (err) {
       setError((err as Error).message);
@@ -81,7 +92,7 @@ export function DiffViewer({ prNumber, projectId }: Props) {
           disabled={loading}
           title="Refresh diff"
         >
-          {loading ? '…' : '↻'}
+          {loading ? "…" : "↻"}
         </button>
       </div>
 
@@ -91,7 +102,7 @@ export function DiffViewer({ prNumber, projectId }: Props) {
             <div
               key={i}
               className={styles.skeletonLine}
-              style={{ width: `${55 + (i * 37) % 45}%` }}
+              style={{ width: `${55 + ((i * 37) % 45)}%` }}
             />
           ))}
         </div>
@@ -110,7 +121,10 @@ export function DiffViewer({ prNumber, projectId }: Props) {
           <table className={styles.diffTable}>
             <tbody>
               {lines.map((line) => (
-                <tr key={line.lineNum} className={styles[`line${capitalize(line.kind)}`]}>
+                <tr
+                  key={line.lineNum}
+                  className={styles[`line${capitalize(line.kind)}`]}
+                >
                   <td className={styles.lineNum}>{line.lineNum}</td>
                   <td className={styles.lineContent}>{line.content}</td>
                 </tr>
@@ -125,10 +139,15 @@ export function DiffViewer({ prNumber, projectId }: Props) {
 
 function capitalize(kind: DiffLineKind): string {
   switch (kind) {
-    case 'added': return 'Added';
-    case 'removed': return 'Removed';
-    case 'hunk': return 'Hunk';
-    case 'file-header': return 'FileHeader';
-    case 'context': return 'Context';
+    case "added":
+      return "Added";
+    case "removed":
+      return "Removed";
+    case "hunk":
+      return "Hunk";
+    case "file-header":
+      return "FileHeader";
+    case "context":
+      return "Context";
   }
 }
