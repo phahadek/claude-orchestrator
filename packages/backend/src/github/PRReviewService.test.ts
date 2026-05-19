@@ -816,6 +816,27 @@ describe('PRReviewService.reviewPR() — approved verdict calls handleApprovedVe
 
     expect(vi.mocked(mockNotion.updateStatus)).toHaveBeenCalledWith('task-abc123', '👀 In Review');
   });
+
+  it('passes projectId to handleApprovedVerdict in the fresh-review path (Case 3)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any); // review_session_id: null → fresh review
+
+    const mockGH = makeMockGitHub();
+    const mockNotion = makeMockNotion();
+    const mockSM = makeMockSessionManager();
+    const service = new PRReviewService(mockGH, mockNotion, mockSM as any, 'default-proj', 'https://notion.so/ctx');
+
+    const handleSpy = vi.spyOn(service, 'handleApprovedVerdict');
+
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+      setImmediate(() => mockSM.emit('message', makeSessionEventMessage(opts.sessionId, JSON.stringify(claudeApprovedPayload))));
+      return opts.sessionId;
+    });
+
+    await service.reviewPR(42, 'owner/repo', 'specific-project-id');
+
+    expect(handleSpy).toHaveBeenCalledWith(42, 'owner/repo', 'task-abc123', 'specific-project-id');
+    expect(vi.mocked(mockNotion.updateStatus)).toHaveBeenCalledWith('task-abc123', '👀 In Review');
+  });
 });
 
 // ── reviewPR() — session reuse logic ─────────────────────────────────────────

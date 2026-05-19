@@ -148,7 +148,7 @@ export class PRReviewService {
     // Set last_reviewed_sha so the next push_detected can compare correctly.
     setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
     if (finalResult.verdict === 'approved') {
-      await this.handleApprovedVerdict(prNumber, repo, prRow.notion_task_id);
+      await this.handleApprovedVerdict(prNumber, repo, prRow.notion_task_id, projectId);
     }
     return finalResult;
   }
