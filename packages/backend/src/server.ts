@@ -8,6 +8,7 @@ import { runMigrations } from './db/schema';
 import { db } from './db/db';
 import { SessionManager } from './session/SessionManager';
 import { handleMessage } from './ws/router';
+import { sendInitialStateBurst } from './ws/initialStateBurst';
 import { JsonlReader, DEFAULT_SESSIONS_DIR } from './session/JsonlReader';
 import type { ServerMessage } from './ws/types';
 import { permissionEventsRouter, permissionDenialsRouter, permissionRulesRouter } from './routes/rules';
@@ -25,8 +26,7 @@ import { ReviewOrchestrator } from './github/ReviewOrchestrator';
 import { PRMergeWatcher } from './github/PRMergeWatcher';
 import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
 import { AutoLauncher } from './orchestration/AutoLauncher';
-import { getActiveSessions, getEventsBySession, getDenialsBySession, deleteGhostSessions, getPRByNotionTaskId, getPRBySessionId, setPRReviewResult, setLastReviewedSha, setHeadSha, getSetting, setPendingPush } from './db/queries';
-import { isSystemOnlyUserEvent } from './utils/eventFilters';
+import { deleteGhostSessions, getPRBySessionId, setPRReviewResult, setLastReviewedSha, setHeadSha, getSetting, setPendingPush } from './db/queries';
 import { shouldAutoReview, formatReviewFeedback } from './github/reviewUtils';
 import type { PRReviewResult } from './github/PRReviewService';
 
@@ -248,68 +248,11 @@ sessionManager.on('push_detected', ({ sessionId: codingSessionId }: { sessionId:
 wss.on('connection', (ws) => {
   console.log('[WS] client connected');
 
-  // Send existing active (non-archived) sessions to the new client so the UI populates on load
-  for (const s of getActiveSessions()) {
-    const tags = s.tags ? (() => { try { return JSON.parse(s.tags) as string[]; } catch { return undefined; } })() : undefined;
-    const reviewPr = s.session_type === 'review' && s.notion_task_id
-      ? (getPRByNotionTaskId(s.notion_task_id) ?? undefined)
-      : undefined;
-    const prNumber = reviewPr?.pr_number;
-    const codeSessionId = reviewPr?.session_id ?? undefined;
-    ws.send(JSON.stringify({
-      type: 'session_started',
-      sessionId: s.session_id,
-      taskName: s.task_name ?? s.notion_task_url ?? s.session_id.slice(0, 8),
-      notionTaskUrl: s.notion_task_url ?? '',
-      ...(s.started_at != null && { started_at: s.started_at }),
-      ...(s.ended_at != null && { ended_at: s.ended_at }),
-      archived: s.archived === 1,
-      favorited: s.favorited === 1,
-      project_id: s.project_id,
-      sessionType: s.session_type,
-      ...(prNumber != null && { prNumber }),
-      ...(codeSessionId != null && { codeSessionId }),
-      note: s.note ?? null,
-      tags,
-      totalInputTokens: s.total_input_tokens ?? 0,
-      totalOutputTokens: s.total_output_tokens ?? 0,
-      model: s.model ?? null,
-      ...(s.pr_url != null && { prUrl: s.pr_url }),
-    } satisfies ServerMessage));
-    ws.send(JSON.stringify({
-      type: 'session_status',
-      sessionId: s.session_id,
-      status: s.status,
-    } satisfies ServerMessage));
-
-    // Send stored events so the transcript populates.
-    // Skip user events that contain only system-injected content — they are
-    // stored in the DB for debugging but are noise in the transcript UI.
-    for (const ev of getEventsBySession(s.session_id)) {
-      if (isSystemOnlyUserEvent(ev.payload)) continue;
-      ws.send(JSON.stringify({
-        type: 'session_event',
-        sessionId: s.session_id,
-        eventType: ev.event_type as 'text' | 'tool_use' | 'tool_result' | 'system' | 'user_message',
-        content: ev.payload,
-        ...(ev.message_id != null && { messageId: ev.message_id }),
-      } satisfies ServerMessage));
-    }
-
-    // Send stored permission denials so SessionDetail shows them after reconnect
-    const denials = getDenialsBySession(s.session_id);
-    if (denials.length > 0) {
-      ws.send(JSON.stringify({
-        type: 'permission_denials',
-        sessionId: s.session_id,
-        denials: denials.map((d) => ({
-          tool_name: d.tool_name,
-          tool_use_id: d.tool_use_id,
-          tool_input: JSON.parse(d.tool_input) as Record<string, unknown>,
-        })),
-      } satisfies ServerMessage));
-    }
-  }
+  // Send existing active (non-archived) sessions to the new client so the UI populates on load.
+  // session_status messages in this burst carry replay: true so the frontend can suppress
+  // notification firing — otherwise every backend restart re-fires notifications for every
+  // historical non-archived session.
+  sendInitialStateBurst((msg) => ws.send(JSON.stringify(msg)));
 
   ws.on('message', (data) => handleMessage(ws, data.toString(), sessionManager));
   ws.on('close', () => console.log('[WS] client disconnected'));

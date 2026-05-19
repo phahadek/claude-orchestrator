@@ -274,4 +274,52 @@ describe('PRMergeWatcher.handleMerged()', () => {
 
     expect(vi.mocked(notion.updateStatus)).toHaveBeenCalledWith('task-xyz', '✅ Done');
   });
+
+  it('suppresses pr_merged broadcast when called with silent: true', async () => {
+    const pr = makePRRow({ notion_task_id: null });
+    const messages: ServerMessage[] = [];
+    const watcher = new PRMergeWatcher(makeMockGitHub(), makeMockSessions(), makeMockNotion(), (msg) => messages.push(msg));
+    await watcher.handleMerged(pr, 'abc123', { silent: true });
+
+    // State still updates, sessions still end, but no pr_merged broadcast
+    expect(vi.mocked(updatePRState)).toHaveBeenCalledWith(42, 'owner/repo', 'merged');
+    expect(messages.filter((m) => m.type === 'pr_merged')).toHaveLength(0);
+  });
+});
+
+// ── first-poll-after-boot suppression ────────────────────────────────────────
+
+describe('PRMergeWatcher first-poll-after-boot suppression', () => {
+  it('does NOT broadcast pr_merged on the first poll for PRs that GitHub reports as merged', async () => {
+    const pr = makePRRow({ notion_task_id: null });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    vi.mocked(github.getPRState).mockResolvedValue('merged');
+
+    const messages: ServerMessage[] = [];
+    const watcher = new PRMergeWatcher(github, makeMockSessions(), makeMockNotion(), (msg) => messages.push(msg));
+    await watcher.poll();
+
+    // SQLite state still transitions to merged
+    expect(vi.mocked(updatePRState)).toHaveBeenCalledWith(42, 'owner/repo', 'merged');
+    // But no pr_merged notification fires for the historical merge
+    expect(messages.filter((m) => m.type === 'pr_merged')).toHaveLength(0);
+  });
+
+  it('DOES broadcast pr_merged on the second poll when a merge is freshly observed', async () => {
+    const pr = makePRRow({ notion_task_id: null });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    // First poll: PR still open. Second poll: now merged.
+    vi.mocked(github.getPRState)
+      .mockResolvedValueOnce('open')
+      .mockResolvedValueOnce('merged');
+
+    const messages: ServerMessage[] = [];
+    const watcher = new PRMergeWatcher(github, makeMockSessions(), makeMockNotion(), (msg) => messages.push(msg));
+    await watcher.poll();
+    await watcher.poll();
+
+    expect(messages.filter((m) => m.type === 'pr_merged')).toHaveLength(1);
+  });
 });

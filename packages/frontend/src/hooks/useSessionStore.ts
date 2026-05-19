@@ -53,6 +53,13 @@ export interface SessionState {
   /** Session ID of the code session whose PR this review session is reviewing */
   codeSessionId?: string;
   model?: string | null;
+  /**
+   * True when the most recent session_status message that updated `status`
+   * carried `replay: true` (sent during the WS reconnect burst). Set false
+   * by any subsequent live session_status update. Used by useNotifications
+   * to suppress fireNotification for replayed transitions.
+   */
+  lastStatusReplay?: boolean;
 }
 
 export interface IncompleteReview {
@@ -68,7 +75,7 @@ export function useSessionStore() {
   const [synced, setSynced] = useState(false);
   const [dismissedDenialIds, setDismissedDenialIds] = useState<Map<string, Set<string>>>(loadDismissedFromStorage);
   const [prRefreshTrigger, setPrRefreshTrigger] = useState(0);
-  const [lastPrReviewEvent, setLastPrReviewEvent] = useState<{ prNumber: number; repo: string; verdict: string; summary: string } | null>(null);
+  const [lastPrReviewEvent, setLastPrReviewEvent] = useState<{ prNumber: number; repo: string; verdict: string; summary: string; replay?: boolean } | null>(null);
   const [lastReviewEscalation, setLastReviewEscalation] = useState<{ prNumber: number; repo: string; message: string; receivedAt: number } | null>(null);
   const [incompleteReviews, setIncompleteReviews] = useState<IncompleteReview[]>([]);
   const [lastTaskUpdate, setLastTaskUpdate] = useState<TaskView | null>(null);
@@ -136,7 +143,7 @@ export function useSessionStore() {
         }
         case 'session_status': {
           const s = next.get(msg.sessionId);
-          if (s) next.set(msg.sessionId, { ...s, status: msg.status });
+          if (s) next.set(msg.sessionId, { ...s, status: msg.status, lastStatusReplay: msg.replay === true });
           break;
         }
         case 'permission_request': {
@@ -214,7 +221,7 @@ export function useSessionStore() {
       setTaskListRefreshTrigger((n) => n + 1);
     }
     if (msg.type === 'pr_review_complete') {
-      setLastPrReviewEvent({ prNumber: msg.prNumber, repo: msg.repo, verdict: msg.verdict, summary: msg.summary });
+      setLastPrReviewEvent({ prNumber: msg.prNumber, repo: msg.repo, verdict: msg.verdict, summary: msg.summary, replay: msg.replay });
       setTaskListRefreshTrigger((n) => n + 1);
     }
     if (msg.type === 'session_started') {

@@ -12,6 +12,13 @@ const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 export class PRMergeWatcher {
   private timer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * True until the first poll after boot completes. On that first poll, PRs
+   * that GitHub reports as already merged are state-transitioned in SQLite
+   * without emitting pr_merged — otherwise a backend restart re-fires merge
+   * notifications for every PR that closed while the backend was down.
+   */
+  private firstPollPending = true;
 
   constructor(
     private github: GitHubClient,
@@ -54,13 +61,15 @@ export class PRMergeWatcher {
   }
 
   async poll(): Promise<void> {
+    const silentMerges = this.firstPollPending;
     const openPRs = getAllOpenPRs();
     for (const pr of openPRs) {
-      await this.checkPR(pr);
+      await this.checkPR(pr, silentMerges);
     }
+    this.firstPollPending = false;
   }
 
-  private async checkPR(pr: PullRequestRow): Promise<void> {
+  private async checkPR(pr: PullRequestRow, silentMerges: boolean): Promise<void> {
     let state: string;
     try {
       state = await this.github.getPRState(pr.pr_number, pr.repo);
@@ -70,7 +79,7 @@ export class PRMergeWatcher {
     }
 
     if (state === 'merged') {
-      await this.handleMerged(pr, null);
+      await this.handleMerged(pr, null, { silent: silentMerges });
     } else if (state === 'closed') {
       updatePRState(pr.pr_number, pr.repo, 'closed');
       this.broadcast({ type: 'pr_closed', prNumber: pr.pr_number, repo: pr.repo });
@@ -149,7 +158,17 @@ export class PRMergeWatcher {
     }
   }
 
-  async handleMerged(pr: PullRequestRow, sha: string | null): Promise<void> {
+  /**
+   * @param options.silent When true, the SQLite state transition still happens
+   *   (and sessions/Notion updates run) but the pr_merged broadcast is
+   *   suppressed. Used by poll() on the first cycle after boot to avoid
+   *   re-firing notifications for PRs that merged while the backend was down.
+   */
+  async handleMerged(
+    pr: PullRequestRow,
+    sha: string | null,
+    options: { silent?: boolean } = {},
+  ): Promise<void> {
     updatePRState(pr.pr_number, pr.repo, 'merged');
 
     // End coding session gracefully (stdin close → clean CLI exit)
@@ -181,11 +200,13 @@ export class PRMergeWatcher {
       }
     }
 
-    this.broadcast({
-      type: 'pr_merged',
-      prNumber: pr.pr_number,
-      repo: pr.repo,
-      sha: sha ?? '',
-    });
+    if (!options.silent) {
+      this.broadcast({
+        type: 'pr_merged',
+        prNumber: pr.pr_number,
+        repo: pr.repo,
+        sha: sha ?? '',
+      });
+    }
   }
 }

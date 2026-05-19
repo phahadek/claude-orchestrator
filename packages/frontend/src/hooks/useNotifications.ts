@@ -37,7 +37,7 @@ interface SessionSnapshot {
   pendingPermissionKey: string | null;
 }
 
-export function useNotifications(sessions: SessionState[], prReviewEvent?: { prNumber: number; verdict: string; summary: string } | null): void {
+export function useNotifications(sessions: SessionState[], prReviewEvent?: { prNumber: number; verdict: string; summary: string; replay?: boolean } | null): void {
   const prevRef = useRef<Map<string, SessionSnapshot>>(new Map());
   const initialSyncDoneRef = useRef(false);
   const prevReviewEventRef = useRef<typeof prReviewEvent>(null);
@@ -67,7 +67,7 @@ export function useNotifications(sessions: SessionState[], prReviewEvent?: { prN
     const next = new Map<string, SessionSnapshot>();
 
     for (const session of sessions) {
-      const { sessionId, taskName, status, pendingPermission } = session;
+      const { sessionId, taskName, status, pendingPermission, lastStatusReplay } = session;
       const pendingPermissionKey = pendingPermission
         ? `${pendingPermission.toolName}:${pendingPermission.proposedAction}`
         : null;
@@ -76,10 +76,16 @@ export function useNotifications(sessions: SessionState[], prReviewEvent?: { prN
 
       const prevSnap = prev.get(sessionId);
 
-      if (status === 'done' && prevSnap?.status !== 'done') {
-        fireNotification('✅ Session done', `${taskName} finished successfully.`);
-      } else if (status === 'error' && prevSnap?.status !== 'error') {
-        fireNotification('❌ Session failed', `${taskName} encountered an error.`);
+      // Suppress notifications for transitions whose latest session_status
+      // carried replay: true (sent during the WS reconnect burst). The
+      // snapshot still advances via next.set above so a later non-replay
+      // transition notifies correctly.
+      if (!lastStatusReplay) {
+        if (status === 'done' && prevSnap?.status !== 'done') {
+          fireNotification('✅ Session done', `${taskName} finished successfully.`);
+        } else if (status === 'error' && prevSnap?.status !== 'error') {
+          fireNotification('❌ Session failed', `${taskName} encountered an error.`);
+        }
       }
 
       if (
@@ -105,6 +111,10 @@ export function useNotifications(sessions: SessionState[], prReviewEvent?: { prN
     if (!prReviewEvent) return;
     if (prevReviewEventRef.current === prReviewEvent) return;
     prevReviewEventRef.current = prReviewEvent;
+
+    // Replayed pr_review_complete from the WS reconnect burst — advance the
+    // ref so subsequent live events still fire, but skip the notification.
+    if (prReviewEvent.replay) return;
 
     const { prNumber, verdict, summary } = prReviewEvent;
     let title: string;
