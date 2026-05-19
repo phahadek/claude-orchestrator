@@ -5,7 +5,7 @@ import type { TaskBackend } from '../tasks/TaskBackend';
 import { getProjectByGithubRepo } from '../config';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
-import { getAllOpenPRs, updatePRState, updateMergeState } from '../db/queries';
+import { getAllOpenPRs, updatePRState, updateMergeState, getPRByNumber } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -91,17 +91,31 @@ export class PRMergeWatcher {
       return;
     }
     if (verdict !== 'approved') return;
+    await this.runMergeabilityCheck(pr);
+  }
 
+  /**
+   * Run an immediate mergeability check for the given PR, regardless of verdict.
+   * Called after a review completes with verdict 'approved' so the DB merge_state
+   * and Merge button reflect current state without waiting for the next 5-min poll.
+   */
+  async checkMergeabilityNow(prNumber: number, repo: string): Promise<void> {
+    const pr = getPRByNumber(prNumber, repo);
+    if (!pr) return;
+    await this.runMergeabilityCheck(pr);
+  }
+
+  private async runMergeabilityCheck(pr: PullRequestRow): Promise<void> {
     let mergeable: boolean | null;
     let mergeableState: string | null;
     try {
-      ({ mergeable, mergeableState } = await this.github.getMergeability(pr.pr_number, pr.repo));
+      ({ mergeable, mergeableState } = await this.github.getMergeabilityWithRetry(pr.pr_number, pr.repo));
     } catch (err) {
       console.warn(`[PRMergeWatcher] getMergeability failed for PR #${pr.pr_number}:`, (err as Error).message);
       return;
     }
 
-    // Skip if GitHub hasn't computed mergeability yet
+    // Skip if GitHub hasn't computed mergeability yet (retries exhausted)
     if (mergeable === null && mergeableState === null) return;
 
     const mergeableInt = mergeable === null ? null : (mergeable ? 1 : 0);
@@ -113,7 +127,7 @@ export class PRMergeWatcher {
 
     updateMergeState(pr.pr_number, pr.repo, mergeableInt, newMergeState);
     this.broadcast({
-      type: 'pr_state_changed',
+      type: 'pr_mergeability_changed',
       prNumber: pr.pr_number,
       repo: pr.repo,
       mergeable,

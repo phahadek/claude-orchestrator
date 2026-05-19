@@ -81,6 +81,7 @@ function makeMockGitHub(): GitHubClient {
     fetchDiff: vi.fn().mockResolvedValue(mockDiff),
     mergePR: vi.fn(),
     getMergeability: vi.fn().mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
+    getMergeabilityWithRetry: vi.fn().mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
     markPRReady: vi.fn().mockResolvedValue(undefined),
   } as unknown as GitHubClient;
 }
@@ -554,6 +555,7 @@ describe('PRReviewService — merge conflict dimension', () => {
     const mockSM = makeMockSessionManager();
     const mockGH = makeMockGitHub();
     vi.mocked(mockGH.getMergeability).mockResolvedValue({ mergeable: true, mergeableState: 'clean' });
+    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({ mergeable: true, mergeableState: 'clean' });
 
     const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
 
@@ -578,6 +580,7 @@ describe('PRReviewService — merge conflict dimension', () => {
     const mockSM = makeMockSessionManager();
     const mockGH = makeMockGitHub();
     vi.mocked(mockGH.getMergeability).mockResolvedValue({ mergeable: false, mergeableState: 'dirty' });
+    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({ mergeable: false, mergeableState: 'dirty' });
 
     const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
 
@@ -603,6 +606,7 @@ describe('PRReviewService — merge conflict dimension', () => {
     const mockSM = makeMockSessionManager();
     const mockGH = makeMockGitHub();
     vi.mocked(mockGH.getMergeability).mockResolvedValue({ mergeable: null, mergeableState: null });
+    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({ mergeable: null, mergeableState: null });
 
     const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
 
@@ -630,6 +634,7 @@ describe('PRReviewService — merge conflict dimension', () => {
     const mockSM = makeMockSessionManager();
     const mockGH = makeMockGitHub();
     vi.mocked(mockGH.getMergeability).mockResolvedValue({ mergeable: null, mergeableState: null });
+    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({ mergeable: null, mergeableState: null });
 
     const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
 
@@ -655,6 +660,7 @@ describe('PRReviewService — merge conflict dimension', () => {
     const mockSM = makeMockSessionManager();
     const mockGH = makeMockGitHub();
     vi.mocked(mockGH.getMergeability).mockResolvedValue({ mergeable: true, mergeableState: 'clean' });
+    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({ mergeable: true, mergeableState: 'clean' });
 
     const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
 
@@ -784,6 +790,7 @@ describe('PRReviewService.reviewPR() — approved verdict calls handleApprovedVe
 
     const mockGH = makeMockGitHub();
     vi.mocked(mockGH.getMergeability).mockResolvedValue({ mergeable: true, mergeableState: 'clean' });
+    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({ mergeable: true, mergeableState: 'clean' });
     const mockSM = makeMockSessionManager();
     const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
 

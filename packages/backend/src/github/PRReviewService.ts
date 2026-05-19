@@ -6,6 +6,7 @@ import type { SessionManager } from '../session/SessionManager';
 import type { PullRequest, PRDiff } from './types';
 import type { ServerMessage } from '../ws/types';
 import type { SessionEvent } from '../db/types';
+import type { PRMergeWatcher } from './PRMergeWatcher';
 
 export interface ReviewDimension {
   name: string;
@@ -58,6 +59,15 @@ export class PRReviewService {
     private readonly defaultProjectContextUrl: string = '',
   ) {}
 
+  // Optional reference to PRMergeWatcher used to trigger an immediate mergeability
+  // check after an approved verdict (so we don't wait for the next 5-min poll).
+  // Set via setMergeWatcher() after both services are constructed (server.ts).
+  private mergeWatcher?: PRMergeWatcher;
+
+  setMergeWatcher(watcher: PRMergeWatcher): void {
+    this.mergeWatcher = watcher;
+  }
+
   private resolveBackend(projectId: string): TaskBackend {
     return this.taskBackendOverride ?? getTaskBackend(projectId);
   }
@@ -102,7 +112,7 @@ export class PRReviewService {
       ].join('\n');
       this.sessionManager.send(existingReviewSessionId, followUp);
       const aiResult = await verdictPromise;
-      const { mergeable } = await this.github.getMergeability(prNumber, repo);
+      const { mergeable } = await this.github.getMergeabilityWithRetry(prNumber, repo);
       const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
       setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
       if (finalResult.verdict === 'approved') {
@@ -132,7 +142,7 @@ export class PRReviewService {
       const resumedSessionId = await this.sessionManager.sendOrResume(existingReviewSessionId, prompt);
       setReviewSessionId(prNumber, repo, resumedSessionId);
       const aiResult = await this.waitForVerdict(resumedSessionId, prNumber, repo);
-      const { mergeable } = await this.github.getMergeability(prNumber, repo);
+      const { mergeable } = await this.github.getMergeabilityWithRetry(prNumber, repo);
       const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
       setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
       if (finalResult.verdict === 'approved') {
@@ -164,7 +174,7 @@ export class PRReviewService {
     setReviewSessionId(prNumber, repo, sessionId);
 
     const aiResult = await verdictPromise;
-    const { mergeable } = await this.github.getMergeability(prNumber, repo);
+    const { mergeable } = await this.github.getMergeabilityWithRetry(prNumber, repo);
     const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
     // Set last_reviewed_sha so the next push_detected can compare correctly.
@@ -196,6 +206,13 @@ export class PRReviewService {
       } catch (e: unknown) {
         console.error(`[PRReviewService] task backend updateStatus failed:`, e);
       }
+    }
+    // Trigger an immediate mergeability check so the watcher's DB merge_state and
+    // WS event reflect current state — don't wait for the next 5-min poll.
+    if (this.mergeWatcher) {
+      this.mergeWatcher.checkMergeabilityNow(prNumber, repo).catch((err: unknown) =>
+        console.warn(`[PRReviewService] checkMergeabilityNow failed for PR #${prNumber}:`, (err as Error).message),
+      );
     }
     return draftTransitioned;
   }
@@ -250,7 +267,7 @@ export class PRReviewService {
     }
 
     const aiResult = await this.waitForVerdict(resumedSessionId, prNumber, repo);
-    const { mergeable } = await this.github.getMergeability(prNumber, repo);
+    const { mergeable } = await this.github.getMergeabilityWithRetry(prNumber, repo);
     const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
     setLastReviewedSha(prNumber, repo, pr.head_sha ?? null);

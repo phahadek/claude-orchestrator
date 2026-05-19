@@ -22,6 +22,7 @@ function makeMockGitHub(): GitHubClient {
   return {
     getPRState: vi.fn().mockResolvedValue('open'),
     getMergeability: vi.fn().mockResolvedValue({ mergeable: null, mergeableState: null }),
+    getMergeabilityWithRetry: vi.fn().mockResolvedValue({ mergeable: null, mergeableState: null }),
   } as unknown as GitHubClient;
 }
 
@@ -203,6 +204,7 @@ describe('PRMergeWatcher dirty-transition sendOrResume', () => {
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeMockGitHub();
     vi.mocked(github.getMergeability).mockResolvedValue({ mergeable: false, mergeableState: 'dirty' });
+    vi.mocked(github.getMergeabilityWithRetry).mockResolvedValue({ mergeable: false, mergeableState: 'dirty' });
     const sessions = makeMockSessions();
 
     const watcher = new PRMergeWatcher(github, sessions, makeMockNotion(), () => {});
@@ -219,6 +221,7 @@ describe('PRMergeWatcher dirty-transition sendOrResume', () => {
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeMockGitHub();
     vi.mocked(github.getMergeability).mockResolvedValue({ mergeable: false, mergeableState: 'dirty' });
+    vi.mocked(github.getMergeabilityWithRetry).mockResolvedValue({ mergeable: false, mergeableState: 'dirty' });
     const sessions = makeMockSessions();
 
     const watcher = new PRMergeWatcher(github, sessions, makeMockNotion(), () => {});
@@ -232,6 +235,7 @@ describe('PRMergeWatcher dirty-transition sendOrResume', () => {
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeMockGitHub();
     vi.mocked(github.getMergeability).mockResolvedValue({ mergeable: false, mergeableState: 'dirty' });
+    vi.mocked(github.getMergeabilityWithRetry).mockResolvedValue({ mergeable: false, mergeableState: 'dirty' });
     const sessions = makeMockSessions();
 
     const watcher = new PRMergeWatcher(github, sessions, makeMockNotion(), () => {});

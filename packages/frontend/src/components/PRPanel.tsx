@@ -21,6 +21,7 @@ export function PRPanel({ activeProjectId, onViewSession, onCollapse, refreshTri
   const [reviewInFlight, setReviewInFlight] = useState<Set<number>>(new Set());
   const [reviewElapsed, setReviewElapsed] = useState<Map<number, number>>(new Map());
   const [mergeInFlight, setMergeInFlight] = useState<Set<number>>(new Set());
+  const [checkingMergeability, setCheckingMergeability] = useState<Set<number>>(new Set());
   const [reReviewInFlight, setReReviewInFlight] = useState<Set<number>>(new Set());
   const [fixConflictsInFlight, setFixConflictsInFlight] = useState<Set<number>>(new Set());
   const [approveInFlight, setApproveInFlight] = useState<Set<number>>(new Set());
@@ -155,8 +156,34 @@ export function PRPanel({ activeProjectId, onViewSession, onCollapse, refreshTri
     const pr = prs.find((p) => p.prNumber === prNumber);
     if (!pr) return;
     const [owner, repoName] = pr.repo.split('/');
-    setMergeInFlight((prev) => new Set(prev).add(prNumber));
     setError(prNumber, null);
+    // Pre-merge mergeability check: ask the backend to query GitHub (with retry)
+    // right before opening the merge. Shows a "checking mergeability..." state
+    // so the user gets immediate feedback instead of an opaque merge failure.
+    setCheckingMergeability((prev) => new Set(prev).add(prNumber));
+    try {
+      const checkRes = await fetch(
+        `/api/prs/${owner}/${repoName}/${prNumber}/mergeability`,
+      );
+      if (checkRes.ok) {
+        const { mergeable } = await checkRes.json() as { mergeable: boolean | null; mergeState: string | null };
+        if (mergeable === false) {
+          setError(prNumber, 'PR has merge conflicts — use Fix Conflicts to have the code session rebase.');
+          await fetchPRs();
+          return;
+        }
+        // mergeable === null after retries: proceed and let the merge endpoint handle it
+      }
+    } catch {
+      // Pre-check is best-effort; fall through to the actual merge call
+    } finally {
+      setCheckingMergeability((prev) => {
+        const next = new Set(prev);
+        next.delete(prNumber);
+        return next;
+      });
+    }
+    setMergeInFlight((prev) => new Set(prev).add(prNumber));
     try {
       const res = await fetch(
         `/api/prs/${owner}/${repoName}/${prNumber}/merge`,
@@ -378,6 +405,7 @@ export function PRPanel({ activeProjectId, onViewSession, onCollapse, refreshTri
                 onApprove={handleApprove}
                 reviewInFlight={reviewInFlight.has(pr.prNumber)}
                 mergeInFlight={mergeInFlight.has(pr.prNumber)}
+                checkingMergeability={checkingMergeability.has(pr.prNumber)}
                 removeInFlight={removeInFlight.has(pr.prNumber)}
                 reReviewInFlight={reReviewInFlight.has(pr.prNumber)}
                 fixConflictsInFlight={fixConflictsInFlight.has(pr.prNumber)}

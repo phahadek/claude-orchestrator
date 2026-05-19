@@ -240,6 +240,10 @@ export function useSessionStore() {
       setTaskListRefreshTrigger((n) => n + 1);
       setPrRefreshTrigger((n) => n + 1);
     }
+    if (msg.type === 'pr_mergeability_changed') {
+      setTaskListRefreshTrigger((n) => n + 1);
+      setPrRefreshTrigger((n) => n + 1);
+    }
     if (msg.type === 'review_incomplete') {
       setIncompleteReviews((prev) => [...prev, { prNumber: msg.prNumber, repo: msg.repo, message: msg.message }]);
     }
