@@ -1,6 +1,20 @@
-import { getEventsBySession, setPRReviewResult, getPRByNumber, setReviewSessionId, updatePRDraftStatus, incrementReviewIteration, setLastReviewedSha } from '../db/queries';
+import {
+  getEventsBySession,
+  setPRReviewResult,
+  getPRByNumber,
+  setReviewSessionId,
+  updatePRDraftStatus,
+  incrementReviewIteration,
+  setLastReviewedSha,
+} from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
-import { computeSizeSignal, isOversized, SIZE_ABSOLUTE_FLOOR, SIZE_FILE_RATIO_LIMIT, type SizeSignal } from './GitHubClient';
+import {
+  computeSizeSignal,
+  isOversized,
+  SIZE_ABSOLUTE_FLOOR,
+  SIZE_FILE_RATIO_LIMIT,
+  type SizeSignal,
+} from './GitHubClient';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { parseSection } from '../notion/NotionClient';
@@ -83,13 +97,19 @@ export class PRReviewService {
    * Resolve the task spec's "Files / paths affected" section for size-signal computation.
    * Returns an empty string when the task lookup fails so the signal still computes.
    */
-  private async fetchSpecFilesSection(projectId: string, taskId: string | null): Promise<string> {
+  private async fetchSpecFilesSection(
+    projectId: string,
+    taskId: string | null,
+  ): Promise<string> {
     if (!taskId) return '';
     try {
       const body = await this.resolveBackend(projectId).fetchTaskPage(taskId);
       return parseSection(body, 'files');
     } catch (e) {
-      console.warn(`[PRReviewService] fetchTaskPage for size signal failed (task ${taskId}):`, e);
+      console.warn(
+        `[PRReviewService] fetchTaskPage for size signal failed (task ${taskId}):`,
+        e,
+      );
       return '';
     }
   }
@@ -125,16 +145,26 @@ export class PRReviewService {
 
     // Case 1: Live review session exists — send follow-up with diff, do not spawn a new session.
     // review_session_id is intentionally NOT updated in this path.
-    if (existingReviewSessionId && this.sessionManager.isAlive(existingReviewSessionId)) {
+    if (
+      existingReviewSessionId &&
+      this.sessionManager.isAlive(existingReviewSessionId)
+    ) {
       // Register listener BEFORE sending to avoid missing a fast verdict.
-      const verdictPromise = this.waitForVerdict(existingReviewSessionId, prNumber, repo);
-      const prData = await this.github.fetchPR(repo, prNumber);
-      const diffData = await this.github.fetchDiff(
-        prNumber, repo,
-        { base: prData.baseBranch, head: prData.headBranch },
+      const verdictPromise = this.waitForVerdict(
+        existingReviewSessionId,
+        prNumber,
+        repo,
       );
+      const prData = await this.github.fetchPR(repo, prNumber);
+      const diffData = await this.github.fetchDiff(prNumber, repo, {
+        base: prData.baseBranch,
+        head: prData.headBranch,
+      });
       // Recompute size signal against the FULL refreshed diff each iteration.
-      const specFilesSection = await this.fetchSpecFilesSection(projectId, prRow.notion_task_id);
+      const specFilesSection = await this.fetchSpecFilesSection(
+        projectId,
+        prRow.notion_task_id,
+      );
       const sizeSignal = computeSizeSignal(diffData.diff, specFilesSection);
       const followUp = [
         `The code session has pushed new commits to PR #${prNumber}.`,
@@ -153,44 +183,84 @@ export class PRReviewService {
       ].join('\n');
       this.sessionManager.send(existingReviewSessionId, followUp);
       const aiResult = await verdictPromise;
-      const { mergeable } = await this.github.getMergeabilityWithRetry(prNumber, repo);
-      const sizedResult = this.appendSizeProportionalityDimension(aiResult, sizeSignal);
-      const finalResult = this.appendMergeConflictDimension(sizedResult, mergeable);
+      const { mergeable } = await this.github.getMergeabilityWithRetry(
+        prNumber,
+        repo,
+      );
+      const sizedResult = this.appendSizeProportionalityDimension(
+        aiResult,
+        sizeSignal,
+      );
+      const finalResult = this.appendMergeConflictDimension(
+        sizedResult,
+        mergeable,
+      );
       setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
       if (finalResult.verdict === 'approved') {
-        await this.handleApprovedVerdict(prNumber, repo, prRow.notion_task_id, projectId);
+        await this.handleApprovedVerdict(
+          prNumber,
+          repo,
+          prRow.notion_task_id,
+          projectId,
+        );
       }
       return finalResult;
     }
 
     const prData = await this.github.fetchPR(repo, prNumber);
-    const diffData = await this.github.fetchDiff(
-      prNumber, repo,
-      { base: prData.baseBranch, head: prData.headBranch },
-    );
+    const diffData = await this.github.fetchDiff(prNumber, repo, {
+      base: prData.baseBranch,
+      head: prData.headBranch,
+    });
 
     if (!prRow.notion_task_id) {
       throw new Error(`PR #${prNumber} has no linked Notion task`);
     }
 
-    const taskBody = await this.resolveBackend(projectId).fetchTaskPage(prRow.notion_task_id);
+    const taskBody = await this.resolveBackend(projectId).fetchTaskPage(
+      prRow.notion_task_id,
+    );
     const taskUrl = `https://www.notion.so/${prRow.notion_task_id}`;
     const prompt = this.buildPrompt(prData, diffData, taskBody);
-    const sizeSignal = computeSizeSignal(diffData.diff, parseSection(taskBody, 'files'));
+    const sizeSignal = computeSizeSignal(
+      diffData.diff,
+      parseSection(taskBody, 'files'),
+    );
 
     // Case 2: Dead existing review session — resume via sendOrResume with the
     // original session ID (do NOT generate a new one here). The returned value
     // is the actual session ID used (may be a new resumed session ID).
     if (existingReviewSessionId) {
-      const resumedSessionId = await this.sessionManager.sendOrResume(existingReviewSessionId, prompt);
+      const resumedSessionId = await this.sessionManager.sendOrResume(
+        existingReviewSessionId,
+        prompt,
+      );
       setReviewSessionId(prNumber, repo, resumedSessionId);
-      const aiResult = await this.waitForVerdict(resumedSessionId, prNumber, repo);
-      const { mergeable } = await this.github.getMergeabilityWithRetry(prNumber, repo);
-      const sizedResult = this.appendSizeProportionalityDimension(aiResult, sizeSignal);
-      const finalResult = this.appendMergeConflictDimension(sizedResult, mergeable);
+      const aiResult = await this.waitForVerdict(
+        resumedSessionId,
+        prNumber,
+        repo,
+      );
+      const { mergeable } = await this.github.getMergeabilityWithRetry(
+        prNumber,
+        repo,
+      );
+      const sizedResult = this.appendSizeProportionalityDimension(
+        aiResult,
+        sizeSignal,
+      );
+      const finalResult = this.appendMergeConflictDimension(
+        sizedResult,
+        mergeable,
+      );
       setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
       if (finalResult.verdict === 'approved') {
-        await this.handleApprovedVerdict(prNumber, repo, prRow.notion_task_id, projectId);
+        await this.handleApprovedVerdict(
+          prNumber,
+          repo,
+          prRow.notion_task_id,
+          projectId,
+        );
       }
       return finalResult;
     }
@@ -218,14 +288,28 @@ export class PRReviewService {
     setReviewSessionId(prNumber, repo, sessionId);
 
     const aiResult = await verdictPromise;
-    const { mergeable } = await this.github.getMergeabilityWithRetry(prNumber, repo);
-    const sizedResult = this.appendSizeProportionalityDimension(aiResult, sizeSignal);
-    const finalResult = this.appendMergeConflictDimension(sizedResult, mergeable);
+    const { mergeable } = await this.github.getMergeabilityWithRetry(
+      prNumber,
+      repo,
+    );
+    const sizedResult = this.appendSizeProportionalityDimension(
+      aiResult,
+      sizeSignal,
+    );
+    const finalResult = this.appendMergeConflictDimension(
+      sizedResult,
+      mergeable,
+    );
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
     // Set last_reviewed_sha so the next push_detected can compare correctly.
     setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
     if (finalResult.verdict === 'approved') {
-      await this.handleApprovedVerdict(prNumber, repo, prRow.notion_task_id, projectId);
+      await this.handleApprovedVerdict(
+        prNumber,
+        repo,
+        prRow.notion_task_id,
+        projectId,
+      );
     }
     return finalResult;
   }
@@ -235,19 +319,30 @@ export class PRReviewService {
    * on GitHub, and update the Notion task status to 👀 In Review.
    * Returns true if the PR was successfully transitioned from draft to ready.
    */
-  async handleApprovedVerdict(prNumber: number, repo: string, taskId: string | null, projectId?: string): Promise<boolean> {
+  async handleApprovedVerdict(
+    prNumber: number,
+    repo: string,
+    taskId: string | null,
+    projectId?: string,
+  ): Promise<boolean> {
     let draftTransitioned = false;
     try {
       await this.github.markPRReady(repo, prNumber);
       updatePRDraftStatus(prNumber, repo, 0);
       draftTransitioned = true;
     } catch (e) {
-      console.warn(`[PRReviewService] markPRReady skipped for PR #${prNumber}:`, e);
+      console.warn(
+        `[PRReviewService] markPRReady skipped for PR #${prNumber}:`,
+        e,
+      );
     }
     if (taskId) {
       const resolvedProjectId = projectId ?? this.defaultProjectId;
       try {
-        await this.resolveBackend(resolvedProjectId).updateStatus(taskId, '👀 In Review');
+        await this.resolveBackend(resolvedProjectId).updateStatus(
+          taskId,
+          '👀 In Review',
+        );
       } catch (e: unknown) {
         console.error(`[PRReviewService] task backend updateStatus failed:`, e);
       }
@@ -255,9 +350,14 @@ export class PRReviewService {
     // Trigger an immediate mergeability check so the watcher's DB merge_state and
     // WS event reflect current state — don't wait for the next 5-min poll.
     if (this.mergeWatcher) {
-      this.mergeWatcher.checkMergeabilityNow(prNumber, repo).catch((err: unknown) =>
-        console.warn(`[PRReviewService] checkMergeabilityNow failed for PR #${prNumber}:`, (err as Error).message),
-      );
+      this.mergeWatcher
+        .checkMergeabilityNow(prNumber, repo)
+        .catch((err: unknown) =>
+          console.warn(
+            `[PRReviewService] checkMergeabilityNow failed for PR #${prNumber}:`,
+            (err as Error).message,
+          ),
+        );
     }
     return draftTransitioned;
   }
@@ -281,13 +381,17 @@ export class PRReviewService {
     }
 
     const prData = await this.github.fetchPR(repo, prNumber);
-    const branches = prData.baseBranch && prData.headBranch
-      ? { base: prData.baseBranch, head: prData.headBranch }
-      : undefined;
+    const branches =
+      prData.baseBranch && prData.headBranch
+        ? { base: prData.baseBranch, head: prData.headBranch }
+        : undefined;
     // Re-review uses the FULL PR diff (compare endpoint), not just the incremental
     // delta, so the size signal reflects total churn across the lifetime of the PR.
     const diffData = await this.github.fetchDiff(prNumber, repo, branches);
-    const specFilesSection = await this.fetchSpecFilesSection(projectId, pr.notion_task_id);
+    const specFilesSection = await this.fetchSpecFilesSection(
+      projectId,
+      pr.notion_task_id,
+    );
     const sizeSignal = computeSizeSignal(diffData.diff, specFilesSection);
 
     const followUp = [
@@ -310,15 +414,31 @@ export class PRReviewService {
     incrementReviewIteration(prNumber, repo);
 
     // Send to the existing review session (resumes via --resume if it has exited)
-    const resumedSessionId = await this.sessionManager.sendOrResume(pr.review_session_id, followUp);
+    const resumedSessionId = await this.sessionManager.sendOrResume(
+      pr.review_session_id,
+      followUp,
+    );
     if (resumedSessionId !== pr.review_session_id) {
       setReviewSessionId(prNumber, repo, resumedSessionId);
     }
 
-    const aiResult = await this.waitForVerdict(resumedSessionId, prNumber, repo);
-    const { mergeable } = await this.github.getMergeabilityWithRetry(prNumber, repo);
-    const sizedResult = this.appendSizeProportionalityDimension(aiResult, sizeSignal);
-    const finalResult = this.appendMergeConflictDimension(sizedResult, mergeable);
+    const aiResult = await this.waitForVerdict(
+      resumedSessionId,
+      prNumber,
+      repo,
+    );
+    const { mergeable } = await this.github.getMergeabilityWithRetry(
+      prNumber,
+      repo,
+    );
+    const sizedResult = this.appendSizeProportionalityDimension(
+      aiResult,
+      sizeSignal,
+    );
+    const finalResult = this.appendMergeConflictDimension(
+      sizedResult,
+      mergeable,
+    );
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
     setLastReviewedSha(prNumber, repo, pr.head_sha ?? null);
     return finalResult;
@@ -329,7 +449,11 @@ export class PRReviewService {
    * first verdict JSON block found in an assistant message.
    * Falls back to parseReviewResult over stored events if session_ended fires first.
    */
-  private waitForVerdict(sessionId: string, prNumber: number, repo: string): Promise<PRReviewResult> {
+  private waitForVerdict(
+    sessionId: string,
+    prNumber: number,
+    repo: string,
+  ): Promise<PRReviewResult> {
     return new Promise<PRReviewResult>((resolve) => {
       const cleanup = () => {
         this.sessionManager.off('message', handler);
@@ -339,7 +463,11 @@ export class PRReviewService {
         if (!('sessionId' in msg) || msg.sessionId !== sessionId) return;
 
         if (msg.type === 'session_event' && msg.eventType === 'text') {
-          const result = this.tryParseVerdictFromRawEvent(msg.content, prNumber, repo);
+          const result = this.tryParseVerdictFromRawEvent(
+            msg.content,
+            prNumber,
+            repo,
+          );
           if (result) {
             cleanup();
             resolve(result);
@@ -373,7 +501,9 @@ export class PRReviewService {
       const event = JSON.parse(rawEventPayload) as Record<string, unknown>;
       if (event.type !== 'assistant') return null;
       const msg = event.message as Record<string, unknown> | undefined;
-      const content = msg?.content as Array<Record<string, unknown>> | undefined;
+      const content = msg?.content as
+        | Array<Record<string, unknown>>
+        | undefined;
       if (!content) return null;
 
       for (const block of content) {
@@ -398,9 +528,11 @@ export class PRReviewService {
   }
 
   /** Try to parse a JSON verdict object from a text string. Returns null on failure. */
-  private tryParseVerdict(
-    text: string,
-  ): { verdict: PRReviewResult['verdict']; dimensions: ReviewDimension[]; summary: string } | null {
+  private tryParseVerdict(text: string): {
+    verdict: PRReviewResult['verdict'];
+    dimensions: ReviewDimension[];
+    summary: string;
+  } | null {
     const candidate = this.extractJsonCandidate(text.trim());
     if (!candidate) {
       return null;
@@ -444,9 +576,18 @@ export class PRReviewService {
     let escape = false;
     for (let i = start; i < text.length; i++) {
       const ch = text[i];
-      if (escape) { escape = false; continue; }
-      if (ch === '\\' && inString) { escape = true; continue; }
-      if (ch === '"') { inString = !inString; continue; }
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch === '\\' && inString) {
+        escape = true;
+        continue;
+      }
+      if (ch === '"') {
+        inString = !inString;
+        continue;
+      }
       if (inString) continue;
       if (ch === '{') depth++;
       else if (ch === '}') {
@@ -457,7 +598,10 @@ export class PRReviewService {
     return null;
   }
 
-  private appendMergeConflictDimension(result: PRReviewResult, mergeable: boolean | null): PRReviewResult {
+  private appendMergeConflictDimension(
+    result: PRReviewResult,
+    mergeable: boolean | null,
+  ): PRReviewResult {
     // When GitHub returns null, mergeability is still being computed — skip the dimension entirely.
     if (mergeable === null) {
       return result;
@@ -477,7 +621,7 @@ export class PRReviewService {
 
     let verdict: PRReviewResult['verdict'];
     if (result.verdict === 'error' || result.verdict === 'incomplete') {
-      verdict = result.verdict;  // Never override error/incomplete
+      verdict = result.verdict; // Never override error/incomplete
     } else if (passedCount === dimensions.length) {
       verdict = 'approved';
     } else if (passedCount === 0) {
@@ -502,7 +646,9 @@ export class PRReviewService {
     result: PRReviewResult,
     signal: SizeSignal,
   ): PRReviewResult {
-    const existing = (result.dimensions ?? []).find((d) => d.name === SIZE_DIMENSION_NAME);
+    const existing = (result.dimensions ?? []).find(
+      (d) => d.name === SIZE_DIMENSION_NAME,
+    );
     let sizeDim: ReviewDimension;
     if (existing) {
       sizeDim = existing;
@@ -517,13 +663,15 @@ export class PRReviewService {
       };
     }
 
-    const otherDims = (result.dimensions ?? []).filter((d) => d.name !== SIZE_DIMENSION_NAME);
+    const otherDims = (result.dimensions ?? []).filter(
+      (d) => d.name !== SIZE_DIMENSION_NAME,
+    );
     const dimensions = [...otherDims, sizeDim];
     const passedCount = dimensions.filter((d) => d.passed).length;
 
     let verdict: PRReviewResult['verdict'];
     if (result.verdict === 'error' || result.verdict === 'incomplete') {
-      verdict = result.verdict;  // Never override error/incomplete
+      verdict = result.verdict; // Never override error/incomplete
     } else if (passedCount === dimensions.length) {
       verdict = 'approved';
     } else if (passedCount === 0) {
@@ -536,7 +684,10 @@ export class PRReviewService {
   }
 
   buildPrompt(pr: PullRequest, diff: PRDiff, taskBody: string): string {
-    const sizeSignal = computeSizeSignal(diff.diff, parseSection(taskBody, 'files'));
+    const sizeSignal = computeSizeSignal(
+      diff.diff,
+      parseSection(taskBody, 'files'),
+    );
     return `You are a code reviewer. Compare the following GitHub PR against its task specification.
 
 ## PR Metadata
@@ -558,16 +709,24 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
 
   /** Render the size signal block for the reviewer prompt. */
   private formatSizeSignalSection(signal: SizeSignal): string {
-    const ratio = signal.specFileCount > 0
-      ? signal.oversizeRatio.toFixed(2)
-      : 'n/a (no spec file list)';
+    const ratio =
+      signal.specFileCount > 0
+        ? signal.oversizeRatio.toFixed(2)
+        : 'n/a (no spec file list)';
     const flagged = isOversized(signal);
     const reasons: string[] = [];
     if (signal.exceededAbsoluteFloor) {
-      reasons.push(`lines added+deleted (${signal.linesAdded + signal.linesDeleted}) exceeds floor of ${SIZE_ABSOLUTE_FLOOR}`);
+      reasons.push(
+        `lines added+deleted (${signal.linesAdded + signal.linesDeleted}) exceeds floor of ${SIZE_ABSOLUTE_FLOOR}`,
+      );
     }
-    if (signal.specFileCount > 0 && signal.oversizeRatio > SIZE_FILE_RATIO_LIMIT) {
-      reasons.push(`filesTouched/specFileCount ratio (${signal.oversizeRatio.toFixed(2)}) exceeds ${SIZE_FILE_RATIO_LIMIT}×`);
+    if (
+      signal.specFileCount > 0 &&
+      signal.oversizeRatio > SIZE_FILE_RATIO_LIMIT
+    ) {
+      reasons.push(
+        `filesTouched/specFileCount ratio (${signal.oversizeRatio.toFixed(2)}) exceeds ${SIZE_FILE_RATIO_LIMIT}×`,
+      );
     }
     const flag = flagged
       ? `⚠️ OVERSIZED — ${reasons.join('; ')}. Review whether the overflow is necessary corollary work.`
@@ -586,7 +745,11 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     ].join('\n');
   }
 
-  parseReviewResult(events: SessionEvent[], prNumber: number, repo: string): PRReviewResult {
+  parseReviewResult(
+    events: SessionEvent[],
+    prNumber: number,
+    repo: string,
+  ): PRReviewResult {
     // Only use text blocks from the LAST assistant message to avoid pollution
     // from earlier tool-call assistant events.
     let lastAssistantContent: Array<Record<string, unknown>> | null = null;
@@ -595,7 +758,9 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         const parsed = JSON.parse(ev.payload) as Record<string, unknown>;
         if (parsed.type === 'assistant') {
           const msg = parsed.message as Record<string, unknown> | undefined;
-          const content = msg?.content as Array<Record<string, unknown>> | undefined;
+          const content = msg?.content as
+            | Array<Record<string, unknown>>
+            | undefined;
           if (content) lastAssistantContent = content;
         }
       } catch {

@@ -42,23 +42,23 @@ All four keys are optional. Only override the ones that differ from the defaults
 
 ### Field reference
 
-| Key | Default | Purpose |
-|---|---|---|
-| `allowedTools` | `[]` | Extra `Bash(prefix:*)` patterns merged on top of the orchestrator's base allowlist (`git`, `npm`, `npx`, `node`, `tsc`, `gh`, `ls`, `cat`, …). Every other `Bash` prefix is silently denied. |
-| `prGate.typeCheck` | `npx tsc --noEmit` | First command in the pre-PR gate, rendered into the session's injected `CLAUDE.md`. |
-| `prGate.build` | `npx vite build` | Second command in the pre-PR gate. |
-| `bootstrapScript` | _(none)_ | Path to a script run after worktree creation, before the session spawns. See section 2. |
-| `bashRules` | `npx` convention rule | List of strings that replace **Rule 5** onward in the orchestrator's Bash Rules section. Rules 1–4 (one command per call, no `cd path &&`, no heredoc subshells, no writes outside the worktree) are hardcoded and cannot be overridden. |
+| Key                | Default               | Purpose                                                                                                                                                                                                                                  |
+| ------------------ | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `allowedTools`     | `[]`                  | Extra `Bash(prefix:*)` patterns merged on top of the orchestrator's base allowlist (`git`, `npm`, `npx`, `node`, `tsc`, `gh`, `ls`, `cat`, …). Every other `Bash` prefix is silently denied.                                             |
+| `prGate.typeCheck` | `npx tsc --noEmit`    | First command in the pre-PR gate, rendered into the session's injected `CLAUDE.md`.                                                                                                                                                      |
+| `prGate.build`     | `npx vite build`      | Second command in the pre-PR gate.                                                                                                                                                                                                       |
+| `bootstrapScript`  | _(none)_              | Path to a script run after worktree creation, before the session spawns. See section 2.                                                                                                                                                  |
+| `bashRules`        | `npx` convention rule | List of strings that replace **Rule 5** onward in the orchestrator's Bash Rules section. Rules 1–4 (one command per call, no `cd path &&`, no heredoc subshells, no writes outside the worktree) are hardcoded and cannot be overridden. |
 
 ### `allowedTools` examples
 
-| Stack | Add to `allowedTools` |
-|---|---|
-| C# / .NET | `["Bash(dotnet:*)"]` |
-| Rust | `["Bash(cargo:*)", "Bash(rustup:*)"]` |
-| Go | `["Bash(go:*)"]` |
-| Python (uv) | `["Bash(uv:*)", "Bash(python:*)"]` |
-| Godot (C#) | `["Bash(dotnet:*)", "Bash(godot:*)"]` |
+| Stack       | Add to `allowedTools`                 |
+| ----------- | ------------------------------------- |
+| C# / .NET   | `["Bash(dotnet:*)"]`                  |
+| Rust        | `["Bash(cargo:*)", "Bash(rustup:*)"]` |
+| Go          | `["Bash(go:*)"]`                      |
+| Python (uv) | `["Bash(uv:*)", "Bash(python:*)"]`    |
+| Godot (C#)  | `["Bash(dotnet:*)", "Bash(godot:*)"]` |
 
 These are **additive**. The base set already covers `git`, `gh`, `npm`, `npx`,
 `node`, `tsc`, `cd`, `ls`, `cat`, `echo`, `mkdir`, `cp`, `mv`, `head`, `tail`,
@@ -123,7 +123,7 @@ restore that state before the session starts.
   checkout.
 - **Timeout**: 120 seconds. Anything slower will be killed.
 - **Failure mode**: a non-zero exit is logged with `[SessionManager] bootstrap
-  script failed` but the session **still launches**. Treat the script as
+script failed` but the session **still launches**. Treat the script as
   best-effort — make it idempotent and don't rely on it for correctness.
 
 ### What it should do
@@ -234,33 +234,40 @@ would do.
 
 ## Rules
 
-| | |
-|---|---|
-| **Source of truth** | Notion (or `tasks.yaml` for YAML projects) |
-| **Scope** | One task per session. No scope creep. |
-| **Branch naming** | `feature/<task-name>` from `dev` |
-| **When done** | Open draft PR → stop and wait. The dashboard sends review feedback as follow-up messages; address findings by pushing additional commits, then wait again. |
-| **Pre-PR gate** | <your typeCheck>, <your build> |
+|                     |                                                                                                                                                            |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Source of truth** | Notion (or `tasks.yaml` for YAML projects)                                                                                                                 |
+| **Scope**           | One task per session. No scope creep.                                                                                                                      |
+| **Branch naming**   | `feature/<task-name>` from `dev`                                                                                                                           |
+| **When done**       | Open draft PR → stop and wait. The dashboard sends review feedback as follow-up messages; address findings by pushing additional commits, then wait again. |
+| **Pre-PR gate**     | <your typeCheck>, <your build>                                                                                                                             |
 
 ## PR Format
+
 …
 
 ## Git isolation
+
 …
 
 ## Task Lifecycle
+
 …
 
 ## Tool Permissions
+
 …
 
 ## Bash Rules
+
 …
 
 ## Stack
+
 …
 
 ## Debug Mode
+
 …
 ```
 

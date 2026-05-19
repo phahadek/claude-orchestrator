@@ -47,7 +47,9 @@ describe('buildOrchestratorClaudeMd', () => {
 
     // Section 6: Branch rules
     expect(result).toContain('## Branch Rules');
-    expect(result).toContain(`Never commit directly to \`${defaultParams.targetBranch}\``);
+    expect(result).toContain(
+      `Never commit directly to \`${defaultParams.targetBranch}\``,
+    );
 
     // Section 7: Pre-PR gate
     expect(result).toContain('## Pre-PR Gate');
@@ -89,11 +91,15 @@ describe('buildOrchestratorClaudeMd', () => {
   it('uses custom bashRules when provided', () => {
     const result = buildOrchestratorClaudeMd({
       ...defaultParams,
-      bashRules: ['Use `dotnet` for builds and tests. Do not use `npm` or `npx`.'],
+      bashRules: [
+        'Use `dotnet` for builds and tests. Do not use `npm` or `npx`.',
+      ],
     });
     expect(result).toContain('**Rule 5 — Use `dotnet` for builds and tests');
     // Bash Rules section should not contain the npx rule
-    const bashSection = result.slice(result.indexOf('## Bash Rules (Permission System)'));
+    const bashSection = result.slice(
+      result.indexOf('## Bash Rules (Permission System)'),
+    );
     expect(bashSection).not.toContain('npx tsc');
   });
 
@@ -119,7 +125,9 @@ describe('buildOrchestratorClaudeMd', () => {
     const result = buildOrchestratorClaudeMd(defaultParams);
     expect(result).toContain('npx tsc --noEmit');
     expect(result).toContain('npx vite build');
-    expect(result).toContain('**Rule 5 — Use `npx` instead of bare tool names.**');
+    expect(result).toContain(
+      '**Rule 5 — Use `npx` instead of bare tool names.**',
+    );
   });
 
   it('includes worktree path in Git Isolation section', () => {
@@ -128,7 +136,9 @@ describe('buildOrchestratorClaudeMd', () => {
       worktreePath: '/my/worktree/dir',
     });
     expect(result).toContain('Your worktree directory is `/my/worktree/dir`');
-    expect(result).toContain('Never navigate to or operate on any parent directory');
+    expect(result).toContain(
+      'Never navigate to or operate on any parent directory',
+    );
   });
 
   it('interpolates taskName, taskUrl, projectContextUrl, and targetBranch', () => {
@@ -190,7 +200,10 @@ describe('orchestrator CLAUDE.md merge logic (section 10)', () => {
 
     expect(fs.existsSync(path.join(worktreePath, 'CLAUDE.md'))).toBe(true);
     // Project dir has its own CLAUDE.md — confirm it was not replaced
-    const projectContent = fs.readFileSync(path.join(projectDir, 'CLAUDE.md'), 'utf-8');
+    const projectContent = fs.readFileSync(
+      path.join(projectDir, 'CLAUDE.md'),
+      'utf-8',
+    );
     expect(projectContent).toBe('# Original');
   });
 
@@ -198,9 +211,14 @@ describe('orchestrator CLAUDE.md merge logic (section 10)', () => {
     // No project CLAUDE.md
     expect(fs.existsSync(path.join(projectDir, 'CLAUDE.md'))).toBe(false);
 
-    expect(() => writeMergedClaudeMd('Task B', 'https://www.notion.so/task-b')).not.toThrow();
+    expect(() =>
+      writeMergedClaudeMd('Task B', 'https://www.notion.so/task-b'),
+    ).not.toThrow();
 
-    const written = fs.readFileSync(path.join(worktreePath, 'CLAUDE.md'), 'utf-8');
+    const written = fs.readFileSync(
+      path.join(worktreePath, 'CLAUDE.md'),
+      'utf-8',
+    );
     expect(written).toContain('# Orchestrator Rules (DO NOT OVERRIDE)');
     // No project instructions separator when there is no project CLAUDE.md
     expect(written).not.toContain('# Project Instructions');
@@ -208,11 +226,18 @@ describe('orchestrator CLAUDE.md merge logic (section 10)', () => {
 
   it('when project has a CLAUDE.md, output contains only orchestrator content (no merge)', () => {
     const projectContent = '# Project Rules\n\nDo stuff the project way.';
-    fs.writeFileSync(path.join(projectDir, 'CLAUDE.md'), projectContent, 'utf-8');
+    fs.writeFileSync(
+      path.join(projectDir, 'CLAUDE.md'),
+      projectContent,
+      'utf-8',
+    );
 
     writeMergedClaudeMd('Task C', 'https://www.notion.so/task-c');
 
-    const written = fs.readFileSync(path.join(worktreePath, 'CLAUDE.md'), 'utf-8');
+    const written = fs.readFileSync(
+      path.join(worktreePath, 'CLAUDE.md'),
+      'utf-8',
+    );
 
     // Orchestrator section is present
     expect(written).toContain('# Orchestrator Rules');
@@ -228,7 +253,10 @@ describe('orchestrator CLAUDE.md merge logic (section 10)', () => {
 
     writeMergedClaudeMd('Task D', 'https://www.notion.so/task-d');
 
-    const afterMerge = fs.readFileSync(path.join(projectDir, 'CLAUDE.md'), 'utf-8');
+    const afterMerge = fs.readFileSync(
+      path.join(projectDir, 'CLAUDE.md'),
+      'utf-8',
+    );
     expect(afterMerge).toBe(original);
   });
 });
@@ -338,7 +366,9 @@ describe('buildSessionContext strips polluted project CLAUDE.md', () => {
     });
 
     // Should have exactly ONE set of orchestrator rules (the current task's)
-    const orchestratorCount = (result.match(/# Orchestrator Rules \(DO NOT OVERRIDE\)/g) || []).length;
+    const orchestratorCount = (
+      result.match(/# Orchestrator Rules \(DO NOT OVERRIDE\)/g) || []
+    ).length;
     expect(orchestratorCount).toBe(1);
 
     // Should contain the current task
@@ -393,12 +423,16 @@ describe('loadOrchestratorConfig', () => {
   it('reads custom config from .claude/orchestrator.json', () => {
     const claudeDir = path.join(tmpDir, '.claude');
     fs.mkdirSync(claudeDir, { recursive: true });
-    fs.writeFileSync(path.join(claudeDir, 'orchestrator.json'), JSON.stringify({
-      allowedTools: ['Bash(dotnet:*)'],
-      prGate: { typeCheck: 'dotnet build', build: 'dotnet test' },
-      bootstrapScript: './bootstrap.sh',
-      bashRules: ['Use `dotnet` instead of `npm`.'],
-    }), 'utf-8');
+    fs.writeFileSync(
+      path.join(claudeDir, 'orchestrator.json'),
+      JSON.stringify({
+        allowedTools: ['Bash(dotnet:*)'],
+        prGate: { typeCheck: 'dotnet build', build: 'dotnet test' },
+        bootstrapScript: './bootstrap.sh',
+        bashRules: ['Use `dotnet` instead of `npm`.'],
+      }),
+      'utf-8',
+    );
 
     const config = loadOrchestratorConfig(tmpDir);
     expect(config.allowedTools).toEqual(['Bash(dotnet:*)']);
@@ -411,9 +445,13 @@ describe('loadOrchestratorConfig', () => {
   it('falls back to defaults for missing fields in partial config', () => {
     const claudeDir = path.join(tmpDir, '.claude');
     fs.mkdirSync(claudeDir, { recursive: true });
-    fs.writeFileSync(path.join(claudeDir, 'orchestrator.json'), JSON.stringify({
-      allowedTools: ['Bash(dotnet:*)'],
-    }), 'utf-8');
+    fs.writeFileSync(
+      path.join(claudeDir, 'orchestrator.json'),
+      JSON.stringify({
+        allowedTools: ['Bash(dotnet:*)'],
+      }),
+      'utf-8',
+    );
 
     const config = loadOrchestratorConfig(tmpDir);
     expect(config.allowedTools).toEqual(['Bash(dotnet:*)']);
@@ -425,7 +463,11 @@ describe('loadOrchestratorConfig', () => {
   it('returns defaults when config file is invalid JSON', () => {
     const claudeDir = path.join(tmpDir, '.claude');
     fs.mkdirSync(claudeDir, { recursive: true });
-    fs.writeFileSync(path.join(claudeDir, 'orchestrator.json'), 'not json', 'utf-8');
+    fs.writeFileSync(
+      path.join(claudeDir, 'orchestrator.json'),
+      'not json',
+      'utf-8',
+    );
 
     const config = loadOrchestratorConfig(tmpDir);
     expect(config.prGate.typeCheck).toBe('npx tsc --noEmit');

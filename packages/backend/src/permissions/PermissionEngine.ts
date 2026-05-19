@@ -55,7 +55,9 @@ function matchPattern(
     try {
       return new RegExp(pattern).test(subject);
     } catch {
-      console.warn(`[PermissionEngine] Invalid regex pattern "${pattern}" — skipping`);
+      console.warn(
+        `[PermissionEngine] Invalid regex pattern "${pattern}" — skipping`,
+      );
       return false;
     }
   }
@@ -108,7 +110,9 @@ export class PermissionEngine {
     }
 
     // Extract tool names from user allow rules
-    const rules = getRules().filter((r) => r.enabled === 1 && r.decision === 'allow');
+    const rules = getRules().filter(
+      (r) => r.enabled === 1 && r.decision === 'allow',
+    );
     for (const rule of rules) {
       const name = rule.pattern.split(' ')[0];
       if (name) tools.add(name);
@@ -138,7 +142,10 @@ export class PermissionEngine {
     } catch (err) {
       // FK constraint fires when session_id is unknown. AgentSession is
       // responsible for wiring the session context; this is best-effort.
-      console.warn('[PermissionEngine] Could not write permission event:', (err as Error).message);
+      console.warn(
+        '[PermissionEngine] Could not write permission event:',
+        (err as Error).message,
+      );
     }
   }
 }

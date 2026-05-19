@@ -7,7 +7,11 @@ import { Readable, Writable } from 'stream';
 function createMockProc() {
   const stdout = new Readable({ read() {} });
   const stderr = new Readable({ read() {} });
-  const stdin = new Writable({ write(_chunk: unknown, _enc: unknown, cb: () => void) { cb(); } });
+  const stdin = new Writable({
+    write(_chunk: unknown, _enc: unknown, cb: () => void) {
+      cb();
+    },
+  });
   const proc = Object.assign(new EventEmitter(), {
     stdout,
     stderr,
@@ -52,7 +56,11 @@ function fakeNotionClient(): NotionClient {
 }
 
 /** Emit an assistant event with a Bash tool_use block, then a matching tool_result. */
-async function simulateBashPush(stdout: Readable, toolUseId: string, command: string) {
+async function simulateBashPush(
+  stdout: Readable,
+  toolUseId: string,
+  command: string,
+) {
   const assistantEvent = {
     type: 'assistant',
     message: {
@@ -118,13 +126,17 @@ async function simulatePushFiles(stdout: Readable, toolUseId: string) {
 describe('isPushCommand', () => {
   it('returns true for Bash git push commands', () => {
     expect(isPushCommand('Bash', 'git push origin feature/foo')).toBe(true);
-    expect(isPushCommand('Bash', 'git push --force-with-lease origin feature/test')).toBe(true);
+    expect(
+      isPushCommand('Bash', 'git push --force-with-lease origin feature/test'),
+    ).toBe(true);
     expect(isPushCommand('Bash', 'git  push origin main')).toBe(true);
   });
 
   it('returns true for mcp__github__push_files', () => {
     expect(isPushCommand('mcp__github__push_files', '')).toBe(true);
-    expect(isPushCommand('mcp__github__push_files', 'irrelevant input')).toBe(true);
+    expect(isPushCommand('mcp__github__push_files', 'irrelevant input')).toBe(
+      true,
+    );
   });
 
   it('returns false for git status', () => {
@@ -164,7 +176,11 @@ describe('AgentSession — push detection', () => {
 
     const runPromise = session.run();
 
-    await simulateBashPush(mockProc.stdout, 'tool-id-1', 'git push origin feature/my-branch');
+    await simulateBashPush(
+      mockProc.stdout,
+      'tool-id-1',
+      'git push origin feature/my-branch',
+    );
 
     mockProc.stdout.push(null);
     await new Promise((r) => setTimeout(r, 0));
@@ -195,7 +211,11 @@ describe('AgentSession — push detection', () => {
 
     const runPromise = session.run();
 
-    await simulateBashPush(mockProc.stdout, 'tool-id-2', 'git push --force-with-lease origin feature/test');
+    await simulateBashPush(
+      mockProc.stdout,
+      'tool-id-2',
+      'git push --force-with-lease origin feature/test',
+    );
 
     mockProc.stdout.push(null);
     await new Promise((r) => setTimeout(r, 0));
@@ -204,7 +224,12 @@ describe('AgentSession — push detection', () => {
 
     const pushMsg = messages.find((m: any) => m.type === 'push_detected');
     expect(pushMsg).toBeDefined();
-    expect(pushMsg).toMatchObject({ type: 'push_detected', sessionId: 'push-session-2', prNumber: 7, repo: 'owner/repo' });
+    expect(pushMsg).toMatchObject({
+      type: 'push_detected',
+      sessionId: 'push-session-2',
+      prNumber: 7,
+      repo: 'owner/repo',
+    });
   });
 
   it('does NOT emit push_detected for git push --dry-run', async () => {
@@ -222,7 +247,11 @@ describe('AgentSession — push detection', () => {
 
     const runPromise = session.run();
 
-    await simulateBashPush(mockProc.stdout, 'tool-id-3', 'git push --dry-run origin feature/test');
+    await simulateBashPush(
+      mockProc.stdout,
+      'tool-id-3',
+      'git push --dry-run origin feature/test',
+    );
 
     mockProc.stdout.push(null);
     await new Promise((r) => setTimeout(r, 0));

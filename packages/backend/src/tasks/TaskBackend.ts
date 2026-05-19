@@ -18,7 +18,10 @@ export interface TaskBackend {
    * (the Notion database ID). For YAML projects, it filters tasks by milestone in
    * the per-project tasks.yaml.
    */
-  fetchReadyTasks(milestoneId: string, skipCache?: boolean): Promise<ResolvedTask[]>;
+  fetchReadyTasks(
+    milestoneId: string,
+    skipCache?: boolean,
+  ): Promise<ResolvedTask[]>;
 
   /** Mark a task as in-review and attach a PR URL. */
   attachPR(taskId: string, prUrl: string): Promise<void>;

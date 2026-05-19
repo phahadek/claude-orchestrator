@@ -2,7 +2,12 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { getProjectById } from '../config';
 import { ProjectService } from '../projects/ProjectService';
-import { getTaskCache, getActiveTaskAggregates, getLatestNonSystemEventPayload, getSetting } from '../db/queries';
+import {
+  getTaskCache,
+  getActiveTaskAggregates,
+  getLatestNonSystemEventPayload,
+  getSetting,
+} from '../db/queries';
 import type { TaskAggregateRow } from '../db/queries';
 import { deriveDisplayStatus } from '../tasks/TaskStatusEngine';
 import type { NotionTask } from '../notion/types';
@@ -31,7 +36,9 @@ function getReviewIterationCap(): number {
   const raw = getSetting('max_review_iterations');
   if (!raw) return DEFAULT_MAX_REVIEW_ITERATIONS;
   const parsed = parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_REVIEW_ITERATIONS;
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_MAX_REVIEW_ITERATIONS;
 }
 
 // ── Broadcast infrastructure ─────────────────────────────────────────────────
@@ -136,8 +143,12 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
   });
 
   const totalTokens = {
-    input: (row.code_session_input_tokens ?? 0) + (row.review_session_input_tokens ?? 0),
-    output: (row.code_session_output_tokens ?? 0) + (row.review_session_output_tokens ?? 0),
+    input:
+      (row.code_session_input_tokens ?? 0) +
+      (row.review_session_input_tokens ?? 0),
+    output:
+      (row.code_session_output_tokens ?? 0) +
+      (row.review_session_output_tokens ?? 0),
   };
 
   return {
@@ -182,7 +193,11 @@ function summarizeEvent(payload: string): string {
     for (const block of content) {
       if (typeof block !== 'object' || block === null) continue;
       const b = block as Record<string, unknown>;
-      if (b.type === 'text' && typeof b.text === 'string' && b.text.trim().length > 0) {
+      if (
+        b.type === 'text' &&
+        typeof b.text === 'string' &&
+        b.text.trim().length > 0
+      ) {
         const text = b.text.trim().replace(/\s+/g, ' ');
         return text.length > 120 ? text.slice(0, 117) + '…' : text;
       }
@@ -212,29 +227,37 @@ export function createTasksRouter(): Router {
 
   // ── GET /api/tasks/export?format=yaml&projectId=<id>&boardId=<id> ────────
   router.get('/tasks/export', (req: Request, res: Response) => {
-    const format = typeof req.query.format === 'string' ? req.query.format : 'yaml';
+    const format =
+      typeof req.query.format === 'string' ? req.query.format : 'yaml';
     if (format !== 'yaml') {
       res.status(400).json({ error: 'Only format=yaml is supported' });
       return;
     }
 
-    const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : '';
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : '';
     const project = projectId ? getProjectById(projectId) : null;
     const boardId = project
-      ? (typeof req.query.boardId === 'string' && req.query.boardId
-          ? req.query.boardId
-          : project.boardId)
-      : (typeof req.query.boardId === 'string' ? req.query.boardId : '');
+      ? typeof req.query.boardId === 'string' && req.query.boardId
+        ? req.query.boardId
+        : project.boardId
+      : typeof req.query.boardId === 'string'
+        ? req.query.boardId
+        : '';
 
     if (!boardId) {
-      res.status(400).json({ error: 'boardId or projectId query param is required' });
+      res
+        .status(400)
+        .json({ error: 'boardId or projectId query param is required' });
       return;
     }
 
     const cacheKey = `board:${resolveBoardCacheKey(boardId)}`;
     const boardCacheRow = getTaskCache(cacheKey);
     if (!boardCacheRow) {
-      res.status(404).json({ error: 'Board not found in cache. Fetch tasks first.' });
+      res
+        .status(404)
+        .json({ error: 'Board not found in cache. Fetch tasks first.' });
       return;
     }
 
@@ -273,7 +296,8 @@ export function createTasksRouter(): Router {
 
   // ── GET /api/tasks/active?projectId=<id>&boardId=<id> ────────────────────
   router.get('/tasks/active', (req: Request, res: Response) => {
-    const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : '';
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : '';
     if (!projectId) {
       res.status(400).json({ error: 'projectId query param is required' });
       return;
@@ -315,7 +339,9 @@ export function createTasksRouter(): Router {
     // Resolve blocked status from the full board task list
     if (boardCacheRow) {
       try {
-        const allBoardTasks = JSON.parse(boardCacheRow.raw_json) as NotionTask[];
+        const allBoardTasks = JSON.parse(
+          boardCacheRow.raw_json,
+        ) as NotionTask[];
         const resolver = new DependencyResolver();
         const resolved = resolver.resolve(allBoardTasks);
         const resolvedMap = new Map(resolved.map((r) => [r.task.id, r]));

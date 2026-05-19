@@ -99,7 +99,10 @@ describe('PATCH /api/sessions/:id/tags', () => {
       .send({ tags: ['bugfix', 'auth'] });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
-    expect(queries.setSessionTags).toHaveBeenCalledWith('test-session-1', ['bugfix', 'auth']);
+    expect(queries.setSessionTags).toHaveBeenCalledWith('test-session-1', [
+      'bugfix',
+      'auth',
+    ]);
   });
 
   it('coerces non-array tags body to empty array', async () => {
@@ -119,7 +122,11 @@ describe('PATCH /api/sessions/:id/tags', () => {
       .patch('/api/sessions/test-session-1/tags')
       .send({ tags: ['fix'] });
     expect(broadcasts).toHaveLength(1);
-    expect(broadcasts[0]).toMatchObject({ type: 'session_updated', sessionId: 'test-session-1', tags: ['fix'] });
+    expect(broadcasts[0]).toMatchObject({
+      type: 'session_updated',
+      sessionId: 'test-session-1',
+      tags: ['fix'],
+    });
   });
 });
 
@@ -139,7 +146,10 @@ describe('PATCH /api/sessions/:id/note', () => {
       .send({ note: 'my note' });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
-    expect(queries.setSessionNote).toHaveBeenCalledWith('test-session-1', 'my note');
+    expect(queries.setSessionNote).toHaveBeenCalledWith(
+      'test-session-1',
+      'my note',
+    );
   });
 
   it('sets null to clear note', async () => {
@@ -168,6 +178,10 @@ describe('PATCH /api/sessions/:id/note', () => {
       .patch('/api/sessions/test-session-1/note')
       .send({ note: null });
     expect(broadcasts).toHaveLength(1);
-    expect(broadcasts[0]).toMatchObject({ type: 'session_updated', sessionId: 'test-session-1', note: null });
+    expect(broadcasts[0]).toMatchObject({
+      type: 'session_updated',
+      sessionId: 'test-session-1',
+      note: null,
+    });
   });
 });

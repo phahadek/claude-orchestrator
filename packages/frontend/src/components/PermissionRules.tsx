@@ -55,7 +55,11 @@ export function PermissionRules() {
               <td>{r.order_index}</td>
               <td className={styles.pattern}>{r.pattern}</td>
               <td>{r.match_type}</td>
-              <td className={r.decision === 'allow' ? styles.allow : styles.deny}>{r.decision}</td>
+              <td
+                className={r.decision === 'allow' ? styles.allow : styles.deny}
+              >
+                {r.decision}
+              </td>
               <td>{r.label ?? '—'}</td>
               <td>{r.enabled ? '✓' : '✗'}</td>
             </tr>

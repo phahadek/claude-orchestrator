@@ -7,9 +7,9 @@ services:
     command: npm run dev
     ports:
       # Backend
-      - "${PORT:-3000}:3000"
+      - '${PORT:-3000}:3000'
       # Vite dev server
-      - "5173:5173"
+      - '5173:5173'
     env_file:
       - packages/backend/.env
     environment:
@@ -23,13 +23,13 @@ services:
       - ./package-lock.json:/app/package-lock.json:ro
 
       # ── Claude CLI auth credentials ────────────────────────────────────────
-      - "${HOME}/.claude:/root/.claude"
+      - '${HOME}/.claude:/root/.claude'
 
       # ── claude CLI binary ──────────────────────────────────────────────────
-      - "${CLAUDE_BIN:-/usr/local/bin/claude}:/usr/local/bin/claude:ro"
+      - '${CLAUDE_BIN:-/usr/local/bin/claude}:/usr/local/bin/claude:ro'
 
       # ── SQLite database persistence ────────────────────────────────────────
-      - "./data:/app/data"
+      - './data:/app/data'
 
       # ── Project directories ────────────────────────────────────────────────
       # Example (uncomment and adjust for each project):

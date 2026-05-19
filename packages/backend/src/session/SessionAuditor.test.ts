@@ -13,7 +13,9 @@ vi.mock('../db/queries', () => ({
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function makeSession(overrides: Partial<AuditableSession> = {}): AuditableSession {
+function makeSession(
+  overrides: Partial<AuditableSession> = {},
+): AuditableSession {
   return {
     sessionId: 'test-session-id',
     taskId: 'task-abc123',
@@ -30,7 +32,9 @@ function makeNotionClient(filesSection = ''): TaskTrackerBackend {
     '## Context\nContext text',
     '## Acceptance Criteria\nAC text',
     filesSection ? `## Files\n${filesSection}` : '',
-  ].filter(Boolean).join('\n\n');
+  ]
+    .filter(Boolean)
+    .join('\n\n');
   return {
     type: 'notion' as const,
     fetchTaskPage: vi.fn(async () => body),
@@ -40,7 +44,9 @@ function makeNotionClient(filesSection = ''): TaskTrackerBackend {
   } as unknown as TaskTrackerBackend;
 }
 
-function makeGitHubClient(prOverrides: Partial<PullRequest> = {}): GitHubClient {
+function makeGitHubClient(
+  prOverrides: Partial<PullRequest> = {},
+): GitHubClient {
   const defaultPR: PullRequest = {
     id: 42,
     title: 'feat: add audit hook',
@@ -82,7 +88,11 @@ describe('SessionAuditor', () => {
 
   // ── AC: Clean exit without PR ─────────────────────────────────────────────
   it('returns "Clean exit but no PR opened" when exitCode is 0 and prUrl is null', async () => {
-    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
     const session = makeSession({ prUrl: undefined });
     const audit = await auditor.audit(session, 0);
 
@@ -91,7 +101,11 @@ describe('SessionAuditor', () => {
   });
 
   it('does NOT flag "Clean exit but no PR opened" when exitCode is non-zero', async () => {
-    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
     const session = makeSession({ prUrl: undefined });
     const audit = await auditor.audit(session, 1);
 
@@ -116,13 +130,17 @@ describe('SessionAuditor', () => {
     const audit = await auditor.audit(session, 0);
 
     expect(audit.violations).not.toContain('PR targets dev instead of dev');
-    const branchViolation = audit.violations.find((v) => v.startsWith('PR targets'));
+    const branchViolation = audit.violations.find((v) =>
+      v.startsWith('PR targets'),
+    );
     expect(branchViolation).toBeUndefined();
   });
 
   // ── AC: Spec mismatch — files in diff not in spec ────────────────────────
   it('flags files in the diff that are not listed in the task spec', async () => {
-    const notion = makeNotionClient('packages/backend/src/session/SessionAuditor.ts');
+    const notion = makeNotionClient(
+      'packages/backend/src/session/SessionAuditor.ts',
+    );
     const github = makeGitHubClient();
     vi.mocked(github.fetchDiff).mockResolvedValue({
       prId: 42,
@@ -174,7 +192,9 @@ describe('SessionAuditor', () => {
   it('routeFailuresToSession does not throw when send() throws', async () => {
     const github = makeGitHubClient({ baseBranch: 'main' }); // produces a violation
     const sm = makeSessionManager();
-    vi.mocked(sm.send).mockImplementation(() => { throw new Error('Session exited'); });
+    vi.mocked(sm.send).mockImplementation(() => {
+      throw new Error('Session exited');
+    });
 
     const auditor = new SessionAuditor(makeNotionClient(), github, sm);
     const session = makeSession();
@@ -188,7 +208,11 @@ describe('SessionAuditor', () => {
   //  explicitly excluded in the integration, and here we confirm audit() can be
   //  called with a review session without crashing.)
   it('audit() runs without error for a review-type session', async () => {
-    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
     const session = makeSession({ sessionType: 'review', prUrl: undefined });
     const audit = await auditor.audit(session, 0);
     expect(audit).toBeDefined();
@@ -206,7 +230,10 @@ describe('SessionAuditor', () => {
     expect(audit).toBeDefined();
     // PR checks skipped — no branch/title/body violations from GitHub
     const ghViolations = audit.violations.filter(
-      (v) => v.includes('PR targets') || v.includes('PR title') || v.includes('PR body'),
+      (v) =>
+        v.includes('PR targets') ||
+        v.includes('PR title') ||
+        v.includes('PR body'),
     );
     expect(ghViolations).toHaveLength(0);
   });
@@ -226,7 +253,11 @@ describe('SessionAuditor', () => {
       base_branch: 'dev',
     } as any);
 
-    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
     const session = makeSession({ prUrl: undefined });
     const audit = await auditor.audit(session, 0);
 
@@ -237,7 +268,11 @@ describe('SessionAuditor', () => {
   it('still flags "no PR opened" when both prUrl is null and getPRByNotionTaskId returns null', async () => {
     vi.mocked(queries.getPRByNotionTaskId).mockReturnValue(null);
 
-    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
     const session = makeSession({ prUrl: undefined });
     const audit = await auditor.audit(session, 0);
 
@@ -248,8 +283,14 @@ describe('SessionAuditor', () => {
   it('does NOT call getPRByNotionTaskId when prUrl is already set', async () => {
     vi.mocked(queries.getPRByNotionTaskId).mockReturnValue(null);
 
-    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
-    const session = makeSession({ prUrl: 'https://github.com/owner/repo/pull/42' });
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
+    const session = makeSession({
+      prUrl: 'https://github.com/owner/repo/pull/42',
+    });
     await auditor.audit(session, 0);
 
     expect(queries.getPRByNotionTaskId).not.toHaveBeenCalled();

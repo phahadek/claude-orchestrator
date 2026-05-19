@@ -47,7 +47,9 @@ vi.mock('../HistoryGrid', () => ({
 }));
 
 vi.mock('../PermissionRules', () => ({
-  PermissionRules: () => <div data-testid="permission-rules">PermissionRules</div>,
+  PermissionRules: () => (
+    <div data-testid="permission-rules">PermissionRules</div>
+  ),
 }));
 
 vi.mock('../Notifications', () => ({
@@ -71,17 +73,34 @@ vi.mock('../TaskDetail', () => ({
 }));
 
 beforeEach(() => {
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-    ok: true,
-    json: async () => [{ id: 'proj-1', name: 'Project 1', projectDir: '/p', contextUrl: '', boardId: '' }],
-  }));
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          id: 'proj-1',
+          name: 'Project 1',
+          projectDir: '/p',
+          contextUrl: '',
+          boardId: '',
+        },
+      ],
+    }),
+  );
 
   const store: Record<string, string> = {};
   vi.stubGlobal('localStorage', {
     getItem: (k: string) => store[k] ?? null,
-    setItem: (k: string, v: string) => { store[k] = v; },
-    removeItem: (k: string) => { delete store[k]; },
-    clear: () => { Object.keys(store).forEach((k) => delete store[k]); },
+    setItem: (k: string, v: string) => {
+      store[k] = v;
+    },
+    removeItem: (k: string) => {
+      delete store[k];
+    },
+    clear: () => {
+      Object.keys(store).forEach((k) => delete store[k]);
+    },
   });
 });
 

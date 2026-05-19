@@ -44,7 +44,9 @@ function makeProject(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
   };
 }
 
-function makeTask(overrides: Partial<ResolvedTask['task']> = {}): ResolvedTask['task'] {
+function makeTask(
+  overrides: Partial<ResolvedTask['task']> = {},
+): ResolvedTask['task'] {
   return {
     id: 'task-1',
     title: 'Test Task',
@@ -108,7 +110,9 @@ describe('AutoLauncher', () => {
     });
 
     await launcher.pollOnce();
-    expect((sm as unknown as { start: ReturnType<typeof vi.fn> }).start).toHaveBeenCalledTimes(1);
+    expect(
+      (sm as unknown as { start: ReturnType<typeof vi.fn> }).start,
+    ).toHaveBeenCalledTimes(1);
   });
 
   it('skips tasks that are not Ready', async () => {
@@ -123,29 +127,18 @@ describe('AutoLauncher', () => {
     });
 
     await launcher.pollOnce();
-    expect((sm as unknown as { start: ReturnType<typeof vi.fn> }).start).not.toHaveBeenCalled();
+    expect(
+      (sm as unknown as { start: ReturnType<typeof vi.fn> }).start,
+    ).not.toHaveBeenCalled();
   });
 
   it('skips non-Code task types (📋 Planning, 🧪 Testing)', async () => {
     const sm = makeMockSessionManager();
     const planning = makeTask({ id: 'p', type: '📋 Planning' });
     const testing = makeTask({ id: 't', type: '🧪 Testing' });
-    const backend = makeMockBackend([makeResolved(planning), makeResolved(testing)]);
-
-    const launcher = new AutoLauncher(sm, undefined, {
-      listProjects: () => [makeProject()],
-      resolveBackend: () => backend,
-      pollOnStart: false,
-    });
-
-    await launcher.pollOnce();
-    expect((sm as unknown as { start: ReturnType<typeof vi.fn> }).start).not.toHaveBeenCalled();
-  });
-
-  it('skips blocked tasks (dependency not Done)', async () => {
-    const sm = makeMockSessionManager();
     const backend = makeMockBackend([
-      makeResolved(makeTask(), { blocked: true, blockers: [makeTask({ id: 'dep' })] }),
+      makeResolved(planning),
+      makeResolved(testing),
     ]);
 
     const launcher = new AutoLauncher(sm, undefined, {
@@ -155,7 +148,30 @@ describe('AutoLauncher', () => {
     });
 
     await launcher.pollOnce();
-    expect((sm as unknown as { start: ReturnType<typeof vi.fn> }).start).not.toHaveBeenCalled();
+    expect(
+      (sm as unknown as { start: ReturnType<typeof vi.fn> }).start,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('skips blocked tasks (dependency not Done)', async () => {
+    const sm = makeMockSessionManager();
+    const backend = makeMockBackend([
+      makeResolved(makeTask(), {
+        blocked: true,
+        blockers: [makeTask({ id: 'dep' })],
+      }),
+    ]);
+
+    const launcher = new AutoLauncher(sm, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+    expect(
+      (sm as unknown as { start: ReturnType<typeof vi.fn> }).start,
+    ).not.toHaveBeenCalled();
   });
 
   it('skips projects with autoLaunchEnabled = false', async () => {
@@ -169,7 +185,9 @@ describe('AutoLauncher', () => {
     });
 
     await launcher.pollOnce();
-    expect((sm as unknown as { start: ReturnType<typeof vi.fn> }).start).not.toHaveBeenCalled();
+    expect(
+      (sm as unknown as { start: ReturnType<typeof vi.fn> }).start,
+    ).not.toHaveBeenCalled();
     expect(backend.fetchReadyTasks).not.toHaveBeenCalled();
   });
 
@@ -189,12 +207,16 @@ describe('AutoLauncher', () => {
     });
 
     await launcher.pollOnce();
-    expect((sm as unknown as { start: ReturnType<typeof vi.fn> }).start).toHaveBeenCalledTimes(2);
+    expect(
+      (sm as unknown as { start: ReturnType<typeof vi.fn> }).start,
+    ).toHaveBeenCalledTimes(2);
   });
 
   it('skips when the cap is already filled by existing sessions', async () => {
     const sm = makeMockSessionManager();
-    (sm as unknown as { getLiveCodeSessionCount: ReturnType<typeof vi.fn> }).getLiveCodeSessionCount = vi.fn(() => 5);
+    (
+      sm as unknown as { getLiveCodeSessionCount: ReturnType<typeof vi.fn> }
+    ).getLiveCodeSessionCount = vi.fn(() => 5);
     runtimeSettings.auto_launch_concurrency = 1;
     const backend = makeMockBackend([makeResolved(makeTask())]);
 
@@ -205,7 +227,9 @@ describe('AutoLauncher', () => {
     });
 
     await launcher.pollOnce();
-    expect((sm as unknown as { start: ReturnType<typeof vi.fn> }).start).not.toHaveBeenCalled();
+    expect(
+      (sm as unknown as { start: ReturnType<typeof vi.fn> }).start,
+    ).not.toHaveBeenCalled();
   });
 
   it('skips tasks with a non-null pause_reason', async () => {
@@ -221,7 +245,9 @@ describe('AutoLauncher', () => {
     });
 
     await launcher.pollOnce();
-    expect((sm as unknown as { start: ReturnType<typeof vi.fn> }).start).not.toHaveBeenCalled();
+    expect(
+      (sm as unknown as { start: ReturnType<typeof vi.fn> }).start,
+    ).not.toHaveBeenCalled();
   });
 
   it('skips tasks whose PR has a non-null pause_reason in SQLite', async () => {
@@ -249,7 +275,9 @@ describe('AutoLauncher', () => {
 
   it('skips when a live session for the task already exists', async () => {
     const sm = makeMockSessionManager();
-    (sm as unknown as { hasLiveSessionForTask: ReturnType<typeof vi.fn> }).hasLiveSessionForTask = vi.fn(() => true);
+    (
+      sm as unknown as { hasLiveSessionForTask: ReturnType<typeof vi.fn> }
+    ).hasLiveSessionForTask = vi.fn(() => true);
     const backend = makeMockBackend([makeResolved(makeTask())]);
 
     const launcher = new AutoLauncher(sm, undefined, {
@@ -259,7 +287,9 @@ describe('AutoLauncher', () => {
     });
 
     await launcher.pollOnce();
-    expect((sm as unknown as { start: ReturnType<typeof vi.fn> }).start).not.toHaveBeenCalled();
+    expect(
+      (sm as unknown as { start: ReturnType<typeof vi.fn> }).start,
+    ).not.toHaveBeenCalled();
   });
 
   it('emits an auto_launch broadcast for every launched task', async () => {
@@ -290,7 +320,10 @@ describe('AutoLauncher', () => {
     const backend: TaskBackend = {
       type: 'notion',
       fetchReadyTasks: vi.fn(
-        () => new Promise<ResolvedTask[]>((res) => { resolveFetch = res; }),
+        () =>
+          new Promise<ResolvedTask[]>((res) => {
+            resolveFetch = res;
+          }),
       ),
       attachPR: vi.fn(),
       updateStatus: vi.fn(),
@@ -316,13 +349,15 @@ describe('AutoLauncher', () => {
     const backend = makeMockBackend([]);
 
     const launcher = new AutoLauncher(sm, undefined, {
-      listProjects: () => [makeProject({
-        boards: [
-          { id: 'no-source', sourceId: '', name: 'NoSrc' },
-          { id: 'milestone-X', sourceId: 'src-X', name: 'X' },
-        ],
-        autoLaunchMilestoneId: null,
-      })],
+      listProjects: () => [
+        makeProject({
+          boards: [
+            { id: 'no-source', sourceId: '', name: 'NoSrc' },
+            { id: 'milestone-X', sourceId: 'src-X', name: 'X' },
+          ],
+          autoLaunchMilestoneId: null,
+        }),
+      ],
       resolveBackend: () => backend,
       pollOnStart: false,
     });
@@ -336,13 +371,15 @@ describe('AutoLauncher', () => {
     const backend = makeMockBackend([]);
 
     const launcher = new AutoLauncher(sm, undefined, {
-      listProjects: () => [makeProject({
-        boards: [
-          { id: 'milestone-1', sourceId: 'src-1', name: 'M1' },
-          { id: 'milestone-2', sourceId: 'src-2', name: 'M2' },
-        ],
-        autoLaunchMilestoneId: 'milestone-2',
-      })],
+      listProjects: () => [
+        makeProject({
+          boards: [
+            { id: 'milestone-1', sourceId: 'src-1', name: 'M1' },
+            { id: 'milestone-2', sourceId: 'src-2', name: 'M2' },
+          ],
+          autoLaunchMilestoneId: 'milestone-2',
+        }),
+      ],
       resolveBackend: () => backend,
       pollOnStart: false,
     });

@@ -25,7 +25,15 @@ interface Props {
 
 type GroupKey = 'ready' | 'inProgress' | 'inReview' | 'blocked';
 
-export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, milestoneId, onClose }: Props) {
+export function DispatchModal({
+  tasks,
+  tasksReady,
+  send,
+  resetTasks,
+  project,
+  milestoneId,
+  onClose,
+}: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [collapsed, setCollapsed] = useState<Set<GroupKey>>(new Set());
@@ -41,7 +49,12 @@ export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, mi
 
   useEffect(() => {
     resetTasks();
-    send({ type: 'fetch_tasks', projectId: project.id, milestoneId, skipCache: true });
+    send({
+      type: 'fetch_tasks',
+      projectId: project.id,
+      milestoneId,
+      skipCache: true,
+    });
     // Run once on modal open. project/milestoneId are fixed for this modal instance,
     // and including send/resetTasks would refetch on every parent render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -51,8 +64,16 @@ export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, mi
     if (tasksReady) setLoading(false);
   }, [tasksReady]);
 
-  const ready = tasks.filter((t) => t.task.status === '🗂️ Ready' && !t.blocked && !t.nonCode && t.task.type === '💻 Code');
-  const blocked = tasks.filter((t) => t.task.status === '🗂️ Ready' && (t.blocked || t.nonCode));
+  const ready = tasks.filter(
+    (t) =>
+      t.task.status === '🗂️ Ready' &&
+      !t.blocked &&
+      !t.nonCode &&
+      t.task.type === '💻 Code',
+  );
+  const blocked = tasks.filter(
+    (t) => t.task.status === '🗂️ Ready' && (t.blocked || t.nonCode),
+  );
   const inProgress = tasks.filter((t) => t.task.status === '🔄 In Progress');
   const inReview = tasks.filter((t) => t.task.status === '👀 In Review');
 
@@ -88,7 +109,10 @@ export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, mi
                 aria-expanded={!collapsed.has('ready')}
                 onClick={() => toggleGroup('ready')}
               >
-                <span className={`${styles.chevron}${collapsed.has('ready') ? ` ${styles.chevronCollapsed}` : ''}`} aria-hidden="true" />
+                <span
+                  className={`${styles.chevron}${collapsed.has('ready') ? ` ${styles.chevronCollapsed}` : ''}`}
+                  aria-hidden="true"
+                />
                 ✅ Ready ({ready.length})
               </h3>
               {!collapsed.has('ready') && (
@@ -100,11 +124,15 @@ export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, mi
                         checked={selected.has(t.task.id)}
                         onChange={() => toggle(t.task.id)}
                       />
-                      <span className={styles['type-icon']} title={t.task.type}>{taskTypeIcon(t.task.type)}</span>
+                      <span className={styles['type-icon']} title={t.task.type}>
+                        {taskTypeIcon(t.task.type)}
+                      </span>
                       {t.task.title}
                     </label>
                   ))}
-                  {ready.length === 0 && <p className={styles.empty}>No unblocked tasks.</p>}
+                  {ready.length === 0 && (
+                    <p className={styles.empty}>No unblocked tasks.</p>
+                  )}
                 </>
               )}
             </section>
@@ -116,15 +144,21 @@ export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, mi
                   aria-expanded={!collapsed.has('inProgress')}
                   onClick={() => toggleGroup('inProgress')}
                 >
-                  <span className={`${styles.chevron}${collapsed.has('inProgress') ? ` ${styles.chevronCollapsed}` : ''}`} aria-hidden="true" />
+                  <span
+                    className={`${styles.chevron}${collapsed.has('inProgress') ? ` ${styles.chevronCollapsed}` : ''}`}
+                    aria-hidden="true"
+                  />
                   🔄 In Progress ({inProgress.length})
                 </h3>
-                {!collapsed.has('inProgress') && inProgress.map((t) => (
-                  <div key={t.task.id} className={styles['blocked-task']}>
-                    <span className={styles['type-icon']} title={t.task.type}>{taskTypeIcon(t.task.type)}</span>
-                    {t.task.title}
-                  </div>
-                ))}
+                {!collapsed.has('inProgress') &&
+                  inProgress.map((t) => (
+                    <div key={t.task.id} className={styles['blocked-task']}>
+                      <span className={styles['type-icon']} title={t.task.type}>
+                        {taskTypeIcon(t.task.type)}
+                      </span>
+                      {t.task.title}
+                    </div>
+                  ))}
               </section>
             )}
             {inReview.length > 0 && (
@@ -135,15 +169,21 @@ export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, mi
                   aria-expanded={!collapsed.has('inReview')}
                   onClick={() => toggleGroup('inReview')}
                 >
-                  <span className={`${styles.chevron}${collapsed.has('inReview') ? ` ${styles.chevronCollapsed}` : ''}`} aria-hidden="true" />
+                  <span
+                    className={`${styles.chevron}${collapsed.has('inReview') ? ` ${styles.chevronCollapsed}` : ''}`}
+                    aria-hidden="true"
+                  />
                   👀 In Review ({inReview.length})
                 </h3>
-                {!collapsed.has('inReview') && inReview.map((t) => (
-                  <div key={t.task.id} className={styles['blocked-task']}>
-                    <span className={styles['type-icon']} title={t.task.type}>{taskTypeIcon(t.task.type)}</span>
-                    {t.task.title}
-                  </div>
-                ))}
+                {!collapsed.has('inReview') &&
+                  inReview.map((t) => (
+                    <div key={t.task.id} className={styles['blocked-task']}>
+                      <span className={styles['type-icon']} title={t.task.type}>
+                        {taskTypeIcon(t.task.type)}
+                      </span>
+                      {t.task.title}
+                    </div>
+                  ))}
               </section>
             )}
             <section>
@@ -153,28 +193,35 @@ export function DispatchModal({ tasks, tasksReady, send, resetTasks, project, mi
                 aria-expanded={!collapsed.has('blocked')}
                 onClick={() => toggleGroup('blocked')}
               >
-                <span className={`${styles.chevron}${collapsed.has('blocked') ? ` ${styles.chevronCollapsed}` : ''}`} aria-hidden="true" />
+                <span
+                  className={`${styles.chevron}${collapsed.has('blocked') ? ` ${styles.chevronCollapsed}` : ''}`}
+                  aria-hidden="true"
+                />
                 🚫 Blocked ({blocked.length})
               </h3>
-              {!collapsed.has('blocked') && blocked.map((t) => (
-                <div key={t.task.id} className={styles['blocked-task']}>
-                  <span className={styles['type-icon']} title={t.task.type}>{taskTypeIcon(t.task.type)}</span>
-                  {t.task.title}
-                  {t.nonCode && <span className={styles.tag}>non-code</span>}
-                  {t.blocked && (
-                    <span className={styles.tag}>
-                      blocked by: {t.blockers.map((b) => b.title).join(', ')}
+              {!collapsed.has('blocked') &&
+                blocked.map((t) => (
+                  <div key={t.task.id} className={styles['blocked-task']}>
+                    <span className={styles['type-icon']} title={t.task.type}>
+                      {taskTypeIcon(t.task.type)}
                     </span>
-                  )}
-                </div>
-              ))}
+                    {t.task.title}
+                    {t.nonCode && <span className={styles.tag}>non-code</span>}
+                    {t.blocked && (
+                      <span className={styles.tag}>
+                        blocked by: {t.blockers.map((b) => b.title).join(', ')}
+                      </span>
+                    )}
+                  </div>
+                ))}
             </section>
           </div>
         )}
         <div className={styles['modal-footer']}>
           <button onClick={onClose}>Cancel</button>
           <button onClick={launch} disabled={selected.size === 0}>
-            Launch{selected.size > 0 ? ` (${selected.size})` : ''} session{selected.size !== 1 ? 's' : ''}
+            Launch{selected.size > 0 ? ` (${selected.size})` : ''} session
+            {selected.size !== 1 ? 's' : ''}
           </button>
         </div>
       </div>

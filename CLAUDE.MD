@@ -7,6 +7,7 @@
 > populated per-host, per-developer from `.claude/local-context.md.example`.
 >
 > If `.claude/local-context.md` does not exist:
+>
 > - The repo was likely just cloned. Tell the human and stop — do not proceed.
 > - Setup: `cp .claude/local-context.md.example .claude/local-context.md`, then
 >   edit it with the project's real Notion URLs.
@@ -37,17 +38,18 @@ the task at hand requires that context.
 
 ## Rules
 
-| | |
-|---|---|
-| **Source of truth** | Notion — never infer rules from code or git history |
-| **Scope** | One task per session. No scope creep. |
-| **Branch naming** | `feature/<task-name>` from `dev` |
-| **Commit to `dev` or `main` directly?** | Never |
-| **When done** | Open draft PR → mark task 👀 In Review → stop. Human merges and marks ✅ Done. |
-| **Pre-PR gate (hard — in order)** | 1. Merge/rebase `dev` → resolve conflicts. 2. `tsc --noEmit` passes (both packages). 3. `vite build` passes. |
-| **Session Log / File Index updates** | Never — the dashboard handles session tracking. |
+|                                         |                                                                                                              |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| **Source of truth**                     | Notion — never infer rules from code or git history                                                          |
+| **Scope**                               | One task per session. No scope creep.                                                                        |
+| **Branch naming**                       | `feature/<task-name>` from `dev`                                                                             |
+| **Commit to `dev` or `main` directly?** | Never                                                                                                        |
+| **When done**                           | Open draft PR → mark task 👀 In Review → stop. Human merges and marks ✅ Done.                               |
+| **Pre-PR gate (hard — in order)**       | 1. Merge/rebase `dev` → resolve conflicts. 2. `tsc --noEmit` passes (both packages). 3. `vite build` passes. |
+| **Session Log / File Index updates**    | Never — the dashboard handles session tracking.                                                              |
 
 ## PR Format
+
 - Title: `feat: <exact task name>` — no scope prefix, no milestone tag
 - Use `gh pr create --draft --base dev --body-file /tmp/pr-body.md`
 - Body must include: ## Summary (bullets), ## Test plan (checkboxes), Notion task URL
@@ -80,15 +82,19 @@ Every draft PR **must** use this exact structure — no omissions, no reordering
 
 ```markdown
 ## Summary
+
 <1-3 sentences: what changed and why>
 
 ## Notion Task
+
 <link to the Notion task page>
 
 ## Automated Tests
+
 <list tests added/modified, or "No test changes">
 
 ## Files Changed
+
 <bulleted list of files with brief description of each change>
 ```
 
@@ -167,27 +173,27 @@ to limit output, let the Bash tool handle truncation.
 
 ### Auto-accepted (will execute without prompting)
 
-| Tool | Why |
-|---|---|
-| `Read`, `Glob`, `Grep`, `ToolSearch` | Read-only, always safe |
-| `Edit`, `Write` | `acceptEdits` mode auto-approves in-project file operations |
-| `Bash` (read-only: `ls`, `cat`, `head`, etc.) | `acceptEdits` auto-approves read-only Bash |
-| `Bash(git:*)` | Explicitly in `--allowed-tools` — all git operations |
-| `Bash(npm:*)`, `Bash(npx:*)`, `Bash(node:*)` | Explicitly in `--allowed-tools` — Node.js tooling |
-| `Bash(gh:*)` | Explicitly in `--allowed-tools` — GitHub CLI |
-| `Bash(ls:*)`, `Bash(cat:*)`, `Bash(mkdir:*)`, etc. | Explicitly in `--allowed-tools` — common file ops |
-| `TodoWrite`, `Skill`, `EnterPlanMode`, `ExitPlanMode` | Session management tools |
-| `mcp__claude_ai_Notion__*` | Explicitly in `--allowed-tools` |
-| `mcp__github__*` | Explicitly in `--allowed-tools` |
-| `mcp__claude_ai_Asana__*`, `mcp__claude_ai_Google_Calendar__*` | Explicitly in `--allowed-tools` |
+| Tool                                                           | Why                                                         |
+| -------------------------------------------------------------- | ----------------------------------------------------------- |
+| `Read`, `Glob`, `Grep`, `ToolSearch`                           | Read-only, always safe                                      |
+| `Edit`, `Write`                                                | `acceptEdits` mode auto-approves in-project file operations |
+| `Bash` (read-only: `ls`, `cat`, `head`, etc.)                  | `acceptEdits` auto-approves read-only Bash                  |
+| `Bash(git:*)`                                                  | Explicitly in `--allowed-tools` — all git operations        |
+| `Bash(npm:*)`, `Bash(npx:*)`, `Bash(node:*)`                   | Explicitly in `--allowed-tools` — Node.js tooling           |
+| `Bash(gh:*)`                                                   | Explicitly in `--allowed-tools` — GitHub CLI                |
+| `Bash(ls:*)`, `Bash(cat:*)`, `Bash(mkdir:*)`, etc.             | Explicitly in `--allowed-tools` — common file ops           |
+| `TodoWrite`, `Skill`, `EnterPlanMode`, `ExitPlanMode`          | Session management tools                                    |
+| `mcp__claude_ai_Notion__*`                                     | Explicitly in `--allowed-tools`                             |
+| `mcp__github__*`                                               | Explicitly in `--allowed-tools`                             |
+| `mcp__claude_ai_Asana__*`, `mcp__claude_ai_Google_Calendar__*` | Explicitly in `--allowed-tools`                             |
 
 ### Auto-denied (will fail silently — session sees "permission denied" in tool result)
 
-| Tool | Example |
-|---|---|
-| `Bash` with non-allowlisted prefix | `curl`, `wget`, `rm`, `sudo`, `docker`, `ssh` |
-| Any tool not listed above | Custom MCP tools, `Agent`, etc. |
-| `Write`/`Edit` to paths **outside** the project directory | `/tmp/`, other repos |
+| Tool                                                      | Example                                       |
+| --------------------------------------------------------- | --------------------------------------------- |
+| `Bash` with non-allowlisted prefix                        | `curl`, `wget`, `rm`, `sudo`, `docker`, `ssh` |
+| Any tool not listed above                                 | Custom MCP tools, `Agent`, etc.               |
+| `Write`/`Edit` to paths **outside** the project directory | `/tmp/`, other repos                          |
 
 ### Adding new Bash command prefixes
 
@@ -206,11 +212,11 @@ array in `AgentSession.ts`. Only add commands that are safe for automated use.
 node scripts/notion-query.mjs <database-id> --env packages/backend/.env [options]
 ```
 
-| Flag | Purpose |
-|---|---|
-| `--no-done` | Exclude ✅ Done tasks |
+| Flag                  | Purpose                   |
+| --------------------- | ------------------------- |
+| `--no-done`           | Exclude ✅ Done tasks     |
 | `--status "🗂️ Ready"` | Filter to a single status |
-| `--json` | Raw JSON output |
+| `--json`              | Raw JSON output           |
 
 **Global location:** `~/.claude/scripts/notion-query.mjs` (symlink).
 **Source:** `scripts/notion-query.mjs` in this repo.
@@ -224,10 +230,10 @@ node scripts/notion-query.mjs <database-id> --env packages/backend/.env [options
 node scripts/notion-move-tasks.mjs --target <database-id> --tasks <id1,id2,...> --env packages/backend/.env [options]
 ```
 
-| Flag | Purpose |
-|---|---|
-| `--dry-run` | Preview without making changes |
-| `--no-archive` | Copy but keep the source page |
+| Flag                    | Purpose                        |
+| ----------------------- | ------------------------------ |
+| `--dry-run`             | Preview without making changes |
+| `--no-archive`          | Copy but keep the source page  |
 | `--status "🔲 Backlog"` | Override status on moved tasks |
 
 Failure handling: if the content copy step errors out (e.g. a Notion API
@@ -244,19 +250,19 @@ copied with their `table_row` children intact.
 
 ## Stack
 
-| Layer | Tech | Path |
-|---|---|---|
-| Frontend | React + Vite (TS) | `packages/frontend/` |
-| Backend | Node.js + Express (TS) | `packages/backend/` |
-| Transport | WebSocket (`ws`) | `packages/backend/src/ws/types.ts` |
-| Database | SQLite (`better-sqlite3`) | `packages/backend/src/db/schema.ts` |
-| Task source | Notion REST API | server-side only |
+| Layer       | Tech                      | Path                                |
+| ----------- | ------------------------- | ----------------------------------- |
+| Frontend    | React + Vite (TS)         | `packages/frontend/`                |
+| Backend     | Node.js + Express (TS)    | `packages/backend/`                 |
+| Transport   | WebSocket (`ws`)          | `packages/backend/src/ws/types.ts`  |
+| Database    | SQLite (`better-sqlite3`) | `packages/backend/src/db/schema.ts` |
+| Task source | Notion REST API           | server-side only                    |
 
 ---
 
 ## Debug Session Mode
 
-**Trigger phrase:** *"Let's launch a debug session for testing task [name/link]."*
+**Trigger phrase:** _"Let's launch a debug session for testing task [name/link]."_
 
 When a human uses this phrase, enter debug session mode:
 
@@ -270,11 +276,12 @@ When a human uses this phrase, enter debug session mode:
 5. **Stop and wait.** Tell the human the fix is ready and prompt them to
    refresh the browser tab. Do not commit or open a PR.
 6. Human verifies in the browser.
-7. Repeat steps 3–6 until the human gives explicit sign-off (e.g. *"Looks good, ship it"*).
+7. Repeat steps 3–6 until the human gives explicit sign-off (e.g. _"Looks good, ship it"_).
 8. After sign-off: commit to `feature/<task-name>` and open a **draft PR
    targeting `dev`** — same as the standard workflow.
 
 **Constraints:**
+
 - No auto-PR. Always wait for explicit human sign-off.
 - No worktree. Changes must be in the main working directory.
 - One debug session = one task. No bundling unrelated fixes.

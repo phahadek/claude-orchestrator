@@ -17,7 +17,11 @@ function makeTask(overrides: Partial<NotionTask> & { id: string }): NotionTask {
 
 describe('DependencyResolver', () => {
   it('returns one ResolvedTask per input task', () => {
-    const tasks = [makeTask({ id: 'a' }), makeTask({ id: 'b' }), makeTask({ id: 'c' })];
+    const tasks = [
+      makeTask({ id: 'a' }),
+      makeTask({ id: 'b' }),
+      makeTask({ id: 'c' }),
+    ];
     const result = resolver.resolve(tasks);
     expect(result).toHaveLength(3);
     expect(result.map((r) => r.task.id)).toEqual(['a', 'b', 'c']);
@@ -99,7 +103,10 @@ describe('DependencyResolver', () => {
 
   it('matches dependencies stored without hyphens against page IDs with hyphens', () => {
     const tasks = [
-      makeTask({ id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', status: '🗂️ Ready' }),
+      makeTask({
+        id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+        status: '🗂️ Ready',
+      }),
       makeTask({ id: 'b', dependsOn: ['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'] }),
     ];
     const resolved = resolver.resolve(tasks);

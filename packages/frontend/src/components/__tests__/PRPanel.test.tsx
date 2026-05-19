@@ -45,7 +45,7 @@ describe('PRPanel', () => {
       json: async () => prs,
     });
 
-    render(<PRPanel activeProjectId="proj-1"  />);
+    render(<PRPanel activeProjectId="proj-1" />);
 
     await waitFor(() => {
       expect(screen.getByText('PR One')).toBeDefined();
@@ -60,7 +60,7 @@ describe('PRPanel', () => {
       json: async () => [],
     });
 
-    render(<PRPanel activeProjectId="proj-1"  />);
+    render(<PRPanel activeProjectId="proj-1" />);
 
     await waitFor(() => {
       expect(screen.getByText(/no open pull requests/i)).toBeDefined();
@@ -74,7 +74,7 @@ describe('PRPanel', () => {
       json: async () => ({ error: 'Project has no githubRepo configured' }),
     });
 
-    render(<PRPanel activeProjectId="proj-no-repo"  />);
+    render(<PRPanel activeProjectId="proj-no-repo" />);
 
     await waitFor(() => {
       expect(screen.getByText(/no github repo configured/i)).toBeDefined();
@@ -82,9 +82,11 @@ describe('PRPanel', () => {
   });
 
   it('shows network error banner on fetch failure', async () => {
-    (fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Network error'));
+    (fetch as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('Network error'),
+    );
 
-    render(<PRPanel activeProjectId="proj-1"  />);
+    render(<PRPanel activeProjectId="proj-1" />);
 
     await waitFor(() => {
       expect(screen.getByText(/could not reach server/i)).toBeDefined();
@@ -95,7 +97,9 @@ describe('PRPanel', () => {
 describe('PRPanel — per-card ErrorBoundary isolation', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn());
-    vi.spyOn(console, 'error').mockImplementation(() => { /* silence React's logged error */ });
+    vi.spyOn(console, 'error').mockImplementation(() => {
+      /* silence React's logged error */
+    });
   });
 
   afterEach(() => {

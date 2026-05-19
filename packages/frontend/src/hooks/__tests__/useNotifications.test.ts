@@ -20,9 +20,15 @@ function makeLocalStorageMock() {
   const store = new Map<string, string>();
   return {
     getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => { store.set(key, value); },
-    removeItem: (key: string) => { store.delete(key); },
-    clear: () => { store.clear(); },
+    setItem: (key: string, value: string) => {
+      store.set(key, value);
+    },
+    removeItem: (key: string) => {
+      store.delete(key);
+    },
+    clear: () => {
+      store.clear();
+    },
   };
 }
 
@@ -43,8 +49,11 @@ describe('useNotifications', () => {
 
     // Mock Notification — cast to any to allow setting static properties
     NotificationSpy = vi.fn();
-    (NotificationSpy as unknown as { permission: string }).permission = 'granted';
-    (NotificationSpy as unknown as { requestPermission: () => Promise<string> }).requestPermission = vi.fn().mockResolvedValue('granted');
+    (NotificationSpy as unknown as { permission: string }).permission =
+      'granted';
+    (
+      NotificationSpy as unknown as { requestPermission: () => Promise<string> }
+    ).requestPermission = vi.fn().mockResolvedValue('granted');
     vi.stubGlobal('Notification', NotificationSpy);
   });
 
@@ -110,20 +119,30 @@ describe('useNotifications', () => {
 
     act(() => {
       rerender({
-        s: [{ ...session, status: 'needs_permission', pendingPermission: { toolName: 'Bash', proposedAction: 'rm -rf' } }],
+        s: [
+          {
+            ...session,
+            status: 'needs_permission',
+            pendingPermission: { toolName: 'Bash', proposedAction: 'rm -rf' },
+          },
+        ],
       });
     });
 
     expect(NotificationSpy).toHaveBeenCalledWith(
       '🔔 Approval needed',
-      expect.objectContaining({ body: 'Bash requested in My Task. Click to review.' }),
+      expect.objectContaining({
+        body: 'Bash requested in My Task. Click to review.',
+      }),
     );
   });
 
   it('does not fire when Notification permission is denied', () => {
     const deniedSpy = vi.fn();
     (deniedSpy as unknown as { permission: string }).permission = 'denied';
-    (deniedSpy as unknown as { requestPermission: () => Promise<string> }).requestPermission = vi.fn().mockResolvedValue('denied');
+    (
+      deniedSpy as unknown as { requestPermission: () => Promise<string> }
+    ).requestPermission = vi.fn().mockResolvedValue('denied');
     vi.stubGlobal('Notification', deniedSpy);
 
     const session = makeSession({ status: 'running' });
@@ -199,10 +218,7 @@ describe('useNotifications', () => {
 
     act(() => {
       rerender({
-        s: [
-          initial[0],
-          { ...initial[1], status: 'done' },
-        ],
+        s: [initial[0], { ...initial[1], status: 'done' }],
       });
     });
 
@@ -251,7 +267,9 @@ describe('useNotifications', () => {
     });
 
     act(() => {
-      rerender({ s: [{ ...session, status: 'done', lastStatusReplay: false }] });
+      rerender({
+        s: [{ ...session, status: 'done', lastStatusReplay: false }],
+      });
     });
 
     expect(NotificationSpy).toHaveBeenCalledTimes(1);
@@ -262,18 +280,32 @@ describe('useNotifications', () => {
   });
 
   it('does NOT fire pr_review_complete notification when prReviewEvent carries replay:true', () => {
-    type ReviewEvt = { prNumber: number; verdict: string; summary: string; replay?: boolean } | null;
+    type ReviewEvt = {
+      prNumber: number;
+      verdict: string;
+      summary: string;
+      replay?: boolean;
+    } | null;
     const session = makeSession({ status: 'running' });
-    const initialProps: { s: SessionState[]; pr: ReviewEvt } = { s: [session], pr: null };
+    const initialProps: { s: SessionState[]; pr: ReviewEvt } = {
+      s: [session],
+      pr: null,
+    };
     const { rerender } = renderHook(
-      ({ s, pr }: { s: SessionState[]; pr: ReviewEvt }) => useNotifications(s, pr),
+      ({ s, pr }: { s: SessionState[]; pr: ReviewEvt }) =>
+        useNotifications(s, pr),
       { initialProps },
     );
 
     act(() => {
       rerender({
         s: [session],
-        pr: { prNumber: 42, verdict: 'approved', summary: 'looks good', replay: true },
+        pr: {
+          prNumber: 42,
+          verdict: 'approved',
+          summary: 'looks good',
+          replay: true,
+        },
       });
     });
 

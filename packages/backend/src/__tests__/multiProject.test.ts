@@ -54,7 +54,8 @@ describe('getSessionsByProject()', () => {
       'utf-8',
     );
     // Both INSERT statements should include project_id
-    const insertMatches = source.match(/INSERT.*INTO sessions[\s\S]*?VALUES/g) ?? [];
+    const insertMatches =
+      source.match(/INSERT.*INTO sessions[\s\S]*?VALUES/g) ?? [];
     expect(insertMatches.length).toBeGreaterThanOrEqual(1);
     for (const match of insertMatches) {
       expect(match).toContain('project_id');
@@ -73,7 +74,9 @@ describe('schema.ts runMigrations()', () => {
     // Must contain the idempotent migration
     expect(source).toMatch(/ALTER TABLE sessions ADD COLUMN project_id TEXT/);
     // Must be wrapped in try/catch (idempotent)
-    const idx = source.indexOf('ALTER TABLE sessions ADD COLUMN project_id TEXT');
+    const idx = source.indexOf(
+      'ALTER TABLE sessions ADD COLUMN project_id TEXT',
+    );
     const before = source.slice(Math.max(0, idx - 60), idx);
     expect(before).toContain('try');
   });

@@ -33,9 +33,12 @@ export interface TokenAnalyticsResponse {
 // GET /api/analytics/tokens
 // Query params: projectId (string), from (ms epoch), to (ms epoch)
 analyticsRouter.get('/tokens', (req: Request, res: Response) => {
-  const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : null;
-  const fromMs = typeof req.query.from === 'string' ? parseInt(req.query.from, 10) : null;
-  const toMs = typeof req.query.to === 'string' ? parseInt(req.query.to, 10) : null;
+  const projectId =
+    typeof req.query.projectId === 'string' ? req.query.projectId : null;
+  const fromMs =
+    typeof req.query.from === 'string' ? parseInt(req.query.from, 10) : null;
+  const toMs =
+    typeof req.query.to === 'string' ? parseInt(req.query.to, 10) : null;
 
   let query = `SELECT * FROM sessions WHERE 1=1`;
   const params: (string | number)[] = [];
@@ -67,7 +70,11 @@ analyticsRouter.get('/tokens', (req: Request, res: Response) => {
     inputTokens: row.total_input_tokens ?? 0,
     outputTokens: row.total_output_tokens ?? 0,
     totalTokens: (row.total_input_tokens ?? 0) + (row.total_output_tokens ?? 0),
-    cost: calculateCost(row.total_input_tokens ?? 0, row.total_output_tokens ?? 0, row.model),
+    cost: calculateCost(
+      row.total_input_tokens ?? 0,
+      row.total_output_tokens ?? 0,
+      row.model,
+    ),
   }));
 
   const totals = sessions.reduce(
@@ -78,7 +85,13 @@ analyticsRouter.get('/tokens', (req: Request, res: Response) => {
       totalCost: acc.totalCost + s.cost,
       sessionCount: acc.sessionCount + 1,
     }),
-    { inputTokens: 0, outputTokens: 0, totalTokens: 0, totalCost: 0, sessionCount: 0 },
+    {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      totalCost: 0,
+      sessionCount: 0,
+    },
   );
 
   const result: TokenAnalyticsResponse = { sessions, totals };

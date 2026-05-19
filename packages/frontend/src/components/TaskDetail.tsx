@@ -12,37 +12,37 @@ import styles from './TaskDetail.module.css';
 // ── Display status helpers ─────────────────────────────────────────
 
 const DISPLAY_STATUS_LABELS: Record<DisplayStatus, string> = {
-  ready:          '🗂️ Ready',
-  in_progress:    '🔄 In Progress',
-  in_review:      '🔍 In Review',
-  needs_attention:'⚠️ Needs Attention',
+  ready: '🗂️ Ready',
+  in_progress: '🔄 In Progress',
+  in_review: '🔍 In Review',
+  needs_attention: '⚠️ Needs Attention',
   ready_to_merge: '✅ Ready to Merge',
-  done:           '✓ Done',
-  backlog:        '🗂️ Backlog',
+  done: '✓ Done',
+  backlog: '🗂️ Backlog',
 };
 
 const DISPLAY_STATUS_CSS_KEYS: Record<DisplayStatus, string> = {
-  ready:          'status--ready',
-  in_progress:    'status--in-progress',
-  in_review:      'status--in-review',
-  needs_attention:'status--needs-attention',
+  ready: 'status--ready',
+  in_progress: 'status--in-progress',
+  in_review: 'status--in-review',
+  needs_attention: 'status--needs-attention',
   ready_to_merge: 'status--ready-to-merge',
-  done:           'status--done',
-  backlog:        'status--backlog',
+  done: 'status--done',
+  backlog: 'status--backlog',
 };
 
 const VERDICT_LABELS: Record<string, string> = {
-  approved:      '✅ Approved',
+  approved: '✅ Approved',
   needs_changes: '⚠️ Needs Changes',
-  incomplete:    '❌ Incomplete',
-  error:         '⚠️ Review Error',
+  incomplete: '❌ Incomplete',
+  error: '⚠️ Review Error',
 };
 
 const VERDICT_CSS_KEYS: Record<string, string> = {
-  approved:      'verdict--approved',
+  approved: 'verdict--approved',
   needs_changes: 'verdict--needs-changes',
-  incomplete:    'verdict--incomplete',
-  error:         'verdict--error',
+  incomplete: 'verdict--incomplete',
+  error: 'verdict--error',
 };
 
 // ── PR state helpers ───────────────────────────────────────────────
@@ -50,10 +50,14 @@ const VERDICT_CSS_KEYS: Record<string, string> = {
 function prStateLabel(state: string, draft: boolean): string {
   if (draft) return 'Draft';
   switch (state) {
-    case 'open':   return 'Open';
-    case 'merged': return 'Merged';
-    case 'closed': return 'Closed';
-    default:       return state;
+    case 'open':
+      return 'Open';
+    case 'merged':
+      return 'Merged';
+    case 'closed':
+      return 'Closed';
+    default:
+      return state;
   }
 }
 
@@ -128,14 +132,21 @@ interface Props {
 
 // ── TaskDetail ────────────────────────────────────────────────────
 
-export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Props) {
+export function TaskDetail({
+  task,
+  send,
+  onClose,
+  sessions = [],
+  projectId,
+}: Props) {
   const [showReviewSection, setShowReviewSection] = useState(true);
   const [showReviewDimensions, setShowReviewDimensions] = useState(false);
   const [reviewInFlight, setReviewInFlight] = useState(false);
   const [mergeInFlight, setMergeInFlight] = useState(false);
   const [fixConflictsInFlight, setFixConflictsInFlight] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
-  const [optimisticDisplayStatus, setOptimisticDisplayStatus] = useState<DisplayStatus | null>(null);
+  const [optimisticDisplayStatus, setOptimisticDisplayStatus] =
+    useState<DisplayStatus | null>(null);
 
   // Reset state when task changes
   useEffect(() => {
@@ -148,18 +159,22 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
 
   // Look up live session state for event transcripts
   const codeSession = task.codeSession
-    ? sessions.find((s) => s.sessionId === task.codeSession!.sessionId) ?? null
+    ? (sessions.find((s) => s.sessionId === task.codeSession!.sessionId) ??
+      null)
     : null;
   const reviewSession = task.review
-    ? sessions.find((s) => s.sessionId === task.review!.sessionId) ?? null
+    ? (sessions.find((s) => s.sessionId === task.review!.sessionId) ?? null)
     : null;
 
   const isCodeActive =
-    task.codeSession?.status === 'running' || task.codeSession?.status === 'needs_permission';
+    task.codeSession?.status === 'running' ||
+    task.codeSession?.status === 'needs_permission';
 
   const effectiveDisplayStatus = optimisticDisplayStatus ?? task.displayStatus;
-  const displayStatusLabel = DISPLAY_STATUS_LABELS[effectiveDisplayStatus] ?? effectiveDisplayStatus;
-  const displayStatusClass = DISPLAY_STATUS_CSS_KEYS[effectiveDisplayStatus] ?? '';
+  const displayStatusLabel =
+    DISPLAY_STATUS_LABELS[effectiveDisplayStatus] ?? effectiveDisplayStatus;
+  const displayStatusClass =
+    DISPLAY_STATUS_CSS_KEYS[effectiveDisplayStatus] ?? '';
 
   async function handleRunReview() {
     if (!task.pr) return;
@@ -171,7 +186,7 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
         : `/api/prs/${task.pr.prNumber}/review`;
       const res = await fetch(url, { method: 'POST' });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as { error?: string };
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
         setReviewError(body.error ?? `HTTP ${res.status}`);
       }
     } catch (err) {
@@ -191,9 +206,12 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
         setReviewError('Could not parse owner/repo from PR URL.');
         return;
       }
-      const res = await fetch(`/api/prs/${ownerRepo.owner}/${ownerRepo.repo}/${task.pr.prNumber}/fix-conflicts`, { method: 'POST' });
+      const res = await fetch(
+        `/api/prs/${ownerRepo.owner}/${ownerRepo.repo}/${task.pr.prNumber}/fix-conflicts`,
+        { method: 'POST' },
+      );
       if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as { error?: string };
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
         setReviewError(body.error ?? `HTTP ${res.status}`);
       }
     } catch (err) {
@@ -205,7 +223,12 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
 
   async function handleMerge() {
     if (!task.pr) return;
-    if (!confirm(`Merge PR #${task.pr.prNumber} '${task.pr.title}' into ${task.pr.baseBranch}? This cannot be undone.`)) return;
+    if (
+      !confirm(
+        `Merge PR #${task.pr.prNumber} '${task.pr.title}' into ${task.pr.baseBranch}? This cannot be undone.`,
+      )
+    )
+      return;
     setMergeInFlight(true);
     setReviewError(null);
     try {
@@ -214,9 +237,12 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
         setReviewError('Could not parse owner/repo from PR URL.');
         return;
       }
-      const res = await fetch(`/api/prs/${ownerRepo.owner}/${ownerRepo.repo}/${task.pr.prNumber}/merge`, { method: 'POST' });
+      const res = await fetch(
+        `/api/prs/${ownerRepo.owner}/${ownerRepo.repo}/${task.pr.prNumber}/merge`,
+        { method: 'POST' },
+      );
       if (!res.ok) {
-        const body = await res.json().catch(() => ({})) as { error?: string };
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
         setReviewError(body.error ?? `HTTP ${res.status}`);
       } else {
         setOptimisticDisplayStatus('done');
@@ -234,20 +260,29 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
       <div className={styles.header}>
         <div className={styles.headerTop}>
           <span className={styles.taskName}>{task.taskName}</span>
-          <button className={styles.closeButton} onClick={onClose} aria-label="Close panel">
+          <button
+            className={styles.closeButton}
+            onClick={onClose}
+            aria-label="Close panel"
+          >
             ✕
           </button>
         </div>
         <div className={styles.headerMeta}>
-          <span className={`${styles.displayStatusBadge} ${styles[displayStatusClass]}`}>
+          <span
+            className={`${styles.displayStatusBadge} ${styles[displayStatusClass]}`}
+          >
             {displayStatusLabel}
           </span>
           {task.priority && (
             <span className={styles.priorityBadge}>{task.priority}</span>
           )}
-          {(task.totalTokens.input + task.totalTokens.output) > 0 && (
+          {task.totalTokens.input + task.totalTokens.output > 0 && (
             <span className={styles.totalTokensBadge}>
-              {formatTokenCount(task.totalTokens.input + task.totalTokens.output)} tokens
+              {formatTokenCount(
+                task.totalTokens.input + task.totalTokens.output,
+              )}{' '}
+              tokens
             </span>
           )}
           {task.notionUrl && (
@@ -278,11 +313,16 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
                   permissionDenials={codeSession.permissionDenials}
                 />
               ) : (
-                <p className={styles.noTranscript}>Transcript not available — session not loaded.</p>
+                <p className={styles.noTranscript}>
+                  Transcript not available — session not loaded.
+                </p>
               )}
             </div>
             {isCodeActive && (
-              <InlineComposer sessionId={task.codeSession.sessionId} send={send} />
+              <InlineComposer
+                sessionId={task.codeSession.sessionId}
+                send={send}
+              />
             )}
           </div>
         )}
@@ -305,17 +345,25 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
                   #{task.review.iterationCount}
                 </span>
               )}
-              {(task.review.inputTokens + task.review.outputTokens) > 0 && (
+              {task.review.inputTokens + task.review.outputTokens > 0 && (
                 <span className={styles.reviewTokenCount}>
-                  {formatTokenCount(task.review.inputTokens + task.review.outputTokens)} tokens
+                  {formatTokenCount(
+                    task.review.inputTokens + task.review.outputTokens,
+                  )}{' '}
+                  tokens
                 </span>
               )}
               {task.review.verdict ? (
-                <span className={`${styles.verdictPill} ${styles[VERDICT_CSS_KEYS[task.review.verdict] ?? 'verdict--error']}`}>
+                <span
+                  className={`${styles.verdictPill} ${styles[VERDICT_CSS_KEYS[task.review.verdict] ?? 'verdict--error']}`}
+                >
                   {VERDICT_LABELS[task.review.verdict] ?? task.review.verdict}
                 </span>
-              ) : (task.review.status === 'running' || task.review.status === 'starting') ? (
-                <span className={`${styles.verdictPill} ${styles['verdict--pending']}`}>
+              ) : task.review.status === 'running' ||
+                task.review.status === 'starting' ? (
+                <span
+                  className={`${styles.verdictPill} ${styles['verdict--pending']}`}
+                >
                   In progress…
                 </span>
               ) : null}
@@ -333,14 +381,18 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
                       onClick={() => setShowReviewDimensions((v) => !v)}
                       aria-expanded={showReviewDimensions}
                     >
-                      {showReviewDimensions ? '▼ Hide dimensions' : '▶ Show dimensions'}
+                      {showReviewDimensions
+                        ? '▼ Hide dimensions'
+                        : '▶ Show dimensions'}
                     </button>
                     {showReviewDimensions && (
                       <ReviewDimensions session={reviewSession} />
                     )}
                   </>
                 ) : (
-                  <p className={styles.noTranscript}>Review transcript not available.</p>
+                  <p className={styles.noTranscript}>
+                    Review transcript not available.
+                  </p>
                 )}
               </div>
             )}
@@ -360,7 +412,9 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
                 <span className={styles.prNumber}>#{task.pr.prNumber}</span>
                 <span className={styles.prTitleText}>{task.pr.title}</span>
               </div>
-              <span className={`${styles.prStateBadge} ${styles[`prState--${task.pr.state}${task.pr.draft ? '-draft' : ''}`]}`}>
+              <span
+                className={`${styles.prStateBadge} ${styles[`prState--${task.pr.state}${task.pr.draft ? '-draft' : ''}`]}`}
+              >
                 {prStateLabel(task.pr.state, task.pr.draft)}
               </span>
             </div>
@@ -386,7 +440,8 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
 
             {task.pr.mergeState === 'dirty' && (
               <div className={styles.conflictBanner}>
-                ⚠ Merge conflicts detected — use Fix Conflicts to have the code session rebase and resolve them.
+                ⚠ Merge conflicts detected — use Fix Conflicts to have the code
+                session rebase and resolve them.
               </div>
             )}
 
@@ -413,24 +468,26 @@ export function TaskDetail({ task, send, onClose, sessions = [], projectId }: Pr
                     {fixConflictsInFlight ? 'Fixing…' : '↺ Fix Conflicts'}
                   </button>
                 )}
-                {task.review?.verdict === 'approved' && task.pr.mergeState !== 'dirty' && (
-                  <button
-                    className={styles.mergeButton}
-                    disabled={mergeInFlight}
-                    onClick={() => void handleMerge()}
-                  >
-                    {mergeInFlight ? 'Merging…' : 'Merge ↓'}
-                  </button>
-                )}
-                {task.review?.verdict === 'approved' && task.pr.mergeState === 'dirty' && (
-                  <button
-                    className={styles.mergeButton}
-                    disabled={true}
-                    title="Cannot merge — PR has merge conflicts"
-                  >
-                    Merge ↓
-                  </button>
-                )}
+                {task.review?.verdict === 'approved' &&
+                  task.pr.mergeState !== 'dirty' && (
+                    <button
+                      className={styles.mergeButton}
+                      disabled={mergeInFlight}
+                      onClick={() => void handleMerge()}
+                    >
+                      {mergeInFlight ? 'Merging…' : 'Merge ↓'}
+                    </button>
+                  )}
+                {task.review?.verdict === 'approved' &&
+                  task.pr.mergeState === 'dirty' && (
+                    <button
+                      className={styles.mergeButton}
+                      disabled={true}
+                      title="Cannot merge — PR has merge conflicts"
+                    >
+                      Merge ↓
+                    </button>
+                  )}
               </div>
             )}
           </div>
@@ -457,7 +514,9 @@ function ReviewDimensions({ session }: { session: SessionState }) {
     <div className={styles.dimensions}>
       {result.dimensions.map((dim, i) => (
         <div key={i} className={styles.dimension}>
-          <span className={`${styles.dimIcon} ${dim.passed ? styles['dimIcon--pass'] : styles['dimIcon--fail']}`}>
+          <span
+            className={`${styles.dimIcon} ${dim.passed ? styles['dimIcon--pass'] : styles['dimIcon--fail']}`}
+          >
             {dim.passed ? '✓' : '✕'}
           </span>
           <div className={styles.dimContent}>

@@ -54,17 +54,23 @@ beforeEach(() => {
 describe('DELETE /api/sessions/:id/denials', () => {
   it('returns 404 if session not found', async () => {
     vi.mocked(queries.getSession).mockReturnValue(undefined);
-    const res = await supertest(buildApp()).delete('/api/sessions/missing/denials');
+    const res = await supertest(buildApp()).delete(
+      '/api/sessions/missing/denials',
+    );
     expect(res.status).toBe(404);
     expect(res.body).toMatchObject({ error: 'Session not found' });
   });
 
   it('calls deleteDenialsBySession and returns 200', async () => {
     vi.mocked(queries.getSession).mockReturnValue(mockSession as never);
-    const res = await supertest(buildApp()).delete('/api/sessions/test-session-1/denials');
+    const res = await supertest(buildApp()).delete(
+      '/api/sessions/test-session-1/denials',
+    );
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
-    expect(queries.deleteDenialsBySession).toHaveBeenCalledWith('test-session-1');
+    expect(queries.deleteDenialsBySession).toHaveBeenCalledWith(
+      'test-session-1',
+    );
   });
 
   it('subsequent getDenialsBySession returns empty after deletion', async () => {

@@ -45,7 +45,11 @@ describe('useWebSocket', () => {
     vi.stubGlobal('WebSocket', TrackingWS);
 
     const { result } = renderHook(() => useWebSocket(onMessage));
-    const returned = result.current.send({ type: 'fetch_tasks', projectId: 'p1', milestoneId: 'm1' });
+    const returned = result.current.send({
+      type: 'fetch_tasks',
+      projectId: 'p1',
+      milestoneId: 'm1',
+    });
 
     expect(returned).toBe(true);
     expect(instances[0]?.send).toHaveBeenCalled();
@@ -64,7 +68,11 @@ describe('useWebSocket', () => {
     vi.stubGlobal('WebSocket', TrackingWS);
 
     const { result } = renderHook(() => useWebSocket(onMessage));
-    const returned = result.current.send({ type: 'fetch_tasks', projectId: 'p1', milestoneId: 'm1' });
+    const returned = result.current.send({
+      type: 'fetch_tasks',
+      projectId: 'p1',
+      milestoneId: 'm1',
+    });
 
     expect(returned).toBe(false);
     expect(instances[0]?.send).not.toHaveBeenCalled();
@@ -82,7 +90,9 @@ describe('useWebSocket', () => {
 
     // Replace readyState to simulate non-open socket
     // We test the guard by patching the mock's instance
-    const mockInstance = (MockWebSocket as unknown as { _lastInstance?: MockWebSocket })._lastInstance;
+    const mockInstance = (
+      MockWebSocket as unknown as { _lastInstance?: MockWebSocket }
+    )._lastInstance;
     if (mockInstance) mockInstance.readyState = 0; // CONNECTING
 
     expect(() => {
@@ -122,10 +132,18 @@ describe('useWebSocket', () => {
     vi.stubGlobal('WebSocket', TrackingWS);
 
     const { result } = renderHook(() => useWebSocket(onMessage));
-    result.current.send({ type: 'fetch_tasks', projectId: 'b1', milestoneId: 'm1' });
+    result.current.send({
+      type: 'fetch_tasks',
+      projectId: 'b1',
+      milestoneId: 'm1',
+    });
 
     expect(instances[0]?.send).toHaveBeenCalledWith(
-      JSON.stringify({ type: 'fetch_tasks', projectId: 'b1', milestoneId: 'm1' })
+      JSON.stringify({
+        type: 'fetch_tasks',
+        projectId: 'b1',
+        milestoneId: 'm1',
+      }),
     );
   });
 

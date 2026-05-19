@@ -89,7 +89,9 @@ function rowToProject(row: ProjectRow, milestones: MilestoneRow[]): Project {
 export const ProjectService = {
   list(): Project[] {
     const rows = listProjectRows();
-    return rows.map((row) => rowToProject(row, listMilestonesByProject(row.id)));
+    return rows.map((row) =>
+      rowToProject(row, listMilestonesByProject(row.id)),
+    );
   },
 
   count(): number {
@@ -150,7 +152,10 @@ export const ProjectService = {
     return rowToMilestone(row);
   },
 
-  updateMilestone(id: string, patch: MilestonePatch): ProjectMilestone | undefined {
+  updateMilestone(
+    id: string,
+    patch: MilestonePatch,
+  ): ProjectMilestone | undefined {
     const row = updateMilestone(id, patch);
     return row ? rowToMilestone(row) : undefined;
   },

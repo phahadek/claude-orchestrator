@@ -1,4 +1,8 @@
-import type { ISessionRunner, RawSessionEvent, SessionRunnerOptions } from './SessionRunner';
+import type {
+  ISessionRunner,
+  RawSessionEvent,
+  SessionRunnerOptions,
+} from './SessionRunner';
 
 /**
  * A push-based async iterable used to stream follow-up messages into the Agent SDK's
@@ -109,12 +113,19 @@ export class ApiSessionRunner implements ISessionRunner {
         toolName: string,
         input: Record<string, unknown>,
         _ctx: Record<string, unknown>,
-      ): Promise<{ behavior: 'allow' } | { behavior: 'deny'; message: string }> => {
+      ): Promise<
+        { behavior: 'allow' } | { behavior: 'deny'; message: string }
+      > => {
         // All tools in the allowedTools list are pre-approved by the SDK's allowedTools option.
         // canUseTool only fires for tools NOT in that list — deny them.
-        console.log(`[ApiSessionRunner ${this.sessionId.slice(0, 8)}] canUseTool: ${toolName} — not in allowedTools, denying`);
+        console.log(
+          `[ApiSessionRunner ${this.sessionId.slice(0, 8)}] canUseTool: ${toolName} — not in allowedTools, denying`,
+        );
         void input;
-        return { behavior: 'deny', message: `Tool '${toolName}' is not in the allowed tools list` };
+        return {
+          behavior: 'deny',
+          message: `Tool '${toolName}' is not in the allowed tools list`,
+        };
       },
     };
 
@@ -150,7 +161,10 @@ export class ApiSessionRunner implements ISessionRunner {
         // Abort was intentional — treat as clean kill
         return null;
       }
-      console.error(`[ApiSessionRunner ${this.sessionId.slice(0, 8)}] error:`, err);
+      console.error(
+        `[ApiSessionRunner ${this.sessionId.slice(0, 8)}] error:`,
+        err,
+      );
       this._hasSpawnError = true;
       throw err;
     }

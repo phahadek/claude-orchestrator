@@ -61,7 +61,11 @@ export function loadRuntimeSettingsFromDb(): void {
       let defaultVal: string;
       if (key === 'auto_review') {
         defaultVal = String(runtimeSettings.auto_review);
-      } else if (key === 'code_session_model' || key === 'review_session_model' || key === 'session_mode') {
+      } else if (
+        key === 'code_session_model' ||
+        key === 'review_session_model' ||
+        key === 'session_mode'
+      ) {
         defaultVal = runtimeSettings[key];
       } else {
         defaultVal = String(runtimeSettings[key]);
@@ -73,7 +77,9 @@ export function loadRuntimeSettingsFromDb(): void {
 
 function runtimeSettingsAsRecord(): Record<SettingKey, string> {
   return {
-    max_concurrent_code_sessions: String(runtimeSettings.max_concurrent_code_sessions),
+    max_concurrent_code_sessions: String(
+      runtimeSettings.max_concurrent_code_sessions,
+    ),
     auto_review_concurrency: String(runtimeSettings.auto_review_concurrency),
     auto_review: String(runtimeSettings.auto_review),
     card_preview_lines: String(runtimeSettings.card_preview_lines),
@@ -81,10 +87,18 @@ function runtimeSettingsAsRecord(): Record<SettingKey, string> {
     review_session_model: runtimeSettings.review_session_model,
     session_mode: runtimeSettings.session_mode,
     auto_launch_concurrency: String(runtimeSettings.auto_launch_concurrency),
-    auto_launch_poll_interval_ms: String(runtimeSettings.auto_launch_poll_interval_ms),
-    session_notify_threshold_seconds: String(runtimeSettings.session_notify_threshold_seconds),
-    session_pause_threshold_seconds: String(runtimeSettings.session_pause_threshold_seconds),
-    session_hard_stop_window_seconds: String(runtimeSettings.session_hard_stop_window_seconds),
+    auto_launch_poll_interval_ms: String(
+      runtimeSettings.auto_launch_poll_interval_ms,
+    ),
+    session_notify_threshold_seconds: String(
+      runtimeSettings.session_notify_threshold_seconds,
+    ),
+    session_pause_threshold_seconds: String(
+      runtimeSettings.session_pause_threshold_seconds,
+    ),
+    session_hard_stop_window_seconds: String(
+      runtimeSettings.session_hard_stop_window_seconds,
+    ),
   };
 }
 
@@ -104,7 +118,6 @@ router.patch('/', (req: Request, res: Response) => {
       setSetting(key, value);
       applyToRuntime(key, value);
       updated[key] = value;
-  
     }
   }
 

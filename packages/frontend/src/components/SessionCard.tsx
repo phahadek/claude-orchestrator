@@ -1,8 +1,16 @@
 import type { SessionState } from '../hooks/useSessionStore';
 import { taskNameFromNotionUrl } from '../utils/notionUrl';
 import { formatElapsed } from '../utils/sessionTimer';
-import { summarizeEvent, isHiddenSystemEvent, tryParseJson } from '../utils/eventParsing';
-import { formatTokenCount, formatCost, calculateCost } from '@claude-orchestrator/backend/src/utils/usage';
+import {
+  summarizeEvent,
+  isHiddenSystemEvent,
+  tryParseJson,
+} from '../utils/eventParsing';
+import {
+  formatTokenCount,
+  formatCost,
+  calculateCost,
+} from '@claude-orchestrator/backend/src/utils/usage';
 import { StatusBadge } from './StatusBadge';
 import styles from './SessionCard.module.css';
 
@@ -20,9 +28,25 @@ interface Props {
   sessionMode?: string;
 }
 
-export function SessionCard({ session, selected, onClick, projectColor, projectName, onResume, onToggleFavorite, previewLines = CARD_PREVIEW_LINES, sessionMode }: Props) {
+export function SessionCard({
+  session,
+  selected,
+  onClick,
+  projectColor,
+  projectName,
+  onResume,
+  onToggleFavorite,
+  previewLines = CARD_PREVIEW_LINES,
+  sessionMode,
+}: Props) {
   const previewEvents = session.events
-    .filter((e) => !(e.eventType === 'system' && isHiddenSystemEvent(tryParseJson(e.content))))
+    .filter(
+      (e) =>
+        !(
+          e.eventType === 'system' &&
+          isHiddenSystemEvent(tryParseJson(e.content))
+        ),
+    )
     .slice(-previewLines);
   const elapsed = formatElapsed(session);
 
@@ -31,10 +55,10 @@ export function SessionCard({ session, selected, onClick, projectColor, projectN
   const borderStyle = isFavorited
     ? { borderLeft: '3px solid #f9e2af' }
     : isReview
-    ? undefined
-    : projectColor
-    ? { borderLeft: `3px solid ${projectColor}` }
-    : undefined;
+      ? undefined
+      : projectColor
+        ? { borderLeft: `3px solid ${projectColor}` }
+        : undefined;
 
   return (
     <div
@@ -48,12 +72,21 @@ export function SessionCard({ session, selected, onClick, projectColor, projectN
             {taskTypeIcon(session.taskType)}
           </span>
         )}
-        <span className={styles['task-name']}>{taskNameFromNotionUrl(session.taskName)}</span>
-        <StatusBadge status={session.status} sessionType={session.sessionType} isRateLimited={session.isRateLimited} />
+        <span className={styles['task-name']}>
+          {taskNameFromNotionUrl(session.taskName)}
+        </span>
+        <StatusBadge
+          status={session.status}
+          sessionType={session.sessionType}
+          isRateLimited={session.isRateLimited}
+        />
         {onToggleFavorite && (
           <button
             className={`${styles['favorite-btn']} ${isFavorited ? styles['favorite-btn--active'] : ''}`}
-            onClick={(e) => { e.stopPropagation(); onToggleFavorite(); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleFavorite();
+            }}
             aria-label={isFavorited ? 'Unfavorite session' : 'Favorite session'}
             title={isFavorited ? 'Unfavorite' : 'Favorite'}
           >
@@ -69,11 +102,16 @@ export function SessionCard({ session, selected, onClick, projectColor, projectN
       )}
       {session.isRateLimited && (
         <div className={styles['rate-limited-row']}>
-          <span className={styles['rate-limited-badge']}>⏸️ Rate limited — waiting for reset</span>
+          <span className={styles['rate-limited-badge']}>
+            ⏸️ Rate limited — waiting for reset
+          </span>
           {onResume && (
             <button
               className={styles['resume-button']}
-              onClick={(e) => { e.stopPropagation(); onResume(); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onResume();
+              }}
             >
               Resume
             </button>
@@ -82,47 +120,71 @@ export function SessionCard({ session, selected, onClick, projectColor, projectN
       )}
       {session.status === 'retrying' && (
         <div className={styles['retrying-row']}>
-          <span className={styles['retrying-badge']}>🔁 Retrying after transient API error…</span>
+          <span className={styles['retrying-badge']}>
+            🔁 Retrying after transient API error…
+          </span>
         </div>
       )}
       {isReview && session.prNumber != null && (
-        <div className={styles['review-pr-tag']}>Review of #{session.prNumber}</div>
+        <div className={styles['review-pr-tag']}>
+          Review of #{session.prNumber}
+        </div>
       )}
       {session.tags && session.tags.length > 0 && (
         <div className={styles['tag-pills']}>
           {session.tags.map((tag) => (
-            <span key={tag} className={styles['tag-pill']}>{tag}</span>
+            <span key={tag} className={styles['tag-pill']}>
+              {tag}
+            </span>
           ))}
         </div>
       )}
       {previewEvents.length > 0 && (
         <div className={styles['last-event']}>
           {previewEvents.map((event, i) => (
-            <div key={i} className={styles['preview-line']}>{summarizeEvent(event)}</div>
+            <div key={i} className={styles['preview-line']}>
+              {summarizeEvent(event)}
+            </div>
           ))}
         </div>
       )}
       <div className={styles['card-footer']}>
         <span className={styles.elapsed}>{elapsed}</span>
-        {(session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0) > 0 && (
+        {(session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0) >
+          0 && (
           <span
             className={styles['token-count']}
             title={`${formatTokenCount(session.totalInputTokens ?? 0)} input · ${formatTokenCount(session.totalOutputTokens ?? 0)} output`}
           >
             {sessionMode === 'api'
-              ? formatCost(calculateCost(session.totalInputTokens ?? 0, session.totalOutputTokens ?? 0, session.model))
+              ? formatCost(
+                  calculateCost(
+                    session.totalInputTokens ?? 0,
+                    session.totalOutputTokens ?? 0,
+                    session.model,
+                  ),
+                )
               : `${formatTokenCount((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0))} tokens (~${formatCost(calculateCost(session.totalInputTokens ?? 0, session.totalOutputTokens ?? 0, session.model))} est.)`}
           </span>
         )}
         {session.model && (
-          <span className={styles['model-badge']}>{formatModelName(session.model)}</span>
+          <span className={styles['model-badge']}>
+            {formatModelName(session.model)}
+          </span>
         )}
         <span className={styles['footer-right']}>
           {session.note && (
-            <span className={styles['note-icon']} title={session.note}>📝</span>
+            <span className={styles['note-icon']} title={session.note}>
+              📝
+            </span>
           )}
           {session.prUrl && (
-            <a href={session.prUrl} target="_blank" rel="noreferrer" className={styles['pr-link']}>
+            <a
+              href={session.prUrl}
+              target="_blank"
+              rel="noreferrer"
+              className={styles['pr-link']}
+            >
               PR ↗
             </a>
           )}

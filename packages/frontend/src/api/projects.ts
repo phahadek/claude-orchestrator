@@ -107,7 +107,10 @@ export const projectsApi = {
     );
   },
 
-  createMilestone(projectId: string, input: CreateMilestoneInput): Promise<ProjectMilestone> {
+  createMilestone(
+    projectId: string,
+    input: CreateMilestoneInput,
+  ): Promise<ProjectMilestone> {
     return request<ProjectMilestone>(
       `/api/projects/${encodeURIComponent(projectId)}/milestones`,
       {
@@ -118,12 +121,18 @@ export const projectsApi = {
     );
   },
 
-  updateMilestone(milestoneId: string, patch: UpdateMilestoneInput): Promise<ProjectMilestone> {
-    return request<ProjectMilestone>(`/api/milestones/${encodeURIComponent(milestoneId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    });
+  updateMilestone(
+    milestoneId: string,
+    patch: UpdateMilestoneInput,
+  ): Promise<ProjectMilestone> {
+    return request<ProjectMilestone>(
+      `/api/milestones/${encodeURIComponent(milestoneId)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      },
+    );
   },
 
   deleteMilestone(milestoneId: string): Promise<void> {

@@ -1,5 +1,11 @@
 import { getProjectByGithubRepo } from '../config';
-import { setPRReviewResult, getSetting, getPRByNumber, setPendingPush, setPauseReason } from '../db/queries';
+import {
+  setPRReviewResult,
+  getSetting,
+  getPRByNumber,
+  setPendingPush,
+  setPauseReason,
+} from '../db/queries';
 import type { PRReviewService, PRReviewResult } from './PRReviewService';
 import type { SessionManager } from '../session/SessionManager';
 import type { ReviewJob } from './types';
@@ -12,7 +18,9 @@ function getMaxReviewIterations(): number {
   const raw = getSetting('max_review_iterations');
   if (!raw) return DEFAULT_MAX_ITERATIONS;
   const parsed = parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_ITERATIONS;
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_MAX_ITERATIONS;
 }
 
 export class ReviewOrchestrator {
@@ -31,7 +39,9 @@ export class ReviewOrchestrator {
   private onPrOpened(job: ReviewJob): void {
     if (!this.enabled) return;
     if (!job.taskId) {
-      console.warn(`[ReviewOrchestrator] PR #${job.prNumber} has no Notion task — skipping`);
+      console.warn(
+        `[ReviewOrchestrator] PR #${job.prNumber} has no Notion task — skipping`,
+      );
       return;
     }
     this.queue.push(job);
@@ -45,7 +55,10 @@ export class ReviewOrchestrator {
       try {
         await this.executeReview(job);
       } catch (e) {
-        console.error(`[ReviewOrchestrator] review failed for PR #${job.prNumber}:`, e);
+        console.error(
+          `[ReviewOrchestrator] review failed for PR #${job.prNumber}:`,
+          e,
+        );
       } finally {
         this.running--;
         void this.drain();
@@ -56,7 +69,9 @@ export class ReviewOrchestrator {
   private async executeReview(job: ReviewJob): Promise<void> {
     const project = getProjectByGithubRepo(job.repo);
     if (!project) {
-      console.warn(`[ReviewOrchestrator] PR #${job.prNumber}: no project found for repo ${job.repo} — skipping`);
+      console.warn(
+        `[ReviewOrchestrator] PR #${job.prNumber}: no project found for repo ${job.repo} — skipping`,
+      );
       return;
     }
 
@@ -79,16 +94,29 @@ export class ReviewOrchestrator {
     let result: PRReviewResult;
     try {
       result = await Promise.race([
-        this.reviewService.reviewPR(job.prNumber, job.repo, project.id, job.contextUrl),
+        this.reviewService.reviewPR(
+          job.prNumber,
+          job.repo,
+          project.id,
+          job.contextUrl,
+        ),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Review timed out')), REVIEW_TIMEOUT_MS),
+          setTimeout(
+            () => reject(new Error('Review timed out')),
+            REVIEW_TIMEOUT_MS,
+          ),
         ),
       ]);
     } catch (e) {
-      const summary = e instanceof Error && e.message === 'Review timed out'
-        ? 'Review timed out'
-        : String(e);
-      setPRReviewResult(job.prNumber, job.repo, JSON.stringify({ verdict: 'error', summary, dimensions: [] }));
+      const summary =
+        e instanceof Error && e.message === 'Review timed out'
+          ? 'Review timed out'
+          : String(e);
+      setPRReviewResult(
+        job.prNumber,
+        job.repo,
+        JSON.stringify({ verdict: 'error', summary, dimensions: [] }),
+      );
       this.sessionManager.emit('message', {
         type: 'pr_review_complete',
         prNumber: job.prNumber,
@@ -102,7 +130,8 @@ export class ReviewOrchestrator {
     // Draft transition and Notion update are handled inside reviewService.reviewPR()
     // via handleApprovedVerdict. Derive draftTransitioned from the pre-review row so
     // we can include draft: false in the broadcast when applicable.
-    const draftTransitioned = result.verdict === 'approved' && prRow?.draft === 1;
+    const draftTransitioned =
+      result.verdict === 'approved' && prRow?.draft === 1;
 
     this.sessionManager.emit('message', {
       type: 'pr_review_complete',
@@ -117,7 +146,10 @@ export class ReviewOrchestrator {
     if (result.verdict === 'needs_changes') {
       const prRow = getPRByNumber(job.prNumber, job.repo);
       if (prRow?.session_id) {
-        this.sessionManager.send(prRow.session_id, formatReviewFeedback(result, 0));
+        this.sessionManager.send(
+          prRow.session_id,
+          formatReviewFeedback(result, 0),
+        );
       }
     } else if (result.verdict === 'incomplete') {
       const message = `Review for PR #${job.prNumber} returned an incomplete verdict — the reviewer could not assess the PR. Manual intervention needed.`;
@@ -137,9 +169,12 @@ export class ReviewOrchestrator {
     const postReviewRow = getPRByNumber(job.prNumber, job.repo);
     if (postReviewRow?.pending_push && postReviewRow.session_id) {
       setPendingPush(job.prNumber, job.repo, 0);
-      console.log(`[ReviewOrchestrator] pending_push detected for PR #${job.prNumber} — triggering re-review`);
-      this.sessionManager.emit('push_detected', { sessionId: postReviewRow.session_id });
+      console.log(
+        `[ReviewOrchestrator] pending_push detected for PR #${job.prNumber} — triggering re-review`,
+      );
+      this.sessionManager.emit('push_detected', {
+        sessionId: postReviewRow.session_id,
+      });
     }
   }
-
 }

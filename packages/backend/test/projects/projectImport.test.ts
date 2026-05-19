@@ -89,7 +89,7 @@ describe('importProjectsFromEnv()', () => {
     const env = JSON.stringify([
       { id: 'good', name: 'G', projectDir: '/g', boardId: 'b' },
       { name: 'NoId', projectDir: '/x' }, // missing id
-      { id: 'no-dir', name: 'N' },          // missing projectDir
+      { id: 'no-dir', name: 'N' }, // missing projectDir
     ]);
     const imported = importProjectsFromEnv(env);
     expect(imported).toBe(1);

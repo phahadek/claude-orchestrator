@@ -358,7 +358,9 @@
   font-size: 0.78rem;
   padding: 4px 10px;
   align-self: flex-start;
-  transition: color 0.15s, border-color 0.15s;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
   flex-shrink: 0;
 }
 

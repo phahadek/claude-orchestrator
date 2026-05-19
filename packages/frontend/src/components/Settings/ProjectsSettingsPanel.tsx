@@ -82,7 +82,9 @@ function ProjectsSettingsPanelInner() {
       const result = await projectsApi.createTasksYamlStub(p.id);
       setStubMessage(`Created ${result.path}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create tasks.yaml');
+      setError(
+        err instanceof Error ? err.message : 'Failed to create tasks.yaml',
+      );
     } finally {
       setStubBusy(null);
     }
@@ -118,7 +120,8 @@ function ProjectsSettingsPanelInner() {
         <p className={styles.muted}>Loading…</p>
       ) : projects.length === 0 ? (
         <p className={styles.muted}>
-          No projects configured yet. Click <strong>+ Add project</strong> to create one.
+          No projects configured yet. Click <strong>+ Add project</strong> to
+          create one.
         </p>
       ) : (
         <table className={styles.table}>
@@ -155,7 +158,9 @@ function ProjectsSettingsPanelInner() {
                       disabled={stubBusy === p.id}
                       onClick={() => void handleCreateStub(p)}
                     >
-                      {stubBusy === p.id ? 'Creating…' : 'Create empty tasks.yaml'}
+                      {stubBusy === p.id
+                        ? 'Creating…'
+                        : 'Create empty tasks.yaml'}
                     </button>
                   )}
                 </td>
@@ -209,8 +214,9 @@ function ProjectsSettingsPanelInner() {
           <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
             <h3 className={styles.modalTitle}>Delete project?</h3>
             <p className={styles.muted}>
-              This will remove the project <strong>{confirmDelete.name}</strong> and all of its
-              milestones from the dashboard. The project files on disk are not touched.
+              This will remove the project <strong>{confirmDelete.name}</strong>{' '}
+              and all of its milestones from the dashboard. The project files on
+              disk are not touched.
             </p>
             <div className={styles.modalActions}>
               <button

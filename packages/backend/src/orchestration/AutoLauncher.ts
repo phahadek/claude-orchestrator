@@ -62,7 +62,10 @@ export class AutoLauncher {
 
   private scheduleNext(): void {
     if (this.stopped) return;
-    const interval = Math.max(MIN_POLL_INTERVAL_MS, runtimeSettings.auto_launch_poll_interval_ms);
+    const interval = Math.max(
+      MIN_POLL_INTERVAL_MS,
+      runtimeSettings.auto_launch_poll_interval_ms,
+    );
     this.timer = setTimeout(() => {
       void this.pollOnce().finally(() => this.scheduleNext());
     }, interval);
@@ -94,7 +97,9 @@ export class AutoLauncher {
   private async processProject(project: ProjectConfig): Promise<void> {
     const milestoneId = this.resolveMilestoneId(project);
     if (!milestoneId) {
-      console.warn(`[AutoLauncher] project ${project.id}: no milestone configured — skipping`);
+      console.warn(
+        `[AutoLauncher] project ${project.id}: no milestone configured — skipping`,
+      );
       return;
     }
 
@@ -137,7 +142,8 @@ export class AutoLauncher {
     if (resolved.blocked) return false;
     // Pause-reason metadata: when a Notion task has a non-null pause_reason
     // property, the user has explicitly held it back from auto-launch.
-    const maybePauseReason = (task as { pause_reason?: string | null }).pause_reason;
+    const maybePauseReason = (task as { pause_reason?: string | null })
+      .pause_reason;
     if (maybePauseReason != null && maybePauseReason !== '') return false;
     // Also skip if the task's most recent PR is paused (e.g. stuck_timeout)
     // so we don't relaunch a session that was force-paused.
@@ -169,7 +175,8 @@ export class AutoLauncher {
 
   private launchTask(project: ProjectConfig, resolved: ResolvedTask): void {
     const task = resolved.task;
-    const taskUrl = task.notionUrl || `https://www.notion.so/${task.id.replace(/-/g, '')}`;
+    const taskUrl =
+      task.notionUrl || `https://www.notion.so/${task.id.replace(/-/g, '')}`;
 
     // Skip if a session for this task is already active. Check both the
     // in-memory SessionManager (catches launches whose Notion status update
@@ -183,7 +190,9 @@ export class AutoLauncher {
         projectId: project.id,
         taskName: task.title || taskUrl,
       });
-      console.log(`[AutoLauncher] launched session ${sessionId.slice(0, 8)} for task ${task.title || task.id} in project ${project.id}`);
+      console.log(
+        `[AutoLauncher] launched session ${sessionId.slice(0, 8)} for task ${task.title || task.id} in project ${project.id}`,
+      );
       this.broadcast?.({
         type: 'auto_launch',
         projectId: project.id,
@@ -192,7 +201,9 @@ export class AutoLauncher {
         sessionId,
       });
     } catch (err) {
-      console.warn(`[AutoLauncher] failed to launch task ${task.id} for project ${project.id}: ${(err as Error).message}`);
+      console.warn(
+        `[AutoLauncher] failed to launch task ${task.id} for project ${project.id}: ${(err as Error).message}`,
+      );
     }
   }
 }

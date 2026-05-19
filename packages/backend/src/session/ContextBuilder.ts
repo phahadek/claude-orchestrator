@@ -74,7 +74,11 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
   // when the file is absent — e.g. on a fresh clone before setup.
   let localContext: string | undefined;
   try {
-    const localContextPath = path.join(projectDir, '.claude', 'local-context.md');
+    const localContextPath = path.join(
+      projectDir,
+      '.claude',
+      'local-context.md',
+    );
     if (fs.existsSync(localContextPath)) {
       localContext = fs.readFileSync(localContextPath, 'utf-8');
     }

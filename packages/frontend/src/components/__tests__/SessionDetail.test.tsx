@@ -18,22 +18,37 @@ function makeSession(overrides?: Partial<SessionState>): SessionState {
 function makeEvent(
   eventType: string,
   content: string,
-  timestamp = 1000
+  timestamp = 1000,
 ): SessionState['events'][number] {
   return { eventType, content, timestamp };
 }
 
-
 describe('SessionDetail', () => {
   it('renders null when session is null', () => {
     const { container } = render(
-      <SessionDetail session={null} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />
+      <SessionDetail
+        session={null}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
     );
     expect(container.firstChild).toBeNull();
   });
 
   it('renders the task name and Notion link', () => {
-    render(<SessionDetail session={makeSession()} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    render(
+      <SessionDetail
+        session={makeSession()}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
     expect(screen.getByText('Test Task')).toBeTruthy();
     const notionLink = screen.getByText('Notion ↗');
     expect(notionLink.getAttribute('href')).toBe('https://notion.so/task');
@@ -45,7 +60,16 @@ describe('SessionDetail', () => {
       makeEvent('system', 'Session started', 2000),
       makeEvent('error', 'Something went wrong', 3000),
     ];
-    render(<SessionDetail session={makeSession({ events })} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    render(
+      <SessionDetail
+        session={makeSession({ events })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
     expect(screen.getByText('Hello world')).toBeTruthy();
     expect(screen.getByText('Session started')).toBeTruthy();
     expect(screen.getByText('Something went wrong')).toBeTruthy();
@@ -53,9 +77,18 @@ describe('SessionDetail', () => {
 
   it('renders the composer for running sessions', () => {
     render(
-      <SessionDetail session={makeSession({ status: 'running' })} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />
+      <SessionDetail
+        session={makeSession({ status: 'running' })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
     );
-    expect(screen.getByPlaceholderText('Send a message to the session…')).toBeTruthy();
+    expect(
+      screen.getByPlaceholderText('Send a message to the session…'),
+    ).toBeTruthy();
   });
 
   it('renders the composer for needs_permission sessions', () => {
@@ -67,24 +100,44 @@ describe('SessionDetail', () => {
         onDelete={vi.fn()}
         onArchive={vi.fn()}
         onUnarchive={vi.fn()}
-      />
+      />,
     );
-    expect(screen.getByPlaceholderText('Send a message to the session…')).toBeTruthy();
+    expect(
+      screen.getByPlaceholderText('Send a message to the session…'),
+    ).toBeTruthy();
   });
 
   it('hides the composer for terminal states', () => {
     for (const status of ['done', 'error', 'killed']) {
       const { unmount } = render(
-        <SessionDetail session={makeSession({ status })} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />
+        <SessionDetail
+          session={makeSession({ status })}
+          send={vi.fn()}
+          onClose={vi.fn()}
+          onDelete={vi.fn()}
+          onArchive={vi.fn()}
+          onUnarchive={vi.fn()}
+        />,
       );
-      expect(screen.queryByPlaceholderText('Send a message to the session…')).toBeNull();
+      expect(
+        screen.queryByPlaceholderText('Send a message to the session…'),
+      ).toBeNull();
       unmount();
     }
   });
 
   it('sends send_message on Enter key (not Shift+Enter)', () => {
     const send = vi.fn();
-    render(<SessionDetail session={makeSession()} send={send} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    render(
+      <SessionDetail
+        session={makeSession()}
+        send={send}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
     const input = screen.getByPlaceholderText('Send a message to the session…');
     fireEvent.change(input, { target: { value: 'hello' } });
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: false });
@@ -97,7 +150,16 @@ describe('SessionDetail', () => {
 
   it('does not send on Shift+Enter', () => {
     const send = vi.fn();
-    render(<SessionDetail session={makeSession()} send={send} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    render(
+      <SessionDetail
+        session={makeSession()}
+        send={send}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
     const input = screen.getByPlaceholderText('Send a message to the session…');
     fireEvent.change(input, { target: { value: 'hello' } });
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
@@ -106,7 +168,16 @@ describe('SessionDetail', () => {
 
   it('does not send empty messages on Enter', () => {
     const send = vi.fn();
-    render(<SessionDetail session={makeSession()} send={send} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    render(
+      <SessionDetail
+        session={makeSession()}
+        send={send}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
     const input = screen.getByPlaceholderText('Send a message to the session…');
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: false });
     expect(send).not.toHaveBeenCalled();
@@ -120,16 +191,37 @@ describe('SessionDetail', () => {
   it('Kill button with confirm sends kill (does not auto-close — waits for session_ended)', () => {
     vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
     const send = vi.fn();
-    render(<SessionDetail session={makeSession({ status: 'running' })} send={send} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    render(
+      <SessionDetail
+        session={makeSession({ status: 'running' })}
+        send={send}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
     fireEvent.click(screen.getByText('Kill'));
-    expect(send).toHaveBeenCalledWith<[ClientMessage]>({ type: 'kill', sessionId: 'sess-1' });
+    expect(send).toHaveBeenCalledWith<[ClientMessage]>({
+      type: 'kill',
+      sessionId: 'sess-1',
+    });
     vi.unstubAllGlobals();
   });
 
   it('Kill button confirm cancelled does not send kill', () => {
     vi.stubGlobal('confirm', vi.fn().mockReturnValue(false));
     const send = vi.fn();
-    render(<SessionDetail session={makeSession({ status: 'running' })} send={send} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    render(
+      <SessionDetail
+        session={makeSession({ status: 'running' })}
+        send={send}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
     fireEvent.click(screen.getByText('Kill'));
     expect(send).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
@@ -138,55 +230,131 @@ describe('SessionDetail', () => {
   it('renders inline denial toggle when permissionDenials are present', () => {
     const session = makeSession({
       permissionDenials: [
-        { tool_name: 'Bash', tool_use_id: 'id-1', tool_input: { command: 'curl https://example.com' } },
-        { tool_name: 'Write', tool_use_id: 'id-2', tool_input: { file_path: '/etc/passwd' } },
+        {
+          tool_name: 'Bash',
+          tool_use_id: 'id-1',
+          tool_input: { command: 'curl https://example.com' },
+        },
+        {
+          tool_name: 'Write',
+          tool_use_id: 'id-2',
+          tool_input: { file_path: '/etc/passwd' },
+        },
       ],
     });
-    render(<SessionDetail session={session} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    render(
+      <SessionDetail
+        session={session}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
     expect(screen.getByText(/2 permission denials/)).toBeTruthy();
   });
 
   it('inline denial section is collapsed by default and expands on click', () => {
     const session = makeSession({
       permissionDenials: [
-        { tool_name: 'Bash', tool_use_id: 'id-1', tool_input: { command: 'curl https://example.com' } },
+        {
+          tool_name: 'Bash',
+          tool_use_id: 'id-1',
+          tool_input: { command: 'curl https://example.com' },
+        },
       ],
     });
-    render(<SessionDetail session={session} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    render(
+      <SessionDetail
+        session={session}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
     expect(screen.queryByText(/Denied: Bash/)).toBeNull();
     fireEvent.click(screen.getByLabelText('Toggle permission denials'));
     expect(screen.getByText(/Denied: Bash/)).toBeTruthy();
   });
 
   it('inline denial section is not rendered when permissionDenials is empty', () => {
-    render(<SessionDetail session={makeSession({ permissionDenials: [] })} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    render(
+      <SessionDetail
+        session={makeSession({ permissionDenials: [] })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
     expect(screen.queryByText(/permission denial/)).toBeNull();
   });
 
   it('inline denial shows tool name and truncated Bash command after expand', () => {
     const session = makeSession({
       permissionDenials: [
-        { tool_name: 'Bash', tool_use_id: 'id-1', tool_input: { command: 'curl https://example.com' } },
+        {
+          tool_name: 'Bash',
+          tool_use_id: 'id-1',
+          tool_input: { command: 'curl https://example.com' },
+        },
       ],
     });
-    render(<SessionDetail session={session} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    render(
+      <SessionDetail
+        session={session}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
     fireEvent.click(screen.getByLabelText('Toggle permission denials'));
-    expect(screen.getByText(/🚫 Denied: Bash\(curl https:\/\/example\.com\)/)).toBeTruthy();
+    expect(
+      screen.getByText(/🚫 Denied: Bash\(curl https:\/\/example\.com\)/),
+    ).toBeTruthy();
   });
 
   it('inline denial shows singular label for exactly 1 denial', () => {
     const session = makeSession({
       permissionDenials: [
-        { tool_name: 'Read', tool_use_id: 'id-1', tool_input: { file_path: '/foo' } },
+        {
+          tool_name: 'Read',
+          tool_use_id: 'id-1',
+          tool_input: { file_path: '/foo' },
+        },
       ],
     });
-    render(<SessionDetail session={session} send={vi.fn()} onClose={vi.fn()} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    render(
+      <SessionDetail
+        session={session}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
     expect(screen.getByText(/1 permission denial(?!s)/)).toBeTruthy();
   });
 
   it('onClose is called when close button is clicked', () => {
     const onClose = vi.fn();
-    render(<SessionDetail session={makeSession()} send={vi.fn()} onClose={onClose} onDelete={vi.fn()} onArchive={vi.fn()} onUnarchive={vi.fn()} />);
+    render(
+      <SessionDetail
+        session={makeSession()}
+        send={vi.fn()}
+        onClose={onClose}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
     fireEvent.click(screen.getByLabelText('Close panel'));
     expect(onClose).toHaveBeenCalled();
   });
@@ -213,8 +381,14 @@ describe('EventRow', () => {
   it('does not render standalone tool_use events (rendered via parent text event instead)', () => {
     // tool_use events arrive embedded in `assistant`-typed text events. The
     // standalone tool_use event_type renders nothing on its own.
-    const content = JSON.stringify({ type: 'tool_use', name: 'Read', input: { file_path: '/foo' } });
-    const { container } = render(<EventRow event={makeEvent('tool_use', content)} />);
+    const content = JSON.stringify({
+      type: 'tool_use',
+      name: 'Read',
+      input: { file_path: '/foo' },
+    });
+    const { container } = render(
+      <EventRow event={makeEvent('tool_use', content)} />,
+    );
     expect(container.firstChild).toBeNull();
   });
 
@@ -224,7 +398,10 @@ describe('EventRow', () => {
   });
 
   it('renders tool_result extracting content field from payload', () => {
-    const content = JSON.stringify({ type: 'tool_result', content: 'command output here' });
+    const content = JSON.stringify({
+      type: 'tool_result',
+      content: 'command output here',
+    });
     render(<EventRow event={makeEvent('tool_result', content)} />);
     expect(screen.getByText('command output here')).toBeTruthy();
   });
@@ -236,7 +413,9 @@ describe('EventRow', () => {
 
   it('hides system init event from transcript', () => {
     const content = JSON.stringify({ type: 'system', subtype: 'init' });
-    const { container } = render(<EventRow event={makeEvent('system', content)} />);
+    const { container } = render(
+      <EventRow event={makeEvent('system', content)} />,
+    );
     // init is in the hidden-system-subtypes set — EventRow returns null
     expect(container.firstChild).toBeNull();
   });
@@ -244,14 +423,20 @@ describe('EventRow', () => {
   it('renders user event with XML tags stripped', () => {
     const content = JSON.stringify({
       type: 'user',
-      message: { content: 'Hello user<local-command-caveat>some caveat</local-command-caveat>' },
+      message: {
+        content:
+          'Hello user<local-command-caveat>some caveat</local-command-caveat>',
+      },
     });
     render(<EventRow event={makeEvent('system', content)} />);
     expect(screen.getByText('Hello usersome caveat')).toBeTruthy();
   });
 
   it('renders file-history-snapshot as summary line', () => {
-    const content = JSON.stringify({ type: 'file-history-snapshot', snapshot: {} });
+    const content = JSON.stringify({
+      type: 'file-history-snapshot',
+      snapshot: {},
+    });
     render(<EventRow event={makeEvent('system', content)} />);
     expect(screen.getByText(/File history snapshot/)).toBeTruthy();
   });
@@ -286,7 +471,10 @@ describe('EventRow', () => {
 
   it('extractToolResult: literal \\n sequences are unescaped to real newlines', () => {
     // The CLI sometimes encodes newlines as the two-character sequence \n.
-    const content = JSON.stringify({ type: 'tool_result', content: 'line1\\nline2\\nline3' });
+    const content = JSON.stringify({
+      type: 'tool_result',
+      content: 'line1\\nline2\\nline3',
+    });
     render(<EventRow event={makeEvent('tool_result', content)} />);
     // After unescaping, each line is a separate text node — find any visible line
     expect(screen.getByText(/line1/)).toBeTruthy();
@@ -294,14 +482,19 @@ describe('EventRow', () => {
 
   it('ToolResultRow renders JSON string result as pretty-printed JSON', () => {
     const jsonPayload = JSON.stringify({ id: 'abc', name: 'test' });
-    const content = JSON.stringify({ type: 'tool_result', content: jsonPayload });
+    const content = JSON.stringify({
+      type: 'tool_result',
+      content: jsonPayload,
+    });
     render(<EventRow event={makeEvent('tool_result', content)} />);
     // Pretty-printed JSON contains the key with quotes and indentation
     expect(screen.getByText(/\"id\": \"abc\"/)).toBeTruthy();
   });
 
   it('renders user_message event with "You" label and message content', () => {
-    render(<EventRow event={makeEvent('user_message', 'Hello from the user')} />);
+    render(
+      <EventRow event={makeEvent('user_message', 'Hello from the user')} />,
+    );
     expect(screen.getByText('You')).toBeTruthy();
     expect(screen.getByText('Hello from the user')).toBeTruthy();
   });
@@ -311,7 +504,11 @@ describe('EventRow', () => {
       type: 'assistant',
       message: {
         content: [
-          { type: 'tool_use', name: 'Read', input: { file_path: 'src/App.tsx' } },
+          {
+            type: 'tool_use',
+            name: 'Read',
+            input: { file_path: 'src/App.tsx' },
+          },
         ],
       },
     });
@@ -342,7 +539,11 @@ describe('EventRow', () => {
       type: 'assistant',
       message: {
         content: [
-          { type: 'tool_use', name: 'SomeTool', input: { unknown_field: 'value' } },
+          {
+            type: 'tool_use',
+            name: 'SomeTool',
+            input: { unknown_field: 'value' },
+          },
         ],
       },
     });
@@ -377,7 +578,7 @@ describe('EventRow', () => {
         {events.map((e) => (
           <EventRow key={`${e.timestamp}-${e.eventType}`} event={e} />
         ))}
-      </>
+      </>,
     );
     expect(container.querySelectorAll('p').length).toBe(2);
   });
@@ -391,7 +592,12 @@ describe('EventRow', () => {
         stop_reason: 'tool_use',
         usage: { input_tokens: 100, output_tokens: 50 },
         content: [
-          { type: 'tool_use', id: 'toolu_01', name: 'Read', input: { file_path: '/src/foo.ts' } },
+          {
+            type: 'tool_use',
+            id: 'toolu_01',
+            name: 'Read',
+            input: { file_path: '/src/foo.ts' },
+          },
         ],
       },
     });
@@ -408,7 +614,11 @@ describe('EventRow', () => {
       message: {
         model: 'claude-opus-4-6',
         stop_reason: 'end_turn',
-        usage: { input_tokens: 200, output_tokens: 80, cache_read_input_tokens: 50 },
+        usage: {
+          input_tokens: 200,
+          output_tokens: 80,
+          cache_read_input_tokens: 50,
+        },
         content: [{ type: 'text', text: 'Done.' }],
       },
     });
@@ -421,15 +631,23 @@ describe('EventRow', () => {
   });
 
   it('result system events are hidden from transcript', () => {
-    const content = JSON.stringify({ type: 'result', subtype: 'success', result: 'Task complete' });
-    const { container } = render(<EventRow event={makeEvent('system', content)} />);
+    const content = JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      result: 'Task complete',
+    });
+    const { container } = render(
+      <EventRow event={makeEvent('system', content)} />,
+    );
     expect(container.firstChild).toBeNull();
   });
 
   it('returns null for system event with empty extracted content', () => {
     // A system payload whose content field is an empty string — extractSystem returns ''
     const content = JSON.stringify({ type: 'system', content: '' });
-    const { container } = render(<EventRow event={makeEvent('system', content)} />);
+    const { container } = render(
+      <EventRow event={makeEvent('system', content)} />,
+    );
     expect(container.firstChild).toBeNull();
   });
 
@@ -439,7 +657,9 @@ describe('EventRow', () => {
       type: 'user',
       message: { content: '<caveat></caveat>' },
     });
-    const { container } = render(<EventRow event={makeEvent('system', content)} />);
+    const { container } = render(
+      <EventRow event={makeEvent('system', content)} />,
+    );
     expect(container.firstChild).toBeNull();
   });
 
@@ -462,10 +682,17 @@ describe('EventRow', () => {
       type: 'user',
       message: {
         role: 'user',
-        content: [{ type: 'text', text: '<system-reminder>Do not do X</system-reminder>' }],
+        content: [
+          {
+            type: 'text',
+            text: '<system-reminder>Do not do X</system-reminder>',
+          },
+        ],
       },
     });
-    const { container } = render(<EventRow event={makeEvent('system', content)} />);
+    const { container } = render(
+      <EventRow event={makeEvent('system', content)} />,
+    );
     expect(container.firstChild).toBeNull();
   });
 
@@ -475,7 +702,12 @@ describe('EventRow', () => {
       message: {
         content: [
           { type: 'text', text: 'I will run a command.' },
-          { type: 'tool_use', id: 'toolu_02', name: 'Bash', input: { command: 'echo hello' } },
+          {
+            type: 'tool_use',
+            id: 'toolu_02',
+            name: 'Bash',
+            input: { command: 'echo hello' },
+          },
         ],
       },
     });
@@ -490,7 +722,12 @@ describe('EventRow', () => {
       type: 'assistant',
       message: {
         content: [
-          { type: 'tool_use', id: 'toolu_03', name: 'Glob', input: { pattern: '**/*.ts' } },
+          {
+            type: 'tool_use',
+            id: 'toolu_03',
+            name: 'Glob',
+            input: { pattern: '**/*.ts' },
+          },
         ],
       },
     });

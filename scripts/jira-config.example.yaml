@@ -28,13 +28,13 @@ jql_filter: project = PROJ AND sprint in openSprints() ORDER BY priority DESC
 # issue status is left unchanged (no error).
 
 status_map:
-  "🔲 Backlog": "To Do"
-  "🗂️ Ready": "To Do"
-  "🔄 In Progress": "In Progress"
-  "👀 In Review": "In Review"
-  "✅ Done": "Done"
-  "🚫 Blocked": "Blocked"
-  "⏭️ Deferred": "Won't Do"
+  '🔲 Backlog': 'To Do'
+  '🗂️ Ready': 'To Do'
+  '🔄 In Progress': 'In Progress'
+  '👀 In Review': 'In Review'
+  '✅ Done': 'Done'
+  '🚫 Blocked': 'Blocked'
+  '⏭️ Deferred': "Won't Do"
 
 # ── Priority mapping (sync direction: tasks.yaml → Jira) ──────────────────────
 #
@@ -42,9 +42,9 @@ status_map:
 # The value must exactly match a priority name configured in your Jira instance.
 
 priority_map:
-  "🔴 High": "High"
-  "🟡 Medium": "Medium"
-  "🟢 Low": "Low"
+  '🔴 High': 'High'
+  '🟡 Medium': 'Medium'
+  '🟢 Low': 'Low'
 
 # ── Reverse status mapping (export direction: Jira → tasks.yaml) ──────────────
 #
@@ -52,12 +52,12 @@ priority_map:
 # If omitted, Jira status names are written to tasks.yaml as-is.
 
 reverse_status_map:
-  "To Do": "🔲 Backlog"
-  "In Progress": "🔄 In Progress"
-  "In Review": "👀 In Review"
-  "Done": "✅ Done"
-  "Blocked": "🚫 Blocked"
-  "Won't Do": "⏭️ Deferred"
+  'To Do': '🔲 Backlog'
+  'In Progress': '🔄 In Progress'
+  'In Review': '👀 In Review'
+  'Done': '✅ Done'
+  'Blocked': '🚫 Blocked'
+  "Won't Do": '⏭️ Deferred'
 
 # ── Reverse priority mapping (export direction: Jira → tasks.yaml) ────────────
 #
@@ -65,8 +65,8 @@ reverse_status_map:
 # If omitted, Jira priority names are written to tasks.yaml as-is.
 
 reverse_priority_map:
-  "Highest": "🔴 High"
-  "High": "🔴 High"
-  "Medium": "🟡 Medium"
-  "Low": "🟢 Low"
-  "Lowest": "🟢 Low"
+  'Highest': '🔴 High'
+  'High': '🔴 High'
+  'Medium': '🟡 Medium'
+  'Low': '🟢 Low'
+  'Lowest': '🟢 Low'

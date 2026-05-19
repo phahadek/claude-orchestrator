@@ -7,12 +7,14 @@ interface Props {
   onProjectChange: (projectId: string) => void;
 }
 
-export function ProjectSwitcher({ projects, activeProjectId, onProjectChange }: Props) {
+export function ProjectSwitcher({
+  projects,
+  activeProjectId,
+  onProjectChange,
+}: Props) {
   if (projects.length <= 1) {
     return (
-      <span className={styles.label}>
-        {projects[0]?.name ?? 'No project'}
-      </span>
+      <span className={styles.label}>{projects[0]?.name ?? 'No project'}</span>
     );
   }
 
@@ -23,7 +25,9 @@ export function ProjectSwitcher({ projects, activeProjectId, onProjectChange }: 
       onChange={(e) => onProjectChange(e.target.value)}
     >
       {projects.map((p) => (
-        <option key={p.id} value={p.id}>{p.name}</option>
+        <option key={p.id} value={p.id}>
+          {p.name}
+        </option>
       ))}
     </select>
   );

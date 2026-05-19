@@ -1,7 +1,11 @@
 import { spawn, ChildProcess, execSync } from 'child_process';
 import { createInterface } from 'readline';
 import { config } from '../config';
-import type { ISessionRunner, RawSessionEvent, SessionRunnerOptions } from './SessionRunner';
+import type {
+  ISessionRunner,
+  RawSessionEvent,
+  SessionRunnerOptions,
+} from './SessionRunner';
 
 function log(sessionId: string, ...args: unknown[]) {
   console.log(`[CliSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
@@ -34,10 +38,13 @@ export class CliSessionRunner implements ISessionRunner {
     const spawnArgs = [
       ...(resumeSessionId ? ['--resume', resumeSessionId] : []),
       '--print',
-      '--output-format', 'stream-json',
-      '--input-format', 'stream-json',
+      '--output-format',
+      'stream-json',
+      '--input-format',
+      'stream-json',
       '--verbose',
-      '--permission-mode', 'acceptEdits',
+      '--permission-mode',
+      'acceptEdits',
       ...(model ? ['--model', model] : []),
       '--allowed-tools',
       ...allowedTools,
@@ -53,15 +60,11 @@ export class CliSessionRunner implements ISessionRunner {
       `spawning: cwd=${worktreePath} cmd=${config.claudePath} ${spawnArgs.join(' ')} env={${envStr}}`,
     );
 
-    this.proc = spawn(
-      config.claudePath,
-      spawnArgs,
-      {
-        cwd: worktreePath,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        ...(process.platform !== 'win32' && { detached: true }),
-      },
-    );
+    this.proc = spawn(config.claudePath, spawnArgs, {
+      cwd: worktreePath,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      ...(process.platform !== 'win32' && { detached: true }),
+    });
 
     // Async stdin errors (e.g. EPIPE when the child exits) must not bubble up
     // as unhandled 'error' events on the process.
@@ -74,10 +77,16 @@ export class CliSessionRunner implements ISessionRunner {
     if (!resumeSessionId && initialPrompt) {
       try {
         this.proc.stdin!.write(
-          JSON.stringify({ type: 'user', message: { role: 'user', content: initialPrompt } }) + '\n',
+          JSON.stringify({
+            type: 'user',
+            message: { role: 'user', content: initialPrompt },
+          }) + '\n',
         );
       } catch (err) {
-        log(this.sessionId, `initial prompt stdin.write failed (ignored): ${(err as Error).message}`);
+        log(
+          this.sessionId,
+          `initial prompt stdin.write failed (ignored): ${(err as Error).message}`,
+        );
       }
     }
 
@@ -115,7 +124,12 @@ export class CliSessionRunner implements ISessionRunner {
     // Drain remaining buffered lines (5s guard).
     await Promise.race([
       rlDone,
-      new Promise<void>((resolve) => setTimeout(() => { rl.close(); resolve(); }, 5_000)),
+      new Promise<void>((resolve) =>
+        setTimeout(() => {
+          rl.close();
+          resolve();
+        }, 5_000),
+      ),
     ]);
 
     return exitCode;
@@ -125,10 +139,16 @@ export class CliSessionRunner implements ISessionRunner {
     if (!this.proc?.stdin?.writable) return;
     try {
       this.proc.stdin.write(
-        JSON.stringify({ type: 'user', message: { role: 'user', content: message } }) + '\n',
+        JSON.stringify({
+          type: 'user',
+          message: { role: 'user', content: message },
+        }) + '\n',
       );
     } catch (err) {
-      log(this.sessionId, `sendMessage stdin.write failed (ignored): ${(err as Error).message}`);
+      log(
+        this.sessionId,
+        `sendMessage stdin.write failed (ignored): ${(err as Error).message}`,
+      );
     }
   }
 

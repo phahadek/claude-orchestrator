@@ -39,8 +39,18 @@ describe('GET /api/projects', () => {
   });
 
   it('returns projects with their milestones nested', async () => {
-    ProjectService.create({ id: 'p1', name: 'P1', projectDir: '/p1', githubRepo: 'owner/r' });
-    ProjectService.createMilestone({ id: 'm1', projectId: 'p1', name: 'M1', sourceId: 'src-1' });
+    ProjectService.create({
+      id: 'p1',
+      name: 'P1',
+      projectDir: '/p1',
+      githubRepo: 'owner/r',
+    });
+    ProjectService.createMilestone({
+      id: 'm1',
+      projectId: 'p1',
+      name: 'M1',
+      sourceId: 'src-1',
+    });
 
     const res = await supertest(buildApp()).get('/api/projects');
     expect(res.status).toBe(200);
@@ -52,7 +62,10 @@ describe('GET /api/projects', () => {
       githubRepo: 'owner/r',
     });
     expect(res.body[0].milestones).toHaveLength(1);
-    expect(res.body[0].milestones[0]).toMatchObject({ id: 'm1', sourceId: 'src-1' });
+    expect(res.body[0].milestones[0]).toMatchObject({
+      id: 'm1',
+      sourceId: 'src-1',
+    });
   });
 });
 
@@ -92,7 +105,10 @@ describe('POST /api/projects', () => {
   });
 
   it('returns 400 when projectDir does not exist on disk', async () => {
-    const missing = path.join(os.tmpdir(), `does-not-exist-${Date.now()}-${Math.random()}`);
+    const missing = path.join(
+      os.tmpdir(),
+      `does-not-exist-${Date.now()}-${Math.random()}`,
+    );
     const res = await supertest(buildApp())
       .post('/api/projects')
       .send({ name: 'X', projectDir: missing });
@@ -117,7 +133,9 @@ describe('PATCH /api/projects/:id', () => {
   });
 
   it('returns 404 when the project is missing', async () => {
-    const res = await supertest(buildApp()).patch('/api/projects/missing').send({ name: 'x' });
+    const res = await supertest(buildApp())
+      .patch('/api/projects/missing')
+      .send({ name: 'x' });
     expect(res.status).toBe(404);
   });
 });
@@ -126,8 +144,9 @@ describe('DELETE /api/projects/:id', () => {
   it('deletes a project and cascades to its milestones; sessions are not removed', async () => {
     ProjectService.create({ id: 'p1', name: 'P', projectDir: '/p1' });
     ProjectService.createMilestone({ id: 'm1', projectId: 'p1', name: 'M' });
-    db.prepare(`INSERT INTO sessions (session_id, project_id, status, started_at) VALUES (?, ?, 'running', 0)`)
-      .run('session-x', 'p1');
+    db.prepare(
+      `INSERT INTO sessions (session_id, project_id, status, started_at) VALUES (?, ?, 'running', 0)`,
+    ).run('session-x', 'p1');
 
     const res = await supertest(buildApp()).delete('/api/projects/p1');
     expect(res.status).toBe(204);
@@ -135,7 +154,9 @@ describe('DELETE /api/projects/:id', () => {
     expect(ProjectService.listMilestones('p1')).toHaveLength(0);
 
     // Sessions referencing the deleted project remain (no FK cascade)
-    const sessions = db.prepare('SELECT * FROM sessions WHERE session_id = ?').all('session-x');
+    const sessions = db
+      .prepare('SELECT * FROM sessions WHERE session_id = ?')
+      .all('session-x');
     expect(sessions).toHaveLength(1);
   });
 
@@ -147,14 +168,26 @@ describe('DELETE /api/projects/:id', () => {
 
 describe('GET /api/projects/:id/milestones', () => {
   it('returns 404 when the project does not exist', async () => {
-    const res = await supertest(buildApp()).get('/api/projects/missing/milestones');
+    const res = await supertest(buildApp()).get(
+      '/api/projects/missing/milestones',
+    );
     expect(res.status).toBe(404);
   });
 
   it('returns the project milestones', async () => {
     ProjectService.create({ id: 'p1', name: 'P', projectDir: '/p1' });
-    ProjectService.createMilestone({ id: 'm1', projectId: 'p1', name: 'M1', displayOrder: 0 });
-    ProjectService.createMilestone({ id: 'm2', projectId: 'p1', name: 'M2', displayOrder: 1 });
+    ProjectService.createMilestone({
+      id: 'm1',
+      projectId: 'p1',
+      name: 'M1',
+      displayOrder: 0,
+    });
+    ProjectService.createMilestone({
+      id: 'm2',
+      projectId: 'p1',
+      name: 'M2',
+      displayOrder: 1,
+    });
 
     const res = await supertest(buildApp()).get('/api/projects/p1/milestones');
     expect(res.status).toBe(200);
@@ -204,7 +237,9 @@ describe('PATCH /api/milestones/:id', () => {
   });
 
   it('returns 404 when missing', async () => {
-    const res = await supertest(buildApp()).patch('/api/milestones/missing').send({ name: 'x' });
+    const res = await supertest(buildApp())
+      .patch('/api/milestones/missing')
+      .send({ name: 'x' });
     expect(res.status).toBe(404);
   });
 });
@@ -238,22 +273,43 @@ describe('POST /api/projects/:id/tasks-yaml-stub', () => {
   });
 
   it('returns 404 when project does not exist', async () => {
-    const res = await supertest(buildApp()).post('/api/projects/missing/tasks-yaml-stub');
+    const res = await supertest(buildApp()).post(
+      '/api/projects/missing/tasks-yaml-stub',
+    );
     expect(res.status).toBe(404);
   });
 
   it('returns 400 when project is not configured for YAML', async () => {
-    ProjectService.create({ id: 'p1', name: 'P', projectDir: realDir, taskSource: 'notion' });
-    const res = await supertest(buildApp()).post('/api/projects/p1/tasks-yaml-stub');
+    ProjectService.create({
+      id: 'p1',
+      name: 'P',
+      projectDir: realDir,
+      taskSource: 'notion',
+    });
+    const res = await supertest(buildApp()).post(
+      '/api/projects/p1/tasks-yaml-stub',
+    );
     expect(res.status).toBe(400);
     expect(String(res.body.error)).toMatch(/YAML/);
   });
 
   it('writes a milestone-schema tasks.yaml when missing in projectDir', async () => {
-    ProjectService.create({ id: 'p1', name: 'P', projectDir: realDir, taskSource: 'yaml' });
-    ProjectService.createMilestone({ id: 'p1:m1', projectId: 'p1', name: 'M1', sourceId: 'm1' });
+    ProjectService.create({
+      id: 'p1',
+      name: 'P',
+      projectDir: realDir,
+      taskSource: 'yaml',
+    });
+    ProjectService.createMilestone({
+      id: 'p1:m1',
+      projectId: 'p1',
+      name: 'M1',
+      sourceId: 'm1',
+    });
 
-    const res = await supertest(buildApp()).post('/api/projects/p1/tasks-yaml-stub');
+    const res = await supertest(buildApp()).post(
+      '/api/projects/p1/tasks-yaml-stub',
+    );
     expect(res.status).toBe(201);
 
     const stubPath = path.join(realDir, 'tasks.yaml');
@@ -264,10 +320,17 @@ describe('POST /api/projects/:id/tasks-yaml-stub', () => {
   });
 
   it('returns 409 when tasks.yaml already exists', async () => {
-    ProjectService.create({ id: 'p1', name: 'P', projectDir: realDir, taskSource: 'yaml' });
+    ProjectService.create({
+      id: 'p1',
+      name: 'P',
+      projectDir: realDir,
+      taskSource: 'yaml',
+    });
     fs.writeFileSync(path.join(realDir, 'tasks.yaml'), 'milestones: []\n');
 
-    const res = await supertest(buildApp()).post('/api/projects/p1/tasks-yaml-stub');
+    const res = await supertest(buildApp()).post(
+      '/api/projects/p1/tasks-yaml-stub',
+    );
     expect(res.status).toBe(409);
   });
 });
@@ -275,7 +338,9 @@ describe('POST /api/projects/:id/tasks-yaml-stub', () => {
 describe('schema migration smoke test', () => {
   it('creates projects and milestones tables', () => {
     const tables = db
-      .prepare(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`)
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`,
+      )
       .all() as { name: string }[];
     const names = tables.map((t) => t.name);
     expect(names).toContain('projects');

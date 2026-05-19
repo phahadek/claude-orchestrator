@@ -1,49 +1,53 @@
 /* global.css — design system for Claude Code Orchestrator */
 :root {
   /* Catppuccin Mocha — full palette */
-  --ctp-base:    #1e1e2e;
-  --ctp-mantle:  #181825;
-  --ctp-crust:   #11111b;
-  --ctp-surface0:#313244;
-  --ctp-surface1:#45475a;
-  --ctp-surface2:#585b70;
-  --ctp-overlay0:#6c7086;
-  --ctp-overlay1:#7f849c;
-  --ctp-text:    #cdd6f4;
-  --ctp-subtext0:#a6adc8;
-  --ctp-subtext1:#bac2de;
-  --ctp-blue:    #89b4fa;
-  --ctp-lavender:#b4befe;
-  --ctp-sapphire:#74c7ec;
-  --ctp-green:   #a6e3a1;
-  --ctp-yellow:  #f9e2af;
-  --ctp-peach:   #fab387;
-  --ctp-red:     #f38ba8;
-  --ctp-mauve:   #cba6f7;
-  --ctp-pink:    #f5c2e7;
+  --ctp-base: #1e1e2e;
+  --ctp-mantle: #181825;
+  --ctp-crust: #11111b;
+  --ctp-surface0: #313244;
+  --ctp-surface1: #45475a;
+  --ctp-surface2: #585b70;
+  --ctp-overlay0: #6c7086;
+  --ctp-overlay1: #7f849c;
+  --ctp-text: #cdd6f4;
+  --ctp-subtext0: #a6adc8;
+  --ctp-subtext1: #bac2de;
+  --ctp-blue: #89b4fa;
+  --ctp-lavender: #b4befe;
+  --ctp-sapphire: #74c7ec;
+  --ctp-green: #a6e3a1;
+  --ctp-yellow: #f9e2af;
+  --ctp-peach: #fab387;
+  --ctp-red: #f38ba8;
+  --ctp-mauve: #cba6f7;
+  --ctp-pink: #f5c2e7;
 
   /* Semantic tokens */
-  --bg-primary:   var(--ctp-base);
+  --bg-primary: var(--ctp-base);
   --bg-secondary: var(--ctp-mantle);
-  --bg-elevated:  var(--ctp-surface0);
-  --bg-hover:     var(--ctp-surface1);
-  --border:       var(--ctp-surface1);
-  --border-subtle:var(--ctp-surface0);
+  --bg-elevated: var(--ctp-surface0);
+  --bg-hover: var(--ctp-surface1);
+  --border: var(--ctp-surface1);
+  --border-subtle: var(--ctp-surface0);
   --text-primary: var(--ctp-text);
-  --text-muted:   var(--ctp-subtext0);
-  --text-faint:   var(--ctp-overlay0);
-  --accent:       var(--ctp-blue);
-  --accent-dim:   rgba(137,180,250,0.15);
+  --text-muted: var(--ctp-subtext0);
+  --text-faint: var(--ctp-overlay0);
+  --accent: var(--ctp-blue);
+  --accent-dim: rgba(137, 180, 250, 0.15);
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 16px;
-  --shadow-sm: 0 1px 3px rgba(0,0,0,0.4);
-  --shadow-md: 0 4px 12px rgba(0,0,0,0.5);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
-*, *::before, *::after { box-sizing: border-box; }
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
 body {
   margin: 0;
   background: var(--bg-primary);

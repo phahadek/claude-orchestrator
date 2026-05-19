@@ -14,7 +14,14 @@ vi.mock('../db/queries.js', () => ({
 }));
 
 import { PRReviewService } from './PRReviewService';
-import { getPRByNumber, setPRReviewResult, getEventsBySession, setReviewSessionId, updatePRDraftStatus, incrementReviewIteration } from '../db/queries';
+import {
+  getPRByNumber,
+  setPRReviewResult,
+  getEventsBySession,
+  setReviewSessionId,
+  updatePRDraftStatus,
+  incrementReviewIteration,
+} from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
 import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
 import type { PullRequest, PRDiff } from './types';
@@ -80,8 +87,12 @@ function makeMockGitHub(): GitHubClient {
     fetchPR: vi.fn().mockResolvedValue(mockPR),
     fetchDiff: vi.fn().mockResolvedValue(mockDiff),
     mergePR: vi.fn(),
-    getMergeability: vi.fn().mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
-    getMergeabilityWithRetry: vi.fn().mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
+    getMergeability: vi
+      .fn()
+      .mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
+    getMergeabilityWithRetry: vi
+      .fn()
+      .mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
     markPRReady: vi.fn().mockResolvedValue(undefined),
   } as unknown as GitHubClient;
 }
@@ -180,7 +191,10 @@ describe('PRReviewService.tryParseVerdict() — hardened parsing', () => {
 
   it('extracts JSON from text with preamble and trailing content', () => {
     const service = makeService();
-    const withPreamble = 'Here is my review:\n' + JSON.stringify(validPayload) + '\nPlease let me know if you need changes.';
+    const withPreamble =
+      'Here is my review:\n' +
+      JSON.stringify(validPayload) +
+      '\nPlease let me know if you need changes.';
     const events = [makeAssistantEvent(withPreamble)];
     const result = service.parseReviewResult(events, 42, 'owner/repo');
     expect(result.verdict).toBe('approved');
@@ -216,12 +230,22 @@ describe('PRReviewService.parseReviewResult() — last assistant message only', 
     // Last assistant message contains the verdict
     const verdictPayload = {
       verdict: 'needs_changes',
-      dimensions: [{ name: 'Diff vs Acceptance Criteria', passed: false, notes: 'Missing test.' }],
+      dimensions: [
+        {
+          name: 'Diff vs Acceptance Criteria',
+          passed: false,
+          notes: 'Missing test.',
+        },
+      ],
       summary: 'One dimension failed.',
     };
     const verdictEvent = makeAssistantEvent(JSON.stringify(verdictPayload));
 
-    const result = service.parseReviewResult([toolCallEvent, verdictEvent], 42, 'owner/repo');
+    const result = service.parseReviewResult(
+      [toolCallEvent, verdictEvent],
+      42,
+      'owner/repo',
+    );
     expect(result.verdict).toBe('needs_changes');
     expect(result.summary).toBe('One dimension failed.');
   });
@@ -231,7 +255,13 @@ describe('PRReviewService.parseReviewResult() — last assistant message only', 
 
     const fullPayload = {
       verdict: 'approved',
-      dimensions: [{ name: 'Title and description vs task Summary', passed: true, notes: 'Matches.' }],
+      dimensions: [
+        {
+          name: 'Title and description vs task Summary',
+          passed: true,
+          notes: 'Matches.',
+        },
+      ],
       summary: 'Looks great.',
     };
     // Split JSON across two text blocks within the same assistant message
@@ -298,8 +328,12 @@ describe('PRReviewService.buildPrompt()', () => {
     );
     const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
 
-    expect(prompt).toContain('necessary downstream updates caused by the listed changes');
-    expect(prompt).toContain('Fail only if the PR touches files unrelated to the task');
+    expect(prompt).toContain(
+      'necessary downstream updates caused by the listed changes',
+    );
+    expect(prompt).toContain(
+      'Fail only if the PR touches files unrelated to the task',
+    );
   });
 
   it('includes the full diff without truncation', () => {
@@ -333,10 +367,18 @@ describe('PRReviewService.parseReviewResult()', () => {
     const payload = {
       verdict: 'approved',
       dimensions: [
-        { name: 'Title and description vs task Summary', passed: true, notes: 'Good.' },
+        {
+          name: 'Title and description vs task Summary',
+          passed: true,
+          notes: 'Good.',
+        },
         { name: 'Diff vs Context spec', passed: true, notes: 'Good.' },
         { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'Good.' },
-        { name: 'Changed files vs Files/paths affected list', passed: true, notes: 'Good.' },
+        {
+          name: 'Changed files vs Files/paths affected list',
+          passed: true,
+          notes: 'Good.',
+        },
       ],
       summary: 'All four dimensions passed.',
     };
@@ -375,10 +417,22 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
     const claudePayload = {
       verdict: 'approved',
       dimensions: [
-        { name: 'Title and description vs task Summary', passed: true, notes: 'Matches.' },
+        {
+          name: 'Title and description vs task Summary',
+          passed: true,
+          notes: 'Matches.',
+        },
         { name: 'Diff vs Context spec', passed: true, notes: 'Matches.' },
-        { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'Matches.' },
-        { name: 'Changed files vs Files/paths affected list', passed: true, notes: 'Matches.' },
+        {
+          name: 'Diff vs Acceptance Criteria',
+          passed: true,
+          notes: 'Matches.',
+        },
+        {
+          name: 'Changed files vs Files/paths affected list',
+          passed: true,
+          notes: 'Matches.',
+        },
       ],
       summary: 'All four dimensions passed.',
     };
@@ -393,14 +447,19 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
     );
 
     const startMock = mockSM.start as ReturnType<typeof vi.fn>;
-    startMock.mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
-      const id = opts.sessionId;
-      // Emit verdict via session_event — session stays alive (no session_ended)
-      setImmediate(() =>
-        mockSM.emit('message', makeSessionEventMessage(id, JSON.stringify(claudePayload))),
-      );
-      return id;
-    });
+    startMock.mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
+        // Emit verdict via session_event — session stays alive (no session_ended)
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(id, JSON.stringify(claudePayload)),
+          ),
+        );
+        return id;
+      },
+    );
 
     const result = await service.reviewPR(42, 'owner/repo');
 
@@ -412,7 +471,11 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
 
     expect(result.verdict).toBe('approved');
     expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledOnce();
-    expect(vi.mocked(setReviewSessionId)).toHaveBeenCalledWith(42, 'owner/repo', opts.sessionId);
+    expect(vi.mocked(setReviewSessionId)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      opts.sessionId,
+    );
   });
 
   it('falls back to stored events when session_ended fires before verdict', async () => {
@@ -420,10 +483,18 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
 
     const claudePayload = {
       verdict: 'needs_changes',
-      dimensions: [{ name: 'Diff vs Context spec', passed: false, notes: 'Missing export.' }],
+      dimensions: [
+        {
+          name: 'Diff vs Context spec',
+          passed: false,
+          notes: 'Missing export.',
+        },
+      ],
       summary: 'One dimension failed.',
     };
-    vi.mocked(getEventsBySession).mockReturnValue([makeAssistantEvent(JSON.stringify(claudePayload))]);
+    vi.mocked(getEventsBySession).mockReturnValue([
+      makeAssistantEvent(JSON.stringify(claudePayload)),
+    ]);
 
     const mockSM = makeMockSessionManager();
     const service = new PRReviewService(
@@ -435,13 +506,19 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
     );
 
     const startMock = mockSM.start as ReturnType<typeof vi.fn>;
-    startMock.mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
-      const id = opts.sessionId;
-      setImmediate(() =>
-        mockSM.emit('message', { type: 'session_ended', sessionId: id, status: 'done' }),
-      );
-      return id;
-    });
+    startMock.mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
+        setImmediate(() =>
+          mockSM.emit('message', {
+            type: 'session_ended',
+            sessionId: id,
+            status: 'done',
+          }),
+        );
+        return id;
+      },
+    );
 
     const result = await service.reviewPR(42, 'owner/repo');
 
@@ -470,15 +547,23 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
 
     let listenerCountAtStart = 0;
     const startMock = mockSM.start as ReturnType<typeof vi.fn>;
-    startMock.mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
-      // Check how many 'message' listeners are attached at the moment start() is called.
-      // With the fix, waitForVerdict() has already subscribed, so count must be >= 1.
-      listenerCountAtStart = mockSM.listenerCount('message');
-      // Emit verdict synchronously inside start() — will only be captured if listener
-      // was already attached before start() was called.
-      mockSM.emit('message', makeSessionEventMessage(opts.sessionId, JSON.stringify(claudePayload)));
-      return opts.sessionId;
-    });
+    startMock.mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        // Check how many 'message' listeners are attached at the moment start() is called.
+        // With the fix, waitForVerdict() has already subscribed, so count must be >= 1.
+        listenerCountAtStart = mockSM.listenerCount('message');
+        // Emit verdict synchronously inside start() — will only be captured if listener
+        // was already attached before start() was called.
+        mockSM.emit(
+          'message',
+          makeSessionEventMessage(
+            opts.sessionId,
+            JSON.stringify(claudePayload),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
 
     const result = await service.reviewPR(42, 'owner/repo');
 
@@ -491,7 +576,9 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
 
     const claudePayload = {
       verdict: 'approved',
-      dimensions: [{ name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' }],
+      dimensions: [
+        { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
+      ],
       summary: 'Approved immediately.',
     };
 
@@ -505,13 +592,18 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
     );
 
     const startMock = mockSM.start as ReturnType<typeof vi.fn>;
-    startMock.mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
-      const id = opts.sessionId;
-      // Emit SYNCHRONOUSLY inside start() — simulates the CLI completing the
-      // review before start() even returns (the original race condition).
-      mockSM.emit('message', makeSessionEventMessage(id, JSON.stringify(claudePayload)));
-      return id;
-    });
+    startMock.mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
+        // Emit SYNCHRONOUSLY inside start() — simulates the CLI completing the
+        // review before start() even returns (the original race condition).
+        mockSM.emit(
+          'message',
+          makeSessionEventMessage(id, JSON.stringify(claudePayload)),
+        );
+        return id;
+      },
+    );
 
     const result = await service.reviewPR(42, 'owner/repo');
 
@@ -531,7 +623,9 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
       'https://notion.so/ctx',
     );
 
-    await expect(service.reviewPR(99, 'owner/repo')).rejects.toThrow('not found in database');
+    await expect(service.reviewPR(99, 'owner/repo')).rejects.toThrow(
+      'not found in database',
+    );
   });
 });
 
@@ -543,10 +637,18 @@ describe('PRReviewService — merge conflict dimension', () => {
   const allPassedAIPayload = {
     verdict: 'approved',
     dimensions: [
-      { name: 'Title and description vs task Summary', passed: true, notes: 'ok' },
+      {
+        name: 'Title and description vs task Summary',
+        passed: true,
+        notes: 'ok',
+      },
       { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
       { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
-      { name: 'Changed files vs Files/paths affected list', passed: true, notes: 'ok' },
+      {
+        name: 'Changed files vs Files/paths affected list',
+        passed: true,
+        notes: 'ok',
+      },
       { name: 'Size proportionality', passed: true, notes: 'In budget.' },
     ],
     summary: 'All five AI dimensions passed.',
@@ -557,21 +659,42 @@ describe('PRReviewService — merge conflict dimension', () => {
 
     const mockSM = makeMockSessionManager();
     const mockGH = makeMockGitHub();
-    vi.mocked(mockGH.getMergeability).mockResolvedValue({ mergeable: true, mergeableState: 'clean' });
-    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({ mergeable: true, mergeableState: 'clean' });
-
-    const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
-
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
-      const id = opts.sessionId;
-      setImmediate(() => mockSM.emit('message', makeSessionEventMessage(id, JSON.stringify(allPassedAIPayload))));
-      return id;
+    vi.mocked(mockGH.getMergeability).mockResolvedValue({
+      mergeable: true,
+      mergeableState: 'clean',
     });
+    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({
+      mergeable: true,
+      mergeableState: 'clean',
+    });
+
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(id, JSON.stringify(allPassedAIPayload)),
+          ),
+        );
+        return id;
+      },
+    );
 
     const result = await service.reviewPR(42, 'owner/repo');
 
     expect(result.dimensions).toHaveLength(6);
-    const conflictDim = result.dimensions!.find((d) => d.name === 'Merge conflicts');
+    const conflictDim = result.dimensions!.find(
+      (d) => d.name === 'Merge conflicts',
+    );
     expect(conflictDim).toBeDefined();
     expect(conflictDim!.passed).toBe(true);
     expect(result.verdict).toBe('approved');
@@ -582,21 +705,42 @@ describe('PRReviewService — merge conflict dimension', () => {
 
     const mockSM = makeMockSessionManager();
     const mockGH = makeMockGitHub();
-    vi.mocked(mockGH.getMergeability).mockResolvedValue({ mergeable: false, mergeableState: 'dirty' });
-    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({ mergeable: false, mergeableState: 'dirty' });
-
-    const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
-
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
-      const id = opts.sessionId;
-      setImmediate(() => mockSM.emit('message', makeSessionEventMessage(id, JSON.stringify(allPassedAIPayload))));
-      return id;
+    vi.mocked(mockGH.getMergeability).mockResolvedValue({
+      mergeable: false,
+      mergeableState: 'dirty',
     });
+    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({
+      mergeable: false,
+      mergeableState: 'dirty',
+    });
+
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(id, JSON.stringify(allPassedAIPayload)),
+          ),
+        );
+        return id;
+      },
+    );
 
     const result = await service.reviewPR(42, 'owner/repo');
 
     expect(result.dimensions).toHaveLength(6);
-    const conflictDim = result.dimensions!.find((d) => d.name === 'Merge conflicts');
+    const conflictDim = result.dimensions!.find(
+      (d) => d.name === 'Merge conflicts',
+    );
     expect(conflictDim).toBeDefined();
     expect(conflictDim!.passed).toBe(false);
     expect(conflictDim!.notes).toContain('merge conflicts');
@@ -608,21 +752,42 @@ describe('PRReviewService — merge conflict dimension', () => {
 
     const mockSM = makeMockSessionManager();
     const mockGH = makeMockGitHub();
-    vi.mocked(mockGH.getMergeability).mockResolvedValue({ mergeable: null, mergeableState: null });
-    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({ mergeable: null, mergeableState: null });
-
-    const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
-
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
-      const id = opts.sessionId;
-      setImmediate(() => mockSM.emit('message', makeSessionEventMessage(id, JSON.stringify(allPassedAIPayload))));
-      return id;
+    vi.mocked(mockGH.getMergeability).mockResolvedValue({
+      mergeable: null,
+      mergeableState: null,
     });
+    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({
+      mergeable: null,
+      mergeableState: null,
+    });
+
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(id, JSON.stringify(allPassedAIPayload)),
+          ),
+        );
+        return id;
+      },
+    );
 
     const result = await service.reviewPR(42, 'owner/repo');
 
     // No Merge conflicts dimension appended — GitHub hasn't computed it yet
-    const conflictDim = result.dimensions!.find((d) => d.name === 'Merge conflicts');
+    const conflictDim = result.dimensions!.find(
+      (d) => d.name === 'Merge conflicts',
+    );
     expect(conflictDim).toBeUndefined();
     // AI verdict (approved) is preserved — not downgraded to needs_changes
     expect(result.verdict).toBe('approved');
@@ -637,23 +802,45 @@ describe('PRReviewService — merge conflict dimension', () => {
 
     const mockSM = makeMockSessionManager();
     const mockGH = makeMockGitHub();
-    vi.mocked(mockGH.getMergeability).mockResolvedValue({ mergeable: null, mergeableState: null });
-    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({ mergeable: null, mergeableState: null });
-
-    const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
-
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
-      const id = opts.sessionId;
-      // Simulate killed session: session_ended fires with no prior verdict
-      setImmediate(() => mockSM.emit('message', { type: 'session_ended', sessionId: id, status: 'killed' }));
-      return id;
+    vi.mocked(mockGH.getMergeability).mockResolvedValue({
+      mergeable: null,
+      mergeableState: null,
     });
+    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({
+      mergeable: null,
+      mergeableState: null,
+    });
+
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
+        // Simulate killed session: session_ended fires with no prior verdict
+        setImmediate(() =>
+          mockSM.emit('message', {
+            type: 'session_ended',
+            sessionId: id,
+            status: 'killed',
+          }),
+        );
+        return id;
+      },
+    );
 
     const result = await service.reviewPR(42, 'owner/repo');
 
     expect(result.verdict).toBe('incomplete');
     // mergeable=null → dimension is skipped entirely
-    const conflictDim = result.dimensions?.find((d) => d.name === 'Merge conflicts');
+    const conflictDim = result.dimensions?.find(
+      (d) => d.name === 'Merge conflicts',
+    );
     expect(conflictDim).toBeUndefined();
   });
 
@@ -663,16 +850,36 @@ describe('PRReviewService — merge conflict dimension', () => {
 
     const mockSM = makeMockSessionManager();
     const mockGH = makeMockGitHub();
-    vi.mocked(mockGH.getMergeability).mockResolvedValue({ mergeable: true, mergeableState: 'clean' });
-    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({ mergeable: true, mergeableState: 'clean' });
-
-    const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
-
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
-      const id = opts.sessionId;
-      setImmediate(() => mockSM.emit('message', { type: 'session_ended', sessionId: id, status: 'killed' }));
-      return id;
+    vi.mocked(mockGH.getMergeability).mockResolvedValue({
+      mergeable: true,
+      mergeableState: 'clean',
     });
+    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({
+      mergeable: true,
+      mergeableState: 'clean',
+    });
+
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
+        setImmediate(() =>
+          mockSM.emit('message', {
+            type: 'session_ended',
+            sessionId: id,
+            status: 'killed',
+          }),
+        );
+        return id;
+      },
+    );
 
     const result = await service.reviewPR(42, 'owner/repo');
 
@@ -688,12 +895,29 @@ describe('PRReviewService.handleApprovedVerdict()', () => {
     vi.mocked(getPRByNumber).mockReturnValue(draftPRRow as any);
 
     const mockGH = makeMockGitHub();
-    const service = new PRReviewService(mockGH, makeMockNotion(), makeMockSessionManager() as any, 'proj-1', 'https://notion.so/ctx');
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
 
-    const result = await service.handleApprovedVerdict(42, 'owner/repo', 'task-abc123');
+    const result = await service.handleApprovedVerdict(
+      42,
+      'owner/repo',
+      'task-abc123',
+    );
 
-    expect(vi.mocked(mockGH.markPRReady)).toHaveBeenCalledWith('owner/repo', 42);
-    expect(vi.mocked(updatePRDraftStatus)).toHaveBeenCalledWith(42, 'owner/repo', 0);
+    expect(vi.mocked(mockGH.markPRReady)).toHaveBeenCalledWith(
+      'owner/repo',
+      42,
+    );
+    expect(vi.mocked(updatePRDraftStatus)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      0,
+    );
     expect(result).toBe(true);
   });
 
@@ -701,12 +925,29 @@ describe('PRReviewService.handleApprovedVerdict()', () => {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any); // draft: 0
 
     const mockGH = makeMockGitHub();
-    const service = new PRReviewService(mockGH, makeMockNotion(), makeMockSessionManager() as any, 'proj-1', 'https://notion.so/ctx');
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
 
-    const result = await service.handleApprovedVerdict(42, 'owner/repo', 'task-abc123');
+    const result = await service.handleApprovedVerdict(
+      42,
+      'owner/repo',
+      'task-abc123',
+    );
 
-    expect(vi.mocked(mockGH.markPRReady)).toHaveBeenCalledWith('owner/repo', 42);
-    expect(vi.mocked(updatePRDraftStatus)).toHaveBeenCalledWith(42, 'owner/repo', 0);
+    expect(vi.mocked(mockGH.markPRReady)).toHaveBeenCalledWith(
+      'owner/repo',
+      42,
+    );
+    expect(vi.mocked(updatePRDraftStatus)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      0,
+    );
     expect(result).toBe(true);
   });
 
@@ -714,13 +955,28 @@ describe('PRReviewService.handleApprovedVerdict()', () => {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
 
     const mockGH = makeMockGitHub();
-    vi.mocked(mockGH.markPRReady).mockRejectedValue(new Error('PR is not a draft'));
+    vi.mocked(mockGH.markPRReady).mockRejectedValue(
+      new Error('PR is not a draft'),
+    );
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const service = new PRReviewService(mockGH, makeMockNotion(), makeMockSessionManager() as any, 'proj-1', 'https://notion.so/ctx');
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
 
-    const result = await service.handleApprovedVerdict(42, 'owner/repo', 'task-abc123');
+    const result = await service.handleApprovedVerdict(
+      42,
+      'owner/repo',
+      'task-abc123',
+    );
 
-    expect(vi.mocked(mockGH.markPRReady)).toHaveBeenCalledWith('owner/repo', 42);
+    expect(vi.mocked(mockGH.markPRReady)).toHaveBeenCalledWith(
+      'owner/repo',
+      42,
+    );
     expect(vi.mocked(updatePRDraftStatus)).not.toHaveBeenCalled();
     expect(result).toBe(false);
     warnSpy.mockRestore();
@@ -730,18 +986,33 @@ describe('PRReviewService.handleApprovedVerdict()', () => {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
 
     const mockNotion = makeMockNotion();
-    const service = new PRReviewService(makeMockGitHub(), mockNotion, makeMockSessionManager() as any, 'proj-1', 'https://notion.so/ctx');
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      mockNotion,
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
 
     await service.handleApprovedVerdict(42, 'owner/repo', 'task-abc123');
 
-    expect(vi.mocked(mockNotion.updateStatus)).toHaveBeenCalledWith('task-abc123', '👀 In Review');
+    expect(vi.mocked(mockNotion.updateStatus)).toHaveBeenCalledWith(
+      'task-abc123',
+      '👀 In Review',
+    );
   });
 
   it('does NOT call Notion updateStatus when taskId is null', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
 
     const mockNotion = makeMockNotion();
-    const service = new PRReviewService(makeMockGitHub(), mockNotion, makeMockSessionManager() as any, 'proj-1', 'https://notion.so/ctx');
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      mockNotion,
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
 
     await service.handleApprovedVerdict(42, 'owner/repo', null);
 
@@ -755,10 +1026,18 @@ describe('PRReviewService.reviewPR() — approved verdict calls handleApprovedVe
   const claudeApprovedPayload = {
     verdict: 'approved',
     dimensions: [
-      { name: 'Title and description vs task Summary', passed: true, notes: 'ok' },
+      {
+        name: 'Title and description vs task Summary',
+        passed: true,
+        notes: 'ok',
+      },
       { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
       { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
-      { name: 'Changed files vs Files/paths affected list', passed: true, notes: 'ok' },
+      {
+        name: 'Changed files vs Files/paths affected list',
+        passed: true,
+        notes: 'ok',
+      },
     ],
     summary: 'All dimensions passed.',
   };
@@ -769,18 +1048,41 @@ describe('PRReviewService.reviewPR() — approved verdict calls handleApprovedVe
 
     const mockGH = makeMockGitHub();
     const mockSM = makeMockSessionManager();
-    const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
 
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
-      setImmediate(() => mockSM.emit('message', makeSessionEventMessage(opts.sessionId, JSON.stringify(claudeApprovedPayload))));
-      return opts.sessionId;
-    });
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(claudeApprovedPayload),
+            ),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
 
     const result = await service.reviewPR(42, 'owner/repo');
 
     expect(result.verdict).toBe('approved');
-    expect(vi.mocked(mockGH.markPRReady)).toHaveBeenCalledWith('owner/repo', 42);
-    expect(vi.mocked(updatePRDraftStatus)).toHaveBeenCalledWith(42, 'owner/repo', 0);
+    expect(vi.mocked(mockGH.markPRReady)).toHaveBeenCalledWith(
+      'owner/repo',
+      42,
+    );
+    expect(vi.mocked(updatePRDraftStatus)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      0,
+    );
   });
 
   it('does NOT call markPRReady when verdict is needs_changes', async () => {
@@ -788,20 +1090,48 @@ describe('PRReviewService.reviewPR() — approved verdict calls handleApprovedVe
 
     const needsChangesPayload = {
       verdict: 'needs_changes',
-      dimensions: [{ name: 'Diff vs Context spec', passed: false, notes: 'Missing export.' }],
+      dimensions: [
+        {
+          name: 'Diff vs Context spec',
+          passed: false,
+          notes: 'Missing export.',
+        },
+      ],
       summary: 'One dimension failed.',
     };
 
     const mockGH = makeMockGitHub();
-    vi.mocked(mockGH.getMergeability).mockResolvedValue({ mergeable: true, mergeableState: 'clean' });
-    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({ mergeable: true, mergeableState: 'clean' });
-    const mockSM = makeMockSessionManager();
-    const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
-
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
-      setImmediate(() => mockSM.emit('message', makeSessionEventMessage(opts.sessionId, JSON.stringify(needsChangesPayload))));
-      return opts.sessionId;
+    vi.mocked(mockGH.getMergeability).mockResolvedValue({
+      mergeable: true,
+      mergeableState: 'clean',
     });
+    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({
+      mergeable: true,
+      mergeableState: 'clean',
+    });
+    const mockSM = makeMockSessionManager();
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(needsChangesPayload),
+            ),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
 
     const result = await service.reviewPR(42, 'owner/repo');
 
@@ -816,16 +1146,35 @@ describe('PRReviewService.reviewPR() — approved verdict calls handleApprovedVe
     const mockGH = makeMockGitHub();
     const mockNotion = makeMockNotion();
     const mockSM = makeMockSessionManager();
-    const service = new PRReviewService(mockGH, mockNotion, mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    const service = new PRReviewService(
+      mockGH,
+      mockNotion,
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
 
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
-      setImmediate(() => mockSM.emit('message', makeSessionEventMessage(opts.sessionId, JSON.stringify(claudeApprovedPayload))));
-      return opts.sessionId;
-    });
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(claudeApprovedPayload),
+            ),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
 
     await service.reviewPR(42, 'owner/repo');
 
-    expect(vi.mocked(mockNotion.updateStatus)).toHaveBeenCalledWith('task-abc123', '👀 In Review');
+    expect(vi.mocked(mockNotion.updateStatus)).toHaveBeenCalledWith(
+      'task-abc123',
+      '👀 In Review',
+    );
   });
 
   it('passes projectId to handleApprovedVerdict in the fresh-review path (Case 3)', async () => {
@@ -834,19 +1183,43 @@ describe('PRReviewService.reviewPR() — approved verdict calls handleApprovedVe
     const mockGH = makeMockGitHub();
     const mockNotion = makeMockNotion();
     const mockSM = makeMockSessionManager();
-    const service = new PRReviewService(mockGH, mockNotion, mockSM as any, 'default-proj', 'https://notion.so/ctx');
+    const service = new PRReviewService(
+      mockGH,
+      mockNotion,
+      mockSM as any,
+      'default-proj',
+      'https://notion.so/ctx',
+    );
 
     const handleSpy = vi.spyOn(service, 'handleApprovedVerdict');
 
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
-      setImmediate(() => mockSM.emit('message', makeSessionEventMessage(opts.sessionId, JSON.stringify(claudeApprovedPayload))));
-      return opts.sessionId;
-    });
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(claudeApprovedPayload),
+            ),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
 
     await service.reviewPR(42, 'owner/repo', 'specific-project-id');
 
-    expect(handleSpy).toHaveBeenCalledWith(42, 'owner/repo', 'task-abc123', 'specific-project-id');
-    expect(vi.mocked(mockNotion.updateStatus)).toHaveBeenCalledWith('task-abc123', '👀 In Review');
+    expect(handleSpy).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'task-abc123',
+      'specific-project-id',
+    );
+    expect(vi.mocked(mockNotion.updateStatus)).toHaveBeenCalledWith(
+      'task-abc123',
+      '👀 In Review',
+    );
   });
 });
 
@@ -860,7 +1233,10 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
   };
 
   it('reuses an existing live review session: sends follow-up, does not spawn', async () => {
-    const prRowWithLiveSession = { ...mockPRRow, review_session_id: 'existing-review-session-id' };
+    const prRowWithLiveSession = {
+      ...mockPRRow,
+      review_session_id: 'existing-review-session-id',
+    };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithLiveSession as any);
 
     const mockSM = makeMockSessionManager();
@@ -869,40 +1245,76 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
     const sendMock = mockSM.send as ReturnType<typeof vi.fn>;
     sendMock.mockImplementationOnce(() => {
       setImmediate(() =>
-        mockSM.emit('message', makeSessionEventMessage('existing-review-session-id', JSON.stringify(claudePayload))),
+        mockSM.emit(
+          'message',
+          makeSessionEventMessage(
+            'existing-review-session-id',
+            JSON.stringify(claudePayload),
+          ),
+        ),
       );
     });
 
-    const service = new PRReviewService(makeMockGitHub(), makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
     const result = await service.reviewPR(42, 'owner/repo');
 
     expect(mockSM.start).not.toHaveBeenCalled();
-    expect(sendMock).toHaveBeenCalledWith('existing-review-session-id', expect.any(String));
+    expect(sendMock).toHaveBeenCalledWith(
+      'existing-review-session-id',
+      expect.any(String),
+    );
     expect(vi.mocked(setReviewSessionId)).not.toHaveBeenCalled();
     expect(result.verdict).toBe('approved');
   });
 
   it('resumes a dead review session via sendOrResume with the original session ID', async () => {
-    const prRowWithDeadSession = { ...mockPRRow, review_session_id: 'dead-review-session-id' };
+    const prRowWithDeadSession = {
+      ...mockPRRow,
+      review_session_id: 'dead-review-session-id',
+    };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithDeadSession as any);
 
     const mockSM = makeMockSessionManager();
     (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(false);
 
     const resumedId = 'new-resumed-session-id';
-    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
-      setImmediate(() =>
-        mockSM.emit('message', makeSessionEventMessage(resumedId, JSON.stringify(claudePayload))),
-      );
-      return resumedId;
-    });
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async () => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(resumedId, JSON.stringify(claudePayload)),
+          ),
+        );
+        return resumedId;
+      },
+    );
 
-    const service = new PRReviewService(makeMockGitHub(), makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
     const result = await service.reviewPR(42, 'owner/repo');
 
     expect(mockSM.start).not.toHaveBeenCalled();
-    expect(mockSM.sendOrResume).toHaveBeenCalledWith('dead-review-session-id', expect.any(String));
-    expect(vi.mocked(setReviewSessionId)).toHaveBeenCalledWith(42, 'owner/repo', resumedId);
+    expect(mockSM.sendOrResume).toHaveBeenCalledWith(
+      'dead-review-session-id',
+      expect.any(String),
+    );
+    expect(vi.mocked(setReviewSessionId)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      resumedId,
+    );
     expect(result.verdict).toBe('approved');
   });
 
@@ -911,27 +1323,45 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
 
     const mockSM = makeMockSessionManager();
     const startMock = mockSM.start as ReturnType<typeof vi.fn>;
-    startMock.mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
-      const id = opts.sessionId;
-      setImmediate(() =>
-        mockSM.emit('message', makeSessionEventMessage(id, JSON.stringify(claudePayload))),
-      );
-      return id;
-    });
+    startMock.mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(id, JSON.stringify(claudePayload)),
+          ),
+        );
+        return id;
+      },
+    );
 
-    const service = new PRReviewService(makeMockGitHub(), makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
     const result = await service.reviewPR(42, 'owner/repo');
 
     expect(startMock).toHaveBeenCalledOnce();
     expect(mockSM.send).not.toHaveBeenCalled();
     expect(mockSM.sendOrResume).not.toHaveBeenCalled();
     const [, , opts] = startMock.mock.calls[0];
-    expect(vi.mocked(setReviewSessionId)).toHaveBeenCalledWith(42, 'owner/repo', opts.sessionId);
+    expect(vi.mocked(setReviewSessionId)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      opts.sessionId,
+    );
     expect(result.verdict).toBe('approved');
   });
 
   it('live-session follow-up inlines the full JSON schema (not a reference to "same format")', async () => {
-    const prRowWithLiveSession = { ...mockPRRow, review_session_id: 'existing-review-session-id' };
+    const prRowWithLiveSession = {
+      ...mockPRRow,
+      review_session_id: 'existing-review-session-id',
+    };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithLiveSession as any);
 
     const mockSM = makeMockSessionManager();
@@ -939,14 +1369,27 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
 
     (mockSM.send as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
       setImmediate(() =>
-        mockSM.emit('message', makeSessionEventMessage('existing-review-session-id', JSON.stringify(claudePayload))),
+        mockSM.emit(
+          'message',
+          makeSessionEventMessage(
+            'existing-review-session-id',
+            JSON.stringify(claudePayload),
+          ),
+        ),
       );
     });
 
-    const service = new PRReviewService(makeMockGitHub(), makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
     await service.reviewPR(42, 'owner/repo');
 
-    const [, followUp] = (mockSM.send as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [, followUp] = (mockSM.send as ReturnType<typeof vi.fn>).mock
+      .calls[0];
     expect(followUp).not.toContain('same JSON review format as before');
     expect(followUp).toContain('"verdict"');
     expect(followUp).toContain('"dimensions"');
@@ -955,11 +1398,16 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
     expect(followUp).toContain('Diff vs Acceptance Criteria');
     expect(followUp).toContain('Changed files vs Files/paths affected list');
     expect(followUp).toContain('verdict rules:');
-    expect(followUp).toContain('necessary downstream updates caused by the listed changes');
+    expect(followUp).toContain(
+      'necessary downstream updates caused by the listed changes',
+    );
   });
 
   it('does not overwrite review_session_id when reusing an existing live session', async () => {
-    const prRowWithLiveSession = { ...mockPRRow, review_session_id: 'existing-review-session-id' };
+    const prRowWithLiveSession = {
+      ...mockPRRow,
+      review_session_id: 'existing-review-session-id',
+    };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithLiveSession as any);
 
     const mockSM = makeMockSessionManager();
@@ -967,11 +1415,23 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
 
     (mockSM.send as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
       setImmediate(() =>
-        mockSM.emit('message', makeSessionEventMessage('existing-review-session-id', JSON.stringify(claudePayload))),
+        mockSM.emit(
+          'message',
+          makeSessionEventMessage(
+            'existing-review-session-id',
+            JSON.stringify(claudePayload),
+          ),
+        ),
       );
     });
 
-    const service = new PRReviewService(makeMockGitHub(), makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
     await service.reviewPR(42, 'owner/repo');
 
     expect(vi.mocked(setReviewSessionId)).not.toHaveBeenCalled();
@@ -983,27 +1443,44 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
 describe('PRReviewService.reReviewPR()', () => {
   const claudePayload = {
     verdict: 'approved',
-    dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'Fixed.' }],
+    dimensions: [
+      { name: 'Diff vs Context spec', passed: true, notes: 'Fixed.' },
+    ],
     summary: 'Issues addressed.',
   };
 
   it('calls sendOrResume with the existing review_session_id', async () => {
-    const prRowWithSession = { ...mockPRRow, review_session_id: 'existing-review-session-abc' };
+    const prRowWithSession = {
+      ...mockPRRow,
+      review_session_id: 'existing-review-session-abc',
+    };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
 
     const mockSM = makeMockSessionManager();
-    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(async (sessionId: string) => {
-      setImmediate(() =>
-        mockSM.emit('message', makeSessionEventMessage(sessionId, JSON.stringify(claudePayload))),
-      );
-      return sessionId;
-    });
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (sessionId: string) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(sessionId, JSON.stringify(claudePayload)),
+          ),
+        );
+        return sessionId;
+      },
+    );
 
-    const service = new PRReviewService(makeMockGitHub(), makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
     const result = await service.reReviewPR(42, 'owner/repo');
 
     expect(mockSM.sendOrResume).toHaveBeenCalledOnce();
-    const [calledSessionId] = (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [calledSessionId] = (mockSM.sendOrResume as ReturnType<typeof vi.fn>)
+      .mock.calls[0];
     expect(calledSessionId).toBe('existing-review-session-abc');
     expect(result.verdict).toBe('approved');
   });
@@ -1013,15 +1490,26 @@ describe('PRReviewService.reReviewPR()', () => {
 
     const mockSM = makeMockSessionManager();
     const startMock = mockSM.start as ReturnType<typeof vi.fn>;
-    startMock.mockImplementationOnce((_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
-      const id = opts.sessionId;
-      setImmediate(() =>
-        mockSM.emit('message', makeSessionEventMessage(id, JSON.stringify(claudePayload))),
-      );
-      return id;
-    });
+    startMock.mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(id, JSON.stringify(claudePayload)),
+          ),
+        );
+        return id;
+      },
+    );
 
-    const service = new PRReviewService(makeMockGitHub(), makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
     const result = await service.reReviewPR(42, 'owner/repo');
 
     expect(startMock).toHaveBeenCalledOnce();
@@ -1030,57 +1518,111 @@ describe('PRReviewService.reReviewPR()', () => {
   });
 
   it('increments review_iteration in DB before calling sendOrResume', async () => {
-    const prRowWithSession = { ...mockPRRow, review_session_id: 'review-session-xyz', review_iteration: 1 };
+    const prRowWithSession = {
+      ...mockPRRow,
+      review_session_id: 'review-session-xyz',
+      review_iteration: 1,
+    };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
 
     const mockSM = makeMockSessionManager();
-    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(async (sessionId: string) => {
-      setImmediate(() =>
-        mockSM.emit('message', makeSessionEventMessage(sessionId, JSON.stringify(claudePayload))),
-      );
-      return sessionId;
-    });
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (sessionId: string) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(sessionId, JSON.stringify(claudePayload)),
+          ),
+        );
+        return sessionId;
+      },
+    );
 
-    const service = new PRReviewService(makeMockGitHub(), makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
     await service.reReviewPR(42, 'owner/repo');
 
-    expect(vi.mocked(incrementReviewIteration)).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(vi.mocked(incrementReviewIteration)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
   });
 
   it('updates review_session_id when sendOrResume returns a new session ID', async () => {
-    const prRowWithSession = { ...mockPRRow, review_session_id: 'old-review-session' };
+    const prRowWithSession = {
+      ...mockPRRow,
+      review_session_id: 'old-review-session',
+    };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
 
     const mockSM = makeMockSessionManager();
-    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
-      setImmediate(() =>
-        mockSM.emit('message', makeSessionEventMessage('new-review-session', JSON.stringify(claudePayload))),
-      );
-      return 'new-review-session';
-    });
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async () => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              'new-review-session',
+              JSON.stringify(claudePayload),
+            ),
+          ),
+        );
+        return 'new-review-session';
+      },
+    );
 
-    const service = new PRReviewService(makeMockGitHub(), makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
     await service.reReviewPR(42, 'owner/repo');
 
-    expect(vi.mocked(setReviewSessionId)).toHaveBeenCalledWith(42, 'owner/repo', 'new-review-session');
+    expect(vi.mocked(setReviewSessionId)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'new-review-session',
+    );
   });
 
   it('follow-up inlines the full JSON schema (not a reference to "same format")', async () => {
-    const prRowWithSession = { ...mockPRRow, review_session_id: 'review-session-abc' };
+    const prRowWithSession = {
+      ...mockPRRow,
+      review_session_id: 'review-session-abc',
+    };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
 
     const mockSM = makeMockSessionManager();
-    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(async (sessionId: string) => {
-      setImmediate(() =>
-        mockSM.emit('message', makeSessionEventMessage(sessionId, JSON.stringify(claudePayload))),
-      );
-      return sessionId;
-    });
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (sessionId: string) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(sessionId, JSON.stringify(claudePayload)),
+          ),
+        );
+        return sessionId;
+      },
+    );
 
-    const service = new PRReviewService(makeMockGitHub(), makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
     await service.reReviewPR(42, 'owner/repo');
 
-    const [, followUp] = (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [, followUp] = (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mock
+      .calls[0];
     expect(followUp).not.toContain('same JSON review format as before');
     expect(followUp).toContain('"verdict"');
     expect(followUp).toContain('"dimensions"');
@@ -1089,7 +1631,9 @@ describe('PRReviewService.reReviewPR()', () => {
     expect(followUp).toContain('Diff vs Acceptance Criteria');
     expect(followUp).toContain('Changed files vs Files/paths affected list');
     expect(followUp).toContain('verdict rules:');
-    expect(followUp).toContain('necessary downstream updates caused by the listed changes');
+    expect(followUp).toContain(
+      'necessary downstream updates caused by the listed changes',
+    );
   });
 });
 
@@ -1110,10 +1654,18 @@ describe('PRReviewService — Size proportionality dimension', () => {
   }
 
   const fourPassedDims = [
-    { name: 'Title and description vs task Summary', passed: true, notes: 'ok' },
+    {
+      name: 'Title and description vs task Summary',
+      passed: true,
+      notes: 'ok',
+    },
     { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
     { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
-    { name: 'Changed files vs Files/paths affected list', passed: true, notes: 'ok' },
+    {
+      name: 'Changed files vs Files/paths affected list',
+      passed: true,
+      notes: 'ok',
+    },
   ];
 
   it('in-budget PR (no LLM size dim emitted) → synthesized Size dim passed:true, verdict approved', async () => {
@@ -1126,16 +1678,31 @@ describe('PRReviewService — Size proportionality dimension', () => {
     };
 
     const mockSM = makeMockSessionManager();
-    const mockGH = makeMockGitHub();  // returns the small mockDiff
+    const mockGH = makeMockGitHub(); // returns the small mockDiff
 
-    const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_a: string, _b: string, opts: { sessionId: string }) => {
-      setImmediate(() => mockSM.emit('message', makeSessionEventMessage(opts.sessionId, JSON.stringify(payload))));
-      return opts.sessionId;
-    });
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_a: string, _b: string, opts: { sessionId: string }) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(opts.sessionId, JSON.stringify(payload)),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
 
     const result = await service.reviewPR(42, 'owner/repo');
-    const sizeDim = result.dimensions!.find((d) => d.name === 'Size proportionality');
+    const sizeDim = result.dimensions!.find(
+      (d) => d.name === 'Size proportionality',
+    );
     expect(sizeDim).toBeDefined();
     expect(sizeDim!.passed).toBe(true);
     expect(result.verdict).toBe('approved');
@@ -1158,14 +1725,29 @@ describe('PRReviewService — Size proportionality dimension', () => {
       filesChanged: ['packages/backend/src/foo.ts'],
     });
 
-    const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_a: string, _b: string, opts: { sessionId: string }) => {
-      setImmediate(() => mockSM.emit('message', makeSessionEventMessage(opts.sessionId, JSON.stringify(payload))));
-      return opts.sessionId;
-    });
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_a: string, _b: string, opts: { sessionId: string }) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(opts.sessionId, JSON.stringify(payload)),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
 
     const result = await service.reviewPR(42, 'owner/repo');
-    const sizeDim = result.dimensions!.find((d) => d.name === 'Size proportionality');
+    const sizeDim = result.dimensions!.find(
+      (d) => d.name === 'Size proportionality',
+    );
     expect(sizeDim).toBeDefined();
     expect(sizeDim!.passed).toBe(false);
     expect(sizeDim!.notes).toMatch(/size budget|added\+deleted/);
@@ -1182,7 +1764,8 @@ describe('PRReviewService — Size proportionality dimension', () => {
         {
           name: 'Size proportionality',
           passed: true,
-          notes: 'Diff is 1,500 lines but ~1,200 of those are deleting dead code paths the spec implicitly retires.',
+          notes:
+            'Diff is 1,500 lines but ~1,200 of those are deleting dead code paths the spec implicitly retires.',
         },
       ],
       summary: 'Oversized but justified — necessary corollary cleanup.',
@@ -1196,14 +1779,29 @@ describe('PRReviewService — Size proportionality dimension', () => {
       filesChanged: ['packages/backend/src/foo.ts'],
     });
 
-    const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_a: string, _b: string, opts: { sessionId: string }) => {
-      setImmediate(() => mockSM.emit('message', makeSessionEventMessage(opts.sessionId, JSON.stringify(payload))));
-      return opts.sessionId;
-    });
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_a: string, _b: string, opts: { sessionId: string }) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(opts.sessionId, JSON.stringify(payload)),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
 
     const result = await service.reviewPR(42, 'owner/repo');
-    const sizeDim = result.dimensions!.find((d) => d.name === 'Size proportionality');
+    const sizeDim = result.dimensions!.find(
+      (d) => d.name === 'Size proportionality',
+    );
     expect(sizeDim).toBeDefined();
     expect(sizeDim!.passed).toBe(true);
     expect(sizeDim!.notes).toContain('1,200');
@@ -1211,7 +1809,10 @@ describe('PRReviewService — Size proportionality dimension', () => {
   });
 
   it('re-review path recomputes size signal against the FULL refreshed PR diff and injects it into the follow-up prompt', async () => {
-    const prRowWithSession = { ...mockPRRow, review_session_id: 'live-review-session' };
+    const prRowWithSession = {
+      ...mockPRRow,
+      review_session_id: 'live-review-session',
+    };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
 
     const payload = {
@@ -1231,18 +1832,31 @@ describe('PRReviewService — Size proportionality dimension', () => {
       filesChanged: ['packages/backend/src/foo.ts'],
     });
 
-    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(async (sessionId: string) => {
-      setImmediate(() =>
-        mockSM.emit('message', makeSessionEventMessage(sessionId, JSON.stringify(payload))),
-      );
-      return sessionId;
-    });
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (sessionId: string) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(sessionId, JSON.stringify(payload)),
+          ),
+        );
+        return sessionId;
+      },
+    );
 
-    const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
     const result = await service.reReviewPR(42, 'owner/repo');
 
     // Confirm the follow-up sent to the existing session contains refreshed size numbers
-    const [, followUpMessage] = (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mock.calls[0];
+    const [, followUpMessage] = (
+      mockSM.sendOrResume as ReturnType<typeof vi.fn>
+    ).mock.calls[0];
     expect(followUpMessage).toContain('Refreshed Size Signal');
     expect(followUpMessage).toContain('Lines added:');
     expect(followUpMessage).toContain('Oversized: YES');
@@ -1285,7 +1899,11 @@ describe('PRReviewService.buildPrompt() — size proportionality', () => {
       '@@ -1,1 +1,1500 @@',
     ];
     for (let i = 0; i < 1500; i++) bigDiffLines.push(`+l${i}`);
-    const bigDiff: PRDiff = { prId: 42, diff: bigDiffLines.join('\n'), filesChanged: ['src/big.ts'] };
+    const bigDiff: PRDiff = {
+      prId: 42,
+      diff: bigDiffLines.join('\n'),
+      filesChanged: ['src/big.ts'],
+    };
     const prompt = service.buildPrompt(mockPR, bigDiff, mockTaskBody);
     expect(prompt).toContain('OVERSIZED');
     expect(prompt).toContain('exceeds floor of 800');

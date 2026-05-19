@@ -70,7 +70,15 @@ const stmtInsertSessionOrIgnore = db.prepare<NewSession>(`
 `);
 
 export function insertSession(s: NewSession): void {
-  stmtInsertSession.run({ ended_at: null, pr_url: null, worktree_path: null, project_id: null, session_type: 'standard', ...s, task_name: s.task_name ?? null });
+  stmtInsertSession.run({
+    ended_at: null,
+    pr_url: null,
+    worktree_path: null,
+    project_id: null,
+    session_type: 'standard',
+    ...s,
+    task_name: s.task_name ?? null,
+  });
 }
 
 export function updateSessionStatus(
@@ -94,11 +102,21 @@ export function getAllSessions(): Session[] {
 }
 
 export function getAllSessionIds(): string[] {
-  return (stmtGetAllSessionIds.all() as { session_id: string }[]).map(r => r.session_id);
+  return (stmtGetAllSessionIds.all() as { session_id: string }[]).map(
+    (r) => r.session_id,
+  );
 }
 
 export function insertSessionOrIgnore(s: NewSession): void {
-  stmtInsertSessionOrIgnore.run({ ended_at: null, pr_url: null, worktree_path: null, project_id: null, session_type: 'standard', ...s, task_name: s.task_name ?? null });
+  stmtInsertSessionOrIgnore.run({
+    ended_at: null,
+    pr_url: null,
+    worktree_path: null,
+    project_id: null,
+    session_type: 'standard',
+    ...s,
+    task_name: s.task_name ?? null,
+  });
 }
 
 export function deleteSession(sessionId: string): boolean {
@@ -113,18 +131,26 @@ export function deleteSession(sessionId: string): boolean {
  * Returns the number of sessions deleted.
  */
 export function deleteGhostSessions(): number {
-  const result = db.prepare(`
+  const result = db
+    .prepare(
+      `
     DELETE FROM sessions
     WHERE session_id NOT IN (SELECT DISTINCT session_id FROM session_events)
-  `).run();
+  `,
+    )
+    .run();
   return result.changes;
 }
 
 export function getSessionsByStatus(statuses: string[]): Session[] {
   const placeholders = statuses.map(() => '?').join(', ');
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT * FROM sessions WHERE status IN (${placeholders}) ORDER BY started_at DESC
-  `).all(...statuses) as Session[];
+  `,
+    )
+    .all(...statuses) as Session[];
 }
 
 /**
@@ -135,20 +161,26 @@ export function getSessionsByStatus(statuses: string[]): Session[] {
  */
 export function hasActiveSessionForTask(notionTaskId: string): boolean {
   const norm = notionTaskId.replace(/-/g, '');
-  const row = db.prepare<{ notion_task_id: string }>(`
+  const row = db
+    .prepare<{ notion_task_id: string }>(
+      `
     SELECT 1 FROM sessions
     WHERE REPLACE(COALESCE(notion_task_id, ''), '-', '') = @notion_task_id
       AND status NOT IN ('done', 'error', 'killed')
       AND (session_type = 'standard' OR session_type IS NULL)
     LIMIT 1
-  `).get({ notion_task_id: norm });
+  `,
+    )
+    .get({ notion_task_id: norm });
   return !!row;
 }
 
 export function getActiveSessions(): Session[] {
   // LEFT JOIN pull_requests so that prUrl is populated even when sessions.pr_url
   // is NULL (e.g. sessions started before their PR was linked back to the row).
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT
       s.session_id, s.notion_task_id, s.notion_task_url, s.project_context_url,
       s.project_id, s.status, s.started_at, s.ended_at, s.worktree_path,
@@ -160,77 +192,118 @@ export function getActiveSessions(): Session[] {
     FROM sessions s
     WHERE s.archived = 0
     ORDER BY s.started_at DESC
-  `).all() as Session[];
+  `,
+    )
+    .all() as Session[];
 }
 
 export function getArchivedSessions(): Session[] {
-  return db.prepare('SELECT * FROM sessions WHERE archived = 1 ORDER BY started_at DESC').all() as Session[];
+  return db
+    .prepare(
+      'SELECT * FROM sessions WHERE archived = 1 ORDER BY started_at DESC',
+    )
+    .all() as Session[];
 }
 
 export function archiveSession(sessionId: string): boolean {
-  const result = db.prepare('UPDATE sessions SET archived = 1 WHERE session_id = ?').run(sessionId);
+  const result = db
+    .prepare('UPDATE sessions SET archived = 1 WHERE session_id = ?')
+    .run(sessionId);
   return result.changes > 0;
 }
 
 export function unarchiveSession(sessionId: string): boolean {
-  const result = db.prepare('UPDATE sessions SET archived = 0 WHERE session_id = ?').run(sessionId);
+  const result = db
+    .prepare('UPDATE sessions SET archived = 0 WHERE session_id = ?')
+    .run(sessionId);
   return result.changes > 0;
 }
 
 export function favoriteSession(sessionId: string): boolean {
-  const result = db.prepare('UPDATE sessions SET favorited = 1 WHERE session_id = ?').run(sessionId);
+  const result = db
+    .prepare('UPDATE sessions SET favorited = 1 WHERE session_id = ?')
+    .run(sessionId);
   return result.changes > 0;
 }
 
 export function unfavoriteSession(sessionId: string): boolean {
-  const result = db.prepare('UPDATE sessions SET favorited = 0 WHERE session_id = ?').run(sessionId);
+  const result = db
+    .prepare('UPDATE sessions SET favorited = 0 WHERE session_id = ?')
+    .run(sessionId);
   return result.changes > 0;
 }
 
 export function archiveFinishedSessions(): number {
-  const result = db.prepare(
-    `UPDATE sessions SET archived = 1 WHERE status IN ('done', 'error', 'killed')`
-  ).run();
+  const result = db
+    .prepare(
+      `UPDATE sessions SET archived = 1 WHERE status IN ('done', 'error', 'killed')`,
+    )
+    .run();
   return result.changes;
 }
 
 export function getSessionsByProject(projectId: string): Session[] {
-  return db.prepare(
-    'SELECT * FROM sessions WHERE project_id = ? ORDER BY started_at DESC'
-  ).all(projectId) as Session[];
+  return db
+    .prepare(
+      'SELECT * FROM sessions WHERE project_id = ? ORDER BY started_at DESC',
+    )
+    .all(projectId) as Session[];
 }
 
 export function setSessionNote(sessionId: string, note: string | null): void {
-  db.prepare('UPDATE sessions SET note = ? WHERE session_id = ?').run(note, sessionId);
+  db.prepare('UPDATE sessions SET note = ? WHERE session_id = ?').run(
+    note,
+    sessionId,
+  );
 }
 
 export function setSessionModel(sessionId: string, model: string): void {
-  db.prepare('UPDATE sessions SET model = ? WHERE session_id = ?').run(model, sessionId);
+  db.prepare('UPDATE sessions SET model = ? WHERE session_id = ?').run(
+    model,
+    sessionId,
+  );
 }
 
 export function setSessionTags(sessionId: string, tags: string[]): void {
-  db.prepare('UPDATE sessions SET tags = ? WHERE session_id = ?').run(JSON.stringify(tags), sessionId);
+  db.prepare('UPDATE sessions SET tags = ? WHERE session_id = ?').run(
+    JSON.stringify(tags),
+    sessionId,
+  );
 }
 
 export function getSessionTags(sessionId: string): string[] {
-  const row = db.prepare('SELECT tags FROM sessions WHERE session_id = ?').get(sessionId) as { tags: string | null } | undefined;
+  const row = db
+    .prepare('SELECT tags FROM sessions WHERE session_id = ?')
+    .get(sessionId) as { tags: string | null } | undefined;
   if (!row?.tags) return [];
-  try { return JSON.parse(row.tags) as string[]; } catch { return []; }
+  try {
+    return JSON.parse(row.tags) as string[];
+  } catch {
+    return [];
+  }
 }
 
 // ─── session_events ────────────────────────────────────────────────────────
 
-const stmtInsertEvent = db.prepare<NewSessionEvent & { message_id: string | null }>(`
+const stmtInsertEvent = db.prepare<
+  NewSessionEvent & { message_id: string | null }
+>(`
   INSERT INTO session_events (session_id, event_type, payload, timestamp, message_id)
   VALUES (@session_id, @event_type, @payload, @timestamp, @message_id)
 `);
 
-const stmtInsertEventOrIgnore = db.prepare<NewSessionEvent & { message_id: string | null }>(`
+const stmtInsertEventOrIgnore = db.prepare<
+  NewSessionEvent & { message_id: string | null }
+>(`
   INSERT OR IGNORE INTO session_events (session_id, event_type, payload, timestamp, message_id)
   VALUES (@session_id, @event_type, @payload, @timestamp, @message_id)
 `);
 
-const stmtUpdateEventPayload = db.prepare<{ id: number; payload: string; timestamp: number }>(`
+const stmtUpdateEventPayload = db.prepare<{
+  id: number;
+  payload: string;
+  timestamp: number;
+}>(`
   UPDATE session_events SET payload = @payload, timestamp = @timestamp WHERE id = @id
 `);
 
@@ -256,7 +329,11 @@ export function upsertSessionEvent(
   existingId?: number,
 ): number {
   if (existingId != null) {
-    stmtUpdateEventPayload.run({ id: existingId, payload: e.payload, timestamp: e.timestamp });
+    stmtUpdateEventPayload.run({
+      id: existingId,
+      payload: e.payload,
+      timestamp: e.timestamp,
+    });
     return existingId;
   }
   const result = stmtInsertEvent.run({ message_id: null, ...e });
@@ -264,7 +341,9 @@ export function upsertSessionEvent(
 }
 
 export function getEventsBySession(sessionId: string): SessionEvent[] {
-  return stmtGetEventsBySession.all({ session_id: sessionId }) as SessionEvent[];
+  return stmtGetEventsBySession.all({
+    session_id: sessionId,
+  }) as SessionEvent[];
 }
 
 // ─── permission_events ─────────────────────────────────────────────────────
@@ -403,13 +482,17 @@ export function insertPermissionDenial(d: NewPermissionDenialRow): void {
 }
 
 export function getDenialsBySession(sessionId: string): PermissionDenialRow[] {
-  return stmtGetDenialsBySession.all({ session_id: sessionId }) as PermissionDenialRow[];
+  return stmtGetDenialsBySession.all({
+    session_id: sessionId,
+  }) as PermissionDenialRow[];
 }
 
 export function deleteDenialsBySession(sessionId: string): void {
-  db.prepare<{ session_id: string }>(`
+  db.prepare<{ session_id: string }>(
+    `
     DELETE FROM permission_denials WHERE session_id = @session_id
-  `).run({ session_id: sessionId });
+  `,
+  ).run({ session_id: sessionId });
 }
 
 export function getRecentPermissionDenials(
@@ -421,7 +504,9 @@ export function getRecentPermissionDenials(
        LEFT JOIN sessions s ON d.session_id = s.session_id
        ORDER BY d.id DESC LIMIT ?`,
     )
-    .all(limit) as Array<PermissionDenialRow & { notion_task_url: string | null }>;
+    .all(limit) as Array<
+    PermissionDenialRow & { notion_task_url: string | null }
+  >;
 }
 
 // ─── task_cache ────────────────────────────────────────────────────────────
@@ -480,7 +565,9 @@ export function upsertTaskCache(taskId: string, rawJson: string): void {
 }
 
 export function getTaskCache(taskId: string): TaskCache | undefined {
-  const row = stmtGetTaskCache.get({ notion_task_id: taskId }) as TaskCache | undefined;
+  const row = stmtGetTaskCache.get({ notion_task_id: taskId }) as
+    | TaskCache
+    | undefined;
   if (row) return row;
   // Sessions store IDs without hyphens; cache stores UUID format — try the other form
   const alt = taskId.includes('-')
@@ -496,22 +583,32 @@ export function getCacheAge(taskId: string): number {
   return Date.now() - row.fetched_at;
 }
 
-export function incrementTokens(sessionId: string, inputTokens: number, outputTokens: number): void {
-  db.prepare(`
+export function incrementTokens(
+  sessionId: string,
+  inputTokens: number,
+  outputTokens: number,
+): void {
+  db.prepare(
+    `
     UPDATE sessions
     SET total_input_tokens  = total_input_tokens  + ?,
         total_output_tokens = total_output_tokens + ?
     WHERE session_id = ?
-  `).run(inputTokens, outputTokens, sessionId);
+  `,
+  ).run(inputTokens, outputTokens, sessionId);
 }
 
 export function getZeroTokenSessions(limit: number): Session[] {
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT * FROM sessions
     WHERE total_input_tokens = 0 AND total_output_tokens = 0
     ORDER BY started_at DESC
     LIMIT ?
-  `).all(limit) as Session[];
+  `,
+    )
+    .all(limit) as Session[];
 }
 
 export function getTaskTitleFromCache(taskId: string): string | null {
@@ -527,18 +624,34 @@ export function getTaskTitleFromCache(taskId: string): string | null {
 
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
-export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_session_id' | 'review_iteration' | 'last_reviewed_sha' | 'node_id' | 'mergeable' | 'merge_state' | 'merge_state_checked_at' | 'failing_checks' | 'pending_push' | 'pause_reason'> & {
-  review_session_id?: string | null;
-  review_iteration?: number;
-  last_reviewed_sha?: string | null;
-  node_id?: string | null;
-  mergeable?: number | null;
-  merge_state?: string | null;
-  merge_state_checked_at?: string | null;
-  failing_checks?: string | null;
-  pause_reason?: PullRequestRow['pause_reason'];
-}): PullRequestRow {
-  db.prepare(`
+export function upsertPullRequest(
+  pr: Omit<
+    PullRequestRow,
+    | 'id'
+    | 'review_session_id'
+    | 'review_iteration'
+    | 'last_reviewed_sha'
+    | 'node_id'
+    | 'mergeable'
+    | 'merge_state'
+    | 'merge_state_checked_at'
+    | 'failing_checks'
+    | 'pending_push'
+    | 'pause_reason'
+  > & {
+    review_session_id?: string | null;
+    review_iteration?: number;
+    last_reviewed_sha?: string | null;
+    node_id?: string | null;
+    mergeable?: number | null;
+    merge_state?: string | null;
+    merge_state_checked_at?: string | null;
+    failing_checks?: string | null;
+    pause_reason?: PullRequestRow['pause_reason'];
+  },
+): PullRequestRow {
+  db.prepare(
+    `
     INSERT INTO pull_requests
       (pr_number, pr_url, notion_task_id, session_id, repo, title, body,
        head_branch, base_branch, state, draft, review_result, review_at,
@@ -565,128 +678,240 @@ export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_sessio
       mergeable              = COALESCE(excluded.mergeable, mergeable),
       merge_state            = COALESCE(excluded.merge_state, merge_state),
       merge_state_checked_at = COALESCE(excluded.merge_state_checked_at, merge_state_checked_at)
-  `).run({ mergeable: null, merge_state: null, merge_state_checked_at: null, ...pr });
-  return db.prepare<{ pr_url: string }>(`
+  `,
+  ).run({
+    mergeable: null,
+    merge_state: null,
+    merge_state_checked_at: null,
+    ...pr,
+  });
+  return db
+    .prepare<{ pr_url: string }>(
+      `
     SELECT * FROM pull_requests WHERE pr_url = @pr_url
-  `).get({ pr_url: pr.pr_url }) as PullRequestRow;
+  `,
+    )
+    .get({ pr_url: pr.pr_url }) as PullRequestRow;
 }
 
-export function setReviewSessionId(prNumber: number, repo: string, reviewSessionId: string): void {
-  db.prepare<{ pr_number: number; repo: string; review_session_id: string }>(`
+export function setReviewSessionId(
+  prNumber: number,
+  repo: string,
+  reviewSessionId: string,
+): void {
+  db.prepare<{ pr_number: number; repo: string; review_session_id: string }>(
+    `
     UPDATE pull_requests
     SET review_session_id = @review_session_id
     WHERE pr_number = @pr_number AND repo = @repo
-  `).run({ pr_number: prNumber, repo, review_session_id: reviewSessionId });
+  `,
+  ).run({ pr_number: prNumber, repo, review_session_id: reviewSessionId });
 }
 
-export function incrementReviewIteration(prNumber: number, repo: string): number {
-  db.prepare<{ pr_number: number; repo: string }>(`
+export function incrementReviewIteration(
+  prNumber: number,
+  repo: string,
+): number {
+  db.prepare<{ pr_number: number; repo: string }>(
+    `
     UPDATE pull_requests
     SET review_iteration = review_iteration + 1
     WHERE pr_number = @pr_number AND repo = @repo
-  `).run({ pr_number: prNumber, repo });
-  const row = db.prepare<{ pr_number: number; repo: string }>(`
+  `,
+  ).run({ pr_number: prNumber, repo });
+  const row = db
+    .prepare<{ pr_number: number; repo: string }>(
+      `
     SELECT review_iteration FROM pull_requests WHERE pr_number = @pr_number AND repo = @repo
-  `).get({ pr_number: prNumber, repo }) as { review_iteration: number } | undefined;
+  `,
+    )
+    .get({ pr_number: prNumber, repo }) as
+    | { review_iteration: number }
+    | undefined;
   return row?.review_iteration ?? 1;
 }
 
-export function setLastReviewedSha(prNumber: number, repo: string, sha: string | null): void {
-  db.prepare<{ pr_number: number; repo: string; last_reviewed_sha: string | null }>(`
+export function setLastReviewedSha(
+  prNumber: number,
+  repo: string,
+  sha: string | null,
+): void {
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    last_reviewed_sha: string | null;
+  }>(
+    `
     UPDATE pull_requests
     SET last_reviewed_sha = @last_reviewed_sha
     WHERE pr_number = @pr_number AND repo = @repo
-  `).run({ pr_number: prNumber, repo, last_reviewed_sha: sha });
+  `,
+  ).run({ pr_number: prNumber, repo, last_reviewed_sha: sha });
 }
 
-export function setHeadSha(prNumber: number, repo: string, sha: string | null): void {
-  db.prepare<{ pr_number: number; repo: string; head_sha: string | null }>(`
+export function setHeadSha(
+  prNumber: number,
+  repo: string,
+  sha: string | null,
+): void {
+  db.prepare<{ pr_number: number; repo: string; head_sha: string | null }>(
+    `
     UPDATE pull_requests
     SET head_sha = @head_sha
     WHERE pr_number = @pr_number AND repo = @repo
-  `).run({ pr_number: prNumber, repo, head_sha: sha });
+  `,
+  ).run({ pr_number: prNumber, repo, head_sha: sha });
 }
 
-export function setPendingPush(prNumber: number, repo: string, value: 0 | 1): void {
-  db.prepare<{ pr_number: number; repo: string; pending_push: number }>(`
+export function setPendingPush(
+  prNumber: number,
+  repo: string,
+  value: 0 | 1,
+): void {
+  db.prepare<{ pr_number: number; repo: string; pending_push: number }>(
+    `
     UPDATE pull_requests SET pending_push = @pending_push WHERE pr_number = @pr_number AND repo = @repo
-  `).run({ pr_number: prNumber, repo, pending_push: value });
+  `,
+  ).run({ pr_number: prNumber, repo, pending_push: value });
 }
 
 export function getPRBySessionId(sessionId: string): PullRequestRow | null {
-  return db.prepare<{ session_id: string }>(`
+  return db
+    .prepare<{ session_id: string }>(
+      `
     SELECT * FROM pull_requests WHERE session_id = @session_id LIMIT 1
-  `).get({ session_id: sessionId }) as PullRequestRow | null;
+  `,
+    )
+    .get({ session_id: sessionId }) as PullRequestRow | null;
 }
 
-export function getPRByNotionTaskId(notionTaskId: string): PullRequestRow | null {
-  return db.prepare<{ notion_task_id: string }>(`
+export function getPRByNotionTaskId(
+  notionTaskId: string,
+): PullRequestRow | null {
+  return db
+    .prepare<{ notion_task_id: string }>(
+      `
     SELECT * FROM pull_requests WHERE notion_task_id = @notion_task_id ORDER BY pr_number DESC LIMIT 1
-  `).get({ notion_task_id: notionTaskId }) as PullRequestRow | null;
+  `,
+    )
+    .get({ notion_task_id: notionTaskId }) as PullRequestRow | null;
 }
 
 export function getOpenPRs(repo: string): PullRequestRow[] {
-  return db.prepare<{ repo: string }>(`
+  return db
+    .prepare<{ repo: string }>(
+      `
     SELECT * FROM pull_requests WHERE repo = @repo AND state = 'open' ORDER BY pr_number DESC
-  `).all({ repo }) as PullRequestRow[];
+  `,
+    )
+    .all({ repo }) as PullRequestRow[];
 }
 
 export function getPRs(repo: string): PullRequestRow[] {
-  return db.prepare<{ repo: string }>(`
+  return db
+    .prepare<{ repo: string }>(
+      `
     SELECT * FROM pull_requests WHERE repo = @repo ORDER BY pr_number DESC
-  `).all({ repo }) as PullRequestRow[];
+  `,
+    )
+    .all({ repo }) as PullRequestRow[];
 }
 
-export function getPRByNumber(prNumber: number, repo: string): PullRequestRow | null {
-  return db.prepare<{ pr_number: number; repo: string }>(`
+export function getPRByNumber(
+  prNumber: number,
+  repo: string,
+): PullRequestRow | null {
+  return db
+    .prepare<{ pr_number: number; repo: string }>(
+      `
     SELECT * FROM pull_requests WHERE pr_number = @pr_number AND repo = @repo
-  `).get({ pr_number: prNumber, repo }) as PullRequestRow | null;
+  `,
+    )
+    .get({ pr_number: prNumber, repo }) as PullRequestRow | null;
 }
 
-export function setPRReviewResult(prNumber: number, repo: string, result: string): void {
-  db.prepare<{ pr_number: number; repo: string; review_result: string; review_at: string }>(`
+export function setPRReviewResult(
+  prNumber: number,
+  repo: string,
+  result: string,
+): void {
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    review_result: string;
+    review_at: string;
+  }>(
+    `
     UPDATE pull_requests
     SET review_result = @review_result, review_at = @review_at
     WHERE pr_number = @pr_number AND repo = @repo
-  `).run({ pr_number: prNumber, repo, review_result: result, review_at: new Date().toISOString() });
+  `,
+  ).run({
+    pr_number: prNumber,
+    repo,
+    review_result: result,
+    review_at: new Date().toISOString(),
+  });
 }
 
-export function updatePRDraftStatus(prNumber: number, repo: string, draft: number): void {
-  db.prepare<{ pr_number: number; repo: string; draft: number }>(`
+export function updatePRDraftStatus(
+  prNumber: number,
+  repo: string,
+  draft: number,
+): void {
+  db.prepare<{ pr_number: number; repo: string; draft: number }>(
+    `
     UPDATE pull_requests SET draft = @draft WHERE pr_number = @pr_number AND repo = @repo
-  `).run({ pr_number: prNumber, repo, draft });
+  `,
+  ).run({ pr_number: prNumber, repo, draft });
 }
 
-export function updatePRState(prNumber: number, repo: string, state: string): void {
-  db.prepare<{ pr_number: number; repo: string; state: string }>(`
+export function updatePRState(
+  prNumber: number,
+  repo: string,
+  state: string,
+): void {
+  db.prepare<{ pr_number: number; repo: string; state: string }>(
+    `
     UPDATE pull_requests SET state = @state WHERE pr_number = @pr_number AND repo = @repo
-  `).run({ pr_number: prNumber, repo, state });
+  `,
+  ).run({ pr_number: prNumber, repo, state });
 }
 
 export function deletePR(prNumber: number, repo: string): boolean {
-  const result = db.prepare<{ pr_number: number; repo: string }>(`
+  const result = db
+    .prepare<{ pr_number: number; repo: string }>(
+      `
     DELETE FROM pull_requests WHERE pr_number = @pr_number AND repo = @repo
-  `).run({ pr_number: prNumber, repo });
+  `,
+    )
+    .run({ pr_number: prNumber, repo });
   return result.changes > 0;
 }
 
 // ─── settings ────────────────────────────────────────────────────────────────
 
 export function getSetting(key: string): string | undefined {
-  const row = db.prepare<{ key: string }>(`SELECT value FROM settings WHERE key = @key`)
+  const row = db
+    .prepare<{ key: string }>(`SELECT value FROM settings WHERE key = @key`)
     .get({ key }) as { value: string } | undefined;
   return row?.value;
 }
 
 export function setSetting(key: string, value: string): void {
-  db.prepare<{ key: string; value: string }>(`
+  db.prepare<{ key: string; value: string }>(
+    `
     INSERT INTO settings (key, value) VALUES (@key, @value)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
-  `).run({ key, value });
+  `,
+  ).run({ key, value });
 }
 
 export function getAllSettings(): Record<string, string> {
-  const rows = db.prepare(`SELECT key, value FROM settings`).all() as { key: string; value: string }[];
+  const rows = db.prepare(`SELECT key, value FROM settings`).all() as {
+    key: string;
+    value: string;
+  }[];
   return Object.fromEntries(rows.map((r) => [r.key, r.value]));
 }
 
@@ -704,31 +929,47 @@ export interface SessionAuditRow {
 }
 
 export function insertSessionAudit(row: Omit<SessionAuditRow, 'id'>): void {
-  db.prepare<Omit<SessionAuditRow, 'id'>>(`
+  db.prepare<Omit<SessionAuditRow, 'id'>>(
+    `
     INSERT INTO session_audits
       (session_id, pr_opened, pr_targets, task_status, violations, spec_mismatch, audited_at)
     VALUES
       (@session_id, @pr_opened, @pr_targets, @task_status, @violations, @spec_mismatch, @audited_at)
-  `).run(row);
+  `,
+  ).run(row);
 }
 
-export function getSessionAudit(sessionId: string): SessionAuditRow | undefined {
-  return db.prepare<{ session_id: string }>(`
+export function getSessionAudit(
+  sessionId: string,
+): SessionAuditRow | undefined {
+  return db
+    .prepare<{ session_id: string }>(
+      `
     SELECT * FROM session_audits WHERE session_id = @session_id ORDER BY id DESC LIMIT 1
-  `).get({ session_id: sessionId }) as SessionAuditRow | undefined;
+  `,
+    )
+    .get({ session_id: sessionId }) as SessionAuditRow | undefined;
 }
 
 export function deleteMergedAndClosedPRs(repo: string): number {
-  const result = db.prepare<{ repo: string }>(`
+  const result = db
+    .prepare<{ repo: string }>(
+      `
     DELETE FROM pull_requests WHERE repo = @repo AND state IN ('merged', 'closed')
-  `).run({ repo });
+  `,
+    )
+    .run({ repo });
   return result.changes;
 }
 
 export function countMergedAndClosedPRs(repo: string): number {
-  const row = db.prepare<{ repo: string }>(`
+  const row = db
+    .prepare<{ repo: string }>(
+      `
     SELECT COUNT(*) as count FROM pull_requests WHERE repo = @repo AND state IN ('merged', 'closed')
-  `).get({ repo }) as { count: number };
+  `,
+    )
+    .get({ repo }) as { count: number };
   return row.count;
 }
 
@@ -739,7 +980,10 @@ export function updateMergeState(
   mergeState: string | null,
   failingChecks: string[] | null = null,
 ): void {
-  const failingChecksJson = failingChecks && failingChecks.length > 0 ? JSON.stringify(failingChecks) : null;
+  const failingChecksJson =
+    failingChecks && failingChecks.length > 0
+      ? JSON.stringify(failingChecks)
+      : null;
   db.prepare<{
     pr_number: number;
     repo: string;
@@ -747,14 +991,16 @@ export function updateMergeState(
     merge_state: string | null;
     checked_at: string;
     failing_checks: string | null;
-  }>(`
+  }>(
+    `
     UPDATE pull_requests
     SET mergeable = @mergeable,
         merge_state = @merge_state,
         merge_state_checked_at = @checked_at,
         failing_checks = @failing_checks
     WHERE pr_number = @pr_number AND repo = @repo
-  `).run({
+  `,
+  ).run({
     pr_number: prNumber,
     repo,
     mergeable,
@@ -771,11 +1017,13 @@ export function updateMergeState(
  * via the same call that resets the iteration counter.
  */
 export function resetReviewIteration(prNumber: number, repo: string): void {
-  db.prepare<{ pr_number: number; repo: string }>(`
+  db.prepare<{ pr_number: number; repo: string }>(
+    `
     UPDATE pull_requests
     SET review_iteration = 0, pause_reason = NULL
     WHERE pr_number = @pr_number AND repo = @repo
-  `).run({ pr_number: prNumber, repo });
+  `,
+  ).run({ pr_number: prNumber, repo });
 }
 
 export function setPauseReason(
@@ -783,9 +1031,11 @@ export function setPauseReason(
   repo: string,
   reason: PauseReason | null,
 ): void {
-  db.prepare<{ pr_number: number; repo: string; pause_reason: string | null }>(`
+  db.prepare<{ pr_number: number; repo: string; pause_reason: string | null }>(
+    `
     UPDATE pull_requests SET pause_reason = @pause_reason WHERE pr_number = @pr_number AND repo = @repo
-  `).run({ pr_number: prNumber, repo, pause_reason: reason });
+  `,
+  ).run({ pr_number: prNumber, repo, pause_reason: reason });
 }
 
 /**
@@ -793,15 +1043,23 @@ export function setPauseReason(
  * or null if no PR exists or the PR is not paused. Used by auto-runner
  * components to skip tasks paused by stuck_timeout (or any other reason).
  */
-export function getPausedPrReasonForTask(notionTaskId: string): PauseReason | null {
+export function getPausedPrReasonForTask(
+  notionTaskId: string,
+): PauseReason | null {
   const norm = notionTaskId.replace(/-/g, '');
-  const row = db.prepare<{ notion_task_id: string }>(`
+  const row = db
+    .prepare<{ notion_task_id: string }>(
+      `
     SELECT pause_reason FROM pull_requests
     WHERE REPLACE(COALESCE(notion_task_id, ''), '-', '') = @notion_task_id
       AND pause_reason IS NOT NULL
     ORDER BY pr_number DESC
     LIMIT 1
-  `).get({ notion_task_id: norm }) as { pause_reason: string | null } | undefined;
+  `,
+    )
+    .get({ notion_task_id: norm }) as
+    | { pause_reason: string | null }
+    | undefined;
   return (row?.pause_reason as PauseReason | null) ?? null;
 }
 
@@ -811,18 +1069,26 @@ export function getPausedPrReasonForTask(notionTaskId: string): PauseReason | nu
  * a human needs to look at first — see AC under "Stuck session timer".
  */
 export function getApprovedOpenPRs(): PullRequestRow[] {
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT * FROM pull_requests
     WHERE state = 'open'
       AND review_result LIKE '%approved%'
       AND pause_reason IS NULL
-  `).all() as PullRequestRow[];
+  `,
+    )
+    .all() as PullRequestRow[];
 }
 
 export function getAllOpenPRs(): PullRequestRow[] {
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT * FROM pull_requests WHERE state = 'open'
-  `).all() as PullRequestRow[];
+  `,
+    )
+    .all() as PullRequestRow[];
 }
 
 // ─── task aggregation ─────────────────────────────────────────────────────────
@@ -859,7 +1125,9 @@ export interface TaskAggregateRow {
 export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
   if (taskIds.length === 0) return [];
   const placeholders = taskIds.map(() => '?').join(', ');
-  return db.prepare(`
+  return db
+    .prepare(
+      `
     SELECT
       tc.notion_task_id,
       tc.raw_json,
@@ -902,42 +1170,58 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
     )
     WHERE tc.notion_task_id IN (${placeholders})
     ORDER BY tc.fetched_at DESC
-  `).all(...taskIds) as TaskAggregateRow[];
+  `,
+    )
+    .all(...taskIds) as TaskAggregateRow[];
 }
 
-export function getLatestNonSystemEventPayload(sessionId: string): string | null {
-  const row = db.prepare(`
+export function getLatestNonSystemEventPayload(
+  sessionId: string,
+): string | null {
+  const row = db
+    .prepare(
+      `
     SELECT payload FROM session_events
     WHERE session_id = ?
       AND event_type NOT IN ('system', 'user_message')
     ORDER BY id DESC
     LIMIT 1
-  `).get(sessionId) as { payload: string } | undefined;
+  `,
+    )
+    .get(sessionId) as { payload: string } | undefined;
   return row?.payload ?? null;
 }
 
 /** Returns the most recent standard (non-review) session for a given Notion task ID. */
-export function getLatestCodeSessionByNotionTaskId(notionTaskId: string): Session | undefined {
-  return db.prepare<{ notion_task_id: string }>(`
+export function getLatestCodeSessionByNotionTaskId(
+  notionTaskId: string,
+): Session | undefined {
+  return db
+    .prepare<{ notion_task_id: string }>(
+      `
     SELECT * FROM sessions
     WHERE notion_task_id = @notion_task_id AND (session_type = 'standard' OR session_type IS NULL)
     ORDER BY started_at DESC
     LIMIT 1
-  `).get({ notion_task_id: notionTaskId }) as Session | undefined;
+  `,
+    )
+    .get({ notion_task_id: notionTaskId }) as Session | undefined;
 }
 
 // ─── projects ──────────────────────────────────────────────────────────────
 
 export function insertProject(p: NewProjectRow): ProjectRow {
   const now = Date.now();
-  db.prepare<NewProjectRow>(`
+  db.prepare<NewProjectRow>(
+    `
     INSERT INTO projects
       (id, name, project_dir, context_url, github_repo, task_source,
        auto_launch_enabled, auto_launch_milestone_id, created_at, updated_at)
     VALUES
       (@id, @name, @project_dir, @context_url, @github_repo, @task_source,
        @auto_launch_enabled, @auto_launch_milestone_id, @created_at, @updated_at)
-  `).run({
+  `,
+  ).run({
     ...p,
     auto_launch_enabled: p.auto_launch_enabled ?? 0,
     auto_launch_milestone_id: p.auto_launch_milestone_id ?? null,
@@ -948,16 +1232,21 @@ export function insertProject(p: NewProjectRow): ProjectRow {
 }
 
 export function getProjectRowById(id: string): ProjectRow | undefined {
-  return db.prepare<{ id: string }>(`SELECT * FROM projects WHERE id = @id`)
+  return db
+    .prepare<{ id: string }>(`SELECT * FROM projects WHERE id = @id`)
     .get({ id }) as ProjectRow | undefined;
 }
 
 export function listProjectRows(): ProjectRow[] {
-  return db.prepare(`SELECT * FROM projects ORDER BY created_at ASC`).all() as ProjectRow[];
+  return db
+    .prepare(`SELECT * FROM projects ORDER BY created_at ASC`)
+    .all() as ProjectRow[];
 }
 
 export function countProjects(): number {
-  const row = db.prepare(`SELECT COUNT(*) AS n FROM projects`).get() as { n: number };
+  const row = db.prepare(`SELECT COUNT(*) AS n FROM projects`).get() as {
+    n: number;
+  };
   return row.n;
 }
 
@@ -971,7 +1260,10 @@ export interface ProjectPatch {
   auto_launch_milestone_id?: string | null;
 }
 
-export function updateProject(id: string, patch: ProjectPatch): ProjectRow | undefined {
+export function updateProject(
+  id: string,
+  patch: ProjectPatch,
+): ProjectRow | undefined {
   const existing = getProjectRowById(id);
   if (!existing) return undefined;
   const now = Date.now();
@@ -985,7 +1277,8 @@ export function updateProject(id: string, patch: ProjectPatch): ProjectRow | und
     auto_launch_enabled: number;
     auto_launch_milestone_id: string | null;
     updated_at: number;
-  }>(`
+  }>(
+    `
     UPDATE projects
     SET name = @name,
         project_dir = @project_dir,
@@ -996,22 +1289,36 @@ export function updateProject(id: string, patch: ProjectPatch): ProjectRow | und
         auto_launch_milestone_id = @auto_launch_milestone_id,
         updated_at = @updated_at
     WHERE id = @id
-  `).run({
+  `,
+  ).run({
     id,
     name: patch.name ?? existing.name,
     project_dir: patch.project_dir ?? existing.project_dir,
-    context_url: patch.context_url !== undefined ? patch.context_url : existing.context_url,
-    github_repo: patch.github_repo !== undefined ? patch.github_repo : existing.github_repo,
+    context_url:
+      patch.context_url !== undefined
+        ? patch.context_url
+        : existing.context_url,
+    github_repo:
+      patch.github_repo !== undefined
+        ? patch.github_repo
+        : existing.github_repo,
     task_source: patch.task_source ?? existing.task_source,
-    auto_launch_enabled: patch.auto_launch_enabled !== undefined ? patch.auto_launch_enabled : existing.auto_launch_enabled,
-    auto_launch_milestone_id: patch.auto_launch_milestone_id !== undefined ? patch.auto_launch_milestone_id : existing.auto_launch_milestone_id,
+    auto_launch_enabled:
+      patch.auto_launch_enabled !== undefined
+        ? patch.auto_launch_enabled
+        : existing.auto_launch_enabled,
+    auto_launch_milestone_id:
+      patch.auto_launch_milestone_id !== undefined
+        ? patch.auto_launch_milestone_id
+        : existing.auto_launch_milestone_id,
     updated_at: now,
   });
   return getProjectRowById(id);
 }
 
 export function deleteProject(id: string): boolean {
-  const result = db.prepare<{ id: string }>(`DELETE FROM projects WHERE id = @id`)
+  const result = db
+    .prepare<{ id: string }>(`DELETE FROM projects WHERE id = @id`)
     .run({ id });
   return result.changes > 0;
 }
@@ -1020,12 +1327,14 @@ export function deleteProject(id: string): boolean {
 
 export function insertMilestone(m: NewMilestoneRow): MilestoneRow {
   const now = Date.now();
-  db.prepare<NewMilestoneRow>(`
+  db.prepare<NewMilestoneRow>(
+    `
     INSERT INTO milestones
       (id, project_id, name, source_id, display_order, created_at, updated_at)
     VALUES
       (@id, @project_id, @name, @source_id, @display_order, @created_at, @updated_at)
-  `).run({
+  `,
+  ).run({
     ...m,
     display_order: m.display_order ?? 0,
     created_at: m.created_at ?? now,
@@ -1035,16 +1344,21 @@ export function insertMilestone(m: NewMilestoneRow): MilestoneRow {
 }
 
 export function getMilestoneById(id: string): MilestoneRow | undefined {
-  return db.prepare<{ id: string }>(`SELECT * FROM milestones WHERE id = @id`)
+  return db
+    .prepare<{ id: string }>(`SELECT * FROM milestones WHERE id = @id`)
     .get({ id }) as MilestoneRow | undefined;
 }
 
 export function listMilestonesByProject(projectId: string): MilestoneRow[] {
-  return db.prepare<{ project_id: string }>(`
+  return db
+    .prepare<{ project_id: string }>(
+      `
     SELECT * FROM milestones
     WHERE project_id = @project_id
     ORDER BY display_order ASC, created_at ASC
-  `).all({ project_id: projectId }) as MilestoneRow[];
+  `,
+    )
+    .all({ project_id: projectId }) as MilestoneRow[];
 }
 
 export interface MilestonePatch {
@@ -1053,7 +1367,10 @@ export interface MilestonePatch {
   display_order?: number;
 }
 
-export function updateMilestone(id: string, patch: MilestonePatch): MilestoneRow | undefined {
+export function updateMilestone(
+  id: string,
+  patch: MilestonePatch,
+): MilestoneRow | undefined {
   const existing = getMilestoneById(id);
   if (!existing) return undefined;
   const now = Date.now();
@@ -1063,17 +1380,20 @@ export function updateMilestone(id: string, patch: MilestonePatch): MilestoneRow
     source_id: string | null;
     display_order: number;
     updated_at: number;
-  }>(`
+  }>(
+    `
     UPDATE milestones
     SET name = @name,
         source_id = @source_id,
         display_order = @display_order,
         updated_at = @updated_at
     WHERE id = @id
-  `).run({
+  `,
+  ).run({
     id,
     name: patch.name ?? existing.name,
-    source_id: patch.source_id !== undefined ? patch.source_id : existing.source_id,
+    source_id:
+      patch.source_id !== undefined ? patch.source_id : existing.source_id,
     display_order: patch.display_order ?? existing.display_order,
     updated_at: now,
   });
@@ -1081,7 +1401,8 @@ export function updateMilestone(id: string, patch: MilestonePatch): MilestoneRow
 }
 
 export function deleteMilestone(id: string): boolean {
-  const result = db.prepare<{ id: string }>(`DELETE FROM milestones WHERE id = @id`)
+  const result = db
+    .prepare<{ id: string }>(`DELETE FROM milestones WHERE id = @id`)
     .run({ id });
   return result.changes > 0;
 }
