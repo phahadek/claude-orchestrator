@@ -13,7 +13,7 @@ vi.mock('../db/queries', () => ({
   getTaskCache: vi.fn(() => null),
 }));
 
-import { parseSection } from './NotionClient';
+import { parseSection, parseDependsOn } from './NotionClient';
 
 const source = fs.readFileSync(
   path.join(__dirname, 'NotionClient.ts'),
@@ -98,5 +98,45 @@ describe('parseSection()', () => {
     const result = parseSection(SAMPLE_MD, 'files');
     expect(result).toContain('src/foo.ts');
     expect(result).not.toContain('Implementation Notes');
+  });
+});
+
+// ─── parseDependsOn unit tests ───────────────────────────────────────────────
+
+describe('parseDependsOn()', () => {
+  it('splits a pipe-delimited list (canonical)', () => {
+    expect(parseDependsOn('abc123|def456')).toEqual(['abc123', 'def456']);
+  });
+
+  it('splits a comma-delimited list (accepted leniently)', () => {
+    expect(parseDependsOn('abc123,def456')).toEqual(['abc123', 'def456']);
+  });
+
+  it('splits a mixed pipe/comma list', () => {
+    expect(parseDependsOn('abc123|def456,ghi789')).toEqual([
+      'abc123',
+      'def456',
+      'ghi789',
+    ]);
+  });
+
+  it('trims whitespace around delimiters', () => {
+    expect(parseDependsOn(' abc123 | def456 , ghi789 ')).toEqual([
+      'abc123',
+      'def456',
+      'ghi789',
+    ]);
+  });
+
+  it('resolves a single ID with no delimiter to one entry', () => {
+    expect(parseDependsOn('abc123')).toEqual(['abc123']);
+  });
+
+  it('returns an empty array for an empty string', () => {
+    expect(parseDependsOn('')).toEqual([]);
+  });
+
+  it('drops empty segments produced by stray delimiters', () => {
+    expect(parseDependsOn('abc123,,def456|')).toEqual(['abc123', 'def456']);
   });
 });
