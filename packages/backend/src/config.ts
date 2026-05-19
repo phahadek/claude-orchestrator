@@ -15,6 +15,8 @@ export interface ProjectConfig {
   boards?: Board[];    // multi-milestone support — derived from milestones table
   githubRepo?: string; // "owner/repo" — optional; enables PR features
   taskSource: 'notion' | 'yaml'; // honored by getTaskBackend(projectId)
+  autoLaunchEnabled: boolean;            // per-project toggle for the AutoLauncher
+  autoLaunchMilestoneId: string | null;  // milestone the AutoLauncher polls; null = first milestone
 }
 
 function resolveClaudePath(): string {
@@ -67,7 +69,7 @@ export const ALLOWED_TOOLS = [
   'mcp__claude_ai_Asana__*', 'mcp__claude_ai_Google_Calendar__*',
 ];
 
-function hydrateProject(p: { id: string; name: string; projectDir: string; contextUrl: string | null; githubRepo: string | null; taskSource: 'notion' | 'yaml'; milestones: { id: string; sourceId: string | null; name: string }[] }): ProjectConfig {
+function hydrateProject(p: { id: string; name: string; projectDir: string; contextUrl: string | null; githubRepo: string | null; taskSource: 'notion' | 'yaml'; autoLaunchEnabled: boolean; autoLaunchMilestoneId: string | null; milestones: { id: string; sourceId: string | null; name: string }[] }): ProjectConfig {
   // boards[].id is now the milestone row id (used as milestoneId for fetch_tasks).
   // boards[].sourceId is the Notion database id (used internally by NotionTaskBackend).
   // YAML projects keep their milestones in boards as well — their sourceId is empty.
@@ -83,6 +85,8 @@ function hydrateProject(p: { id: string; name: string; projectDir: string; conte
     contextUrl: p.contextUrl ?? '',
     boardId: boards[0]?.id ?? '',
     taskSource: p.taskSource,
+    autoLaunchEnabled: p.autoLaunchEnabled,
+    autoLaunchMilestoneId: p.autoLaunchMilestoneId,
   };
   if (boards.length > 0) config.boards = boards;
   if (p.githubRepo) config.githubRepo = p.githubRepo;
@@ -114,6 +118,10 @@ export interface RuntimeSettings {
   review_session_model: string;
   /** Session launch mode: 'cli' uses the claude subprocess, 'api' uses the Agent SDK. */
   session_mode: 'cli' | 'api';
+  /** Global concurrency cap for AutoLauncher-spawned code sessions. */
+  auto_launch_concurrency: number;
+  /** AutoLauncher poll interval in milliseconds. */
+  auto_launch_poll_interval_ms: number;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -125,4 +133,6 @@ export const runtimeSettings: RuntimeSettings = {
   code_session_model: '',
   review_session_model: '',
   session_mode: (process.env.SESSION_MODE === 'api' ? 'api' : 'cli'),
+  auto_launch_concurrency: Number(process.env.AUTO_LAUNCH_CONCURRENCY ?? 1),
+  auto_launch_poll_interval_ms: Number(process.env.AUTO_LAUNCH_POLL_INTERVAL_MS ?? 60_000),
 };

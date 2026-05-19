@@ -22,6 +22,8 @@ const TEST_PROJECT: ProjectConfig = {
   contextUrl: 'https://notion.so/context',
   boardId: 'test-board-id',
   taskSource: 'notion',
+  autoLaunchEnabled: false,
+  autoLaunchMilestoneId: null,
 };
 
 function renderModal(

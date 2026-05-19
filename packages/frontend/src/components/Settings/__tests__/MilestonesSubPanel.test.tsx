@@ -32,6 +32,8 @@ const PROJECT: Project = {
   contextUrl: null,
   githubRepo: null,
   taskSource: 'notion',
+  autoLaunchEnabled: false,
+  autoLaunchMilestoneId: null,
   createdAt: 1,
   updatedAt: 1,
   milestones: [],

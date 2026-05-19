@@ -126,6 +126,24 @@ export function getSessionsByStatus(statuses: string[]): Session[] {
   `).all(...statuses) as Session[];
 }
 
+/**
+ * Returns true when a standard (non-review) session is currently active for the
+ * given Notion task id. "Active" means not in a terminal status (done, error,
+ * killed). Used by AutoLauncher to avoid re-launching a task whose status hasn't
+ * yet propagated back from Notion.
+ */
+export function hasActiveSessionForTask(notionTaskId: string): boolean {
+  const norm = notionTaskId.replace(/-/g, '');
+  const row = db.prepare<{ notion_task_id: string }>(`
+    SELECT 1 FROM sessions
+    WHERE REPLACE(COALESCE(notion_task_id, ''), '-', '') = @notion_task_id
+      AND status NOT IN ('done', 'error', 'killed')
+      AND (session_type = 'standard' OR session_type IS NULL)
+    LIMIT 1
+  `).get({ notion_task_id: norm });
+  return !!row;
+}
+
 export function getActiveSessions(): Session[] {
   // LEFT JOIN pull_requests so that prUrl is populated even when sessions.pr_url
   // is NULL (e.g. sessions started before their PR was linked back to the row).
@@ -847,11 +865,15 @@ export function insertProject(p: NewProjectRow): ProjectRow {
   const now = Date.now();
   db.prepare<NewProjectRow>(`
     INSERT INTO projects
-      (id, name, project_dir, context_url, github_repo, task_source, created_at, updated_at)
+      (id, name, project_dir, context_url, github_repo, task_source,
+       auto_launch_enabled, auto_launch_milestone_id, created_at, updated_at)
     VALUES
-      (@id, @name, @project_dir, @context_url, @github_repo, @task_source, @created_at, @updated_at)
+      (@id, @name, @project_dir, @context_url, @github_repo, @task_source,
+       @auto_launch_enabled, @auto_launch_milestone_id, @created_at, @updated_at)
   `).run({
     ...p,
+    auto_launch_enabled: p.auto_launch_enabled ?? 0,
+    auto_launch_milestone_id: p.auto_launch_milestone_id ?? null,
     created_at: p.created_at ?? now,
     updated_at: p.updated_at ?? now,
   });
@@ -878,6 +900,8 @@ export interface ProjectPatch {
   context_url?: string | null;
   github_repo?: string | null;
   task_source?: 'notion' | 'yaml';
+  auto_launch_enabled?: number;
+  auto_launch_milestone_id?: string | null;
 }
 
 export function updateProject(id: string, patch: ProjectPatch): ProjectRow | undefined {
@@ -891,6 +915,8 @@ export function updateProject(id: string, patch: ProjectPatch): ProjectRow | und
     context_url: string | null;
     github_repo: string | null;
     task_source: string;
+    auto_launch_enabled: number;
+    auto_launch_milestone_id: string | null;
     updated_at: number;
   }>(`
     UPDATE projects
@@ -899,6 +925,8 @@ export function updateProject(id: string, patch: ProjectPatch): ProjectRow | und
         context_url = @context_url,
         github_repo = @github_repo,
         task_source = @task_source,
+        auto_launch_enabled = @auto_launch_enabled,
+        auto_launch_milestone_id = @auto_launch_milestone_id,
         updated_at = @updated_at
     WHERE id = @id
   `).run({
@@ -908,6 +936,8 @@ export function updateProject(id: string, patch: ProjectPatch): ProjectRow | und
     context_url: patch.context_url !== undefined ? patch.context_url : existing.context_url,
     github_repo: patch.github_repo !== undefined ? patch.github_repo : existing.github_repo,
     task_source: patch.task_source ?? existing.task_source,
+    auto_launch_enabled: patch.auto_launch_enabled !== undefined ? patch.auto_launch_enabled : existing.auto_launch_enabled,
+    auto_launch_milestone_id: patch.auto_launch_milestone_id !== undefined ? patch.auto_launch_milestone_id : existing.auto_launch_milestone_id,
     updated_at: now,
   });
   return getProjectRowById(id);

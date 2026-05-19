@@ -33,6 +33,8 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     contextUrl: null,
     githubRepo: 'owner/alpha',
     taskSource: 'notion',
+    autoLaunchEnabled: false,
+    autoLaunchMilestoneId: null,
     createdAt: 1,
     updatedAt: 1,
     milestones: [],

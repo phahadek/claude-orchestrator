@@ -12,6 +12,8 @@ function toCreatePayload(values: ProjectFormValues) {
     contextUrl: values.contextUrl.trim() || null,
     githubRepo: values.githubRepo.trim() || null,
     taskSource: values.taskSource,
+    autoLaunchEnabled: values.autoLaunchEnabled,
+    autoLaunchMilestoneId: values.autoLaunchMilestoneId.trim() || null,
   };
 }
 

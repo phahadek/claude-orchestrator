@@ -9,6 +9,8 @@ export interface ProjectFormValues {
   contextUrl: string;
   githubRepo: string;
   taskSource: TaskSource;
+  autoLaunchEnabled: boolean;
+  autoLaunchMilestoneId: string;
 }
 
 interface Props {
@@ -23,6 +25,8 @@ const EMPTY: ProjectFormValues = {
   contextUrl: '',
   githubRepo: '',
   taskSource: 'notion',
+  autoLaunchEnabled: false,
+  autoLaunchMilestoneId: '',
 };
 
 function fromProject(p: Project): ProjectFormValues {
@@ -32,6 +36,8 @@ function fromProject(p: Project): ProjectFormValues {
     contextUrl: p.contextUrl ?? '',
     githubRepo: p.githubRepo ?? '',
     taskSource: p.taskSource,
+    autoLaunchEnabled: p.autoLaunchEnabled,
+    autoLaunchMilestoneId: p.autoLaunchMilestoneId ?? '',
   };
 }
 
@@ -147,6 +153,37 @@ export function ProjectFormModal({ initialProject, onCancel, onSubmit }: Props) 
               placeholder="owner/repo"
             />
           </div>
+
+          <div className={styles.formField}>
+            <label htmlFor="proj-auto-launch" className={styles.formLabel}>
+              <input
+                id="proj-auto-launch"
+                type="checkbox"
+                checked={values.autoLaunchEnabled}
+                onChange={(e) => update('autoLaunchEnabled', e.target.checked)}
+              />
+              {' '}Auto-launch Ready 💻 Code tasks
+            </label>
+          </div>
+
+          {values.autoLaunchEnabled && initialProject && initialProject.milestones.length > 1 && (
+            <div className={styles.formField}>
+              <label htmlFor="proj-auto-launch-milestone" className={styles.formLabel}>
+                Auto-launch milestone
+              </label>
+              <select
+                id="proj-auto-launch-milestone"
+                className={styles.input}
+                value={values.autoLaunchMilestoneId}
+                onChange={(e) => update('autoLaunchMilestoneId', e.target.value)}
+              >
+                <option value="">First configured milestone</option>
+                {initialProject.milestones.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {serverError && <p className={styles.serverError}>{serverError}</p>}
 

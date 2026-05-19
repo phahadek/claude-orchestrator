@@ -125,11 +125,15 @@ export interface ProjectRow {
   context_url: string | null;
   github_repo: string | null;
   task_source: TaskSource;
+  auto_launch_enabled: number; // 0 | 1 (SQLite boolean)
+  auto_launch_milestone_id: string | null;
   created_at: number;
   updated_at: number;
 }
 
-export type NewProjectRow = Omit<ProjectRow, 'created_at' | 'updated_at'> & {
+export type NewProjectRow = Omit<ProjectRow, 'created_at' | 'updated_at' | 'auto_launch_enabled' | 'auto_launch_milestone_id'> & {
+  auto_launch_enabled?: number;
+  auto_launch_milestone_id?: string | null;
   created_at?: number;
   updated_at?: number;
 };
