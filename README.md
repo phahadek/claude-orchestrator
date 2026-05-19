@@ -95,6 +95,7 @@ sequenceDiagram
 ```bash
 git clone https://github.com/phahadek/claude-orchestrator.git && cd claude-orchestrator
 npm install
+git config blame.ignoreRevsFile .git-blame-ignore-revs      # once per clone — hides mass-format commits from blame
 cp packages/backend/.env.example packages/backend/.env       # then edit
 cp .claude/local-context.md.example .claude/local-context.md # gitignored — add your Notion URLs
 npm run dev    # → http://localhost:5173 (dev; Vite proxies API/WS to backend on :3000)

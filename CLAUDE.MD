@@ -46,6 +46,8 @@ the task at hand requires that context.
 | **Commit to `dev` or `main` directly?** | Never                                                                                                        |
 | **When done**                           | Open draft PR → mark task 👀 In Review → stop. Human merges and marks ✅ Done.                               |
 | **Pre-PR gate (hard — in order)**       | 1. Merge/rebase `dev` → resolve conflicts. 2. `tsc --noEmit` passes (both packages). 3. `vite build` passes. |
+| **Formatting / linting**                | `npm run format:check` and `npm run lint` must pass before opening a PR.                                     |
+| **Blame ignore (once per clone)**       | Run `git config blame.ignoreRevsFile .git-blame-ignore-revs` to hide mass-format commits from blame.         |
 | **Session Log / File Index updates**    | Never — the dashboard handles session tracking.                                                              |
 
 ## PR Format
