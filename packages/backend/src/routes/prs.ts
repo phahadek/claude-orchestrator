@@ -16,6 +16,7 @@ import {
   updatePRDraftStatus,
 } from '../db/queries';
 import { GitHubApiError } from '../github/types';
+import type { MergeabilityCategory } from '../github/types';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { PRReviewService } from '../github/PRReviewService';
 import type { PRReviewResult } from '../github/PRReviewService';
@@ -29,6 +30,16 @@ import { emitTaskUpdated } from './tasks';
 let _broadcast: (msg: ServerMessage) => void = () => {};
 export function setPRBroadcast(fn: (msg: ServerMessage) => void): void {
   _broadcast = fn;
+}
+
+function parseFailingChecks(raw: string | null): string[] | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as string[]) : null;
+  } catch {
+    return null;
+  }
 }
 
 export function createPrsRouter(
@@ -104,6 +115,7 @@ export function createPrsRouter(
       updatedAt: pr.updated_at,
       reviewIteration: pr.review_iteration,
       mergeState: pr.merge_state ?? null,
+      failingChecks: parseFailingChecks(pr.failing_checks),
     }));
     res.json(items);
   });
@@ -190,21 +202,41 @@ export function createPrsRouter(
 
   // ── GET /api/prs/:owner/:repoName/:prNumber/mergeability ─────────────────────
   // Fresh mergeability check used by the frontend right before opening a merge.
-  // Retries the GitHub mergeability endpoint with exponential backoff so we
-  // get a definitive answer even when GitHub initially returns mergeable: null.
+  // Persists the categorized merge_state (clean / dirty / ci_failed / blocked /
+  // unknown) so the dashboard can show category-specific blockers consistently
+  // with the periodic watcher poll.
   router.get('/prs/:owner/:repoName/:prNumber/mergeability', async (req: Request, res: Response) => {
     const repo = `${req.params.owner}/${req.params.repoName}`;
     const prNumber = parseInt(String(req.params.prNumber), 10);
     try {
-      const { mergeable, mergeableState } = await github.getMergeabilityWithRetry(prNumber, repo);
-      // Persist + broadcast if state changed so other clients update too
+      const category = await github.categorizeMergeability(prNumber, repo);
+      const failingNames = category.failingChecks.map((c) => c.name);
+      const failingNamesOrNull = failingNames.length > 0 ? failingNames : null;
+      const mergeable = category.category === 'clean'
+        ? true
+        : category.category === 'unknown' && category.rawMergeableState === null
+          ? null
+          : false;
       const prRow = getPRByNumber(prNumber, repo);
-      if (prRow && mergeable !== null && prRow.merge_state !== mergeableState) {
-        updateMergeState(prNumber, repo, mergeable ? 1 : 0, mergeableState);
-        _broadcast({ type: 'pr_mergeability_changed', prNumber, repo, mergeable, mergeState: mergeableState });
+      if (prRow && prRow.merge_state !== category.mergeState) {
+        const mergeableInt = mergeable === null ? null : (mergeable ? 1 : 0);
+        updateMergeState(prNumber, repo, mergeableInt, category.mergeState, failingNamesOrNull);
+        _broadcast({
+          type: 'pr_mergeability_changed',
+          prNumber,
+          repo,
+          mergeable,
+          mergeState: category.mergeState,
+          failingChecks: failingNamesOrNull,
+        });
         if (prRow.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
       }
-      res.json({ mergeable, mergeState: mergeableState });
+      res.json({
+        mergeable,
+        mergeState: category.mergeState,
+        category: category.category,
+        failingChecks: failingNames,
+      });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -294,19 +326,75 @@ export function createPrsRouter(
             ? (err as GitHubApiError).status
             : null;
       if (errStatus === 409 || errStatus === 405) {
-        // Merge conflict or not mergeable — persist the conflict state
-        updateMergeState(prNumber, repo, 0, 'dirty');
-        _broadcast({ type: 'pr_mergeability_changed', prNumber, repo, mergeable: false, mergeState: 'dirty' });
-        if (prRow?.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
-        // Message the code session to fix the conflicts
-        if (prRow?.session_id) {
-          const baseBranch = prRow.base_branch ?? 'dev';
-          const msg = `PR #${prNumber} has merge conflicts with the base branch. Rebase onto \`${baseBranch}\`, resolve the conflicts, and push the fixed branch.`;
-          sessionManager.sendOrResume(prRow.session_id, msg).catch((err: unknown) =>
-            console.warn('[prs] sendOrResume failed:', (err as Error).message),
-          );
+        // Merge blocked — categorize by querying GitHub for mergeable_state +
+        // check-runs so we can tell merge conflicts apart from CI failures and
+        // branch-protection blocks. The agent only gets a session message for
+        // categories it can act on (conflicts → rebase, ci_failed → fix).
+        let category: MergeabilityCategory;
+        try {
+          category = await github.categorizeMergeability(prNumber, repo);
+        } catch (catErr) {
+          console.warn('[prs] categorizeMergeability failed:', (catErr as Error).message);
+          // Fallback to conflict — historical default.
+          category = { category: 'conflict', mergeState: 'dirty', rawMergeableState: null, failingChecks: [] };
         }
-        res.status(422).json({ error: 'PR has merge conflicts. Use Fix Conflicts to have the code session rebase and resolve them.' });
+        // GitHub may briefly still report 'clean' while the merge is failing
+        // for some other reason; downgrade to 'unknown' rather than lying.
+        if (category.category === 'clean') {
+          category = { category: 'unknown', mergeState: 'unknown', rawMergeableState: category.rawMergeableState, failingChecks: [] };
+        }
+
+        const failingNames = category.failingChecks.map((c) => c.name);
+        const failingNamesOrNull = failingNames.length > 0 ? failingNames : null;
+        updateMergeState(prNumber, repo, 0, category.mergeState, failingNamesOrNull);
+        _broadcast({
+          type: 'pr_mergeability_changed',
+          prNumber,
+          repo,
+          mergeable: false,
+          mergeState: category.mergeState,
+          failingChecks: failingNamesOrNull,
+        });
+        if (prRow?.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
+
+        let errorMessage: string;
+        switch (category.category) {
+          case 'conflict':
+            errorMessage = 'PR has merge conflicts. Use Fix Conflicts to have the code session rebase and resolve them.';
+            if (prRow?.session_id) {
+              const baseBranch = prRow.base_branch ?? 'dev';
+              const msg = `PR #${prNumber} has merge conflicts with the base branch. Rebase onto \`${baseBranch}\`, resolve the conflicts, and push the fixed branch.`;
+              sessionManager.sendOrResume(prRow.session_id, msg).catch((sendErr: unknown) =>
+                console.warn('[prs] sendOrResume failed:', (sendErr as Error).message),
+              );
+            }
+            break;
+          case 'ci_failed':
+            errorMessage = failingNames.length > 0
+              ? `PR cannot merge — required CI checks are failing: ${failingNames.join(', ')}`
+              : 'PR cannot merge — required CI checks are failing';
+            if (prRow?.session_id) {
+              const msg = failingNames.length > 0
+                ? `PR #${prNumber} cannot be merged because the following CI checks are failing: ${failingNames.join(', ')}. Investigate the failures and push a fix.`
+                : `PR #${prNumber} cannot be merged because required CI checks are failing. Investigate the failures and push a fix.`;
+              sessionManager.sendOrResume(prRow.session_id, msg).catch((sendErr: unknown) =>
+                console.warn('[prs] sendOrResume failed:', (sendErr as Error).message),
+              );
+            }
+            break;
+          case 'blocked':
+            errorMessage = 'PR is blocked by branch protection (e.g. a required review is missing). Resolve on GitHub before merging.';
+            break;
+          case 'unknown':
+          default:
+            errorMessage = 'Merge failed and GitHub did not report a definitive reason — try again in a moment.';
+            break;
+        }
+        res.status(422).json({
+          error: errorMessage,
+          category: category.category,
+          failingChecks: failingNames,
+        });
         return;
       }
       if (errStatus !== null) {

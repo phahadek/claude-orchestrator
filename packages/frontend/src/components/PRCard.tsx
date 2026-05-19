@@ -30,7 +30,13 @@ export interface PRListItem {
   createdAt: string;
   updatedAt: string;
   reviewIteration?: number;
+  /**
+   * Categorized non-mergeability reason from the backend. One of:
+   * 'clean' | 'dirty' | 'ci_failed' | 'blocked' | 'unstable' | 'unknown' | null
+   */
   mergeState: string | null;
+  /** Names of failing required check-runs. Populated when mergeState is 'ci_failed'. */
+  failingChecks?: string[] | null;
 }
 
 export interface PRCardProps {
@@ -86,7 +92,15 @@ export function PRCard({
   const isFinished = pr.state === 'merged' || pr.state === 'closed';
   const verdict = pr.reviewResult?.verdict ?? null;
   const hasConflicts = !isFinished && pr.mergeState === 'dirty';
-  const canMerge = pr.state === 'open' && verdict === 'approved' && !hasConflicts;
+  const hasCiFailures = !isFinished && pr.mergeState === 'ci_failed';
+  const isBlocked = !isFinished && pr.mergeState === 'blocked';
+  const isUnstable = !isFinished && pr.mergeState === 'unstable';
+  const isUnknownMergeState = !isFinished && pr.mergeState === 'unknown';
+  // Block merge for any non-clean merge_state value (null is treated as "not
+  // yet checked" and falls through to the backend's pre-merge check).
+  const mergeBlocked = hasConflicts || hasCiFailures || isBlocked || isUnstable || isUnknownMergeState;
+  const canMerge = pr.state === 'open' && verdict === 'approved' && !mergeBlocked;
+  const failingChecks = pr.failingChecks ?? [];
   const sessionAlive = pr.sessionId !== null;
   // Single context-aware review action:
   // - finished → no button
@@ -185,7 +199,42 @@ export function PRCard({
       <div className={styles.cardActions}>
         <span className={`${styles.verdictBadge} ${verdictClass}`}>{verdictLabel}</span>
         {hasConflicts && (
-          <span className={styles.conflictBadge} title="PR has merge conflicts">⚠ Merge Conflicts</span>
+          <span
+            className={styles.conflictBadge}
+            title={`Merge conflicts on ${pr.headBranch} — rebase onto ${pr.baseBranch} and resolve.`}
+          >
+            ⚠ Merge Conflicts
+          </span>
+        )}
+        {hasCiFailures && (
+          <span
+            className={styles.conflictBadge}
+            title={
+              failingChecks.length > 0
+                ? `Failing checks: ${failingChecks.join(', ')}`
+                : 'CI checks are failing'
+            }
+          >
+            ⚠ CI failing{failingChecks.length > 0 ? `: ${failingChecks.join(', ')}` : ''}
+          </span>
+        )}
+        {isUnstable && (
+          <span className={styles.conflictBadge} title="CI is unstable — checks may be failing">
+            ⚠ CI unstable
+          </span>
+        )}
+        {isBlocked && (
+          <span
+            className={styles.conflictBadge}
+            title="Blocked by branch protection — a required review or status is missing."
+          >
+            ⚠ Blocked by branch protection
+          </span>
+        )}
+        {isUnknownMergeState && (
+          <span className={styles.conflictBadge} title="GitHub has not yet computed mergeability">
+            ⚠ Mergeability unknown
+          </span>
         )}
 
         <div className={styles.buttons}>

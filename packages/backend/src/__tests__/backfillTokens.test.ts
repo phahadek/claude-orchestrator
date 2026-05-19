@@ -88,7 +88,8 @@ vi.mock('../db/db.js', async () => {
       head_sha          TEXT,
       last_reviewed_sha TEXT,
       pending_push      INTEGER NOT NULL DEFAULT 0,
-      pause_reason      TEXT
+      pause_reason      TEXT,
+      failing_checks    TEXT
     );
   `);
   return { db };

@@ -190,8 +190,16 @@ export interface PullRequestRow {
   last_reviewed_sha: string | null;
   node_id: string | null;     // GitHub GraphQL global ID
   mergeable: number | null;   // 0 | 1 | NULL (SQLite boolean, NULL = unknown)
-  merge_state: string | null; // 'clean' | 'dirty' | 'blocked' | 'unknown' | null
+  /**
+   * Categorized non-mergeability reason. Extends GitHub's raw mergeable_state
+   * so the dashboard can tell merge conflicts apart from CI failures and
+   * branch-protection blocks.
+   *   'clean' | 'dirty' | 'ci_failed' | 'blocked' | 'unknown' | null
+   */
+  merge_state: string | null;
   merge_state_checked_at: string | null; // ISO timestamp
+  /** JSON-encoded string[] of failing check-run names. Non-null only when merge_state = 'ci_failed'. */
+  failing_checks: string | null;
   pending_push: number;       // 0 | 1 — push arrived before initial review completed
   pause_reason: PauseReason | null; // non-null marks the task as needs_attention
 }

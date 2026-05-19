@@ -23,6 +23,14 @@ function makeMockGitHub(): GitHubClient {
     getPRState: vi.fn().mockResolvedValue('open'),
     getMergeability: vi.fn().mockResolvedValue({ mergeable: null, mergeableState: null }),
     getMergeabilityWithRetry: vi.fn().mockResolvedValue({ mergeable: null, mergeableState: null }),
+    getFailingChecks: vi.fn().mockResolvedValue([]),
+    // Default: GitHub still computing — watcher should skip.
+    categorizeMergeability: vi.fn().mockResolvedValue({
+      category: 'unknown',
+      mergeState: 'unknown',
+      rawMergeableState: null,
+      failingChecks: [],
+    }),
   } as unknown as GitHubClient;
 }
 
@@ -66,7 +74,9 @@ function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
     mergeable: null,
     merge_state: null,
     merge_state_checked_at: null,
+    failing_checks: null,
     pending_push: 0,
+    pause_reason: null,
     ...overrides,
   };
 }
@@ -199,12 +209,21 @@ describe('PRMergeWatcher.poll()', () => {
 // ── checkMergeability / dirty transition ─────────────────────────────────────
 
 describe('PRMergeWatcher dirty-transition sendOrResume', () => {
+  function mockCategorize(github: GitHubClient, value: {
+    category: 'clean' | 'conflict' | 'ci_failed' | 'blocked' | 'unknown';
+    mergeState: string;
+    rawMergeableState: string | null;
+    failingChecks: Array<{ name: string; conclusion: string }>;
+  }): void {
+    vi.mocked((github as unknown as { categorizeMergeability: (n: number, r: string) => Promise<unknown> }).categorizeMergeability)
+      .mockResolvedValue(value);
+  }
+
   it('calls sendOrResume when merge_state transitions to dirty', async () => {
     const pr = makePRRow({ merge_state: 'clean', session_id: 'coding-session', base_branch: 'dev' });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeMockGitHub();
-    vi.mocked(github.getMergeability).mockResolvedValue({ mergeable: false, mergeableState: 'dirty' });
-    vi.mocked(github.getMergeabilityWithRetry).mockResolvedValue({ mergeable: false, mergeableState: 'dirty' });
+    mockCategorize(github, { category: 'conflict', mergeState: 'dirty', rawMergeableState: 'dirty', failingChecks: [] });
     const sessions = makeMockSessions();
 
     const watcher = new PRMergeWatcher(github, sessions, makeMockNotion(), () => {});
@@ -220,8 +239,7 @@ describe('PRMergeWatcher dirty-transition sendOrResume', () => {
     const pr = makePRRow({ merge_state: 'dirty', session_id: 'coding-session' });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeMockGitHub();
-    vi.mocked(github.getMergeability).mockResolvedValue({ mergeable: false, mergeableState: 'dirty' });
-    vi.mocked(github.getMergeabilityWithRetry).mockResolvedValue({ mergeable: false, mergeableState: 'dirty' });
+    mockCategorize(github, { category: 'conflict', mergeState: 'dirty', rawMergeableState: 'dirty', failingChecks: [] });
     const sessions = makeMockSessions();
 
     const watcher = new PRMergeWatcher(github, sessions, makeMockNotion(), () => {});
@@ -234,13 +252,127 @@ describe('PRMergeWatcher dirty-transition sendOrResume', () => {
     const pr = makePRRow({ merge_state: 'clean', session_id: null });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeMockGitHub();
-    vi.mocked(github.getMergeability).mockResolvedValue({ mergeable: false, mergeableState: 'dirty' });
-    vi.mocked(github.getMergeabilityWithRetry).mockResolvedValue({ mergeable: false, mergeableState: 'dirty' });
+    mockCategorize(github, { category: 'conflict', mergeState: 'dirty', rawMergeableState: 'dirty', failingChecks: [] });
     const sessions = makeMockSessions();
 
     const watcher = new PRMergeWatcher(github, sessions, makeMockNotion(), () => {});
     await watcher.poll();
 
+    expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
+  });
+});
+
+// ── mergeability category branches ───────────────────────────────────────────
+
+describe('PRMergeWatcher categorization branches', () => {
+  function mockCategorize(github: GitHubClient, value: {
+    category: 'clean' | 'conflict' | 'ci_failed' | 'blocked' | 'unknown';
+    mergeState: string;
+    rawMergeableState: string | null;
+    failingChecks: Array<{ name: string; conclusion: string }>;
+  }): void {
+    vi.mocked((github as unknown as { categorizeMergeability: (n: number, r: string) => Promise<unknown> }).categorizeMergeability)
+      .mockResolvedValue(value);
+  }
+
+  it('messages session about failing CI checks when transitioning to ci_failed', async () => {
+    const pr = makePRRow({ merge_state: 'clean', session_id: 'coding-session' });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorize(github, {
+      category: 'ci_failed',
+      mergeState: 'ci_failed',
+      rawMergeableState: 'unstable',
+      failingChecks: [{ name: 'lint', conclusion: 'failure' }, { name: 'unit', conclusion: 'failure' }],
+    });
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(github, sessions, makeMockNotion(), () => {});
+    await watcher.poll();
+
+    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledWith(
+      'coding-session',
+      expect.stringMatching(/CI checks are failing.*lint, unit/),
+    );
+    expect(vi.mocked(updateMergeState)).toHaveBeenCalledWith(42, 'owner/repo', 0, 'ci_failed', ['lint', 'unit']);
+  });
+
+  it('does NOT message session for blocked category (requires human action)', async () => {
+    const pr = makePRRow({ merge_state: 'clean', session_id: 'coding-session' });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorize(github, {
+      category: 'blocked',
+      mergeState: 'blocked',
+      rawMergeableState: 'blocked',
+      failingChecks: [],
+    });
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(github, sessions, makeMockNotion(), () => {});
+    await watcher.poll();
+
+    expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
+    expect(vi.mocked(updateMergeState)).toHaveBeenCalledWith(42, 'owner/repo', 0, 'blocked', null);
+  });
+
+  it('broadcasts pr_mergeability_changed with failingChecks for ci_failed', async () => {
+    const pr = makePRRow({ merge_state: 'clean', session_id: 'coding-session' });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorize(github, {
+      category: 'ci_failed',
+      mergeState: 'ci_failed',
+      rawMergeableState: 'blocked',
+      failingChecks: [{ name: 'typecheck', conclusion: 'failure' }],
+    });
+    const messages: ServerMessage[] = [];
+    const watcher = new PRMergeWatcher(github, makeMockSessions(), makeMockNotion(), (m) => messages.push(m));
+
+    await watcher.poll();
+
+    const event = messages.find((m) => m.type === 'pr_mergeability_changed');
+    expect(event).toBeDefined();
+    expect(event).toMatchObject({ mergeState: 'ci_failed', failingChecks: ['typecheck'], mergeable: false });
+  });
+
+  it('skips update when GitHub reports unknown with no raw state (still computing)', async () => {
+    const pr = makePRRow({ merge_state: 'clean' });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorize(github, {
+      category: 'unknown',
+      mergeState: 'unknown',
+      rawMergeableState: null,
+      failingChecks: [],
+    });
+    const watcher = new PRMergeWatcher(github, makeMockSessions(), makeMockNotion(), () => {});
+
+    await watcher.poll();
+
+    expect(vi.mocked(updateMergeState)).not.toHaveBeenCalled();
+  });
+
+  it('updates DB (but not session) when failing-check names change without state change', async () => {
+    const pr = makePRRow({
+      merge_state: 'ci_failed',
+      session_id: 'coding-session',
+      failing_checks: JSON.stringify(['old-check']),
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorize(github, {
+      category: 'ci_failed',
+      mergeState: 'ci_failed',
+      rawMergeableState: 'unstable',
+      failingChecks: [{ name: 'new-check', conclusion: 'failure' }],
+    });
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(github, sessions, makeMockNotion(), () => {});
+    await watcher.poll();
+
+    expect(vi.mocked(updateMergeState)).toHaveBeenCalledWith(42, 'owner/repo', 0, 'ci_failed', ['new-check']);
     expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
   });
 });

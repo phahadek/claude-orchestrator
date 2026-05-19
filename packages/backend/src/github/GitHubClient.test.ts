@@ -257,6 +257,206 @@ describe('GitHubClient request error handling', () => {
 
 // ── computeSizeSignal() ──────────────────────────────────────────────────────
 
+// ── getFailingChecks() ───────────────────────────────────────────────────────
+
+describe('GitHubClient.getFailingChecks()', () => {
+  it('returns only failing/timed_out/cancelled/action_required check-runs', async () => {
+    const checkRuns = [
+      { name: 'success-check', status: 'completed', conclusion: 'success' },
+      { name: 'lint', status: 'completed', conclusion: 'failure' },
+      { name: 'unit-tests', status: 'completed', conclusion: 'failure' },
+      { name: 'flaky-test', status: 'completed', conclusion: 'timed_out' },
+      { name: 'cancelled-check', status: 'completed', conclusion: 'cancelled' },
+      { name: 'manual-step', status: 'completed', conclusion: 'action_required' },
+      { name: 'skipped-check', status: 'completed', conclusion: 'skipped' },
+      { name: 'neutral-check', status: 'completed', conclusion: 'neutral' },
+      // Incomplete runs are excluded — only completed runs count.
+      { name: 'still-running', status: 'in_progress', conclusion: null },
+    ];
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'application/json' },
+      json: async () => ({ check_runs: checkRuns }),
+      text: async () => '',
+    }));
+
+    const client = new GitHubClient();
+    const failing = await client.getFailingChecks('deadbeef', 'owner/repo');
+
+    expect(failing.map((c) => c.name)).toEqual([
+      'lint', 'unit-tests', 'flaky-test', 'cancelled-check', 'manual-step',
+    ]);
+    expect(failing.find((c) => c.name === 'lint')?.conclusion).toBe('failure');
+  });
+
+  it('returns an empty array when no check-runs have failed', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'application/json' },
+      json: async () => ({
+        check_runs: [
+          { name: 'all-good', status: 'completed', conclusion: 'success' },
+        ],
+      }),
+      text: async () => '',
+    }));
+
+    const client = new GitHubClient();
+    const failing = await client.getFailingChecks('deadbeef', 'owner/repo');
+    expect(failing).toEqual([]);
+  });
+
+  it('hits the correct endpoint path', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'application/json' },
+      json: async () => ({ check_runs: [] }),
+      text: async () => '',
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const client = new GitHubClient();
+    await client.getFailingChecks('abc123', 'owner/repo');
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/repos/owner/repo/commits/abc123/check-runs'),
+      expect.anything(),
+    );
+  });
+});
+
+// ── categorizeMergeability() ─────────────────────────────────────────────────
+
+describe('GitHubClient.categorizeMergeability()', () => {
+  function mockPRThenChecks(prResponse: {
+    mergeable_state: string | null;
+    head_sha?: string;
+  }, checkRuns: Array<{ name: string; status: string; conclusion: string | null }> = []): ReturnType<typeof vi.fn> {
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'application/json' },
+        json: async () => ({
+          node_id: 'PR_1', number: 42, title: 'Test PR', body: null,
+          html_url: 'https://github.com/owner/repo/pull/42',
+          url: 'https://api.github.com/repos/owner/repo/pulls/42',
+          head: { ref: 'feature/x', sha: prResponse.head_sha ?? 'sha-abc' },
+          base: { ref: 'dev' },
+          state: 'open', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z',
+          mergeable: null, mergeable_state: prResponse.mergeable_state, draft: false,
+        }),
+        text: async () => '',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'application/json' },
+        json: async () => ({ check_runs: checkRuns }),
+        text: async () => '',
+      });
+    vi.stubGlobal('fetch', fetchSpy);
+    return fetchSpy;
+  }
+
+  it('categorizes clean as clean (no check-runs fetched)', async () => {
+    const fetchSpy = mockPRThenChecks({ mergeable_state: 'clean' });
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo');
+    expect(result.category).toBe('clean');
+    expect(result.mergeState).toBe('clean');
+    expect(result.failingChecks).toEqual([]);
+    // Only the PR fetch should fire — no check-runs request.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('categorizes dirty as conflict', async () => {
+    mockPRThenChecks({ mergeable_state: 'dirty' });
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo');
+    expect(result.category).toBe('conflict');
+    expect(result.mergeState).toBe('dirty');
+  });
+
+  it('categorizes behind as conflict (needs rebase)', async () => {
+    mockPRThenChecks({ mergeable_state: 'behind' });
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo');
+    expect(result.category).toBe('conflict');
+    expect(result.mergeState).toBe('dirty');
+  });
+
+  it('categorizes unstable as ci_failed and includes failing-check names', async () => {
+    mockPRThenChecks({ mergeable_state: 'unstable' }, [
+      { name: 'lint', status: 'completed', conclusion: 'failure' },
+      { name: 'unit-tests', status: 'completed', conclusion: 'success' },
+    ]);
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo');
+    expect(result.category).toBe('ci_failed');
+    expect(result.mergeState).toBe('ci_failed');
+    expect(result.failingChecks.map((c) => c.name)).toEqual(['lint']);
+  });
+
+  it('categorizes blocked + failing checks as ci_failed', async () => {
+    mockPRThenChecks({ mergeable_state: 'blocked' }, [
+      { name: 'required-check', status: 'completed', conclusion: 'failure' },
+    ]);
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo');
+    expect(result.category).toBe('ci_failed');
+    expect(result.mergeState).toBe('ci_failed');
+    expect(result.failingChecks).toHaveLength(1);
+  });
+
+  it('categorizes blocked + no failing checks as blocked', async () => {
+    mockPRThenChecks({ mergeable_state: 'blocked' }, [
+      { name: 'happy-check', status: 'completed', conclusion: 'success' },
+    ]);
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo');
+    expect(result.category).toBe('blocked');
+    expect(result.mergeState).toBe('blocked');
+    expect(result.failingChecks).toEqual([]);
+  });
+
+  it('categorizes unknown mergeable_state as unknown', async () => {
+    mockPRThenChecks({ mergeable_state: 'unknown' });
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo');
+    expect(result.category).toBe('unknown');
+    expect(result.mergeState).toBe('unknown');
+  });
+
+  it('still returns ci_failed even if check-runs request fails (graceful degradation)', async () => {
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'application/json' },
+        json: async () => ({
+          node_id: 'PR_1', number: 42, title: 'Test', body: null,
+          html_url: 'https://github.com/owner/repo/pull/42',
+          url: 'https://api.github.com/repos/owner/repo/pulls/42',
+          head: { ref: 'feature/x', sha: 'sha-abc' }, base: { ref: 'dev' },
+          state: 'open', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z',
+          mergeable_state: 'unstable', draft: false,
+        }),
+        text: async () => '',
+      })
+      .mockResolvedValueOnce({
+        ok: false, status: 500,
+        headers: { get: () => 'application/json' },
+        text: async () => 'GitHub error',
+      });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo');
+    // Empty failingChecks because the secondary call failed; we still categorize
+    // as ci_failed (from the mergeable_state alone).
+    expect(result.category).toBe('ci_failed');
+    expect(result.failingChecks).toEqual([]);
+  });
+});
+
 describe('computeSizeSignal()', () => {
   const TWO_FILE_SPEC = '- packages/backend/src/foo.ts\n- packages/backend/src/bar.ts';
 
