@@ -301,59 +301,97 @@ describe('PRCard', () => {
     }
 
     it('shows merge-conflict badge for mergeState=dirty', () => {
-      render(<PRCard pr={approved({ mergeState: 'dirty' })} {...defaultProps} />);
+      render(
+        <PRCard pr={approved({ mergeState: 'dirty' })} {...defaultProps} />,
+      );
       expect(screen.getByText('⚠ Merge Conflicts')).toBeDefined();
     });
 
     it('shows CI-failing badge with check names for mergeState=ci_failed', () => {
-      const pr = approved({ mergeState: 'ci_failed', failingChecks: ['lint', 'unit-tests'] });
+      const pr = approved({
+        mergeState: 'ci_failed',
+        failingChecks: ['lint', 'unit-tests'],
+      });
       render(<PRCard pr={pr} {...defaultProps} />);
       expect(screen.getByText(/CI failing: lint, unit-tests/)).toBeDefined();
     });
 
     it('shows blocked badge for mergeState=blocked', () => {
-      render(<PRCard pr={approved({ mergeState: 'blocked' })} {...defaultProps} />);
+      render(
+        <PRCard pr={approved({ mergeState: 'blocked' })} {...defaultProps} />,
+      );
       expect(screen.getByText(/Blocked by branch protection/)).toBeDefined();
     });
 
     it('shows unstable badge for mergeState=unstable', () => {
-      render(<PRCard pr={approved({ mergeState: 'unstable' })} {...defaultProps} />);
+      render(
+        <PRCard pr={approved({ mergeState: 'unstable' })} {...defaultProps} />,
+      );
       expect(screen.getByText(/CI unstable/)).toBeDefined();
     });
 
     it('shows unknown badge for mergeState=unknown', () => {
-      render(<PRCard pr={approved({ mergeState: 'unknown' })} {...defaultProps} />);
+      render(
+        <PRCard pr={approved({ mergeState: 'unknown' })} {...defaultProps} />,
+      );
       expect(screen.getByText(/Mergeability unknown/)).toBeDefined();
     });
 
     it('disables Merge button when mergeState is dirty (approved)', () => {
-      render(<PRCard pr={approved({ mergeState: 'dirty' })} {...defaultProps} />);
-      expect(screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled')).toBe(true);
+      render(
+        <PRCard pr={approved({ mergeState: 'dirty' })} {...defaultProps} />,
+      );
+      expect(
+        screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled'),
+      ).toBe(true);
     });
 
     it('disables Merge button when mergeState is ci_failed (approved)', () => {
-      render(<PRCard pr={approved({ mergeState: 'ci_failed', failingChecks: ['lint'] })} {...defaultProps} />);
-      expect(screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled')).toBe(true);
+      render(
+        <PRCard
+          pr={approved({ mergeState: 'ci_failed', failingChecks: ['lint'] })}
+          {...defaultProps}
+        />,
+      );
+      expect(
+        screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled'),
+      ).toBe(true);
     });
 
     it('disables Merge button when mergeState is blocked (approved)', () => {
-      render(<PRCard pr={approved({ mergeState: 'blocked' })} {...defaultProps} />);
-      expect(screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled')).toBe(true);
+      render(
+        <PRCard pr={approved({ mergeState: 'blocked' })} {...defaultProps} />,
+      );
+      expect(
+        screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled'),
+      ).toBe(true);
     });
 
     it('disables Merge button when mergeState is unstable (approved)', () => {
-      render(<PRCard pr={approved({ mergeState: 'unstable' })} {...defaultProps} />);
-      expect(screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled')).toBe(true);
+      render(
+        <PRCard pr={approved({ mergeState: 'unstable' })} {...defaultProps} />,
+      );
+      expect(
+        screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled'),
+      ).toBe(true);
     });
 
     it('disables Merge button when mergeState is unknown (approved)', () => {
-      render(<PRCard pr={approved({ mergeState: 'unknown' })} {...defaultProps} />);
-      expect(screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled')).toBe(true);
+      render(
+        <PRCard pr={approved({ mergeState: 'unknown' })} {...defaultProps} />,
+      );
+      expect(
+        screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled'),
+      ).toBe(true);
     });
 
     it('enables Merge button when mergeState is clean (approved)', () => {
-      render(<PRCard pr={approved({ mergeState: 'clean' })} {...defaultProps} />);
-      expect(screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled')).toBe(false);
+      render(
+        <PRCard pr={approved({ mergeState: 'clean' })} {...defaultProps} />,
+      );
+      expect(
+        screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled'),
+      ).toBe(false);
     });
   });
 });

@@ -253,14 +253,16 @@ describe('AutoLauncher', () => {
   it('skips tasks whose PR has a non-null pause_reason in SQLite', async () => {
     const sm = makeMockSessionManager();
     const task = makeTask({ id: 'paused-task' });
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO pull_requests
         (pr_number, pr_url, notion_task_id, session_id, repo, state,
          created_at, updated_at, synced_at, pause_reason)
       VALUES
         (1, 'https://github.com/o/r/pull/1', @notion_task_id, NULL, 'o/r', 'open',
          'now', 'now', 'now', 'stuck_timeout')
-    `).run({ notion_task_id: task.id });
+    `,
+    ).run({ notion_task_id: task.id });
     const backend = makeMockBackend([makeResolved(task)]);
 
     const launcher = new AutoLauncher(sm, undefined, {
@@ -270,7 +272,9 @@ describe('AutoLauncher', () => {
     });
 
     await launcher.pollOnce();
-    expect((sm as unknown as { start: ReturnType<typeof vi.fn> }).start).not.toHaveBeenCalled();
+    expect(
+      (sm as unknown as { start: ReturnType<typeof vi.fn> }).start,
+    ).not.toHaveBeenCalled();
   });
 
   it('skips when a live session for the task already exists', async () => {

@@ -5,7 +5,10 @@ import { getAllProjects, runtimeSettings } from '../config';
 import type { ProjectConfig } from '../config';
 import type { ResolvedTask } from '../notion/types';
 import type { ServerMessage } from '../ws/types';
-import { hasActiveSessionForTask, getPausedPrReasonForTask } from '../db/queries';
+import {
+  hasActiveSessionForTask,
+  getPausedPrReasonForTask,
+} from '../db/queries';
 
 const READY_STATUS = '🗂️ Ready';
 const CODE_TYPE = '💻 Code';

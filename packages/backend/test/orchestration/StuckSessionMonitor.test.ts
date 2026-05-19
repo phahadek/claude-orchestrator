@@ -38,14 +38,16 @@ const PR_NUMBER = 42;
 const REPO = 'owner/repo';
 
 function insertPR(sessionId: string, prNumber: number, repo: string): void {
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO pull_requests
       (pr_number, pr_url, notion_task_id, session_id, repo, state,
        created_at, updated_at, synced_at)
     VALUES
       (@pr_number, @pr_url, NULL, @session_id, @repo, 'open',
        'now', 'now', 'now')
-  `).run({
+  `,
+  ).run({
     pr_number: prNumber,
     pr_url: `https://github.com/${repo}/pull/${prNumber}`,
     session_id: sessionId,
@@ -53,7 +55,11 @@ function insertPR(sessionId: string, prNumber: number, repo: string): void {
   });
 }
 
-function sessionStarted(sessionId = SESSION_ID, taskName = TASK_NAME, sessionType: 'standard' | 'review' = 'standard'): ServerMessage {
+function sessionStarted(
+  sessionId = SESSION_ID,
+  taskName = TASK_NAME,
+  sessionType: 'standard' | 'review' = 'standard',
+): ServerMessage {
   return {
     type: 'session_started',
     sessionId,
@@ -153,11 +159,20 @@ describe('StuckSessionMonitor', () => {
     insertPR(SESSION_ID, PR_NUMBER, REPO);
     vi.advanceTimersByTime(120_000);
 
-    expect(sm.send).toHaveBeenCalledWith(SESSION_ID, expect.stringContaining('Pause your work'));
-    expect(broadcast).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'stuck_session_paused', sessionId: SESSION_ID }),
+    expect(sm.send).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.stringContaining('Pause your work'),
     );
-    const row = db.prepare('SELECT pause_reason FROM pull_requests WHERE pr_number = ? AND repo = ?')
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'stuck_session_paused',
+        sessionId: SESSION_ID,
+      }),
+    );
+    const row = db
+      .prepare(
+        'SELECT pause_reason FROM pull_requests WHERE pr_number = ? AND repo = ?',
+      )
       .get(PR_NUMBER, REPO) as { pause_reason: string | null };
     expect(row.pause_reason).toBe('stuck_timeout');
   });
@@ -182,7 +197,10 @@ describe('StuckSessionMonitor', () => {
 
     expect(sm.kill).toHaveBeenCalledWith(SESSION_ID);
     expect(broadcast).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'stuck_session_killed', sessionId: SESSION_ID }),
+      expect.objectContaining({
+        type: 'stuck_session_killed',
+        sessionId: SESSION_ID,
+      }),
     );
   });
 
@@ -211,7 +229,11 @@ describe('StuckSessionMonitor', () => {
 
     fireMessage(sm, sessionStarted());
     expect(monitor.isTracking(SESSION_ID)).toBe(true);
-    fireMessage(sm, { type: 'session_ended', sessionId: SESSION_ID, status: 'done' });
+    fireMessage(sm, {
+      type: 'session_ended',
+      sessionId: SESSION_ID,
+      status: 'done',
+    });
     expect(monitor.isTracking(SESSION_ID)).toBe(false);
 
     // No timers should fire after end

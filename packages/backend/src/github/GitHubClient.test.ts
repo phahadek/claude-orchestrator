@@ -359,39 +359,53 @@ describe('GitHubClient.getFailingChecks()', () => {
       { name: 'unit-tests', status: 'completed', conclusion: 'failure' },
       { name: 'flaky-test', status: 'completed', conclusion: 'timed_out' },
       { name: 'cancelled-check', status: 'completed', conclusion: 'cancelled' },
-      { name: 'manual-step', status: 'completed', conclusion: 'action_required' },
+      {
+        name: 'manual-step',
+        status: 'completed',
+        conclusion: 'action_required',
+      },
       { name: 'skipped-check', status: 'completed', conclusion: 'skipped' },
       { name: 'neutral-check', status: 'completed', conclusion: 'neutral' },
       // Incomplete runs are excluded — only completed runs count.
       { name: 'still-running', status: 'in_progress', conclusion: null },
     ];
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      headers: { get: () => 'application/json' },
-      json: async () => ({ check_runs: checkRuns }),
-      text: async () => '',
-    }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        headers: { get: () => 'application/json' },
+        json: async () => ({ check_runs: checkRuns }),
+        text: async () => '',
+      }),
+    );
 
     const client = new GitHubClient();
     const failing = await client.getFailingChecks('deadbeef', 'owner/repo');
 
     expect(failing.map((c) => c.name)).toEqual([
-      'lint', 'unit-tests', 'flaky-test', 'cancelled-check', 'manual-step',
+      'lint',
+      'unit-tests',
+      'flaky-test',
+      'cancelled-check',
+      'manual-step',
     ]);
     expect(failing.find((c) => c.name === 'lint')?.conclusion).toBe('failure');
   });
 
   it('returns an empty array when no check-runs have failed', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      headers: { get: () => 'application/json' },
-      json: async () => ({
-        check_runs: [
-          { name: 'all-good', status: 'completed', conclusion: 'success' },
-        ],
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        headers: { get: () => 'application/json' },
+        json: async () => ({
+          check_runs: [
+            { name: 'all-good', status: 'completed', conclusion: 'success' },
+          ],
+        }),
+        text: async () => '',
       }),
-      text: async () => '',
-    }));
+    );
 
     const client = new GitHubClient();
     const failing = await client.getFailingChecks('deadbeef', 'owner/repo');
@@ -420,22 +434,37 @@ describe('GitHubClient.getFailingChecks()', () => {
 // ── categorizeMergeability() ─────────────────────────────────────────────────
 
 describe('GitHubClient.categorizeMergeability()', () => {
-  function mockPRThenChecks(prResponse: {
-    mergeable_state: string | null;
-    head_sha?: string;
-  }, checkRuns: Array<{ name: string; status: string; conclusion: string | null }> = []): ReturnType<typeof vi.fn> {
-    const fetchSpy = vi.fn()
+  function mockPRThenChecks(
+    prResponse: {
+      mergeable_state: string | null;
+      head_sha?: string;
+    },
+    checkRuns: Array<{
+      name: string;
+      status: string;
+      conclusion: string | null;
+    }> = [],
+  ): ReturnType<typeof vi.fn> {
+    const fetchSpy = vi
+      .fn()
       .mockResolvedValueOnce({
         ok: true,
         headers: { get: () => 'application/json' },
         json: async () => ({
-          node_id: 'PR_1', number: 42, title: 'Test PR', body: null,
+          node_id: 'PR_1',
+          number: 42,
+          title: 'Test PR',
+          body: null,
           html_url: 'https://github.com/owner/repo/pull/42',
           url: 'https://api.github.com/repos/owner/repo/pulls/42',
           head: { ref: 'feature/x', sha: prResponse.head_sha ?? 'sha-abc' },
           base: { ref: 'dev' },
-          state: 'open', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z',
-          mergeable: null, mergeable_state: prResponse.mergeable_state, draft: false,
+          state: 'open',
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+          mergeable: null,
+          mergeable_state: prResponse.mergeable_state,
+          draft: false,
         }),
         text: async () => '',
       })
@@ -519,22 +548,31 @@ describe('GitHubClient.categorizeMergeability()', () => {
   });
 
   it('still returns ci_failed even if check-runs request fails (graceful degradation)', async () => {
-    const fetchSpy = vi.fn()
+    const fetchSpy = vi
+      .fn()
       .mockResolvedValueOnce({
         ok: true,
         headers: { get: () => 'application/json' },
         json: async () => ({
-          node_id: 'PR_1', number: 42, title: 'Test', body: null,
+          node_id: 'PR_1',
+          number: 42,
+          title: 'Test',
+          body: null,
           html_url: 'https://github.com/owner/repo/pull/42',
           url: 'https://api.github.com/repos/owner/repo/pulls/42',
-          head: { ref: 'feature/x', sha: 'sha-abc' }, base: { ref: 'dev' },
-          state: 'open', created_at: '2024-01-01T00:00:00Z', updated_at: '2024-01-01T00:00:00Z',
-          mergeable_state: 'unstable', draft: false,
+          head: { ref: 'feature/x', sha: 'sha-abc' },
+          base: { ref: 'dev' },
+          state: 'open',
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+          mergeable_state: 'unstable',
+          draft: false,
         }),
         text: async () => '',
       })
       .mockResolvedValueOnce({
-        ok: false, status: 500,
+        ok: false,
+        status: 500,
         headers: { get: () => 'application/json' },
         text: async () => 'GitHub error',
       });

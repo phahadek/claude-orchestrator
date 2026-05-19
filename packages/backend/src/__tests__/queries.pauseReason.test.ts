@@ -26,14 +26,16 @@ function insertPR(opts: {
   review_result?: string | null;
   pause_reason?: string | null;
 }): void {
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO pull_requests
       (pr_number, pr_url, notion_task_id, session_id, repo, state,
        review_result, created_at, updated_at, synced_at, pause_reason)
     VALUES
       (@pr_number, @pr_url, @notion_task_id, NULL, 'owner/repo', @state,
        @review_result, @created_at, @updated_at, @synced_at, @pause_reason)
-  `).run({
+  `,
+  ).run({
     pr_number: opts.pr_number,
     pr_url: `https://github.com/owner/repo/pull/${opts.pr_number}`,
     notion_task_id: opts.notion_task_id ?? null,
@@ -52,7 +54,10 @@ beforeEach(() => {
 
 describe('getApprovedOpenPRs() — Auto-merger candidate query', () => {
   it('returns approved open PRs with no pause_reason', () => {
-    insertPR({ pr_number: 1, review_result: JSON.stringify({ verdict: 'approved' }) });
+    insertPR({
+      pr_number: 1,
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
     const rows = getApprovedOpenPRs();
     expect(rows).toHaveLength(1);
     expect(rows[0].pr_number).toBe(1);
@@ -77,14 +82,22 @@ describe('getApprovedOpenPRs() — Auto-merger candidate query', () => {
   });
 
   it('returns the mix of paused/unpaused approved PRs minus paused ones', () => {
-    insertPR({ pr_number: 10, review_result: JSON.stringify({ verdict: 'approved' }) });
+    insertPR({
+      pr_number: 10,
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
     insertPR({
       pr_number: 11,
       review_result: JSON.stringify({ verdict: 'approved' }),
       pause_reason: 'stuck_timeout',
     });
-    insertPR({ pr_number: 12, review_result: JSON.stringify({ verdict: 'approved' }) });
-    const rows = getApprovedOpenPRs().map((r) => r.pr_number).sort((a, b) => a - b);
+    insertPR({
+      pr_number: 12,
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
+    const rows = getApprovedOpenPRs()
+      .map((r) => r.pr_number)
+      .sort((a, b) => a - b);
     expect(rows).toEqual([10, 12]);
   });
 });
@@ -92,11 +105,16 @@ describe('getApprovedOpenPRs() — Auto-merger candidate query', () => {
 describe('resetReviewIteration() — resume-mechanism contract', () => {
   it('clears pause_reason=stuck_timeout when called via the re-review pathway', () => {
     insertPR({ pr_number: 20, pause_reason: 'stuck_timeout' });
-    db.prepare('UPDATE pull_requests SET review_iteration = 3 WHERE pr_number = 20').run();
+    db.prepare(
+      'UPDATE pull_requests SET review_iteration = 3 WHERE pr_number = 20',
+    ).run();
 
     resetReviewIteration(20, 'owner/repo');
 
-    const row = db.prepare('SELECT review_iteration, pause_reason FROM pull_requests WHERE pr_number = 20')
+    const row = db
+      .prepare(
+        'SELECT review_iteration, pause_reason FROM pull_requests WHERE pr_number = 20',
+      )
       .get() as { review_iteration: number; pause_reason: string | null };
     expect(row.review_iteration).toBe(0);
     expect(row.pause_reason).toBeNull();

@@ -53,7 +53,12 @@ export interface FailingCheck {
  *                 with no failing checks.
  * - `unknown`   — GitHub is still computing, or returned a state we don't recognize.
  */
-export type MergeCategory = 'clean' | 'conflict' | 'ci_failed' | 'blocked' | 'unknown';
+export type MergeCategory =
+  | 'clean'
+  | 'conflict'
+  | 'ci_failed'
+  | 'blocked'
+  | 'unknown';
 
 export interface MergeabilityCategory {
   category: MergeCategory;

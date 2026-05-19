@@ -301,12 +301,10 @@ export function createPrsRouter(
                 ),
               );
           }
-          res
-            .status(422)
-            .json({
-              error:
-                'PR has merge conflicts. Use Fix Conflicts to have the code session rebase and resolve them.',
-            });
+          res.status(422).json({
+            error:
+              'PR has merge conflicts. Use Fix Conflicts to have the code session rebase and resolve them.',
+          });
           return;
         }
         // mergeable === null after retries: GitHub still computing. Fall through to
