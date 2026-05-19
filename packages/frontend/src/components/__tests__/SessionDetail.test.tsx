@@ -281,7 +281,7 @@ describe('EventRow', () => {
     render(<EventRow event={makeEvent('text', content)} />);
     // The CollapsibleToolUse body holds the pretty-printed JSON. The body is
     // CSS-hidden when collapsed but still in the DOM, so the text is findable.
-    expect(screen.getByText(/\"file_path\": \"\/foo\/bar\.ts\"/)).toBeTruthy();
+    expect(screen.getByText(/"file_path": "\/foo\/bar\.ts"/)).toBeTruthy();
   });
 
   it('extractToolResult: literal \\n sequences are unescaped to real newlines', () => {
@@ -297,7 +297,7 @@ describe('EventRow', () => {
     const content = JSON.stringify({ type: 'tool_result', content: jsonPayload });
     render(<EventRow event={makeEvent('tool_result', content)} />);
     // Pretty-printed JSON contains the key with quotes and indentation
-    expect(screen.getByText(/\"id\": \"abc\"/)).toBeTruthy();
+    expect(screen.getByText(/"id": "abc"/)).toBeTruthy();
   });
 
   it('renders user_message event with "You" label and message content', () => {
@@ -397,7 +397,7 @@ describe('EventRow', () => {
     });
     render(<EventRow event={makeEvent('text', content)} />);
     expect(screen.getByText(/Read/)).toBeTruthy();
-    expect(screen.getByText(/\"file_path\": \"\/src\/foo\.ts\"/)).toBeTruthy();
+    expect(screen.getByText(/"file_path": "\/src\/foo\.ts"/)).toBeTruthy();
     expect(screen.queryByText(/input_tokens/)).toBeNull();
     expect(screen.queryByText(/stop_reason/)).toBeNull();
   });

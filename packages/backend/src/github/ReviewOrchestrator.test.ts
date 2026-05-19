@@ -29,7 +29,7 @@ vi.mock('../config.js', () => ({
 }));
 
 import { ReviewOrchestrator } from './ReviewOrchestrator';
-import { setPRReviewResult, getPRByNumber, incrementReviewIteration, updatePRDraftStatus } from '../db/queries';
+import { setPRReviewResult, getPRByNumber, updatePRDraftStatus } from '../db/queries';
 import type { PRReviewService } from './PRReviewService';
 import type { GitHubClient } from './GitHubClient';
 import type { PullRequest } from './types';

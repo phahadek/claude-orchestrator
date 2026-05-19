@@ -192,6 +192,8 @@ export default function App() {
         if (boardId) send({ type: 'fetch_tasks', projectId: validProjectId, milestoneId: boardId });
       })
       .catch(() => {/* leave projects empty — DispatchModal handles the empty case */});
+    // Runs once on mount; `send` is a stable WebSocket sender and is not a meaningful dep here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleProjectChange = useCallback((id: string) => {
@@ -373,6 +375,10 @@ export default function App() {
         }
       })
       .catch((err) => console.error('[App] failed to load archived session events:', err));
+    // `sessions` is intentionally not a dep: we use it only as a one-shot
+    // "is this already loaded?" check via the ref, and including it would
+    // re-fire the fetch on every store update. `dispatch` is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
   // Fetch session events for the selected task's code and review sessions if not yet in store.
@@ -427,6 +433,10 @@ export default function App() {
         })
         .catch((err) => console.error('[App] failed to load task session events:', err));
     }
+    // `sessions` and `dispatch` excluded for the same reason as the
+    // selectedId-driven fetch above: `sessions` is checked once via the ref,
+    // and `dispatch` is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTaskId, taskViews]);
 
   const selectedSession = selectedId != null

@@ -54,8 +54,7 @@ import { AgentSession } from '../session/AgentSession';
 import { spawn } from 'child_process';
 import type { NotionClient } from '../notion/NotionClient';
 import type { ServerMessage } from '../ws/types';
-import { getRules, getEventsBySession, updateSessionStatus, upsertSessionEvent, getPRBySessionId, getPRByNumber } from '../db/queries';
-import type { PermissionRule } from '../db/types';
+import { getRules, getEventsBySession, upsertSessionEvent, getPRBySessionId, getPRByNumber } from '../db/queries';
 
 function fakeNotionClient(): NotionClient {
   return {

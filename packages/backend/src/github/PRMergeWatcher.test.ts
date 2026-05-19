@@ -9,7 +9,7 @@ vi.mock('../db/queries.js', () => ({
 }));
 
 import { PRMergeWatcher } from './PRMergeWatcher';
-import { getAllOpenPRs, updatePRState, updateMergeState } from '../db/queries';
+import { getAllOpenPRs, updatePRState } from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
 import type { SessionManager } from '../session/SessionManager';
 import type { NotionClient } from '../notion/NotionClient';

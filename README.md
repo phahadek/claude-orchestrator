@@ -97,10 +97,24 @@ git clone https://github.com/phahadek/claude-orchestrator.git && cd claude-orche
 npm install
 cp packages/backend/.env.example packages/backend/.env       # then edit
 cp .claude/local-context.md.example .claude/local-context.md # gitignored — add your Notion URLs
+git config blame.ignoreRevsFile .git-blame-ignore-revs       # one-time — keeps `git blame` useful across mass-format commits
 npm run dev    # → http://localhost:5173 (dev; Vite proxies API/WS to backend on :3000)
 ```
 
 `.claude/local-context.md` is gitignored and holds host-local references (Notion URLs, board IDs). Sessions read it as their first action. See [`docs/install.md`](docs/install.md) for details and an optional pre-commit hook that blocks workspace-ID leaks.
+
+The `git config blame.ignoreRevsFile` line is per-clone (the setting itself is not committed). It tells `git blame` to skip the SHAs listed in `.git-blame-ignore-revs` — currently the one-time Prettier mass-format commit — so author/line attribution still points at the meaningful edit, not the formatter.
+
+## Code style
+
+This repo uses Prettier defaults (with `endOfLine: "lf"`) and a minimal flat ESLint config that extends `eslint:recommended` and `@typescript-eslint/recommended`.
+
+```bash
+npm run format    # apply Prettier to the whole repo
+npm run lint      # run ESLint across both packages
+```
+
+Format checks are idempotent on a clean checkout; lint runs with zero errors and zero warnings.
 
 For Docker, production builds, the full env var reference, and Notion/local task source setup, see [`docs/install.md`](docs/install.md).
 

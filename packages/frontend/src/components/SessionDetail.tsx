@@ -46,6 +46,9 @@ export function SessionDetail({ session, send, onClose, onDelete, onArchive, onU
     setNoteValue(session?.note ?? '');
     setTagInput('');
     setActiveTab('transcript');
+    // Reset only when the selected session changes; including `session?.note`
+    // would clobber edits in progress when the note updates via WebSocket.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.sessionId]);
 
   if (!session) return null;

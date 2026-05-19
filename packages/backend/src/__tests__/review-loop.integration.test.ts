@@ -353,6 +353,7 @@ describe('ReviewOrchestrator.executeReview → pending_push → re-review', () =
       1,
       true,
     );
+    void orchestrator; // used implicitly via sessionManager event listeners
 
     // Spy on emit to capture push_detected
     const emittedEvents: Array<{ event: string; payload: unknown }> = [];

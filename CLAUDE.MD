@@ -44,8 +44,24 @@ the task at hand requires that context.
 | **Branch naming** | `feature/<task-name>` from `dev` |
 | **Commit to `dev` or `main` directly?** | Never |
 | **When done** | Open draft PR → mark task 👀 In Review → stop. Human merges and marks ✅ Done. |
-| **Pre-PR gate (hard — in order)** | 1. Merge/rebase `dev` → resolve conflicts. 2. `tsc --noEmit` passes (both packages). 3. `vite build` passes. |
+| **Pre-PR gate (hard — in order)** | 1. Merge/rebase `dev` → resolve conflicts. 2. `tsc --noEmit` passes (both packages). 3. `vite build` passes. 4. `npm run lint` passes with zero errors and zero warnings. 5. `npm run format -- --check` passes. |
 | **Session Log / File Index updates** | Never — the dashboard handles session tracking. |
+
+### Code style — Prettier + ESLint
+
+The repo enforces a Prettier baseline and a minimal flat ESLint config. Run
+`npm run format` to apply formatting and `npm run lint` to check both packages.
+
+A one-time mass-format commit lives in `.git-blame-ignore-revs`. After cloning,
+run this **once per clone** so `git blame` keeps pointing at meaningful edits:
+
+```bash
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+```
+
+The `blame.ignoreRevsFile` setting is per-clone (not committed). Sessions that
+edit code should not change Prettier/ESLint config to silence findings — fix
+the underlying violation or add an inline disable with an explanation.
 
 ## PR Format
 - Title: `feat: <exact task name>` — no scope prefix, no milestone tag

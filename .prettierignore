@@ -1,0 +1,26 @@
+# Dependencies and lockfiles
+node_modules/
+package-lock.json
+packages/*/package-lock.json
+
+# Build artifacts
+packages/backend/dist/
+packages/frontend/dist/
+
+# Logs and databases
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+
+# Dashboard generated
+.dashboard.pids
+data/
+
+# Claude Code session state
+.claude/worktrees/
+.claire/
+
+# Local-only task source
+tasks.yaml

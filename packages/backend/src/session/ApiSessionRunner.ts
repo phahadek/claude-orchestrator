@@ -76,7 +76,6 @@ export class ApiSessionRunner implements ISessionRunner {
     }
 
     // Lazy import so the package is only required when actually used in API mode.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { query } = require('@anthropic-ai/claude-agent-sdk') as {
       query: (params: {
         prompt: string | AsyncIterable<unknown>;

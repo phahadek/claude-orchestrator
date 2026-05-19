@@ -56,7 +56,7 @@ const sessionManager = new SessionManager(githubClient);
 const prReviewService = new PRReviewService(githubClient, undefined, sessionManager);
 // Constructed for its side effect: subscribes to sessionManager 'pr_opened' events.
 // The reference is intentionally not retained (kept alive via the event listener).
-const reviewOrchestrator = new ReviewOrchestrator(
+new ReviewOrchestrator(
   prReviewService, sessionManager, AUTO_REVIEW_CONCURRENCY, AUTO_REVIEW_ENABLED,
 );
 
