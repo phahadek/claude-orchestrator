@@ -1,5 +1,6 @@
 import type { ResolvedTask } from '../notion/types';
 import type { DisplayStatus } from '../tasks/TaskStatusEngine';
+import type { PauseReason } from '../db/types';
 
 // ── Server → Client ──────────────────────────────────────────────
 export interface PermissionDenial {
@@ -41,6 +42,8 @@ export interface TaskView {
   taskName: string;
   notionStatus: string;
   displayStatus: DisplayStatus;
+  /** Non-null when the task is paused (e.g. 'max_reviews', 'stuck_timeout'). */
+  pauseReason: PauseReason | null;
   priority: string;
   notionUrl: string;
   taskType: string;

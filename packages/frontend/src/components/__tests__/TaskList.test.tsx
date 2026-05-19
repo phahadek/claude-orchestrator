@@ -8,6 +8,7 @@ function makeTask(overrides: Partial<TaskView> & { taskId: string; displayStatus
   return {
     taskName: 'Test Task',
     notionStatus: '🔄 In Progress',
+    pauseReason: null,
     priority: '',
     notionUrl: 'https://notion.so/task',
     taskType: '💻 Code',

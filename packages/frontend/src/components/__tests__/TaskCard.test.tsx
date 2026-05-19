@@ -10,6 +10,7 @@ function makeTask(overrides?: Partial<TaskView>): TaskView {
     taskName: 'Implement Feature',
     notionStatus: '🗂️ Ready',
     displayStatus: 'ready',
+    pauseReason: null,
     priority: '',
     notionUrl: 'https://notion.so/task-1',
     taskType: '💻 Code',

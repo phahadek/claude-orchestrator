@@ -25,6 +25,7 @@ vi.mock('../db/queries.js', () => ({
   setLastReviewedSha: vi.fn(),
   setHeadSha: vi.fn(),
   setPendingPush: vi.fn(),
+  setPauseReason: vi.fn(),
   updatePRDraftStatus: vi.fn(),
   getSetting: vi.fn().mockReturnValue(null),
 }));
@@ -99,6 +100,7 @@ function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
     merge_state: null,
     merge_state_checked_at: null,
     pending_push: 0,
+    pause_reason: null,
     ...overrides,
   };
 }

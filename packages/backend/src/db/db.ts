@@ -125,3 +125,5 @@ try { db.exec(`ALTER TABLE pull_requests ADD COLUMN merge_state_checked_at TEXT`
 // pending_push: 1 when a push arrives before the initial review session is established.
 // Cleared and re-review triggered after the initial review completes.
 try { db.exec(`ALTER TABLE pull_requests ADD COLUMN pending_push INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
+// pause_reason: non-null marks the task as needs_attention (e.g. 'max_reviews', 'stuck_timeout').
+try { db.exec(`ALTER TABLE pull_requests ADD COLUMN pause_reason TEXT`); } catch { /* already exists */ }

@@ -12,6 +12,7 @@ import type {
   NewPermissionDenialRow,
   TaskCache,
   PullRequestRow,
+  PauseReason,
   ProjectRow,
   NewProjectRow,
   MilestoneRow,
@@ -526,7 +527,7 @@ export function getTaskTitleFromCache(taskId: string): string | null {
 
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
-export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_session_id' | 'review_iteration' | 'last_reviewed_sha' | 'node_id' | 'mergeable' | 'merge_state' | 'merge_state_checked_at' | 'pending_push'> & {
+export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_session_id' | 'review_iteration' | 'last_reviewed_sha' | 'node_id' | 'mergeable' | 'merge_state' | 'merge_state_checked_at' | 'pending_push' | 'pause_reason'> & {
   review_session_id?: string | null;
   review_iteration?: number;
   last_reviewed_sha?: string | null;
@@ -534,6 +535,7 @@ export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_sessio
   mergeable?: number | null;
   merge_state?: string | null;
   merge_state_checked_at?: string | null;
+  pause_reason?: PullRequestRow['pause_reason'];
 }): PullRequestRow {
   db.prepare(`
     INSERT INTO pull_requests
@@ -744,8 +746,20 @@ export function updateMergeState(
 
 export function resetReviewIteration(prNumber: number, repo: string): void {
   db.prepare<{ pr_number: number; repo: string }>(`
-    UPDATE pull_requests SET review_iteration = 0 WHERE pr_number = @pr_number AND repo = @repo
+    UPDATE pull_requests
+    SET review_iteration = 0, pause_reason = NULL
+    WHERE pr_number = @pr_number AND repo = @repo
   `).run({ pr_number: prNumber, repo });
+}
+
+export function setPauseReason(
+  prNumber: number,
+  repo: string,
+  reason: PauseReason | null,
+): void {
+  db.prepare<{ pr_number: number; repo: string; pause_reason: string | null }>(`
+    UPDATE pull_requests SET pause_reason = @pause_reason WHERE pr_number = @pr_number AND repo = @repo
+  `).run({ pr_number: prNumber, repo, pause_reason: reason });
 }
 
 export function getApprovedOpenPRs(): PullRequestRow[] {
@@ -788,6 +802,7 @@ export interface TaskAggregateRow {
   pr_review_result: string | null;
   pr_review_iteration: number | null;
   pr_merge_state: string | null;
+  pr_pause_reason: string | null;
 }
 
 export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
@@ -816,7 +831,8 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       pr.draft               AS pr_draft,
       pr.review_result       AS pr_review_result,
       pr.review_iteration    AS pr_review_iteration,
-      pr.merge_state         AS pr_merge_state
+      pr.merge_state         AS pr_merge_state,
+      pr.pause_reason        AS pr_pause_reason
     FROM task_cache tc
     LEFT JOIN sessions cs ON cs.session_id = (
       SELECT session_id FROM sessions

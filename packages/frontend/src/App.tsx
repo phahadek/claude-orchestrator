@@ -67,7 +67,7 @@ function resolveActiveBoardId(project: ProjectConfig): string {
 }
 
 export default function App() {
-  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, prRefreshTrigger, lastPrReviewEvent, incompleteReviews, lastTaskUpdate, taskListRefreshTrigger } = useSessionStore();
+  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, prRefreshTrigger, lastPrReviewEvent, lastReviewEscalation, incompleteReviews, lastTaskUpdate, taskListRefreshTrigger } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const activeProjectIdRef = useRef<string | null>(null);
@@ -292,6 +292,22 @@ export default function App() {
     ]);
     setTimeout(() => dismissNotification(notifId), 10000);
   }, [lastPrReviewEvent, dismissNotification]);
+
+  useEffect(() => {
+    if (!lastReviewEscalation) return;
+    const { prNumber, receivedAt } = lastReviewEscalation;
+    const notifId = `escalation-${prNumber}-${receivedAt}`;
+    setNotifications((prev) => [
+      ...prev,
+      {
+        id: notifId,
+        message: `⚠️ PR #${prNumber} review loop hit max iterations — needs your attention`,
+        status: 'review',
+        onClick: () => setTopView('prs'),
+      },
+    ]);
+    setTimeout(() => dismissNotification(notifId), 10000);
+  }, [lastReviewEscalation, dismissNotification]);
 
   const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();

@@ -9,6 +9,7 @@ import type { NotionTask } from '../notion/types';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import type { PRReviewResult } from '../github/PRReviewService';
 import type { ServerMessage, TaskView } from '../ws/types';
+import type { PauseReason } from '../db/types';
 import yaml from 'js-yaml';
 export type { TaskView } from '../ws/types';
 
@@ -121,6 +122,8 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     };
   }
 
+  const pauseReason = (row.pr_pause_reason ?? null) as PauseReason | null;
+
   const displayStatus = deriveDisplayStatus({
     notionStatus,
     codeSessionStatus: row.code_session_status ?? null,
@@ -129,6 +132,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     reviewVerdict,
     reviewIterationCount: row.pr_review_iteration ?? 0,
     reviewIterationCap: cap,
+    pauseReason,
   });
 
   const totalTokens = {
@@ -141,6 +145,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     taskName: notionTask?.title ?? row.notion_task_id,
     notionStatus,
     displayStatus,
+    pauseReason,
     priority,
     notionUrl: notionTask?.notionUrl ?? '',
     taskType: notionTask?.type ?? '',

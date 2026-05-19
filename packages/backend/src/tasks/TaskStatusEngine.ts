@@ -1,4 +1,5 @@
 import { getPRByNotionTaskId, getLatestCodeSessionByNotionTaskId, getSetting, getTaskCache } from '../db/queries';
+import type { PauseReason } from '../db/types';
 
 export type DisplayStatus =
   | 'ready'
@@ -17,6 +18,7 @@ export interface TaskStatusInput {
   reviewVerdict: string | null;     // 'approved' | 'needs_changes' | 'incomplete' | null
   reviewIterationCount: number;     // how many review cycles
   reviewIterationCap: number;       // configurable cap from settings
+  pauseReason?: PauseReason | null; // non-null forces needs_attention (unless terminal/approved)
 }
 
 /**
@@ -31,8 +33,7 @@ export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
     notionStatus,
     prState,
     reviewVerdict,
-    reviewIterationCount,
-    reviewIterationCap,
+    pauseReason,
   } = input;
 
   // 1. done — PR merged or closed (terminal override, takes precedence over Notion)
@@ -44,11 +45,16 @@ export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
   if (notionStatus.includes('Done')) return 'done';
 
   if (notionStatus.includes('In Review')) {
-    // Enrich with review-specific sub-states within the In Review group
+    // Enrich with review-specific sub-states within the In Review group.
+    // ready_to_merge wins over needs_attention so approved PRs surface
+    // promptly even if a stale pause_reason hasn't been cleared yet.
     if (reviewVerdict === 'approved' && prState === 'open') return 'ready_to_merge';
-    if (reviewIterationCount >= reviewIterationCap) return 'needs_attention';
+    if (pauseReason) return 'needs_attention';
     return 'in_review';
   }
+
+  // Any non-null pause_reason marks the task as needing attention.
+  if (pauseReason) return 'needs_attention';
 
   if (notionStatus.includes('In Progress')) return 'in_progress';
 
@@ -104,6 +110,7 @@ export function deriveDisplayStatusFromDb(notionTaskId: string): DisplayStatus {
     reviewVerdict,
     reviewIterationCount: prRow?.review_iteration ?? 0,
     reviewIterationCap: getReviewIterationCap(),
+    pauseReason: prRow?.pause_reason ?? null,
   });
 }
 

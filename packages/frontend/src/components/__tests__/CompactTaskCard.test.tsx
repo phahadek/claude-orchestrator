@@ -9,6 +9,7 @@ function makeTask(overrides: Partial<TaskView> = {}): TaskView {
     taskName: 'My Task',
     notionStatus: '🗂️ Ready',
     displayStatus: 'ready',
+    pauseReason: null,
     priority: '🟡 Medium',
     notionUrl: 'https://notion.so/task-1',
     taskType: '💻 Code',

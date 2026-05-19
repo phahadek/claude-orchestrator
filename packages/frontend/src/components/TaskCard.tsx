@@ -1,4 +1,4 @@
-import type { TaskView, DisplayStatus } from '../types/taskView';
+import type { TaskView, DisplayStatus, PauseReason } from '../types/taskView';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { useDispatch } from '../hooks/useDispatch';
@@ -21,6 +21,11 @@ const STATUS_LABELS: Record<DisplayStatus, string> = {
   ready: '🗂️ Ready',
   done: '✔️ Done',
   backlog: '🗂️ Backlog',
+};
+
+const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
+  max_reviews: 'Max review iterations reached — re-review or close the PR.',
+  stuck_timeout: 'Session stuck — no progress within the timeout window.',
 };
 
 function verdictLabel(verdict: string): string {
@@ -67,7 +72,10 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
     >
       <div className={styles.header}>
         <span className={styles.taskName}>{task.taskName}</span>
-        <span className={`${styles.statusBadge} ${styles[`status-${statusKey}`] ?? ''}`}>
+        <span
+          className={`${styles.statusBadge} ${styles[`status-${statusKey}`] ?? ''}`}
+          title={task.pauseReason ? PAUSE_REASON_LABELS[task.pauseReason] : undefined}
+        >
           {STATUS_LABELS[task.displayStatus]}
         </span>
       </div>

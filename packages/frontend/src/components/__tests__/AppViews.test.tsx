@@ -17,6 +17,7 @@ vi.mock('../../hooks/useSessionStore', () => ({
     setSessionFavorited: vi.fn(),
     prRefreshTrigger: 0,
     lastPrReviewEvent: null,
+    lastReviewEscalation: null,
     incompleteReviews: [],
     lastTaskUpdate: null,
     taskListRefreshTrigger: 0,
