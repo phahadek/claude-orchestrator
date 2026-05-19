@@ -201,3 +201,100 @@ function parseDiffFiles(diff: string): string[] {
   }
   return files;
 }
+
+export interface SizeSignal {
+  linesAdded: number;
+  linesDeleted: number;
+  filesTouched: number;
+  specFileCount: number;
+  oversizeRatio: number;          // filesTouched / max(specFileCount, 1); 0 when no spec list
+  exceededAbsoluteFloor: boolean; // (linesAdded + linesDeleted) > 800
+}
+
+/** Absolute LOC floor above which a PR is flagged for size-proportionality review. */
+export const SIZE_ABSOLUTE_FLOOR = 800;
+/** File-count ratio above which a PR is flagged (filesTouched / specFileCount). */
+export const SIZE_FILE_RATIO_LIMIT = 3;
+
+/**
+ * Files whose diffs should be excluded from the LOC count because they are
+ * machine-generated and their churn is not representative of human-written change.
+ * Matched as a suffix (file basename) or by file extension.
+ */
+const GENERATED_FILE_PATTERNS: ReadonlyArray<RegExp> = [
+  /(^|\/)package-lock\.json$/,
+  /(^|\/)yarn\.lock$/,
+  /(^|\/)pnpm-lock\.yaml$/,
+  /\.snap$/,
+  /\.svg$/,
+];
+
+function isGeneratedFile(path: string): boolean {
+  return GENERATED_FILE_PATTERNS.some((re) => re.test(path));
+}
+
+/** Extract spec file paths from the "Files / paths affected" section of a task spec. */
+function parseSpecFiles(specFilesSection: string): string[] {
+  if (!specFilesSection.trim()) return [];
+  return specFilesSection
+    .split('\n')
+    .map((line) => line.replace(/^[-*\s]+/, '').trim())
+    .filter((line) => line.length > 0 && (line.includes('/') || line.includes('.')));
+}
+
+/**
+ * Compute size proportionality signal for a PR diff vs. its task spec.
+ * Lines added/deleted are summed across non-generated files only.
+ * Files touched counts the total number of files in the diff (including generated).
+ */
+export function computeSizeSignal(diff: string, specFilesSection: string): SizeSignal {
+  const specFiles = parseSpecFiles(specFilesSection);
+  const specFileCount = specFiles.length;
+
+  let linesAdded = 0;
+  let linesDeleted = 0;
+  const files = new Set<string>();
+  let currentFile: string | null = null;
+  let currentFileIsGenerated = false;
+
+  for (const line of diff.split('\n')) {
+    // New file section
+    if (line.startsWith('diff --git a/')) {
+      const m = line.match(/^diff --git a\/.+ b\/(.+)$/);
+      currentFile = m ? m[1] : null;
+      if (currentFile) {
+        files.add(currentFile);
+        currentFileIsGenerated = isGeneratedFile(currentFile);
+      } else {
+        currentFileIsGenerated = false;
+      }
+      continue;
+    }
+    if (currentFile === null) continue;
+    if (currentFileIsGenerated) continue;
+    // Ignore the file-header lines (---/+++), only count real +/− body lines.
+    if (line.startsWith('+++') || line.startsWith('---')) continue;
+    if (line.startsWith('+')) linesAdded++;
+    else if (line.startsWith('-')) linesDeleted++;
+  }
+
+  const filesTouched = files.size;
+  const oversizeRatio = specFileCount > 0 ? filesTouched / specFileCount : 0;
+  const exceededAbsoluteFloor = (linesAdded + linesDeleted) > SIZE_ABSOLUTE_FLOOR;
+
+  return {
+    linesAdded,
+    linesDeleted,
+    filesTouched,
+    specFileCount,
+    oversizeRatio,
+    exceededAbsoluteFloor,
+  };
+}
+
+/** True when the PR exceeds either size threshold (absolute LOC or file-count ratio). */
+export function isOversized(signal: SizeSignal): boolean {
+  if (signal.exceededAbsoluteFloor) return true;
+  if (signal.specFileCount > 0 && signal.oversizeRatio > SIZE_FILE_RATIO_LIMIT) return true;
+  return false;
+}

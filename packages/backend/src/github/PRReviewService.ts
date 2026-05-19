@@ -1,12 +1,16 @@
 import { getEventsBySession, setPRReviewResult, getPRByNumber, setReviewSessionId, updatePRDraftStatus, incrementReviewIteration, setLastReviewedSha } from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
+import { computeSizeSignal, isOversized, SIZE_ABSOLUTE_FLOOR, SIZE_FILE_RATIO_LIMIT, type SizeSignal } from './GitHubClient';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
+import { parseSection } from '../notion/NotionClient';
 import type { SessionManager } from '../session/SessionManager';
 import type { PullRequest, PRDiff } from './types';
 import type { ServerMessage } from '../ws/types';
 import type { SessionEvent } from '../db/types';
 import type { PRMergeWatcher } from './PRMergeWatcher';
+
+const SIZE_DIMENSION_NAME = 'Size proportionality';
 
 export interface ReviewDimension {
   name: string;
@@ -25,25 +29,28 @@ export interface PRReviewResult {
 
 /**
  * Shared review-instructions block: the JSON schema, verdict rules, and the
- * Changed-files dimension guidance. Used by both the initial prompt and the
- * re-review follow-ups so the two stay in sync.
+ * per-dimension guidance. Used by both the initial prompt and the re-review
+ * follow-ups so the two stay in sync.
  */
 const REVIEW_JSON_SCHEMA_BLOCK = `Respond ONLY with a JSON object — no preamble, no markdown fences.
 
-Evaluate the PR across exactly these 4 dimensions and respond with this JSON schema:
+Evaluate the PR across exactly these 5 dimensions and respond with this JSON schema:
 {
   "verdict": "approved" | "needs_changes" | "incomplete",
   "dimensions": [
     { "name": "Title and description vs task Summary",        "passed": bool, "notes": "..." },
     { "name": "Diff vs Context spec",                         "passed": bool, "notes": "..." },
     { "name": "Diff vs Acceptance Criteria",                  "passed": bool, "notes": "..." },
-    { "name": "Changed files vs Files/paths affected list",   "passed": bool, "notes": "..." }
+    { "name": "Changed files vs Files/paths affected list",   "passed": bool, "notes": "..." },
+    { "name": "${SIZE_DIMENSION_NAME}",                          "passed": bool, "notes": "..." }
   ],
   "summary": "2–4 sentence overall assessment"
 }
-verdict rules: "approved" = all 4 passed. "needs_changes" = 1–3 passed. "incomplete" = 0 passed.
+verdict rules: "approved" = all 5 passed. "needs_changes" = 1–4 passed. "incomplete" = 0 passed.
 
-For the "Changed files vs Files/paths affected list" dimension: Pass if all changed files are either listed in the task OR are necessary downstream updates caused by the listed changes (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports). Fail only if the PR touches files unrelated to the task's intent.`;
+For the "Changed files vs Files/paths affected list" dimension: Pass if all changed files are either listed in the task OR are necessary downstream updates caused by the listed changes (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports). Fail only if the PR touches files unrelated to the task's intent.
+
+For the "${SIZE_DIMENSION_NAME}" dimension: Pass when the PR is within the size budget signaled above OR when any overflow is necessary corollary work — for example, deleting dead code or types that the listed changes leave unused, refactoring call sites the listed changes force to update, or test/fixture adjustments that follow from modified behavior. Fail only when the diff is materially larger than what the task scope (Summary + Acceptance Criteria + Files affected) demands, i.e. scope creep, unrelated cleanup, or speculative refactors. Note your reasoning in the "notes" field so a re-reviewer can audit the call.`;
 
 export class PRReviewService {
   constructor(
@@ -72,6 +79,37 @@ export class PRReviewService {
     return this.taskBackendOverride ?? getTaskBackend(projectId);
   }
 
+  /**
+   * Resolve the task spec's "Files / paths affected" section for size-signal computation.
+   * Returns an empty string when the task lookup fails so the signal still computes.
+   */
+  private async fetchSpecFilesSection(projectId: string, taskId: string | null): Promise<string> {
+    if (!taskId) return '';
+    try {
+      const body = await this.resolveBackend(projectId).fetchTaskPage(taskId);
+      return parseSection(body, 'files');
+    } catch (e) {
+      console.warn(`[PRReviewService] fetchTaskPage for size signal failed (task ${taskId}):`, e);
+      return '';
+    }
+  }
+
+  /** Render the size signal block shown in re-review follow-up messages. */
+  private renderSizeSignalForFollowUp(signal: SizeSignal): string {
+    return [
+      '',
+      '### Refreshed Size Signal',
+      `- Lines added: ${signal.linesAdded}`,
+      `- Lines deleted: ${signal.linesDeleted}`,
+      `- Files touched: ${signal.filesTouched}`,
+      `- Files listed in task spec: ${signal.specFileCount}`,
+      `- Absolute LOC floor (>${SIZE_ABSOLUTE_FLOOR}): ${signal.exceededAbsoluteFloor ? 'EXCEEDED' : 'within budget'}`,
+      `- filesTouched / specFileCount: ${signal.specFileCount > 0 ? signal.oversizeRatio.toFixed(2) : 'n/a'}`,
+      `- Oversized: ${isOversized(signal) ? `YES — re-evaluate ${SIZE_DIMENSION_NAME} and confirm any overflow is necessary corollary work` : 'no'}`,
+      '',
+    ].join('\n');
+  }
+
   async reviewPR(
     prNumber: number,
     repo: string,
@@ -95,6 +133,9 @@ export class PRReviewService {
         prNumber, repo,
         { base: prData.baseBranch, head: prData.headBranch },
       );
+      // Recompute size signal against the FULL refreshed diff each iteration.
+      const specFilesSection = await this.fetchSpecFilesSection(projectId, prRow.notion_task_id);
+      const sizeSignal = computeSizeSignal(diffData.diff, specFilesSection);
       const followUp = [
         `The code session has pushed new commits to PR #${prNumber}.`,
         `Please re-review the updated diff against the same task spec.`,
@@ -107,13 +148,14 @@ export class PRReviewService {
         '```',
         diffData.diff,
         '```',
-        ``,
+        this.renderSizeSignalForFollowUp(sizeSignal),
         REVIEW_JSON_SCHEMA_BLOCK,
       ].join('\n');
       this.sessionManager.send(existingReviewSessionId, followUp);
       const aiResult = await verdictPromise;
       const { mergeable } = await this.github.getMergeabilityWithRetry(prNumber, repo);
-      const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
+      const sizedResult = this.appendSizeProportionalityDimension(aiResult, sizeSignal);
+      const finalResult = this.appendMergeConflictDimension(sizedResult, mergeable);
       setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
       if (finalResult.verdict === 'approved') {
         await this.handleApprovedVerdict(prNumber, repo, prRow.notion_task_id, projectId);
@@ -134,6 +176,7 @@ export class PRReviewService {
     const taskBody = await this.resolveBackend(projectId).fetchTaskPage(prRow.notion_task_id);
     const taskUrl = `https://www.notion.so/${prRow.notion_task_id}`;
     const prompt = this.buildPrompt(prData, diffData, taskBody);
+    const sizeSignal = computeSizeSignal(diffData.diff, parseSection(taskBody, 'files'));
 
     // Case 2: Dead existing review session — resume via sendOrResume with the
     // original session ID (do NOT generate a new one here). The returned value
@@ -143,7 +186,8 @@ export class PRReviewService {
       setReviewSessionId(prNumber, repo, resumedSessionId);
       const aiResult = await this.waitForVerdict(resumedSessionId, prNumber, repo);
       const { mergeable } = await this.github.getMergeabilityWithRetry(prNumber, repo);
-      const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
+      const sizedResult = this.appendSizeProportionalityDimension(aiResult, sizeSignal);
+      const finalResult = this.appendMergeConflictDimension(sizedResult, mergeable);
       setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
       if (finalResult.verdict === 'approved') {
         await this.handleApprovedVerdict(prNumber, repo, prRow.notion_task_id, projectId);
@@ -175,7 +219,8 @@ export class PRReviewService {
 
     const aiResult = await verdictPromise;
     const { mergeable } = await this.github.getMergeabilityWithRetry(prNumber, repo);
-    const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
+    const sizedResult = this.appendSizeProportionalityDimension(aiResult, sizeSignal);
+    const finalResult = this.appendMergeConflictDimension(sizedResult, mergeable);
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
     // Set last_reviewed_sha so the next push_detected can compare correctly.
     setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
@@ -239,7 +284,11 @@ export class PRReviewService {
     const branches = prData.baseBranch && prData.headBranch
       ? { base: prData.baseBranch, head: prData.headBranch }
       : undefined;
+    // Re-review uses the FULL PR diff (compare endpoint), not just the incremental
+    // delta, so the size signal reflects total churn across the lifetime of the PR.
     const diffData = await this.github.fetchDiff(prNumber, repo, branches);
+    const specFilesSection = await this.fetchSpecFilesSection(projectId, pr.notion_task_id);
+    const sizeSignal = computeSizeSignal(diffData.diff, specFilesSection);
 
     const followUp = [
       `The code session has pushed new commits to PR #${prNumber}.`,
@@ -253,7 +302,7 @@ export class PRReviewService {
       '```',
       diffData.diff,
       '```',
-      ``,
+      this.renderSizeSignalForFollowUp(sizeSignal),
       REVIEW_JSON_SCHEMA_BLOCK,
     ].join('\n');
 
@@ -268,7 +317,8 @@ export class PRReviewService {
 
     const aiResult = await this.waitForVerdict(resumedSessionId, prNumber, repo);
     const { mergeable } = await this.github.getMergeabilityWithRetry(prNumber, repo);
-    const finalResult = this.appendMergeConflictDimension(aiResult, mergeable);
+    const sizedResult = this.appendSizeProportionalityDimension(aiResult, sizeSignal);
+    const finalResult = this.appendMergeConflictDimension(sizedResult, mergeable);
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
     setLastReviewedSha(prNumber, repo, pr.head_sha ?? null);
     return finalResult;
@@ -439,7 +489,54 @@ export class PRReviewService {
     return { ...result, dimensions, verdict };
   }
 
+  /**
+   * Normalize the Size proportionality dimension and re-derive the overall verdict.
+   * The LLM owns the pass/fail call (it sees the size signal in the prompt). When
+   * the LLM forgets to emit the dimension, we synthesize one from the heuristic:
+   *   - in budget → pass
+   *   - oversized → fail (no justification was offered)
+   * Verdict is recomputed using the same passedCount === dimensions.length pattern
+   * as appendMergeConflictDimension; error/incomplete inputs are preserved.
+   */
+  private appendSizeProportionalityDimension(
+    result: PRReviewResult,
+    signal: SizeSignal,
+  ): PRReviewResult {
+    const existing = (result.dimensions ?? []).find((d) => d.name === SIZE_DIMENSION_NAME);
+    let sizeDim: ReviewDimension;
+    if (existing) {
+      sizeDim = existing;
+    } else {
+      const flagged = isOversized(signal);
+      sizeDim = {
+        name: SIZE_DIMENSION_NAME,
+        passed: !flagged,
+        notes: flagged
+          ? `PR exceeds size budget (added+deleted=${signal.linesAdded + signal.linesDeleted}, files=${signal.filesTouched}, spec files=${signal.specFileCount}) and reviewer did not address the overflow.`
+          : `PR is within size budget (added+deleted=${signal.linesAdded + signal.linesDeleted}, files=${signal.filesTouched}, spec files=${signal.specFileCount}).`,
+      };
+    }
+
+    const otherDims = (result.dimensions ?? []).filter((d) => d.name !== SIZE_DIMENSION_NAME);
+    const dimensions = [...otherDims, sizeDim];
+    const passedCount = dimensions.filter((d) => d.passed).length;
+
+    let verdict: PRReviewResult['verdict'];
+    if (result.verdict === 'error' || result.verdict === 'incomplete') {
+      verdict = result.verdict;  // Never override error/incomplete
+    } else if (passedCount === dimensions.length) {
+      verdict = 'approved';
+    } else if (passedCount === 0) {
+      verdict = 'incomplete';
+    } else {
+      verdict = 'needs_changes';
+    }
+
+    return { ...result, dimensions, verdict };
+  }
+
   buildPrompt(pr: PullRequest, diff: PRDiff, taskBody: string): string {
+    const sizeSignal = computeSizeSignal(diff.diff, parseSection(taskBody, 'files'));
     return `You are a code reviewer. Compare the following GitHub PR against its task specification.
 
 ## PR Metadata
@@ -453,8 +550,40 @@ ${diff.diff}
 ## Task Specification
 ${taskBody}
 
+${this.formatSizeSignalSection(sizeSignal)}
+
 ## Your task
 ${REVIEW_JSON_SCHEMA_BLOCK}`;
+  }
+
+  /** Render the size signal block for the reviewer prompt. */
+  private formatSizeSignalSection(signal: SizeSignal): string {
+    const ratio = signal.specFileCount > 0
+      ? signal.oversizeRatio.toFixed(2)
+      : 'n/a (no spec file list)';
+    const flagged = isOversized(signal);
+    const reasons: string[] = [];
+    if (signal.exceededAbsoluteFloor) {
+      reasons.push(`lines added+deleted (${signal.linesAdded + signal.linesDeleted}) exceeds floor of ${SIZE_ABSOLUTE_FLOOR}`);
+    }
+    if (signal.specFileCount > 0 && signal.oversizeRatio > SIZE_FILE_RATIO_LIMIT) {
+      reasons.push(`filesTouched/specFileCount ratio (${signal.oversizeRatio.toFixed(2)}) exceeds ${SIZE_FILE_RATIO_LIMIT}×`);
+    }
+    const flag = flagged
+      ? `⚠️ OVERSIZED — ${reasons.join('; ')}. Review whether the overflow is necessary corollary work.`
+      : 'In budget vs. task spec.';
+    return [
+      '## Size Signal',
+      `- Lines added: ${signal.linesAdded}`,
+      `- Lines deleted: ${signal.linesDeleted}`,
+      `- Files touched: ${signal.filesTouched}`,
+      `- Files listed in task spec: ${signal.specFileCount}`,
+      `- filesTouched / specFileCount: ${ratio}`,
+      `- Absolute LOC floor (added+deleted > ${SIZE_ABSOLUTE_FLOOR}): ${signal.exceededAbsoluteFloor ? 'EXCEEDED' : 'within budget'}`,
+      `- Verdict: ${flag}`,
+      '',
+      'Generated-file diffs (package-lock.json, lockfiles, .snap, .svg) are excluded from the LOC count.',
+    ].join('\n');
   }
 
   parseReviewResult(events: SessionEvent[], prNumber: number, repo: string): PRReviewResult {

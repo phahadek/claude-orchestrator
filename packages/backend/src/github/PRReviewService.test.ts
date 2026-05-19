@@ -538,6 +538,8 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
 // ── Merge conflict dimension ──────────────────────────────────────────────────
 
 describe('PRReviewService — merge conflict dimension', () => {
+  // Payload now includes the 5th Size proportionality dimension that the LLM is
+  // asked to produce alongside the original four.
   const allPassedAIPayload = {
     verdict: 'approved',
     dimensions: [
@@ -545,11 +547,12 @@ describe('PRReviewService — merge conflict dimension', () => {
       { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
       { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
       { name: 'Changed files vs Files/paths affected list', passed: true, notes: 'ok' },
+      { name: 'Size proportionality', passed: true, notes: 'In budget.' },
     ],
-    summary: 'All four AI dimensions passed.',
+    summary: 'All five AI dimensions passed.',
   };
 
-  it('includes 5th Merge conflicts dimension with passed=true when mergeable=true', async () => {
+  it('includes 6th Merge conflicts dimension with passed=true when mergeable=true', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
 
     const mockSM = makeMockSessionManager();
@@ -567,14 +570,14 @@ describe('PRReviewService — merge conflict dimension', () => {
 
     const result = await service.reviewPR(42, 'owner/repo');
 
-    expect(result.dimensions).toHaveLength(5);
+    expect(result.dimensions).toHaveLength(6);
     const conflictDim = result.dimensions!.find((d) => d.name === 'Merge conflicts');
     expect(conflictDim).toBeDefined();
     expect(conflictDim!.passed).toBe(true);
     expect(result.verdict).toBe('approved');
   });
 
-  it('includes 5th Merge conflicts dimension with passed=false when mergeable=false, downgrading verdict to needs_changes', async () => {
+  it('includes 6th Merge conflicts dimension with passed=false when mergeable=false, downgrading verdict to needs_changes', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
 
     const mockSM = makeMockSessionManager();
@@ -592,7 +595,7 @@ describe('PRReviewService — merge conflict dimension', () => {
 
     const result = await service.reviewPR(42, 'owner/repo');
 
-    expect(result.dimensions).toHaveLength(5);
+    expect(result.dimensions).toHaveLength(6);
     const conflictDim = result.dimensions!.find((d) => d.name === 'Merge conflicts');
     expect(conflictDim).toBeDefined();
     expect(conflictDim!.passed).toBe(false);
@@ -623,7 +626,8 @@ describe('PRReviewService — merge conflict dimension', () => {
     expect(conflictDim).toBeUndefined();
     // AI verdict (approved) is preserved — not downgraded to needs_changes
     expect(result.verdict).toBe('approved');
-    expect(result.dimensions).toHaveLength(4);
+    // 5 LLM dimensions remain (Size proportionality already included by the LLM)
+    expect(result.dimensions).toHaveLength(5);
   });
 
   it('preserves incomplete verdict when session killed with mergeable=null, no conflict dim appended', async () => {
@@ -1086,5 +1090,220 @@ describe('PRReviewService.reReviewPR()', () => {
     expect(followUp).toContain('Changed files vs Files/paths affected list');
     expect(followUp).toContain('verdict rules:');
     expect(followUp).toContain('necessary downstream updates caused by the listed changes');
+  });
+});
+
+// ── Size proportionality dimension ────────────────────────────────────────────
+
+describe('PRReviewService — Size proportionality dimension', () => {
+  // Build a large diff that blows past the 800-LOC absolute floor.
+  function makeOversizedDiff(addedLines: number): string {
+    const out: string[] = [
+      'diff --git a/packages/backend/src/foo.ts b/packages/backend/src/foo.ts',
+      '--- a/packages/backend/src/foo.ts',
+      '+++ b/packages/backend/src/foo.ts',
+      `@@ -1,1 +1,${addedLines + 1} @@`,
+      ' keep me',
+    ];
+    for (let i = 0; i < addedLines; i++) out.push(`+added line ${i}`);
+    return out.join('\n');
+  }
+
+  const fourPassedDims = [
+    { name: 'Title and description vs task Summary', passed: true, notes: 'ok' },
+    { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
+    { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
+    { name: 'Changed files vs Files/paths affected list', passed: true, notes: 'ok' },
+  ];
+
+  it('in-budget PR (no LLM size dim emitted) → synthesized Size dim passed:true, verdict approved', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+
+    const payload = {
+      verdict: 'approved',
+      dimensions: fourPassedDims,
+      summary: 'All four passed; LLM omitted size dim.',
+    };
+
+    const mockSM = makeMockSessionManager();
+    const mockGH = makeMockGitHub();  // returns the small mockDiff
+
+    const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_a: string, _b: string, opts: { sessionId: string }) => {
+      setImmediate(() => mockSM.emit('message', makeSessionEventMessage(opts.sessionId, JSON.stringify(payload))));
+      return opts.sessionId;
+    });
+
+    const result = await service.reviewPR(42, 'owner/repo');
+    const sizeDim = result.dimensions!.find((d) => d.name === 'Size proportionality');
+    expect(sizeDim).toBeDefined();
+    expect(sizeDim!.passed).toBe(true);
+    expect(result.verdict).toBe('approved');
+  });
+
+  it('oversized PR (no LLM size dim emitted) → synthesized Size dim passed:false, verdict needs_changes', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+
+    const payload = {
+      verdict: 'approved',
+      dimensions: fourPassedDims,
+      summary: 'AI thinks it is fine; size heuristic disagrees.',
+    };
+
+    const mockSM = makeMockSessionManager();
+    const mockGH = makeMockGitHub();
+    vi.mocked(mockGH.fetchDiff).mockResolvedValue({
+      prId: 42,
+      diff: makeOversizedDiff(1500),
+      filesChanged: ['packages/backend/src/foo.ts'],
+    });
+
+    const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_a: string, _b: string, opts: { sessionId: string }) => {
+      setImmediate(() => mockSM.emit('message', makeSessionEventMessage(opts.sessionId, JSON.stringify(payload))));
+      return opts.sessionId;
+    });
+
+    const result = await service.reviewPR(42, 'owner/repo');
+    const sizeDim = result.dimensions!.find((d) => d.name === 'Size proportionality');
+    expect(sizeDim).toBeDefined();
+    expect(sizeDim!.passed).toBe(false);
+    expect(sizeDim!.notes).toMatch(/size budget|added\+deleted/);
+    expect(result.verdict).toBe('needs_changes');
+  });
+
+  it('oversized-but-justified PR (LLM emits passed:true with cleanup rationale) → verdict approved', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+
+    const payload = {
+      verdict: 'approved',
+      dimensions: [
+        ...fourPassedDims,
+        {
+          name: 'Size proportionality',
+          passed: true,
+          notes: 'Diff is 1,500 lines but ~1,200 of those are deleting dead code paths the spec implicitly retires.',
+        },
+      ],
+      summary: 'Oversized but justified — necessary corollary cleanup.',
+    };
+
+    const mockSM = makeMockSessionManager();
+    const mockGH = makeMockGitHub();
+    vi.mocked(mockGH.fetchDiff).mockResolvedValue({
+      prId: 42,
+      diff: makeOversizedDiff(1500),
+      filesChanged: ['packages/backend/src/foo.ts'],
+    });
+
+    const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce((_a: string, _b: string, opts: { sessionId: string }) => {
+      setImmediate(() => mockSM.emit('message', makeSessionEventMessage(opts.sessionId, JSON.stringify(payload))));
+      return opts.sessionId;
+    });
+
+    const result = await service.reviewPR(42, 'owner/repo');
+    const sizeDim = result.dimensions!.find((d) => d.name === 'Size proportionality');
+    expect(sizeDim).toBeDefined();
+    expect(sizeDim!.passed).toBe(true);
+    expect(sizeDim!.notes).toContain('1,200');
+    expect(result.verdict).toBe('approved');
+  });
+
+  it('re-review path recomputes size signal against the FULL refreshed PR diff and injects it into the follow-up prompt', async () => {
+    const prRowWithSession = { ...mockPRRow, review_session_id: 'live-review-session' };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+
+    const payload = {
+      verdict: 'needs_changes',
+      dimensions: [
+        ...fourPassedDims,
+        { name: 'Size proportionality', passed: false, notes: 'too large' },
+      ],
+      summary: 'Oversized, no justification.',
+    };
+
+    const mockSM = makeMockSessionManager();
+    const mockGH = makeMockGitHub();
+    vi.mocked(mockGH.fetchDiff).mockResolvedValue({
+      prId: 42,
+      diff: makeOversizedDiff(1500),
+      filesChanged: ['packages/backend/src/foo.ts'],
+    });
+
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(async (sessionId: string) => {
+      setImmediate(() =>
+        mockSM.emit('message', makeSessionEventMessage(sessionId, JSON.stringify(payload))),
+      );
+      return sessionId;
+    });
+
+    const service = new PRReviewService(mockGH, makeMockNotion(), mockSM as any, 'proj-1', 'https://notion.so/ctx');
+    const result = await service.reReviewPR(42, 'owner/repo');
+
+    // Confirm the follow-up sent to the existing session contains refreshed size numbers
+    const [, followUpMessage] = (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(followUpMessage).toContain('Refreshed Size Signal');
+    expect(followUpMessage).toContain('Lines added:');
+    expect(followUpMessage).toContain('Oversized: YES');
+    expect(result.verdict).toBe('needs_changes');
+  });
+});
+
+// ── buildPrompt() — size proportionality directive ───────────────────────────
+
+describe('PRReviewService.buildPrompt() — size proportionality', () => {
+  it('includes the size signal section with computed numbers', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
+    expect(prompt).toContain('## Size Signal');
+    expect(prompt).toContain('Lines added:');
+    expect(prompt).toContain('Lines deleted:');
+    expect(prompt).toContain('Files touched:');
+    expect(prompt).toContain('Files listed in task spec:');
+    expect(prompt).toContain('Absolute LOC floor');
+  });
+
+  it('flags an oversized diff with ⚠️ in the signal section', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    const bigDiffLines: string[] = [
+      'diff --git a/src/big.ts b/src/big.ts',
+      '--- a/src/big.ts',
+      '+++ b/src/big.ts',
+      '@@ -1,1 +1,1500 @@',
+    ];
+    for (let i = 0; i < 1500; i++) bigDiffLines.push(`+l${i}`);
+    const bigDiff: PRDiff = { prId: 42, diff: bigDiffLines.join('\n'), filesChanged: ['src/big.ts'] };
+    const prompt = service.buildPrompt(mockPR, bigDiff, mockTaskBody);
+    expect(prompt).toContain('OVERSIZED');
+    expect(prompt).toContain('exceeds floor of 800');
+  });
+
+  it('includes the Size proportionality dimension in the JSON schema and its directive', () => {
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
+    expect(prompt).toContain('Size proportionality');
+    // Reviewer is told to pass only when overflow is necessary corollary work
+    expect(prompt).toContain('necessary corollary work');
+    // Verdict math updated to 5 dimensions
+    expect(prompt).toContain('all 5 passed');
   });
 });

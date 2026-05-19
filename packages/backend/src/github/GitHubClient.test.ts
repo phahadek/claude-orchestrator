@@ -11,7 +11,7 @@ vi.mock('../db/queries.js', () => ({
   getPRByNumber: vi.fn().mockReturnValue(null),
 }));
 
-import { GitHubClient } from './GitHubClient';
+import { GitHubClient, computeSizeSignal, isOversized, SIZE_ABSOLUTE_FLOOR } from './GitHubClient';
 import { GitHubApiError } from './types';
 import { getPRByNumber } from '../db/queries';
 
@@ -252,5 +252,134 @@ describe('GitHubClient request error handling', () => {
     const client = new GitHubClient();
     await expect(client.mergePR(1, 'squash commit')).rejects.toThrow(GitHubApiError);
     await expect(client.mergePR(1, 'squash commit')).rejects.toMatchObject({ status: 405 });
+  });
+});
+
+// ── computeSizeSignal() ──────────────────────────────────────────────────────
+
+describe('computeSizeSignal()', () => {
+  const TWO_FILE_SPEC = '- packages/backend/src/foo.ts\n- packages/backend/src/bar.ts';
+
+  it('returns zeros for empty diff', () => {
+    const s = computeSizeSignal('', TWO_FILE_SPEC);
+    expect(s.linesAdded).toBe(0);
+    expect(s.linesDeleted).toBe(0);
+    expect(s.filesTouched).toBe(0);
+    expect(s.specFileCount).toBe(2);
+    expect(s.oversizeRatio).toBe(0);
+    expect(s.exceededAbsoluteFloor).toBe(false);
+    expect(isOversized(s)).toBe(false);
+  });
+
+  it('handles diff with no spec files section: specFileCount=0, oversizeRatio=0', () => {
+    const diff = [
+      'diff --git a/src/foo.ts b/src/foo.ts',
+      '--- a/src/foo.ts',
+      '+++ b/src/foo.ts',
+      '@@ -1,1 +1,2 @@',
+      ' a',
+      '+b',
+    ].join('\n');
+    const s = computeSizeSignal(diff, '');
+    expect(s.linesAdded).toBe(1);
+    expect(s.linesDeleted).toBe(0);
+    expect(s.filesTouched).toBe(1);
+    expect(s.specFileCount).toBe(0);
+    expect(s.oversizeRatio).toBe(0);
+    expect(isOversized(s)).toBe(false);
+  });
+
+  it('flags exceededAbsoluteFloor for a 2,535-line case', () => {
+    const lines: string[] = [
+      'diff --git a/src/big.ts b/src/big.ts',
+      '--- a/src/big.ts',
+      '+++ b/src/big.ts',
+      '@@ -1,1000 +1,1535 @@',
+    ];
+    for (let i = 0; i < 1535; i++) lines.push(`+added line ${i}`);
+    for (let i = 0; i < 1000; i++) lines.push(`-removed line ${i}`);
+    const diff = lines.join('\n');
+    const s = computeSizeSignal(diff, TWO_FILE_SPEC);
+    expect(s.linesAdded).toBe(1535);
+    expect(s.linesDeleted).toBe(1000);
+    expect(s.linesAdded + s.linesDeleted).toBe(2535);
+    expect(s.exceededAbsoluteFloor).toBe(true);
+    expect(isOversized(s)).toBe(true);
+  });
+
+  it('flags oversizeRatio>3 even when LOC is small', () => {
+    const lines = ['diff --git a/a/a.ts b/a/a.ts'];
+    // 7 files vs 2 in spec = ratio 3.5
+    for (let i = 0; i < 7; i++) {
+      lines.push(`diff --git a/src/f${i}.ts b/src/f${i}.ts`);
+      lines.push('--- a/src/f' + i + '.ts');
+      lines.push('+++ b/src/f' + i + '.ts');
+      lines.push('@@ -1,1 +1,1 @@');
+      lines.push('+x');
+    }
+    const diff = lines.join('\n');
+    const s = computeSizeSignal(diff, TWO_FILE_SPEC);
+    expect(s.specFileCount).toBe(2);
+    expect(s.filesTouched).toBeGreaterThan(6);
+    expect(s.oversizeRatio).toBeGreaterThan(3);
+    expect(isOversized(s)).toBe(true);
+  });
+
+  it('does not flag a small in-budget PR', () => {
+    const diff = [
+      'diff --git a/packages/backend/src/foo.ts b/packages/backend/src/foo.ts',
+      '--- a/packages/backend/src/foo.ts',
+      '+++ b/packages/backend/src/foo.ts',
+      '@@ -1,1 +1,2 @@',
+      ' a',
+      '+b',
+    ].join('\n');
+    const s = computeSizeSignal(diff, TWO_FILE_SPEC);
+    expect(s.linesAdded).toBe(1);
+    expect(s.filesTouched).toBe(1);
+    expect(s.exceededAbsoluteFloor).toBe(false);
+    expect(isOversized(s)).toBe(false);
+  });
+
+  it('filters generated files (package-lock.json, *.snap, *.svg) from LOC count', () => {
+    const lines = [
+      // Generated file with massive churn — should NOT be counted in LOC
+      'diff --git a/package-lock.json b/package-lock.json',
+      '--- a/package-lock.json',
+      '+++ b/package-lock.json',
+      '@@ -1,1 +1,1500 @@',
+    ];
+    for (let i = 0; i < 1500; i++) lines.push(`+lockfile line ${i}`);
+    // Real human file
+    lines.push('diff --git a/src/foo.ts b/src/foo.ts');
+    lines.push('--- a/src/foo.ts');
+    lines.push('+++ b/src/foo.ts');
+    lines.push('@@ -1,1 +1,3 @@');
+    lines.push(' keep');
+    lines.push('+new');
+    lines.push('+also new');
+    // .snap and .svg also excluded
+    lines.push('diff --git a/__snapshots__/component.test.ts.snap b/__snapshots__/component.test.ts.snap');
+    lines.push('--- a/__snapshots__/component.test.ts.snap');
+    lines.push('+++ b/__snapshots__/component.test.ts.snap');
+    lines.push('@@ -1,1 +1,1000 @@');
+    for (let i = 0; i < 1000; i++) lines.push(`+snapshot line ${i}`);
+    lines.push('diff --git a/icons/logo.svg b/icons/logo.svg');
+    lines.push('--- a/icons/logo.svg');
+    lines.push('+++ b/icons/logo.svg');
+    lines.push('@@ -1,1 +1,500 @@');
+    for (let i = 0; i < 500; i++) lines.push(`+<path d="..."/>`);
+
+    const s = computeSizeSignal(lines.join('\n'), '- src/foo.ts');
+    // Only the 2 real lines should be counted; lockfile/snap/svg excluded.
+    expect(s.linesAdded).toBe(2);
+    expect(s.linesDeleted).toBe(0);
+    // filesTouched still reflects the total count of files in the diff
+    expect(s.filesTouched).toBe(4);
+    expect(s.exceededAbsoluteFloor).toBe(false);
+  });
+
+  it('exposes the documented SIZE_ABSOLUTE_FLOOR threshold of 800', () => {
+    expect(SIZE_ABSOLUTE_FLOOR).toBe(800);
   });
 });
