@@ -1,0 +1,11 @@
+node_modules/**
+packages/backend/dist/**
+packages/frontend/dist/**
+package-lock.json
+packages/backend/package-lock.json
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+.claude/**
