@@ -188,6 +188,28 @@ export function createPrsRouter(
     }
   });
 
+  // ── GET /api/prs/:owner/:repoName/:prNumber/mergeability ─────────────────────
+  // Fresh mergeability check used by the frontend right before opening a merge.
+  // Retries the GitHub mergeability endpoint with exponential backoff so we
+  // get a definitive answer even when GitHub initially returns mergeable: null.
+  router.get('/prs/:owner/:repoName/:prNumber/mergeability', async (req: Request, res: Response) => {
+    const repo = `${req.params.owner}/${req.params.repoName}`;
+    const prNumber = parseInt(String(req.params.prNumber), 10);
+    try {
+      const { mergeable, mergeableState } = await github.getMergeabilityWithRetry(prNumber, repo);
+      // Persist + broadcast if state changed so other clients update too
+      const prRow = getPRByNumber(prNumber, repo);
+      if (prRow && mergeable !== null && prRow.merge_state !== mergeableState) {
+        updateMergeState(prNumber, repo, mergeable ? 1 : 0, mergeableState);
+        _broadcast({ type: 'pr_mergeability_changed', prNumber, repo, mergeable, mergeState: mergeableState });
+        if (prRow.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
+      }
+      res.json({ mergeable, mergeState: mergeableState });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // ── POST /api/prs/:owner/:repoName/:prNumber/merge ───────────────────────────
   router.post('/prs/:owner/:repoName/:prNumber/merge', async (req: Request, res: Response) => {
     const repo = `${req.params.owner}/${req.params.repoName}`;
@@ -197,6 +219,34 @@ export function createPrsRouter(
       typeof (req.body as { commitTitle?: string }).commitTitle === 'string'
         ? (req.body as { commitTitle: string }).commitTitle
         : prRow?.title ?? `Merge PR #${prNumber}`;
+
+    // Pre-merge mergeability check: ask GitHub directly (with retry) right before
+    // attempting the merge. Catches the case where the base branch received new
+    // commits between review and merge, which leaves the stored merge_state stale.
+    try {
+      const { mergeable, mergeableState } = await github.getMergeabilityWithRetry(prNumber, repo);
+      if (mergeable === false) {
+        // Persist conflict state, broadcast, and message the code session
+        updateMergeState(prNumber, repo, 0, mergeableState ?? 'dirty');
+        _broadcast({ type: 'pr_mergeability_changed', prNumber, repo, mergeable: false, mergeState: mergeableState ?? 'dirty' });
+        if (prRow?.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
+        if (prRow?.session_id) {
+          const baseBranch = prRow.base_branch ?? 'dev';
+          const msg = `PR #${prNumber} has merge conflicts with the base branch. Rebase onto \`${baseBranch}\`, resolve the conflicts, and push the fixed branch.`;
+          sessionManager.sendOrResume(prRow.session_id, msg).catch((err: unknown) =>
+            console.warn('[prs] sendOrResume failed:', (err as Error).message),
+          );
+        }
+        res.status(422).json({ error: 'PR has merge conflicts. Use Fix Conflicts to have the code session rebase and resolve them.' });
+        return;
+      }
+      // mergeable === null after retries: GitHub still computing. Fall through to
+      // the actual merge attempt — the 409/405 catch path below will handle a true conflict.
+    } catch (err) {
+      // Pre-check error is non-fatal — fall through to the merge attempt
+      console.warn(`[prs] pre-merge mergeability check failed for PR #${prNumber}:`, (err as Error).message);
+    }
+
     try {
       const result = await github.mergePR(prNumber, commitTitle, repo);
       updatePRState(prNumber, repo, 'merged');
@@ -246,7 +296,7 @@ export function createPrsRouter(
       if (errStatus === 409 || errStatus === 405) {
         // Merge conflict or not mergeable — persist the conflict state
         updateMergeState(prNumber, repo, 0, 'dirty');
-        _broadcast({ type: 'pr_state_changed', prNumber, repo, mergeable: false, mergeState: 'dirty' });
+        _broadcast({ type: 'pr_mergeability_changed', prNumber, repo, mergeable: false, mergeState: 'dirty' });
         if (prRow?.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
         // Message the code session to fix the conflicts
         if (prRow?.session_id) {
@@ -454,7 +504,7 @@ export function createPrsRouter(
     const sessionId = await sessionManager.sendOrResume(prRow.session_id, message);
     // Reset merge state so PRMergeWatcher will re-check after the push
     updateMergeState(prNumber, repo, null, null);
-    _broadcast({ type: 'pr_state_changed', prNumber, repo, mergeable: null, mergeState: null });
+    _broadcast({ type: 'pr_mergeability_changed', prNumber, repo, mergeable: null, mergeState: null });
     if (prRow.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
     res.json({ sessionId });
   });

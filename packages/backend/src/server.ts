@@ -71,6 +71,9 @@ app.use('/api/sessions', sessionsRouter);
 // PRMergeWatcher created early so routes and sync jobs can delegate lifecycle to it.
 // .start() is called later after server boots.
 const prMergeWatcher = new PRMergeWatcher(githubClient, sessionManager, undefined, broadcast);
+// After an approved verdict, the review service should trigger an immediate
+// watcher-style mergeability check so we don't wait for the next 5-min poll.
+prReviewService.setMergeWatcher(prMergeWatcher);
 app.use('/api', createPrsRouter(githubClient, prReviewService, sessionManager, undefined, prMergeWatcher));
 app.use('/api', createTasksRouter());
 app.use('/api/analytics', analyticsRouter);

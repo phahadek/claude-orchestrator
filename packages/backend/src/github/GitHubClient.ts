@@ -46,6 +46,28 @@ export class GitHubClient {
     };
   }
 
+  // Retry getMergeability with exponential backoff (2s, 4s, 8s, 16s, 32s) when
+  // GitHub returns mergeable: null. After all 5 retries, returns the last (still-null) result.
+  async getMergeabilityWithRetry(
+    prNumber: number,
+    repo?: string,
+    sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+  ): Promise<{ mergeable: boolean | null; mergeableState: string | null }> {
+    const delays = [2000, 4000, 8000, 16000, 32000];
+    let result = await this.getMergeability(prNumber, repo);
+    for (const delay of delays) {
+      if (result.mergeable !== null) return result;
+      await sleep(delay);
+      result = await this.getMergeability(prNumber, repo);
+    }
+    if (result.mergeable === null) {
+      console.warn(
+        `[GitHubClient] getMergeability still null after retries for PR #${prNumber} in ${repo ?? GITHUB_REPO} — skipping`,
+      );
+    }
+    return result;
+  }
+
   async fetchDiff(prId: number, repo?: string, branches?: { base: string; head: string }): Promise<PRDiff> {
     const r = repo ?? GITHUB_REPO;
     let diff: string;

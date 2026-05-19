@@ -44,6 +44,9 @@ export interface PRCardProps {
   onApprove: (prNumber: number) => void;
   reviewInFlight: boolean;
   mergeInFlight: boolean;
+  /** True while the frontend is asking the backend for a fresh mergeability check
+   *  right before opening a merge. Drives the "Checking mergeability..." label. */
+  checkingMergeability?: boolean;
   removeInFlight: boolean;
   reReviewInFlight: boolean;
   fixConflictsInFlight: boolean;
@@ -70,6 +73,7 @@ export function PRCard({
   onApprove,
   reviewInFlight,
   mergeInFlight,
+  checkingMergeability = false,
   removeInFlight,
   reReviewInFlight,
   fixConflictsInFlight,
@@ -247,10 +251,14 @@ export function PRCard({
           <button
             type="button"
             className={styles.mergeButton}
-            disabled={!canMerge || mergeInFlight}
+            disabled={!canMerge || mergeInFlight || checkingMergeability}
             onClick={handleMerge}
           >
-            {mergeInFlight ? 'Merging...' : 'Merge ↓'}
+            {checkingMergeability
+              ? 'Checking mergeability...'
+              : mergeInFlight
+                ? 'Merging...'
+                : 'Merge ↓'}
           </button>
         </div>
       </div>

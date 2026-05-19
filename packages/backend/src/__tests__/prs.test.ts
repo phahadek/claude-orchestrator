@@ -156,6 +156,8 @@ function makeMockGitHub(): GitHubClient {
     fetchPR: vi.fn().mockResolvedValue(mockGitHubPR),
     mergePR: vi.fn().mockResolvedValue({ merged: true, message: 'Merged', sha: 'abc123' }),
     markPRReady: vi.fn().mockResolvedValue(undefined),
+    getMergeability: vi.fn().mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
+    getMergeabilityWithRetry: vi.fn().mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
   } as unknown as GitHubClient;
 }
 
