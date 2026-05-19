@@ -171,7 +171,7 @@ export class SessionAuditor {
       return null;
     }
 
-    let taskMarkdown: string | null = null;
+    let taskMarkdown: string | null;
     try {
       taskMarkdown = await this.resolveBackend().fetchTaskPage(taskId);
     } catch (err) {

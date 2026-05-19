@@ -409,7 +409,7 @@ describe('ReviewOrchestrator.executeReview → pending_push → re-review', () =
       >,
     );
 
-    const orchestrator = new ReviewOrchestrator(
+    const _orchestrator = new ReviewOrchestrator(
       reviewService,
       sessionManager as unknown as InstanceType<
         typeof import('../session/SessionManager.js').SessionManager

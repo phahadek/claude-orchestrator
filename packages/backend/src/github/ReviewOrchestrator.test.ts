@@ -36,7 +36,6 @@ import { ReviewOrchestrator } from './ReviewOrchestrator';
 import {
   setPRReviewResult,
   getPRByNumber,
-  incrementReviewIteration,
   updatePRDraftStatus,
   setPauseReason,
 } from '../db/queries';

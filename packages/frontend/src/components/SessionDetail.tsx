@@ -63,6 +63,9 @@ export function SessionDetail({
     setNoteValue(session?.note ?? '');
     setTagInput('');
     setActiveTab('transcript');
+    // Reset local state only on session switch — intentionally excludes session?.note
+    // to avoid resetting the input while the user is editing
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.sessionId]);
 
   if (!session) return null;

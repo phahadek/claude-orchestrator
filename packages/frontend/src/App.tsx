@@ -121,7 +121,7 @@ export default function App() {
   const notifiedRef = useRef<Set<string>>(new Set());
   const initialSessionSyncDoneRef = useRef(false);
   const [showReconnected, setShowReconnected] = useState(false);
-  const hasConnectedOnce = useRef(false);
+  const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
   const prevConnectionState = useRef<ConnectionState>('disconnected');
 
   const [cardPreviewLines, setCardPreviewLines] = useState<number>(3);
@@ -153,15 +153,15 @@ export default function App() {
 
   useEffect(() => {
     if (connectionState === 'connected') {
-      if (hasConnectedOnce.current) {
+      if (hasConnectedOnce) {
         setShowReconnected(true);
         const timer = setTimeout(() => setShowReconnected(false), 3000);
         return () => clearTimeout(timer);
       }
-      hasConnectedOnce.current = true;
+      setHasConnectedOnce(true);
     }
     prevConnectionState.current = connectionState;
-  }, [connectionState]);
+  }, [connectionState, hasConnectedOnce]);
 
   const dismissNotification = useCallback((id: string) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
@@ -239,7 +239,7 @@ export default function App() {
       .catch(() => {
         /* leave projects empty — DispatchModal handles the empty case */
       });
-  }, []);
+  }, [send]);
 
   const handleProjectChange = useCallback(
     (id: string) => {
@@ -524,7 +524,7 @@ export default function App() {
       .catch((err) =>
         console.error('[App] failed to load archived session events:', err),
       );
-  }, [selectedId]);
+  }, [selectedId, dispatch, sessions]);
 
   // Fetch session events for the selected task's code and review sessions if not yet in store.
   // Mirrors the archived-session fetch for the Sessions tab so TaskDetail always has live or
@@ -581,7 +581,7 @@ export default function App() {
           console.error('[App] failed to load task session events:', err),
         );
     }
-  }, [selectedTaskId, taskViews]);
+  }, [selectedTaskId, taskViews, dispatch, sessions]);
 
   const selectedSession =
     selectedId != null
@@ -1013,7 +1013,7 @@ export default function App() {
       />
       <ShortcutHint />
 
-      {hasConnectedOnce.current && connectionState !== 'connected' && (
+      {hasConnectedOnce && connectionState !== 'connected' && (
         <div className={styles.connectionBanner}>Reconnecting...</div>
       )}
       {showReconnected && (

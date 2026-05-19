@@ -57,12 +57,10 @@ import type { ServerMessage } from '../ws/types';
 import {
   getRules,
   getEventsBySession,
-  updateSessionStatus,
   upsertSessionEvent,
   getPRBySessionId,
   getPRByNumber,
 } from '../db/queries';
-import type { PermissionRule } from '../db/types';
 
 function fakeNotionClient(): NotionClient {
   return {

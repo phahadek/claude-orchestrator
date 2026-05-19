@@ -487,7 +487,7 @@ export function EventTranscript({
     }
     const text = lines.join('\n---\n');
 
-    let success = false;
+    let success: boolean;
     try {
       await navigator.clipboard.writeText(text);
       success = true;
@@ -501,6 +501,8 @@ export function EventTranscript({
       textarea.select();
       try {
         success = document.execCommand('copy');
+      } catch {
+        success = false;
       } finally {
         document.body.removeChild(textarea);
       }

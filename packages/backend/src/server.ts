@@ -75,7 +75,7 @@ const prReviewService = new PRReviewService(
 );
 // Constructed for its side effect: subscribes to sessionManager 'pr_opened' events.
 // The reference is intentionally not retained (kept alive via the event listener).
-const reviewOrchestrator = new ReviewOrchestrator(
+const _reviewOrchestrator = new ReviewOrchestrator(
   prReviewService,
   sessionManager,
   AUTO_REVIEW_CONCURRENCY,

@@ -69,7 +69,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
   try {
     notionTask = JSON.parse(row.raw_json) as NotionTask;
   } catch {
-    notionTask = null;
+    // leave as null
   }
 
   const notionStatus = notionTask?.status ?? '';
@@ -261,7 +261,7 @@ export function createTasksRouter(): Router {
       return;
     }
 
-    let notionTasks: NotionTask[] = [];
+    let notionTasks: NotionTask[];
     try {
       notionTasks = JSON.parse(boardCacheRow.raw_json) as NotionTask[];
     } catch {
