@@ -715,4 +715,53 @@ describe('computeSizeSignal()', () => {
   it('exposes the documented SIZE_ABSOLUTE_FLOOR threshold of 800', () => {
     expect(SIZE_ABSOLUTE_FLOOR).toBe(800);
   });
+
+  describe('with Expected size override', () => {
+    // Diff that triggers BOTH defaults: 1000 LOC (> 800 floor) AND ratio > 3
+    // (7 files touched vs 2 spec files = 3.5×). Without an override this is
+    // oversized; with a generous expectedSize it should pass.
+    function buildLargeDiff(): string {
+      const lines: string[] = [];
+      for (let i = 0; i < 7; i++) {
+        lines.push(`diff --git a/src/f${i}.ts b/src/f${i}.ts`);
+        lines.push(`--- a/src/f${i}.ts`);
+        lines.push(`+++ b/src/f${i}.ts`);
+        lines.push('@@ -1,0 +1,1000 @@');
+      }
+      // 1000 added lines spread across the diff (all go to the last file
+      // since lines after the final `diff --git` header belong to it).
+      for (let i = 0; i < 1000; i++) lines.push(`+added line ${i}`);
+      return lines.join('\n');
+    }
+
+    it('records the override on the returned signal', () => {
+      const s = computeSizeSignal('', TWO_FILE_SPEC, 1500);
+      expect(s.expectedSize).toBe(1500);
+    });
+
+    it('flags oversized when LOC exceeds the expected-size budget', () => {
+      const diff = buildLargeDiff();
+      const s = computeSizeSignal(diff, TWO_FILE_SPEC, 500);
+      expect(s.linesAdded).toBe(1000);
+      expect(s.expectedSize).toBe(500);
+      expect(isOversized(s)).toBe(true);
+    });
+
+    it('passes within an expected-size budget even when defaults would flag', () => {
+      const diff = buildLargeDiff();
+      const s = computeSizeSignal(diff, TWO_FILE_SPEC, 2000);
+      // The default heuristic would flag this: > 800 LOC AND ratio > 3.
+      expect(s.exceededAbsoluteFloor).toBe(true);
+      expect(s.oversizeRatio).toBeGreaterThan(3);
+      // Override raises the budget above the actual LOC and suppresses the file-ratio default.
+      expect(isOversized(s)).toBe(false);
+    });
+
+    it('still applies defaults when expectedSize is undefined', () => {
+      const diff = buildLargeDiff();
+      const s = computeSizeSignal(diff, TWO_FILE_SPEC);
+      expect(s.expectedSize).toBeUndefined();
+      expect(isOversized(s)).toBe(true);
+    });
+  });
 });

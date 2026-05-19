@@ -23,6 +23,12 @@ export interface NotionTaskPage {
   acceptanceCriteria: string;
   filesSection: string;
   rawMarkdown: string;
+  /**
+   * Per-task LOC budget from the Notion "Expected size" property, used as an
+   * override of the global oversized-PR heuristic. Undefined when the property
+   * is unset (most tasks fall back to the global heuristic).
+   */
+  expectedSize?: number;
 }
 
 // ─── Internal Notion API response shapes ───────────────────────────────────
@@ -42,6 +48,7 @@ interface NotionPage {
     'Depends On': { type: 'rich_text'; rich_text: NotionRichTextItem[] };
     Notes: { type: 'rich_text'; rich_text: NotionRichTextItem[] };
     PR?: { type: 'url'; url: string | null };
+    'Expected size'?: { type: 'number'; number: number | null };
     [key: string]: unknown;
   };
 }
@@ -221,6 +228,7 @@ export const TOP_LEVEL_SECTIONS = [
   'acceptance criteria',
   'files',
   'implementation notes',
+  'expected size',
 ];
 
 /** Extract the text content of a named heading section from a markdown string. */
@@ -250,6 +258,22 @@ export function parseSection(markdown: string, headingKeyword: string): string {
     }
   }
   return buf.join('\n').trim();
+}
+
+/**
+ * Extract the Expected size LOC budget from a task-page markdown body.
+ * Returns undefined when the section is missing or its content does not parse
+ * as a positive integer. Used by PRReviewService to override the global
+ * oversized-PR heuristic for tasks that legitimately need more scope.
+ */
+export function parseExpectedSize(markdown: string): number | undefined {
+  const section = parseSection(markdown, 'expected size');
+  if (!section) return undefined;
+  const match = section.match(/-?\d+/);
+  if (!match) return undefined;
+  const n = parseInt(match[0], 10);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return n;
 }
 
 function taskPageCacheKey(taskId: string): string {
@@ -339,6 +363,11 @@ export class NotionClient {
     const page = await notionRequest<NotionPage>('GET', `/pages/${taskId}`);
     const titleItems = page.properties['Task Name']?.title ?? [];
     const name = titleItems.map((t) => t.text.content).join('');
+    const expectedSizeProp = page.properties['Expected size'];
+    const expectedSize =
+      expectedSizeProp?.number != null && expectedSizeProp.number > 0
+        ? expectedSizeProp.number
+        : undefined;
 
     // Fetch page blocks (paginate)
     const lines: string[] = [];
@@ -354,7 +383,14 @@ export class NotionClient {
         resp.has_more && resp.next_cursor ? resp.next_cursor : undefined;
     } while (startCursor);
 
-    const rawMarkdown = lines.join('\n');
+    const bodyMarkdown = lines.join('\n');
+    // Embed Expected size as a top-level section so it travels through
+    // TaskBackend.fetchTaskPage() (which only returns the markdown body) and
+    // can be recovered downstream by parseExpectedSize().
+    const rawMarkdown =
+      expectedSize !== undefined
+        ? `## Expected size\n${expectedSize}\n\n${bodyMarkdown}`
+        : bodyMarkdown;
     const result: NotionTaskPage = {
       taskId,
       name,
@@ -363,6 +399,7 @@ export class NotionClient {
       acceptanceCriteria: parseSection(rawMarkdown, 'acceptance criteria'),
       filesSection: parseSection(rawMarkdown, 'files'),
       rawMarkdown,
+      expectedSize,
     };
 
     upsertTaskCache(cacheKey, JSON.stringify(result));

@@ -364,6 +364,13 @@ export interface SizeSignal {
   specFileCount: number;
   oversizeRatio: number; // filesTouched / max(specFileCount, 1); 0 when no spec list
   exceededAbsoluteFloor: boolean; // (linesAdded + linesDeleted) > 800
+  /**
+   * Per-task LOC override from the Notion "Expected size" property. When set,
+   * `isOversized` uses only `linesAdded + linesDeleted > expectedSize` and
+   * skips the absolute-floor + file-ratio defaults so refactors and
+   * infrastructure tasks aren't mis-flagged.
+   */
+  expectedSize?: number;
 }
 
 /** Absolute LOC floor above which a PR is flagged for size-proportionality review. */
@@ -403,10 +410,15 @@ function parseSpecFiles(specFilesSection: string): string[] {
  * Compute size proportionality signal for a PR diff vs. its task spec.
  * Lines added/deleted are summed across non-generated files only.
  * Files touched counts the total number of files in the diff (including generated).
+ *
+ * When `expectedSize` is provided (from the task's "Expected size" property),
+ * it is recorded on the returned signal and overrides the default heuristic in
+ * `isOversized`.
  */
 export function computeSizeSignal(
   diff: string,
   specFilesSection: string,
+  expectedSize?: number,
 ): SizeSignal {
   const specFiles = parseSpecFiles(specFilesSection);
   const specFileCount = specFiles.length;
@@ -449,11 +461,20 @@ export function computeSizeSignal(
     specFileCount,
     oversizeRatio,
     exceededAbsoluteFloor,
+    expectedSize,
   };
 }
 
-/** True when the PR exceeds either size threshold (absolute LOC or file-count ratio). */
+/**
+ * True when the PR exceeds the size budget. When `expectedSize` is set on the
+ * signal, only `linesAdded + linesDeleted > expectedSize` matters — the
+ * absolute-floor and file-ratio defaults are bypassed. Without an override,
+ * the global heuristic (>800 LOC OR >3× spec files) applies.
+ */
 export function isOversized(signal: SizeSignal): boolean {
+  if (signal.expectedSize !== undefined) {
+    return signal.linesAdded + signal.linesDeleted > signal.expectedSize;
+  }
   if (signal.exceededAbsoluteFloor) return true;
   if (signal.specFileCount > 0 && signal.oversizeRatio > SIZE_FILE_RATIO_LIMIT)
     return true;

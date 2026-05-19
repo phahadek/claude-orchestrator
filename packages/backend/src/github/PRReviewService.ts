@@ -17,7 +17,7 @@ import {
 } from './GitHubClient';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
-import { parseSection } from '../notion/NotionClient';
+import { parseSection, parseExpectedSize } from '../notion/NotionClient';
 import type { SessionManager } from '../session/SessionManager';
 import type { PullRequest, PRDiff } from './types';
 import type { ServerMessage } from '../ws/types';
@@ -94,28 +94,40 @@ export class PRReviewService {
   }
 
   /**
-   * Resolve the task spec's "Files / paths affected" section for size-signal computation.
-   * Returns an empty string when the task lookup fails so the signal still computes.
+   * Resolve the task spec inputs needed for size-signal computation: the
+   * "Files / paths affected" section and the optional "Expected size" override.
+   * Returns empty/undefined when the task lookup fails so the signal still computes.
    */
-  private async fetchSpecFilesSection(
+  private async fetchSizeSignalInputs(
     projectId: string,
     taskId: string | null,
-  ): Promise<string> {
-    if (!taskId) return '';
+  ): Promise<{ filesSection: string; expectedSize?: number }> {
+    if (!taskId) return { filesSection: '' };
     try {
       const body = await this.resolveBackend(projectId).fetchTaskPage(taskId);
-      return parseSection(body, 'files');
+      return {
+        filesSection: parseSection(body, 'files'),
+        expectedSize: parseExpectedSize(body),
+      };
     } catch (e) {
       console.warn(
         `[PRReviewService] fetchTaskPage for size signal failed (task ${taskId}):`,
         e,
       );
-      return '';
+      return { filesSection: '' };
     }
   }
 
   /** Render the size signal block shown in re-review follow-up messages. */
   private renderSizeSignalForFollowUp(signal: SizeSignal): string {
+    const budgetLine =
+      signal.expectedSize !== undefined
+        ? `- Expected size override (task budget ${signal.expectedSize}): ${signal.linesAdded + signal.linesDeleted > signal.expectedSize ? 'EXCEEDED' : 'within budget'}`
+        : `- Absolute LOC floor (>${SIZE_ABSOLUTE_FLOOR}): ${signal.exceededAbsoluteFloor ? 'EXCEEDED' : 'within budget'}`;
+    const ratioLine =
+      signal.expectedSize !== undefined
+        ? `- filesTouched / specFileCount: ${signal.specFileCount > 0 ? signal.oversizeRatio.toFixed(2) : 'n/a'} (suppressed by Expected size override)`
+        : `- filesTouched / specFileCount: ${signal.specFileCount > 0 ? signal.oversizeRatio.toFixed(2) : 'n/a'}`;
     return [
       '',
       '### Refreshed Size Signal',
@@ -123,8 +135,8 @@ export class PRReviewService {
       `- Lines deleted: ${signal.linesDeleted}`,
       `- Files touched: ${signal.filesTouched}`,
       `- Files listed in task spec: ${signal.specFileCount}`,
-      `- Absolute LOC floor (>${SIZE_ABSOLUTE_FLOOR}): ${signal.exceededAbsoluteFloor ? 'EXCEEDED' : 'within budget'}`,
-      `- filesTouched / specFileCount: ${signal.specFileCount > 0 ? signal.oversizeRatio.toFixed(2) : 'n/a'}`,
+      budgetLine,
+      ratioLine,
       `- Oversized: ${isOversized(signal) ? `YES — re-evaluate ${SIZE_DIMENSION_NAME} and confirm any overflow is necessary corollary work` : 'no'}`,
       '',
     ].join('\n');
@@ -161,11 +173,15 @@ export class PRReviewService {
         head: prData.headBranch,
       });
       // Recompute size signal against the FULL refreshed diff each iteration.
-      const specFilesSection = await this.fetchSpecFilesSection(
+      const { filesSection, expectedSize } = await this.fetchSizeSignalInputs(
         projectId,
         prRow.notion_task_id,
       );
-      const sizeSignal = computeSizeSignal(diffData.diff, specFilesSection);
+      const sizeSignal = computeSizeSignal(
+        diffData.diff,
+        filesSection,
+        expectedSize,
+      );
       const followUp = [
         `The code session has pushed new commits to PR #${prNumber}.`,
         `Please re-review the updated diff against the same task spec.`,
@@ -225,6 +241,7 @@ export class PRReviewService {
     const sizeSignal = computeSizeSignal(
       diffData.diff,
       parseSection(taskBody, 'files'),
+      parseExpectedSize(taskBody),
     );
 
     // Case 2: Dead existing review session — resume via sendOrResume with the
@@ -388,11 +405,15 @@ export class PRReviewService {
     // Re-review uses the FULL PR diff (compare endpoint), not just the incremental
     // delta, so the size signal reflects total churn across the lifetime of the PR.
     const diffData = await this.github.fetchDiff(prNumber, repo, branches);
-    const specFilesSection = await this.fetchSpecFilesSection(
+    const { filesSection, expectedSize } = await this.fetchSizeSignalInputs(
       projectId,
       pr.notion_task_id,
     );
-    const sizeSignal = computeSizeSignal(diffData.diff, specFilesSection);
+    const sizeSignal = computeSizeSignal(
+      diffData.diff,
+      filesSection,
+      expectedSize,
+    );
 
     const followUp = [
       `The code session has pushed new commits to PR #${prNumber}.`,
@@ -687,6 +708,7 @@ export class PRReviewService {
     const sizeSignal = computeSizeSignal(
       diff.diff,
       parseSection(taskBody, 'files'),
+      parseExpectedSize(taskBody),
     );
     return `You are a code reviewer. Compare the following GitHub PR against its task specification.
 
@@ -714,23 +736,36 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         ? signal.oversizeRatio.toFixed(2)
         : 'n/a (no spec file list)';
     const flagged = isOversized(signal);
+    const totalLoc = signal.linesAdded + signal.linesDeleted;
     const reasons: string[] = [];
-    if (signal.exceededAbsoluteFloor) {
-      reasons.push(
-        `lines added+deleted (${signal.linesAdded + signal.linesDeleted}) exceeds floor of ${SIZE_ABSOLUTE_FLOOR}`,
-      );
-    }
-    if (
-      signal.specFileCount > 0 &&
-      signal.oversizeRatio > SIZE_FILE_RATIO_LIMIT
-    ) {
-      reasons.push(
-        `filesTouched/specFileCount ratio (${signal.oversizeRatio.toFixed(2)}) exceeds ${SIZE_FILE_RATIO_LIMIT}×`,
-      );
+    if (signal.expectedSize !== undefined) {
+      if (totalLoc > signal.expectedSize) {
+        reasons.push(
+          `lines added+deleted (${totalLoc}) exceeds task-level Expected size budget of ${signal.expectedSize}`,
+        );
+      }
+    } else {
+      if (signal.exceededAbsoluteFloor) {
+        reasons.push(
+          `lines added+deleted (${totalLoc}) exceeds floor of ${SIZE_ABSOLUTE_FLOOR}`,
+        );
+      }
+      if (
+        signal.specFileCount > 0 &&
+        signal.oversizeRatio > SIZE_FILE_RATIO_LIMIT
+      ) {
+        reasons.push(
+          `filesTouched/specFileCount ratio (${signal.oversizeRatio.toFixed(2)}) exceeds ${SIZE_FILE_RATIO_LIMIT}×`,
+        );
+      }
     }
     const flag = flagged
       ? `⚠️ OVERSIZED — ${reasons.join('; ')}. Review whether the overflow is necessary corollary work.`
       : 'In budget vs. task spec.';
+    const budgetLine =
+      signal.expectedSize !== undefined
+        ? `- Expected size override (task budget ${signal.expectedSize}, added+deleted=${totalLoc}): ${totalLoc > signal.expectedSize ? 'EXCEEDED' : 'within budget'} — file-ratio default suppressed`
+        : `- Absolute LOC floor (added+deleted > ${SIZE_ABSOLUTE_FLOOR}): ${signal.exceededAbsoluteFloor ? 'EXCEEDED' : 'within budget'}`;
     return [
       '## Size Signal',
       `- Lines added: ${signal.linesAdded}`,
@@ -738,7 +773,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       `- Files touched: ${signal.filesTouched}`,
       `- Files listed in task spec: ${signal.specFileCount}`,
       `- filesTouched / specFileCount: ${ratio}`,
-      `- Absolute LOC floor (added+deleted > ${SIZE_ABSOLUTE_FLOOR}): ${signal.exceededAbsoluteFloor ? 'EXCEEDED' : 'within budget'}`,
+      budgetLine,
       `- Verdict: ${flag}`,
       '',
       'Generated-file diffs (package-lock.json, lockfiles, .snap, .svg) are excluded from the LOC count.',

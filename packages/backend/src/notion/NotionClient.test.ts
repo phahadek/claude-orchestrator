@@ -13,7 +13,11 @@ vi.mock('../db/queries', () => ({
   getTaskCache: vi.fn(() => null),
 }));
 
-import { parseSection, parseDependsOn } from './NotionClient';
+import {
+  parseSection,
+  parseDependsOn,
+  parseExpectedSize,
+} from './NotionClient';
 
 const source = fs.readFileSync(
   path.join(__dirname, 'NotionClient.ts'),
@@ -138,5 +142,34 @@ describe('parseDependsOn()', () => {
 
   it('drops empty segments produced by stray delimiters', () => {
     expect(parseDependsOn('abc123,,def456|')).toEqual(['abc123', 'def456']);
+  });
+});
+
+// ─── parseExpectedSize unit tests ────────────────────────────────────────────
+
+describe('parseExpectedSize()', () => {
+  it('returns undefined when the section is absent', () => {
+    expect(parseExpectedSize(SAMPLE_MD)).toBeUndefined();
+  });
+
+  it('returns the numeric value from a top-level Expected size section', () => {
+    const md = `## Expected size\n1500\n\n## Summary\nbody`;
+    expect(parseExpectedSize(md)).toBe(1500);
+  });
+
+  it('does not bleed into adjacent sections when Summary follows', () => {
+    const md = `## Expected size\n1500\n\n## Summary\nThis is the summary.`;
+    expect(parseSection(md, 'summary')).toBe('This is the summary.');
+    expect(parseSection(md, 'expected size')).toBe('1500');
+  });
+
+  it('ignores zero/negative values (treated as unset)', () => {
+    expect(parseExpectedSize(`## Expected size\n0\n`)).toBeUndefined();
+    expect(parseExpectedSize(`## Expected size\n-100\n`)).toBeUndefined();
+  });
+
+  it('returns undefined when the section is empty or non-numeric', () => {
+    expect(parseExpectedSize(`## Expected size\n\n## Summary\nx`)).toBeUndefined();
+    expect(parseExpectedSize(`## Expected size\nlarge\n`)).toBeUndefined();
   });
 });
