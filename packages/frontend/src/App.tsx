@@ -67,7 +67,7 @@ function resolveActiveBoardId(project: ProjectConfig): string {
 }
 
 export default function App() {
-  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, prRefreshTrigger, lastPrReviewEvent, lastReviewEscalation, incompleteReviews, lastTaskUpdate, taskListRefreshTrigger } = useSessionStore();
+  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, prRefreshTrigger, lastPrReviewEvent, lastReviewEscalation, lastStuckNotification, lastStuckPaused, lastStuckKilled, incompleteReviews, lastTaskUpdate, taskListRefreshTrigger } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const activeProjectIdRef = useRef<string | null>(null);
@@ -308,6 +308,54 @@ export default function App() {
     ]);
     setTimeout(() => dismissNotification(notifId), 10000);
   }, [lastReviewEscalation, dismissNotification]);
+
+  useEffect(() => {
+    if (!lastStuckNotification) return;
+    const { sessionId, message, receivedAt } = lastStuckNotification;
+    const notifId = `stuck-notify-${sessionId}-${receivedAt}`;
+    setNotifications((prev) => [
+      ...prev,
+      {
+        id: notifId,
+        message,
+        status: 'review',
+        onClick: () => window.dispatchEvent(new CustomEvent('selectSession', { detail: { sessionId } })),
+      },
+    ]);
+    setTimeout(() => dismissNotification(notifId), 10000);
+  }, [lastStuckNotification, dismissNotification]);
+
+  useEffect(() => {
+    if (!lastStuckPaused) return;
+    const { sessionId, taskName, receivedAt } = lastStuckPaused;
+    const notifId = `stuck-paused-${sessionId}-${receivedAt}`;
+    setNotifications((prev) => [
+      ...prev,
+      {
+        id: notifId,
+        message: `⏸ ${taskName} paused — supervisor flagged this session`,
+        status: 'review',
+        onClick: () => window.dispatchEvent(new CustomEvent('selectSession', { detail: { sessionId } })),
+      },
+    ]);
+    setTimeout(() => dismissNotification(notifId), 10000);
+  }, [lastStuckPaused, dismissNotification]);
+
+  useEffect(() => {
+    if (!lastStuckKilled) return;
+    const { sessionId, taskName, receivedAt } = lastStuckKilled;
+    const notifId = `stuck-killed-${sessionId}-${receivedAt}`;
+    setNotifications((prev) => [
+      ...prev,
+      {
+        id: notifId,
+        message: `🛑 ${taskName} hard-stopped — session continued tool use after pause`,
+        status: 'review',
+        onClick: () => window.dispatchEvent(new CustomEvent('selectSession', { detail: { sessionId } })),
+      },
+    ]);
+    setTimeout(() => dismissNotification(notifId), 10000);
+  }, [lastStuckKilled, dismissNotification]);
 
   const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();

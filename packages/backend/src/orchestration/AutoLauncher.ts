@@ -5,7 +5,7 @@ import { getAllProjects, runtimeSettings } from '../config';
 import type { ProjectConfig } from '../config';
 import type { ResolvedTask } from '../notion/types';
 import type { ServerMessage } from '../ws/types';
-import { hasActiveSessionForTask } from '../db/queries';
+import { hasActiveSessionForTask, getPausedPrReasonForTask } from '../db/queries';
 
 const READY_STATUS = '🗂️ Ready';
 const CODE_TYPE = '💻 Code';
@@ -139,6 +139,9 @@ export class AutoLauncher {
     // property, the user has explicitly held it back from auto-launch.
     const maybePauseReason = (task as { pause_reason?: string | null }).pause_reason;
     if (maybePauseReason != null && maybePauseReason !== '') return false;
+    // Also skip if the task's most recent PR is paused (e.g. stuck_timeout)
+    // so we don't relaunch a session that was force-paused.
+    if (getPausedPrReasonForTask(task.id) != null) return false;
     return true;
   }
 
