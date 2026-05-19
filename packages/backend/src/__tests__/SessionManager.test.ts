@@ -445,3 +445,157 @@ describe('server.ts startup sequence', () => {
     expect(resumeIdx).toBeGreaterThan(importAllIdx);
   });
 });
+
+// ── AC: resumeSession() — resumability pre-check skips spawn for missing worktree ──
+describe('SessionManager.resumeSession() — resumability pre-check', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('checks worktree existence with fs.existsSync before constructing AgentSession', () => {
+    // The pre-check must use fs.existsSync on row.worktree_path
+    expect(source).toMatch(/fs\.existsSync\s*\(\s*worktreePath\s*\)/);
+    // The pre-check appears before "new AgentSession(" in resumeSession()
+    const resumeSessionIdx = source.indexOf('private async resumeSession(');
+    const newAgentSessionIdx = source.indexOf('new AgentSession(', resumeSessionIdx);
+    const preCheckIdx = source.indexOf('resumability pre-check', resumeSessionIdx);
+    expect(preCheckIdx).toBeGreaterThan(-1);
+    expect(preCheckIdx).toBeLessThan(newAgentSessionIdx);
+  });
+
+  it('marks the session as error when the worktree is missing', () => {
+    // The pre-check failure path must call updateSessionStatus(..., 'error', ...)
+    // and emit session_ended. It must also return early (skip spawn).
+    const resumeSessionIdx = source.indexOf('private async resumeSession(');
+    const preCheckIdx = source.indexOf('resumability pre-check failed', resumeSessionIdx);
+    expect(preCheckIdx).toBeGreaterThan(-1);
+    const newAgentSessionIdx = source.indexOf('new AgentSession(', resumeSessionIdx);
+    const preCheckBlock = source.slice(preCheckIdx, newAgentSessionIdx);
+    expect(preCheckBlock).toMatch(/updateSessionStatus\s*\(\s*row\.session_id\s*,\s*'error'/);
+    expect(preCheckBlock).toMatch(/session_ended/);
+    expect(preCheckBlock).toMatch(/return\s*;/);
+  });
+
+  it('does NOT auto-create a fresh worktree when the original is missing', () => {
+    // The legacy "create new worktree on resume" branch must be removed —
+    // a missing worktree should result in error, not a fresh worktree based on origin/dev.
+    const resumeSessionIdx = source.indexOf('private async resumeSession(');
+    const resumeOrphanIdx = source.indexOf('resumeOrphanSessions', resumeSessionIdx);
+    const resumeSessionBlock = source.slice(resumeSessionIdx, resumeOrphanIdx);
+    expect(resumeSessionBlock).not.toMatch(/worktree-resume-/);
+    expect(resumeSessionBlock).not.toMatch(/git worktree add\b/);
+  });
+});
+
+// ── AC: resumeSession() carries forward row.pr_url to AgentSession.prUrl ────
+describe('SessionManager.resumeSession() — pr_url carry-forward', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('assigns row.pr_url to session.prUrl after AgentSession construction', () => {
+    // session.prUrl is set from row.pr_url so cleanupWorktree(prUrl) does NOT
+    // delete the branch on the next clean exit.
+    const resumeSessionIdx = source.indexOf('private async resumeSession(');
+    const resumeOrphanIdx = source.indexOf('resumeOrphanSessions', resumeSessionIdx);
+    const resumeSessionBlock = source.slice(resumeSessionIdx, resumeOrphanIdx);
+    expect(resumeSessionBlock).toMatch(/session\.prUrl\s*=\s*row\.pr_url/);
+  });
+
+  it('sendOrResume() also assigns row.pr_url to session.prUrl', () => {
+    const sendOrResumeIdx = source.indexOf('async sendOrResume');
+    const shutdownAllIdx = source.indexOf('async shutdownAll', sendOrResumeIdx);
+    const sendOrResumeBlock = source.slice(sendOrResumeIdx, shutdownAllIdx);
+    expect(sendOrResumeBlock).toMatch(/session\.prUrl\s*=\s*row\.pr_url/);
+  });
+});
+
+// ── AC: resumeOrphanSessions() only re-spawns running sessions ──────────────
+describe('SessionManager.resumeOrphanSessions() — only running sessions', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('does NOT query for terminal-status sessions (done/killed/error)', () => {
+    // The DB query in resumeOrphanSessions() must be limited to status='running'.
+    // Sessions in done/killed/error remain in their terminal state.
+    expect(source).toMatch(/getSessionsByStatus\s*\(\s*\[\s*['"]running['"]\s*\]\s*\)/);
+    expect(source).not.toMatch(/getSessionsByStatus\s*\(\s*\[\s*['"]done['"]/);
+    expect(source).not.toMatch(/getSessionsByStatus\s*\(\s*\[\s*['"]killed['"]/);
+    expect(source).not.toMatch(/getSessionsByStatus\s*\(\s*\[\s*['"]error['"]/);
+  });
+});
+
+// ── AC: CliSessionRunner — stdin IO errors do not throw ──────────────────────
+describe('CliSessionRunner — stdin error handling', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'CliSessionRunner.ts'),
+    'utf-8',
+  );
+
+  it('wraps stdin.write in sendMessage() with try/catch', () => {
+    const sendMessageIdx = source.indexOf('sendMessage(message: string)');
+    const endSessionIdx = source.indexOf('endSession()', sendMessageIdx);
+    const sendMessageBlock = source.slice(sendMessageIdx, endSessionIdx);
+    expect(sendMessageBlock).toMatch(/try\s*\{[\s\S]*?stdin\.write[\s\S]*?\}\s*catch/);
+  });
+
+  it('wraps the initial-prompt stdin.write in run() with try/catch', () => {
+    // The initial-prompt write at run() must be inside a try/catch so a
+    // synchronous EPIPE/ERR_STREAM_DESTROYED does not throw.
+    const initialPromptIdx = source.indexOf('Send initial prompt via stdin');
+    const errorListenerIdx = source.indexOf('spawn error', initialPromptIdx);
+    const block = source.slice(initialPromptIdx, errorListenerIdx);
+    expect(block).toMatch(/try\s*\{[\s\S]*?stdin!\.write[\s\S]*?\}\s*catch/);
+  });
+
+  it('attaches an error listener to this.proc.stdin after spawn', () => {
+    // Async stdin errors must not bubble up as unhandled events on the process.
+    expect(source).toMatch(/this\.proc\.stdin!\.on\s*\(\s*['"]error['"]/);
+  });
+});
+
+// ── AC: CliSessionRunner.sendMessage() returns cleanly on destroyed stdin ────
+describe('CliSessionRunner.sendMessage() — destroyed stdin', () => {
+  it('returns cleanly without throwing when stdin.write throws synchronously', async () => {
+    // Import after vi.mock setup elsewhere — fresh-import here keeps the test
+    // independent of any other suite's mock state.
+    const { CliSessionRunner } = await import('../session/CliSessionRunner');
+    const runner = new CliSessionRunner('test-session-id-abc');
+    // Inject a fake proc with a writable stdin that throws synchronously
+    // (mimicking EPIPE / ERR_STREAM_DESTROYED from a closed pipe).
+    (runner as unknown as { proc: unknown }).proc = {
+      stdin: {
+        writable: true,
+        write: () => {
+          throw new Error('write EPIPE');
+        },
+      },
+    };
+    expect(() => runner.sendMessage('hello')).not.toThrow();
+  });
+
+  it('returns cleanly when stdin is not writable (no-op early return)', async () => {
+    const { CliSessionRunner } = await import('../session/CliSessionRunner');
+    const runner = new CliSessionRunner('test-session-id-xyz');
+    (runner as unknown as { proc: unknown }).proc = {
+      stdin: {
+        writable: false,
+        write: () => {
+          throw new Error('should not be called');
+        },
+      },
+    };
+    expect(() => runner.sendMessage('hello')).not.toThrow();
+  });
+
+  it('returns cleanly when proc is null (never spawned)', async () => {
+    const { CliSessionRunner } = await import('../session/CliSessionRunner');
+    const runner = new CliSessionRunner('test-session-id-null');
+    // proc is null by default
+    expect(() => runner.sendMessage('hello')).not.toThrow();
+  });
+});
