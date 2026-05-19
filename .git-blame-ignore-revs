@@ -4,3 +4,5 @@
 #
 # Each entry below is a 40-character commit SHA on its own line.
 
+# style: apply prettier formatting (mass change)
+21c4680d23249776f177a03bedde629023c7c3c1
