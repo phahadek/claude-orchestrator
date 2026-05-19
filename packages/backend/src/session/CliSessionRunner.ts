@@ -63,12 +63,22 @@ export class CliSessionRunner implements ISessionRunner {
       },
     );
 
+    // Async stdin errors (e.g. EPIPE when the child exits) must not bubble up
+    // as unhandled 'error' events on the process.
+    this.proc.stdin!.on('error', (err: Error) => {
+      log(this.sessionId, `stdin error (ignored): ${err.message}`);
+    });
+
     // Send initial prompt via stdin (required by --input-format stream-json).
     // Resumed sessions skip the initial prompt — the caller delivers via sendMessage().
     if (!resumeSessionId && initialPrompt) {
-      this.proc.stdin!.write(
-        JSON.stringify({ type: 'user', message: { role: 'user', content: initialPrompt } }) + '\n',
-      );
+      try {
+        this.proc.stdin!.write(
+          JSON.stringify({ type: 'user', message: { role: 'user', content: initialPrompt } }) + '\n',
+        );
+      } catch (err) {
+        log(this.sessionId, `initial prompt stdin.write failed (ignored): ${(err as Error).message}`);
+      }
     }
 
     this.proc.on('error', (err) => {
@@ -113,9 +123,13 @@ export class CliSessionRunner implements ISessionRunner {
 
   sendMessage(message: string): void {
     if (!this.proc?.stdin?.writable) return;
-    this.proc.stdin.write(
-      JSON.stringify({ type: 'user', message: { role: 'user', content: message } }) + '\n',
-    );
+    try {
+      this.proc.stdin.write(
+        JSON.stringify({ type: 'user', message: { role: 'user', content: message } }) + '\n',
+      );
+    } catch (err) {
+      log(this.sessionId, `sendMessage stdin.write failed (ignored): ${(err as Error).message}`);
+    }
   }
 
   endSession(): void {

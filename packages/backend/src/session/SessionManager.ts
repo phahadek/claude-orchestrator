@@ -476,31 +476,34 @@ export class SessionManager extends EventEmitter {
     }
 
     const projectDir = normalizePath(project.projectDir);
-    let worktreePath = row.worktree_path ?? '';
-    let branchName: string;
+    const worktreePath = row.worktree_path ?? '';
 
-    // Re-use the existing worktree if it is still on disk; otherwise create a fresh one.
-    if (worktreePath && fs.existsSync(worktreePath)) {
-      // Derive the branch from the worktree's HEAD so cleanupWorktree can delete it.
-      try {
-        branchName = execSync('git rev-parse --abbrev-ref HEAD', { cwd: worktreePath, encoding: 'utf8' }).trim();
-      } catch {
-        branchName = `session/${row.session_id}`;
-      }
-      console.log(`[SessionManager] resumeSession ${row.session_id}: re-using worktree ${worktreePath} (branch=${branchName})`);
-    } else {
-      branchName = `worktree-resume-${row.session_id.slice(0, 8)}`;
-      worktreePath = path.join(projectDir, '.claude', 'worktrees', row.session_id);
-      console.log(`[SessionManager] resumeSession ${row.session_id}: creating new worktree ${worktreePath} (branch=${branchName})`);
-      try {
-        execSync('git fetch origin dev', { cwd: projectDir, timeout: 30_000 });
-      } catch (fetchErr) {
-        console.warn(`[SessionManager] resumeSession: git fetch origin dev failed (continuing with local ref): ${fetchErr}`);
-      }
-      execSync(`git worktree add "${worktreePath}" -b "${branchName}" origin/dev`, {
-        cwd: projectDir,
-      });
+    // Resumability pre-check: claude --resume requires the original worktree as
+    // cwd. If the worktree was deleted (e.g. PR merged and the orchestrator
+    // cleaned it up), the spawn would exit immediately and the 30s timeout
+    // fallback would fire. Detect this upfront and mark the session as error
+    // without spawning anything.
+    if (!worktreePath || !fs.existsSync(worktreePath)) {
+      console.warn(
+        `[SessionManager] resumability pre-check failed for ${row.session_id}: worktree missing (${worktreePath}) — marking error`,
+      );
+      updateSessionStatus(row.session_id, 'error', Date.now());
+      this.emit('message', {
+        type: 'session_ended',
+        sessionId: row.session_id,
+        status: 'error',
+      } satisfies ServerMessage);
+      return;
     }
+
+    // Derive the branch from the worktree's HEAD so cleanupWorktree can delete it.
+    let branchName: string;
+    try {
+      branchName = execSync('git rev-parse --abbrev-ref HEAD', { cwd: worktreePath, encoding: 'utf8' }).trim();
+    } catch {
+      branchName = `session/${row.session_id}`;
+    }
+    console.log(`[SessionManager] resumeSession ${row.session_id}: re-using worktree ${worktreePath} (branch=${branchName})`);
 
     // Load per-project orchestrator config so resumed sessions get the same
     // extra allowed tools (e.g. Bash(dotnet:*)) as freshly spawned ones.
@@ -528,6 +531,13 @@ export class SessionManager extends EventEmitter {
       resumeRunner,
       row.project_id ?? '',
     );
+
+    // Carry forward the PR url so cleanupWorktree does NOT delete the branch on
+    // the next clean exit. Without this, a resumed session loses track of the
+    // PR it opened pre-restart and the branch is wiped along with the worktree.
+    if (row.pr_url) {
+      session.prUrl = row.pr_url;
+    }
 
     this.sessions.set(row.session_id, session);
 
@@ -849,6 +859,12 @@ export class SessionManager extends EventEmitter {
       sendOrResumeRunner,
       row.project_id ?? '',
     );
+
+    // Carry forward the PR url so cleanupWorktree does NOT delete the branch on
+    // the next clean exit.
+    if (row.pr_url) {
+      session.prUrl = row.pr_url;
+    }
 
     const startedAt = Date.now();
     insertSession({
