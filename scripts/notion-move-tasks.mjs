@@ -23,12 +23,15 @@
  *   NOTION_API_KEY      Required. Notion integration token.
  *
  * Known limitations:
- *   - Table blocks with children may fail to copy (Notion API limitation).
- *     The script will create the page without content and log a warning.
  *   - Relation properties (Depends On as relation type) are copied as-is
  *     but the relation targets still point to the source database's pages.
  *   - The new page gets a new ID. Any external references to the old ID
  *     will point to the archived page.
+ *
+ * Failure handling:
+ *   - If the content copy step fails, the source page is NOT archived.
+ *     The new (content-less) page in the target database is left in place
+ *     and a warning is logged so the move can be retried or completed manually.
  *
  * Examples:
  *   # Move 3 tasks to M2a board
@@ -123,6 +126,33 @@ async function api(method, path, body) {
     throw new Error(`${res.status}: ${text.slice(0, 300)}`);
   }
   return res.json();
+}
+
+// ── Fetch all children of a block (paginated) ────────────────────────
+async function fetchAllChildren(blockId) {
+  const all = [];
+  let cursor;
+  do {
+    const url = `/blocks/${blockId}/children?page_size=100${cursor ? '&start_cursor=' + cursor : ''}`;
+    const data = await api('GET', url);
+    all.push(...data.results);
+    cursor = data.has_more ? data.next_cursor : undefined;
+  } while (cursor);
+  return all;
+}
+
+// ── Expand table blocks with their table_row children ────────────────
+/**
+ * Notion's POST /blocks/{id}/children rejects a table block whose
+ * `table.children` is missing or null — it must be an array of table_row
+ * children. The list-children response does not embed those rows, so we
+ * fetch them and attach them to the table block before sending the create.
+ */
+async function expandTableBlock(block) {
+  if (block?.type !== 'table' || !block.has_children) return;
+  const rows = await fetchAllChildren(block.id);
+  block.table = block.table ?? {};
+  block.table.children = rows;
 }
 
 // ── Block cleaning ───────────────────────────────────────────────────
@@ -222,6 +252,9 @@ async function moveTask(pageId) {
       const url = `/blocks/${pageId}/children?page_size=50${cursor ? '&start_cursor=' + cursor : ''}`;
       const data = await api('GET', url);
       if (data.results.length > 0) {
+        for (const block of data.results) {
+          await expandTableBlock(block);
+        }
         const cleaned = data.results.map(cleanBlock);
         await api('PATCH', `/blocks/${newPage.id}/children`, { children: cleaned });
       }
@@ -229,17 +262,23 @@ async function moveTask(pageId) {
     } while (cursor);
   } catch (e) {
     console.warn(`  ⚠ Content copy failed for "${title}": ${e.message}`);
-    console.warn(`    Page created without content — copy manually if needed.`);
+    console.warn(`    Source page kept; new (empty) page left at ${newPage.id} — retry or copy manually.`);
     contentCopied = false;
   }
 
-  // 4. Archive source page
-  if (!noArchive) {
+  // 4. Archive source page — only if the content copy succeeded.
+  //    Archiving after a partial copy is lossy: the source leaves the active
+  //    view and the new page is empty, so we leave the source in place and
+  //    let the operator retry or finish the move manually.
+  const shouldArchive = !noArchive && contentCopied;
+  if (shouldArchive) {
     await api('PATCH', `/pages/${pageId}`, { archived: true });
   }
 
   const status = contentCopied ? '✅' : '⚠️';
-  const archiveNote = noArchive ? ' (source kept)' : ' (source archived)';
+  const archiveNote = shouldArchive
+    ? ' (source archived)'
+    : (contentCopied ? ' (source kept)' : ' (source kept — copy failed)');
   console.log(`${status} ${title} → ${newPage.id}${archiveNote}`);
 
   return { title, success: true, newId: newPage.id, contentCopied };
