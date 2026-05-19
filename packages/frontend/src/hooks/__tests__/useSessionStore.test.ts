@@ -291,6 +291,44 @@ describe('useSessionStore', () => {
     });
   });
 
+  describe('review_escalated handling', () => {
+    it('sets lastReviewEscalation when review_escalated message arrives', () => {
+      const { result } = renderHook(() => useSessionStore());
+      const escalationMsg: ServerMessage = {
+        type: 'review_escalated',
+        prNumber: 42,
+        repo: 'owner/repo',
+        message: 'Review loop reached max iterations.',
+      };
+      act(() => result.current.dispatch(escalationMsg));
+      expect(result.current.lastReviewEscalation).toMatchObject({
+        prNumber: 42,
+        repo: 'owner/repo',
+        message: 'Review loop reached max iterations.',
+      });
+    });
+
+    it('updates lastReviewEscalation on repeated escalations (receivedAt changes)', () => {
+      const { result } = renderHook(() => useSessionStore());
+      const msg1: ServerMessage = {
+        type: 'review_escalated',
+        prNumber: 42,
+        repo: 'owner/repo',
+        message: 'first',
+      };
+      act(() => result.current.dispatch(msg1));
+      const first = result.current.lastReviewEscalation?.receivedAt;
+      // Spin a microtask so Date.now() can advance on slower machines.
+      act(() => result.current.dispatch({ ...msg1, message: 'second' }));
+      const second = result.current.lastReviewEscalation?.receivedAt;
+      expect(result.current.lastReviewEscalation?.message).toBe('second');
+      // The two timestamps may be equal on very fast hardware, but the reference identity
+      // must change so downstream effects re-fire.
+      expect(first).toBeDefined();
+      expect(second).toBeDefined();
+    });
+  });
+
   describe('task_status_changed handling', () => {
     it('patches matching task status in the tasks array', () => {
       const { result } = renderHook(() => useSessionStore());

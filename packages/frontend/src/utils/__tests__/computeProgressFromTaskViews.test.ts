@@ -8,6 +8,7 @@ function makeTaskView(taskId: string, notionStatus: string, wave = 1): TaskView 
     taskName: `Task ${taskId}`,
     notionStatus,
     displayStatus: 'ready',
+    pauseReason: null,
     priority: '🟡 Medium',
     notionUrl: `https://notion.so/${taskId}`,
     taskType: '💻 Code',

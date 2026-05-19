@@ -56,7 +56,8 @@ vi.mock('../db/db.js', async () => {
       mergeable              INTEGER,
       merge_state            TEXT,
       merge_state_checked_at TEXT,
-      pending_push           INTEGER NOT NULL DEFAULT 0
+      pending_push           INTEGER NOT NULL DEFAULT 0,
+      pause_reason           TEXT
     );
     CREATE TABLE IF NOT EXISTS session_events (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,

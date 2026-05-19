@@ -11,6 +11,7 @@ function makeInput(overrides: Partial<TaskStatusInput> = {}): TaskStatusInput {
     reviewVerdict: null,
     reviewIterationCount: 0,
     reviewIterationCap: 3,
+    pauseReason: null,
     ...overrides,
   };
 }
@@ -102,26 +103,34 @@ describe('deriveDisplayStatus', () => {
 
   // ─── needs_attention ───────────────────────────────────────────────────────
 
-  it("returns 'needs_attention' when notionStatus is '👀 In Review' and reviewIterationCount >= reviewIterationCap", () => {
+  it("returns 'needs_attention' when notionStatus is '👀 In Review' and pauseReason is 'max_reviews'", () => {
     expect(
       deriveDisplayStatus(
-        makeInput({ notionStatus: '👀 In Review', prState: 'open', reviewIterationCount: 3, reviewIterationCap: 3 }),
+        makeInput({ notionStatus: '👀 In Review', prState: 'open', pauseReason: 'max_reviews' }),
       ),
     ).toBe('needs_attention');
   });
 
-  it("returns 'needs_attention' when notionStatus is '👀 In Review' and count exceeds cap", () => {
+  it("returns 'needs_attention' for any non-null pauseReason", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({ notionStatus: '👀 In Review', prState: 'open', pauseReason: 'stuck_timeout' }),
+      ),
+    ).toBe('needs_attention');
+  });
+
+  it("returns 'needs_attention' even when pauseReason is set outside of In Review", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({ notionStatus: '🔄 In Progress', pauseReason: 'stuck_timeout' }),
+      ),
+    ).toBe('needs_attention');
+  });
+
+  it("does NOT return 'needs_attention' when pauseReason is null", () => {
     expect(
       deriveDisplayStatus(
         makeInput({ notionStatus: '👀 In Review', prState: 'open', reviewIterationCount: 5, reviewIterationCap: 3 }),
-      ),
-    ).toBe('needs_attention');
-  });
-
-  it("does NOT return 'needs_attention' when count is below cap", () => {
-    expect(
-      deriveDisplayStatus(
-        makeInput({ notionStatus: '👀 In Review', prState: 'open', reviewIterationCount: 2, reviewIterationCap: 3 }),
       ),
     ).toBe('in_review');
   });
@@ -134,7 +143,7 @@ describe('deriveDisplayStatus', () => {
     ).toBe('ready_to_merge');
   });
 
-  it("returns 'ready_to_merge' even when iteration cap is reached if verdict is approved", () => {
+  it("returns 'ready_to_merge' even when pauseReason is set if verdict is approved", () => {
     // ready_to_merge takes priority over needs_attention
     expect(
       deriveDisplayStatus(
@@ -142,8 +151,7 @@ describe('deriveDisplayStatus', () => {
           notionStatus: '👀 In Review',
           prState: 'open',
           reviewVerdict: 'approved',
-          reviewIterationCount: 5,
-          reviewIterationCap: 3,
+          pauseReason: 'max_reviews',
         }),
       ),
     ).toBe('ready_to_merge');
@@ -210,8 +218,7 @@ describe('deriveDisplayStatus', () => {
           notionStatus: '👀 In Review',
           prState: 'open',
           reviewVerdict: 'approved',
-          reviewIterationCount: 10,
-          reviewIterationCap: 3,
+          pauseReason: 'max_reviews',
         }),
       ),
     ).toBe('ready_to_merge');
@@ -220,7 +227,7 @@ describe('deriveDisplayStatus', () => {
   it('needs_attention takes priority over in_review (within In Review)', () => {
     expect(
       deriveDisplayStatus(
-        makeInput({ notionStatus: '👀 In Review', prState: 'open', reviewIterationCount: 3, reviewIterationCap: 3 }),
+        makeInput({ notionStatus: '👀 In Review', prState: 'open', pauseReason: 'max_reviews' }),
       ),
     ).toBe('needs_attention');
   });

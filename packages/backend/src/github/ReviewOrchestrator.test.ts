@@ -9,6 +9,8 @@ vi.mock('../db/queries.js', () => ({
   getSetting: vi.fn().mockReturnValue(undefined),
   incrementReviewIteration: vi.fn(),
   updatePRDraftStatus: vi.fn(),
+  setPendingPush: vi.fn(),
+  setPauseReason: vi.fn(),
 }));
 
 const projectFixture = {
@@ -29,7 +31,7 @@ vi.mock('../config.js', () => ({
 }));
 
 import { ReviewOrchestrator } from './ReviewOrchestrator';
-import { setPRReviewResult, getPRByNumber, incrementReviewIteration, updatePRDraftStatus } from '../db/queries';
+import { setPRReviewResult, getPRByNumber, incrementReviewIteration, updatePRDraftStatus, setPauseReason } from '../db/queries';
 import type { PRReviewService } from './PRReviewService';
 import type { GitHubClient } from './GitHubClient';
 import type { PullRequest } from './types';
@@ -334,6 +336,20 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
       prNumber: 1,
       repo: 'owner/repo',
     });
+  });
+
+  it('sets pause_reason = "max_reviews" when iteration cap escalation fires', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, review_iteration: 3 } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(1, 'owner/repo', 'max_reviews');
   });
 
   it('does not escalate when iteration is below cap', async () => {

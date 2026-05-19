@@ -11,6 +11,7 @@ function makeTask(overrides?: Partial<TaskView>): TaskView {
     taskName: 'Implement something',
     notionStatus: '🔄 In Progress',
     displayStatus: 'in_progress',
+    pauseReason: null,
     priority: '🔴 High',
     notionUrl: 'https://notion.so/task-1',
     taskType: '💻 Code',

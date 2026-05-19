@@ -7,11 +7,14 @@ export type DisplayStatus =
   | 'done'
   | 'backlog';
 
+export type PauseReason = 'max_reviews' | 'stuck_timeout';
+
 export interface TaskView {
   taskId: string;
   taskName: string;
   notionStatus: string;
   displayStatus: DisplayStatus;
+  pauseReason: PauseReason | null;
   priority: string;
   notionUrl: string;
   taskType: string;

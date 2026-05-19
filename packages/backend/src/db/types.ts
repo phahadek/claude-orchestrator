@@ -158,6 +158,14 @@ export type NewMilestoneRow = Omit<MilestoneRow, 'created_at' | 'updated_at' | '
 
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
+/**
+ * Closed set of reasons a task is paused awaiting human attention. Stored as
+ * plain TEXT in SQLite; the union gives compile-time safety in TS code paths.
+ * Extend this list as new auto-orchestration triggers land (ci_failing,
+ * auto_merge_failed, pr_closed).
+ */
+export type PauseReason = 'max_reviews' | 'stuck_timeout';
+
 export interface PullRequestRow {
   id: number;
   pr_number: number;
@@ -185,4 +193,5 @@ export interface PullRequestRow {
   merge_state: string | null; // 'clean' | 'dirty' | 'blocked' | 'unknown' | null
   merge_state_checked_at: string | null; // ISO timestamp
   pending_push: number;       // 0 | 1 — push arrived before initial review completed
+  pause_reason: PauseReason | null; // non-null marks the task as needs_attention
 }

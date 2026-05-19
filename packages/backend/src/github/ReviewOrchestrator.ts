@@ -1,5 +1,5 @@
 import { getProjectByGithubRepo } from '../config';
-import { setPRReviewResult, getSetting, getPRByNumber, setPendingPush } from '../db/queries';
+import { setPRReviewResult, getSetting, getPRByNumber, setPendingPush, setPauseReason } from '../db/queries';
 import type { PRReviewService, PRReviewResult } from './PRReviewService';
 import type { SessionManager } from '../session/SessionManager';
 import type { ReviewJob } from './types';
@@ -66,6 +66,7 @@ export class ReviewOrchestrator {
     if (prRow && prRow.review_iteration >= maxIterations) {
       const message = `Review loop for PR #${job.prNumber} reached ${maxIterations} iterations without approval. Manual intervention needed.`;
       console.warn(`[ReviewOrchestrator] ${message}`);
+      setPauseReason(job.prNumber, job.repo, 'max_reviews');
       this.sessionManager.emit('message', {
         type: 'review_escalated',
         prNumber: job.prNumber,
