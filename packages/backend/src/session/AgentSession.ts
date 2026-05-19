@@ -10,6 +10,7 @@ import {
   insertSessionAudit,
   setSessionModel,
   getPRBySessionId,
+  getPRByNumber,
   setHeadSha,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
@@ -636,11 +637,15 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       // Always upsert notion_task_id and session_id onto the PR row when a
       // PR URL is known at session end. This ensures the link is set even if
       // PRSyncJob ran before handleCleanExit and created the row with null values.
+      // Capture existing PR state BEFORE the upsert overwrites it so the
+      // status-update step below can tell when the PR has already been merged.
+      let existingPrState: string | undefined;
       if (prUrl) {
         const prMatch = prUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
         if (prMatch) {
           const repo = prMatch[1];
           const prNumber = parseInt(prMatch[2], 10);
+          existingPrState = getPRByNumber(prNumber, repo)?.state;
           const now = new Date().toISOString();
           let headSha: string | null = null;
           if (this.githubClient) {
@@ -683,7 +688,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         }
       }
 
-      if (prUrl) {
+      // Skip the "In Review" write when the PR is already merged or closed.
+      // The merge flow ends the session and sets the Notion task to "Done";
+      // without this guard handleCleanExit would race and regress the status.
+      if (prUrl && existingPrState !== 'merged' && existingPrState !== 'closed') {
         this.taskBackend().updateStatus(this.taskId, '👀 In Review')
           .then(() => {
             this.broadcast({
