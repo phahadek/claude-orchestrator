@@ -13,6 +13,8 @@ const SETTING_KEYS = [
   'code_session_model',
   'review_session_model',
   'session_mode',
+  'auto_launch_concurrency',
+  'auto_launch_poll_interval_ms',
 ] as const;
 
 type SettingKey = (typeof SETTING_KEYS)[number];
@@ -32,6 +34,10 @@ function applyToRuntime(key: SettingKey, value: string): void {
     runtimeSettings.review_session_model = value;
   } else if (key === 'session_mode') {
     runtimeSettings.session_mode = value === 'api' ? 'api' : 'cli';
+  } else if (key === 'auto_launch_concurrency') {
+    runtimeSettings.auto_launch_concurrency = Number(value);
+  } else if (key === 'auto_launch_poll_interval_ms') {
+    runtimeSettings.auto_launch_poll_interval_ms = Number(value);
   }
 }
 
@@ -65,6 +71,8 @@ function runtimeSettingsAsRecord(): Record<SettingKey, string> {
     code_session_model: runtimeSettings.code_session_model,
     review_session_model: runtimeSettings.review_session_model,
     session_mode: runtimeSettings.session_mode,
+    auto_launch_concurrency: String(runtimeSettings.auto_launch_concurrency),
+    auto_launch_poll_interval_ms: String(runtimeSettings.auto_launch_poll_interval_ms),
   };
 }
 

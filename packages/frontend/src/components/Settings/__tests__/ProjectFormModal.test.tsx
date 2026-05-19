@@ -11,6 +11,8 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     contextUrl: 'https://notion.so/ctx',
     githubRepo: 'owner/repo',
     taskSource: 'notion',
+    autoLaunchEnabled: false,
+    autoLaunchMilestoneId: null,
     createdAt: 1,
     updatedAt: 1,
     milestones: [],

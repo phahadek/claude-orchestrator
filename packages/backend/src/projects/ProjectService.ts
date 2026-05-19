@@ -32,6 +32,8 @@ export interface Project {
   contextUrl: string | null;
   githubRepo: string | null;
   taskSource: TaskSource;
+  autoLaunchEnabled: boolean;
+  autoLaunchMilestoneId: string | null;
   createdAt: number;
   updatedAt: number;
   milestones: ProjectMilestone[];
@@ -44,6 +46,8 @@ export interface CreateProjectInput {
   contextUrl?: string | null;
   githubRepo?: string | null;
   taskSource?: TaskSource;
+  autoLaunchEnabled?: boolean;
+  autoLaunchMilestoneId?: string | null;
 }
 
 export interface CreateMilestoneInput {
@@ -74,6 +78,8 @@ function rowToProject(row: ProjectRow, milestones: MilestoneRow[]): Project {
     contextUrl: row.context_url,
     githubRepo: row.github_repo,
     taskSource: row.task_source,
+    autoLaunchEnabled: row.auto_launch_enabled === 1,
+    autoLaunchMilestoneId: row.auto_launch_milestone_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     milestones: milestones.map(rowToMilestone),
@@ -108,6 +114,8 @@ export const ProjectService = {
       context_url: input.contextUrl ?? null,
       github_repo: input.githubRepo ?? null,
       task_source: input.taskSource ?? 'notion',
+      auto_launch_enabled: input.autoLaunchEnabled ? 1 : 0,
+      auto_launch_milestone_id: input.autoLaunchMilestoneId ?? null,
     });
     return rowToProject(row, []);
   },

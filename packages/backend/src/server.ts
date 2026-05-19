@@ -24,6 +24,7 @@ import { PRReviewService } from './github/PRReviewService';
 import { ReviewOrchestrator } from './github/ReviewOrchestrator';
 import { PRMergeWatcher } from './github/PRMergeWatcher';
 import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
+import { AutoLauncher } from './orchestration/AutoLauncher';
 import { getActiveSessions, getEventsBySession, getDenialsBySession, deleteGhostSessions, getPRByNotionTaskId, getPRBySessionId, setPRReviewResult, setLastReviewedSha, setHeadSha, getSetting, setPendingPush } from './db/queries';
 import { isSystemOnlyUserEvent } from './utils/eventFilters';
 import { shouldAutoReview, formatReviewFeedback } from './github/reviewUtils';
@@ -311,6 +312,11 @@ wss.on('connection', (ws) => {
   ws.on('close', () => console.log('[WS] client disconnected'));
 });
 
+// AutoLauncher is constructed up-front so it can be referenced during shutdown,
+// but .start() runs only after orphan resume so the two don't race on slot
+// reservations (orphan resume reserves slots from this.sessions.size).
+const autoLauncher = new AutoLauncher(sessionManager, broadcast);
+
 jsonlReader.importAll().then(async () => {
   jsonlReader.backfillTokens();
 
@@ -319,6 +325,10 @@ jsonlReader.importAll().then(async () => {
   );
 
   prMergeWatcher.start();
+
+  await autoLauncher.start().catch((err: unknown) =>
+    console.warn('[server] auto-launcher start failed:', (err as Error).message)
+  );
 
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[server] listening on port ${PORT}`);
@@ -331,6 +341,7 @@ jsonlReader.importAll().then(async () => {
 
 async function gracefulShutdown(signal: string) {
   console.log(`[server] ${signal} received — shutting down`);
+  autoLauncher.stop();
   wss.close();
   await sessionManager.shutdownAll();
   server.close();

@@ -690,6 +690,26 @@ export class SessionManager extends EventEmitter {
     return this.sessions.has(sessionId);
   }
 
+  /** Count live standard (non-review) sessions. Used by AutoLauncher for concurrency. */
+  getLiveCodeSessionCount(): number {
+    let n = 0;
+    for (const s of this.sessions.values()) {
+      if (s.sessionType !== 'review') n++;
+    }
+    return n;
+  }
+
+  /** Returns true if a live session exists for the given Notion task id. */
+  hasLiveSessionForTask(notionTaskId: string): boolean {
+    const norm = notionTaskId.replace(/-/g, '');
+    for (const s of this.sessions.values()) {
+      if (s.sessionType === 'review') continue;
+      const tid = s.taskId?.replace(/-/g, '');
+      if (tid && tid === norm) return true;
+    }
+    return false;
+  }
+
   async kill(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (session) {

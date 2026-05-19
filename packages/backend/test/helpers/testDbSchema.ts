@@ -111,14 +111,16 @@ export function applyTestSchema(db: Database.Database): void {
       pending_push           INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS projects (
-      id           TEXT    PRIMARY KEY,
-      name         TEXT    NOT NULL,
-      project_dir  TEXT    NOT NULL,
-      context_url  TEXT,
-      github_repo  TEXT,
-      task_source  TEXT    NOT NULL DEFAULT 'notion',
-      created_at   INTEGER NOT NULL,
-      updated_at   INTEGER NOT NULL
+      id                       TEXT    PRIMARY KEY,
+      name                     TEXT    NOT NULL,
+      project_dir              TEXT    NOT NULL,
+      context_url              TEXT,
+      github_repo              TEXT,
+      task_source              TEXT    NOT NULL DEFAULT 'notion',
+      auto_launch_enabled      INTEGER NOT NULL DEFAULT 0,
+      auto_launch_milestone_id TEXT,
+      created_at               INTEGER NOT NULL,
+      updated_at               INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS milestones (
       id            TEXT    PRIMARY KEY,

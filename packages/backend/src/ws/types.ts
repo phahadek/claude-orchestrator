@@ -99,6 +99,7 @@ export type ServerMessage =
   | { type: 'session_audit';         sessionId: string; prOpened: boolean; prTargetsBranch: string | null; violations: string[]; specMismatch: string | null; auditedAt: string }
   | { type: 'task_status_changed';   notionTaskId: string; newStatus: string }
   | { type: 'task_updated';          task: TaskView }
+  | { type: 'auto_launch';           projectId: string; taskId: string; taskTitle: string; sessionId: string }
   | { type: 'error';                 message: string };
 
 // ── Client → Server ──────────────────────────────────────────────

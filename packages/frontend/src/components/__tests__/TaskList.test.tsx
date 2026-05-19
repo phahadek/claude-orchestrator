@@ -589,6 +589,8 @@ describe('TaskList', () => {
       contextUrl: 'https://notion.so/ctx',
       boardId: 'board-1',
       taskSource: 'notion',
+      autoLaunchEnabled: false,
+      autoLaunchMilestoneId: null,
     };
 
     render(

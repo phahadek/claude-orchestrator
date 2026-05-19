@@ -57,6 +57,8 @@ projectsRouter.post('/projects', (req: Request, res: Response) => {
     contextUrl: typeof body.contextUrl === 'string' ? body.contextUrl : null,
     githubRepo: typeof body.githubRepo === 'string' ? body.githubRepo : null,
     taskSource,
+    autoLaunchEnabled: body.autoLaunchEnabled === true,
+    autoLaunchMilestoneId: typeof body.autoLaunchMilestoneId === 'string' ? body.autoLaunchMilestoneId : null,
   });
   res.status(201).json(project);
 });
@@ -81,6 +83,12 @@ projectsRouter.patch('/projects/:id', (req: Request, res: Response) => {
   }
   if (body.taskSource === 'notion' || body.taskSource === 'yaml') {
     patch.task_source = body.taskSource;
+  }
+  if ('autoLaunchEnabled' in body) {
+    patch.auto_launch_enabled = body.autoLaunchEnabled === true ? 1 : 0;
+  }
+  if ('autoLaunchMilestoneId' in body) {
+    patch.auto_launch_milestone_id = typeof body.autoLaunchMilestoneId === 'string' ? body.autoLaunchMilestoneId : null;
   }
 
   const updated = ProjectService.update(id, patch);

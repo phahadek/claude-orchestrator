@@ -17,6 +17,8 @@ export interface Project {
   contextUrl: string | null;
   githubRepo: string | null;
   taskSource: TaskSource;
+  autoLaunchEnabled: boolean;
+  autoLaunchMilestoneId: string | null;
   createdAt: number;
   updatedAt: number;
   milestones: ProjectMilestone[];
@@ -29,6 +31,8 @@ export interface CreateProjectInput {
   contextUrl?: string | null;
   githubRepo?: string | null;
   taskSource: TaskSource;
+  autoLaunchEnabled?: boolean;
+  autoLaunchMilestoneId?: string | null;
 }
 
 export interface UpdateProjectInput {
@@ -37,6 +41,8 @@ export interface UpdateProjectInput {
   contextUrl?: string | null;
   githubRepo?: string | null;
   taskSource?: TaskSource;
+  autoLaunchEnabled?: boolean;
+  autoLaunchMilestoneId?: string | null;
 }
 
 export interface CreateMilestoneInput {
