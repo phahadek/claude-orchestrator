@@ -230,9 +230,12 @@ node scripts/notion-move-tasks.mjs --target <database-id> --tasks <id1,id2,...> 
 | `--no-archive` | Copy but keep the source page |
 | `--status "🔲 Backlog"` | Override status on moved tasks |
 
-Known limitation: table blocks with children may fail to copy (Notion API
-rejects null child arrays). The page is created without content and a
-warning is logged — copy content manually if needed.
+Failure handling: if the content copy step errors out (e.g. a Notion API
+validation failure on a specific block type), the source page is **not**
+archived. The new (empty) page in the target database is left in place and a
+warning is logged so the move can be retried or completed manually. Table
+blocks — which were the historical trigger for this failure mode — are now
+copied with their `table_row` children intact.
 
 **Global location:** `~/.claude/scripts/notion-move-tasks.mjs` (symlink).
 **Source:** `scripts/notion-move-tasks.mjs` in this repo.
