@@ -41,7 +41,10 @@
   cursor: pointer;
   font-size: 0.8rem;
   padding: 3px 10px;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
 }
 
 .filter-toggle:hover {
@@ -79,7 +82,10 @@
   font-size: 0.8rem;
   padding: 3px 10px;
   margin-left: auto;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
 }
 
 .archive-all-button:hover {
@@ -88,8 +94,8 @@
 }
 
 .resume-all-button {
-  background: rgba(249, 226, 175, 0.10);
-  border: 1px solid rgba(249, 226, 175, 0.40);
+  background: rgba(249, 226, 175, 0.1);
+  border: 1px solid rgba(249, 226, 175, 0.4);
   border-radius: 16px;
   color: var(--ctp-yellow);
   cursor: pointer;
@@ -99,7 +105,7 @@
 }
 
 .resume-all-button:hover {
-  background: rgba(249, 226, 175, 0.20);
+  background: rgba(249, 226, 175, 0.2);
 }
 
 .archived-toggle {
@@ -163,8 +169,12 @@
 
 /* Loading skeleton */
 @keyframes shimmer {
-  0%   { background-position: -400px 0; }
-  100% { background-position:  400px 0; }
+  0% {
+    background-position: -400px 0;
+  }
+  100% {
+    background-position: 400px 0;
+  }
 }
 
 .skeleton-card {
@@ -180,7 +190,12 @@
 .skeleton-line {
   height: 12px;
   border-radius: 6px;
-  background: linear-gradient(90deg, var(--ctp-surface0) 25%, var(--ctp-surface1) 50%, var(--ctp-surface0) 75%);
+  background: linear-gradient(
+    90deg,
+    var(--ctp-surface0) 25%,
+    var(--ctp-surface1) 50%,
+    var(--ctp-surface0) 75%
+  );
   background-size: 800px 100%;
   animation: shimmer 1.4s infinite linear;
 }

@@ -6,7 +6,12 @@ import type { TaskBackend } from '../tasks/TaskBackend';
 import { getProjectByGithubRepo } from '../config';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
-import { getAllOpenPRs, updatePRState, updateMergeState, getPRByNumber } from '../db/queries';
+import {
+  getAllOpenPRs,
+  updatePRState,
+  updateMergeState,
+  getPRByNumber,
+} from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -37,12 +42,13 @@ export class PRMergeWatcher {
     if (this.taskBackendOverride) return this.taskBackendOverride;
     const project = getProjectByGithubRepo(repo);
     if (!project) {
-      console.warn(`[PRMergeWatcher] no project found for repo ${repo} — skipping task backend update`);
+      console.warn(
+        `[PRMergeWatcher] no project found for repo ${repo} — skipping task backend update`,
+      );
       return undefined;
     }
     return getTaskBackend(project.id);
   }
-
 
   start(intervalMs: number = DEFAULT_INTERVAL_MS): void {
     if (this.timer) return;
@@ -70,12 +76,18 @@ export class PRMergeWatcher {
     this.firstPollPending = false;
   }
 
-  private async checkPR(pr: PullRequestRow, silentMerges: boolean): Promise<void> {
+  private async checkPR(
+    pr: PullRequestRow,
+    silentMerges: boolean,
+  ): Promise<void> {
     let state: string;
     try {
       state = await this.github.getPRState(pr.pr_number, pr.repo);
     } catch (err) {
-      console.warn(`[PRMergeWatcher] getPRState failed for PR #${pr.pr_number}:`, (err as Error).message);
+      console.warn(
+        `[PRMergeWatcher] getPRState failed for PR #${pr.pr_number}:`,
+        (err as Error).message,
+      );
       return;
     }
 
@@ -83,7 +95,11 @@ export class PRMergeWatcher {
       await this.handleMerged(pr, null, { silent: silentMerges });
     } else if (state === 'closed') {
       updatePRState(pr.pr_number, pr.repo, 'closed');
-      this.broadcast({ type: 'pr_closed', prNumber: pr.pr_number, repo: pr.repo });
+      this.broadcast({
+        type: 'pr_closed',
+        prNumber: pr.pr_number,
+        repo: pr.repo,
+      });
     } else {
       // PR is still open — check mergeability for approved PRs
       await this.checkMergeability(pr);
@@ -118,26 +134,42 @@ export class PRMergeWatcher {
   private async runMergeabilityCheck(pr: PullRequestRow): Promise<void> {
     let category: MergeabilityCategory;
     try {
-      category = await this.github.categorizeMergeability(pr.pr_number, pr.repo);
+      category = await this.github.categorizeMergeability(
+        pr.pr_number,
+        pr.repo,
+      );
     } catch (err) {
-      console.warn(`[PRMergeWatcher] categorizeMergeability failed for PR #${pr.pr_number}:`, (err as Error).message);
+      console.warn(
+        `[PRMergeWatcher] categorizeMergeability failed for PR #${pr.pr_number}:`,
+        (err as Error).message,
+      );
       return;
     }
 
     // Skip if GitHub hasn't computed mergeability yet
-    if (category.category === 'unknown' && category.rawMergeableState === null) return;
+    if (category.category === 'unknown' && category.rawMergeableState === null)
+      return;
 
     const failingNames = category.failingChecks.map((c) => c.name);
     const prevFailingNames = parseFailingChecksRaw(pr.failing_checks);
     const stateChanged = pr.merge_state !== category.mergeState;
-    const failingChecksChanged = !arraysShallowEqual(prevFailingNames, failingNames);
+    const failingChecksChanged = !arraysShallowEqual(
+      prevFailingNames,
+      failingNames,
+    );
 
     // Only update + broadcast if something actually changed.
     if (!stateChanged && !failingChecksChanged) return;
 
     const mergeableInt = category.category === 'clean' ? 1 : 0;
     const failingNamesOrNull = failingNames.length > 0 ? failingNames : null;
-    updateMergeState(pr.pr_number, pr.repo, mergeableInt, category.mergeState, failingNamesOrNull);
+    updateMergeState(
+      pr.pr_number,
+      pr.repo,
+      mergeableInt,
+      category.mergeState,
+      failingNamesOrNull,
+    );
     this.broadcast({
       type: 'pr_mergeability_changed',
       prNumber: pr.pr_number,
@@ -155,26 +187,43 @@ export class PRMergeWatcher {
     if (!stateChanged) return;
 
     if (category.category === 'conflict') {
-      console.log(`[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has merge conflicts`);
+      console.log(
+        `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has merge conflicts`,
+      );
       if (pr.session_id) {
         const baseBranch = pr.base_branch ?? 'dev';
         const msg = `PR #${pr.pr_number} has merge conflicts with the base branch. Rebase onto \`${baseBranch}\`, resolve the conflicts, and push the fixed branch.`;
-        this.sessions.sendOrResume(pr.session_id, msg).catch((err: unknown) =>
-          console.warn(`[PRMergeWatcher] sendOrResume failed for session ${pr.session_id}:`, (err as Error).message),
-        );
+        this.sessions
+          .sendOrResume(pr.session_id, msg)
+          .catch((err: unknown) =>
+            console.warn(
+              `[PRMergeWatcher] sendOrResume failed for session ${pr.session_id}:`,
+              (err as Error).message,
+            ),
+          );
       }
     } else if (category.category === 'ci_failed') {
-      console.log(`[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has failing CI checks: ${failingNames.join(', ') || '(unknown)'}`);
+      console.log(
+        `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has failing CI checks: ${failingNames.join(', ') || '(unknown)'}`,
+      );
       if (pr.session_id) {
-        const msg = failingNames.length > 0
-          ? `PR #${pr.pr_number} cannot be merged because the following CI checks are failing: ${failingNames.join(', ')}. Investigate the failures and push a fix.`
-          : `PR #${pr.pr_number} cannot be merged because required CI checks are failing. Investigate the failures and push a fix.`;
-        this.sessions.sendOrResume(pr.session_id, msg).catch((err: unknown) =>
-          console.warn(`[PRMergeWatcher] sendOrResume failed for session ${pr.session_id}:`, (err as Error).message),
-        );
+        const msg =
+          failingNames.length > 0
+            ? `PR #${pr.pr_number} cannot be merged because the following CI checks are failing: ${failingNames.join(', ')}. Investigate the failures and push a fix.`
+            : `PR #${pr.pr_number} cannot be merged because required CI checks are failing. Investigate the failures and push a fix.`;
+        this.sessions
+          .sendOrResume(pr.session_id, msg)
+          .catch((err: unknown) =>
+            console.warn(
+              `[PRMergeWatcher] sendOrResume failed for session ${pr.session_id}:`,
+              (err as Error).message,
+            ),
+          );
       }
     } else if (category.category === 'blocked') {
-      console.log(`[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} is blocked by branch protection`);
+      console.log(
+        `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} is blocked by branch protection`,
+      );
     }
   }
 
@@ -205,7 +254,8 @@ export class PRMergeWatcher {
     if (pr.notion_task_id) {
       const backend = this.resolveBackendForRepo(pr.repo);
       if (backend) {
-        await backend.updateStatus(pr.notion_task_id, '✅ Done')
+        await backend
+          .updateStatus(pr.notion_task_id, '✅ Done')
           .then(() => {
             this.broadcast({
               type: 'task_status_changed',
@@ -215,7 +265,10 @@ export class PRMergeWatcher {
             emitTaskUpdated(pr.notion_task_id!);
           })
           .catch((err: unknown) =>
-            console.warn(`[PRMergeWatcher] task backend updateStatus failed:`, (err as Error).message),
+            console.warn(
+              `[PRMergeWatcher] task backend updateStatus failed:`,
+              (err as Error).message,
+            ),
           );
       }
     }

@@ -153,19 +153,39 @@ describe('upsertPullRequest + getPRByNumber', () => {
 
   it('preserves existing notion_task_id when upserted with null', () => {
     // First upsert sets notion_task_id
-    upsertPullRequest({ ...baseRow, pr_url: 'https://github.com/owner/repo/pull/11', pr_number: 11, notion_task_id: 'task-abc' });
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: 'https://github.com/owner/repo/pull/11',
+      pr_number: 11,
+      notion_task_id: 'task-abc',
+    });
     // Second upsert (e.g. from PRSyncJob) passes null — should not overwrite
-    upsertPullRequest({ ...baseRow, pr_url: 'https://github.com/owner/repo/pull/11', pr_number: 11, notion_task_id: null });
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: 'https://github.com/owner/repo/pull/11',
+      pr_number: 11,
+      notion_task_id: null,
+    });
     const row = getPRByNumber(11, 'owner/repo');
     expect(row!.notion_task_id).toBe('task-abc');
   });
 
   it('updates notion_task_id when upserted with a non-null value', () => {
     // Row created by PRSyncJob without notion_task_id
-    upsertPullRequest({ ...baseRow, pr_url: 'https://github.com/owner/repo/pull/12', pr_number: 12 });
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: 'https://github.com/owner/repo/pull/12',
+      pr_number: 12,
+    });
     expect(getPRByNumber(12, 'owner/repo')!.notion_task_id).toBeNull();
     // Session ends and links the task
-    upsertPullRequest({ ...baseRow, pr_url: 'https://github.com/owner/repo/pull/12', pr_number: 12, notion_task_id: 'task-xyz', session_id: 'sess-1' });
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: 'https://github.com/owner/repo/pull/12',
+      pr_number: 12,
+      notion_task_id: 'task-xyz',
+      session_id: 'sess-1',
+    });
     const row = getPRByNumber(12, 'owner/repo');
     expect(row!.notion_task_id).toBe('task-xyz');
     expect(row!.session_id).toBe('sess-1');

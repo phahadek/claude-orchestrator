@@ -10,7 +10,11 @@ function makeEvent(eventType: string, content: string, timestamp = 1000) {
 }
 
 /** Create a text event wrapping an assistant message with a single tool_use block. */
-function makeToolUseTextEvent(toolName: string, input: Record<string, unknown>, timestamp = 1000) {
+function makeToolUseTextEvent(
+  toolName: string,
+  input: Record<string, unknown>,
+  timestamp = 1000,
+) {
   return makeEvent(
     'text',
     JSON.stringify({
@@ -31,7 +35,11 @@ function makeToolResultEvent(content: string, timestamp = 1001) {
   );
 }
 
-function makeCallPair(toolName: string, input: Record<string, unknown>, result: string) {
+function makeCallPair(
+  toolName: string,
+  input: Record<string, unknown>,
+  result: string,
+) {
   return {
     textEvent: makeToolUseTextEvent(toolName, input),
     resultEvent: makeToolResultEvent(result),
@@ -53,8 +61,16 @@ describe('ToolCallGroup', () => {
 
   it('collapsed header shows description for Bash groups', () => {
     const calls = [
-      makeCallPair('Bash', { command: 'npx tsc --noEmit', description: 'Run tsc' }, 'output'),
-      makeCallPair('Bash', { command: 'npx tsc --noEmit', description: 'Run tsc' }, 'output'),
+      makeCallPair(
+        'Bash',
+        { command: 'npx tsc --noEmit', description: 'Run tsc' },
+        'output',
+      ),
+      makeCallPair(
+        'Bash',
+        { command: 'npx tsc --noEmit', description: 'Run tsc' },
+        'output',
+      ),
     ];
     render(<ToolCallGroup toolName="Bash" calls={calls} />);
     expect(screen.getByText(/🔧 Bash \(Run tsc\) ×2/)).toBeTruthy();
@@ -214,7 +230,9 @@ describe('groupSessionEvents', () => {
     const items = groupSessionEvents(events);
     expect(items).toHaveLength(1);
     if (items[0].kind === 'group') {
-      render(<ToolCallGroup toolName={items[0].toolName} calls={items[0].calls} />);
+      render(
+        <ToolCallGroup toolName={items[0].toolName} calls={items[0].calls} />,
+      );
       expect(screen.getByText(/🔧 Read \(a\.ts\) ×3/)).toBeTruthy();
     }
   });
@@ -270,10 +288,18 @@ describe('groupSessionEvents', () => {
     // Sequence: text(Read) + tool_use(standalone) + tool_result
     const events = [
       makeToolUseTextEvent('Read', { file_path: '/a.ts' }, 1000),
-      makeEvent('tool_use', JSON.stringify({ name: 'Read', input: { file_path: '/a.ts' } }), 1000),
+      makeEvent(
+        'tool_use',
+        JSON.stringify({ name: 'Read', input: { file_path: '/a.ts' } }),
+        1000,
+      ),
       makeToolResultEvent('content a', 1001),
       makeToolUseTextEvent('Read', { file_path: '/b.ts' }, 1002),
-      makeEvent('tool_use', JSON.stringify({ name: 'Read', input: { file_path: '/b.ts' } }), 1002),
+      makeEvent(
+        'tool_use',
+        JSON.stringify({ name: 'Read', input: { file_path: '/b.ts' } }),
+        1002,
+      ),
       makeToolResultEvent('content b', 1003),
     ];
     const items = groupSessionEvents(events);

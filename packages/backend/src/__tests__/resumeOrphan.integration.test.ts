@@ -159,7 +159,10 @@ vi.mock('../db/queries', () => ({
 // Now import the modules under test (after all mocks are in place).
 import fs from 'fs';
 import { spawn, execSync } from 'child_process';
-import { SessionManager, RESUME_NUDGE_MESSAGE } from '../session/SessionManager';
+import {
+  SessionManager,
+  RESUME_NUDGE_MESSAGE,
+} from '../session/SessionManager';
 import * as queries from '../db/queries';
 import type { ServerMessage } from '../ws/types';
 import type { Session } from '../db/types';
@@ -225,7 +228,9 @@ describe('resumeOrphanSessions() — missing-worktree pre-check (integration)', 
     );
     // ... and a session_ended (status=error) broadcast must have been emitted.
     const ended = messages.filter(
-      (m) => m.type === 'session_ended' && (m as { sessionId: string }).sessionId === 'missing-session',
+      (m) =>
+        m.type === 'session_ended' &&
+        (m as { sessionId: string }).sessionId === 'missing-session',
     );
     expect(ended).toHaveLength(1);
     expect((ended[0] as { status: string }).status).toBe('error');
@@ -265,7 +270,10 @@ describe('resumeOrphanSessions() — missing-worktree pre-check (integration)', 
     // The healthy-session orphan is added to the live sessions map (re-attached).
     expect(sm.isAlive('healthy-session')).toBe(true);
     // Its status was broadcast as running by resumeSession().
-    expect(queries.updateSessionStatus).toHaveBeenCalledWith('healthy-session', 'running');
+    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+      'healthy-session',
+      'running',
+    );
   });
 });
 
@@ -296,7 +304,8 @@ describe('resumeOrphanSessions() — healthy-worktree resume (integration)', () 
       const statusMsgs = messages.filter(
         (m) =>
           m.type === 'session_status' &&
-          (m as { sessionId: string; status: string }).sessionId === 'healthy-session' &&
+          (m as { sessionId: string; status: string }).sessionId ===
+            'healthy-session' &&
           (m as { status: string }).status === 'running',
       );
       expect(statusMsgs.length).toBeGreaterThanOrEqual(1);
@@ -342,8 +351,9 @@ describe('resumeOrphanSessions() — pr_url carry-forward (integration)', () => 
 
     // The live AgentSession should have prUrl populated.
     expect(sm.isAlive('pr-session')).toBe(true);
-    const session = (sm as unknown as { sessions: Map<string, { prUrl?: string }> })
-      .sessions.get('pr-session');
+    const session = (
+      sm as unknown as { sessions: Map<string, { prUrl?: string }> }
+    ).sessions.get('pr-session');
     expect(session?.prUrl).toBe(prUrl);
 
     // Simulate a clean CLI exit so the .then() in wireSession() runs and
@@ -355,9 +365,11 @@ describe('resumeOrphanSessions() — pr_url carry-forward (integration)', () => 
     await new Promise((r) => setImmediate(r));
     await new Promise((r) => setImmediate(r));
 
-    const execCallsAfter = vi.mocked(execSync).mock.calls.slice(execSyncCallsBefore);
-    const branchDeletions = execCallsAfter.filter(([cmd]) =>
-      typeof cmd === 'string' && /git\s+branch\s+-D/.test(cmd),
+    const execCallsAfter = vi
+      .mocked(execSync)
+      .mock.calls.slice(execSyncCallsBefore);
+    const branchDeletions = execCallsAfter.filter(
+      ([cmd]) => typeof cmd === 'string' && /git\s+branch\s+-D/.test(cmd),
     );
     expect(branchDeletions).toHaveLength(0);
   });

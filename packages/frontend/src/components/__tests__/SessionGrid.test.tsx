@@ -3,7 +3,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SessionGrid } from '../SessionGrid';
 import type { SessionState } from '../../hooks/useSessionStore';
 
-function makeSession(overrides: Partial<SessionState> & { sessionId: string }): SessionState {
+function makeSession(
+  overrides: Partial<SessionState> & { sessionId: string },
+): SessionState {
   return {
     taskName: 'Test Task',
     notionTaskUrl: 'https://notion.so/task',
@@ -19,28 +21,70 @@ describe('SessionGrid', () => {
       makeSession({ sessionId: 's1', taskName: 'Task One', status: 'running' }),
       makeSession({ sessionId: 's2', taskName: 'Task Two', status: 'done' }),
     ];
-    render(<SessionGrid sessions={sessions} projects={[]} onSelect={vi.fn()} selectedId={null} keyboardSelectedId={null} synced={true} onArchiveAll={vi.fn()} />);
+    render(
+      <SessionGrid
+        sessions={sessions}
+        projects={[]}
+        onSelect={vi.fn()}
+        selectedId={null}
+        keyboardSelectedId={null}
+        synced={true}
+        onArchiveAll={vi.fn()}
+      />,
+    );
     expect(screen.getByText('Task One')).toBeDefined();
     expect(screen.getByText('Task Two')).toBeDefined();
   });
 
   it('sorts cards by status rank — needs_permission always first', () => {
     const sessions = [
-      makeSession({ sessionId: 's1', taskName: 'Done Task',       status: 'done' }),
-      makeSession({ sessionId: 's2', taskName: 'Running Task',     status: 'running' }),
-      makeSession({ sessionId: 's3', taskName: 'Permission Task',  status: 'needs_permission' }),
-      makeSession({ sessionId: 's4', taskName: 'Starting Task',    status: 'starting' }),
+      makeSession({ sessionId: 's1', taskName: 'Done Task', status: 'done' }),
+      makeSession({
+        sessionId: 's2',
+        taskName: 'Running Task',
+        status: 'running',
+      }),
+      makeSession({
+        sessionId: 's3',
+        taskName: 'Permission Task',
+        status: 'needs_permission',
+      }),
+      makeSession({
+        sessionId: 's4',
+        taskName: 'Starting Task',
+        status: 'starting',
+      }),
     ];
-    render(<SessionGrid sessions={sessions} projects={[]} onSelect={vi.fn()} selectedId={null} keyboardSelectedId={null} synced={true} onArchiveAll={vi.fn()} />);
-    const cards = screen.getAllByRole('generic').filter(
-      (el) => el.className?.includes('session-card')
+    render(
+      <SessionGrid
+        sessions={sessions}
+        projects={[]}
+        onSelect={vi.fn()}
+        selectedId={null}
+        keyboardSelectedId={null}
+        synced={true}
+        onArchiveAll={vi.fn()}
+      />,
     );
+    const cards = screen
+      .getAllByRole('generic')
+      .filter((el) => el.className?.includes('session-card'));
     // First card should contain the needs_permission task
     expect(cards[0].textContent).toContain('Permission Task');
   });
 
   it('renders empty state placeholder when sessions list is empty', () => {
-    render(<SessionGrid sessions={[]} projects={[]} onSelect={vi.fn()} selectedId={null} keyboardSelectedId={null} synced={true} onArchiveAll={vi.fn()} />);
+    render(
+      <SessionGrid
+        sessions={[]}
+        projects={[]}
+        onSelect={vi.fn()}
+        selectedId={null}
+        keyboardSelectedId={null}
+        synced={true}
+        onArchiveAll={vi.fn()}
+      />,
+    );
     expect(screen.getByText(/no sessions yet/i)).toBeDefined();
   });
 
@@ -56,10 +100,12 @@ describe('SessionGrid', () => {
         onArchiveAll={vi.fn()}
         filtersActive={true}
         onClearFilters={vi.fn()}
-      />
+      />,
     );
     expect(screen.getByText(/no sessions match your filters/i)).toBeDefined();
-    expect(screen.getByRole('button', { name: /clear filters/i })).toBeDefined();
+    expect(
+      screen.getByRole('button', { name: /clear filters/i }),
+    ).toBeDefined();
   });
 
   it('calls onClearFilters when Clear filters button is clicked', () => {
@@ -75,7 +121,7 @@ describe('SessionGrid', () => {
         onArchiveAll={vi.fn()}
         filtersActive={true}
         onClearFilters={onClearFilters}
-      />
+      />,
     );
     fireEvent.click(screen.getByRole('button', { name: /clear filters/i }));
     expect(onClearFilters).toHaveBeenCalledOnce();
@@ -83,22 +129,63 @@ describe('SessionGrid', () => {
 
   it('sorts favorited sessions before non-favorited regardless of status rank', () => {
     const sessions = [
-      makeSession({ sessionId: 's1', taskName: 'Running Task',   status: 'running',           favorited: false }),
-      makeSession({ sessionId: 's2', taskName: 'Favorited Done', status: 'done',              favorited: true }),
-      makeSession({ sessionId: 's3', taskName: 'Permission Task', status: 'needs_permission', favorited: false }),
+      makeSession({
+        sessionId: 's1',
+        taskName: 'Running Task',
+        status: 'running',
+        favorited: false,
+      }),
+      makeSession({
+        sessionId: 's2',
+        taskName: 'Favorited Done',
+        status: 'done',
+        favorited: true,
+      }),
+      makeSession({
+        sessionId: 's3',
+        taskName: 'Permission Task',
+        status: 'needs_permission',
+        favorited: false,
+      }),
     ];
-    render(<SessionGrid sessions={sessions} projects={[]} onSelect={vi.fn()} selectedId={null} keyboardSelectedId={null} synced={true} onArchiveAll={vi.fn()} />);
-    const cards = screen.getAllByRole('generic').filter(
-      (el) => el.className?.includes('session-card')
+    render(
+      <SessionGrid
+        sessions={sessions}
+        projects={[]}
+        onSelect={vi.fn()}
+        selectedId={null}
+        keyboardSelectedId={null}
+        synced={true}
+        onArchiveAll={vi.fn()}
+      />,
     );
+    const cards = screen
+      .getAllByRole('generic')
+      .filter((el) => el.className?.includes('session-card'));
     // Favorited session should come first regardless of its status rank
     expect(cards[0].textContent).toContain('Favorited Done');
   });
 
   it('calls onSelect with the correct sessionId when a card is clicked', () => {
     const onSelect = vi.fn();
-    const sessions = [makeSession({ sessionId: 'abc123', taskName: 'Clickable Task', status: 'running' })];
-    render(<SessionGrid sessions={sessions} projects={[]} onSelect={onSelect} selectedId={null} keyboardSelectedId={null} synced={true} onArchiveAll={vi.fn()} />);
+    const sessions = [
+      makeSession({
+        sessionId: 'abc123',
+        taskName: 'Clickable Task',
+        status: 'running',
+      }),
+    ];
+    render(
+      <SessionGrid
+        sessions={sessions}
+        projects={[]}
+        onSelect={onSelect}
+        selectedId={null}
+        keyboardSelectedId={null}
+        synced={true}
+        onArchiveAll={vi.fn()}
+      />,
+    );
     fireEvent.click(screen.getByText('Clickable Task'));
     expect(onSelect).toHaveBeenCalledWith('abc123');
   });
@@ -106,7 +193,9 @@ describe('SessionGrid', () => {
 
 describe('SessionGrid — per-card ErrorBoundary isolation', () => {
   beforeEach(() => {
-    vi.spyOn(console, 'error').mockImplementation(() => { /* silence React's logged error */ });
+    vi.spyOn(console, 'error').mockImplementation(() => {
+      /* silence React's logged error */
+    });
   });
 
   afterEach(() => {
@@ -120,7 +209,11 @@ describe('SessionGrid — per-card ErrorBoundary isolation', () => {
     vi.doMock('../SessionCard', () => ({
       SessionCard: ({ session }: { session: SessionState }) => {
         if (session.sessionId === 'broken') throw new Error('boom');
-        return <div data-testid={`card-${session.sessionId}`}>{session.taskName}</div>;
+        return (
+          <div data-testid={`card-${session.sessionId}`}>
+            {session.taskName}
+          </div>
+        );
       },
     }));
 
@@ -128,7 +221,11 @@ describe('SessionGrid — per-card ErrorBoundary isolation', () => {
 
     const sessions = [
       makeSession({ sessionId: 'ok-1', taskName: 'OK One', status: 'running' }),
-      makeSession({ sessionId: 'broken', taskName: 'Broken Card', status: 'running' }),
+      makeSession({
+        sessionId: 'broken',
+        taskName: 'Broken Card',
+        status: 'running',
+      }),
       makeSession({ sessionId: 'ok-2', taskName: 'OK Two', status: 'running' }),
     ];
 
@@ -141,7 +238,7 @@ describe('SessionGrid — per-card ErrorBoundary isolation', () => {
         keyboardSelectedId={null}
         synced={true}
         onArchiveAll={vi.fn()}
-      />
+      />,
     );
 
     expect(screen.getByTestId('card-ok-1')).toBeDefined();

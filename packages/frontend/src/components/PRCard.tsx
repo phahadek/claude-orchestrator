@@ -98,8 +98,14 @@ export function PRCard({
   const isUnknownMergeState = !isFinished && pr.mergeState === 'unknown';
   // Block merge for any non-clean merge_state value (null is treated as "not
   // yet checked" and falls through to the backend's pre-merge check).
-  const mergeBlocked = hasConflicts || hasCiFailures || isBlocked || isUnstable || isUnknownMergeState;
-  const canMerge = pr.state === 'open' && verdict === 'approved' && !mergeBlocked;
+  const mergeBlocked =
+    hasConflicts ||
+    hasCiFailures ||
+    isBlocked ||
+    isUnstable ||
+    isUnknownMergeState;
+  const canMerge =
+    pr.state === 'open' && verdict === 'approved' && !mergeBlocked;
   const failingChecks = pr.failingChecks ?? [];
   const sessionAlive = pr.sessionId !== null;
   // Single context-aware review action:
@@ -115,10 +121,12 @@ export function PRCard({
         ? 'fix-conflicts'
         : verdict === 'approved'
           ? null
-          : (verdict === 'needs_changes' || verdict === 'incomplete') && sessionAlive
+          : (verdict === 'needs_changes' || verdict === 'incomplete') &&
+              sessionAlive
             ? 're-review'
             : 'run-review';
-  const showApproveButton = !isFinished && verdict !== 'approved' && !hasConflicts;
+  const showApproveButton =
+    !isFinished && verdict !== 'approved' && !hasConflicts;
 
   const verdictClass = isFinished
     ? styles[`state-${pr.state}`]
@@ -126,8 +134,12 @@ export function PRCard({
       ? styles[`verdict-${verdict.replace('_', '-')}`]
       : styles['verdict-none'];
   const verdictLabel = isFinished
-    ? pr.state === 'merged' ? '✓ Merged' : '✕ Closed'
-    : verdict ? VERDICT_LABELS[verdict] : '— Not reviewed';
+    ? pr.state === 'merged'
+      ? '✓ Merged'
+      : '✕ Closed'
+    : verdict
+      ? VERDICT_LABELS[verdict]
+      : '— Not reviewed';
 
   const handleMerge = () => {
     const confirmed = window.confirm(
@@ -170,7 +182,9 @@ export function PRCard({
                     {pr.notionTaskTitle} ↗
                   </a>
                 ) : (
-                  <span className={styles.notionTitle}>{pr.notionTaskTitle}</span>
+                  <span className={styles.notionTitle}>
+                    {pr.notionTaskTitle}
+                  </span>
                 )}
               </div>
             )}
@@ -197,7 +211,9 @@ export function PRCard({
       </div>
 
       <div className={styles.cardActions}>
-        <span className={`${styles.verdictBadge} ${verdictClass}`}>{verdictLabel}</span>
+        <span className={`${styles.verdictBadge} ${verdictClass}`}>
+          {verdictLabel}
+        </span>
         {hasConflicts && (
           <span
             className={styles.conflictBadge}
@@ -215,11 +231,15 @@ export function PRCard({
                 : 'CI checks are failing'
             }
           >
-            ⚠ CI failing{failingChecks.length > 0 ? `: ${failingChecks.join(', ')}` : ''}
+            ⚠ CI failing
+            {failingChecks.length > 0 ? `: ${failingChecks.join(', ')}` : ''}
           </span>
         )}
         {isUnstable && (
-          <span className={styles.conflictBadge} title="CI is unstable — checks may be failing">
+          <span
+            className={styles.conflictBadge}
+            title="CI is unstable — checks may be failing"
+          >
             ⚠ CI unstable
           </span>
         )}
@@ -232,7 +252,10 @@ export function PRCard({
           </span>
         )}
         {isUnknownMergeState && (
-          <span className={styles.conflictBadge} title="GitHub has not yet computed mergeability">
+          <span
+            className={styles.conflictBadge}
+            title="GitHub has not yet computed mergeability"
+          >
             ⚠ Mergeability unknown
           </span>
         )}
@@ -326,17 +349,23 @@ export function PRCard({
           {detailsOpen && (
             <div className={styles.detailsBody}>
               {pr.reviewResult.verdict === 'error' ? (
-                <div className={styles.reviewError}>Review failed: {pr.reviewResult.summary}</div>
+                <div className={styles.reviewError}>
+                  Review failed: {pr.reviewResult.summary}
+                </div>
               ) : (
                 <>
                   {(pr.reviewResult.dimensions ?? []).map((dim) => (
                     <div key={dim.name} className={styles.dimension}>
-                      <span className={styles.dimIcon}>{dim.passed ? '✅' : '⚠️'}</span>
+                      <span className={styles.dimIcon}>
+                        {dim.passed ? '✅' : '⚠️'}
+                      </span>
                       <span className={styles.dimName}>{dim.name}</span>
                       <span className={styles.dimNotes}>{dim.notes}</span>
                     </div>
                   ))}
-                  <div className={styles.reviewSummary}>{pr.reviewResult.summary}</div>
+                  <div className={styles.reviewSummary}>
+                    {pr.reviewResult.summary}
+                  </div>
                 </>
               )}
             </div>

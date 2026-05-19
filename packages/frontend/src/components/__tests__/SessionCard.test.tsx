@@ -31,7 +31,13 @@ describe('truncate', () => {
 
 describe('SessionCard', () => {
   it('renders task name and status badge', () => {
-    render(<SessionCard session={makeSession()} selected={false} onClick={vi.fn()} />);
+    render(
+      <SessionCard
+        session={makeSession()}
+        selected={false}
+        onClick={vi.fn()}
+      />,
+    );
     expect(screen.getByText('Test Task')).toBeDefined();
     expect(screen.getByText('🔄 Running')).toBeDefined();
   });
@@ -39,9 +45,13 @@ describe('SessionCard', () => {
   it('truncates last event plain-text content to 120 characters (fallback)', () => {
     const longContent = 'x'.repeat(130);
     const session = makeSession({
-      events: [{ eventType: 'text', content: longContent, timestamp: Date.now() }],
+      events: [
+        { eventType: 'text', content: longContent, timestamp: Date.now() },
+      ],
     });
-    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    render(
+      <SessionCard session={session} selected={false} onClick={vi.fn()} />,
+    );
     const preview = screen.getByText(/x+…/);
     expect(preview.textContent?.length).toBe(121); // 120 + ellipsis
   });
@@ -54,64 +64,123 @@ describe('SessionCard', () => {
       },
     };
     const session = makeSession({
-      events: [{ eventType: 'text', content: JSON.stringify(payload), timestamp: Date.now() }],
+      events: [
+        {
+          eventType: 'text',
+          content: JSON.stringify(payload),
+          timestamp: Date.now(),
+        },
+      ],
     });
-    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    render(
+      <SessionCard session={session} selected={false} onClick={vi.fn()} />,
+    );
     expect(screen.getByText('I have completed the analysis.')).toBeDefined();
     expect(screen.queryByText(/^\{/)).toBeNull();
   });
 
   it('shows 🔧 ToolName summary for tool_use event payload', () => {
-    const payload = { type: 'tool_use', name: 'Read', input: { file_path: '/src/main.ts' } };
+    const payload = {
+      type: 'tool_use',
+      name: 'Read',
+      input: { file_path: '/src/main.ts' },
+    };
     const session = makeSession({
-      events: [{ eventType: 'tool_use', content: JSON.stringify(payload), timestamp: Date.now() }],
+      events: [
+        {
+          eventType: 'tool_use',
+          content: JSON.stringify(payload),
+          timestamp: Date.now(),
+        },
+      ],
     });
-    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    render(
+      <SessionCard session={session} selected={false} onClick={vi.fn()} />,
+    );
     // Tool summary now includes the file detail in parentheses (e.g. "🔧 Read (main.ts)")
     expect(screen.getByText(/🔧 Read\b/)).toBeDefined();
   });
 
   it('falls back to raw content when last event content is not parseable JSON', () => {
     const session = makeSession({
-      events: [{ eventType: 'tool_use', content: 'not valid json', timestamp: Date.now() }],
+      events: [
+        {
+          eventType: 'tool_use',
+          content: 'not valid json',
+          timestamp: Date.now(),
+        },
+      ],
     });
-    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    render(
+      <SessionCard session={session} selected={false} onClick={vi.fn()} />,
+    );
     expect(screen.getByText('not valid json')).toBeDefined();
   });
 
   it('renders attention indicator for needs_permission sessions', () => {
     const session = makeSession({ status: 'needs_permission' });
-    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    render(
+      <SessionCard session={session} selected={false} onClick={vi.fn()} />,
+    );
     expect(screen.getByText(/needs permission/i)).toBeDefined();
   });
 
   it('does not render attention indicator for non-needs_permission sessions', () => {
-    render(<SessionCard session={makeSession({ status: 'running' })} selected={false} onClick={vi.fn()} />);
+    render(
+      <SessionCard
+        session={makeSession({ status: 'running' })}
+        selected={false}
+        onClick={vi.fn()}
+      />,
+    );
     expect(screen.queryByText(/needs permission/i)).toBeNull();
   });
 
   it('renders PR link when prUrl is set (terminal session)', () => {
-    const session = makeSession({ status: 'done', prUrl: 'https://github.com/pr/42' });
-    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    const session = makeSession({
+      status: 'done',
+      prUrl: 'https://github.com/pr/42',
+    });
+    render(
+      <SessionCard session={session} selected={false} onClick={vi.fn()} />,
+    );
     const link = screen.getByText('PR ↗');
     expect(link).toBeDefined();
     expect((link as HTMLAnchorElement).href).toBe('https://github.com/pr/42');
   });
 
   it('does not render PR link when prUrl is not set', () => {
-    render(<SessionCard session={makeSession({ status: 'running' })} selected={false} onClick={vi.fn()} />);
+    render(
+      <SessionCard
+        session={makeSession({ status: 'running' })}
+        selected={false}
+        onClick={vi.fn()}
+      />,
+    );
     expect(screen.queryByText('PR ↗')).toBeNull();
   });
 
   it('calls onClick when card is clicked', () => {
     const onClick = vi.fn();
-    render(<SessionCard session={makeSession()} selected={false} onClick={onClick} />);
+    render(
+      <SessionCard
+        session={makeSession()}
+        selected={false}
+        onClick={onClick}
+      />,
+    );
     fireEvent.click(screen.getByText('Test Task'));
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
   it('does not render last-event section when events list is empty', () => {
-    render(<SessionCard session={makeSession({ events: [] })} selected={false} onClick={vi.fn()} />);
+    render(
+      <SessionCard
+        session={makeSession({ events: [] })}
+        selected={false}
+        onClick={vi.fn()}
+      />,
+    );
     // No text from an event content — just task name, badge, elapsed
     expect(screen.queryByText(/^x/)).toBeNull();
   });
@@ -123,7 +192,9 @@ describe('SessionCard', () => {
       timestamp: Date.now() + i,
     }));
     const session = makeSession({ events });
-    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    render(
+      <SessionCard session={session} selected={false} onClick={vi.fn()} />,
+    );
     // Only the last CARD_PREVIEW_LINES events should be visible
     for (let i = events.length - CARD_PREVIEW_LINES; i < events.length; i++) {
       expect(screen.getByText(`event-${i}`)).toBeDefined();
@@ -140,7 +211,9 @@ describe('SessionCard', () => {
       timestamp: Date.now() + i,
     }));
     const session = makeSession({ events });
-    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    render(
+      <SessionCard session={session} selected={false} onClick={vi.fn()} />,
+    );
     for (let i = 0; i < count; i++) {
       expect(screen.getByText(`evt-${i}`)).toBeDefined();
     }
@@ -148,9 +221,11 @@ describe('SessionCard', () => {
 
   it('shows total duration for done session using started_at/ended_at', () => {
     const started_at = Date.now() - 125_000; // 2m 5s ago
-    const ended_at = Date.now() - 5_000;     // ended 5s ago → 2m 0s duration
+    const ended_at = Date.now() - 5_000; // ended 5s ago → 2m 0s duration
     const session = makeSession({ status: 'done', started_at, ended_at });
-    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    render(
+      <SessionCard session={session} selected={false} onClick={vi.fn()} />,
+    );
     expect(screen.getByText('2m 0s')).toBeDefined();
   });
 
@@ -166,32 +241,61 @@ describe('SessionCard', () => {
         { eventType: 'text', content: 'b', timestamp: burstTs },
       ],
     });
-    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    render(
+      <SessionCard session={session} selected={false} onClick={vi.fn()} />,
+    );
     // Should show ~61s from started_at, not < 1s from event timestamps
     expect(screen.getByText(/1m \d+s/)).toBeDefined();
   });
 
   it('shows — when no started_at and no events', () => {
-    const session = makeSession({ status: 'running', started_at: undefined, events: [] });
-    render(<SessionCard session={session} selected={false} onClick={vi.fn()} />);
+    const session = makeSession({
+      status: 'running',
+      started_at: undefined,
+      events: [],
+    });
+    render(
+      <SessionCard session={session} selected={false} onClick={vi.fn()} />,
+    );
     expect(screen.getByText('—')).toBeDefined();
   });
 
   it('shows Resume button on rate-limited session when onResume is provided', () => {
     const session = makeSession({ status: 'running', isRateLimited: true });
-    render(<SessionCard session={session} selected={false} onClick={vi.fn()} onResume={vi.fn()} />);
+    render(
+      <SessionCard
+        session={session}
+        selected={false}
+        onClick={vi.fn()}
+        onResume={vi.fn()}
+      />,
+    );
     expect(screen.getByText('Resume')).toBeDefined();
   });
 
   it('does not show Resume button on non-rate-limited running session', () => {
     const session = makeSession({ status: 'running', isRateLimited: false });
-    render(<SessionCard session={session} selected={false} onClick={vi.fn()} onResume={vi.fn()} />);
+    render(
+      <SessionCard
+        session={session}
+        selected={false}
+        onClick={vi.fn()}
+        onResume={vi.fn()}
+      />,
+    );
     expect(screen.queryByText('Resume')).toBeNull();
   });
 
   it('does not show Resume button on done session', () => {
     const session = makeSession({ status: 'done', isRateLimited: false });
-    render(<SessionCard session={session} selected={false} onClick={vi.fn()} onResume={vi.fn()} />);
+    render(
+      <SessionCard
+        session={session}
+        selected={false}
+        onClick={vi.fn()}
+        onResume={vi.fn()}
+      />,
+    );
     expect(screen.queryByText('Resume')).toBeNull();
   });
 
@@ -199,19 +303,40 @@ describe('SessionCard', () => {
     const onResume = vi.fn();
     const onClick = vi.fn();
     const session = makeSession({ status: 'running', isRateLimited: true });
-    render(<SessionCard session={session} selected={false} onClick={onClick} onResume={onResume} />);
+    render(
+      <SessionCard
+        session={session}
+        selected={false}
+        onClick={onClick}
+        onResume={onResume}
+      />,
+    );
     fireEvent.click(screen.getByText('Resume'));
     expect(onResume).toHaveBeenCalledTimes(1);
   });
 
   it('renders ☆ star button when onToggleFavorite is provided', () => {
-    render(<SessionCard session={makeSession()} selected={false} onClick={vi.fn()} onToggleFavorite={vi.fn()} />);
+    render(
+      <SessionCard
+        session={makeSession()}
+        selected={false}
+        onClick={vi.fn()}
+        onToggleFavorite={vi.fn()}
+      />,
+    );
     expect(screen.getByLabelText('Favorite session')).toBeDefined();
     expect(screen.getByText('☆')).toBeDefined();
   });
 
   it('renders ★ when session is favorited', () => {
-    render(<SessionCard session={makeSession({ favorited: true })} selected={false} onClick={vi.fn()} onToggleFavorite={vi.fn()} />);
+    render(
+      <SessionCard
+        session={makeSession({ favorited: true })}
+        selected={false}
+        onClick={vi.fn()}
+        onToggleFavorite={vi.fn()}
+      />,
+    );
     expect(screen.getByLabelText('Unfavorite session')).toBeDefined();
     expect(screen.getByText('★')).toBeDefined();
   });
@@ -219,14 +344,27 @@ describe('SessionCard', () => {
   it('calls onToggleFavorite and does not bubble to onClick when star is clicked', () => {
     const onToggleFavorite = vi.fn();
     const onClick = vi.fn();
-    render(<SessionCard session={makeSession()} selected={false} onClick={onClick} onToggleFavorite={onToggleFavorite} />);
+    render(
+      <SessionCard
+        session={makeSession()}
+        selected={false}
+        onClick={onClick}
+        onToggleFavorite={onToggleFavorite}
+      />,
+    );
     fireEvent.click(screen.getByLabelText('Favorite session'));
     expect(onToggleFavorite).toHaveBeenCalledTimes(1);
     expect(onClick).not.toHaveBeenCalled();
   });
 
   it('does not render star button when onToggleFavorite is not provided', () => {
-    render(<SessionCard session={makeSession()} selected={false} onClick={vi.fn()} />);
+    render(
+      <SessionCard
+        session={makeSession()}
+        selected={false}
+        onClick={vi.fn()}
+      />,
+    );
     expect(screen.queryByLabelText('Favorite session')).toBeNull();
   });
 });

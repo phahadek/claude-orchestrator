@@ -55,13 +55,15 @@ const mockSession = {
 const mockEvents = [
   {
     event_type: 'text',
-    payload: '{"type":"assistant","message":{"content":[{"type":"text","text":"Hello"}]}}',
+    payload:
+      '{"type":"assistant","message":{"content":[{"type":"text","text":"Hello"}]}}',
     timestamp: 1000100,
     message_id: 'msg-1',
   },
   {
     event_type: 'user_message',
-    payload: '{"type":"user","message":{"content":[{"type":"text","text":"Hi"}]}}',
+    payload:
+      '{"type":"user","message":{"content":[{"type":"text","text":"Hi"}]}}',
     timestamp: 1000050,
     message_id: null,
   },
@@ -75,7 +77,9 @@ beforeEach(() => {
 describe('GET /api/sessions/:id/events', () => {
   it('returns 404 for a non-existent session ID', async () => {
     vi.mocked(queries.getSession).mockReturnValue(undefined);
-    const res = await supertest(buildApp()).get('/api/sessions/nonexistent/events');
+    const res = await supertest(buildApp()).get(
+      '/api/sessions/nonexistent/events',
+    );
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ error: 'Session not found' });
   });
@@ -83,7 +87,9 @@ describe('GET /api/sessions/:id/events', () => {
   it('returns 200 with { session, events } for an existing session', async () => {
     vi.mocked(queries.getSession).mockReturnValue(mockSession as never);
     vi.mocked(queries.getEventsBySession).mockReturnValue(mockEvents as never);
-    const res = await supertest(buildApp()).get('/api/sessions/test-session-1/events');
+    const res = await supertest(buildApp()).get(
+      '/api/sessions/test-session-1/events',
+    );
     expect(res.status).toBe(200);
     expect(res.body).toHaveProperty('session');
     expect(res.body).toHaveProperty('events');
@@ -94,7 +100,9 @@ describe('GET /api/sessions/:id/events', () => {
   it('maps event fields correctly including optional messageId', async () => {
     vi.mocked(queries.getSession).mockReturnValue(mockSession as never);
     vi.mocked(queries.getEventsBySession).mockReturnValue(mockEvents as never);
-    const res = await supertest(buildApp()).get('/api/sessions/test-session-1/events');
+    const res = await supertest(buildApp()).get(
+      '/api/sessions/test-session-1/events',
+    );
     expect(res.status).toBe(200);
     const [ev0, ev1] = res.body.events;
     expect(ev0.eventType).toBe('text');
@@ -107,9 +115,11 @@ describe('GET /api/sessions/:id/events', () => {
     vi.mocked(queries.getSession).mockReturnValue(mockSession as never);
     vi.mocked(queries.getEventsBySession).mockReturnValue(mockEvents as never);
     vi.mocked(eventFilters.isSystemOnlyUserEvent)
-      .mockReturnValueOnce(true)   // first event filtered out
+      .mockReturnValueOnce(true) // first event filtered out
       .mockReturnValueOnce(false); // second event kept
-    const res = await supertest(buildApp()).get('/api/sessions/test-session-1/events');
+    const res = await supertest(buildApp()).get(
+      '/api/sessions/test-session-1/events',
+    );
     expect(res.status).toBe(200);
     expect(res.body.events).toHaveLength(1);
     expect(res.body.events[0].eventType).toBe('user_message');

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { summarizeEvent, extractSystem, extractToolDetail } from '../eventParsing';
+import {
+  summarizeEvent,
+  extractSystem,
+  extractToolDetail,
+} from '../eventParsing';
 
 // Helper to make an event object
 function ev(eventType: string, content: string) {
@@ -74,13 +78,21 @@ describe('summarizeEvent', () => {
 
   describe('tool_use events', () => {
     it('renders 🔧 ToolName (pattern) for Glob tool', () => {
-      const payload = { type: 'tool_use', name: 'Glob', input: { pattern: '**/*.ts' } };
+      const payload = {
+        type: 'tool_use',
+        name: 'Glob',
+        input: { pattern: '**/*.ts' },
+      };
       const result = summarizeEvent(ev('tool_use', JSON.stringify(payload)));
       expect(result).toBe('🔧 Glob (**/*.ts)');
     });
 
     it('renders 🔧 Read (filename) for Read tool', () => {
-      const payload = { type: 'tool_use', name: 'Read', input: { file_path: '/src/config.ts' } };
+      const payload = {
+        type: 'tool_use',
+        name: 'Read',
+        input: { file_path: '/src/config.ts' },
+      };
       const result = summarizeEvent(ev('tool_use', JSON.stringify(payload)));
       expect(result).toBe('🔧 Read (config.ts)');
     });
@@ -92,7 +104,11 @@ describe('summarizeEvent', () => {
     });
 
     it('renders 🔧 Bash $ <command> for Bash tool', () => {
-      const payload = { type: 'tool_use', name: 'Bash', input: { command: 'git status' } };
+      const payload = {
+        type: 'tool_use',
+        name: 'Bash',
+        input: { command: 'git status' },
+      };
       const result = summarizeEvent(ev('tool_use', JSON.stringify(payload)));
       expect(result).toBe('🔧 Bash $ git status');
     });
@@ -158,11 +174,15 @@ describe('summarizeEvent', () => {
 
 describe('extractToolDetail', () => {
   it('returns basename for Read with file_path', () => {
-    expect(extractToolDetail('Read', { file_path: '/src/config.ts' })).toBe('config.ts');
+    expect(extractToolDetail('Read', { file_path: '/src/config.ts' })).toBe(
+      'config.ts',
+    );
   });
 
   it('returns basename for Write with file_path', () => {
-    expect(extractToolDetail('Write', { file_path: 'C:\\project\\foo.ts' })).toBe('foo.ts');
+    expect(
+      extractToolDetail('Write', { file_path: 'C:\\project\\foo.ts' }),
+    ).toBe('foo.ts');
   });
 
   it('returns basename for Edit with file_path', () => {
@@ -178,11 +198,15 @@ describe('extractToolDetail', () => {
   });
 
   it('returns description for Agent', () => {
-    expect(extractToolDetail('Agent', { description: 'Explore codebase' })).toBe('Explore codebase');
+    expect(
+      extractToolDetail('Agent', { description: 'Explore codebase' }),
+    ).toBe('Explore codebase');
   });
 
   it('returns null for unknown tool', () => {
-    expect(extractToolDetail('WebFetch', { url: 'https://example.com' })).toBeNull();
+    expect(
+      extractToolDetail('WebFetch', { url: 'https://example.com' }),
+    ).toBeNull();
   });
 
   it('returns null when input is null', () => {
@@ -215,7 +239,10 @@ describe('extractSystem — user events with array content', () => {
       message: {
         role: 'user',
         content: [
-          { type: 'text', text: '<system-reminder>Do not do X</system-reminder>' },
+          {
+            type: 'text',
+            text: '<system-reminder>Do not do X</system-reminder>',
+          },
         ],
       },
     };
@@ -230,7 +257,10 @@ describe('extractSystem — user events with array content', () => {
       message: {
         role: 'user',
         content: [
-          { type: 'text', text: 'Hello<local-command-caveat>some caveat</local-command-caveat>' },
+          {
+            type: 'text',
+            text: 'Hello<local-command-caveat>some caveat</local-command-caveat>',
+          },
         ],
       },
     };

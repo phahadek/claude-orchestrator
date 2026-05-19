@@ -31,32 +31,50 @@ vi.mock('../db/db.js', async () => {
   `);
 
   // Fixture data
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO sessions (session_id, project_id, status, started_at, session_type, total_input_tokens, total_output_tokens, model, task_name)
     VALUES (?, ?, 'done', ?, 'standard', ?, ?, ?, ?)
-  `).run('s1', 'proj-a', 1_000_000, 1000, 500, 'claude-sonnet-4-6', 'Task A');
+  `,
+  ).run('s1', 'proj-a', 1_000_000, 1000, 500, 'claude-sonnet-4-6', 'Task A');
 
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO sessions (session_id, project_id, status, started_at, session_type, total_input_tokens, total_output_tokens, model, task_name)
     VALUES (?, ?, 'done', ?, 'standard', ?, ?, ?, ?)
-  `).run('s2', 'proj-a', 2_000_000, 500, 200, 'claude-haiku-4-5', 'Task B');
+  `,
+  ).run('s2', 'proj-a', 2_000_000, 500, 200, 'claude-haiku-4-5', 'Task B');
 
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO sessions (session_id, project_id, status, started_at, session_type, total_input_tokens, total_output_tokens, model, task_name)
     VALUES (?, ?, 'done', ?, 'standard', ?, ?, ?, ?)
-  `).run('s3', 'proj-b', 1_500_000, 300, 150, 'claude-opus-4-6', 'Task C');
+  `,
+  ).run('s3', 'proj-b', 1_500_000, 300, 150, 'claude-opus-4-6', 'Task C');
 
   // Zero-token session
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO sessions (session_id, project_id, status, started_at, session_type, total_input_tokens, total_output_tokens, task_name)
     VALUES (?, ?, 'done', ?, 'standard', 0, 0, ?)
-  `).run('s4', 'proj-a', 3_000_000, 'Zero-token task');
+  `,
+  ).run('s4', 'proj-a', 3_000_000, 'Zero-token task');
 
   // Archived session — must still appear in analytics (analytics is historical)
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO sessions (session_id, project_id, status, started_at, session_type, total_input_tokens, total_output_tokens, model, task_name, archived)
     VALUES (?, ?, 'done', ?, 'standard', ?, ?, ?, ?, 1)
-  `).run('s5', 'proj-a', 4_000_000, 800, 400, 'claude-sonnet-4-6', 'Archived task');
+  `,
+  ).run(
+    's5',
+    'proj-a',
+    4_000_000,
+    800,
+    400,
+    'claude-sonnet-4-6',
+    'Archived task',
+  );
 
   return { db };
 });
@@ -89,9 +107,13 @@ describe('GET /api/analytics/tokens', () => {
   it('includes archived sessions in the response', async () => {
     const res = await supertest(buildApp()).get('/api/analytics/tokens');
     expect(res.status).toBe(200);
-    const ids = res.body.sessions.map((s: { sessionId: string }) => s.sessionId);
+    const ids = res.body.sessions.map(
+      (s: { sessionId: string }) => s.sessionId,
+    );
     expect(ids).toContain('s5');
-    const archived = res.body.sessions.find((s: { sessionId: string }) => s.sessionId === 's5');
+    const archived = res.body.sessions.find(
+      (s: { sessionId: string }) => s.sessionId === 's5',
+    );
     expect(archived).toBeDefined();
     expect(archived.inputTokens).toBe(800);
     expect(archived.outputTokens).toBe(400);
@@ -99,7 +121,9 @@ describe('GET /api/analytics/tokens', () => {
   });
 
   it('filters by projectId correctly (archived included)', async () => {
-    const res = await supertest(buildApp()).get('/api/analytics/tokens?projectId=proj-a');
+    const res = await supertest(buildApp()).get(
+      '/api/analytics/tokens?projectId=proj-a',
+    );
     expect(res.status).toBe(200);
     expect(res.body.sessions).toHaveLength(4);
     for (const s of res.body.sessions) {
@@ -111,16 +135,22 @@ describe('GET /api/analytics/tokens', () => {
   });
 
   it('filters by date range', async () => {
-    const res = await supertest(buildApp()).get('/api/analytics/tokens?from=1500000&to=2500000');
+    const res = await supertest(buildApp()).get(
+      '/api/analytics/tokens?from=1500000&to=2500000',
+    );
     expect(res.status).toBe(200);
-    const ids = res.body.sessions.map((s: { sessionId: string }) => s.sessionId);
+    const ids = res.body.sessions.map(
+      (s: { sessionId: string }) => s.sessionId,
+    );
     expect(ids).toContain('s2');
     expect(ids).not.toContain('s1');
     expect(ids).not.toContain('s4');
   });
 
   it('returns cost field for each session', async () => {
-    const res = await supertest(buildApp()).get('/api/analytics/tokens?projectId=proj-a');
+    const res = await supertest(buildApp()).get(
+      '/api/analytics/tokens?projectId=proj-a',
+    );
     expect(res.status).toBe(200);
     for (const s of res.body.sessions) {
       expect(typeof s.cost).toBe('number');
@@ -129,8 +159,12 @@ describe('GET /api/analytics/tokens', () => {
   });
 
   it('returns zero cost for zero-token sessions without errors', async () => {
-    const res = await supertest(buildApp()).get('/api/analytics/tokens?projectId=proj-a');
-    const zeroSession = res.body.sessions.find((s: { sessionId: string }) => s.sessionId === 's4');
+    const res = await supertest(buildApp()).get(
+      '/api/analytics/tokens?projectId=proj-a',
+    );
+    const zeroSession = res.body.sessions.find(
+      (s: { sessionId: string }) => s.sessionId === 's4',
+    );
     expect(zeroSession).toBeDefined();
     expect(zeroSession.totalTokens).toBe(0);
     expect(zeroSession.cost).toBe(0);

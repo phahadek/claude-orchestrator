@@ -1,5 +1,10 @@
 import { config } from '../config';
-import { upsertTaskCache, getCacheAge, getTaskCache, updateTaskCacheStatus } from '../db/queries';
+import {
+  upsertTaskCache,
+  getCacheAge,
+  getTaskCache,
+  updateTaskCacheStatus,
+} from '../db/queries';
 import { NotionTask, NotionApiError, ResolvedTask } from './types';
 import { DependencyResolver } from './DependencyResolver';
 
@@ -118,7 +123,10 @@ async function notionRequest<T>(
  */
 export function parseDependsOn(raw: string): string[] {
   if (!raw) return [];
-  return raw.split(/[|,]/).map((id) => id.trim()).filter(Boolean);
+  return raw
+    .split(/[|,]/)
+    .map((id) => id.trim())
+    .filter(Boolean);
 }
 
 function mapPageToTask(page: NotionPage): NotionTask {
@@ -135,7 +143,16 @@ function mapPageToTask(page: NotionPage): NotionTask {
 
   const prUrl = page.properties['PR']?.url ?? undefined;
 
-  return { id: page.id, title, status, type, dependsOn, notionUrl: page.url, prUrl, priority };
+  return {
+    id: page.id,
+    title,
+    status,
+    type,
+    dependsOn,
+    notionUrl: page.url,
+    prUrl,
+    priority,
+  };
 }
 
 // ─── Block helpers for fetchTaskPage ────────────────────────────────────────
@@ -162,20 +179,32 @@ function richTextToString(items: NotionRichText[]): string {
 
 function blockToLine(block: NotionBlock): string {
   const type = block.type as string;
-  const inner = block[type] as { rich_text?: NotionRichText[]; language?: string } | undefined;
+  const inner = block[type] as
+    | { rich_text?: NotionRichText[]; language?: string }
+    | undefined;
   if (!inner) return '';
   const text = inner.rich_text ? richTextToString(inner.rich_text) : '';
   switch (type) {
-    case 'heading_1': return `# ${text}`;
-    case 'heading_2': return `## ${text}`;
-    case 'heading_3': return `### ${text}`;
-    case 'code': return `\`\`\`${inner.language ?? ''}\n${text}\n\`\`\``;
-    case 'bulleted_list_item': return `- ${text}`;
-    case 'numbered_list_item': return `1. ${text}`;
-    case 'quote': return `> ${text}`;
-    case 'callout': return `> ${text}`;
-    case 'divider': return '---';
-    default: return text;
+    case 'heading_1':
+      return `# ${text}`;
+    case 'heading_2':
+      return `## ${text}`;
+    case 'heading_3':
+      return `### ${text}`;
+    case 'code':
+      return `\`\`\`${inner.language ?? ''}\n${text}\n\`\`\``;
+    case 'bulleted_list_item':
+      return `- ${text}`;
+    case 'numbered_list_item':
+      return `1. ${text}`;
+    case 'quote':
+      return `> ${text}`;
+    case 'callout':
+      return `> ${text}`;
+    case 'divider':
+      return '---';
+    default:
+      return text;
   }
 }
 
@@ -209,7 +238,7 @@ export function parseSection(markdown: string, headingKeyword: string): string {
       } else if (inSection) {
         // Only break on a different known top-level section, not sub-headings
         const isTopLevel = TOP_LEVEL_SECTIONS.some(
-          s => heading.includes(s) && s !== headingKeyword.toLowerCase(),
+          (s) => heading.includes(s) && s !== headingKeyword.toLowerCase(),
         );
         if (isTopLevel) {
           break;
@@ -235,7 +264,10 @@ export class NotionClient {
    * Results are cached per board with a 5-minute TTL.
    * Returns ResolvedTask[] with dependency annotations.
    */
-  async fetchReadyTasks(boardId: string, skipCache?: boolean): Promise<ResolvedTask[]> {
+  async fetchReadyTasks(
+    boardId: string,
+    skipCache?: boolean,
+  ): Promise<ResolvedTask[]> {
     if (!skipCache && isBoardCacheFresh(boardId)) {
       const cached = readBoardCache(boardId);
       if (cached) return resolver.resolve(cached);
@@ -265,9 +297,10 @@ export class NotionClient {
         tasks.push(mapPageToTask(page));
       }
 
-      startCursor = response.has_more && response.next_cursor
-        ? response.next_cursor
-        : undefined;
+      startCursor =
+        response.has_more && response.next_cursor
+          ? response.next_cursor
+          : undefined;
     } while (startCursor);
 
     writeBoardCache(boardId, tasks);
@@ -317,7 +350,8 @@ export class NotionClient {
         const line = blockToLine(block);
         lines.push(line);
       }
-      startCursor = resp.has_more && resp.next_cursor ? resp.next_cursor : undefined;
+      startCursor =
+        resp.has_more && resp.next_cursor ? resp.next_cursor : undefined;
     } while (startCursor);
 
     const rawMarkdown = lines.join('\n');
@@ -341,8 +375,7 @@ export class NotionClient {
    */
   async attachPR(taskId: string, prUrl: string): Promise<void> {
     const page = await notionRequest<NotionPage>('GET', `/pages/${taskId}`);
-    const existing =
-      page.properties.Notes?.rich_text?.[0]?.text?.content ?? '';
+    const existing = page.properties.Notes?.rich_text?.[0]?.text?.content ?? '';
     const updated = existing ? `${existing}\n${prUrl}` : prUrl;
 
     await notionRequest('PATCH', `/pages/${taskId}`, {

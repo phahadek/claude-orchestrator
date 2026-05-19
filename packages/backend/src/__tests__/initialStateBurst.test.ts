@@ -54,7 +54,9 @@ describe('sendInitialStateBurst', () => {
   });
 
   it('tags every replayed session_status with replay: true for done sessions', () => {
-    const sessions = ['a', 'b', 'c', 'd', 'e'].map((id) => makeSession(id, 'done'));
+    const sessions = ['a', 'b', 'c', 'd', 'e'].map((id) =>
+      makeSession(id, 'done'),
+    );
     vi.mocked(queries.getActiveSessions).mockReturnValue(sessions);
 
     const sent: ServerMessage[] = [];
@@ -82,12 +84,16 @@ describe('sendInitialStateBurst', () => {
     const sent: ServerMessage[] = [];
     sendInitialStateBurst((msg) => sent.push(msg));
 
-    const statusMessages = sent.filter((m) => m.type === 'session_status') as Extract<ServerMessage, { type: 'session_status' }>[];
+    const statusMessages = sent.filter(
+      (m) => m.type === 'session_status',
+    ) as Extract<ServerMessage, { type: 'session_status' }>[];
     expect(statusMessages.map((m) => m.replay)).toEqual([true, true, true]);
   });
 
   it('does not add replay:true to other message types in the burst', () => {
-    vi.mocked(queries.getActiveSessions).mockReturnValue([makeSession('a', 'done')]);
+    vi.mocked(queries.getActiveSessions).mockReturnValue([
+      makeSession('a', 'done'),
+    ]);
 
     const sent: ServerMessage[] = [];
     sendInitialStateBurst((msg) => sent.push(msg));

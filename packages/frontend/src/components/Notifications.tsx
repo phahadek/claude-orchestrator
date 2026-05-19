@@ -14,7 +14,10 @@ interface NotificationsProps {
   onDismiss: (id: string) => void;
 }
 
-export function Notifications({ notifications, onDismiss }: NotificationsProps) {
+export function Notifications({
+  notifications,
+  onDismiss,
+}: NotificationsProps) {
   if (notifications.length === 0) return null;
 
   return (
@@ -29,7 +32,10 @@ export function Notifications({ notifications, onDismiss }: NotificationsProps) 
             <button
               type="button"
               className={styles.reviewBody}
-              onClick={() => { n.onClick?.(); onDismiss(n.id); }}
+              onClick={() => {
+                n.onClick?.();
+                onDismiss(n.id);
+              }}
             >
               {n.message}
             </button>
@@ -39,7 +45,12 @@ export function Notifications({ notifications, onDismiss }: NotificationsProps) 
               {n.status === 'done' && n.prUrl ? (
                 <span className={styles.message}>
                   PR opened —{' '}
-                  <a href={n.prUrl} target="_blank" rel="noreferrer" className={styles.prLink}>
+                  <a
+                    href={n.prUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={styles.prLink}
+                  >
                     view PR
                   </a>
                 </span>

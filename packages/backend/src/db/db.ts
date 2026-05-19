@@ -108,24 +108,86 @@ db.exec(`
 `);
 
 // ── Migrations (idempotent column additions for existing databases) ──────────
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN draft INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
+try {
+  db.exec(
+    `ALTER TABLE pull_requests ADD COLUMN draft INTEGER NOT NULL DEFAULT 0`,
+  );
+} catch {
+  /* already exists */
+}
 // review_iteration and review_session_id support the auto re-review loop:
 // review_iteration tracks how many times a PR has been reviewed (caps escalation).
 // review_session_id is the session ID of the paired review session for sendOrResume.
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN review_iteration INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN review_session_id TEXT`); } catch { /* already exists */ }
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN head_sha TEXT`); } catch { /* already exists */ }
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN last_reviewed_sha TEXT`); } catch { /* already exists */ }
-try { db.exec(`ALTER TABLE sessions ADD COLUMN model TEXT`); } catch { /* already exists */ }
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN node_id TEXT`); } catch { /* already exists */ }
-try { db.exec(`ALTER TABLE sessions ADD COLUMN task_name TEXT`); } catch { /* already exists */ }
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN mergeable INTEGER`); } catch { /* already exists */ }
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN merge_state TEXT`); } catch { /* already exists */ }
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN merge_state_checked_at TEXT`); } catch { /* already exists */ }
+try {
+  db.exec(
+    `ALTER TABLE pull_requests ADD COLUMN review_iteration INTEGER NOT NULL DEFAULT 0`,
+  );
+} catch {
+  /* already exists */
+}
+try {
+  db.exec(`ALTER TABLE pull_requests ADD COLUMN review_session_id TEXT`);
+} catch {
+  /* already exists */
+}
+try {
+  db.exec(`ALTER TABLE pull_requests ADD COLUMN head_sha TEXT`);
+} catch {
+  /* already exists */
+}
+try {
+  db.exec(`ALTER TABLE pull_requests ADD COLUMN last_reviewed_sha TEXT`);
+} catch {
+  /* already exists */
+}
+try {
+  db.exec(`ALTER TABLE sessions ADD COLUMN model TEXT`);
+} catch {
+  /* already exists */
+}
+try {
+  db.exec(`ALTER TABLE pull_requests ADD COLUMN node_id TEXT`);
+} catch {
+  /* already exists */
+}
+try {
+  db.exec(`ALTER TABLE sessions ADD COLUMN task_name TEXT`);
+} catch {
+  /* already exists */
+}
+try {
+  db.exec(`ALTER TABLE pull_requests ADD COLUMN mergeable INTEGER`);
+} catch {
+  /* already exists */
+}
+try {
+  db.exec(`ALTER TABLE pull_requests ADD COLUMN merge_state TEXT`);
+} catch {
+  /* already exists */
+}
+try {
+  db.exec(`ALTER TABLE pull_requests ADD COLUMN merge_state_checked_at TEXT`);
+} catch {
+  /* already exists */
+}
 // failing_checks: JSON array of failing check-run names; populated when merge_state is 'ci_failed'.
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN failing_checks TEXT`); } catch { /* already exists */ }
+try {
+  db.exec(`ALTER TABLE pull_requests ADD COLUMN failing_checks TEXT`);
+} catch {
+  /* already exists */
+}
 // pending_push: 1 when a push arrives before the initial review session is established.
 // Cleared and re-review triggered after the initial review completes.
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN pending_push INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
+try {
+  db.exec(
+    `ALTER TABLE pull_requests ADD COLUMN pending_push INTEGER NOT NULL DEFAULT 0`,
+  );
+} catch {
+  /* already exists */
+}
 // pause_reason: non-null marks the task as needs_attention (e.g. 'max_reviews', 'stuck_timeout').
-try { db.exec(`ALTER TABLE pull_requests ADD COLUMN pause_reason TEXT`); } catch { /* already exists */ }
+try {
+  db.exec(`ALTER TABLE pull_requests ADD COLUMN pause_reason TEXT`);
+} catch {
+  /* already exists */
+}

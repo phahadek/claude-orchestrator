@@ -81,12 +81,17 @@ const dryRun = flag('--dry-run');
 const noArchive = flag('--no-archive');
 
 if (!targetDbId || !tasksRaw) {
-  console.error('Usage: node notion-move-tasks.mjs --target <database-id> --tasks <id1,id2,...> [options]');
+  console.error(
+    'Usage: node notion-move-tasks.mjs --target <database-id> --tasks <id1,id2,...> [options]',
+  );
   console.error('Run with no args to see full help at the top of the script.');
   process.exit(1);
 }
 
-const taskIds = tasksRaw.split(',').map(id => id.trim()).filter(Boolean);
+const taskIds = tasksRaw
+  .split(',')
+  .map((id) => id.trim())
+  .filter(Boolean);
 
 // ── Load env ─────────────────────────────────────────────────────────
 if (envPath) {
@@ -106,13 +111,15 @@ if (envPath) {
 
 const NOTION_API_KEY = process.env.NOTION_API_KEY;
 if (!NOTION_API_KEY) {
-  console.error('Error: NOTION_API_KEY not set. Pass --env <path> or export it.');
+  console.error(
+    'Error: NOTION_API_KEY not set. Pass --env <path> or export it.',
+  );
   process.exit(1);
 }
 
 // ── Notion API ───────────────────────────────────────────────────────
 const HEADERS = {
-  'Authorization': `Bearer ${NOTION_API_KEY}`,
+  Authorization: `Bearer ${NOTION_API_KEY}`,
   'Notion-Version': '2022-06-28',
   'Content-Type': 'application/json',
 };
@@ -165,9 +172,16 @@ function cleanBlock(obj) {
   if (obj === null || typeof obj !== 'object') return obj;
 
   const skip = new Set([
-    'id', 'created_time', 'last_edited_time', 'created_by',
-    'last_edited_by', 'parent', 'has_children', 'archived',
-    'in_trash', 'request_id',
+    'id',
+    'created_time',
+    'last_edited_time',
+    'created_by',
+    'last_edited_by',
+    'parent',
+    'has_children',
+    'archived',
+    'in_trash',
+    'request_id',
   ]);
 
   const cleaned = {};
@@ -188,7 +202,7 @@ function cleanBlock(obj) {
 function getTitle(page) {
   for (const [, prop] of Object.entries(page.properties)) {
     if (prop.type === 'title') {
-      return prop.title?.map(t => t.plain_text).join('') ?? '(untitled)';
+      return prop.title?.map((t) => t.plain_text).join('') ?? '(untitled)';
     }
   }
   return '(untitled)';
@@ -256,13 +270,17 @@ async function moveTask(pageId) {
           await expandTableBlock(block);
         }
         const cleaned = data.results.map(cleanBlock);
-        await api('PATCH', `/blocks/${newPage.id}/children`, { children: cleaned });
+        await api('PATCH', `/blocks/${newPage.id}/children`, {
+          children: cleaned,
+        });
       }
       cursor = data.has_more ? data.next_cursor : undefined;
     } while (cursor);
   } catch (e) {
     console.warn(`  ⚠ Content copy failed for "${title}": ${e.message}`);
-    console.warn(`    Source page kept; new (empty) page left at ${newPage.id} — retry or copy manually.`);
+    console.warn(
+      `    Source page kept; new (empty) page left at ${newPage.id} — retry or copy manually.`,
+    );
     contentCopied = false;
   }
 
@@ -278,7 +296,9 @@ async function moveTask(pageId) {
   const status = contentCopied ? '✅' : '⚠️';
   const archiveNote = shouldArchive
     ? ' (source archived)'
-    : (contentCopied ? ' (source kept)' : ' (source kept — copy failed)');
+    : contentCopied
+      ? ' (source kept)'
+      : ' (source kept — copy failed)';
   console.log(`${status} ${title} → ${newPage.id}${archiveNote}`);
 
   return { title, success: true, newId: newPage.id, contentCopied };
@@ -308,7 +328,7 @@ async function main() {
   if (fail > 0) process.exit(1);
 }
 
-main().catch(e => {
+main().catch((e) => {
   console.error(e);
   process.exit(1);
 });

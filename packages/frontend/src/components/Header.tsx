@@ -1,5 +1,8 @@
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
-import { formatTokenCount, formatCost } from '@claude-orchestrator/backend/src/utils/usage';
+import {
+  formatTokenCount,
+  formatCost,
+} from '@claude-orchestrator/backend/src/utils/usage';
 import type { TaskView } from '../types/taskView';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { MilestoneProgress } from './MilestoneProgress';
@@ -21,7 +24,19 @@ interface Props {
   incompleteReviewCount?: number;
 }
 
-export function Header({ projects, activeProjectId, onProjectChange, activeBoardId, onBoardChange, activeView, onViewChange, totalTokens, totalCost, tasks, incompleteReviewCount }: Props) {
+export function Header({
+  projects,
+  activeProjectId,
+  onProjectChange,
+  activeBoardId,
+  onBoardChange,
+  activeView,
+  onViewChange,
+  totalTokens,
+  totalCost,
+  tasks,
+  incompleteReviewCount,
+}: Props) {
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
   const boards = activeProject?.boards ?? [];
 
@@ -50,7 +65,12 @@ export function Header({ projects, activeProjectId, onProjectChange, activeBoard
         >
           PRs
           {incompleteReviewCount != null && incompleteReviewCount > 0 && (
-            <span className={styles.incompleteBadge} title="Incomplete review — needs attention">{incompleteReviewCount}</span>
+            <span
+              className={styles.incompleteBadge}
+              title="Incomplete review — needs attention"
+            >
+              {incompleteReviewCount}
+            </span>
           )}
         </button>
         <button
@@ -83,7 +103,9 @@ export function Header({ projects, activeProjectId, onProjectChange, activeBoard
             onChange={(e) => onBoardChange(e.target.value)}
           >
             {boards.map((b) => (
-              <option key={b.id} value={b.id}>{b.name}</option>
+              <option key={b.id} value={b.id}>
+                {b.name}
+              </option>
             ))}
           </select>
         </>
@@ -104,7 +126,9 @@ export function Header({ projects, activeProjectId, onProjectChange, activeBoard
             title="View token analytics"
           >
             {formatTokenCount(totalTokens)} tokens
-            {totalCost != null && totalCost > 0 ? ` (~${formatCost(totalCost)})` : ''}
+            {totalCost != null && totalCost > 0
+              ? ` (~${formatCost(totalCost)})`
+              : ''}
           </button>
         </>
       )}

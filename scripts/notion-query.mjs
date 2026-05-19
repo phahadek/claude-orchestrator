@@ -89,14 +89,16 @@ if (envPath) {
 
 const NOTION_API_KEY = process.env.NOTION_API_KEY;
 if (!NOTION_API_KEY) {
-  console.error('Error: NOTION_API_KEY not set. Pass --env <path> or export it.');
+  console.error(
+    'Error: NOTION_API_KEY not set. Pass --env <path> or export it.',
+  );
   process.exit(1);
 }
 
 // ── Notion API ───────────────────────────────────────────────────────
 const NOTION_BASE = 'https://api.notion.com/v1';
 const HEADERS = {
-  'Authorization': `Bearer ${NOTION_API_KEY}`,
+  Authorization: `Bearer ${NOTION_API_KEY}`,
   'Notion-Version': '2022-06-28',
   'Content-Type': 'application/json',
 };
@@ -147,11 +149,15 @@ function detectTitleProp(page) {
 
 function extractText(prop) {
   if (!prop) return '';
-  if (prop.type === 'title') return prop.title?.map(t => t.plain_text).join('') ?? '';
-  if (prop.type === 'rich_text') return prop.rich_text?.map(t => t.plain_text).join('') ?? '';
+  if (prop.type === 'title')
+    return prop.title?.map((t) => t.plain_text).join('') ?? '';
+  if (prop.type === 'rich_text')
+    return prop.rich_text?.map((t) => t.plain_text).join('') ?? '';
   if (prop.type === 'select') return prop.select?.name ?? '';
-  if (prop.type === 'multi_select') return prop.multi_select?.map(s => s.name).join(', ') ?? '';
-  if (prop.type === 'relation') return prop.relation?.map(r => r.id).join(', ') ?? '';
+  if (prop.type === 'multi_select')
+    return prop.multi_select?.map((s) => s.name).join(', ') ?? '';
+  if (prop.type === 'relation')
+    return prop.relation?.map((r) => r.id).join(', ') ?? '';
   if (prop.type === 'url') return prop.url ?? '';
   if (prop.type === 'number') return prop.number?.toString() ?? '';
   if (prop.type === 'checkbox') return prop.checkbox ? 'true' : 'false';
@@ -180,11 +186,11 @@ async function main() {
   }
 
   const titleProp = titlePropOverride ?? detectTitleProp(pages[0]);
-  let rows = pages.map(p => mapPage(p, titleProp));
+  let rows = pages.map((p) => mapPage(p, titleProp));
 
   // Post-filter: exclude Done
   if (noDone) {
-    rows = rows.filter(r => r[statusProp] !== '✅ Done');
+    rows = rows.filter((r) => r[statusProp] !== '✅ Done');
   }
 
   // JSON output
@@ -204,10 +210,18 @@ async function main() {
   console.log(`Total: ${rows.length} tasks\n`);
 
   // Status display order
-  const order = ['🔲 Backlog', '🗂️ Ready', '🔄 In Progress', '👀 In Review', '✅ Done', '🚫 Blocked', '⏭️ Deferred'];
+  const order = [
+    '🔲 Backlog',
+    '🗂️ Ready',
+    '🔄 In Progress',
+    '👀 In Review',
+    '✅ Done',
+    '🚫 Blocked',
+    '⏭️ Deferred',
+  ];
   const statuses = [
-    ...order.filter(s => groups[s]),
-    ...Object.keys(groups).filter(s => !order.includes(s)),
+    ...order.filter((s) => groups[s]),
+    ...Object.keys(groups).filter((s) => !order.includes(s)),
   ];
 
   for (const status of statuses) {
@@ -224,7 +238,7 @@ async function main() {
   }
 }
 
-main().catch(e => {
+main().catch((e) => {
   console.error(e);
   process.exit(1);
 });

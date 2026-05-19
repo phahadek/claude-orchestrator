@@ -2,7 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { computeProgressFromTaskViews } from '../computeWaves';
 import type { TaskView } from '../../types/taskView';
 
-function makeTaskView(taskId: string, notionStatus: string, wave = 1): TaskView {
+function makeTaskView(
+  taskId: string,
+  notionStatus: string,
+  wave = 1,
+): TaskView {
   return {
     taskId,
     taskName: `Task ${taskId}`,
@@ -53,7 +57,9 @@ describe('computeProgressFromTaskViews', () => {
     const taskUpdate: TaskView = { ...makeTaskView('t1', '🔄 In Progress') };
 
     // App.tsx merges the update in-place (same pattern used by TaskList)
-    const merged = tasks.map((t) => (t.taskId === taskUpdate.taskId ? taskUpdate : t));
+    const merged = tasks.map((t) =>
+      t.taskId === taskUpdate.taskId ? taskUpdate : t,
+    );
 
     const result = computeProgressFromTaskViews(merged);
     expect(result.statusCounts['🔄 In Progress']).toBe(1);
@@ -111,7 +117,8 @@ describe('computeProgressFromTaskViews', () => {
       makeTaskView('a', '✅ Done'),
       makeTaskView('b', '🗂️ Ready'),
     ];
-    const { waves, doneCount, statusCounts } = computeProgressFromTaskViews(tasks);
+    const { waves, doneCount, statusCounts } =
+      computeProgressFromTaskViews(tasks);
     expect(doneCount).toBe(1);
     expect(statusCounts['✅ Done']).toBe(1);
     // Done task does not appear in waves

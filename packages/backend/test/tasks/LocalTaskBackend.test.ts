@@ -230,7 +230,9 @@ describe('LocalTaskBackend (milestone schema)', () => {
     });
 
     it('throws when milestoneId is unknown', async () => {
-      await expect(backend.fetchReadyTasks('does-not-exist')).rejects.toThrow(/milestone not found/);
+      await expect(backend.fetchReadyTasks('does-not-exist')).rejects.toThrow(
+        /milestone not found/,
+      );
     });
 
     it('writes a board:<milestoneId> row and one row per task to task_cache', async () => {
@@ -240,10 +242,18 @@ describe('LocalTaskBackend (milestone schema)', () => {
       expect(board).toBeDefined();
       const boardTasks = JSON.parse(board!.raw_json) as Array<{ id: string }>;
       expect(boardTasks.map((t) => t.id).sort()).toEqual([
-        'task-done', 'task-in-progress', 'task-ready-1', 'task-ready-2',
+        'task-done',
+        'task-in-progress',
+        'task-ready-1',
+        'task-ready-2',
       ]);
 
-      for (const id of ['task-ready-1', 'task-ready-2', 'task-in-progress', 'task-done']) {
+      for (const id of [
+        'task-ready-1',
+        'task-ready-2',
+        'task-in-progress',
+        'task-done',
+      ]) {
         const row = getTaskCache(id);
         expect(row, `missing per-task cache row for ${id}`).toBeDefined();
         const cached = JSON.parse(row!.raw_json) as { id: string };
@@ -254,23 +264,41 @@ describe('LocalTaskBackend (milestone schema)', () => {
 
   describe('attachPR()', () => {
     it('writes pr_url and preserves milestone structure', async () => {
-      await backend.attachPR('task-ready-1', 'https://github.com/owner/repo/pull/42');
+      await backend.attachPR(
+        'task-ready-1',
+        'https://github.com/owner/repo/pull/42',
+      );
 
-      const file = readTasksFile(tmpDir) as { milestones: { id: string; tasks: Array<{ id: string; pr_url?: string | null; name?: string }> }[] };
+      const file = readTasksFile(tmpDir) as {
+        milestones: {
+          id: string;
+          tasks: Array<{ id: string; pr_url?: string | null; name?: string }>;
+        }[];
+      };
       expect(file.milestones).toHaveLength(2);
       expect(file.milestones[0].id).toBe('m1');
-      const task = file.milestones[0].tasks.find((t) => t.id === 'task-ready-1');
+      const task = file.milestones[0].tasks.find(
+        (t) => t.id === 'task-ready-1',
+      );
       expect(task?.pr_url).toBe('https://github.com/owner/repo/pull/42');
       // Surrounding tasks remain
       expect(file.milestones[0].tasks.map((t) => t.id)).toEqual([
-        'task-ready-1', 'task-ready-2', 'task-in-progress', 'task-done',
+        'task-ready-1',
+        'task-ready-2',
+        'task-in-progress',
+        'task-done',
       ]);
-      expect(file.milestones[1].tasks.map((t) => t.id)).toEqual(['task-other-milestone']);
+      expect(file.milestones[1].tasks.map((t) => t.id)).toEqual([
+        'task-other-milestone',
+      ]);
     });
 
     it('throws when task id is not found in any milestone', async () => {
       await expect(
-        backend.attachPR('nonexistent-task', 'https://github.com/owner/repo/pull/1'),
+        backend.attachPR(
+          'nonexistent-task',
+          'https://github.com/owner/repo/pull/1',
+        ),
       ).rejects.toThrow(/task not found/);
     });
   });
@@ -279,11 +307,20 @@ describe('LocalTaskBackend (milestone schema)', () => {
     it('writes the new status and preserves the rest of the file', async () => {
       await backend.updateStatus('task-ready-1', '🔄 In Progress');
 
-      const file = readTasksFile(tmpDir) as { milestones: { id: string; tasks: Array<{ id: string; status: string; name?: string }> }[] };
-      const task = file.milestones[0].tasks.find((t) => t.id === 'task-ready-1');
+      const file = readTasksFile(tmpDir) as {
+        milestones: {
+          id: string;
+          tasks: Array<{ id: string; status: string; name?: string }>;
+        }[];
+      };
+      const task = file.milestones[0].tasks.find(
+        (t) => t.id === 'task-ready-1',
+      );
       expect(task?.status).toBe('In Progress');
       // Other tasks within same milestone unchanged
-      const inProg = file.milestones[0].tasks.find((t) => t.id === 'task-in-progress');
+      const inProg = file.milestones[0].tasks.find(
+        (t) => t.id === 'task-in-progress',
+      );
       expect(inProg?.status).toBe('In Progress');
       // Other milestone untouched
       expect(file.milestones[1].tasks[0].status).toBe('Ready');
@@ -291,12 +328,19 @@ describe('LocalTaskBackend (milestone schema)', () => {
 
     it('finds tasks across milestones', async () => {
       await backend.updateStatus('task-other-milestone', '✅ Done');
-      const file = readTasksFile(tmpDir) as { milestones: { id: string; tasks: Array<{ id: string; status: string }> }[] };
+      const file = readTasksFile(tmpDir) as {
+        milestones: {
+          id: string;
+          tasks: Array<{ id: string; status: string }>;
+        }[];
+      };
       expect(file.milestones[1].tasks[0].status).toBe('Done');
     });
 
     it('throws when task id is not found', async () => {
-      await expect(backend.updateStatus('nonexistent-task', '🔄 In Progress')).rejects.toThrow(/task not found/);
+      await expect(
+        backend.updateStatus('nonexistent-task', '🔄 In Progress'),
+      ).rejects.toThrow(/task not found/);
     });
   });
 
@@ -310,7 +354,9 @@ describe('LocalTaskBackend (milestone schema)', () => {
     });
 
     it('throws when task id is not found', async () => {
-      await expect(backend.fetchTaskPage('nope')).rejects.toThrow(/task not found/);
+      await expect(backend.fetchTaskPage('nope')).rejects.toThrow(
+        /task not found/,
+      );
     });
   });
 
@@ -321,8 +367,22 @@ describe('LocalTaskBackend (milestone schema)', () => {
         const flatFixture = {
           board_id: 'default',
           tasks: [
-            { id: 't1', name: 'T1', status: 'Ready', type: 'Code', depends_on: [], pr_url: null },
-            { id: 't2', name: 'T2', status: 'Done', type: 'Code', depends_on: [], pr_url: null },
+            {
+              id: 't1',
+              name: 'T1',
+              status: 'Ready',
+              type: 'Code',
+              depends_on: [],
+              pr_url: null,
+            },
+            {
+              id: 't2',
+              name: 'T2',
+              status: 'Done',
+              type: 'Code',
+              depends_on: [],
+              pr_url: null,
+            },
           ],
         };
         writeTasksFile(flatDir, flatFixture);
@@ -346,7 +406,16 @@ describe('LocalTaskBackend (milestone schema)', () => {
       try {
         writeTasksFile(flatDir, {
           board_id: 'sprint-3',
-          tasks: [{ id: 't1', name: 'T1', status: 'Ready', type: 'Code', depends_on: [], pr_url: null }],
+          tasks: [
+            {
+              id: 't1',
+              name: 'T1',
+              status: 'Ready',
+              type: 'Code',
+              depends_on: [],
+              pr_url: null,
+            },
+          ],
         });
         const flatBackend = new LocalTaskBackend(flatDir);
         const ready = await flatBackend.fetchReadyTasks('sprint-3');
@@ -369,7 +438,9 @@ describe('LocalTaskBackend (milestone schema)', () => {
       const emptyDir = makeTempDir();
       try {
         const b = new LocalTaskBackend(emptyDir);
-        await expect(b.fetchReadyTasks('m1')).rejects.toThrow(/tasks.yaml not found/);
+        await expect(b.fetchReadyTasks('m1')).rejects.toThrow(
+          /tasks.yaml not found/,
+        );
       } finally {
         fs.rmSync(emptyDir, { recursive: true, force: true });
       }

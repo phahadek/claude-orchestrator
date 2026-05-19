@@ -17,7 +17,11 @@ export interface RawSessionEvent {
   timestamp?: number;
 }
 
-export const DEFAULT_SESSIONS_DIR = path.join(os.homedir(), '.claude', 'projects');
+export const DEFAULT_SESSIONS_DIR = path.join(
+  os.homedir(),
+  '.claude',
+  'projects',
+);
 
 // Includes both our internal types and the real types emitted by the Claude CLI.
 const VALID_EVENT_TYPES: ReadonlySet<string> = new Set([
@@ -177,7 +181,9 @@ export class JsonlReader {
         try {
           const payload = JSON.parse(event.payload) as Record<string, unknown>;
           if (payload.type === 'result') {
-            const usage = payload.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+            const usage = payload.usage as
+              | { input_tokens?: number; output_tokens?: number }
+              | undefined;
             if (usage) {
               totalInput = usage.input_tokens ?? 0;
               totalOutput = usage.output_tokens ?? 0;
@@ -185,20 +191,29 @@ export class JsonlReader {
               break;
             }
           }
-        } catch { /* ignore malformed payloads */ }
+        } catch {
+          /* ignore malformed payloads */
+        }
       }
 
       // Second pass: if no result event, sum usage from all events (e.g. assistant message events).
       if (!foundResultEvent) {
         for (const event of events) {
           try {
-            const payload = JSON.parse(event.payload) as Record<string, unknown>;
-            const usage = payload.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+            const payload = JSON.parse(event.payload) as Record<
+              string,
+              unknown
+            >;
+            const usage = payload.usage as
+              | { input_tokens?: number; output_tokens?: number }
+              | undefined;
             if (usage) {
               totalInput += usage.input_tokens ?? 0;
               totalOutput += usage.output_tokens ?? 0;
             }
-          } catch { /* ignore malformed payloads */ }
+          } catch {
+            /* ignore malformed payloads */
+          }
         }
       }
 
@@ -209,7 +224,9 @@ export class JsonlReader {
     }
 
     if (backfilled > 0) {
-      console.log(`[JsonlReader] backfilled tokens for ${backfilled} session(s)`);
+      console.log(
+        `[JsonlReader] backfilled tokens for ${backfilled} session(s)`,
+      );
     }
   }
 }

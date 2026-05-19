@@ -7,7 +7,11 @@ describe('vite.config', () => {
   it('ignores .claude/worktrees so worktree cleanup does not trigger HMR', () => {
     const config = viteConfig as UserConfig;
     const ignored = config.server?.watch?.ignored;
-    const patterns = Array.isArray(ignored) ? ignored : ignored ? [ignored] : [];
+    const patterns = Array.isArray(ignored)
+      ? ignored
+      : ignored
+        ? [ignored]
+        : [];
     expect(patterns).toContain('**/.claude/worktrees/**');
   });
 });

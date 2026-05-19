@@ -1,5 +1,10 @@
 import { useState } from 'react';
-import { tryParseJson, extractBashCommand, extractToolDetail, extractToolResult } from '../utils/eventParsing';
+import {
+  tryParseJson,
+  extractBashCommand,
+  extractToolDetail,
+  extractToolResult,
+} from '../utils/eventParsing';
 import styles from './ToolCallGroup.module.css';
 
 export interface CallPair {
@@ -26,7 +31,11 @@ function extractCallInput(textEvent: CallPair['textEvent']): unknown {
     if (b.type === 'tool_use') {
       let input = b.input;
       if (typeof input === 'string') {
-        try { input = JSON.parse(input); } catch { /* leave as string */ }
+        try {
+          input = JSON.parse(input);
+        } catch {
+          /* leave as string */
+        }
       }
       return input;
     }
@@ -54,12 +63,16 @@ function inputLabel(toolName: string, input: unknown): string {
 export function ToolCallGroup({ toolName, calls }: Props) {
   const [expanded, setExpanded] = useState(false);
 
-  const firstInput = calls.length > 0 ? extractCallInput(calls[0].textEvent) : null;
-  const rawDetail = toolName === 'Bash'
-    ? ((firstInput as Record<string, unknown> | null)?.description as string | undefined
-        ?? extractBashCommand(firstInput)?.slice(0, 40)
-        ?? null)
-    : extractToolDetail(toolName, firstInput);
+  const firstInput =
+    calls.length > 0 ? extractCallInput(calls[0].textEvent) : null;
+  const rawDetail =
+    toolName === 'Bash'
+      ? (((firstInput as Record<string, unknown> | null)?.description as
+          | string
+          | undefined) ??
+        extractBashCommand(firstInput)?.slice(0, 40) ??
+        null)
+      : extractToolDetail(toolName, firstInput);
   const headerSuffix = rawDetail
     ? ` (${rawDetail.length > 40 ? rawDetail.slice(0, 40) + '…' : rawDetail})`
     : '';
@@ -75,11 +88,14 @@ export function ToolCallGroup({ toolName, calls }: Props) {
         role="button"
         tabIndex={0}
         onClick={toggle}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggle(); }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') toggle();
+        }}
         aria-expanded={expanded}
       >
         <span className={styles.chevron}>{expanded ? '▼' : '▶'}</span>
-        🔧 {toolName}{headerSuffix} ×{calls.length}
+        🔧 {toolName}
+        {headerSuffix} ×{calls.length}
       </div>
       {expanded && (
         <div className={styles.groupBody}>
@@ -105,7 +121,9 @@ function CallItem({ toolName, call }: { toolName: string; call: CallPair }) {
     if (typeof parsed === 'object' && parsed !== null) {
       result = JSON.stringify(parsed, null, 2);
     }
-  } catch { /* not JSON */ }
+  } catch {
+    /* not JSON */
+  }
 
   function toggle() {
     setOpen((o) => !o);
@@ -118,7 +136,9 @@ function CallItem({ toolName, call }: { toolName: string; call: CallPair }) {
         role="button"
         tabIndex={0}
         onClick={toggle}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggle(); }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') toggle();
+        }}
         aria-expanded={open}
       >
         <span className={styles.callChevron}>{open ? '▼' : '▶'}</span>
@@ -131,9 +151,7 @@ function CallItem({ toolName, call }: { toolName: string; call: CallPair }) {
           ) : (
             <pre className={styles.args}>{JSON.stringify(input, null, 2)}</pre>
           )}
-          {result.trim() && (
-            <pre className={styles.result}>{result}</pre>
-          )}
+          {result.trim() && <pre className={styles.result}>{result}</pre>}
         </div>
       )}
     </div>

@@ -96,7 +96,10 @@ export class StuckSessionMonitor {
     const pauseMs = runtimeSettings.session_pause_threshold_seconds * 1000;
 
     if (notifyMs > 0) {
-      state.notifyTimer = setTimeout(() => this.fireNotify(sessionId), notifyMs);
+      state.notifyTimer = setTimeout(
+        () => this.fireNotify(sessionId),
+        notifyMs,
+      );
       state.notifyTimer.unref?.();
     }
     if (pauseMs > 0) {
@@ -125,8 +128,7 @@ export class StuckSessionMonitor {
     const state = this.timers.get(sessionId);
     if (!state) return;
     state.notifyTimer = null;
-    const message =
-      `⚠️ ${state.taskName} exceeding expected duration — possible grooming gap`;
+    const message = `⚠️ ${state.taskName} exceeding expected duration — possible grooming gap`;
     this.broadcast({
       type: 'stuck_session_notified',
       sessionId,
@@ -148,7 +150,9 @@ export class StuckSessionMonitor {
     try {
       this.sessionManager.send(sessionId, PAUSE_MESSAGE);
     } catch (err) {
-      console.warn(`[StuckSessionMonitor] send failed for ${sessionId}: ${(err as Error).message}`);
+      console.warn(
+        `[StuckSessionMonitor] send failed for ${sessionId}: ${(err as Error).message}`,
+      );
     }
 
     // Arm the hard-stop window. If a tool_use arrives within this window we
@@ -193,9 +197,13 @@ export class StuckSessionMonitor {
       sessionId,
       taskName: state.taskName,
     });
-    this.sessionManager.kill(sessionId).catch((err: unknown) =>
-      console.warn(`[StuckSessionMonitor] kill failed for ${sessionId}: ${(err as Error).message}`),
-    );
+    this.sessionManager
+      .kill(sessionId)
+      .catch((err: unknown) =>
+        console.warn(
+          `[StuckSessionMonitor] kill failed for ${sessionId}: ${(err as Error).message}`,
+        ),
+      );
   }
 
   private clear(sessionId: string): void {

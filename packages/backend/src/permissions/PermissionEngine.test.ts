@@ -11,7 +11,9 @@ import { getRules, insertPermissionEvent } from '../db/queries';
 import type { PermissionRule } from '../db/types';
 
 const mockGetRules = getRules as ReturnType<typeof vi.fn>;
-const mockInsertPermissionEvent = insertPermissionEvent as ReturnType<typeof vi.fn>;
+const mockInsertPermissionEvent = insertPermissionEvent as ReturnType<
+  typeof vi.fn
+>;
 
 function makeRule(overrides: Partial<PermissionRule> = {}): PermissionRule {
   return {
@@ -49,19 +51,27 @@ describe('PermissionEngine', () => {
   });
 
   it('hard-denies git push --force main', () => {
-    expect(engine.evaluate('Bash', '{"command":"git push --force origin main"}')).toBe('deny');
+    expect(
+      engine.evaluate('Bash', '{"command":"git push --force origin main"}'),
+    ).toBe('deny');
   });
 
   it('hard-denies git push --force master', () => {
-    expect(engine.evaluate('Bash', '{"command":"git push --force origin master"}')).toBe('deny');
+    expect(
+      engine.evaluate('Bash', '{"command":"git push --force origin master"}'),
+    ).toBe('deny');
   });
 
   it('hard-denies chmod -R 777', () => {
-    expect(engine.evaluate('Bash', '{"command":"chmod -R 777 ."}')).toBe('deny');
+    expect(engine.evaluate('Bash', '{"command":"chmod -R 777 ."}')).toBe(
+      'deny',
+    );
   });
 
   it('hard-denies sudo rm', () => {
-    expect(engine.evaluate('Bash', '{"command":"sudo rm -rf /tmp"}')).toBe('deny');
+    expect(engine.evaluate('Bash', '{"command":"sudo rm -rf /tmp"}')).toBe(
+      'deny',
+    );
   });
 
   it('writes to permission_events for hard-deny decisions', () => {
@@ -73,7 +83,9 @@ describe('PermissionEngine', () => {
   });
 
   it('hard-deny takes priority over any user rule', () => {
-    mockGetRules.mockReturnValue([makeRule({ pattern: 'Bash *', decision: 'allow' })]);
+    mockGetRules.mockReturnValue([
+      makeRule({ pattern: 'Bash *', decision: 'allow' }),
+    ]);
     expect(engine.evaluate('Bash', '{"command":"rm -rf /"}')).toBe('deny');
   });
 
@@ -88,7 +100,9 @@ describe('PermissionEngine', () => {
   });
 
   it('hard-allows npm run build', () => {
-    expect(engine.evaluate('Bash', '{"command":"npm run build"}')).toBe('allow');
+    expect(engine.evaluate('Bash', '{"command":"npm run build"}')).toBe(
+      'allow',
+    );
   });
 
   it('does NOT write to permission_events for hard-allow', () => {
@@ -99,25 +113,41 @@ describe('PermissionEngine', () => {
   // ─── User rules ────────────────────────────────────────────────────────────
 
   it('applies user allow rule and writes to permission_events', () => {
-    mockGetRules.mockReturnValue([makeRule({ pattern: 'Write *', decision: 'allow' })]);
+    mockGetRules.mockReturnValue([
+      makeRule({ pattern: 'Write *', decision: 'allow' }),
+    ]);
     const decision = engine.evaluate('Write', '{"file_path":"/tmp/out.txt"}');
     expect(decision).toBe('allow');
     expect(mockInsertPermissionEvent).toHaveBeenCalledOnce();
-    expect(mockInsertPermissionEvent.mock.calls[0][0].decision).toBe('auto_allow');
+    expect(mockInsertPermissionEvent.mock.calls[0][0].decision).toBe(
+      'auto_allow',
+    );
   });
 
   it('applies user deny rule and writes to permission_events', () => {
-    mockGetRules.mockReturnValue([makeRule({ pattern: 'Bash *curl*', decision: 'deny' })]);
-    const decision = engine.evaluate('Bash', '{"command":"curl https://example.com"}');
+    mockGetRules.mockReturnValue([
+      makeRule({ pattern: 'Bash *curl*', decision: 'deny' }),
+    ]);
+    const decision = engine.evaluate(
+      'Bash',
+      '{"command":"curl https://example.com"}',
+    );
     expect(decision).toBe('deny');
-    expect(mockInsertPermissionEvent.mock.calls[0][0].decision).toBe('auto_deny');
+    expect(mockInsertPermissionEvent.mock.calls[0][0].decision).toBe(
+      'auto_deny',
+    );
   });
 
   it('evaluates rules in order_index order — first match wins', () => {
     // Rule at order_index 1 allows, rule at order_index 2 denies same pattern.
     // getRules() returns them pre-sorted; first match should win.
     mockGetRules.mockReturnValue([
-      makeRule({ id: 1, order_index: 1, pattern: 'Write *', decision: 'allow' }),
+      makeRule({
+        id: 1,
+        order_index: 1,
+        pattern: 'Write *',
+        decision: 'allow',
+      }),
       makeRule({ id: 2, order_index: 2, pattern: 'Write *', decision: 'deny' }),
     ]);
     expect(engine.evaluate('Write', '{"file_path":"/tmp/a"}')).toBe('allow');
@@ -133,10 +163,16 @@ describe('PermissionEngine', () => {
 
   it('uses the label in the audit event when provided', () => {
     mockGetRules.mockReturnValue([
-      makeRule({ pattern: 'Write *', decision: 'allow', label: 'Allow all writes' }),
+      makeRule({
+        pattern: 'Write *',
+        decision: 'allow',
+        label: 'Allow all writes',
+      }),
     ]);
     engine.evaluate('Write', '{"file_path":"/tmp/a"}');
-    expect(mockInsertPermissionEvent.mock.calls[0][0].rule_matched).toBe('Allow all writes');
+    expect(mockInsertPermissionEvent.mock.calls[0][0].rule_matched).toBe(
+      'Allow all writes',
+    );
   });
 
   it('falls back to pattern as rule_matched when label is null', () => {
@@ -144,7 +180,9 @@ describe('PermissionEngine', () => {
       makeRule({ pattern: 'Write *', decision: 'allow', label: null }),
     ]);
     engine.evaluate('Write', '{"file_path":"/tmp/a"}');
-    expect(mockInsertPermissionEvent.mock.calls[0][0].rule_matched).toBe('Write *');
+    expect(mockInsertPermissionEvent.mock.calls[0][0].rule_matched).toBe(
+      'Write *',
+    );
   });
 
   // ─── Escalate ──────────────────────────────────────────────────────────────
@@ -156,7 +194,9 @@ describe('PermissionEngine', () => {
   it('writes escalate decision to permission_events', () => {
     engine.evaluate('Write', '{"file_path":"/tmp/a"}');
     expect(mockInsertPermissionEvent).toHaveBeenCalledOnce();
-    expect(mockInsertPermissionEvent.mock.calls[0][0].decision).toBe('escalate');
+    expect(mockInsertPermissionEvent.mock.calls[0][0].decision).toBe(
+      'escalate',
+    );
     expect(mockInsertPermissionEvent.mock.calls[0][0].rule_matched).toBeNull();
   });
 
@@ -164,14 +204,24 @@ describe('PermissionEngine', () => {
 
   it('applies a regex rule correctly', () => {
     mockGetRules.mockReturnValue([
-      makeRule({ pattern: 'Bash.*npm install', match_type: 'regex', decision: 'deny' }),
+      makeRule({
+        pattern: 'Bash.*npm install',
+        match_type: 'regex',
+        decision: 'deny',
+      }),
     ]);
-    expect(engine.evaluate('Bash', '{"command":"npm install lodash"}')).toBe('deny');
+    expect(engine.evaluate('Bash', '{"command":"npm install lodash"}')).toBe(
+      'deny',
+    );
   });
 
   it('invalid regex defaults to no-match without throwing', () => {
     mockGetRules.mockReturnValue([
-      makeRule({ pattern: '[invalid regex(', match_type: 'regex', decision: 'deny' }),
+      makeRule({
+        pattern: '[invalid regex(',
+        match_type: 'regex',
+        decision: 'deny',
+      }),
     ]);
     // Should not throw; falls through to escalate
     expect(engine.evaluate('Write', '{"file_path":"/a"}')).toBe('escalate');

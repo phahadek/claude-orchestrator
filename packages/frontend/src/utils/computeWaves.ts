@@ -14,7 +14,9 @@ export interface TaskViewWaveResult {
  * Uses the pre-computed `wave` field from the backend rather than re-deriving from dependsOn.
  * Deferred tasks are excluded from the counts and wave display.
  */
-export function computeProgressFromTaskViews(tasks: TaskView[]): TaskViewWaveResult {
+export function computeProgressFromTaskViews(
+  tasks: TaskView[],
+): TaskViewWaveResult {
   const DEFERRED = '⏭️ Deferred';
   const DONE = '✅ Done';
 
@@ -83,7 +85,9 @@ export function computeWaves(tasks: ResolvedTask[]): WaveResult {
   //   - Done (status === DONE), or
   //   - Already placed in a previous wave
   const placed = new Set<string>(); // IDs of tasks already assigned to a wave
-  const doneIds = new Set(nonDeferred.filter((t) => t.task.status === DONE).map((t) => t.task.id));
+  const doneIds = new Set(
+    nonDeferred.filter((t) => t.task.status === DONE).map((t) => t.task.id),
+  );
   const nonDoneNonDeferred = nonDeferred.filter((t) => t.task.status !== DONE);
 
   const waves: ResolvedTask[][] = [];
@@ -98,7 +102,9 @@ export function computeWaves(tasks: ResolvedTask[]): WaveResult {
     const nextRemaining: ResolvedTask[] = [];
 
     for (const t of remaining) {
-      const allDepsSatisfied = t.task.dependsOn.every((depId) => placed.has(depId) || doneIds.has(depId));
+      const allDepsSatisfied = t.task.dependsOn.every(
+        (depId) => placed.has(depId) || doneIds.has(depId),
+      );
       if (allDepsSatisfied) {
         wave.push(t);
       } else {

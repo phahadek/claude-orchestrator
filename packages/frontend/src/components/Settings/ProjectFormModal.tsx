@@ -41,11 +41,17 @@ function fromProject(p: Project): ProjectFormValues {
   };
 }
 
-export function ProjectFormModal({ initialProject, onCancel, onSubmit }: Props) {
+export function ProjectFormModal({
+  initialProject,
+  onCancel,
+  onSubmit,
+}: Props) {
   const [values, setValues] = useState<ProjectFormValues>(() =>
     initialProject ? fromProject(initialProject) : EMPTY,
   );
-  const [errors, setErrors] = useState<{ name?: string; projectDir?: string }>({});
+  const [errors, setErrors] = useState<{ name?: string; projectDir?: string }>(
+    {},
+  );
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
 
@@ -55,7 +61,10 @@ export function ProjectFormModal({ initialProject, onCancel, onSubmit }: Props) 
     setServerError(null);
   }, [initialProject]);
 
-  function update<K extends keyof ProjectFormValues>(key: K, value: ProjectFormValues[K]) {
+  function update<K extends keyof ProjectFormValues>(
+    key: K,
+    value: ProjectFormValues[K],
+  ) {
     setValues((v) => ({ ...v, [key]: value }));
   }
 
@@ -63,7 +72,8 @@ export function ProjectFormModal({ initialProject, onCancel, onSubmit }: Props) 
     e.preventDefault();
     const nextErrors: { name?: string; projectDir?: string } = {};
     if (!values.name.trim()) nextErrors.name = 'Name is required';
-    if (!values.projectDir.trim()) nextErrors.projectDir = 'Project Dir is required';
+    if (!values.projectDir.trim())
+      nextErrors.projectDir = 'Project Dir is required';
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
 
@@ -72,7 +82,9 @@ export function ProjectFormModal({ initialProject, onCancel, onSubmit }: Props) 
     try {
       await onSubmit(values);
     } catch (err) {
-      setServerError(err instanceof Error ? err.message : 'Failed to save project');
+      setServerError(
+        err instanceof Error ? err.message : 'Failed to save project',
+      );
     } finally {
       setSubmitting(false);
     }
@@ -89,10 +101,14 @@ export function ProjectFormModal({ initialProject, onCancel, onSubmit }: Props) 
       aria-label={isEdit ? 'Edit project' : 'Add project'}
     >
       <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
-        <h3 className={styles.modalTitle}>{isEdit ? 'Edit project' : 'Add project'}</h3>
+        <h3 className={styles.modalTitle}>
+          {isEdit ? 'Edit project' : 'Add project'}
+        </h3>
         <form onSubmit={(e) => void handleSubmit(e)}>
           <div className={styles.formField}>
-            <label htmlFor="proj-name" className={styles.formLabel}>Name</label>
+            <label htmlFor="proj-name" className={styles.formLabel}>
+              Name
+            </label>
             <input
               id="proj-name"
               type="text"
@@ -105,7 +121,9 @@ export function ProjectFormModal({ initialProject, onCancel, onSubmit }: Props) 
           </div>
 
           <div className={styles.formField}>
-            <label htmlFor="proj-dir" className={styles.formLabel}>Project Dir</label>
+            <label htmlFor="proj-dir" className={styles.formLabel}>
+              Project Dir
+            </label>
             <input
               id="proj-dir"
               type="text"
@@ -114,16 +132,25 @@ export function ProjectFormModal({ initialProject, onCancel, onSubmit }: Props) 
               onChange={(e) => update('projectDir', e.target.value)}
               placeholder="/absolute/path/to/repo"
             />
-            {errors.projectDir && <p className={styles.fieldError}>{errors.projectDir}</p>}
+            {errors.projectDir && (
+              <p className={styles.fieldError}>{errors.projectDir}</p>
+            )}
           </div>
 
           <div className={styles.formField}>
-            <label htmlFor="proj-source" className={styles.formLabel}>Task Source</label>
+            <label htmlFor="proj-source" className={styles.formLabel}>
+              Task Source
+            </label>
             <select
               id="proj-source"
               className={styles.input}
               value={values.taskSource}
-              onChange={(e) => update('taskSource', e.target.value === 'yaml' ? 'yaml' : 'notion')}
+              onChange={(e) =>
+                update(
+                  'taskSource',
+                  e.target.value === 'yaml' ? 'yaml' : 'notion',
+                )
+              }
             >
               <option value="notion">Notion</option>
               <option value="yaml">YAML (tasks.yaml in projectDir)</option>
@@ -131,7 +158,9 @@ export function ProjectFormModal({ initialProject, onCancel, onSubmit }: Props) 
           </div>
 
           <div className={styles.formField}>
-            <label htmlFor="proj-context" className={styles.formLabel}>Context URL (optional)</label>
+            <label htmlFor="proj-context" className={styles.formLabel}>
+              Context URL (optional)
+            </label>
             <input
               id="proj-context"
               type="text"
@@ -143,7 +172,9 @@ export function ProjectFormModal({ initialProject, onCancel, onSubmit }: Props) 
           </div>
 
           <div className={styles.formField}>
-            <label htmlFor="proj-repo" className={styles.formLabel}>GitHub Repo (optional)</label>
+            <label htmlFor="proj-repo" className={styles.formLabel}>
+              GitHub Repo (optional)
+            </label>
             <input
               id="proj-repo"
               type="text"
@@ -161,29 +192,38 @@ export function ProjectFormModal({ initialProject, onCancel, onSubmit }: Props) 
                 type="checkbox"
                 checked={values.autoLaunchEnabled}
                 onChange={(e) => update('autoLaunchEnabled', e.target.checked)}
-              />
-              {' '}Auto-launch Ready 💻 Code tasks
+              />{' '}
+              Auto-launch Ready 💻 Code tasks
             </label>
           </div>
 
-          {values.autoLaunchEnabled && initialProject && initialProject.milestones.length > 1 && (
-            <div className={styles.formField}>
-              <label htmlFor="proj-auto-launch-milestone" className={styles.formLabel}>
-                Auto-launch milestone
-              </label>
-              <select
-                id="proj-auto-launch-milestone"
-                className={styles.input}
-                value={values.autoLaunchMilestoneId}
-                onChange={(e) => update('autoLaunchMilestoneId', e.target.value)}
-              >
-                <option value="">First configured milestone</option>
-                {initialProject.milestones.map((m) => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
-                ))}
-              </select>
-            </div>
-          )}
+          {values.autoLaunchEnabled &&
+            initialProject &&
+            initialProject.milestones.length > 1 && (
+              <div className={styles.formField}>
+                <label
+                  htmlFor="proj-auto-launch-milestone"
+                  className={styles.formLabel}
+                >
+                  Auto-launch milestone
+                </label>
+                <select
+                  id="proj-auto-launch-milestone"
+                  className={styles.input}
+                  value={values.autoLaunchMilestoneId}
+                  onChange={(e) =>
+                    update('autoLaunchMilestoneId', e.target.value)
+                  }
+                >
+                  <option value="">First configured milestone</option>
+                  {initialProject.milestones.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
           {serverError && <p className={styles.serverError}>{serverError}</p>}
 
@@ -196,7 +236,11 @@ export function ProjectFormModal({ initialProject, onCancel, onSubmit }: Props) 
             >
               Cancel
             </button>
-            <button type="submit" className={styles.btnPrimary} disabled={submitting}>
+            <button
+              type="submit"
+              className={styles.btnPrimary}
+              disabled={submitting}
+            >
               {submitting ? 'Saving…' : isEdit ? 'Save' : 'Create'}
             </button>
           </div>

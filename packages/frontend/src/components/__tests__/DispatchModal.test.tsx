@@ -5,8 +5,19 @@ import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ResolvedTask } from '@claude-orchestrator/backend/src/notion/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 
-const makeTask = (id: string, title: string, overrides: Partial<ResolvedTask> = {}): ResolvedTask => ({
-  task: { id, title, status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: `https://notion.so/${id}` },
+const makeTask = (
+  id: string,
+  title: string,
+  overrides: Partial<ResolvedTask> = {},
+): ResolvedTask => ({
+  task: {
+    id,
+    title,
+    status: '🗂️ Ready',
+    type: '💻 Code',
+    dependsOn: [],
+    notionUrl: `https://notion.so/${id}`,
+  },
   blocked: false,
   blockers: [],
   nonCode: false,
@@ -61,19 +72,33 @@ describe('DispatchModal', () => {
   it('fires fetch_tasks on mount with projectId and the default milestoneId', () => {
     renderModal([], false, send, onClose, resetTasks);
     expect(send).toHaveBeenCalledOnce();
-    expect(send).toHaveBeenCalledWith({ type: 'fetch_tasks', projectId: PROJECT_ID, milestoneId: 'test-milestone-id', skipCache: true });
+    expect(send).toHaveBeenCalledWith({
+      type: 'fetch_tasks',
+      projectId: PROJECT_ID,
+      milestoneId: 'test-milestone-id',
+      skipCache: true,
+    });
   });
 
   it('fires fetch_tasks on mount with the milestoneId prop value when provided', () => {
     renderModal([], false, send, onClose, resetTasks, 'custom-milestone-id');
     expect(send).toHaveBeenCalledOnce();
-    expect(send).toHaveBeenCalledWith({ type: 'fetch_tasks', projectId: PROJECT_ID, milestoneId: 'custom-milestone-id', skipCache: true });
+    expect(send).toHaveBeenCalledWith({
+      type: 'fetch_tasks',
+      projectId: PROJECT_ID,
+      milestoneId: 'custom-milestone-id',
+      skipCache: true,
+    });
   });
 
   it('calls resetTasks before fetch_tasks on mount', () => {
     const callOrder: string[] = [];
-    const orderedResetTasks = vi.fn(() => { callOrder.push('resetTasks'); });
-    const orderedSend = vi.fn(() => { callOrder.push('send'); });
+    const orderedResetTasks = vi.fn(() => {
+      callOrder.push('resetTasks');
+    });
+    const orderedSend = vi.fn(() => {
+      callOrder.push('send');
+    });
     renderModal([], false, orderedSend, onClose, orderedResetTasks);
     expect(orderedResetTasks).toHaveBeenCalledOnce();
     expect(callOrder).toEqual(['resetTasks', 'send']);
@@ -88,7 +113,15 @@ describe('DispatchModal', () => {
     const { rerender } = renderModal([], false, send, onClose, resetTasks);
     expect(screen.getByText('Fetching tasks from Notion…')).toBeTruthy();
     rerender(
-      <DispatchModal tasks={[]} tasksReady={true} send={send} resetTasks={resetTasks} project={TEST_PROJECT} milestoneId="test-milestone-id" onClose={onClose} />,
+      <DispatchModal
+        tasks={[]}
+        tasksReady={true}
+        send={send}
+        resetTasks={resetTasks}
+        project={TEST_PROJECT}
+        milestoneId="test-milestone-id"
+        onClose={onClose}
+      />,
     );
     expect(screen.queryByText('Fetching tasks from Notion…')).toBeNull();
     expect(screen.getByText('No unblocked tasks.')).toBeTruthy();
@@ -104,9 +137,19 @@ describe('DispatchModal', () => {
   });
 
   it('renders blocked tasks without checkboxes (read-only)', () => {
-    const blockerTask = { id: 'dep1', title: 'Dep Task', status: '🔲 Backlog', type: '💻 Code', dependsOn: [], notionUrl: 'https://notion.so/dep1' };
+    const blockerTask = {
+      id: 'dep1',
+      title: 'Dep Task',
+      status: '🔲 Backlog',
+      type: '💻 Code',
+      dependsOn: [],
+      notionUrl: 'https://notion.so/dep1',
+    };
     const tasks = [
-      makeTask('t1', 'Blocked Task', { blocked: true, blockers: [blockerTask] }),
+      makeTask('t1', 'Blocked Task', {
+        blocked: true,
+        blockers: [blockerTask],
+      }),
     ];
     renderModal(tasks, true, send, onClose);
     expect(screen.queryByRole('checkbox')).toBeNull();
@@ -123,11 +166,25 @@ describe('DispatchModal', () => {
 
   it('ready filter requires task.type === "💻 Code" — Planning and Testing tasks are excluded even if nonCode is false', () => {
     const planningTask = makeTask('p1', 'Planning Task', {
-      task: { id: 'p1', title: 'Planning Task', status: '🗂️ Ready', type: '📋 Planning', dependsOn: [], notionUrl: 'https://notion.so/p1' },
+      task: {
+        id: 'p1',
+        title: 'Planning Task',
+        status: '🗂️ Ready',
+        type: '📋 Planning',
+        dependsOn: [],
+        notionUrl: 'https://notion.so/p1',
+      },
       nonCode: false,
     });
     const testingTask = makeTask('q1', 'Testing Task', {
-      task: { id: 'q1', title: 'Testing Task', status: '🗂️ Ready', type: '🧪 Testing', dependsOn: [], notionUrl: 'https://notion.so/q1' },
+      task: {
+        id: 'q1',
+        title: 'Testing Task',
+        status: '🗂️ Ready',
+        type: '🧪 Testing',
+        dependsOn: [],
+        notionUrl: 'https://notion.so/q1',
+      },
       nonCode: false,
     });
     const codeTask = makeTask('c1', 'Code Task');
@@ -146,21 +203,31 @@ describe('DispatchModal', () => {
 
   it('Launch button is disabled when no tasks are selected', () => {
     renderModal([makeTask('t1', 'Task One')], true, send, onClose);
-    const launchBtn = screen.getByRole('button', { name: /launch/i }) as HTMLButtonElement;
+    const launchBtn = screen.getByRole('button', {
+      name: /launch/i,
+    }) as HTMLButtonElement;
     expect(launchBtn.disabled).toBe(true);
   });
 
   it('Launch button label reflects selected count', () => {
-    const tasks = [makeTask('t1', 'Task One'), makeTask('t2', 'Task Two'), makeTask('t3', 'Task Three')];
+    const tasks = [
+      makeTask('t1', 'Task One'),
+      makeTask('t2', 'Task Two'),
+      makeTask('t3', 'Task Three'),
+    ];
     renderModal(tasks, true, send, onClose);
 
     const checkboxes = screen.getAllByRole('checkbox');
     fireEvent.click(checkboxes[0]);
-    expect(screen.getByRole('button', { name: 'Launch (1) session' })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Launch (1) session' }),
+    ).toBeTruthy();
 
     fireEvent.click(checkboxes[1]);
     fireEvent.click(checkboxes[2]);
-    expect(screen.getByRole('button', { name: 'Launch (3) sessions' })).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'Launch (3) sessions' }),
+    ).toBeTruthy();
   });
 
   it('sends dispatch with taskUrl + projectContextUrl for each selected task, then calls onClose', () => {
@@ -174,9 +241,14 @@ describe('DispatchModal', () => {
     const launchBtn = screen.getByRole('button', { name: /launch/i });
     fireEvent.click(launchBtn);
 
-    const dispatchCall = send.mock.calls.find((call) => (call[0] as ClientMessage).type === 'dispatch');
+    const dispatchCall = send.mock.calls.find(
+      (call) => (call[0] as ClientMessage).type === 'dispatch',
+    );
     expect(dispatchCall).toBeDefined();
-    const dispatchMsg = dispatchCall![0] as Extract<ClientMessage, { type: 'dispatch' }>;
+    const dispatchMsg = dispatchCall![0] as Extract<
+      ClientMessage,
+      { type: 'dispatch' }
+    >;
     expect(dispatchMsg.tasks).toHaveLength(2);
     expect(dispatchMsg.tasks[0].taskUrl).toBe('https://notion.so/t1');
     expect(dispatchMsg.tasks[1].taskUrl).toBe('https://notion.so/t2');
@@ -189,14 +261,18 @@ describe('DispatchModal', () => {
     renderModal([makeTask('t1', 'Task One')], true, send, onClose);
     const launchBtn = screen.getByRole('button', { name: /launch/i });
     fireEvent.click(launchBtn);
-    const dispatchCalls = send.mock.calls.filter((call) => (call[0] as ClientMessage).type === 'dispatch');
+    const dispatchCalls = send.mock.calls.filter(
+      (call) => (call[0] as ClientMessage).type === 'dispatch',
+    );
     expect(dispatchCalls).toHaveLength(0);
     expect(onClose).not.toHaveBeenCalled();
   });
 
   it('closes when overlay is clicked', () => {
     renderModal([], true, send, onClose);
-    const overlay = document.querySelector('[class*="modal-overlay"]') as HTMLElement;
+    const overlay = document.querySelector(
+      '[class*="modal-overlay"]',
+    ) as HTMLElement;
     fireEvent.click(overlay);
     expect(onClose).toHaveBeenCalledOnce();
   });
@@ -212,7 +288,16 @@ describe('DispatchModal', () => {
   it('all groups are expanded by default', () => {
     const tasks = [
       makeTask('t1', 'Ready Task'),
-      makeTask('t2', 'In Progress Task', { task: { id: 't2', title: 'In Progress Task', status: '🔄 In Progress', type: '💻 Code', dependsOn: [], notionUrl: 'https://notion.so/t2' } }),
+      makeTask('t2', 'In Progress Task', {
+        task: {
+          id: 't2',
+          title: 'In Progress Task',
+          status: '🔄 In Progress',
+          type: '💻 Code',
+          dependsOn: [],
+          notionUrl: 'https://notion.so/t2',
+        },
+      }),
     ];
     renderModal(tasks, true, send, onClose);
     expect(screen.getByText('Ready Task')).toBeTruthy();
@@ -220,7 +305,10 @@ describe('DispatchModal', () => {
   });
 
   it('clicking a group header collapses its task list', () => {
-    const tasks = [makeTask('t1', 'Ready Task One'), makeTask('t2', 'Ready Task Two')];
+    const tasks = [
+      makeTask('t1', 'Ready Task One'),
+      makeTask('t2', 'Ready Task Two'),
+    ];
     renderModal(tasks, true, send, onClose);
     // Initially visible
     expect(screen.getByText('Ready Task One')).toBeTruthy();
@@ -249,18 +337,31 @@ describe('DispatchModal', () => {
     renderModal(tasks, true, send, onClose);
     const readyHeader = screen.getByRole('button', { name: /ready/i });
     // Before collapse — chevron should not have the collapsed class
-    const chevronBefore = readyHeader.querySelector('[aria-hidden="true"]') as HTMLElement;
+    const chevronBefore = readyHeader.querySelector(
+      '[aria-hidden="true"]',
+    ) as HTMLElement;
     expect(chevronBefore.className).not.toMatch(/chevronCollapsed/);
     // After collapse — chevron should have the collapsed class
     fireEvent.click(readyHeader);
-    const chevronAfter = readyHeader.querySelector('[aria-hidden="true"]') as HTMLElement;
+    const chevronAfter = readyHeader.querySelector(
+      '[aria-hidden="true"]',
+    ) as HTMLElement;
     expect(chevronAfter.className).toMatch(/chevronCollapsed/);
   });
 
   it('collapsing one group does not affect other groups', () => {
     const tasks = [
       makeTask('t1', 'Ready Task'),
-      makeTask('t2', 'In Progress Task', { task: { id: 't2', title: 'In Progress Task', status: '🔄 In Progress', type: '💻 Code', dependsOn: [], notionUrl: 'https://notion.so/t2' } }),
+      makeTask('t2', 'In Progress Task', {
+        task: {
+          id: 't2',
+          title: 'In Progress Task',
+          status: '🔄 In Progress',
+          type: '💻 Code',
+          dependsOn: [],
+          notionUrl: 'https://notion.so/t2',
+        },
+      }),
     ];
     renderModal(tasks, true, send, onClose);
     // Collapse only the Ready group

@@ -35,9 +35,15 @@ vi.mock('../../src/notion/NotionClient', () => {
           },
         ];
       }
-      async updateStatus() { /* no-op */ }
-      async attachPR() { /* no-op */ }
-      async fetchTaskPage() { return { rawMarkdown: '' }; }
+      async updateStatus() {
+        /* no-op */
+      }
+      async attachPR() {
+        /* no-op */
+      }
+      async fetchTaskPage() {
+        return { rawMarkdown: '' };
+      }
     },
     parseSection: () => '',
   };
@@ -45,7 +51,10 @@ vi.mock('../../src/notion/NotionClient', () => {
 
 import { ProjectService } from '../../src/projects/ProjectService.js';
 import { db } from '../../src/db/db.js';
-import { getTaskBackend, _resetTaskBackendCacheForTests } from '../../src/tasks/TaskBackend';
+import {
+  getTaskBackend,
+  _resetTaskBackendCacheForTests,
+} from '../../src/tasks/TaskBackend';
 
 let yamlDir: string;
 
@@ -65,12 +74,20 @@ beforeEach(() => {
           name: 'YAML Milestone',
           tasks: [
             {
-              id: 'yaml-ready', name: 'YAML Ready Task', status: 'Ready',
-              type: 'Code', depends_on: [], pr_url: null,
+              id: 'yaml-ready',
+              name: 'YAML Ready Task',
+              status: 'Ready',
+              type: 'Code',
+              depends_on: [],
+              pr_url: null,
             },
             {
-              id: 'yaml-done', name: 'YAML Done Task', status: 'Done',
-              type: 'Code', depends_on: [], pr_url: null,
+              id: 'yaml-done',
+              name: 'YAML Done Task',
+              status: 'Done',
+              type: 'Code',
+              depends_on: [],
+              pr_url: null,
             },
           ],
         },
@@ -78,11 +95,30 @@ beforeEach(() => {
     }),
   );
 
-  ProjectService.create({ id: 'p-notion', name: 'Notion P', projectDir: '/tmp/n', taskSource: 'notion' });
-  ProjectService.createMilestone({ id: 'm-notion', projectId: 'p-notion', name: 'Notion Milestone', sourceId: 'notion-db-source' });
+  ProjectService.create({
+    id: 'p-notion',
+    name: 'Notion P',
+    projectDir: '/tmp/n',
+    taskSource: 'notion',
+  });
+  ProjectService.createMilestone({
+    id: 'm-notion',
+    projectId: 'p-notion',
+    name: 'Notion Milestone',
+    sourceId: 'notion-db-source',
+  });
 
-  ProjectService.create({ id: 'p-yaml', name: 'YAML P', projectDir: yamlDir, taskSource: 'yaml' });
-  ProjectService.createMilestone({ id: 'm-yaml', projectId: 'p-yaml', name: 'YAML Milestone' });
+  ProjectService.create({
+    id: 'p-yaml',
+    name: 'YAML P',
+    projectDir: yamlDir,
+    taskSource: 'yaml',
+  });
+  ProjectService.createMilestone({
+    id: 'm-yaml',
+    projectId: 'p-yaml',
+    name: 'YAML Milestone',
+  });
 });
 
 afterEach(() => {
@@ -108,7 +144,9 @@ describe('Mixed-source projects: fetchReadyTasks routes to the right backend', (
       getTaskBackend('p-notion').fetchReadyTasks('m-notion'),
       getTaskBackend('p-yaml').fetchReadyTasks('m-yaml'),
     ]);
-    expect(n.map((t) => t.task.id)).toEqual(['notion-task-for-notion-db-source']);
+    expect(n.map((t) => t.task.id)).toEqual([
+      'notion-task-for-notion-db-source',
+    ]);
     expect(y.map((t) => t.task.id).sort()).toEqual(['yaml-done', 'yaml-ready']);
   });
 });

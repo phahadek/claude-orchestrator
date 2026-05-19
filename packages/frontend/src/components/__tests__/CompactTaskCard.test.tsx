@@ -173,6 +173,8 @@ describe('CompactTaskCard', () => {
         onClick={vi.fn()}
       />,
     );
-    expect(screen.getByTestId('compact-task-card').getAttribute('data-status')).toBe('ready');
+    expect(
+      screen.getByTestId('compact-task-card').getAttribute('data-status'),
+    ).toBe('ready');
   });
 });

@@ -49,7 +49,13 @@ describe('PRCard', () => {
   });
 
   it('shows approved badge when verdict is approved', () => {
-    const pr = makePR({ reviewResult: { verdict: 'approved', dimensions: [], summary: 'Looks good' } });
+    const pr = makePR({
+      reviewResult: {
+        verdict: 'approved',
+        dimensions: [],
+        summary: 'Looks good',
+      },
+    });
     render(<PRCard pr={pr} {...defaultProps} />);
     expect(screen.getByText('✅ Approved')).toBeDefined();
   });
@@ -61,14 +67,18 @@ describe('PRCard', () => {
   });
 
   it('disables Merge button when verdict is needs_changes', () => {
-    const pr = makePR({ reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' } });
+    const pr = makePR({
+      reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' },
+    });
     render(<PRCard pr={pr} {...defaultProps} />);
     const mergeBtn = screen.getByRole('button', { name: /merge/i });
     expect(mergeBtn.hasAttribute('disabled')).toBe(true);
   });
 
   it('enables Merge button when verdict is approved and state is open', () => {
-    const pr = makePR({ reviewResult: { verdict: 'approved', dimensions: [], summary: '' } });
+    const pr = makePR({
+      reviewResult: { verdict: 'approved', dimensions: [], summary: '' },
+    });
     render(<PRCard pr={pr} {...defaultProps} />);
     const mergeBtn = screen.getByRole('button', { name: /merge/i });
     expect(mergeBtn.hasAttribute('disabled')).toBe(false);
@@ -80,26 +90,37 @@ describe('PRCard', () => {
   });
 
   it('shows "Re-review" button when verdict is needs_changes and coding session is alive', () => {
-    const pr = makePR({ sessionId: 'session-123', reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' } });
+    const pr = makePR({
+      sessionId: 'session-123',
+      reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' },
+    });
     render(<PRCard pr={pr} {...defaultProps} />);
     expect(screen.getByRole('button', { name: /re-review/i })).toBeDefined();
   });
 
   it('shows "Re-review" button when verdict is incomplete and coding session is alive', () => {
-    const pr = makePR({ sessionId: 'session-123', reviewResult: { verdict: 'incomplete', dimensions: [], summary: '' } });
+    const pr = makePR({
+      sessionId: 'session-123',
+      reviewResult: { verdict: 'incomplete', dimensions: [], summary: '' },
+    });
     render(<PRCard pr={pr} {...defaultProps} />);
     expect(screen.getByRole('button', { name: /re-review/i })).toBeDefined();
   });
 
   it('hides the review button when verdict is approved', () => {
-    const pr = makePR({ reviewResult: { verdict: 'approved', dimensions: [], summary: '' } });
+    const pr = makePR({
+      reviewResult: { verdict: 'approved', dimensions: [], summary: '' },
+    });
     render(<PRCard pr={pr} {...defaultProps} />);
     expect(screen.queryByRole('button', { name: /run review/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /re-review/i })).toBeNull();
   });
 
   it('shows "Run Review" (not "Re-review") when verdict is needs_changes but coding session is dead', () => {
-    const pr = makePR({ sessionId: null, reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' } });
+    const pr = makePR({
+      sessionId: null,
+      reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' },
+    });
     render(<PRCard pr={pr} {...defaultProps} />);
     expect(screen.getByRole('button', { name: /run review/i })).toBeDefined();
     expect(screen.queryByRole('button', { name: /re-review/i })).toBeNull();
@@ -107,14 +128,21 @@ describe('PRCard', () => {
 
   it('calls onReReview when "Re-review" button is clicked', () => {
     const onReReview = vi.fn();
-    const pr = makePR({ prNumber: 7, sessionId: 'session-abc', reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' } });
+    const pr = makePR({
+      prNumber: 7,
+      sessionId: 'session-abc',
+      reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' },
+    });
     render(<PRCard pr={pr} {...defaultProps} onReReview={onReReview} />);
     fireEvent.click(screen.getByRole('button', { name: /re-review/i }));
     expect(onReReview).toHaveBeenCalledWith(7);
   });
 
   it('disables "Re-review" button when reReviewInFlight is true', () => {
-    const pr = makePR({ sessionId: 'session-123', reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' } });
+    const pr = makePR({
+      sessionId: 'session-123',
+      reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' },
+    });
     render(<PRCard pr={pr} {...defaultProps} reReviewInFlight={true} />);
     const btn = screen.getByRole('button', { name: /reviewing/i });
     expect(btn.hasAttribute('disabled')).toBe(true);
@@ -127,7 +155,9 @@ describe('PRCard', () => {
   });
 
   it('shows inline error when error prop is set', () => {
-    render(<PRCard pr={makePR()} {...defaultProps} error="Review failed: timeout" />);
+    render(
+      <PRCard pr={makePR()} {...defaultProps} error="Review failed: timeout" />,
+    );
     expect(screen.getByText('Review failed: timeout')).toBeDefined();
   });
 
@@ -138,7 +168,10 @@ describe('PRCard', () => {
   });
 
   it('shows "Merged" badge when state is merged even if reviewResult is set', () => {
-    const pr = makePR({ state: 'merged', reviewResult: { verdict: 'approved', dimensions: [], summary: '' } });
+    const pr = makePR({
+      state: 'merged',
+      reviewResult: { verdict: 'approved', dimensions: [], summary: '' },
+    });
     render(<PRCard pr={pr} {...defaultProps} />);
     expect(screen.getByText('✓ Merged')).toBeDefined();
     expect(screen.queryByText('✅ Approved')).toBeNull();
@@ -157,28 +190,41 @@ describe('PRCard', () => {
   });
 
   it('disables Merge button when state is merged', () => {
-    const pr = makePR({ state: 'merged', reviewResult: { verdict: 'approved', dimensions: [], summary: '' } });
+    const pr = makePR({
+      state: 'merged',
+      reviewResult: { verdict: 'approved', dimensions: [], summary: '' },
+    });
     render(<PRCard pr={pr} {...defaultProps} />);
     const mergeBtn = screen.getByRole('button', { name: /merge/i });
     expect(mergeBtn.hasAttribute('disabled')).toBe(true);
   });
 
   it('renders without crash when reviewResult has no dimensions property', () => {
-    const pr = makePR({ reviewResult: { verdict: 'needs_changes', summary: 'Review timed out' } });
+    const pr = makePR({
+      reviewResult: { verdict: 'needs_changes', summary: 'Review timed out' },
+    });
     render(<PRCard pr={pr} {...defaultProps} />);
     fireEvent.click(screen.getByText(/review details/i));
     expect(screen.getByText('Review timed out')).toBeDefined();
   });
 
   it('renders without crash when reviewResult.dimensions is an empty array', () => {
-    const pr = makePR({ reviewResult: { verdict: 'needs_changes', dimensions: [], summary: 'All good' } });
+    const pr = makePR({
+      reviewResult: {
+        verdict: 'needs_changes',
+        dimensions: [],
+        summary: 'All good',
+      },
+    });
     render(<PRCard pr={pr} {...defaultProps} />);
     fireEvent.click(screen.getByText(/review details/i));
     expect(screen.getByText('All good')).toBeDefined();
   });
 
   it('shows error verdict summary instead of dimensions list', () => {
-    const pr = makePR({ reviewResult: { verdict: 'error', summary: 'Review timed out' } });
+    const pr = makePR({
+      reviewResult: { verdict: 'error', summary: 'Review timed out' },
+    });
     render(<PRCard pr={pr} {...defaultProps} />);
     fireEvent.click(screen.getByText(/review details/i));
     expect(screen.getByText('Review failed: Review timed out')).toBeDefined();
@@ -190,20 +236,30 @@ describe('PRCard', () => {
   });
 
   it('shows Approve button when verdict is needs_changes', () => {
-    const pr = makePR({ reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' } });
+    const pr = makePR({
+      reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' },
+    });
     render(<PRCard pr={pr} {...defaultProps} />);
     expect(screen.getByRole('button', { name: /approve/i })).toBeDefined();
   });
 
   it('does NOT show Approve button when verdict is already approved', () => {
-    const pr = makePR({ reviewResult: { verdict: 'approved', dimensions: [], summary: '' } });
+    const pr = makePR({
+      reviewResult: { verdict: 'approved', dimensions: [], summary: '' },
+    });
     render(<PRCard pr={pr} {...defaultProps} />);
     expect(screen.queryByRole('button', { name: /✓ approve/i })).toBeNull();
   });
 
   it('calls onApprove with prNumber when Approve button is clicked', () => {
     const onApprove = vi.fn();
-    render(<PRCard pr={makePR({ prNumber: 7 })} {...defaultProps} onApprove={onApprove} />);
+    render(
+      <PRCard
+        pr={makePR({ prNumber: 7 })}
+        {...defaultProps}
+        onApprove={onApprove}
+      />,
+    );
     fireEvent.click(screen.getByRole('button', { name: /approve/i }));
     expect(onApprove).toHaveBeenCalledWith(7);
   });
@@ -245,59 +301,97 @@ describe('PRCard', () => {
     }
 
     it('shows merge-conflict badge for mergeState=dirty', () => {
-      render(<PRCard pr={approved({ mergeState: 'dirty' })} {...defaultProps} />);
+      render(
+        <PRCard pr={approved({ mergeState: 'dirty' })} {...defaultProps} />,
+      );
       expect(screen.getByText('⚠ Merge Conflicts')).toBeDefined();
     });
 
     it('shows CI-failing badge with check names for mergeState=ci_failed', () => {
-      const pr = approved({ mergeState: 'ci_failed', failingChecks: ['lint', 'unit-tests'] });
+      const pr = approved({
+        mergeState: 'ci_failed',
+        failingChecks: ['lint', 'unit-tests'],
+      });
       render(<PRCard pr={pr} {...defaultProps} />);
       expect(screen.getByText(/CI failing: lint, unit-tests/)).toBeDefined();
     });
 
     it('shows blocked badge for mergeState=blocked', () => {
-      render(<PRCard pr={approved({ mergeState: 'blocked' })} {...defaultProps} />);
+      render(
+        <PRCard pr={approved({ mergeState: 'blocked' })} {...defaultProps} />,
+      );
       expect(screen.getByText(/Blocked by branch protection/)).toBeDefined();
     });
 
     it('shows unstable badge for mergeState=unstable', () => {
-      render(<PRCard pr={approved({ mergeState: 'unstable' })} {...defaultProps} />);
+      render(
+        <PRCard pr={approved({ mergeState: 'unstable' })} {...defaultProps} />,
+      );
       expect(screen.getByText(/CI unstable/)).toBeDefined();
     });
 
     it('shows unknown badge for mergeState=unknown', () => {
-      render(<PRCard pr={approved({ mergeState: 'unknown' })} {...defaultProps} />);
+      render(
+        <PRCard pr={approved({ mergeState: 'unknown' })} {...defaultProps} />,
+      );
       expect(screen.getByText(/Mergeability unknown/)).toBeDefined();
     });
 
     it('disables Merge button when mergeState is dirty (approved)', () => {
-      render(<PRCard pr={approved({ mergeState: 'dirty' })} {...defaultProps} />);
-      expect(screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled')).toBe(true);
+      render(
+        <PRCard pr={approved({ mergeState: 'dirty' })} {...defaultProps} />,
+      );
+      expect(
+        screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled'),
+      ).toBe(true);
     });
 
     it('disables Merge button when mergeState is ci_failed (approved)', () => {
-      render(<PRCard pr={approved({ mergeState: 'ci_failed', failingChecks: ['lint'] })} {...defaultProps} />);
-      expect(screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled')).toBe(true);
+      render(
+        <PRCard
+          pr={approved({ mergeState: 'ci_failed', failingChecks: ['lint'] })}
+          {...defaultProps}
+        />,
+      );
+      expect(
+        screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled'),
+      ).toBe(true);
     });
 
     it('disables Merge button when mergeState is blocked (approved)', () => {
-      render(<PRCard pr={approved({ mergeState: 'blocked' })} {...defaultProps} />);
-      expect(screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled')).toBe(true);
+      render(
+        <PRCard pr={approved({ mergeState: 'blocked' })} {...defaultProps} />,
+      );
+      expect(
+        screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled'),
+      ).toBe(true);
     });
 
     it('disables Merge button when mergeState is unstable (approved)', () => {
-      render(<PRCard pr={approved({ mergeState: 'unstable' })} {...defaultProps} />);
-      expect(screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled')).toBe(true);
+      render(
+        <PRCard pr={approved({ mergeState: 'unstable' })} {...defaultProps} />,
+      );
+      expect(
+        screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled'),
+      ).toBe(true);
     });
 
     it('disables Merge button when mergeState is unknown (approved)', () => {
-      render(<PRCard pr={approved({ mergeState: 'unknown' })} {...defaultProps} />);
-      expect(screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled')).toBe(true);
+      render(
+        <PRCard pr={approved({ mergeState: 'unknown' })} {...defaultProps} />,
+      );
+      expect(
+        screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled'),
+      ).toBe(true);
     });
 
     it('enables Merge button when mergeState is clean (approved)', () => {
-      render(<PRCard pr={approved({ mergeState: 'clean' })} {...defaultProps} />);
-      expect(screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled')).toBe(false);
+      render(
+        <PRCard pr={approved({ mergeState: 'clean' })} {...defaultProps} />,
+      );
+      expect(
+        screen.getByRole('button', { name: /merge/i }).hasAttribute('disabled'),
+      ).toBe(false);
     });
   });
 });

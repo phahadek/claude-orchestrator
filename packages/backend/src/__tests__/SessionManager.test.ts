@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import { normalizePath } from '../config';
@@ -26,7 +26,9 @@ describe('SessionManager.start() — In Progress status', () => {
   it('In Progress call is gated on sessionType === standard', () => {
     expect(source).toMatch(/sessionType\s*===\s*'standard'/);
     const gateIdx = source.indexOf("sessionType === 'standard'");
-    const inProgressIdx = source.indexOf("getTaskBackend(projectId).updateStatus(notionTaskId, '🔄 In Progress')");
+    const inProgressIdx = source.indexOf(
+      "getTaskBackend(projectId).updateStatus(notionTaskId, '🔄 In Progress')",
+    );
     expect(inProgressIdx).toBeGreaterThan(gateIdx);
   });
 });
@@ -56,7 +58,9 @@ describe('SessionManager.start() — code-only session limit', () => {
 
   it('counts only non-review sessions against the cap', () => {
     // Must filter sessions by sessionType !== review before counting
-    expect(source).toMatch(/\.filter\s*\(\s*\(s\)\s*=>\s*s\.sessionType\s*!==\s*'review'\s*\)/);
+    expect(source).toMatch(
+      /\.filter\s*\(\s*\(s\)\s*=>\s*s\.sessionType\s*!==\s*'review'\s*\)/,
+    );
   });
 });
 
@@ -135,7 +139,9 @@ describe('SessionManager.sendOrResume()', () => {
 
     // Must create AgentSession with sessionId as resumeSessionId
     expect(source).toMatch(/new AgentSession/);
-    expect(source).toMatch(/resumeSessionId|sessionId,\s*\/\/\s*resumeSessionId/);
+    expect(source).toMatch(
+      /resumeSessionId|sessionId,\s*\/\/\s*resumeSessionId/,
+    );
   });
 });
 
@@ -171,7 +177,9 @@ describe('SessionManager.start() — StartOptions', () => {
       'utf-8',
     );
 
-    expect(source).toMatch(/session_type.*sessionType|sessionType.*session_type/);
+    expect(source).toMatch(
+      /session_type.*sessionType|sessionType.*session_type/,
+    );
     expect(source).toMatch(/insertSession/);
   });
 
@@ -192,7 +200,9 @@ describe('SessionManager.start() — StartOptions', () => {
     );
 
     // Find the session_started broadcast block and verify token fields are present
-    const sessionStartedBlock = source.match(/type:\s*['"]session_started['"][\s\S]*?satisfies ServerMessage/);
+    const sessionStartedBlock = source.match(
+      /type:\s*['"]session_started['"][\s\S]*?satisfies ServerMessage/,
+    );
     expect(sessionStartedBlock).not.toBeNull();
     expect(sessionStartedBlock![0]).toMatch(/totalInputTokens/);
     expect(sessionStartedBlock![0]).toMatch(/totalOutputTokens/);
@@ -203,12 +213,18 @@ describe('SessionManager.start() — StartOptions', () => {
 describe('normalizePath()', () => {
   it('converts /c/Users/... to C:/Users/... on Windows, no-op on other platforms', () => {
     if (process.platform === 'win32') {
-      expect(normalizePath('/c/Users/testuser/foo')).toBe('C:/Users/testuser/foo');
+      expect(normalizePath('/c/Users/testuser/foo')).toBe(
+        'C:/Users/testuser/foo',
+      );
       expect(normalizePath('/D/projects/bar')).toBe('D:/projects/bar');
-      expect(normalizePath('C:/Users/testuser/foo')).toBe('C:/Users/testuser/foo');
+      expect(normalizePath('C:/Users/testuser/foo')).toBe(
+        'C:/Users/testuser/foo',
+      );
       expect(normalizePath('/usr/local/bin')).toBe('/usr/local/bin');
     } else {
-      expect(normalizePath('/c/Users/testuser/foo')).toBe('/c/Users/testuser/foo');
+      expect(normalizePath('/c/Users/testuser/foo')).toBe(
+        '/c/Users/testuser/foo',
+      );
       expect(normalizePath('/usr/local/bin')).toBe('/usr/local/bin');
     }
   });
@@ -235,7 +251,9 @@ describe('normalizePath()', () => {
     // Must NOT pass project.projectDir directly to path.join
     expect(source).not.toMatch(/path\.join\s*\(\s*project\.projectDir\s*,/);
     // Must pass normalized projectDir instead
-    expect(source).toMatch(/const\s+projectDir\s*=\s*normalizePath\s*\(\s*project\.projectDir\s*\)/);
+    expect(source).toMatch(
+      /const\s+projectDir\s*=\s*normalizePath\s*\(\s*project\.projectDir\s*\)/,
+    );
   });
 });
 
@@ -260,7 +278,9 @@ describe('SessionManager.resumeOrphanSessions()', () => {
   );
 
   it('queries DB for sessions with status "running"', () => {
-    expect(source).toMatch(/getSessionsByStatus\s*\(\s*\[['"]running['"]\]\s*\)/);
+    expect(source).toMatch(
+      /getSessionsByStatus\s*\(\s*\[['"]running['"]\]\s*\)/,
+    );
   });
 
   it('calls resumeSession() for each orphan in a loop', () => {
@@ -270,11 +290,15 @@ describe('SessionManager.resumeOrphanSessions()', () => {
   });
 
   it('marks sessions as error when resume fails (catch block)', () => {
-    expect(source).toMatch(/updateSessionStatus\s*\(.*'error'.*Date\.now\(\)\)/s);
+    expect(source).toMatch(
+      /updateSessionStatus\s*\(.*'error'.*Date\.now\(\)\)/s,
+    );
   });
 
   it('respects maxConcurrentCodeSessions — slices code orphans into toResume and toError', () => {
-    expect(source).toMatch(/config\.maxConcurrentCodeSessions\s*-\s*codeSessionCount/);
+    expect(source).toMatch(
+      /config\.maxConcurrentCodeSessions\s*-\s*codeSessionCount/,
+    );
     expect(source).toMatch(/codeOrphans\.slice\s*\(\s*0\s*,\s*available\s*\)/);
     expect(source).toMatch(/codeOrphans\.slice\s*\(\s*available\s*\)/);
   });
@@ -336,17 +360,25 @@ describe('SessionManager.resumeSession()', () => {
 
   it('passes row.session_id as both sessionId and resumeSessionId to AgentSession', () => {
     // The first arg must be row.session_id and resumeSessionId must also be row.session_id
-    expect(source).toMatch(/row\.session_id,\s*\/\/\s*keep original ID|keep original ID.*row\.session_id/s);
-    expect(source).toMatch(/row\.session_id,\s*\/\/\s*resumeSessionId|resumeSessionId.*row\.session_id/s);
+    expect(source).toMatch(
+      /row\.session_id,\s*\/\/\s*keep original ID|keep original ID.*row\.session_id/s,
+    );
+    expect(source).toMatch(
+      /row\.session_id,\s*\/\/\s*resumeSessionId|resumeSessionId.*row\.session_id/s,
+    );
   });
 
   it('broadcasts session_status: running after re-attaching', () => {
     expect(source).toMatch(/session_status.*running|running.*session_status/);
-    expect(source).toMatch(/row\.session_id.*status.*running|status.*running.*row\.session_id/s);
+    expect(source).toMatch(
+      /row\.session_id.*status.*running|status.*running.*row\.session_id/s,
+    );
   });
 
   it('marks project-not-found orphans as error', () => {
-    expect(source).toMatch(/project not found.*marking error|orphan.*project not found/s);
+    expect(source).toMatch(
+      /project not found.*marking error|orphan.*project not found/s,
+    );
   });
 });
 
@@ -364,11 +396,15 @@ describe('SessionManager.resumeSession() — nudge, timeout, mid-turn detection'
   it('exports RESUME_NUDGE_MESSAGE with continuation text', () => {
     expect(source).toMatch(/export\s+const\s+RESUME_NUDGE_MESSAGE\s*=/);
     // Nudge must reference where the model left off, in some form
-    expect(source).toMatch(/RESUME_NUDGE_MESSAGE\s*=[\s\S]*?where you left off/i);
+    expect(source).toMatch(
+      /RESUME_NUDGE_MESSAGE\s*=[\s\S]*?where you left off/i,
+    );
   });
 
   it('calls this.send() with RESUME_NUDGE_MESSAGE during resume', () => {
-    expect(source).toMatch(/this\.send\s*\(\s*row\.session_id\s*,\s*RESUME_NUDGE_MESSAGE\s*\)/);
+    expect(source).toMatch(
+      /this\.send\s*\(\s*row\.session_id\s*,\s*RESUME_NUDGE_MESSAGE\s*\)/,
+    );
   });
 
   // The continuation message JSON shape is now produced by CliSessionRunner,
@@ -384,7 +420,9 @@ describe('SessionManager.resumeSession() — nudge, timeout, mid-turn detection'
   it('sets a 30-second timeout and marks session as error if no events are received', () => {
     expect(source).toMatch(/RESUME_TIMEOUT_MS\s*=\s*30[_]?000/);
     expect(source).toMatch(/setTimeout\s*\(/);
-    expect(source).toMatch(/updateSessionStatus\s*\(.*'error'.*Date\.now\(\)\)/s);
+    expect(source).toMatch(
+      /updateSessionStatus\s*\(.*'error'.*Date\.now\(\)\)/s,
+    );
     expect(source).toMatch(/session_ended/);
     // Timer is cleared on first message — the variable is errorTimer
     expect(source).toMatch(/clearTimeout\s*\(\s*errorTimer\s*\)/);
@@ -397,7 +435,9 @@ describe('SessionManager.resumeSession() — nudge, timeout, mid-turn detection'
   it('detects mid-turn state and logs a warning when last event is tool_result or tool_use', () => {
     expect(source).toMatch(/getEventsBySession\s*\(\s*row\.session_id\s*\)/);
     expect(source).toMatch(/tool_result.*tool_use|tool_use.*tool_result/);
-    expect(source).toMatch(/Resuming mid-turn session.*continuation nudge|continuation nudge.*mid-turn session/s);
+    expect(source).toMatch(
+      /Resuming mid-turn session.*continuation nudge|continuation nudge.*mid-turn session/s,
+    );
   });
 
   it('does NOT send an initial prompt when resuming (no double-prompting)', () => {
@@ -405,7 +445,9 @@ describe('SessionManager.resumeSession() — nudge, timeout, mid-turn detection'
     expect(cliRunnerSource).toMatch(/if\s*\(\s*!resumeSessionId\b/);
     // resumeSession() passes row.session_id as the resumeSessionId so the guard
     // is always active for resumed sessions
-    expect(source).toMatch(/row\.session_id,\s*\/\/\s*resumeSessionId|resumeSessionId.*row\.session_id/s);
+    expect(source).toMatch(
+      /row\.session_id,\s*\/\/\s*resumeSessionId|resumeSessionId.*row\.session_id/s,
+    );
   });
 });
 
@@ -424,7 +466,10 @@ describe('SessionManager.sendOrResume() — pr_url carry-forward', () => {
   it('does NOT hard-code pr_url: null in sendOrResume insertSession call', () => {
     // The sendOrResume block must not pass pr_url: null directly
     const sendOrResumeIdx = source.indexOf('sendOrResume');
-    const insertSessionInResume = source.indexOf('insertSession', sendOrResumeIdx);
+    const insertSessionInResume = source.indexOf(
+      'insertSession',
+      sendOrResumeIdx,
+    );
     const closingBrace = source.indexOf('});', insertSessionInResume);
     const insertBlock = source.slice(insertSessionInResume, closingBrace);
     expect(insertBlock).not.toMatch(/pr_url:\s*null(?!\s*\?\?)/);
@@ -458,8 +503,14 @@ describe('SessionManager.resumeSession() — resumability pre-check', () => {
     expect(source).toMatch(/fs\.existsSync\s*\(\s*worktreePath\s*\)/);
     // The pre-check appears before "new AgentSession(" in resumeSession()
     const resumeSessionIdx = source.indexOf('private async resumeSession(');
-    const newAgentSessionIdx = source.indexOf('new AgentSession(', resumeSessionIdx);
-    const preCheckIdx = source.indexOf('resumability pre-check', resumeSessionIdx);
+    const newAgentSessionIdx = source.indexOf(
+      'new AgentSession(',
+      resumeSessionIdx,
+    );
+    const preCheckIdx = source.indexOf(
+      'resumability pre-check',
+      resumeSessionIdx,
+    );
     expect(preCheckIdx).toBeGreaterThan(-1);
     expect(preCheckIdx).toBeLessThan(newAgentSessionIdx);
   });
@@ -468,11 +519,19 @@ describe('SessionManager.resumeSession() — resumability pre-check', () => {
     // The pre-check failure path must call updateSessionStatus(..., 'error', ...)
     // and emit session_ended. It must also return early (skip spawn).
     const resumeSessionIdx = source.indexOf('private async resumeSession(');
-    const preCheckIdx = source.indexOf('resumability pre-check failed', resumeSessionIdx);
+    const preCheckIdx = source.indexOf(
+      'resumability pre-check failed',
+      resumeSessionIdx,
+    );
     expect(preCheckIdx).toBeGreaterThan(-1);
-    const newAgentSessionIdx = source.indexOf('new AgentSession(', resumeSessionIdx);
+    const newAgentSessionIdx = source.indexOf(
+      'new AgentSession(',
+      resumeSessionIdx,
+    );
     const preCheckBlock = source.slice(preCheckIdx, newAgentSessionIdx);
-    expect(preCheckBlock).toMatch(/updateSessionStatus\s*\(\s*row\.session_id\s*,\s*'error'/);
+    expect(preCheckBlock).toMatch(
+      /updateSessionStatus\s*\(\s*row\.session_id\s*,\s*'error'/,
+    );
     expect(preCheckBlock).toMatch(/session_ended/);
     expect(preCheckBlock).toMatch(/return\s*;/);
   });
@@ -481,7 +540,10 @@ describe('SessionManager.resumeSession() — resumability pre-check', () => {
     // The legacy "create new worktree on resume" branch must be removed —
     // a missing worktree should result in error, not a fresh worktree based on origin/dev.
     const resumeSessionIdx = source.indexOf('private async resumeSession(');
-    const resumeOrphanIdx = source.indexOf('resumeOrphanSessions', resumeSessionIdx);
+    const resumeOrphanIdx = source.indexOf(
+      'resumeOrphanSessions',
+      resumeSessionIdx,
+    );
     const resumeSessionBlock = source.slice(resumeSessionIdx, resumeOrphanIdx);
     expect(resumeSessionBlock).not.toMatch(/worktree-resume-/);
     expect(resumeSessionBlock).not.toMatch(/git worktree add\b/);
@@ -499,7 +561,10 @@ describe('SessionManager.resumeSession() — pr_url carry-forward', () => {
     // session.prUrl is set from row.pr_url so cleanupWorktree(prUrl) does NOT
     // delete the branch on the next clean exit.
     const resumeSessionIdx = source.indexOf('private async resumeSession(');
-    const resumeOrphanIdx = source.indexOf('resumeOrphanSessions', resumeSessionIdx);
+    const resumeOrphanIdx = source.indexOf(
+      'resumeOrphanSessions',
+      resumeSessionIdx,
+    );
     const resumeSessionBlock = source.slice(resumeSessionIdx, resumeOrphanIdx);
     expect(resumeSessionBlock).toMatch(/session\.prUrl\s*=\s*row\.pr_url/);
   });
@@ -522,9 +587,13 @@ describe('SessionManager.resumeOrphanSessions() — only running sessions', () =
   it('does NOT query for terminal-status sessions (done/killed/error)', () => {
     // The DB query in resumeOrphanSessions() must be limited to status='running'.
     // Sessions in done/killed/error remain in their terminal state.
-    expect(source).toMatch(/getSessionsByStatus\s*\(\s*\[\s*['"]running['"]\s*\]\s*\)/);
+    expect(source).toMatch(
+      /getSessionsByStatus\s*\(\s*\[\s*['"]running['"]\s*\]\s*\)/,
+    );
     expect(source).not.toMatch(/getSessionsByStatus\s*\(\s*\[\s*['"]done['"]/);
-    expect(source).not.toMatch(/getSessionsByStatus\s*\(\s*\[\s*['"]killed['"]/);
+    expect(source).not.toMatch(
+      /getSessionsByStatus\s*\(\s*\[\s*['"]killed['"]/,
+    );
     expect(source).not.toMatch(/getSessionsByStatus\s*\(\s*\[\s*['"]error['"]/);
   });
 });
@@ -540,7 +609,9 @@ describe('CliSessionRunner — stdin error handling', () => {
     const sendMessageIdx = source.indexOf('sendMessage(message: string)');
     const endSessionIdx = source.indexOf('endSession()', sendMessageIdx);
     const sendMessageBlock = source.slice(sendMessageIdx, endSessionIdx);
-    expect(sendMessageBlock).toMatch(/try\s*\{[\s\S]*?stdin\.write[\s\S]*?\}\s*catch/);
+    expect(sendMessageBlock).toMatch(
+      /try\s*\{[\s\S]*?stdin\.write[\s\S]*?\}\s*catch/,
+    );
   });
 
   it('wraps the initial-prompt stdin.write in run() with try/catch', () => {

@@ -1,10 +1,21 @@
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import {
+  render,
+  screen,
+  waitFor,
+  fireEvent,
+  act,
+} from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TaskList } from '../TaskList';
 import type { TaskView, DisplayStatus } from '../../types/taskView';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 
-function makeTask(overrides: Partial<TaskView> & { taskId: string; displayStatus: DisplayStatus }): TaskView {
+function makeTask(
+  overrides: Partial<TaskView> & {
+    taskId: string;
+    displayStatus: DisplayStatus;
+  },
+): TaskView {
   return {
     taskName: 'Test Task',
     notionStatus: '🔄 In Progress',
@@ -43,14 +54,36 @@ describe('TaskList', () => {
   });
 
   it('renders a loading indicator while tasks are being fetched', () => {
-    (fetch as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => { /* never resolves */ }));
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    (fetch as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise(() => {
+        /* never resolves */
+      }),
+    );
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     expect(screen.getByTestId('task-list-loading')).toBeDefined();
   });
 
   it('renders an empty state when no active tasks exist', async () => {
     mockFetch([]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('task-list-empty')).toBeDefined();
     });
@@ -58,10 +91,27 @@ describe('TaskList', () => {
 
   it('renders section headers for each non-empty display status group', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Running Task', displayStatus: 'in_progress' }),
-      makeTask({ taskId: 't2', taskName: 'Review Task',  displayStatus: 'in_review' }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Running Task',
+        displayStatus: 'in_progress',
+      }),
+      makeTask({
+        taskId: 't2',
+        taskName: 'Review Task',
+        displayStatus: 'in_review',
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     // Status badges inside task cards also contain status text, so target the
     // dedicated group-header testids rather than free-text matches.
     await waitFor(() => {
@@ -77,7 +127,16 @@ describe('TaskList', () => {
     mockFetch([
       makeTask({ taskId: 't1', taskName: 'Only Task', displayStatus: 'ready' }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('ready-section')).toBeDefined();
       expect(screen.getByText(/ready/i)).toBeDefined();
@@ -87,9 +146,23 @@ describe('TaskList', () => {
 
   it('renders ready tasks in compact row format (CompactTaskCard), not full TaskCard', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Ready Task', displayStatus: 'ready', wave: 1 }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Ready Task',
+        displayStatus: 'ready',
+        wave: 1,
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('compact-task-card')).toBeDefined();
       expect(screen.getByText('Ready Task')).toBeDefined();
@@ -98,49 +171,127 @@ describe('TaskList', () => {
 
   it('groups ready code tasks under correct wave headers', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Wave 1 Task', displayStatus: 'ready', wave: 1, blocked: false }),
-      makeTask({ taskId: 't2', taskName: 'Wave 2 Task', displayStatus: 'ready', wave: 2, blocked: true, blockerNames: ['Wave 1 Task'] }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Wave 1 Task',
+        displayStatus: 'ready',
+        wave: 1,
+        blocked: false,
+      }),
+      makeTask({
+        taskId: 't2',
+        taskName: 'Wave 2 Task',
+        displayStatus: 'ready',
+        wave: 2,
+        blocked: true,
+        blockerNames: ['Wave 1 Task'],
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('wave-group-1')).toBeDefined();
       expect(screen.getByTestId('wave-group-2')).toBeDefined();
     });
     // Wave 2+ groups start collapsed — expand to verify the task is grouped under it
     fireEvent.click(screen.getByTestId('wave-header-2'));
-    expect(screen.getByTestId('wave-group-1').textContent).toContain('Wave 1 Task');
-    expect(screen.getByTestId('wave-group-2').textContent).toContain('Wave 2 Task');
+    expect(screen.getByTestId('wave-group-1').textContent).toContain(
+      'Wave 1 Task',
+    );
+    expect(screen.getByTestId('wave-group-2').textContent).toContain(
+      'Wave 2 Task',
+    );
   });
 
   it('Wave 2+ tasks render with blocked CSS class', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Blocked Task', displayStatus: 'ready', wave: 2, blocked: true, blockerNames: ['Other'] }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Blocked Task',
+        displayStatus: 'ready',
+        wave: 2,
+        blocked: true,
+        blockerNames: ['Other'],
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('wave-header-2')).toBeDefined();
     });
     fireEvent.click(screen.getByTestId('wave-header-2'));
-    expect(screen.getByTestId('compact-task-card').className).toContain('blocked');
+    expect(screen.getByTestId('compact-task-card').className).toContain(
+      'blocked',
+    );
   });
 
   it('Wave 2+ tasks show blocker names', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Blocked Task', displayStatus: 'ready', wave: 2, blocked: true, blockerNames: ['Task Alpha'] }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Blocked Task',
+        displayStatus: 'ready',
+        wave: 2,
+        blocked: true,
+        blockerNames: ['Task Alpha'],
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('wave-header-2')).toBeDefined();
     });
     fireEvent.click(screen.getByTestId('wave-header-2'));
-    expect(screen.getByTestId('blocker-names').textContent).toContain('Task Alpha');
+    expect(screen.getByTestId('blocker-names').textContent).toContain(
+      'Task Alpha',
+    );
   });
 
   it('Wave 2+ tasks do NOT render checkboxes', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Blocked Task', displayStatus: 'ready', wave: 2, blocked: true, blockerNames: ['Other'] }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Blocked Task',
+        displayStatus: 'ready',
+        wave: 2,
+        blocked: true,
+        blockerNames: ['Other'],
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('wave-header-2')).toBeDefined();
     });
@@ -150,9 +301,25 @@ describe('TaskList', () => {
 
   it('Wave 1 code tasks render with a checkbox', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Launchable Task', displayStatus: 'ready', wave: 1, blocked: false, taskType: '💻 Code' }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Launchable Task',
+        displayStatus: 'ready',
+        wave: 1,
+        blocked: false,
+        taskType: '💻 Code',
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByRole('checkbox')).toBeDefined();
     });
@@ -160,10 +327,32 @@ describe('TaskList', () => {
 
   it('non-code ready tasks are in the Non-Code sub-group within the Ready section with no checkboxes', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Code Task', displayStatus: 'ready', taskType: '💻 Code', wave: 1 }),
-      makeTask({ taskId: 't2', taskName: 'Planning Task', displayStatus: 'ready', taskType: '📋 Planning', notionStatus: '🗂️ Ready', wave: 1 }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Code Task',
+        displayStatus: 'ready',
+        taskType: '💻 Code',
+        wave: 1,
+      }),
+      makeTask({
+        taskId: 't2',
+        taskName: 'Planning Task',
+        displayStatus: 'ready',
+        taskType: '📋 Planning',
+        notionStatus: '🗂️ Ready',
+        wave: 1,
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('non-code-wave-group')).toBeDefined();
     });
@@ -179,10 +368,30 @@ describe('TaskList', () => {
 
   it('renders non-ready non-code tasks in a separate section at the bottom', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Code Task', displayStatus: 'in_progress', taskType: '💻 Code' }),
-      makeTask({ taskId: 't2', taskName: 'Planning Task', displayStatus: 'in_progress', taskType: '📋 Planning', notionStatus: '🔄 In Progress' }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Code Task',
+        displayStatus: 'in_progress',
+        taskType: '💻 Code',
+      }),
+      makeTask({
+        taskId: 't2',
+        taskName: 'Planning Task',
+        displayStatus: 'in_progress',
+        taskType: '📋 Planning',
+        notionStatus: '🔄 In Progress',
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('non-code-section')).toBeDefined();
     });
@@ -193,10 +402,34 @@ describe('TaskList', () => {
 
   it('"Select All" button only selects Wave 1 code tasks', async () => {
     mockFetch([
-      makeTask({ taskId: 'w1-1', taskName: 'Wave 1 Task', displayStatus: 'ready', wave: 1, blocked: false, taskType: '💻 Code' }),
-      makeTask({ taskId: 'w2-1', taskName: 'Wave 2 Task', displayStatus: 'ready', wave: 2, blocked: true, blockerNames: ['Other'], taskType: '💻 Code' }),
+      makeTask({
+        taskId: 'w1-1',
+        taskName: 'Wave 1 Task',
+        displayStatus: 'ready',
+        wave: 1,
+        blocked: false,
+        taskType: '💻 Code',
+      }),
+      makeTask({
+        taskId: 'w2-1',
+        taskName: 'Wave 2 Task',
+        displayStatus: 'ready',
+        wave: 2,
+        blocked: true,
+        blockerNames: ['Other'],
+        taskType: '💻 Code',
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('select-all-btn')).toBeDefined();
     });
@@ -209,9 +442,25 @@ describe('TaskList', () => {
 
   it('"Launch (N)" button is disabled when no tasks are checked', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Task', displayStatus: 'ready', wave: 1, blocked: false, taskType: '💻 Code' }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Task',
+        displayStatus: 'ready',
+        wave: 1,
+        blocked: false,
+        taskType: '💻 Code',
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('launch-btn')).toBeDefined();
     });
@@ -221,9 +470,26 @@ describe('TaskList', () => {
 
   it('"Launch (N)" button becomes enabled and shows count when tasks are checked', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Task', displayStatus: 'ready', wave: 1, blocked: false, taskType: '💻 Code', notionUrl: 'https://notion.so/t1' }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Task',
+        displayStatus: 'ready',
+        wave: 1,
+        blocked: false,
+        taskType: '💻 Code',
+        notionUrl: 'https://notion.so/t1',
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByRole('checkbox')).toBeDefined();
     });
@@ -235,11 +501,38 @@ describe('TaskList', () => {
 
   it('sorts ready tasks within a wave by priority — High first', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Low Priority Task',    displayStatus: 'ready', priority: '🟢 Low',    wave: 1 }),
-      makeTask({ taskId: 't2', taskName: 'High Priority Task',   displayStatus: 'ready', priority: '🔴 High',   wave: 1 }),
-      makeTask({ taskId: 't3', taskName: 'Medium Priority Task', displayStatus: 'ready', priority: '🟡 Medium', wave: 1 }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Low Priority Task',
+        displayStatus: 'ready',
+        priority: '🟢 Low',
+        wave: 1,
+      }),
+      makeTask({
+        taskId: 't2',
+        taskName: 'High Priority Task',
+        displayStatus: 'ready',
+        priority: '🔴 High',
+        wave: 1,
+      }),
+      makeTask({
+        taskId: 't3',
+        taskName: 'Medium Priority Task',
+        displayStatus: 'ready',
+        priority: '🟡 Medium',
+        wave: 1,
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByText('High Priority Task')).toBeDefined();
     });
@@ -252,9 +545,22 @@ describe('TaskList', () => {
 
   it('clicking a non-done group header collapses it (toggles collapsed state)', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Running Task', displayStatus: 'in_progress' }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Running Task',
+        displayStatus: 'in_progress',
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('group-header-in_progress')).toBeDefined();
     });
@@ -274,9 +580,22 @@ describe('TaskList', () => {
 
   it('collapsed group does not render its task list children', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'In Review Task', displayStatus: 'in_review' }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'In Review Task',
+        displayStatus: 'in_review',
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('group-header-in_review')).toBeDefined();
     });
@@ -288,10 +607,27 @@ describe('TaskList', () => {
 
   it('expanded group renders all task items', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Task Alpha', displayStatus: 'in_progress' }),
-      makeTask({ taskId: 't2', taskName: 'Task Beta', displayStatus: 'in_progress' }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Task Alpha',
+        displayStatus: 'in_progress',
+      }),
+      makeTask({
+        taskId: 't2',
+        taskName: 'Task Beta',
+        displayStatus: 'in_progress',
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByText('Task Alpha')).toBeDefined();
       expect(screen.getByText('Task Beta')).toBeDefined();
@@ -300,9 +636,22 @@ describe('TaskList', () => {
 
   it('toggle icon changes between expanded and collapsed states', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Some Task', displayStatus: 'in_progress' }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Some Task',
+        displayStatus: 'in_progress',
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('group-header-in_progress')).toBeDefined();
     });
@@ -319,7 +668,16 @@ describe('TaskList', () => {
     mockFetch([
       makeTask({ taskId: 't1', taskName: 'Done Task', displayStatus: 'done' }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       // The header should exist
       expect(screen.getByText(/done/i)).toBeDefined();
@@ -330,9 +688,22 @@ describe('TaskList', () => {
 
   it('expands the Done group when the header is clicked', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Completed Work', displayStatus: 'done' }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Completed Work',
+        displayStatus: 'done',
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('group-header-done')).toBeDefined();
     });
@@ -343,9 +714,23 @@ describe('TaskList', () => {
   it('calls onSelectTask with the task id when a ready card is clicked', async () => {
     const onSelectTask = vi.fn();
     mockFetch([
-      makeTask({ taskId: 'task-abc', taskName: 'Clickable Task', displayStatus: 'ready', wave: 1 }),
+      makeTask({
+        taskId: 'task-abc',
+        taskName: 'Clickable Task',
+        displayStatus: 'ready',
+        wave: 1,
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={onSelectTask} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={onSelectTask}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByText('Clickable Task')).toBeDefined();
     });
@@ -356,9 +741,22 @@ describe('TaskList', () => {
   it('calls onSelectTask with the task id when an in-progress card is clicked', async () => {
     const onSelectTask = vi.fn();
     mockFetch([
-      makeTask({ taskId: 'task-abc', taskName: 'Clickable Task', displayStatus: 'in_progress' }),
+      makeTask({
+        taskId: 'task-abc',
+        taskName: 'Clickable Task',
+        displayStatus: 'in_progress',
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={onSelectTask} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={onSelectTask}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByText('Clickable Task')).toBeDefined();
     });
@@ -367,23 +765,56 @@ describe('TaskList', () => {
   });
 
   it('renders the empty state when activeProjectId is null', async () => {
-    render(<TaskList activeProjectId={null} boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId={null}
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('task-list-empty')).toBeDefined();
     });
   });
 
   it('triggers a re-fetch when reviewRefreshTrigger changes (pr_review_complete scenario)', async () => {
-    const task = makeTask({ taskId: 't1', taskName: 'Task A', displayStatus: 'in_review' });
-    const updatedTask = makeTask({ taskId: 't1', taskName: 'Task A (reviewed)', displayStatus: 'needs_attention' });
+    const task = makeTask({
+      taskId: 't1',
+      taskName: 'Task A',
+      displayStatus: 'in_review',
+    });
+    const updatedTask = makeTask({
+      taskId: 't1',
+      taskName: 'Task A (reviewed)',
+      displayStatus: 'needs_attention',
+    });
 
     // First fetch returns initial task list
     (fetch as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => [task] })
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => [updatedTask] });
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => [task],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => [updatedTask],
+      });
 
     const { rerender } = render(
-      <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} reviewRefreshTrigger={0} send={noop} project={null} />,
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        reviewRefreshTrigger={0}
+        send={noop}
+        project={null}
+      />,
     );
 
     await waitFor(() => {
@@ -394,7 +825,15 @@ describe('TaskList', () => {
 
     await act(async () => {
       rerender(
-        <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} reviewRefreshTrigger={1} send={noop} project={null} />,
+        <TaskList
+          activeProjectId="proj-1"
+          boardId={null}
+          selectedTaskId={null}
+          onSelectTask={vi.fn()}
+          reviewRefreshTrigger={1}
+          send={noop}
+          project={null}
+        />,
       );
     });
 
@@ -405,15 +844,48 @@ describe('TaskList', () => {
   });
 
   it('triggers a re-fetch when reviewRefreshTrigger changes (session_started review scenario)', async () => {
-    const task = makeTask({ taskId: 't2', taskName: 'Task B', displayStatus: 'in_progress' });
-    const withReview = makeTask({ taskId: 't2', taskName: 'Task B', displayStatus: 'in_review', review: { sessionId: 'rev-1', status: 'running', verdict: null, summary: null, iterationCount: 1, inputTokens: 0, outputTokens: 0 } });
+    const task = makeTask({
+      taskId: 't2',
+      taskName: 'Task B',
+      displayStatus: 'in_progress',
+    });
+    const withReview = makeTask({
+      taskId: 't2',
+      taskName: 'Task B',
+      displayStatus: 'in_review',
+      review: {
+        sessionId: 'rev-1',
+        status: 'running',
+        verdict: null,
+        summary: null,
+        iterationCount: 1,
+        inputTokens: 0,
+        outputTokens: 0,
+      },
+    });
 
     (fetch as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => [task] })
-      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => [withReview] });
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => [task],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => [withReview],
+      });
 
     const { rerender } = render(
-      <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} reviewRefreshTrigger={0} send={noop} project={null} />,
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        reviewRefreshTrigger={0}
+        send={noop}
+        project={null}
+      />,
     );
 
     await waitFor(() => {
@@ -424,7 +896,15 @@ describe('TaskList', () => {
 
     await act(async () => {
       rerender(
-        <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} reviewRefreshTrigger={1} send={noop} project={null} />,
+        <TaskList
+          activeProjectId="proj-1"
+          boardId={null}
+          selectedTaskId={null}
+          onSelectTask={vi.fn()}
+          reviewRefreshTrigger={1}
+          send={noop}
+          project={null}
+        />,
       );
     });
 
@@ -435,9 +915,23 @@ describe('TaskList', () => {
 
   it('Ready group header renders with role="button" and aria-expanded', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Ready Task', displayStatus: 'ready', wave: 1 }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Ready Task',
+        displayStatus: 'ready',
+        wave: 1,
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('group-header-ready')).toBeDefined();
     });
@@ -448,9 +942,23 @@ describe('TaskList', () => {
 
   it('clicking Ready group header toggles aria-expanded between true and false', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Ready Task', displayStatus: 'ready', wave: 1 }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Ready Task',
+        displayStatus: 'ready',
+        wave: 1,
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('group-header-ready')).toBeDefined();
     });
@@ -464,9 +972,23 @@ describe('TaskList', () => {
 
   it('when Ready is collapsed, wave cards are not rendered', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Ready Task', displayStatus: 'ready', wave: 1 }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Ready Task',
+        displayStatus: 'ready',
+        wave: 1,
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('group-header-ready')).toBeDefined();
     });
@@ -479,9 +1001,24 @@ describe('TaskList', () => {
 
   it('Launch button click does NOT trigger collapse toggle (stopPropagation)', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Ready Task', displayStatus: 'ready', wave: 1, taskType: '💻 Code' }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Ready Task',
+        displayStatus: 'ready',
+        wave: 1,
+        taskType: '💻 Code',
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('launch-btn')).toBeDefined();
     });
@@ -495,9 +1032,24 @@ describe('TaskList', () => {
 
   it('Planning/Testing group header renders with role="button" and aria-expanded', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Planning Task', displayStatus: 'in_progress', taskType: '📋 Planning', notionStatus: '🔄 In Progress' }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Planning Task',
+        displayStatus: 'in_progress',
+        taskType: '📋 Planning',
+        notionStatus: '🔄 In Progress',
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('group-header-planning')).toBeDefined();
     });
@@ -508,9 +1060,24 @@ describe('TaskList', () => {
 
   it('clicking Planning/Testing header toggles visibility of its task cards', async () => {
     mockFetch([
-      makeTask({ taskId: 't1', taskName: 'Planning Task', displayStatus: 'in_progress', taskType: '📋 Planning', notionStatus: '🔄 In Progress' }),
+      makeTask({
+        taskId: 't1',
+        taskName: 'Planning Task',
+        displayStatus: 'in_progress',
+        taskType: '📋 Planning',
+        notionStatus: '🔄 In Progress',
+      }),
     ]);
-    render(<TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={noop} project={null} />);
+    render(
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={noop}
+        project={null}
+      />,
+    );
     await waitFor(() => {
       expect(screen.getByTestId('group-header-planning')).toBeDefined();
     });
@@ -522,13 +1089,31 @@ describe('TaskList', () => {
   });
 
   it('patches an existing task in-place when lastTaskUpdate changes', async () => {
-    const initial = makeTask({ taskId: 't1', taskName: 'Old Name', displayStatus: 'ready', wave: 1 });
+    const initial = makeTask({
+      taskId: 't1',
+      taskName: 'Old Name',
+      displayStatus: 'ready',
+      wave: 1,
+    });
     mockFetch([initial]);
 
-    const updated = makeTask({ taskId: 't1', taskName: 'Updated Name', displayStatus: 'in_progress', wave: 1 });
+    const updated = makeTask({
+      taskId: 't1',
+      taskName: 'Updated Name',
+      displayStatus: 'in_progress',
+      wave: 1,
+    });
 
     const { rerender } = render(
-      <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} lastTaskUpdate={null} send={noop} project={null} />,
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        lastTaskUpdate={null}
+        send={noop}
+        project={null}
+      />,
     );
 
     await waitFor(() => {
@@ -537,7 +1122,15 @@ describe('TaskList', () => {
 
     act(() => {
       rerender(
-        <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} lastTaskUpdate={updated} send={noop} project={null} />,
+        <TaskList
+          activeProjectId="proj-1"
+          boardId={null}
+          selectedTaskId={null}
+          onSelectTask={vi.fn()}
+          lastTaskUpdate={updated}
+          send={noop}
+          project={null}
+        />,
       );
     });
 
@@ -546,13 +1139,29 @@ describe('TaskList', () => {
   });
 
   it('task_updated for an unknown task ID does not crash or add a phantom entry', async () => {
-    const initial = makeTask({ taskId: 't1', taskName: 'Known Task', displayStatus: 'in_progress' });
+    const initial = makeTask({
+      taskId: 't1',
+      taskName: 'Known Task',
+      displayStatus: 'in_progress',
+    });
     mockFetch([initial]);
 
-    const phantom = makeTask({ taskId: 'unknown-id', taskName: 'Phantom Task', displayStatus: 'in_progress' });
+    const phantom = makeTask({
+      taskId: 'unknown-id',
+      taskName: 'Phantom Task',
+      displayStatus: 'in_progress',
+    });
 
     const { rerender } = render(
-      <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} lastTaskUpdate={null} send={noop} project={null} />,
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        lastTaskUpdate={null}
+        send={noop}
+        project={null}
+      />,
     );
 
     await waitFor(() => {
@@ -561,7 +1170,15 @@ describe('TaskList', () => {
 
     act(() => {
       rerender(
-        <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} lastTaskUpdate={phantom} send={noop} project={null} />,
+        <TaskList
+          activeProjectId="proj-1"
+          boardId={null}
+          selectedTaskId={null}
+          onSelectTask={vi.fn()}
+          lastTaskUpdate={phantom}
+          send={noop}
+          project={null}
+        />,
       );
     });
 
@@ -622,10 +1239,23 @@ describe('TaskList', () => {
   });
 
   it('Sync button sends fetch_tasks WS message on click', async () => {
-    mockFetch([makeTask({ taskId: 't1', taskName: 'Task', displayStatus: 'in_progress' })]);
+    mockFetch([
+      makeTask({
+        taskId: 't1',
+        taskName: 'Task',
+        displayStatus: 'in_progress',
+      }),
+    ]);
     const sendFn = vi.fn().mockReturnValue(true);
     render(
-      <TaskList activeProjectId="proj-1" boardId="board-1" selectedTaskId={null} onSelectTask={vi.fn()} send={sendFn} project={null} />,
+      <TaskList
+        activeProjectId="proj-1"
+        boardId="board-1"
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={sendFn}
+        project={null}
+      />,
     );
 
     await waitFor(() => {
@@ -644,10 +1274,21 @@ describe('TaskList', () => {
     (fetch as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce({ ok: true, status: 200, json: async () => [] })
       // Second fetch (triggered by sync) never resolves — keeps syncing state
-      .mockReturnValueOnce(new Promise(() => { /* never resolves */ }));
+      .mockReturnValueOnce(
+        new Promise(() => {
+          /* never resolves */
+        }),
+      );
 
     render(
-      <TaskList activeProjectId="proj-1" boardId="board-1" selectedTaskId={null} onSelectTask={vi.fn()} send={vi.fn().mockReturnValue(true)} project={null} />,
+      <TaskList
+        activeProjectId="proj-1"
+        boardId="board-1"
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        send={vi.fn().mockReturnValue(true)}
+        project={null}
+      />,
     );
 
     await waitFor(() => {
@@ -665,7 +1306,12 @@ describe('TaskList', () => {
   });
 
   it('task_updated WS message updates the matching task status in local state', async () => {
-    const initial = makeTask({ taskId: 't1', taskName: 'Task Alpha', displayStatus: 'ready', wave: 1 });
+    const initial = makeTask({
+      taskId: 't1',
+      taskName: 'Task Alpha',
+      displayStatus: 'ready',
+      wave: 1,
+    });
     mockFetch([initial]);
 
     const updated: TaskView = {
@@ -675,7 +1321,15 @@ describe('TaskList', () => {
     };
 
     const { rerender } = render(
-      <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} lastTaskUpdate={null} send={noop} project={null} />,
+      <TaskList
+        activeProjectId="proj-1"
+        boardId={null}
+        selectedTaskId={null}
+        onSelectTask={vi.fn()}
+        lastTaskUpdate={null}
+        send={noop}
+        project={null}
+      />,
     );
 
     await waitFor(() => {
@@ -684,7 +1338,15 @@ describe('TaskList', () => {
 
     act(() => {
       rerender(
-        <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} lastTaskUpdate={updated} send={noop} project={null} />,
+        <TaskList
+          activeProjectId="proj-1"
+          boardId={null}
+          selectedTaskId={null}
+          onSelectTask={vi.fn()}
+          lastTaskUpdate={updated}
+          send={noop}
+          project={null}
+        />,
       );
     });
 
@@ -696,11 +1358,24 @@ describe('TaskList', () => {
 
   describe('Sync button — send() boolean return and safety timeout', () => {
     it('clears syncing immediately when send() returns false (WS disconnected)', async () => {
-      mockFetch([makeTask({ taskId: 't1', taskName: 'Task', displayStatus: 'in_progress' })]);
+      mockFetch([
+        makeTask({
+          taskId: 't1',
+          taskName: 'Task',
+          displayStatus: 'in_progress',
+        }),
+      ]);
       const disconnectedSend = vi.fn().mockReturnValue(false);
 
       render(
-        <TaskList activeProjectId="proj-1" boardId={null} selectedTaskId={null} onSelectTask={vi.fn()} send={disconnectedSend} project={null} />,
+        <TaskList
+          activeProjectId="proj-1"
+          boardId={null}
+          selectedTaskId={null}
+          onSelectTask={vi.fn()}
+          send={disconnectedSend}
+          project={null}
+        />,
       );
 
       await waitFor(() => {
@@ -718,11 +1393,24 @@ describe('TaskList', () => {
     });
 
     it('clears syncing after 5-second safety timeout when no tasks_ready arrives', async () => {
-      mockFetch([makeTask({ taskId: 't1', taskName: 'Task', displayStatus: 'in_progress' })]);
+      mockFetch([
+        makeTask({
+          taskId: 't1',
+          taskName: 'Task',
+          displayStatus: 'in_progress',
+        }),
+      ]);
       const connectedSend = vi.fn().mockReturnValue(true);
 
       render(
-        <TaskList activeProjectId="proj-1" boardId="board-1" selectedTaskId={null} onSelectTask={vi.fn()} send={connectedSend} project={null} />,
+        <TaskList
+          activeProjectId="proj-1"
+          boardId="board-1"
+          selectedTaskId={null}
+          onSelectTask={vi.fn()}
+          send={connectedSend}
+          project={null}
+        />,
       );
 
       // Wait for initial render with real timers

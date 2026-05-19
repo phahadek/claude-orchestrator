@@ -2,9 +2,20 @@ import { describe, it, expect } from 'vitest';
 import { computeWaves } from '../computeWaves';
 import type { ResolvedTask } from '@claude-orchestrator/backend/src/notion/types';
 
-function makeTask(id: string, status: string, dependsOn: string[] = []): ResolvedTask {
+function makeTask(
+  id: string,
+  status: string,
+  dependsOn: string[] = [],
+): ResolvedTask {
   return {
-    task: { id, title: `Task ${id}`, status, type: '💻 Code', dependsOn, notionUrl: `https://notion.so/${id}` },
+    task: {
+      id,
+      title: `Task ${id}`,
+      status,
+      type: '💻 Code',
+      dependsOn,
+      notionUrl: `https://notion.so/${id}`,
+    },
     blocked: false,
     blockers: [],
     nonCode: false,
@@ -22,10 +33,7 @@ describe('computeWaves', () => {
   });
 
   it('places tasks with no deps in wave 1', () => {
-    const tasks = [
-      makeTask('a', '🗂️ Ready'),
-      makeTask('b', '🗂️ Ready'),
-    ];
+    const tasks = [makeTask('a', '🗂️ Ready'), makeTask('b', '🗂️ Ready')];
     const { waves } = computeWaves(tasks);
     expect(waves).toHaveLength(1);
     expect(waves[0].map((t) => t.task.id).sort()).toEqual(['a', 'b']);
@@ -44,10 +52,10 @@ describe('computeWaves', () => {
 
   it('correctly groups tasks into multiple waves', () => {
     const tasks = [
-      makeTask('a', '🗂️ Ready'),          // wave 1 — no deps
-      makeTask('b', '🗂️ Ready'),          // wave 1 — no deps
-      makeTask('c', '🗂️ Ready', ['a']),   // wave 2 — depends on a
-      makeTask('d', '🗂️ Ready', ['b']),   // wave 2 — depends on b
+      makeTask('a', '🗂️ Ready'), // wave 1 — no deps
+      makeTask('b', '🗂️ Ready'), // wave 1 — no deps
+      makeTask('c', '🗂️ Ready', ['a']), // wave 2 — depends on a
+      makeTask('d', '🗂️ Ready', ['b']), // wave 2 — depends on b
       makeTask('e', '🗂️ Ready', ['c', 'd']), // wave 3
     ];
     const { waves } = computeWaves(tasks);
@@ -58,10 +66,7 @@ describe('computeWaves', () => {
   });
 
   it('excludes deferred tasks from waves', () => {
-    const tasks = [
-      makeTask('a', '🗂️ Ready'),
-      makeTask('b', '⏭️ Deferred'),
-    ];
+    const tasks = [makeTask('a', '🗂️ Ready'), makeTask('b', '⏭️ Deferred')];
     const { waves, deferredCount } = computeWaves(tasks);
     expect(deferredCount).toBe(1);
     expect(waves.flat().map((t) => t.task.id)).not.toContain('b');

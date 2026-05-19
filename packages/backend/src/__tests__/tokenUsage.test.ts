@@ -32,7 +32,9 @@ describe('runMigrations() — token columns', () => {
       path.join(__dirname, '..', 'db', 'schema.ts'),
       'utf-8',
     );
-    expect(source).toMatch(/ALTER TABLE sessions ADD COLUMN.*total_input_tokens/);
+    expect(source).toMatch(
+      /ALTER TABLE sessions ADD COLUMN.*total_input_tokens/,
+    );
   });
 
   it('adds total_output_tokens column with try/catch for idempotency', () => {
@@ -40,7 +42,9 @@ describe('runMigrations() — token columns', () => {
       path.join(__dirname, '..', 'db', 'schema.ts'),
       'utf-8',
     );
-    expect(source).toMatch(/ALTER TABLE sessions ADD COLUMN.*total_output_tokens/);
+    expect(source).toMatch(
+      /ALTER TABLE sessions ADD COLUMN.*total_output_tokens/,
+    );
   });
 
   it('wraps token column additions in try/catch', () => {
@@ -49,7 +53,9 @@ describe('runMigrations() — token columns', () => {
       'utf-8',
     );
     const inputMatch = source.match(/try\s*\{[^}]*total_input_tokens[^}]*\}/s);
-    const outputMatch = source.match(/try\s*\{[^}]*total_output_tokens[^}]*\}/s);
+    const outputMatch = source.match(
+      /try\s*\{[^}]*total_output_tokens[^}]*\}/s,
+    );
     expect(inputMatch).not.toBeNull();
     expect(outputMatch).not.toBeNull();
   });
@@ -179,4 +185,3 @@ describe('incrementTokens', () => {
     expect(row?.total_output_tokens).toBe(150);
   });
 });
-

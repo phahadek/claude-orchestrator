@@ -181,7 +181,10 @@
   color: #6c7086;
   cursor: pointer;
   line-height: 1;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
 }
 
 .removeButton:hover:not(:disabled) {
@@ -208,7 +211,9 @@
   color: #cdd6f4;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
 }
 
 .reviewButton:hover:not(:disabled),

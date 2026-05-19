@@ -1,5 +1,10 @@
 import type { ServerMessage } from './types';
-import { getActiveSessions, getEventsBySession, getDenialsBySession, getPRByNotionTaskId } from '../db/queries';
+import {
+  getActiveSessions,
+  getEventsBySession,
+  getDenialsBySession,
+  getPRByNotionTaskId,
+} from '../db/queries';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 
 /**
@@ -9,12 +14,23 @@ import { isSystemOnlyUserEvent } from '../utils/eventFilters';
  * the flag, a backend restart re-fires notifications for every historical
  * non-archived session in done/error state.
  */
-export function sendInitialStateBurst(send: (msg: ServerMessage) => void): void {
+export function sendInitialStateBurst(
+  send: (msg: ServerMessage) => void,
+): void {
   for (const s of getActiveSessions()) {
-    const tags = s.tags ? (() => { try { return JSON.parse(s.tags) as string[]; } catch { return undefined; } })() : undefined;
-    const reviewPr = s.session_type === 'review' && s.notion_task_id
-      ? (getPRByNotionTaskId(s.notion_task_id) ?? undefined)
+    const tags = s.tags
+      ? (() => {
+          try {
+            return JSON.parse(s.tags) as string[];
+          } catch {
+            return undefined;
+          }
+        })()
       : undefined;
+    const reviewPr =
+      s.session_type === 'review' && s.notion_task_id
+        ? (getPRByNotionTaskId(s.notion_task_id) ?? undefined)
+        : undefined;
     const prNumber = reviewPr?.pr_number;
     const codeSessionId = reviewPr?.session_id ?? undefined;
     send({
@@ -52,7 +68,12 @@ export function sendInitialStateBurst(send: (msg: ServerMessage) => void): void 
       send({
         type: 'session_event',
         sessionId: s.session_id,
-        eventType: ev.event_type as 'text' | 'tool_use' | 'tool_result' | 'system' | 'user_message',
+        eventType: ev.event_type as
+          | 'text'
+          | 'tool_use'
+          | 'tool_result'
+          | 'system'
+          | 'user_message',
         content: ev.payload,
         ...(ev.message_id != null && { messageId: ev.message_id }),
       });

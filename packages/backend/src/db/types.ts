@@ -30,7 +30,21 @@ export interface Session {
   task_name: string | null;
 }
 
-export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path' | 'archived' | 'favorited' | 'project_id' | 'session_type' | 'note' | 'tags' | 'total_input_tokens' | 'total_output_tokens' | 'task_name'> & {
+export type NewSession = Omit<
+  Session,
+  | 'ended_at'
+  | 'pr_url'
+  | 'worktree_path'
+  | 'archived'
+  | 'favorited'
+  | 'project_id'
+  | 'session_type'
+  | 'note'
+  | 'tags'
+  | 'total_input_tokens'
+  | 'total_output_tokens'
+  | 'task_name'
+> & {
   ended_at?: number | null;
   pr_url?: string | null;
   worktree_path?: string | null;
@@ -47,7 +61,13 @@ export type NewSession = Omit<Session, 'ended_at' | 'pr_url' | 'worktree_path' |
 
 // ─── session_events ────────────────────────────────────────────────────────
 
-export type EventType = 'text' | 'tool_use' | 'tool_result' | 'system' | 'error' | 'user_message';
+export type EventType =
+  | 'text'
+  | 'tool_use'
+  | 'tool_result'
+  | 'system'
+  | 'error'
+  | 'user_message';
 
 export interface SessionEvent {
   id: number;
@@ -62,7 +82,11 @@ export type NewSessionEvent = Omit<SessionEvent, 'id'>;
 
 // ─── permission_events ─────────────────────────────────────────────────────
 
-export type PermissionDecision = 'auto_allow' | 'auto_deny' | 'approved' | 'denied';
+export type PermissionDecision =
+  | 'auto_allow'
+  | 'auto_deny'
+  | 'approved'
+  | 'denied';
 
 export interface PermissionEvent {
   id: number;
@@ -131,7 +155,13 @@ export interface ProjectRow {
   updated_at: number;
 }
 
-export type NewProjectRow = Omit<ProjectRow, 'created_at' | 'updated_at' | 'auto_launch_enabled' | 'auto_launch_milestone_id'> & {
+export type NewProjectRow = Omit<
+  ProjectRow,
+  | 'created_at'
+  | 'updated_at'
+  | 'auto_launch_enabled'
+  | 'auto_launch_milestone_id'
+> & {
   auto_launch_enabled?: number;
   auto_launch_milestone_id?: string | null;
   created_at?: number;
@@ -150,7 +180,10 @@ export interface MilestoneRow {
   updated_at: number;
 }
 
-export type NewMilestoneRow = Omit<MilestoneRow, 'created_at' | 'updated_at' | 'display_order'> & {
+export type NewMilestoneRow = Omit<
+  MilestoneRow,
+  'created_at' | 'updated_at' | 'display_order'
+> & {
   display_order?: number;
   created_at?: number;
   updated_at?: number;
@@ -178,7 +211,7 @@ export interface PullRequestRow {
   head_branch: string | null;
   base_branch: string | null;
   state: string;
-  draft: number;              // 0 | 1 (SQLite boolean)
+  draft: number; // 0 | 1 (SQLite boolean)
   review_result: string | null; // JSON
   review_at: string | null;
   created_at: string | null;
@@ -188,8 +221,8 @@ export interface PullRequestRow {
   review_iteration: number;
   head_sha: string | null;
   last_reviewed_sha: string | null;
-  node_id: string | null;     // GitHub GraphQL global ID
-  mergeable: number | null;   // 0 | 1 | NULL (SQLite boolean, NULL = unknown)
+  node_id: string | null; // GitHub GraphQL global ID
+  mergeable: number | null; // 0 | 1 | NULL (SQLite boolean, NULL = unknown)
   /**
    * Categorized non-mergeability reason. Extends GitHub's raw mergeable_state
    * so the dashboard can tell merge conflicts apart from CI failures and
@@ -200,6 +233,6 @@ export interface PullRequestRow {
   merge_state_checked_at: string | null; // ISO timestamp
   /** JSON-encoded string[] of failing check-run names. Non-null only when merge_state = 'ci_failed'. */
   failing_checks: string | null;
-  pending_push: number;       // 0 | 1 — push arrived before initial review completed
+  pending_push: number; // 0 | 1 — push arrived before initial review completed
   pause_reason: PauseReason | null; // non-null marks the task as needs_attention
 }

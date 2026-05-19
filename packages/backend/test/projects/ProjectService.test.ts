@@ -46,8 +46,20 @@ describe('ProjectService.create / list / getById', () => {
 
   it('returns project with milestones nested', () => {
     ProjectService.create({ id: 'proj-1', name: 'P', projectDir: '/p' });
-    ProjectService.createMilestone({ id: 'm1', projectId: 'proj-1', name: 'M1', sourceId: 'src-1', displayOrder: 0 });
-    ProjectService.createMilestone({ id: 'm2', projectId: 'proj-1', name: 'M2', sourceId: 'src-2', displayOrder: 1 });
+    ProjectService.createMilestone({
+      id: 'm1',
+      projectId: 'proj-1',
+      name: 'M1',
+      sourceId: 'src-1',
+      displayOrder: 0,
+    });
+    ProjectService.createMilestone({
+      id: 'm2',
+      projectId: 'proj-1',
+      name: 'M2',
+      sourceId: 'src-2',
+      displayOrder: 1,
+    });
 
     const got = ProjectService.getById('proj-1');
     expect(got?.milestones).toHaveLength(2);
@@ -61,7 +73,10 @@ describe('ProjectService.update', () => {
     const before = ProjectService.getById('proj-1')!;
 
     await new Promise((r) => setTimeout(r, 5));
-    const updated = ProjectService.update('proj-1', { name: 'B', github_repo: 'owner/x' });
+    const updated = ProjectService.update('proj-1', {
+      name: 'B',
+      github_repo: 'owner/x',
+    });
     expect(updated?.name).toBe('B');
     expect(updated?.githubRepo).toBe('owner/x');
     expect(updated!.updatedAt).toBeGreaterThanOrEqual(before.updatedAt);
@@ -75,8 +90,16 @@ describe('ProjectService.update', () => {
 describe('ProjectService.delete (cascade)', () => {
   it('removes the project and cascades to its milestones', () => {
     ProjectService.create({ id: 'proj-1', name: 'A', projectDir: '/a' });
-    ProjectService.createMilestone({ id: 'm1', projectId: 'proj-1', name: 'M1' });
-    ProjectService.createMilestone({ id: 'm2', projectId: 'proj-1', name: 'M2' });
+    ProjectService.createMilestone({
+      id: 'm1',
+      projectId: 'proj-1',
+      name: 'M1',
+    });
+    ProjectService.createMilestone({
+      id: 'm2',
+      projectId: 'proj-1',
+      name: 'M2',
+    });
     expect(ProjectService.listMilestones('proj-1')).toHaveLength(2);
 
     const deleted = ProjectService.delete('proj-1');
@@ -104,19 +127,39 @@ describe('ProjectService.delete (cascade)', () => {
 describe('ProjectService.deleteMilestone', () => {
   it('removes a single milestone but leaves the project intact', () => {
     ProjectService.create({ id: 'proj-1', name: 'A', projectDir: '/a' });
-    ProjectService.createMilestone({ id: 'm1', projectId: 'proj-1', name: 'M1' });
-    ProjectService.createMilestone({ id: 'm2', projectId: 'proj-1', name: 'M2' });
+    ProjectService.createMilestone({
+      id: 'm1',
+      projectId: 'proj-1',
+      name: 'M1',
+    });
+    ProjectService.createMilestone({
+      id: 'm2',
+      projectId: 'proj-1',
+      name: 'M2',
+    });
 
     expect(ProjectService.deleteMilestone('m1')).toBe(true);
-    expect(ProjectService.listMilestones('proj-1').map((m) => m.id)).toEqual(['m2']);
+    expect(ProjectService.listMilestones('proj-1').map((m) => m.id)).toEqual([
+      'm2',
+    ]);
     expect(ProjectService.getById('proj-1')).toBeDefined();
   });
 });
 
 describe('ProjectService.getByGithubRepo', () => {
   it('returns the project that owns the repo', () => {
-    ProjectService.create({ id: 'p1', name: 'A', projectDir: '/a', githubRepo: 'owner/a' });
-    ProjectService.create({ id: 'p2', name: 'B', projectDir: '/b', githubRepo: 'owner/b' });
+    ProjectService.create({
+      id: 'p1',
+      name: 'A',
+      projectDir: '/a',
+      githubRepo: 'owner/a',
+    });
+    ProjectService.create({
+      id: 'p2',
+      name: 'B',
+      projectDir: '/b',
+      githubRepo: 'owner/b',
+    });
     expect(ProjectService.getByGithubRepo('owner/a')?.id).toBe('p1');
     expect(ProjectService.getByGithubRepo('owner/b')?.id).toBe('p2');
     expect(ProjectService.getByGithubRepo('owner/missing')).toBeUndefined();
@@ -126,9 +169,17 @@ describe('ProjectService.getByGithubRepo', () => {
 describe('ProjectService milestone update', () => {
   it('updates milestone fields and bumps updatedAt', () => {
     ProjectService.create({ id: 'p1', name: 'A', projectDir: '/a' });
-    ProjectService.createMilestone({ id: 'm1', projectId: 'p1', name: 'old', sourceId: 'src-1' });
+    ProjectService.createMilestone({
+      id: 'm1',
+      projectId: 'p1',
+      name: 'old',
+      sourceId: 'src-1',
+    });
 
-    const updated = ProjectService.updateMilestone('m1', { name: 'new', display_order: 5 });
+    const updated = ProjectService.updateMilestone('m1', {
+      name: 'new',
+      display_order: 5,
+    });
     expect(updated?.name).toBe('new');
     expect(updated?.displayOrder).toBe(5);
     expect(updated?.sourceId).toBe('src-1');

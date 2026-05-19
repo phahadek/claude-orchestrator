@@ -39,7 +39,10 @@ export function importProjectsFromEnv(rawEnv: string | undefined): number {
   let imported = 0;
   for (const entry of parsed) {
     if (!entry.id || !entry.name || !entry.projectDir) {
-      console.warn('[projectImport] Skipping invalid PROJECTS entry (missing id/name/projectDir):', entry);
+      console.warn(
+        '[projectImport] Skipping invalid PROJECTS entry (missing id/name/projectDir):',
+        entry,
+      );
       continue;
     }
 

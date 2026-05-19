@@ -25,8 +25,8 @@ export class GitHubClient {
 
   constructor() {
     this.headers = {
-      'Authorization': `Bearer ${GITHUB_TOKEN}`,
-      'Accept': 'application/vnd.github+json',
+      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      Accept: 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
     };
   }
@@ -34,12 +34,15 @@ export class GitHubClient {
   async listOpenPRs(repo?: string): Promise<PullRequest[]> {
     const r = repo ?? GITHUB_REPO;
     const data = await this.request<GitHubRawPR[]>(
-      `/repos/${r}/pulls?state=open&per_page=100`
+      `/repos/${r}/pulls?state=open&per_page=100`,
     );
-    return data.map(pr => mapPR(pr));
+    return data.map((pr) => mapPR(pr));
   }
 
-  async getPRState(prNumber: number, repo?: string): Promise<'open' | 'merged' | 'closed'> {
+  async getPRState(
+    prNumber: number,
+    repo?: string,
+  ): Promise<'open' | 'merged' | 'closed'> {
     const r = repo ?? GITHUB_REPO;
     const data = await this.request<{ state: string; merged: boolean }>(
       `/repos/${r}/pulls/${prNumber}`,
@@ -50,13 +53,20 @@ export class GitHubClient {
   }
 
   async fetchPR(repo: string, prNumber: number): Promise<PullRequest> {
-    const data = await this.request<GitHubRawPR>(`/repos/${repo}/pulls/${prNumber}`);
+    const data = await this.request<GitHubRawPR>(
+      `/repos/${repo}/pulls/${prNumber}`,
+    );
     return mapPR(data);
   }
 
-  async getMergeability(prNumber: number, repo?: string): Promise<{ mergeable: boolean | null; mergeableState: string | null }> {
+  async getMergeability(
+    prNumber: number,
+    repo?: string,
+  ): Promise<{ mergeable: boolean | null; mergeableState: string | null }> {
     const r = repo ?? GITHUB_REPO;
-    const data = await this.request<GitHubRawPR>(`/repos/${r}/pulls/${prNumber}`);
+    const data = await this.request<GitHubRawPR>(
+      `/repos/${r}/pulls/${prNumber}`,
+    );
     return {
       mergeable: data.mergeable ?? null,
       mergeableState: data.mergeable_state ?? null,
@@ -68,7 +78,8 @@ export class GitHubClient {
   async getMergeabilityWithRetry(
     prNumber: number,
     repo?: string,
-    sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms)),
+    sleep: (ms: number) => Promise<void> = (ms) =>
+      new Promise((r) => setTimeout(r, ms)),
   ): Promise<{ mergeable: boolean | null; mergeableState: string | null }> {
     const delays = [2000, 4000, 8000, 16000, 32000];
     let result = await this.getMergeability(prNumber, repo);
@@ -85,20 +96,23 @@ export class GitHubClient {
     return result;
   }
 
-  async fetchDiff(prId: number, repo?: string, branches?: { base: string; head: string }): Promise<PRDiff> {
+  async fetchDiff(
+    prId: number,
+    repo?: string,
+    branches?: { base: string; head: string },
+  ): Promise<PRDiff> {
     const r = repo ?? GITHUB_REPO;
     let diff: string;
     if (branches) {
       // Explicit three-dot compare endpoint — guarantees merge-base semantics
       diff = await this.request<string>(
         `/repos/${r}/compare/${branches.base}...${branches.head}`,
-        { headers: { ...this.headers, 'Accept': 'application/vnd.github.diff' } }
+        { headers: { ...this.headers, Accept: 'application/vnd.github.diff' } },
       );
     } else {
-      diff = await this.request<string>(
-        `/repos/${r}/pulls/${prId}`,
-        { headers: { ...this.headers, 'Accept': 'application/vnd.github.diff' } }
-      );
+      diff = await this.request<string>(`/repos/${r}/pulls/${prId}`, {
+        headers: { ...this.headers, Accept: 'application/vnd.github.diff' },
+      });
     }
     const filesChanged = parseDiffFiles(diff);
     return { prId, diff, filesChanged };
@@ -132,9 +146,12 @@ export class GitHubClient {
       const text = await res.text();
       throw new GitHubApiError(res.status, text);
     }
-    const body = await res.json() as { errors?: Array<{ message: string }> };
+    const body = (await res.json()) as { errors?: Array<{ message: string }> };
     if (body.errors?.length) {
-      throw new GitHubApiError(422, body.errors.map(e => e.message).join('; '));
+      throw new GitHubApiError(
+        422,
+        body.errors.map((e) => e.message).join('; '),
+      );
     }
   }
 
@@ -146,10 +163,19 @@ export class GitHubClient {
   async getFailingChecks(sha: string, repo?: string): Promise<FailingCheck[]> {
     const r = repo ?? GITHUB_REPO;
     const data = await this.request<{
-      check_runs: Array<{ name: string; status: string; conclusion: string | null }>;
+      check_runs: Array<{
+        name: string;
+        status: string;
+        conclusion: string | null;
+      }>;
     }>(`/repos/${r}/commits/${sha}/check-runs?per_page=100`);
     return data.check_runs
-      .filter((c) => c.status === 'completed' && c.conclusion !== null && FAILING_CHECK_CONCLUSIONS.has(c.conclusion))
+      .filter(
+        (c) =>
+          c.status === 'completed' &&
+          c.conclusion !== null &&
+          FAILING_CHECK_CONCLUSIONS.has(c.conclusion),
+      )
       .map((c) => ({ name: c.name, conclusion: c.conclusion as string }));
   }
 
@@ -162,33 +188,75 @@ export class GitHubClient {
    * Called after a 409/405 merge failure to pick the right remediation, and by
    * PRMergeWatcher polling so the state is reflected before the user clicks Merge.
    */
-  async categorizeMergeability(prNumber: number, repo?: string): Promise<MergeabilityCategory> {
+  async categorizeMergeability(
+    prNumber: number,
+    repo?: string,
+  ): Promise<MergeabilityCategory> {
     const r = repo ?? GITHUB_REPO;
-    const data = await this.request<GitHubRawPR>(`/repos/${r}/pulls/${prNumber}`);
+    const data = await this.request<GitHubRawPR>(
+      `/repos/${r}/pulls/${prNumber}`,
+    );
     const rawMergeableState = data.mergeable_state ?? null;
     const headSha = data.head?.sha ?? null;
 
     if (rawMergeableState === 'dirty' || rawMergeableState === 'behind') {
-      return { category: 'conflict', mergeState: 'dirty', rawMergeableState, failingChecks: [] };
+      return {
+        category: 'conflict',
+        mergeState: 'dirty',
+        rawMergeableState,
+        failingChecks: [],
+      };
     }
     if (rawMergeableState === 'unstable') {
-      const failingChecks = headSha ? await this.safeGetFailingChecks(headSha, r) : [];
-      return { category: 'ci_failed', mergeState: 'ci_failed', rawMergeableState, failingChecks };
+      const failingChecks = headSha
+        ? await this.safeGetFailingChecks(headSha, r)
+        : [];
+      return {
+        category: 'ci_failed',
+        mergeState: 'ci_failed',
+        rawMergeableState,
+        failingChecks,
+      };
     }
     if (rawMergeableState === 'blocked') {
-      const failingChecks = headSha ? await this.safeGetFailingChecks(headSha, r) : [];
+      const failingChecks = headSha
+        ? await this.safeGetFailingChecks(headSha, r)
+        : [];
       if (failingChecks.length > 0) {
-        return { category: 'ci_failed', mergeState: 'ci_failed', rawMergeableState, failingChecks };
+        return {
+          category: 'ci_failed',
+          mergeState: 'ci_failed',
+          rawMergeableState,
+          failingChecks,
+        };
       }
-      return { category: 'blocked', mergeState: 'blocked', rawMergeableState, failingChecks: [] };
+      return {
+        category: 'blocked',
+        mergeState: 'blocked',
+        rawMergeableState,
+        failingChecks: [],
+      };
     }
     if (rawMergeableState === 'clean') {
-      return { category: 'clean', mergeState: 'clean', rawMergeableState, failingChecks: [] };
+      return {
+        category: 'clean',
+        mergeState: 'clean',
+        rawMergeableState,
+        failingChecks: [],
+      };
     }
-    return { category: 'unknown', mergeState: rawMergeableState ?? 'unknown', rawMergeableState, failingChecks: [] };
+    return {
+      category: 'unknown',
+      mergeState: rawMergeableState ?? 'unknown',
+      rawMergeableState,
+      failingChecks: [],
+    };
   }
 
-  private async safeGetFailingChecks(sha: string, repo: string): Promise<FailingCheck[]> {
+  private async safeGetFailingChecks(
+    sha: string,
+    repo: string,
+  ): Promise<FailingCheck[]> {
     try {
       return await this.getFailingChecks(sha, repo);
     } catch (err) {
@@ -200,16 +268,24 @@ export class GitHubClient {
     }
   }
 
-  async mergePR(prId: number, commitTitle: string, repo?: string): Promise<MergeResult> {
+  async mergePR(
+    prId: number,
+    commitTitle: string,
+    repo?: string,
+  ): Promise<MergeResult> {
     const r = repo ?? GITHUB_REPO;
-    const data = await this.request<{ merged: boolean; message: string; sha: string | null }>(
-      `/repos/${r}/pulls/${prId}/merge`,
-      {
-        method: 'PUT',
-        headers: { ...this.headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ merge_method: 'squash', commit_title: commitTitle }),
-      }
-    );
+    const data = await this.request<{
+      merged: boolean;
+      message: string;
+      sha: string | null;
+    }>(`/repos/${r}/pulls/${prId}/merge`, {
+      method: 'PUT',
+      headers: { ...this.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        merge_method: 'squash',
+        commit_title: commitTitle,
+      }),
+    });
     return { merged: data.merged, message: data.message, sha: data.sha };
   }
 
@@ -286,7 +362,7 @@ export interface SizeSignal {
   linesDeleted: number;
   filesTouched: number;
   specFileCount: number;
-  oversizeRatio: number;          // filesTouched / max(specFileCount, 1); 0 when no spec list
+  oversizeRatio: number; // filesTouched / max(specFileCount, 1); 0 when no spec list
   exceededAbsoluteFloor: boolean; // (linesAdded + linesDeleted) > 800
 }
 
@@ -318,7 +394,9 @@ function parseSpecFiles(specFilesSection: string): string[] {
   return specFilesSection
     .split('\n')
     .map((line) => line.replace(/^[-*\s]+/, '').trim())
-    .filter((line) => line.length > 0 && (line.includes('/') || line.includes('.')));
+    .filter(
+      (line) => line.length > 0 && (line.includes('/') || line.includes('.')),
+    );
 }
 
 /**
@@ -326,7 +404,10 @@ function parseSpecFiles(specFilesSection: string): string[] {
  * Lines added/deleted are summed across non-generated files only.
  * Files touched counts the total number of files in the diff (including generated).
  */
-export function computeSizeSignal(diff: string, specFilesSection: string): SizeSignal {
+export function computeSizeSignal(
+  diff: string,
+  specFilesSection: string,
+): SizeSignal {
   const specFiles = parseSpecFiles(specFilesSection);
   const specFileCount = specFiles.length;
 
@@ -359,7 +440,7 @@ export function computeSizeSignal(diff: string, specFilesSection: string): SizeS
 
   const filesTouched = files.size;
   const oversizeRatio = specFileCount > 0 ? filesTouched / specFileCount : 0;
-  const exceededAbsoluteFloor = (linesAdded + linesDeleted) > SIZE_ABSOLUTE_FLOOR;
+  const exceededAbsoluteFloor = linesAdded + linesDeleted > SIZE_ABSOLUTE_FLOOR;
 
   return {
     linesAdded,
@@ -374,6 +455,7 @@ export function computeSizeSignal(diff: string, specFilesSection: string): SizeS
 /** True when the PR exceeds either size threshold (absolute LOC or file-count ratio). */
 export function isOversized(signal: SizeSignal): boolean {
   if (signal.exceededAbsoluteFloor) return true;
-  if (signal.specFileCount > 0 && signal.oversizeRatio > SIZE_FILE_RATIO_LIMIT) return true;
+  if (signal.specFileCount > 0 && signal.oversizeRatio > SIZE_FILE_RATIO_LIMIT)
+    return true;
   return false;
 }

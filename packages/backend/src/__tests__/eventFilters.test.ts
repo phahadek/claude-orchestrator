@@ -4,7 +4,10 @@ import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 describe('isSystemOnlyUserEvent', () => {
   // ── Non-user events are never filtered ────────────────────────────────────
   it('returns false for non-user event types', () => {
-    const payload = JSON.stringify({ type: 'assistant', message: { content: [] } });
+    const payload = JSON.stringify({
+      type: 'assistant',
+      message: { content: [] },
+    });
     expect(isSystemOnlyUserEvent(payload)).toBe(false);
   });
 
@@ -31,7 +34,10 @@ describe('isSystemOnlyUserEvent', () => {
       message: {
         role: 'user',
         content: [
-          { type: 'text', text: '<system-reminder>CLAUDE.md bootstrap content</system-reminder>' },
+          {
+            type: 'text',
+            text: '<system-reminder>CLAUDE.md bootstrap content</system-reminder>',
+          },
         ],
       },
     });
@@ -59,7 +65,12 @@ describe('isSystemOnlyUserEvent', () => {
       type: 'user',
       message: {
         role: 'user',
-        content: [{ type: 'text', text: '  <system-reminder>x</system-reminder>  \n  ' }],
+        content: [
+          {
+            type: 'text',
+            text: '  <system-reminder>x</system-reminder>  \n  ',
+          },
+        ],
       },
     });
     expect(isSystemOnlyUserEvent(payload)).toBe(true);
@@ -71,7 +82,8 @@ describe('isSystemOnlyUserEvent', () => {
       type: 'user',
       message: {
         role: 'user',
-        content: 'Task page: https://notion.so/task\nProject context: https://notion.so/ctx\n\nFetch both Notion pages, then begin the task.',
+        content:
+          'Task page: https://notion.so/task\nProject context: https://notion.so/ctx\n\nFetch both Notion pages, then begin the task.',
       },
     });
     expect(isSystemOnlyUserEvent(payload)).toBe(false);
@@ -82,7 +94,12 @@ describe('isSystemOnlyUserEvent', () => {
       type: 'user',
       message: {
         role: 'user',
-        content: [{ type: 'text', text: 'Please implement the feature described in the task.' }],
+        content: [
+          {
+            type: 'text',
+            text: 'Please implement the feature described in the task.',
+          },
+        ],
       },
     });
     expect(isSystemOnlyUserEvent(payload)).toBe(false);
@@ -94,7 +111,10 @@ describe('isSystemOnlyUserEvent', () => {
       message: {
         role: 'user',
         content: [
-          { type: 'text', text: '<system-reminder>reminder</system-reminder>\nActual user question here.' },
+          {
+            type: 'text',
+            text: '<system-reminder>reminder</system-reminder>\nActual user question here.',
+          },
         ],
       },
     });

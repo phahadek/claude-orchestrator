@@ -27,11 +27,18 @@ vi.mock('../config.js', () => ({
     repo === 'owner/repo' ? projectFixture : undefined,
   ),
   getAllProjects: vi.fn(() => [projectFixture]),
-  getProjectById: vi.fn((id: string) => (id === 'proj-1' ? projectFixture : undefined)),
+  getProjectById: vi.fn((id: string) =>
+    id === 'proj-1' ? projectFixture : undefined,
+  ),
 }));
 
 import { ReviewOrchestrator } from './ReviewOrchestrator';
-import { setPRReviewResult, getPRByNumber, incrementReviewIteration, updatePRDraftStatus, setPauseReason } from '../db/queries';
+import {
+  setPRReviewResult,
+  getPRByNumber,
+  updatePRDraftStatus,
+  setPauseReason,
+} from '../db/queries';
 import type { PRReviewService } from './PRReviewService';
 import type { GitHubClient } from './GitHubClient';
 import type { PullRequest } from './types';
@@ -56,10 +63,14 @@ const baseFreshPR: PullRequest = {
   draft: false,
 };
 
-function makeMockGitHubClient(fetchPRResolveWith?: Partial<PullRequest>): GitHubClient {
+function makeMockGitHubClient(
+  fetchPRResolveWith?: Partial<PullRequest>,
+): GitHubClient {
   return {
     markPRReady: vi.fn().mockResolvedValue(undefined),
-    fetchPR: vi.fn().mockResolvedValue({ ...baseFreshPR, ...fetchPRResolveWith }),
+    fetchPR: vi
+      .fn()
+      .mockResolvedValue({ ...baseFreshPR, ...fetchPRResolveWith }),
   } as unknown as GitHubClient;
 }
 
@@ -87,7 +98,9 @@ function makeMockReviewService(resolveWith?: object): PRReviewService {
   };
   return {
     reviewPR: vi.fn().mockResolvedValue(resolveWith ?? defaultResult),
-    sendReReview: vi.fn().mockResolvedValue({ ...defaultResult, summary: 'Fixed.' }),
+    sendReReview: vi
+      .fn()
+      .mockResolvedValue({ ...defaultResult, summary: 'Fixed.' }),
     reReviewPR: vi.fn().mockResolvedValue(resolveWith ?? defaultResult),
   } as unknown as PRReviewService;
 }
@@ -142,7 +155,6 @@ describe('ReviewOrchestrator — disabled', () => {
 
     expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
   });
-
 });
 
 // ── Missing taskId ────────────────────────────────────────────────────────────
@@ -177,16 +189,31 @@ describe('ReviewOrchestrator — concurrency', () => {
 
     const callOrder: number[] = [];
     const rs = {
-      reviewPR: vi.fn()
+      reviewPR: vi
+        .fn()
         .mockImplementationOnce(async () => {
           callOrder.push(1);
           resolveFirst();
           await firstComplete;
-          return { prNumber: 1, repo: 'owner/repo', verdict: 'approved', dimensions: [], summary: 'ok', reviewedAt: '' };
+          return {
+            prNumber: 1,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
         })
         .mockImplementationOnce(async () => {
           callOrder.push(2);
-          return { prNumber: 2, repo: 'owner/repo', verdict: 'approved', dimensions: [], summary: 'ok', reviewedAt: '' };
+          return {
+            prNumber: 2,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
         }),
       sendReReview: vi.fn(),
       reReviewPR: vi.fn(),
@@ -255,7 +282,13 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
       prNumber: 1,
       repo: 'owner/repo',
       verdict: 'needs_changes',
-      dimensions: [{ name: 'Diff vs Context spec', passed: false, notes: 'Missing export.' }],
+      dimensions: [
+        {
+          name: 'Diff vs Context spec',
+          passed: false,
+          notes: 'Missing export.',
+        },
+      ],
       summary: 'One dimension failed.',
       reviewedAt: new Date().toISOString(),
     });
@@ -311,12 +344,14 @@ describe('ReviewOrchestrator — push_detected triggers re-review', () => {
   });
 });
 
-
 // ── Iteration cap escalation ──────────────────────────────────────────────────
 
 describe('ReviewOrchestrator — iteration cap escalation', () => {
   it('emits review_escalated and skips review when iteration cap is hit', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, review_iteration: 3 } as any);
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: 3,
+    } as any);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
@@ -339,7 +374,10 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
   });
 
   it('sets pause_reason = "max_reviews" when iteration cap escalation fires', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, review_iteration: 3 } as any);
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: 3,
+    } as any);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
@@ -349,11 +387,18 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(1, 'owner/repo', 'max_reviews');
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'max_reviews',
+    );
   });
 
   it('does not escalate when iteration is below cap', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, review_iteration: 2 } as any);
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: 2,
+    } as any);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
@@ -367,7 +412,9 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
-    expect(messages.find((m: any) => m.type === 'review_escalated')).toBeUndefined();
+    expect(
+      messages.find((m: any) => m.type === 'review_escalated'),
+    ).toBeUndefined();
   });
 });
 
@@ -399,7 +446,9 @@ describe('ReviewOrchestrator — incomplete verdict', () => {
     expect(vi.mocked(sm.send)).not.toHaveBeenCalled();
 
     // Must broadcast review_incomplete
-    const incompleteMsg = messages.find((m: any) => m.type === 'review_incomplete');
+    const incompleteMsg = messages.find(
+      (m: any) => m.type === 'review_incomplete',
+    );
     expect(incompleteMsg).toBeDefined();
     expect(incompleteMsg).toMatchObject({
       type: 'review_incomplete',
@@ -407,7 +456,6 @@ describe('ReviewOrchestrator — incomplete verdict', () => {
       repo: 'owner/repo',
     });
   });
-
 });
 
 // ── Timeout handling ──────────────────────────────────────────────────────────
@@ -434,10 +482,15 @@ describe('ReviewOrchestrator — timeout', () => {
     await vi.advanceTimersByTimeAsync(121_000);
 
     expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledOnce();
-    const [prNum, repo, resultJson] = vi.mocked(setPRReviewResult).mock.calls[0];
+    const [prNum, repo, resultJson] =
+      vi.mocked(setPRReviewResult).mock.calls[0];
     expect(prNum).toBe(1);
     expect(repo).toBe('owner/repo');
-    const stored = JSON.parse(resultJson as string) as { verdict: string; summary: string; dimensions: unknown };
+    const stored = JSON.parse(resultJson as string) as {
+      verdict: string;
+      summary: string;
+      dimensions: unknown;
+    };
     expect(stored.verdict).toBe('error');
     expect(stored.summary).toContain('timed out');
     expect(Array.isArray(stored.dimensions)).toBe(true);
@@ -465,11 +518,13 @@ describe('ReviewOrchestrator — timeout', () => {
 
     expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledOnce();
     const [, , resultJson] = vi.mocked(setPRReviewResult).mock.calls[0];
-    const stored = JSON.parse(resultJson as string) as { verdict: string; dimensions: unknown };
+    const stored = JSON.parse(resultJson as string) as {
+      verdict: string;
+      dimensions: unknown;
+    };
     expect(stored.verdict).toBe('error');
     expect(Array.isArray(stored.dimensions)).toBe(true);
   });
-
 });
 
 // ── Merge conflict dimension routing ─────────────────────────────────────────
@@ -484,11 +539,24 @@ describe('ReviewOrchestrator — merge conflict causes needs_changes', () => {
       repo: 'owner/repo',
       verdict: 'needs_changes',
       dimensions: [
-        { name: 'Title and description vs task Summary', passed: true, notes: 'ok' },
+        {
+          name: 'Title and description vs task Summary',
+          passed: true,
+          notes: 'ok',
+        },
         { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
         { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
-        { name: 'Changed files vs Files/paths affected list', passed: true, notes: 'ok' },
-        { name: 'Merge conflicts', passed: false, notes: 'PR has merge conflicts with base branch. Rebase and resolve before re-review.' },
+        {
+          name: 'Changed files vs Files/paths affected list',
+          passed: true,
+          notes: 'ok',
+        },
+        {
+          name: 'Merge conflicts',
+          passed: false,
+          notes:
+            'PR has merge conflicts with base branch. Rebase and resolve before re-review.',
+        },
       ],
       summary: 'Merge conflicts detected.',
       reviewedAt: new Date().toISOString(),
@@ -588,7 +656,13 @@ describe('Break 4 (AC) — auto findings routing: sessionManager.send() called o
       prNumber: 1,
       repo: 'owner/repo',
       verdict: 'needs_changes',
-      dimensions: [{ name: 'Diff vs Acceptance Criteria', passed: false, notes: 'Unit tests missing.' }],
+      dimensions: [
+        {
+          name: 'Diff vs Acceptance Criteria',
+          passed: false,
+          notes: 'Unit tests missing.',
+        },
+      ],
       summary: 'Please add tests.',
       reviewedAt: new Date().toISOString(),
     });
@@ -616,7 +690,10 @@ describe('Break 5 (AC) — re-review trigger: re-review called on push_detected'
   // in server.ts, not ReviewOrchestrator. See PRReviewService.test.ts for reReviewPR coverage.
 
   it('emits review_escalated when review_iteration exceeds max_review_iterations', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, review_iteration: 3 } as any);
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: 3,
+    } as any);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
@@ -631,7 +708,11 @@ describe('Break 5 (AC) — re-review trigger: re-review called on push_detected'
     expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
     const escalated = messages.find((m: any) => m.type === 'review_escalated');
     expect(escalated).toBeDefined();
-    expect(escalated).toMatchObject({ type: 'review_escalated', prNumber: 1, repo: 'owner/repo' });
+    expect(escalated).toMatchObject({
+      type: 'review_escalated',
+      prNumber: 1,
+      repo: 'owner/repo',
+    });
   });
 });
 

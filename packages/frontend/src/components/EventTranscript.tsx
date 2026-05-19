@@ -16,7 +16,12 @@ import styles from './EventTranscript.module.css';
 
 // ── Types ─────────────────────────────────────────────────────────
 
-export type SessionEvent = { eventType: string; content: string; timestamp: number; messageId?: string };
+export type SessionEvent = {
+  eventType: string;
+  content: string;
+  timestamp: number;
+  messageId?: string;
+};
 
 type RenderItem =
   | { kind: 'event'; event: SessionEvent }
@@ -61,7 +66,9 @@ export function groupSessionEvents(events: SessionEvent[]): RenderItem[] {
 
       if (j < events.length && events[j].eventType === 'tool_result') {
         const firstEndIdx = j;
-        const calls: CallPair[] = [{ textEvent: events[startIdx], resultEvent: events[firstEndIdx] }];
+        const calls: CallPair[] = [
+          { textEvent: events[startIdx], resultEvent: events[firstEndIdx] },
+        ];
         i = firstEndIdx + 1;
 
         while (i < events.length) {
@@ -120,25 +127,46 @@ export function EventRow({ event }: EventRowProps) {
             blocks.forEach((block: unknown, idx: number) => {
               if (typeof block !== 'object' || block === null) return;
               const b = block as Record<string, unknown>;
-              if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
-                nodes.push(<p key={idx} className={styles.eventText}>{b.text}</p>);
+              if (
+                b.type === 'text' &&
+                typeof b.text === 'string' &&
+                b.text.trim()
+              ) {
+                nodes.push(
+                  <p key={idx} className={styles.eventText}>
+                    {b.text}
+                  </p>,
+                );
               } else if (b.type === 'tool_use') {
-                const toolName = typeof b.name === 'string' ? b.name : 'tool_use';
+                const toolName =
+                  typeof b.name === 'string' ? b.name : 'tool_use';
                 let input: unknown = b.input;
                 if (typeof input === 'string') {
-                  try { input = JSON.parse(input); } catch { /* leave as string */ }
+                  try {
+                    input = JSON.parse(input);
+                  } catch {
+                    /* leave as string */
+                  }
                 }
                 const isBash = toolName === 'Bash';
                 const bashCmd = isBash ? extractBashCommand(input) : null;
-                const detail = !isBash ? extractToolDetail(toolName, input) : null;
+                const detail = !isBash
+                  ? extractToolDetail(toolName, input)
+                  : null;
                 nodes.push(
-                  <CollapsibleToolUse key={idx} toolName={toolName} detail={detail}>
+                  <CollapsibleToolUse
+                    key={idx}
+                    toolName={toolName}
+                    detail={detail}
+                  >
                     {isBash && bashCmd != null ? (
                       <pre className={styles.bashCommand}>$ {bashCmd}</pre>
                     ) : (
-                      <pre className={styles.toolArgs}>{JSON.stringify(input, null, 2)}</pre>
+                      <pre className={styles.toolArgs}>
+                        {JSON.stringify(input, null, 2)}
+                      </pre>
                     )}
-                  </CollapsibleToolUse>
+                  </CollapsibleToolUse>,
                 );
               }
             });
@@ -187,7 +215,9 @@ export function EventRow({ event }: EventRowProps) {
     case 'error': {
       const errMsg =
         typeof payload === 'object' && payload !== null
-          ? String((payload as Record<string, unknown>).message ?? event.content)
+          ? String(
+              (payload as Record<string, unknown>).message ?? event.content,
+            )
           : event.content;
       return (
         <div className={styles.eventError}>
@@ -203,11 +233,22 @@ export function EventRow({ event }: EventRowProps) {
 
 // ── CollapsibleToolUse ─────────────────────────────────────────────
 
-function CollapsibleToolUse({ toolName, detail, children }: { toolName: string; detail?: string | null; children: React.ReactNode }) {
+function CollapsibleToolUse({
+  toolName,
+  detail,
+  children,
+}: {
+  toolName: string;
+  detail?: string | null;
+  children: React.ReactNode;
+}) {
   const [open, setOpen] = useState(false);
-  const truncatedDetail = detail != null
-    ? (detail.length > 60 ? detail.slice(0, 60) + '…' : detail)
-    : null;
+  const truncatedDetail =
+    detail != null
+      ? detail.length > 60
+        ? detail.slice(0, 60) + '…'
+        : detail
+      : null;
   return (
     <div className={styles.eventToolUse}>
       <div
@@ -215,7 +256,9 @@ function CollapsibleToolUse({ toolName, detail, children }: { toolName: string; 
         role="button"
         tabIndex={0}
         onClick={() => setOpen((o) => !o)}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setOpen((o) => !o); }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') setOpen((o) => !o);
+        }}
         aria-expanded={open}
       >
         <span className={styles.toolChevron}>{open ? '▼' : '▶'}</span>
@@ -242,7 +285,9 @@ function ToolResultRow({ result }: { result: string }) {
     if (typeof parsed === 'object' && parsed !== null) {
       display = JSON.stringify(parsed, null, 2);
     }
-  } catch { /* not JSON, use raw string */ }
+  } catch {
+    /* not JSON, use raw string */
+  }
 
   const lines = display.split('\n');
   const shouldCollapse = lines.length > TOOL_RESULT_COLLAPSE_LINES;
@@ -250,11 +295,17 @@ function ToolResultRow({ result }: { result: string }) {
   const toggle = useCallback(() => setExpanded((e) => !e), []);
 
   const displayed =
-    shouldCollapse && !expanded ? lines.slice(0, TOOL_RESULT_COLLAPSE_LINES).join('\n') : display;
+    shouldCollapse && !expanded
+      ? lines.slice(0, TOOL_RESULT_COLLAPSE_LINES).join('\n')
+      : display;
 
   return (
     <div className={styles.eventToolResult}>
-      <pre className={`${styles.toolResultContent} ${expanded ? styles.toolResultExpanded : ''}`}>{displayed}</pre>
+      <pre
+        className={`${styles.toolResultContent} ${expanded ? styles.toolResultExpanded : ''}`}
+      >
+        {displayed}
+      </pre>
       {shouldCollapse && (
         <button className={styles.expandButton} onClick={toggle}>
           {expanded ? '▲ Collapse' : `▼ Show all ${lines.length} lines`}
@@ -300,7 +351,8 @@ function PermissionDenialsInline({ denials }: { denials: PermissionDenial[] }) {
         <div className={styles.inlineDenialsBody}>
           {denials.map((d) => (
             <p key={d.tool_use_id} className={styles.inlineDenialItem}>
-              🚫 Denied: {d.tool_name}({getDenialInputSummary(d.tool_name, d.tool_input)})
+              🚫 Denied: {d.tool_name}(
+              {getDenialInputSummary(d.tool_name, d.tool_input)})
             </p>
           ))}
         </div>
@@ -316,8 +368,13 @@ interface EventTranscriptProps {
   permissionDenials?: PermissionDenial[];
 }
 
-export function EventTranscript({ events, permissionDenials }: EventTranscriptProps) {
-  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+export function EventTranscript({
+  events,
+  permissionDenials,
+}: EventTranscriptProps) {
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>(
+    'idle',
+  );
   const [isAtBottom, setIsAtBottom] = useState(true);
   const transcriptRef = useRef<HTMLDivElement>(null);
 
@@ -356,17 +413,31 @@ export function EventTranscript({ events, permissionDenials }: EventTranscriptPr
                 for (const block of blocks) {
                   if (typeof block !== 'object' || block === null) continue;
                   const b = block as Record<string, unknown>;
-                  if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+                  if (
+                    b.type === 'text' &&
+                    typeof b.text === 'string' &&
+                    b.text.trim()
+                  ) {
                     parts.push(b.text);
                   } else if (b.type === 'tool_use') {
-                    const toolName = typeof b.name === 'string' ? b.name : 'tool_use';
+                    const toolName =
+                      typeof b.name === 'string' ? b.name : 'tool_use';
                     let input: unknown = b.input;
                     if (typeof input === 'string') {
-                      try { input = JSON.parse(input); } catch { /* leave as string */ }
+                      try {
+                        input = JSON.parse(input);
+                      } catch {
+                        /* leave as string */
+                      }
                     }
-                    const bashCmd = toolName === 'Bash' ? extractBashCommand(input) : null;
-                    if (bashCmd != null) parts.push(`🔧 ${toolName}\n$ ${bashCmd}`);
-                    else parts.push(`🔧 ${toolName}\n${JSON.stringify(input, null, 2)}`);
+                    const bashCmd =
+                      toolName === 'Bash' ? extractBashCommand(input) : null;
+                    if (bashCmd != null)
+                      parts.push(`🔧 ${toolName}\n$ ${bashCmd}`);
+                    else
+                      parts.push(
+                        `🔧 ${toolName}\n${JSON.stringify(input, null, 2)}`,
+                      );
                   }
                 }
                 line = parts.join('\n');
@@ -378,11 +449,18 @@ export function EventTranscript({ events, permissionDenials }: EventTranscriptPr
         }
         case 'tool_use': {
           const parsed = extractToolUse(payload);
-          if (!parsed) { line = e.content; break; }
-          const bashCmd = parsed.toolName === 'Bash' ? extractBashCommand(parsed.input) : null;
-          line = bashCmd != null
-            ? `🔧 ${parsed.toolName}\n$ ${bashCmd}`
-            : `🔧 ${parsed.toolName}\n${JSON.stringify(parsed.input, null, 2)}`;
+          if (!parsed) {
+            line = e.content;
+            break;
+          }
+          const bashCmd =
+            parsed.toolName === 'Bash'
+              ? extractBashCommand(parsed.input)
+              : null;
+          line =
+            bashCmd != null
+              ? `🔧 ${parsed.toolName}\n$ ${bashCmd}`
+              : `🔧 ${parsed.toolName}\n${JSON.stringify(parsed.input, null, 2)}`;
           break;
         }
         case 'tool_result':
@@ -395,7 +473,10 @@ export function EventTranscript({ events, permissionDenials }: EventTranscriptPr
           break;
         }
         case 'error': {
-          const p = typeof payload === 'object' && payload !== null ? payload as Record<string, unknown> : null;
+          const p =
+            typeof payload === 'object' && payload !== null
+              ? (payload as Record<string, unknown>)
+              : null;
           line = p ? String(p.message ?? e.content) : e.content;
           break;
         }
@@ -406,19 +487,22 @@ export function EventTranscript({ events, permissionDenials }: EventTranscriptPr
     }
     const text = lines.join('\n---\n');
 
-    let success = false;
+    let success: boolean;
     try {
       await navigator.clipboard.writeText(text);
       success = true;
     } catch {
       const textarea = document.createElement('textarea');
       textarea.value = text;
-      textarea.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+      textarea.style.cssText =
+        'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
       document.body.appendChild(textarea);
       textarea.focus();
       textarea.select();
       try {
         success = document.execCommand('copy');
+      } catch {
+        success = false;
       } finally {
         document.body.removeChild(textarea);
       }
@@ -429,7 +513,10 @@ export function EventTranscript({ events, permissionDenials }: EventTranscriptPr
   }
 
   function handleGoToEnd() {
-    transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: 'smooth' });
+    transcriptRef.current?.scrollTo({
+      top: transcriptRef.current.scrollHeight,
+      behavior: 'smooth',
+    });
   }
 
   return (
@@ -445,14 +532,22 @@ export function EventTranscript({ events, permissionDenials }: EventTranscriptPr
           onClick={() => void handleCopy()}
           disabled={events.length === 0}
         >
-          {copyState === 'copied' ? '✓ Copied' : copyState === 'failed' ? '✗ Failed' : 'Copy'}
+          {copyState === 'copied'
+            ? '✓ Copied'
+            : copyState === 'failed'
+              ? '✗ Failed'
+              : 'Copy'}
         </button>
       </div>
       <div className={styles.transcript} ref={transcriptRef}>
         {groupSessionEvents(events).map((item, i) => {
           if (item.kind === 'group') {
             return (
-              <ToolCallGroup key={`group-${i}`} toolName={item.toolName} calls={item.calls} />
+              <ToolCallGroup
+                key={`group-${i}`}
+                toolName={item.toolName}
+                calls={item.calls}
+              />
             );
           }
           return (

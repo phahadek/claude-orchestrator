@@ -6,7 +6,9 @@ export interface ShortcutHandlers {
   onSelectNext: () => void;
   onSelectPrev: () => void;
   onConfirmSelection: () => void;
-  onSwitchView: (view: 'tasks' | 'sessions' | 'prs' | 'analytics' | 'settings') => void;
+  onSwitchView: (
+    view: 'tasks' | 'sessions' | 'prs' | 'analytics' | 'settings',
+  ) => void;
   onFocusSearch: () => void;
 }
 

@@ -12,13 +12,19 @@
   "bugs": {
     "url": "https://github.com/phahadek/claude-orchestrator/issues"
   },
-  "workspaces": ["packages/backend", "packages/frontend"],
+  "workspaces": [
+    "packages/backend",
+    "packages/frontend"
+  ],
   "scripts": {
     "dev": "concurrently \"npm run dev -w packages/backend\" \"npm run dev -w packages/frontend\"",
     "build": "npm run build -w packages/frontend && npm run build -w packages/backend",
     "start": "node packages/backend/dist/server.js",
     "restart": "npx kill-port 3000 && npm run dev",
     "restart:backend": "npx kill-port 3000 && npm run dev -w packages/backend",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint packages/backend/src packages/frontend/src",
     "test": "echo \"Error: no test specified\" && exit 1",
     "scan:identifiers": "node scripts/scan-identifiers.mjs",
     "audit:licenses": "npx --yes license-checker --failOn 'GPL;AGPL'",
@@ -27,8 +33,15 @@
     "restart:win": "powershell -ExecutionPolicy Bypass -File restart.ps1"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "concurrently": "^8.0.0",
-    "kill-port": "^2.0.1"
+    "eslint": "^10.4.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.6.0",
+    "kill-port": "^2.0.1",
+    "prettier": "^3.8.3",
+    "typescript-eslint": "^8.59.4"
   },
   "keywords": [
     "claude",
