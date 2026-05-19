@@ -227,4 +227,56 @@ describe('useNotifications', () => {
 
     expect(NotificationSpy).not.toHaveBeenCalled();
   });
+
+  it('does NOT fire when a done session arrives via replay (lastStatusReplay=true) after a running prevSnap', () => {
+    const session = makeSession({ status: 'running' });
+    const { rerender } = renderHook(({ s }) => useNotifications(s), {
+      initialProps: { s: [session] },
+    });
+
+    act(() => {
+      rerender({ s: [{ ...session, status: 'done', lastStatusReplay: true }] });
+    });
+
+    expect(NotificationSpy).not.toHaveBeenCalled();
+  });
+
+  it('fires for a live (non-replay) running→done transition that follows a replay update', () => {
+    // Simulates: in-flight session running at snapshot time, transitions to done
+    // between the server snapshot and the live event subscription. The live
+    // message arrives without replay:true and must notify.
+    const session = makeSession({ status: 'running', lastStatusReplay: true });
+    const { rerender } = renderHook(({ s }) => useNotifications(s), {
+      initialProps: { s: [session] },
+    });
+
+    act(() => {
+      rerender({ s: [{ ...session, status: 'done', lastStatusReplay: false }] });
+    });
+
+    expect(NotificationSpy).toHaveBeenCalledTimes(1);
+    expect(NotificationSpy).toHaveBeenCalledWith(
+      '✅ Session done',
+      expect.objectContaining({ body: 'My Task finished successfully.' }),
+    );
+  });
+
+  it('does NOT fire pr_review_complete notification when prReviewEvent carries replay:true', () => {
+    type ReviewEvt = { prNumber: number; verdict: string; summary: string; replay?: boolean } | null;
+    const session = makeSession({ status: 'running' });
+    const initialProps: { s: SessionState[]; pr: ReviewEvt } = { s: [session], pr: null };
+    const { rerender } = renderHook(
+      ({ s, pr }: { s: SessionState[]; pr: ReviewEvt }) => useNotifications(s, pr),
+      { initialProps },
+    );
+
+    act(() => {
+      rerender({
+        s: [session],
+        pr: { prNumber: 42, verdict: 'approved', summary: 'looks good', replay: true },
+      });
+    });
+
+    expect(NotificationSpy).not.toHaveBeenCalled();
+  });
 });

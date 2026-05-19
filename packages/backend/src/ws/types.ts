@@ -84,16 +84,16 @@ export interface TaskView {
 export type ServerMessage =
   | ({ type: 'session_started' } & SessionState)
   | { type: 'session_event';         sessionId: string; eventType: 'text' | 'tool_use' | 'tool_result' | 'system' | 'user_message'; content: string; messageId?: string }
-  | { type: 'session_status';        sessionId: string; status: 'starting' | 'running' | 'needs_permission' | 'done' | 'error' | 'killed' | 'retrying' }
+  | { type: 'session_status';        sessionId: string; status: 'starting' | 'running' | 'needs_permission' | 'done' | 'error' | 'killed' | 'retrying'; replay?: boolean }
   | { type: 'permission_request';    sessionId: string; toolName: string; proposedAction: string }
   | { type: 'permission_denials';    sessionId: string; denials: PermissionDenial[] }
   | { type: 'session_ended';         sessionId: string; status: string; prUrl?: string }
   | { type: 'pr_created';            sessionId: string; prUrl: string }
   | { type: 'session_updated';       sessionId: string; note?: string | null; tags?: string[]; totalInputTokens?: number; totalOutputTokens?: number; model?: string }
   | { type: 'tasks_ready';           tasks: ResolvedTask[] }
-  | { type: 'pr_review_complete';    prNumber: number; repo: string; verdict: string; summary: string; draft?: boolean }
+  | { type: 'pr_review_complete';    prNumber: number; repo: string; verdict: string; summary: string; draft?: boolean; replay?: boolean }
   | { type: 'push_detected';         sessionId: string; prNumber: number; repo: string }
-  | { type: 'review_verdict';        prNumber: number; repo: string; verdict: string; summary: string; iteration: number }
+  | { type: 'review_verdict';        prNumber: number; repo: string; verdict: string; summary: string; iteration: number; replay?: boolean }
   | { type: 'pr_merged';             prNumber: number; repo: string; sha: string }
   | { type: 'pr_closed';             prNumber: number; repo: string }
   | { type: 'pr_state_changed';      prNumber: number; repo: string; mergeable: boolean | null; mergeState: string | null }
