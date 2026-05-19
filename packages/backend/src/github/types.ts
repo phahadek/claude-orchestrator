@@ -31,6 +31,35 @@ export interface MergeResult {
   sha: string | null;
 }
 
+export interface FailingCheck {
+  name: string;
+  conclusion: string;
+}
+
+/**
+ * Why a PR is currently not mergeable. Derived from GitHub's `mergeable_state`
+ * combined with check-run conclusions for blocked/unstable PRs.
+ *
+ * - `clean`     — PR is mergeable.
+ * - `conflict`  — merge conflicts (mergeable_state 'dirty' or 'behind'); needs rebase.
+ * - `ci_failed` — required CI checks are failing (mergeable_state 'unstable', or
+ *                 'blocked' with failing check-runs).
+ * - `blocked`   — blocked by branch protection (missing required reviews, etc.)
+ *                 with no failing checks.
+ * - `unknown`   — GitHub is still computing, or returned a state we don't recognize.
+ */
+export type MergeCategory = 'clean' | 'conflict' | 'ci_failed' | 'blocked' | 'unknown';
+
+export interface MergeabilityCategory {
+  category: MergeCategory;
+  /** Value persisted in pull_requests.merge_state ('clean' | 'dirty' | 'ci_failed' | 'blocked' | 'unknown'). */
+  mergeState: string;
+  /** Raw mergeable_state from GitHub (null when GitHub is still computing). */
+  rawMergeableState: string | null;
+  /** Names + conclusions of failing check-runs. Empty unless category is 'ci_failed'. */
+  failingChecks: FailingCheck[];
+}
+
 export interface ReviewJob {
   prNumber: number;
   repo: string;

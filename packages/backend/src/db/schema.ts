@@ -118,4 +118,5 @@ export function runMigrations(): void {
   try { db.exec(`ALTER TABLE projects ADD COLUMN auto_launch_enabled INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE projects ADD COLUMN auto_launch_milestone_id TEXT`); } catch { /* already exists */ }
   try { db.exec(`ALTER TABLE pull_requests ADD COLUMN pause_reason TEXT`); } catch { /* already exists */ }
+  try { db.exec(`ALTER TABLE pull_requests ADD COLUMN failing_checks TEXT`); } catch { /* already exists */ }
 }

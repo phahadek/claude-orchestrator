@@ -1,4 +1,5 @@
 import type { GitHubClient } from './GitHubClient';
+import type { MergeabilityCategory } from './types';
 import type { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
@@ -115,38 +116,45 @@ export class PRMergeWatcher {
   }
 
   private async runMergeabilityCheck(pr: PullRequestRow): Promise<void> {
-    let mergeable: boolean | null;
-    let mergeableState: string | null;
+    let category: MergeabilityCategory;
     try {
-      ({ mergeable, mergeableState } = await this.github.getMergeabilityWithRetry(pr.pr_number, pr.repo));
+      category = await this.github.categorizeMergeability(pr.pr_number, pr.repo);
     } catch (err) {
-      console.warn(`[PRMergeWatcher] getMergeability failed for PR #${pr.pr_number}:`, (err as Error).message);
+      console.warn(`[PRMergeWatcher] categorizeMergeability failed for PR #${pr.pr_number}:`, (err as Error).message);
       return;
     }
 
-    // Skip if GitHub hasn't computed mergeability yet (retries exhausted)
-    if (mergeable === null && mergeableState === null) return;
+    // Skip if GitHub hasn't computed mergeability yet
+    if (category.category === 'unknown' && category.rawMergeableState === null) return;
 
-    const mergeableInt = mergeable === null ? null : (mergeable ? 1 : 0);
-    const prevMergeState = pr.merge_state;
-    const newMergeState = mergeableState;
+    const failingNames = category.failingChecks.map((c) => c.name);
+    const prevFailingNames = parseFailingChecksRaw(pr.failing_checks);
+    const stateChanged = pr.merge_state !== category.mergeState;
+    const failingChecksChanged = !arraysShallowEqual(prevFailingNames, failingNames);
 
-    // Only update if state changed
-    if (prevMergeState === newMergeState) return;
+    // Only update + broadcast if something actually changed.
+    if (!stateChanged && !failingChecksChanged) return;
 
-    updateMergeState(pr.pr_number, pr.repo, mergeableInt, newMergeState);
+    const mergeableInt = category.category === 'clean' ? 1 : 0;
+    const failingNamesOrNull = failingNames.length > 0 ? failingNames : null;
+    updateMergeState(pr.pr_number, pr.repo, mergeableInt, category.mergeState, failingNamesOrNull);
     this.broadcast({
       type: 'pr_mergeability_changed',
       prNumber: pr.pr_number,
       repo: pr.repo,
-      mergeable,
-      mergeState: newMergeState,
+      mergeable: category.category === 'clean',
+      mergeState: category.mergeState,
+      failingChecks: failingNamesOrNull,
     });
     if (pr.notion_task_id) {
       emitTaskUpdated(pr.notion_task_id);
     }
 
-    if (newMergeState === 'dirty') {
+    // Send session messages only when the state itself transitioned, so the
+    // agent doesn't get re-pinged every 5-minute poll for unchanged states.
+    if (!stateChanged) return;
+
+    if (category.category === 'conflict') {
       console.log(`[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has merge conflicts`);
       if (pr.session_id) {
         const baseBranch = pr.base_branch ?? 'dev';
@@ -155,6 +163,18 @@ export class PRMergeWatcher {
           console.warn(`[PRMergeWatcher] sendOrResume failed for session ${pr.session_id}:`, (err as Error).message),
         );
       }
+    } else if (category.category === 'ci_failed') {
+      console.log(`[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has failing CI checks: ${failingNames.join(', ') || '(unknown)'}`);
+      if (pr.session_id) {
+        const msg = failingNames.length > 0
+          ? `PR #${pr.pr_number} cannot be merged because the following CI checks are failing: ${failingNames.join(', ')}. Investigate the failures and push a fix.`
+          : `PR #${pr.pr_number} cannot be merged because required CI checks are failing. Investigate the failures and push a fix.`;
+        this.sessions.sendOrResume(pr.session_id, msg).catch((err: unknown) =>
+          console.warn(`[PRMergeWatcher] sendOrResume failed for session ${pr.session_id}:`, (err as Error).message),
+        );
+      }
+    } else if (category.category === 'blocked') {
+      console.log(`[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} is blocked by branch protection`);
     }
   }
 
@@ -209,4 +229,22 @@ export class PRMergeWatcher {
       });
     }
   }
+}
+
+function parseFailingChecksRaw(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function arraysShallowEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 }

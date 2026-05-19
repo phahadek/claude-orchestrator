@@ -122,6 +122,8 @@ try { db.exec(`ALTER TABLE sessions ADD COLUMN task_name TEXT`); } catch { /* al
 try { db.exec(`ALTER TABLE pull_requests ADD COLUMN mergeable INTEGER`); } catch { /* already exists */ }
 try { db.exec(`ALTER TABLE pull_requests ADD COLUMN merge_state TEXT`); } catch { /* already exists */ }
 try { db.exec(`ALTER TABLE pull_requests ADD COLUMN merge_state_checked_at TEXT`); } catch { /* already exists */ }
+// failing_checks: JSON array of failing check-run names; populated when merge_state is 'ci_failed'.
+try { db.exec(`ALTER TABLE pull_requests ADD COLUMN failing_checks TEXT`); } catch { /* already exists */ }
 // pending_push: 1 when a push arrives before the initial review session is established.
 // Cleared and re-review triggered after the initial review completes.
 try { db.exec(`ALTER TABLE pull_requests ADD COLUMN pending_push INTEGER NOT NULL DEFAULT 0`); } catch { /* already exists */ }

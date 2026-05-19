@@ -527,7 +527,7 @@ export function getTaskTitleFromCache(taskId: string): string | null {
 
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
-export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_session_id' | 'review_iteration' | 'last_reviewed_sha' | 'node_id' | 'mergeable' | 'merge_state' | 'merge_state_checked_at' | 'pending_push' | 'pause_reason'> & {
+export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_session_id' | 'review_iteration' | 'last_reviewed_sha' | 'node_id' | 'mergeable' | 'merge_state' | 'merge_state_checked_at' | 'failing_checks' | 'pending_push' | 'pause_reason'> & {
   review_session_id?: string | null;
   review_iteration?: number;
   last_reviewed_sha?: string | null;
@@ -535,6 +535,7 @@ export function upsertPullRequest(pr: Omit<PullRequestRow, 'id' | 'review_sessio
   mergeable?: number | null;
   merge_state?: string | null;
   merge_state_checked_at?: string | null;
+  failing_checks?: string | null;
   pause_reason?: PullRequestRow['pause_reason'];
 }): PullRequestRow {
   db.prepare(`
@@ -736,12 +737,31 @@ export function updateMergeState(
   repo: string,
   mergeable: number | null,
   mergeState: string | null,
+  failingChecks: string[] | null = null,
 ): void {
-  db.prepare<{ pr_number: number; repo: string; mergeable: number | null; merge_state: string | null; checked_at: string }>(`
+  const failingChecksJson = failingChecks && failingChecks.length > 0 ? JSON.stringify(failingChecks) : null;
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    mergeable: number | null;
+    merge_state: string | null;
+    checked_at: string;
+    failing_checks: string | null;
+  }>(`
     UPDATE pull_requests
-    SET mergeable = @mergeable, merge_state = @merge_state, merge_state_checked_at = @checked_at
+    SET mergeable = @mergeable,
+        merge_state = @merge_state,
+        merge_state_checked_at = @checked_at,
+        failing_checks = @failing_checks
     WHERE pr_number = @pr_number AND repo = @repo
-  `).run({ pr_number: prNumber, repo, mergeable, merge_state: mergeState, checked_at: new Date().toISOString() });
+  `).run({
+    pr_number: prNumber,
+    repo,
+    mergeable,
+    merge_state: mergeState,
+    checked_at: new Date().toISOString(),
+    failing_checks: failingChecksJson,
+  });
 }
 
 export function resetReviewIteration(prNumber: number, repo: string): void {

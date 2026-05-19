@@ -1,6 +1,23 @@
 import { GITHUB_TOKEN, GITHUB_REPO } from '../config';
-import { GitHubApiError, PullRequest, PRDiff, MergeResult } from './types';
+import {
+  GitHubApiError,
+  PullRequest,
+  PRDiff,
+  MergeResult,
+  FailingCheck,
+  MergeabilityCategory,
+} from './types';
 import { getPRByNumber } from '../db/queries';
+
+/** GitHub check-run conclusions that indicate the check did not pass. */
+const FAILING_CHECK_CONCLUSIONS: ReadonlySet<string> = new Set([
+  'failure',
+  'timed_out',
+  'action_required',
+  'cancelled',
+  'stale',
+  'startup_failure',
+]);
 
 export class GitHubClient {
   private readonly base = 'https://api.github.com';
@@ -118,6 +135,68 @@ export class GitHubClient {
     const body = await res.json() as { errors?: Array<{ message: string }> };
     if (body.errors?.length) {
       throw new GitHubApiError(422, body.errors.map(e => e.message).join('; '));
+    }
+  }
+
+  /**
+   * Fetch failing check-runs for a given commit SHA. Used to distinguish
+   * "blocked by failing CI" from "blocked by branch protection" when a merge
+   * attempt fails with 409/405 or when mergeable_state is `unstable`/`blocked`.
+   */
+  async getFailingChecks(sha: string, repo?: string): Promise<FailingCheck[]> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<{
+      check_runs: Array<{ name: string; status: string; conclusion: string | null }>;
+    }>(`/repos/${r}/commits/${sha}/check-runs?per_page=100`);
+    return data.check_runs
+      .filter((c) => c.status === 'completed' && c.conclusion !== null && FAILING_CHECK_CONCLUSIONS.has(c.conclusion))
+      .map((c) => ({ name: c.name, conclusion: c.conclusion as string }));
+  }
+
+  /**
+   * Map GitHub's mergeable_state (plus check-runs when relevant) onto a single
+   * category so the dashboard can tell merge conflicts apart from CI failures
+   * and branch-protection blocks. Returns `clean` when mergeable, otherwise one
+   * of `conflict` / `ci_failed` / `blocked` / `unknown`.
+   *
+   * Called after a 409/405 merge failure to pick the right remediation, and by
+   * PRMergeWatcher polling so the state is reflected before the user clicks Merge.
+   */
+  async categorizeMergeability(prNumber: number, repo?: string): Promise<MergeabilityCategory> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<GitHubRawPR>(`/repos/${r}/pulls/${prNumber}`);
+    const rawMergeableState = data.mergeable_state ?? null;
+    const headSha = data.head?.sha ?? null;
+
+    if (rawMergeableState === 'dirty' || rawMergeableState === 'behind') {
+      return { category: 'conflict', mergeState: 'dirty', rawMergeableState, failingChecks: [] };
+    }
+    if (rawMergeableState === 'unstable') {
+      const failingChecks = headSha ? await this.safeGetFailingChecks(headSha, r) : [];
+      return { category: 'ci_failed', mergeState: 'ci_failed', rawMergeableState, failingChecks };
+    }
+    if (rawMergeableState === 'blocked') {
+      const failingChecks = headSha ? await this.safeGetFailingChecks(headSha, r) : [];
+      if (failingChecks.length > 0) {
+        return { category: 'ci_failed', mergeState: 'ci_failed', rawMergeableState, failingChecks };
+      }
+      return { category: 'blocked', mergeState: 'blocked', rawMergeableState, failingChecks: [] };
+    }
+    if (rawMergeableState === 'clean') {
+      return { category: 'clean', mergeState: 'clean', rawMergeableState, failingChecks: [] };
+    }
+    return { category: 'unknown', mergeState: rawMergeableState ?? 'unknown', rawMergeableState, failingChecks: [] };
+  }
+
+  private async safeGetFailingChecks(sha: string, repo: string): Promise<FailingCheck[]> {
+    try {
+      return await this.getFailingChecks(sha, repo);
+    } catch (err) {
+      console.warn(
+        `[GitHubClient] getFailingChecks failed for ${sha} in ${repo}:`,
+        (err as Error).message,
+      );
+      return [];
     }
   }
 

@@ -107,7 +107,9 @@ const mockPRRow: PullRequestRow = {
   mergeable: null,
   merge_state: null,
   merge_state_checked_at: null,
+  failing_checks: null,
   pending_push: 0,
+  pause_reason: null,
 };
 
 const mockPRRowNoTask: PullRequestRow = {
@@ -158,6 +160,13 @@ function makeMockGitHub(): GitHubClient {
     markPRReady: vi.fn().mockResolvedValue(undefined),
     getMergeability: vi.fn().mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
     getMergeabilityWithRetry: vi.fn().mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
+    getFailingChecks: vi.fn().mockResolvedValue([]),
+    categorizeMergeability: vi.fn().mockResolvedValue({
+      category: 'conflict',
+      mergeState: 'dirty',
+      rawMergeableState: 'dirty',
+      failingChecks: [],
+    }),
   } as unknown as GitHubClient;
 }
 
@@ -474,6 +483,144 @@ describe('POST /api/prs/:prNumber/merge', () => {
     expect(taskStatusIdx).toBeLessThan(responseIdx);
     expect(emitIdx).toBeLessThan(responseIdx);
 
+    setPRBroadcast(() => {});
+  });
+});
+
+// ── Merge failure categorization (409/405 → categorizeMergeability) ─────────
+
+describe('POST /api/prs/:prNumber/merge — failure categorization', () => {
+  function mergeFailingGitHub(category: {
+    category: 'conflict' | 'ci_failed' | 'blocked' | 'unknown' | 'clean';
+    mergeState: string;
+    rawMergeableState: string | null;
+    failingChecks: Array<{ name: string; conclusion: string }>;
+  }): GitHubClient {
+    const github = makeMockGitHub();
+    vi.mocked(github.mergePR).mockRejectedValue(new GitHubApiError(405, 'Not mergeable'));
+    vi.mocked((github as unknown as { categorizeMergeability: (n: number, r: string) => Promise<unknown> }).categorizeMergeability)
+      .mockResolvedValue(category);
+    return github;
+  }
+
+  it('on mergeable_state=dirty, returns conflict error and sends rebase message', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const github = mergeFailingGitHub({
+      category: 'conflict',
+      mergeState: 'dirty',
+      rawMergeableState: 'dirty',
+      failingChecks: [],
+    });
+    const sessionManager = makeMockSessionManager();
+    const res = await supertest(buildApp(github, makeMockPRReviewService(), sessionManager))
+      .post('/api/prs/owner/repo/42/merge').send({});
+    expect(res.status).toBe(422);
+    expect(res.body.category).toBe('conflict');
+    expect(res.body.error).toMatch(/merge conflicts/i);
+    expect(vi.mocked(queries.updateMergeState)).toHaveBeenCalledWith(42, 'owner/repo', 0, 'dirty', null);
+    expect(vi.mocked(sessionManager.sendOrResume)).toHaveBeenCalledWith(
+      'session-xyz',
+      expect.stringContaining('Rebase onto `dev`'),
+    );
+  });
+
+  it('on mergeable_state=unstable, returns ci_failed with failing-check names and messages session', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const github = mergeFailingGitHub({
+      category: 'ci_failed',
+      mergeState: 'ci_failed',
+      rawMergeableState: 'unstable',
+      failingChecks: [
+        { name: 'lint', conclusion: 'failure' },
+        { name: 'unit-tests', conclusion: 'failure' },
+      ],
+    });
+    const sessionManager = makeMockSessionManager();
+    const res = await supertest(buildApp(github, makeMockPRReviewService(), sessionManager))
+      .post('/api/prs/owner/repo/42/merge').send({});
+    expect(res.status).toBe(422);
+    expect(res.body.category).toBe('ci_failed');
+    expect(res.body.failingChecks).toEqual(['lint', 'unit-tests']);
+    expect(res.body.error).toMatch(/CI checks are failing.*lint.*unit-tests/);
+    expect(vi.mocked(queries.updateMergeState)).toHaveBeenCalledWith(
+      42, 'owner/repo', 0, 'ci_failed', ['lint', 'unit-tests'],
+    );
+    expect(vi.mocked(sessionManager.sendOrResume)).toHaveBeenCalledWith(
+      'session-xyz',
+      expect.stringMatching(/CI checks are failing.*lint, unit-tests/),
+    );
+  });
+
+  it('on mergeable_state=blocked with failing checks, treats as ci_failed (not blocked)', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const github = mergeFailingGitHub({
+      category: 'ci_failed',
+      mergeState: 'ci_failed',
+      rawMergeableState: 'blocked',
+      failingChecks: [{ name: 'required-check', conclusion: 'failure' }],
+    });
+    const res = await supertest(buildApp(github)).post('/api/prs/owner/repo/42/merge').send({});
+    expect(res.body.category).toBe('ci_failed');
+    expect(res.body.failingChecks).toEqual(['required-check']);
+  });
+
+  it('on mergeable_state=blocked with no failing checks, returns blocked error and does NOT message session', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const github = mergeFailingGitHub({
+      category: 'blocked',
+      mergeState: 'blocked',
+      rawMergeableState: 'blocked',
+      failingChecks: [],
+    });
+    const sessionManager = makeMockSessionManager();
+    const res = await supertest(buildApp(github, makeMockPRReviewService(), sessionManager))
+      .post('/api/prs/owner/repo/42/merge').send({});
+    expect(res.status).toBe(422);
+    expect(res.body.category).toBe('blocked');
+    expect(res.body.error).toMatch(/branch protection/i);
+    expect(vi.mocked(sessionManager.sendOrResume)).not.toHaveBeenCalled();
+    expect(vi.mocked(queries.updateMergeState)).toHaveBeenCalledWith(42, 'owner/repo', 0, 'blocked', null);
+  });
+
+  it('on mergeable_state=unknown, returns unknown category and generic message', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const github = mergeFailingGitHub({
+      category: 'unknown',
+      mergeState: 'unknown',
+      rawMergeableState: 'unknown',
+      failingChecks: [],
+    });
+    const res = await supertest(buildApp(github)).post('/api/prs/owner/repo/42/merge').send({});
+    expect(res.body.category).toBe('unknown');
+    expect(res.body.error).toMatch(/did not report/i);
+  });
+
+  it('falls back to conflict when categorizeMergeability itself throws', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const github = makeMockGitHub();
+    vi.mocked(github.mergePR).mockRejectedValue(new GitHubApiError(409, 'Merge conflict'));
+    vi.mocked((github as unknown as { categorizeMergeability: (n: number, r: string) => Promise<unknown> }).categorizeMergeability)
+      .mockRejectedValue(new Error('GitHub down'));
+    const res = await supertest(buildApp(github)).post('/api/prs/owner/repo/42/merge').send({});
+    expect(res.status).toBe(422);
+    expect(res.body.category).toBe('conflict');
+  });
+
+  it('broadcasts pr_mergeability_changed with failingChecks for ci_failed', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const github = mergeFailingGitHub({
+      category: 'ci_failed',
+      mergeState: 'ci_failed',
+      rawMergeableState: 'unstable',
+      failingChecks: [{ name: 'typecheck', conclusion: 'failure' }],
+    });
+    const messages: Array<{ type: string; mergeState?: string; failingChecks?: string[] | null }> = [];
+    setPRBroadcast((msg) => messages.push(msg as { type: string; mergeState?: string; failingChecks?: string[] | null }));
+    await supertest(buildApp(github)).post('/api/prs/owner/repo/42/merge').send({});
+    const event = messages.find((m) => m.type === 'pr_mergeability_changed');
+    expect(event).toBeDefined();
+    expect(event?.mergeState).toBe('ci_failed');
+    expect(event?.failingChecks).toEqual(['typecheck']);
     setPRBroadcast(() => {});
   });
 });
