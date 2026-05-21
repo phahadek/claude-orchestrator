@@ -1209,6 +1209,7 @@ describe('TaskList', () => {
       taskSource: 'notion',
       autoLaunchEnabled: false,
       autoLaunchMilestoneId: null,
+      autoMergeEnabled: false,
     };
 
     render(

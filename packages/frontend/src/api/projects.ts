@@ -19,6 +19,7 @@ export interface Project {
   taskSource: TaskSource;
   autoLaunchEnabled: boolean;
   autoLaunchMilestoneId: string | null;
+  autoMergeEnabled: boolean;
   createdAt: number;
   updatedAt: number;
   milestones: ProjectMilestone[];
@@ -33,6 +34,7 @@ export interface CreateProjectInput {
   taskSource: TaskSource;
   autoLaunchEnabled?: boolean;
   autoLaunchMilestoneId?: string | null;
+  autoMergeEnabled?: boolean;
 }
 
 export interface UpdateProjectInput {
@@ -43,6 +45,7 @@ export interface UpdateProjectInput {
   taskSource?: TaskSource;
   autoLaunchEnabled?: boolean;
   autoLaunchMilestoneId?: string | null;
+  autoMergeEnabled?: boolean;
 }
 
 export interface CreateMilestoneInput {

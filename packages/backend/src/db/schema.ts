@@ -205,4 +205,11 @@ export function runMigrations(): void {
   } catch {
     /* already exists */
   }
+  try {
+    db.exec(
+      `ALTER TABLE projects ADD COLUMN auto_merge_enabled INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
 }

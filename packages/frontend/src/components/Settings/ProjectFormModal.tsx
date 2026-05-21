@@ -11,6 +11,7 @@ export interface ProjectFormValues {
   taskSource: TaskSource;
   autoLaunchEnabled: boolean;
   autoLaunchMilestoneId: string;
+  autoMergeEnabled: boolean;
 }
 
 interface Props {
@@ -27,6 +28,7 @@ const EMPTY: ProjectFormValues = {
   taskSource: 'notion',
   autoLaunchEnabled: false,
   autoLaunchMilestoneId: '',
+  autoMergeEnabled: false,
 };
 
 function fromProject(p: Project): ProjectFormValues {
@@ -38,6 +40,7 @@ function fromProject(p: Project): ProjectFormValues {
     taskSource: p.taskSource,
     autoLaunchEnabled: p.autoLaunchEnabled,
     autoLaunchMilestoneId: p.autoLaunchMilestoneId ?? '',
+    autoMergeEnabled: p.autoMergeEnabled,
   };
 }
 
@@ -224,6 +227,18 @@ export function ProjectFormModal({
                 </select>
               </div>
             )}
+
+          <div className={styles.formField}>
+            <label htmlFor="proj-auto-merge" className={styles.formLabel}>
+              <input
+                id="proj-auto-merge"
+                type="checkbox"
+                checked={values.autoMergeEnabled}
+                onChange={(e) => update('autoMergeEnabled', e.target.checked)}
+              />{' '}
+              Auto-merge approved PRs when CI is green
+            </label>
+          </div>
 
           {serverError && <p className={styles.serverError}>{serverError}</p>}
 

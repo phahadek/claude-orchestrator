@@ -17,6 +17,7 @@ export interface ProjectConfig {
   taskSource: 'notion' | 'yaml'; // honored by getTaskBackend(projectId)
   autoLaunchEnabled: boolean; // per-project toggle for the AutoLauncher
   autoLaunchMilestoneId: string | null; // milestone the AutoLauncher polls; null = first milestone
+  autoMergeEnabled: boolean; // per-project toggle for the AutoMerger
 }
 
 function resolveClaudePath(): string {
@@ -106,6 +107,7 @@ function hydrateProject(p: {
   taskSource: 'notion' | 'yaml';
   autoLaunchEnabled: boolean;
   autoLaunchMilestoneId: string | null;
+  autoMergeEnabled: boolean;
   milestones: { id: string; sourceId: string | null; name: string }[];
 }): ProjectConfig {
   // boards[].id is now the milestone row id (used as milestoneId for fetch_tasks).
@@ -125,6 +127,7 @@ function hydrateProject(p: {
     taskSource: p.taskSource,
     autoLaunchEnabled: p.autoLaunchEnabled,
     autoLaunchMilestoneId: p.autoLaunchMilestoneId,
+    autoMergeEnabled: p.autoMergeEnabled,
   };
   if (boards.length > 0) config.boards = boards;
   if (p.githubRepo) config.githubRepo = p.githubRepo;
@@ -170,6 +173,10 @@ export interface RuntimeSettings {
   session_pause_threshold_seconds: number;
   /** After pause, seconds during which a tool_use triggers a hard-stop. */
   session_hard_stop_window_seconds: number;
+  /** Auto-merger: seconds between CI status polls while waiting for green. */
+  ci_poll_interval_seconds: number;
+  /** Auto-merger: minutes before the merge attempt gives up and pauses. */
+  ci_poll_max_minutes: number;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -196,4 +203,6 @@ export const runtimeSettings: RuntimeSettings = {
   session_hard_stop_window_seconds: Number(
     process.env.SESSION_HARD_STOP_WINDOW_SECONDS ?? 60,
   ),
+  ci_poll_interval_seconds: Number(process.env.CI_POLL_INTERVAL_SECONDS ?? 30),
+  ci_poll_max_minutes: Number(process.env.CI_POLL_MAX_MINUTES ?? 30),
 };

@@ -17,6 +17,8 @@ interface SettingsValues {
   session_notify_threshold_seconds: string;
   session_pause_threshold_seconds: string;
   session_hard_stop_window_seconds: string;
+  ci_poll_interval_seconds: string;
+  ci_poll_max_minutes: string;
 }
 
 const MODEL_OPTIONS = [
@@ -273,6 +275,27 @@ export function Settings({ initialTab = 'general' }: Props) {
                   0,
                   3600,
                   10,
+                )}
+
+                <h3 className={styles.sectionTitle}>Auto-merge</h3>
+                <p className={styles.hint}>
+                  After auto-review approves a PR, the orchestrator polls CI
+                  status. When CI turns green, it squash-merges to dev (per-project
+                  opt-in under Projects → Edit).
+                </p>
+                {numInput(
+                  'ci_poll_interval_seconds',
+                  'CI poll interval (seconds)',
+                  5,
+                  600,
+                  5,
+                )}
+                {numInput(
+                  'ci_poll_max_minutes',
+                  'CI poll max wait (minutes)',
+                  1,
+                  240,
+                  1,
                 )}
 
                 <h3 className={styles.sectionTitle}>Notifications</h3>

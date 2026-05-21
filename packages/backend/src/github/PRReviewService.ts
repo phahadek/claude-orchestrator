@@ -23,6 +23,7 @@ import type { PullRequest, PRDiff } from './types';
 import type { ServerMessage } from '../ws/types';
 import type { SessionEvent } from '../db/types';
 import type { PRMergeWatcher } from './PRMergeWatcher';
+import type { AutoMerger } from './AutoMerger';
 
 const SIZE_DIMENSION_NAME = 'Size proportionality';
 
@@ -87,6 +88,14 @@ export class PRReviewService {
 
   setMergeWatcher(watcher: PRMergeWatcher): void {
     this.mergeWatcher = watcher;
+  }
+
+  // Optional reference to AutoMerger used to kick off the auto-merge polling
+  // loop after an approved verdict on projects with autoMergeEnabled.
+  private autoMerger?: AutoMerger;
+
+  setAutoMerger(merger: AutoMerger): void {
+    this.autoMerger = merger;
   }
 
   private resolveBackend(projectId: string): TaskBackend {
@@ -375,6 +384,12 @@ export class PRReviewService {
             (err as Error).message,
           ),
         );
+    }
+    // Kick off the auto-merger (per-project opt-in; AutoMerger guards on the
+    // project toggle and on pause_reason). Fire-and-forget — the polling loop
+    // runs in the background.
+    if (this.autoMerger) {
+      this.autoMerger.attempt(prNumber, repo);
     }
     return draftTransitioned;
   }

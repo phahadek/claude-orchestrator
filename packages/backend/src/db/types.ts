@@ -151,6 +151,7 @@ export interface ProjectRow {
   task_source: TaskSource;
   auto_launch_enabled: number; // 0 | 1 (SQLite boolean)
   auto_launch_milestone_id: string | null;
+  auto_merge_enabled: number; // 0 | 1 (SQLite boolean)
   created_at: number;
   updated_at: number;
 }
@@ -161,9 +162,11 @@ export type NewProjectRow = Omit<
   | 'updated_at'
   | 'auto_launch_enabled'
   | 'auto_launch_milestone_id'
+  | 'auto_merge_enabled'
 > & {
   auto_launch_enabled?: number;
   auto_launch_milestone_id?: string | null;
+  auto_merge_enabled?: number;
   created_at?: number;
   updated_at?: number;
 };
@@ -194,10 +197,13 @@ export type NewMilestoneRow = Omit<
 /**
  * Closed set of reasons a task is paused awaiting human attention. Stored as
  * plain TEXT in SQLite; the union gives compile-time safety in TS code paths.
- * Extend this list as new auto-orchestration triggers land (ci_failing,
- * auto_merge_failed, pr_closed).
  */
-export type PauseReason = 'max_reviews' | 'stuck_timeout';
+export type PauseReason =
+  | 'max_reviews'
+  | 'stuck_timeout'
+  | 'ci_failing'
+  | 'auto_merge_failed'
+  | 'pr_closed';
 
 export interface PullRequestRow {
   id: number;

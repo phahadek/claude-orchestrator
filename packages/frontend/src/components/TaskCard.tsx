@@ -26,6 +26,9 @@ const STATUS_LABELS: Record<DisplayStatus, string> = {
 const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
   max_reviews: 'Max review iterations reached — re-review or close the PR.',
   stuck_timeout: 'Session stuck — no progress within the timeout window.',
+  ci_failing: 'CI is failing — fix the failing checks and push.',
+  auto_merge_failed: 'Auto-merge failed — merge manually or investigate.',
+  pr_closed: 'PR was closed during auto-merge — reopen or create a new PR.',
 };
 
 function verdictLabel(verdict: string): string {
