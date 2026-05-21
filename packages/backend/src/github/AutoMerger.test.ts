@@ -39,11 +39,7 @@ vi.mock('../routes/tasks.js', () => ({
 }));
 
 import { AutoMerger } from './AutoMerger';
-import {
-  getPRByNumber,
-  setPauseReason,
-  updateMergeState,
-} from '../db/queries';
+import { getPRByNumber, setPauseReason, updateMergeState } from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
 import type { PRMergeWatcher } from './PRMergeWatcher';
 import type { PullRequestRow } from '../db/types';
@@ -112,7 +108,9 @@ function makeMockGitHub(
     mergePR: vi
       .fn()
       .mockResolvedValue({ merged: true, message: 'ok', sha: 'merged-sha' }),
-    categorizeMergeability: vi.fn().mockResolvedValue(makeMergeability('clean')),
+    categorizeMergeability: vi
+      .fn()
+      .mockResolvedValue(makeMergeability('clean')),
   } as unknown as GitHubClient;
 }
 
@@ -208,11 +206,7 @@ describe('AutoMerger.attempt() — CI green', () => {
     merger.attempt(42, 'owner/repo');
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(github.mergePR).toHaveBeenCalledWith(
-      42,
-      'feat: test',
-      'owner/repo',
-    );
+    expect(github.mergePR).toHaveBeenCalledWith(42, 'feat: test', 'owner/repo');
     expect(watcher.handleMerged).toHaveBeenCalled();
     expect(setPauseReason).not.toHaveBeenCalled();
   });

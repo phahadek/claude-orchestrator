@@ -280,8 +280,8 @@ export function Settings({ initialTab = 'general' }: Props) {
                 <h3 className={styles.sectionTitle}>Auto-merge</h3>
                 <p className={styles.hint}>
                   After auto-review approves a PR, the orchestrator polls CI
-                  status. When CI turns green, it squash-merges to dev (per-project
-                  opt-in under Projects → Edit).
+                  status. When CI turns green, it squash-merges to dev
+                  (per-project opt-in under Projects → Edit).
                 </p>
                 {numInput(
                   'ci_poll_interval_seconds',

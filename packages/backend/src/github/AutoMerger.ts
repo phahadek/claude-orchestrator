@@ -1,9 +1,5 @@
 import { getProjectByGithubRepo, runtimeSettings } from '../config';
-import {
-  getPRByNumber,
-  setPauseReason,
-  updateMergeState,
-} from '../db/queries';
+import { getPRByNumber, setPauseReason, updateMergeState } from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
 import { GitHubApiError } from './types';
 import type { PRMergeWatcher } from './PRMergeWatcher';
@@ -91,11 +87,7 @@ export class AutoMerger {
 
       let poll;
       try {
-        poll = await this.github.fetchPRStatusConditional(
-          prNumber,
-          repo,
-          etag,
-        );
+        poll = await this.github.fetchPRStatusConditional(prNumber, repo, etag);
       } catch (err) {
         console.warn(
           `[AutoMerger] PR #${prNumber}: status fetch failed: ${(err as Error).message}`,
@@ -172,7 +164,7 @@ export class AutoMerger {
         err instanceof GitHubApiError
           ? err.status
           : typeof (err as { status?: unknown }).status === 'number'
-            ? ((err as { status: number }).status)
+            ? (err as { status: number }).status
             : null;
       if (status === 409 || status === 405) {
         // Merge blocked — categorize so conflict / ci_failed get their normal handling.
