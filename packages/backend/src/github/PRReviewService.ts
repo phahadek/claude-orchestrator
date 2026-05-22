@@ -477,6 +477,14 @@ export class PRReviewService {
     );
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
     setLastReviewedSha(prNumber, repo, pr.head_sha ?? null);
+    if (finalResult.verdict === 'approved') {
+      await this.handleApprovedVerdict(
+        prNumber,
+        repo,
+        pr.notion_task_id,
+        projectId,
+      );
+    }
     return finalResult;
   }
 
