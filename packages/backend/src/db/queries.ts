@@ -1104,7 +1104,9 @@ export function getMergeReadyPRs(
     .prepare<{
       id: string;
       project_id: string;
-    }>(`SELECT source_id FROM milestones WHERE id = @id AND project_id = @project_id`)
+    }>(
+      `SELECT source_id FROM milestones WHERE id = @id AND project_id = @project_id`,
+    )
     .get({ id: milestoneId, project_id: projectId }) as
     | { source_id: string | null }
     | undefined;
