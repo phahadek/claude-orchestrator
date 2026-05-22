@@ -1592,6 +1592,99 @@ describe('PRReviewService.reReviewPR()', () => {
     );
   });
 
+  it('calls handleApprovedVerdict with (prNumber, repo, notion_task_id, projectId) when verdict is approved', async () => {
+    const prRowWithSession = {
+      ...mockPRRow,
+      review_session_id: 'review-session-approved',
+      notion_task_id: 'task-abc123',
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+
+    const mockGH = makeMockGitHub();
+    const mockSM = makeMockSessionManager();
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (sessionId: string) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(sessionId, JSON.stringify(claudePayload)),
+          ),
+        );
+        return sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-re-review',
+      'https://notion.so/ctx',
+    );
+    const handleSpy = vi.spyOn(service, 'handleApprovedVerdict');
+
+    const result = await service.reReviewPR(42, 'owner/repo', 'proj-re-review');
+
+    expect(result.verdict).toBe('approved');
+    expect(handleSpy).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'task-abc123',
+      'proj-re-review',
+    );
+  });
+
+  it('does NOT call handleApprovedVerdict when verdict is needs_changes', async () => {
+    const prRowWithSession = {
+      ...mockPRRow,
+      review_session_id: 'review-session-needs-changes',
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+
+    const needsChangesPayload = {
+      verdict: 'needs_changes',
+      dimensions: [
+        { name: 'Diff vs Context spec', passed: false, notes: 'Still broken.' },
+      ],
+      summary: 'Not ready yet.',
+    };
+
+    const mockGH = makeMockGitHub();
+    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({
+      mergeable: true,
+      mergeableState: 'clean',
+    });
+    const mockSM = makeMockSessionManager();
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (sessionId: string) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              sessionId,
+              JSON.stringify(needsChangesPayload),
+            ),
+          ),
+        );
+        return sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    const handleSpy = vi.spyOn(service, 'handleApprovedVerdict');
+
+    const result = await service.reReviewPR(42, 'owner/repo');
+
+    expect(result.verdict).toBe('needs_changes');
+    expect(handleSpy).not.toHaveBeenCalled();
+  });
+
   it('follow-up inlines the full JSON schema (not a reference to "same format")', async () => {
     const prRowWithSession = {
       ...mockPRRow,
