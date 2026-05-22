@@ -25,7 +25,10 @@ interface SettingsValues {
 
 const MIN_POLL_INTERVAL_MS = 5000;
 
-function validateField(key: keyof SettingsValues, value: string): string | null {
+function validateField(
+  key: keyof SettingsValues,
+  value: string,
+): string | null {
   const num = Number(value);
   if (!Number.isInteger(num) || isNaN(num)) return 'Must be a whole number';
   if (key === 'auto_launch_concurrency' && num < 1) return 'Minimum is 1';

@@ -33,8 +33,7 @@ function makeFetch(getBody: object = defaultSettings, patchBody: object = {}) {
     }
     return Promise.resolve({
       ok: true,
-      json: () =>
-        Promise.resolve({ updated: patchBody, current: getBody }),
+      json: () => Promise.resolve({ updated: patchBody, current: getBody }),
     });
   });
 }
@@ -101,7 +100,8 @@ describe('Settings — auto-launch inputs', () => {
         ([, opts]) =>
           opts &&
           opts.method === 'PATCH' &&
-          JSON.parse(opts.body as string).auto_launch_poll_interval_ms === '10000',
+          JSON.parse(opts.body as string).auto_launch_poll_interval_ms ===
+            '10000',
       );
       expect(patchCall).toBeDefined();
     });
