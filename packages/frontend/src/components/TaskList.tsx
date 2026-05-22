@@ -5,6 +5,7 @@ import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { TaskCard } from './TaskCard';
 import { CompactTaskCard } from './CompactTaskCard';
 import { useDispatch } from '../hooks/useDispatch';
+import { projectsApi } from '../api/projects';
 import styles from './TaskList.module.css';
 
 interface Props {
@@ -396,8 +397,33 @@ export function TaskList({
     }, 5000);
   }, [activeProjectId, boardId, syncing, send]);
 
+  const mergeReadyCount = tasks.filter(
+    (t) =>
+      t.pr !== null &&
+      t.pr.state === 'open' &&
+      t.review !== null &&
+      t.review.verdict === 'approved' &&
+      t.pauseReason === null &&
+      t.pr.mergeState === 'clean',
+  ).length;
+
+  const handleMergeReady = useCallback(() => {
+    if (!activeProjectId || !boardId) return;
+    if (!window.confirm(`Merge ${mergeReadyCount} ready PR${mergeReadyCount === 1 ? '' : 's'}?`)) return;
+    void projectsApi.mergeReady(activeProjectId, boardId);
+  }, [activeProjectId, boardId, mergeReadyCount]);
+
   const syncButton = (
     <div className={styles.listHeader}>
+      {mergeReadyCount > 0 && (
+        <button
+          className={styles.mergeReadyBtn}
+          onClick={handleMergeReady}
+          data-testid="merge-ready-btn"
+        >
+          Merge Ready ({mergeReadyCount})
+        </button>
+      )}
       <button
         className={`${styles.syncBtn}${syncing ? ` ${styles.syncBtnLoading}` : ''}`}
         onClick={handleSync}

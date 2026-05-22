@@ -10,6 +10,13 @@ import {
   type ProjectPatch,
   type MilestonePatch,
 } from '../projects/ProjectService';
+import type { AutoMerger } from '../github/AutoMerger';
+import { getMergeReadyPRs } from '../db/queries';
+
+let _autoMerger: AutoMerger | null = null;
+export function setAutoMerger(merger: AutoMerger): void {
+  _autoMerger = merger;
+}
 
 export const projectsRouter = Router();
 
@@ -263,5 +270,32 @@ projectsRouter.post(
     };
     fs.writeFileSync(filePath, yaml.dump(stub, { lineWidth: 120 }), 'utf-8');
     res.status(201).json({ path: filePath });
+  },
+);
+
+// ── Merge-Ready bulk merge ────────────────────────────────────────────────────
+
+projectsRouter.post(
+  '/projects/:projectId/milestones/:milestoneId/merge-ready',
+  (req: Request, res: Response) => {
+    const projectId = String(req.params.projectId);
+    const milestoneId = String(req.params.milestoneId);
+
+    if (!ProjectService.getById(projectId)) {
+      res.status(404).json({ error: `Project '${projectId}' not found` });
+      return;
+    }
+
+    const eligiblePRs = getMergeReadyPRs(projectId, milestoneId);
+    const attempted: number[] = [];
+
+    for (const pr of eligiblePRs) {
+      if (_autoMerger) {
+        _autoMerger.attempt(pr.pr_number, pr.repo);
+      }
+      attempted.push(pr.pr_number);
+    }
+
+    res.json({ attempted });
   },
 );

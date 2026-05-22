@@ -22,7 +22,7 @@ import { sessionsRouter, setBroadcast } from './routes/sessions';
 import { createPrsRouter, setPRBroadcast } from './routes/prs';
 import { createTasksRouter, setTaskBroadcast } from './routes/tasks';
 import { analyticsRouter } from './routes/analytics';
-import { projectsRouter } from './routes/projects';
+import { projectsRouter, setAutoMerger } from './routes/projects';
 import { importProjectsFromEnv } from './projects/projectImport';
 import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
@@ -105,6 +105,7 @@ const prMergeWatcher = new PRMergeWatcher(
 prReviewService.setMergeWatcher(prMergeWatcher);
 const autoMerger = new AutoMerger(githubClient, prMergeWatcher, broadcast);
 prReviewService.setAutoMerger(autoMerger);
+setAutoMerger(autoMerger);
 app.use(
   '/api',
   createPrsRouter(
