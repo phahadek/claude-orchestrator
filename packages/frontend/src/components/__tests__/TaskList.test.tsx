@@ -1439,4 +1439,254 @@ describe('TaskList', () => {
       }
     });
   });
+
+  // ── Merge Ready button ──────────────────────────────────────────────────────
+
+  function makeEligibleTask(taskId: string): TaskView {
+    return makeTask({
+      taskId,
+      displayStatus: 'in_review',
+      pr: {
+        prNumber: 10,
+        prUrl: 'https://github.com/owner/repo/pull/10',
+        title: 'feat: something',
+        headBranch: 'feature/foo',
+        baseBranch: 'dev',
+        state: 'open',
+        draft: false,
+        mergeState: 'clean',
+      },
+      review: {
+        sessionId: 'rev-1',
+        status: 'done',
+        verdict: 'approved',
+        summary: 'lgtm',
+        iterationCount: 1,
+        inputTokens: 0,
+        outputTokens: 0,
+      },
+      pauseReason: null,
+    });
+  }
+
+  describe('Merge Ready button', () => {
+    it('is hidden when no tasks have eligible PRs', async () => {
+      mockFetch([makeTask({ taskId: 't1', displayStatus: 'in_review' })]);
+      render(
+        <TaskList
+          activeProjectId="proj-1"
+          boardId="ms-1"
+          selectedTaskId={null}
+          onSelectTask={vi.fn()}
+          send={noop}
+          project={null}
+        />,
+      );
+      await waitFor(() => {
+        expect(screen.getByTestId('sync-btn')).toBeDefined();
+      });
+      expect(screen.queryByTestId('merge-ready-btn')).toBeNull();
+    });
+
+    it('is visible with correct count when eligible PRs exist', async () => {
+      mockFetch([makeEligibleTask('t1')]);
+      render(
+        <TaskList
+          activeProjectId="proj-1"
+          boardId="ms-1"
+          selectedTaskId={null}
+          onSelectTask={vi.fn()}
+          send={noop}
+          project={null}
+        />,
+      );
+      await waitFor(() => {
+        expect(screen.getByTestId('merge-ready-btn')).toBeDefined();
+      });
+      expect(screen.getByTestId('merge-ready-btn').textContent).toContain('1');
+    });
+
+    it('updates count as eligible PRs change', async () => {
+      const task1 = makeEligibleTask('t1');
+      const task2 = {
+        ...makeEligibleTask('t2'),
+        pr: { ...makeEligibleTask('t2').pr!, prNumber: 11 },
+      };
+      mockFetch([task1, task2]);
+      render(
+        <TaskList
+          activeProjectId="proj-1"
+          boardId="ms-1"
+          selectedTaskId={null}
+          onSelectTask={vi.fn()}
+          send={noop}
+          project={null}
+        />,
+      );
+      await waitFor(() => {
+        expect(screen.getByTestId('merge-ready-btn')).toBeDefined();
+      });
+      expect(screen.getByTestId('merge-ready-btn').textContent).toContain('2');
+    });
+
+    it('shows confirm dialog with correct count on click', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+      mockFetch([makeEligibleTask('t1')]);
+      render(
+        <TaskList
+          activeProjectId="proj-1"
+          boardId="ms-1"
+          selectedTaskId={null}
+          onSelectTask={vi.fn()}
+          send={noop}
+          project={null}
+        />,
+      );
+      await waitFor(() => {
+        expect(screen.getByTestId('merge-ready-btn')).toBeDefined();
+      });
+      fireEvent.click(screen.getByTestId('merge-ready-btn'));
+      expect(confirmSpy).toHaveBeenCalledWith('Merge 1 ready PR?');
+      confirmSpy.mockRestore();
+    });
+
+    it('calls the merge-ready API when confirm is accepted', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      (fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => [makeEligibleTask('t1')],
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ attempted: [10] }),
+        });
+      render(
+        <TaskList
+          activeProjectId="proj-1"
+          boardId="ms-1"
+          selectedTaskId={null}
+          onSelectTask={vi.fn()}
+          send={noop}
+          project={null}
+        />,
+      );
+      await waitFor(() => {
+        expect(screen.getByTestId('merge-ready-btn')).toBeDefined();
+      });
+      fireEvent.click(screen.getByTestId('merge-ready-btn'));
+      await waitFor(() => {
+        const calls = (fetch as ReturnType<typeof vi.fn>).mock.calls;
+        const mergeCall = calls.find(
+          (c: unknown[]) =>
+            typeof c[0] === 'string' &&
+            (c[0] as string).includes('merge-ready'),
+        );
+        expect(mergeCall).toBeDefined();
+        expect((mergeCall![1] as RequestInit).method).toBe('POST');
+      });
+    });
+
+    it('does NOT call the API when confirm is cancelled', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(false);
+      mockFetch([makeEligibleTask('t1')]);
+      render(
+        <TaskList
+          activeProjectId="proj-1"
+          boardId="ms-1"
+          selectedTaskId={null}
+          onSelectTask={vi.fn()}
+          send={noop}
+          project={null}
+        />,
+      );
+      await waitFor(() => {
+        expect(screen.getByTestId('merge-ready-btn')).toBeDefined();
+      });
+      const callsBefore = (fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+      fireEvent.click(screen.getByTestId('merge-ready-btn'));
+      expect((fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+        callsBefore,
+      );
+    });
+
+    it('does not count paused PRs as eligible', async () => {
+      mockFetch([
+        makeTask({
+          taskId: 't1',
+          displayStatus: 'needs_attention',
+          pr: {
+            prNumber: 10,
+            prUrl: 'https://github.com/owner/repo/pull/10',
+            title: 'feat: x',
+            headBranch: 'f',
+            baseBranch: 'dev',
+            state: 'open',
+            draft: false,
+            mergeState: 'clean',
+          },
+          review: {
+            sessionId: 'r',
+            status: 'done',
+            verdict: 'approved',
+            summary: '',
+            iterationCount: 1,
+            inputTokens: 0,
+            outputTokens: 0,
+          },
+          pauseReason: 'stuck_timeout',
+        }),
+      ]);
+      render(
+        <TaskList
+          activeProjectId="proj-1"
+          boardId="ms-1"
+          selectedTaskId={null}
+          onSelectTask={vi.fn()}
+          send={noop}
+          project={null}
+        />,
+      );
+      await waitFor(() => {
+        expect(screen.getByTestId('sync-btn')).toBeDefined();
+      });
+      expect(screen.queryByTestId('merge-ready-btn')).toBeNull();
+    });
+
+    it('switching to a different milestone re-evaluates visibility against that milestone', async () => {
+      // First render with eligible task
+      mockFetch([makeEligibleTask('t1')]);
+      const { rerender } = render(
+        <TaskList
+          activeProjectId="proj-1"
+          boardId="ms-1"
+          selectedTaskId={null}
+          onSelectTask={vi.fn()}
+          send={noop}
+          project={null}
+        />,
+      );
+      await waitFor(() => {
+        expect(screen.getByTestId('merge-ready-btn')).toBeDefined();
+      });
+
+      // Switch to a milestone with no eligible PRs
+      mockFetch([makeTask({ taskId: 't2', displayStatus: 'in_review' })]);
+      rerender(
+        <TaskList
+          activeProjectId="proj-1"
+          boardId="ms-2"
+          selectedTaskId={null}
+          onSelectTask={vi.fn()}
+          send={noop}
+          project={null}
+        />,
+      );
+      await waitFor(() => {
+        expect(screen.queryByTestId('merge-ready-btn')).toBeNull();
+      });
+    });
+  });
 });

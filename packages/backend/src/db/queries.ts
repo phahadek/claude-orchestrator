@@ -1091,6 +1091,64 @@ export function getAllOpenPRs(): PullRequestRow[] {
     .all() as PullRequestRow[];
 }
 
+/**
+ * Returns eligible PRs for the bulk-merge button: open, approved verdict,
+ * not paused, and mergeable=1, scoped to the given project's milestone.
+ */
+export function getMergeReadyPRs(
+  projectId: string,
+  milestoneId: string,
+): PullRequestRow[] {
+  // Resolve milestone source_id to build the board cache key.
+  const milestone = db
+    .prepare<{
+      id: string;
+      project_id: string;
+    }>(
+      `SELECT source_id FROM milestones WHERE id = @id AND project_id = @project_id`,
+    )
+    .get({ id: milestoneId, project_id: projectId }) as
+    | { source_id: string | null }
+    | undefined;
+
+  if (!milestone) return [];
+
+  const boardKey = milestone.source_id ?? milestoneId;
+  const cacheKey = `board:${boardKey}`;
+
+  const boardCache = db
+    .prepare<{
+      notion_task_id: string;
+    }>(`SELECT raw_json FROM task_cache WHERE notion_task_id = @notion_task_id`)
+    .get({ notion_task_id: cacheKey }) as { raw_json: string } | undefined;
+
+  if (!boardCache) return [];
+
+  let taskIds: string[];
+  try {
+    const tasks = JSON.parse(boardCache.raw_json) as { id: string }[];
+    taskIds = tasks.map((t) => t.id.replace(/-/g, ''));
+  } catch {
+    return [];
+  }
+
+  if (taskIds.length === 0) return [];
+
+  const placeholders = taskIds.map(() => '?').join(', ');
+  return db
+    .prepare(
+      `
+    SELECT * FROM pull_requests
+    WHERE state = 'open'
+      AND pause_reason IS NULL
+      AND mergeable = 1
+      AND JSON_EXTRACT(review_result, '$.verdict') = 'approved'
+      AND REPLACE(COALESCE(notion_task_id, ''), '-', '') IN (${placeholders})
+  `,
+    )
+    .all(...taskIds) as PullRequestRow[];
+}
+
 // ─── task aggregation ─────────────────────────────────────────────────────────
 
 export interface TaskAggregateRow {

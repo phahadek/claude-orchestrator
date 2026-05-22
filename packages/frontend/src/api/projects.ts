@@ -150,4 +150,14 @@ export const projectsApi = {
       { method: 'POST' },
     );
   },
+
+  mergeReady(
+    projectId: string,
+    milestoneId: string,
+  ): Promise<{ attempted: number[] }> {
+    return request<{ attempted: number[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}/merge-ready`,
+      { method: 'POST' },
+    );
+  },
 };
