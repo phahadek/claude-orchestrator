@@ -79,6 +79,55 @@
   border-color: #89b4fa;
 }
 
+.autoLaunchPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #313244;
+  border: 1px solid #45475a;
+  border-radius: 999px;
+  color: var(--text-muted, #a6adc8);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  padding: 4px 12px;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s;
+}
+
+.autoLaunchPill:hover:not(:disabled) {
+  border-color: #585b70;
+  color: var(--text-primary, #cdd6f4);
+}
+
+.autoLaunchPill:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.autoLaunchPillOn {
+  background: var(--accent-dim, #313a55);
+  border-color: var(--accent, #89b4fa);
+  color: var(--accent, #89b4fa);
+}
+
+.autoLaunchPillOn:hover:not(:disabled) {
+  color: var(--accent, #89b4fa);
+  border-color: var(--accent, #89b4fa);
+}
+
+.autoLaunchLabel {
+  font-weight: 500;
+}
+
+.autoLaunchState {
+  font-weight: 700;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+}
+
 .tokenSummary {
   font-size: 12px;
   color: var(--text-faint);

@@ -10,6 +10,11 @@ import styles from './Header.module.css';
 
 export type TopView = 'tasks' | 'sessions' | 'prs' | 'analytics' | 'settings';
 
+export interface AutoLaunchTogglePatch {
+  autoLaunchEnabled: boolean;
+  autoLaunchMilestoneId?: string | null;
+}
+
 interface Props {
   projects: ProjectConfig[];
   activeProjectId: string | null;
@@ -22,6 +27,7 @@ interface Props {
   totalCost?: number;
   tasks?: TaskView[];
   incompleteReviewCount?: number;
+  onAutoLaunchToggle?: (patch: AutoLaunchTogglePatch) => void;
 }
 
 export function Header({
@@ -36,9 +42,42 @@ export function Header({
   totalCost,
   tasks,
   incompleteReviewCount,
+  onAutoLaunchToggle,
 }: Props) {
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
   const boards = activeProject?.boards ?? [];
+  const showAutoLaunchToggle =
+    activeProject !== null &&
+    activeProject.taskSource !== 'yaml' &&
+    boards.length > 0;
+  const autoLaunchEnabled = activeProject?.autoLaunchEnabled ?? false;
+  const autoLaunchMilestoneId = activeProject?.autoLaunchMilestoneId ?? null;
+  const isOnThisMilestone =
+    autoLaunchEnabled && autoLaunchMilestoneId === activeBoardId;
+  const otherMilestoneName =
+    autoLaunchEnabled &&
+    autoLaunchMilestoneId &&
+    autoLaunchMilestoneId !== activeBoardId
+      ? (boards.find((b) => b.id === autoLaunchMilestoneId)?.name ?? null)
+      : null;
+  const autoLaunchTooltip = (() => {
+    if (isOnThisMilestone) return 'Auto-launch ON for this milestone';
+    if (otherMilestoneName)
+      return `Auto-launch active on ${otherMilestoneName} — click to reassign to current milestone`;
+    return 'Auto-launch OFF — click to enable for this milestone';
+  })();
+
+  function handleAutoLaunchClick() {
+    if (!onAutoLaunchToggle || !activeBoardId) return;
+    if (isOnThisMilestone) {
+      onAutoLaunchToggle({ autoLaunchEnabled: false });
+    } else {
+      onAutoLaunchToggle({
+        autoLaunchEnabled: true,
+        autoLaunchMilestoneId: activeBoardId,
+      });
+    }
+  }
 
   return (
     <header className={styles.header}>
@@ -108,6 +147,32 @@ export function Header({
               </option>
             ))}
           </select>
+        </>
+      )}
+      {showAutoLaunchToggle && (
+        <>
+          <div className={styles.divider} />
+          <button
+            type="button"
+            className={`${styles.autoLaunchPill}${isOnThisMilestone ? ` ${styles.autoLaunchPillOn}` : ''}`}
+            onClick={handleAutoLaunchClick}
+            disabled={!activeBoardId || !onAutoLaunchToggle}
+            title={autoLaunchTooltip}
+            aria-pressed={isOnThisMilestone}
+            aria-label={
+              isOnThisMilestone
+                ? 'Auto-launch ON for this milestone'
+                : otherMilestoneName
+                  ? `Auto-launch active on ${otherMilestoneName}`
+                  : 'Auto-launch OFF'
+            }
+          >
+            <span aria-hidden="true">🤖</span>
+            <span className={styles.autoLaunchLabel}>Auto-launch</span>
+            <span className={styles.autoLaunchState}>
+              {isOnThisMilestone ? 'ON' : 'OFF'}
+            </span>
+          </button>
         </>
       )}
       {tasks && tasks.length > 0 && (
