@@ -411,4 +411,118 @@ describe('AutoLauncher', () => {
     await launcher.pollOnce();
     expect(yamlBackend.fetchReadyTasks).not.toHaveBeenCalled();
   });
+
+  // ── Concurrency cap race-condition regression tests ──────────────────────────
+
+  it('cap=1 with N≥2 eligible candidates: pollOnce() launches exactly one session', async () => {
+    runtimeSettings.auto_launch_concurrency = 1;
+    const sm = makeMockSessionManager();
+    const backend = makeMockBackend([
+      makeResolved(makeTask({ id: 'a', title: 'Task A' })),
+      makeResolved(makeTask({ id: 'b', title: 'Task B' })),
+      makeResolved(makeTask({ id: 'c', title: 'Task C' })),
+    ]);
+
+    const launcher = new AutoLauncher(sm, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+    expect(
+      (sm as unknown as { start: ReturnType<typeof vi.fn> }).start,
+    ).toHaveBeenCalledTimes(1);
+  });
+
+  it('cap=3 with 5 eligible candidates: pollOnce() launches exactly 3 sessions', async () => {
+    runtimeSettings.auto_launch_concurrency = 3;
+    const sm = makeMockSessionManager();
+    const backend = makeMockBackend([
+      makeResolved(makeTask({ id: 'a' })),
+      makeResolved(makeTask({ id: 'b' })),
+      makeResolved(makeTask({ id: 'c' })),
+      makeResolved(makeTask({ id: 'd' })),
+      makeResolved(makeTask({ id: 'e' })),
+    ]);
+
+    const launcher = new AutoLauncher(sm, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+    expect(
+      (sm as unknown as { start: ReturnType<typeof vi.fn> }).start,
+    ).toHaveBeenCalledTimes(3);
+  });
+
+  it('cap=3 with 5 candidates: second pollOnce() launches 0 more when no sessions ended', async () => {
+    runtimeSettings.auto_launch_concurrency = 3;
+    const sm = makeMockSessionManager();
+    const backend = makeMockBackend([
+      makeResolved(makeTask({ id: 'a' })),
+      makeResolved(makeTask({ id: 'b' })),
+      makeResolved(makeTask({ id: 'c' })),
+      makeResolved(makeTask({ id: 'd' })),
+      makeResolved(makeTask({ id: 'e' })),
+    ]);
+
+    const launcher = new AutoLauncher(sm, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+    const startMock = (sm as unknown as { start: ReturnType<typeof vi.fn> })
+      .start;
+    expect(startMock).toHaveBeenCalledTimes(3);
+
+    // Second poll — cap is already full, no new launches
+    await launcher.pollOnce();
+    expect(startMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('after the first session ends, the next poll cycle launches the next candidate', async () => {
+    runtimeSettings.auto_launch_concurrency = 1;
+
+    // Inline mock so we can decrement liveCount to simulate session end
+    let liveCount = 0;
+    const sm = new EventEmitter() as unknown as SessionManager;
+    const startMock = vi.fn(() => {
+      liveCount++;
+      return `session-${liveCount}`;
+    });
+    (sm as unknown as Record<string, unknown>).start = startMock;
+    (sm as unknown as Record<string, unknown>).getLiveCodeSessionCount = vi.fn(
+      () => liveCount,
+    );
+    (sm as unknown as Record<string, unknown>).hasLiveSessionForTask = vi.fn(
+      () => false,
+    );
+
+    const backend = makeMockBackend([
+      makeResolved(makeTask({ id: 'first' })),
+      makeResolved(makeTask({ id: 'second' })),
+    ]);
+
+    const launcher = new AutoLauncher(sm, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend,
+      pollOnStart: false,
+    });
+
+    // First poll — launches one session (liveCount becomes 1)
+    await launcher.pollOnce();
+    expect(startMock).toHaveBeenCalledTimes(1);
+
+    // Simulate session ending — slot opens
+    liveCount--;
+
+    // Second poll — cap opens, launches the next candidate
+    await launcher.pollOnce();
+    expect(startMock).toHaveBeenCalledTimes(2);
+  });
 });
