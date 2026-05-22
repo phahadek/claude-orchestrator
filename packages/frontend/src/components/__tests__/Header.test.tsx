@@ -251,4 +251,161 @@ describe('Header', () => {
       ).toBeDefined();
     });
   });
+
+  describe('auto-launch counter', () => {
+    function makeProject(
+      overrides: Partial<ProjectConfig> = {},
+    ): ProjectConfig {
+      return {
+        id: 'proj1',
+        name: 'Project 1',
+        projectDir: '/tmp/proj1',
+        contextUrl: '',
+        boardId: 'm1',
+        boards: [
+          { id: 'm1', sourceId: 'src1', name: 'Milestone 1' },
+          { id: 'm2', sourceId: 'src2', name: 'Milestone 2' },
+        ],
+        taskSource: 'notion',
+        autoLaunchEnabled: true,
+        autoLaunchMilestoneId: 'm1',
+        autoMergeEnabled: false,
+        ...overrides,
+      };
+    }
+
+    const onProject = makeProject();
+
+    it('renders 1/1 when one session is running with cap 1', () => {
+      render(
+        <Header
+          {...defaultProps}
+          projects={[onProject]}
+          activeProjectId="proj1"
+          activeBoardId="m1"
+          onAutoLaunchToggle={vi.fn()}
+          autoLaunchRunningCount={1}
+          autoLaunchCap={1}
+          autoLaunchQueuedCount={0}
+          autoLaunchPollIntervalMs={60000}
+        />,
+      );
+      const counter = screen.getByTestId('auto-launch-counter');
+      expect(counter.textContent).toContain('1/1');
+    });
+
+    it('renders 2/3 when two sessions are running with cap 3', () => {
+      render(
+        <Header
+          {...defaultProps}
+          projects={[onProject]}
+          activeProjectId="proj1"
+          activeBoardId="m1"
+          onAutoLaunchToggle={vi.fn()}
+          autoLaunchRunningCount={2}
+          autoLaunchCap={3}
+          autoLaunchQueuedCount={0}
+          autoLaunchPollIntervalMs={60000}
+        />,
+      );
+      const counter = screen.getByTestId('auto-launch-counter');
+      expect(counter.textContent).toContain('2/3');
+    });
+
+    it('tooltip text includes running count, queued count, and cap', () => {
+      render(
+        <Header
+          {...defaultProps}
+          projects={[onProject]}
+          activeProjectId="proj1"
+          activeBoardId="m1"
+          onAutoLaunchToggle={vi.fn()}
+          autoLaunchRunningCount={2}
+          autoLaunchCap={3}
+          autoLaunchQueuedCount={4}
+          autoLaunchPollIntervalMs={60000}
+        />,
+      );
+      const counter = screen.getByTestId('auto-launch-counter');
+      const title = counter.getAttribute('title') ?? '';
+      expect(title).toContain('2 running');
+      expect(title).toContain('4 queued');
+      expect(title).toContain('cap 3');
+    });
+
+    it('queued indicator appears when there are eligible-but-deferred Ready tasks', () => {
+      render(
+        <Header
+          {...defaultProps}
+          projects={[onProject]}
+          activeProjectId="proj1"
+          activeBoardId="m1"
+          onAutoLaunchToggle={vi.fn()}
+          autoLaunchRunningCount={1}
+          autoLaunchCap={1}
+          autoLaunchQueuedCount={3}
+          autoLaunchPollIntervalMs={60000}
+        />,
+      );
+      const counter = screen.getByTestId('auto-launch-counter');
+      expect(counter.textContent).toContain('+3 queued');
+    });
+
+    it('counter is hidden when the auto-launch toggle is OFF for the active project', () => {
+      const offProject = makeProject({
+        autoLaunchEnabled: false,
+        autoLaunchMilestoneId: null,
+      });
+      render(
+        <Header
+          {...defaultProps}
+          projects={[offProject]}
+          activeProjectId="proj1"
+          activeBoardId="m1"
+          onAutoLaunchToggle={vi.fn()}
+          autoLaunchRunningCount={1}
+          autoLaunchCap={1}
+          autoLaunchQueuedCount={0}
+          autoLaunchPollIntervalMs={60000}
+        />,
+      );
+      expect(screen.queryByTestId('auto-launch-counter')).toBeNull();
+    });
+
+    it('counter is hidden when the project has no boards', () => {
+      const noBoardProject = makeProject({ boards: [] });
+      render(
+        <Header
+          {...defaultProps}
+          projects={[noBoardProject]}
+          activeProjectId="proj1"
+          activeBoardId={null}
+          onAutoLaunchToggle={vi.fn()}
+          autoLaunchRunningCount={1}
+          autoLaunchCap={1}
+          autoLaunchQueuedCount={0}
+          autoLaunchPollIntervalMs={60000}
+        />,
+      );
+      expect(screen.queryByTestId('auto-launch-counter')).toBeNull();
+    });
+
+    it('counter is hidden when the task source is YAML', () => {
+      const yamlProject = makeProject({ taskSource: 'yaml' });
+      render(
+        <Header
+          {...defaultProps}
+          projects={[yamlProject]}
+          activeProjectId="proj1"
+          activeBoardId="m1"
+          onAutoLaunchToggle={vi.fn()}
+          autoLaunchRunningCount={1}
+          autoLaunchCap={1}
+          autoLaunchQueuedCount={0}
+          autoLaunchPollIntervalMs={60000}
+        />,
+      );
+      expect(screen.queryByTestId('auto-launch-counter')).toBeNull();
+    });
+  });
 });

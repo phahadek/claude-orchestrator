@@ -28,6 +28,10 @@ interface Props {
   tasks?: TaskView[];
   incompleteReviewCount?: number;
   onAutoLaunchToggle?: (patch: AutoLaunchTogglePatch) => void;
+  autoLaunchRunningCount?: number;
+  autoLaunchCap?: number;
+  autoLaunchQueuedCount?: number;
+  autoLaunchPollIntervalMs?: number;
 }
 
 export function Header({
@@ -43,6 +47,10 @@ export function Header({
   tasks,
   incompleteReviewCount,
   onAutoLaunchToggle,
+  autoLaunchRunningCount,
+  autoLaunchCap,
+  autoLaunchQueuedCount,
+  autoLaunchPollIntervalMs,
 }: Props) {
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
   const boards = activeProject?.boards ?? [];
@@ -173,6 +181,22 @@ export function Header({
               {isOnThisMilestone ? 'ON' : 'OFF'}
             </span>
           </button>
+          {isOnThisMilestone &&
+            autoLaunchCap != null &&
+            autoLaunchRunningCount != null && (
+              <span
+                className={styles.autoLaunchCounter}
+                title={`${autoLaunchRunningCount} running, ${autoLaunchQueuedCount ?? 0} queued, cap ${autoLaunchCap}. Auto-launch checks every ${Math.round((autoLaunchPollIntervalMs ?? 60000) / 1000)}s.`}
+                data-testid="auto-launch-counter"
+              >
+                🤖 {autoLaunchRunningCount}/{autoLaunchCap}
+                {(autoLaunchQueuedCount ?? 0) > 0 && (
+                  <span className={styles.autoLaunchQueued}>
+                    +{autoLaunchQueuedCount} queued
+                  </span>
+                )}
+              </span>
+            )}
         </>
       )}
       {tasks && tasks.length > 0 && (

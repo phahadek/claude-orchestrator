@@ -147,6 +147,28 @@
   background: var(--bg-elevated, #313244);
 }
 
+.autoLaunchCounter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--accent-dim, #313a55);
+  border: 1px solid var(--accent, #89b4fa);
+  border-radius: 999px;
+  color: var(--accent, #89b4fa);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  padding: 4px 12px;
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+}
+
+.autoLaunchQueued {
+  color: var(--color-yellow, #f9e2af);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
 .incompleteBadge {
   display: inline-flex;
   align-items: center;

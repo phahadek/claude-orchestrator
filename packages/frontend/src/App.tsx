@@ -127,6 +127,9 @@ export default function App() {
 
   const [cardPreviewLines, setCardPreviewLines] = useState<number>(3);
   const [sessionMode, setSessionMode] = useState<string>('cli');
+  const [autoLaunchCap, setAutoLaunchCap] = useState<number>(1);
+  const [autoLaunchPollIntervalMs, setAutoLaunchPollIntervalMs] =
+    useState<number>(60000);
 
   const [detailWidthPct, setDetailWidthPct] = useState<number>(() => {
     const saved = localStorage.getItem('sessionDetailWidth');
@@ -206,6 +209,10 @@ export default function App() {
         if (lines > 0) setCardPreviewLines(lines);
         if (s.session_mode === 'api' || s.session_mode === 'cli')
           setSessionMode(s.session_mode);
+        const cap = Number(s.auto_launch_concurrency);
+        if (cap > 0) setAutoLaunchCap(cap);
+        const pollMs = Number(s.auto_launch_poll_interval_ms);
+        if (pollMs > 0) setAutoLaunchPollIntervalMs(pollMs);
       })
       .catch(() => {
         /* keep default */
@@ -705,6 +712,32 @@ export default function App() {
     [activeSessions],
   );
 
+  const autoLaunchRunningCount = useMemo(
+    () =>
+      sessions.filter(
+        (s) =>
+          !s.archived &&
+          s.project_id === activeProjectId &&
+          s.sessionType === 'standard' &&
+          (s.status === 'running' || s.status === 'needs_permission'),
+      ).length,
+    [sessions, activeProjectId],
+  );
+
+  // taskViews is already fetched scoped to activeProjectId + activeBoardId;
+  // both are listed in the dep array to make the milestone scope explicit.
+  const autoLaunchQueuedCount = useMemo(
+    () =>
+      taskViews.filter(
+        (t) =>
+          t.displayStatus === 'ready' &&
+          t.taskType === '💻 Code' &&
+          !t.blocked &&
+          !t.pauseReason,
+      ).length,
+    [taskViews, activeProjectId, activeBoardId],
+  );
+
   // Keyboard navigation: sorted active sessions (same order as SessionGrid)
   const kbSortedSessions = [...filteredSessions].sort((a, b) => {
     const statusOrder: Record<string, number> = {
@@ -822,6 +855,10 @@ export default function App() {
           tasks={taskViews}
           incompleteReviewCount={incompleteReviews.length}
           onAutoLaunchToggle={handleAutoLaunchToggle}
+          autoLaunchRunningCount={autoLaunchRunningCount}
+          autoLaunchCap={autoLaunchCap}
+          autoLaunchQueuedCount={autoLaunchQueuedCount}
+          autoLaunchPollIntervalMs={autoLaunchPollIntervalMs}
         />
       </ErrorBoundary>
       <div className={styles.mainArea}>
