@@ -50,6 +50,19 @@ the task at hand requires that context.
 | **Blame ignore (once per clone)**       | Run `git config blame.ignoreRevsFile .git-blame-ignore-revs` to hide mass-format commits from blame.         |
 | **Session Log / File Index updates**    | Never — the dashboard handles session tracking.                                                              |
 
+## Memory policy
+
+**Never write to memory.** This project does not use the per-Claude-Code memory system. All durable context must live in one of:
+
+- This `CLAUDE.md` (human + main-session rules — always loaded)
+- The Notion docs linked from `.claude/local-context.md` (Project Context, Task Writing Guidelines, Coding Guidelines, etc. — source of truth for cross-session rules)
+- The review-session `CLAUDE.md` template at `packages/backend/src/session/orchestrator-claudemd.ts` (rules that need to reach orchestrator-launched review sessions specifically)
+- The code itself (anything verifiable by reading the current source)
+
+**Why:** memory is per-Claude-Code-instance, but the actual work happens in many separate processes (orchestrator-launched coding sessions, review sessions, etc.) that cannot see this instance's memory. Writing rules to memory creates the false confidence that the rule is "saved" when in fact it's invisible to the agents who need it. Rules that need to apply across sessions belong in CLAUDE.md or Notion. Rules that need to reach review sessions specifically belong in the review-session CLAUDE.md template.
+
+**If asked to remember something:** save it to one of the four places above — never to memory. Ask the human where it should live if it's not obvious.
+
 ## PR Format
 
 - Title: `feat: <exact task name>` — no scope prefix, no milestone tag
