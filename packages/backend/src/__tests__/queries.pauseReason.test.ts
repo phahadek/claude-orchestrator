@@ -16,6 +16,7 @@ import {
   resetReviewIteration,
   setPauseReason,
 } from '../db/queries.js';
+import { deriveDisplayStatus } from '../tasks/TaskStatusEngine.js';
 
 const NOW = '2024-01-01T00:00:00Z';
 
@@ -146,5 +147,80 @@ describe('setPauseReason() round-trip', () => {
     insertPR({ pr_number: 30, notion_task_id: 'task-xyz' });
     setPauseReason(30, 'owner/repo', 'stuck_timeout');
     expect(getPausedPrReasonForTask('task-xyz')).toBe('stuck_timeout');
+  });
+
+  it('a review_failed pause set by the catch site flows through getPausedPrReasonForTask', () => {
+    insertPR({ pr_number: 31, notion_task_id: 'task-review-failed' });
+    setPauseReason(31, 'owner/repo', 'review_failed');
+    expect(getPausedPrReasonForTask('task-review-failed')).toBe('review_failed');
+  });
+});
+
+describe('TaskStatusEngine regression — review_failed resolves to needs_attention', () => {
+  it('deriveDisplayStatus returns needs_attention when pauseReason is review_failed', () => {
+    const status = deriveDisplayStatus({
+      notionStatus: '👀 In Review',
+      codeSessionStatus: 'done',
+      prState: 'open',
+      prDraft: false,
+      reviewVerdict: 'needs_changes',
+      reviewIterationCount: 1,
+      reviewIterationCap: 3,
+      pauseReason: 'review_failed',
+    });
+    expect(status).toBe('needs_attention');
+  });
+
+  it('deriveDisplayStatus returns needs_attention for review_failed outside In Review', () => {
+    const status = deriveDisplayStatus({
+      notionStatus: '💻 In Progress',
+      codeSessionStatus: 'running',
+      prState: null,
+      prDraft: false,
+      reviewVerdict: null,
+      reviewIterationCount: 0,
+      reviewIterationCap: 3,
+      pauseReason: 'review_failed',
+    });
+    expect(status).toBe('needs_attention');
+  });
+});
+
+describe('resetReviewIteration() — review_failed reset coverage', () => {
+  it('clears pause_reason=review_failed when called via the re-review pathway', () => {
+    insertPR({ pr_number: 40, pause_reason: 'review_failed' });
+    db.prepare(
+      'UPDATE pull_requests SET review_iteration = 2 WHERE pr_number = 40',
+    ).run();
+
+    resetReviewIteration(40, 'owner/repo');
+
+    const row = db
+      .prepare(
+        'SELECT review_iteration, pause_reason FROM pull_requests WHERE pr_number = 40',
+      )
+      .get() as { review_iteration: number; pause_reason: string | null };
+    expect(row.review_iteration).toBe(0);
+    expect(row.pause_reason).toBeNull();
+  });
+
+  it('after reset, a review_failed-paused PR is unblocked in AutoLauncher / Auto-merger queries', () => {
+    insertPR({
+      pr_number: 41,
+      notion_task_id: 'task-review-failed-2',
+      review_result: JSON.stringify({ verdict: 'approved' }),
+      pause_reason: 'review_failed',
+    });
+
+    // Pre-reset: blocked
+    expect(getApprovedOpenPRs()).toHaveLength(0);
+    expect(getPausedPrReasonForTask('task-review-failed-2')).toBe('review_failed');
+
+    // Reset (mirrors the re-review endpoint)
+    resetReviewIteration(41, 'owner/repo');
+
+    // Post-reset: unblocked
+    expect(getApprovedOpenPRs()).toHaveLength(1);
+    expect(getPausedPrReasonForTask('task-review-failed-2')).toBeNull();
   });
 });

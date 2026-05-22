@@ -17,6 +17,7 @@ vi.mock('../../hooks/useSessionStore', () => ({
     prRefreshTrigger: 0,
     lastPrReviewEvent: null,
     lastReviewEscalation: null,
+    lastReviewFailed: null,
     incompleteReviews: [],
     lastTaskUpdate: null,
     taskListRefreshTrigger: 0,

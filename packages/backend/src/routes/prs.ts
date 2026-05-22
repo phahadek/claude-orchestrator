@@ -123,6 +123,7 @@ export function createPrsRouter(
       reviewIteration: pr.review_iteration,
       mergeState: pr.merge_state ?? null,
       failingChecks: parseFailingChecks(pr.failing_checks),
+      pauseReason: pr.pause_reason ?? null,
     }));
     res.json(items);
   });

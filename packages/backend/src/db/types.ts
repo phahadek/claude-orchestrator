@@ -203,7 +203,8 @@ export type PauseReason =
   | 'stuck_timeout'
   | 'ci_failing'
   | 'auto_merge_failed'
-  | 'pr_closed';
+  | 'pr_closed'
+  | 'review_failed';
 
 export interface PullRequestRow {
   id: number;

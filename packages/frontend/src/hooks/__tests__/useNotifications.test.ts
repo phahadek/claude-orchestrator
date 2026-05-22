@@ -311,4 +311,98 @@ describe('useNotifications', () => {
 
     expect(NotificationSpy).not.toHaveBeenCalled();
   });
+
+  describe('review_failed notifications', () => {
+    type FailedEvt = {
+      prNumber: number;
+      repo: string;
+      message: string;
+      receivedAt: number;
+    } | null;
+
+    it('fires a notification with distinct copy when review_failed event arrives', () => {
+      const session = makeSession({ status: 'running' });
+      const initialProps: { s: SessionState[]; pr: null; rf: FailedEvt } = {
+        s: [session],
+        pr: null,
+        rf: null,
+      };
+      const { rerender } = renderHook(
+        ({ s, pr, rf }: { s: SessionState[]; pr: null; rf: FailedEvt }) =>
+          useNotifications(s, pr, rf),
+        { initialProps },
+      );
+
+      act(() => {
+        rerender({
+          s: [session],
+          pr: null,
+          rf: {
+            prNumber: 300,
+            repo: 'owner/repo',
+            message: 'Re-review for PR #300 failed: FOREIGN KEY constraint failed',
+            receivedAt: 1000,
+          },
+        });
+      });
+
+      expect(NotificationSpy).toHaveBeenCalledTimes(1);
+      expect(NotificationSpy).toHaveBeenCalledWith(
+        '❌ Review failed unexpectedly',
+        expect.objectContaining({ body: expect.stringContaining('PR #300') }),
+      );
+    });
+
+    it('notification copy is distinct from review_escalated (no "max iterations" copy)', () => {
+      const session = makeSession({ status: 'running' });
+      const { rerender } = renderHook(
+        ({ rf }: { rf: FailedEvt }) => useNotifications([session], null, rf),
+        { initialProps: { rf: null as FailedEvt } },
+      );
+
+      act(() => {
+        rerender({
+          rf: {
+            prNumber: 300,
+            repo: 'owner/repo',
+            message: 'Re-review for PR #300 failed: timeout',
+            receivedAt: 2000,
+          },
+        });
+      });
+
+      expect(NotificationSpy).toHaveBeenCalledWith(
+        '❌ Review failed unexpectedly',
+        expect.anything(),
+      );
+      // Escalation copy should NOT appear
+      expect(NotificationSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining('max iterations'),
+        expect.anything(),
+      );
+    });
+
+    it('does NOT re-fire when same receivedAt is passed again', () => {
+      const session = makeSession({ status: 'running' });
+      const failedEvt: NonNullable<FailedEvt> = {
+        prNumber: 300,
+        repo: 'owner/repo',
+        message: 'failed',
+        receivedAt: 3000,
+      };
+      const { rerender } = renderHook(
+        ({ rf }: { rf: FailedEvt }) => useNotifications([session], null, rf),
+        { initialProps: { rf: null as FailedEvt } },
+      );
+
+      act(() => {
+        rerender({ rf: failedEvt });
+      });
+      act(() => {
+        rerender({ rf: failedEvt }); // same object, same receivedAt
+      });
+
+      expect(NotificationSpy).toHaveBeenCalledTimes(1);
+    });
+  });
 });
