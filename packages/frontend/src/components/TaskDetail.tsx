@@ -171,8 +171,10 @@ export function TaskDetail({
     task.codeSession?.status === 'needs_permission';
 
   function handleKill() {
-    const activeSession = task.codeSession &&
-      (task.codeSession.status === 'running' || task.codeSession.status === 'needs_permission')
+    const activeSession =
+      task.codeSession &&
+      (task.codeSession.status === 'running' ||
+        task.codeSession.status === 'needs_permission')
         ? task.codeSession
         : null;
     if (!activeSession) return;

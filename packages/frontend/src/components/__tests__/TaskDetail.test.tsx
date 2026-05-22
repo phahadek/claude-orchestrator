@@ -520,7 +520,10 @@ describe('TaskDetail', () => {
   it('sends kill WS message with correct sessionId when confirmed', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     const send = vi.fn();
-    const codeSession = makeCodeSession({ status: 'running', sessionId: 'sess-kill' });
+    const codeSession = makeCodeSession({
+      status: 'running',
+      sessionId: 'sess-kill',
+    });
     render(
       <TaskDetail
         task={makeTask({ codeSession })}
@@ -539,7 +542,10 @@ describe('TaskDetail', () => {
   it('does not send kill WS message when confirm is cancelled', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(false);
     const send = vi.fn();
-    const codeSession = makeCodeSession({ status: 'running', sessionId: 'sess-kill' });
+    const codeSession = makeCodeSession({
+      status: 'running',
+      sessionId: 'sess-kill',
+    });
     render(
       <TaskDetail
         task={makeTask({ codeSession })}
