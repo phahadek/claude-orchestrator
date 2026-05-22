@@ -427,6 +427,137 @@ describe('TaskDetail', () => {
     vi.unstubAllGlobals();
   });
 
+  // ── Kill button ──
+
+  it('renders Kill button when codeSession is running', () => {
+    const codeSession = makeCodeSession({ status: 'running' });
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Kill')).toBeTruthy();
+  });
+
+  it('renders Kill button when codeSession is needs_permission', () => {
+    const codeSession = makeCodeSession({ status: 'needs_permission' });
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Kill')).toBeTruthy();
+  });
+
+  it('does not render Kill button when codeSession is done', () => {
+    const codeSession = makeCodeSession({ status: 'done' });
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText('Kill')).toBeNull();
+  });
+
+  it('does not render Kill button when codeSession is error', () => {
+    const codeSession = makeCodeSession({ status: 'error' });
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText('Kill')).toBeNull();
+  });
+
+  it('does not render Kill button when codeSession is killed', () => {
+    const codeSession = makeCodeSession({ status: 'killed' });
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText('Kill')).toBeNull();
+  });
+
+  it('does not render Kill button when there is no codeSession', () => {
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession: null })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText('Kill')).toBeNull();
+  });
+
+  it('shows confirm dialog with exact copy when Kill is clicked', () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const codeSession = makeCodeSession({ status: 'running' });
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText('Kill'));
+    expect(confirmSpy).toHaveBeenCalledWith(
+      'Kill this session? It will have 15 seconds to wrap up.',
+    );
+    confirmSpy.mockRestore();
+  });
+
+  it('sends kill WS message with correct sessionId when confirmed', () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const send = vi.fn();
+    const codeSession = makeCodeSession({
+      status: 'running',
+      sessionId: 'sess-kill',
+    });
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={send}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText('Kill'));
+    expect(send).toHaveBeenCalledWith({
+      type: 'kill',
+      sessionId: 'sess-kill',
+    } as ClientMessage);
+    vi.restoreAllMocks();
+  });
+
+  it('does not send kill WS message when confirm is cancelled', () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const send = vi.fn();
+    const codeSession = makeCodeSession({
+      status: 'running',
+      sessionId: 'sess-kill',
+    });
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={send}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText('Kill'));
+    expect(send).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+  });
+
   // ── Token aggregation display ──
 
   it('displays aggregated token count badge when totalTokens > 0', () => {

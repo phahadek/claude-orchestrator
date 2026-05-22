@@ -612,6 +612,23 @@
   line-height: 1.4;
 }
 
+/* ── Kill button ─────────────────────────────────────────────────── */
+.killButton {
+  background: rgba(243, 139, 168, 0.15);
+  border: 1px solid rgba(243, 139, 168, 0.4);
+  border-radius: var(--radius-sm);
+  color: var(--ctp-red, #f38ba8);
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.killButton:hover {
+  background: rgba(243, 139, 168, 0.25);
+}
+
 /* ── Empty state ─────────────────────────────────────────────────── */
 .emptyState {
   padding: 32px 16px;
