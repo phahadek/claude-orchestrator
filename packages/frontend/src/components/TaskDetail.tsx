@@ -166,20 +166,14 @@ export function TaskDetail({
     ? (sessions.find((s) => s.sessionId === task.review!.sessionId) ?? null)
     : null;
 
+  const liveStatus = codeSession?.status ?? task.codeSession?.status;
   const isCodeActive =
-    task.codeSession?.status === 'running' ||
-    task.codeSession?.status === 'needs_permission';
+    liveStatus === 'running' || liveStatus === 'needs_permission';
 
   function handleKill() {
-    const activeSession =
-      task.codeSession &&
-      (task.codeSession.status === 'running' ||
-        task.codeSession.status === 'needs_permission')
-        ? task.codeSession
-        : null;
-    if (!activeSession) return;
+    if (!task.codeSession || !isCodeActive) return;
     if (confirm('Kill this session? It will have 15 seconds to wrap up.')) {
-      send({ type: 'kill', sessionId: activeSession.sessionId });
+      send({ type: 'kill', sessionId: task.codeSession.sessionId });
     }
   }
 
