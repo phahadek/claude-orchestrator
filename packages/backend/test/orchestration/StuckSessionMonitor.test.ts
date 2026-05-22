@@ -285,4 +285,272 @@ describe('StuckSessionMonitor', () => {
     });
     expect(sm.kill).not.toHaveBeenCalled();
   });
+
+  it('pr_created cancels notify, pause, and hard-stop timers', () => {
+    const sm = makeMockSessionManager();
+    const broadcast = vi.fn();
+    new StuckSessionMonitor(sm, broadcast);
+
+    fireMessage(sm, sessionStarted());
+    vi.advanceTimersByTime(30_000);
+    fireMessage(sm, {
+      type: 'pr_created',
+      sessionId: SESSION_ID,
+      prUrl: `https://github.com/${REPO}/pull/${PR_NUMBER}`,
+    });
+
+    // Advance past both notify (60s) and pause (120s) thresholds — nothing should fire.
+    vi.advanceTimersByTime(200_000);
+
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'stuck_session_notified' }),
+    );
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'stuck_session_paused' }),
+    );
+    expect(sm.send).not.toHaveBeenCalled();
+  });
+
+  it('review_verdict needs_changes after pr_created re-arms notify and pause from full duration', () => {
+    const sm = makeMockSessionManager();
+    const broadcast = vi.fn();
+    new StuckSessionMonitor(sm, broadcast);
+
+    fireMessage(sm, sessionStarted());
+    insertPR(SESSION_ID, PR_NUMBER, REPO);
+
+    vi.advanceTimersByTime(30_000);
+    fireMessage(sm, {
+      type: 'pr_created',
+      sessionId: SESSION_ID,
+      prUrl: `https://github.com/${REPO}/pull/${PR_NUMBER}`,
+    });
+
+    // Sit paused for a while — no broadcasts
+    vi.advanceTimersByTime(300_000);
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'stuck_session_notified' }),
+    );
+
+    // needs_changes verdict re-arms from full
+    fireMessage(sm, {
+      type: 'review_verdict',
+      prNumber: PR_NUMBER,
+      repo: REPO,
+      verdict: 'needs_changes',
+      summary: 'x',
+      iteration: 1,
+    });
+
+    vi.advanceTimersByTime(59_000);
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'stuck_session_notified' }),
+    );
+
+    vi.advanceTimersByTime(2_000); // total +61s since verdict
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'stuck_session_notified' }),
+    );
+  });
+
+  it.each([['approved'], ['incomplete'], ['error']])(
+    'review_verdict %s after pr_created does NOT re-arm timers',
+    (verdict) => {
+      const sm = makeMockSessionManager();
+      const broadcast = vi.fn();
+      new StuckSessionMonitor(sm, broadcast);
+
+      fireMessage(sm, sessionStarted());
+      insertPR(SESSION_ID, PR_NUMBER, REPO);
+
+      vi.advanceTimersByTime(30_000);
+      fireMessage(sm, {
+        type: 'pr_created',
+        sessionId: SESSION_ID,
+        prUrl: `https://github.com/${REPO}/pull/${PR_NUMBER}`,
+      });
+
+      fireMessage(sm, {
+        type: 'review_verdict',
+        prNumber: PR_NUMBER,
+        repo: REPO,
+        verdict,
+        summary: 'x',
+        iteration: 1,
+      });
+
+      vi.advanceTimersByTime(200_000);
+      expect(broadcast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'stuck_session_notified' }),
+      );
+      expect(broadcast).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'stuck_session_paused' }),
+      );
+    },
+  );
+
+  it('push_detected after a needs_changes restart pauses timers again', () => {
+    const sm = makeMockSessionManager();
+    const broadcast = vi.fn();
+    new StuckSessionMonitor(sm, broadcast);
+
+    fireMessage(sm, sessionStarted());
+    insertPR(SESSION_ID, PR_NUMBER, REPO);
+
+    // PR opens, timers paused
+    fireMessage(sm, {
+      type: 'pr_created',
+      sessionId: SESSION_ID,
+      prUrl: `https://github.com/${REPO}/pull/${PR_NUMBER}`,
+    });
+
+    // needs_changes re-arms
+    fireMessage(sm, {
+      type: 'review_verdict',
+      prNumber: PR_NUMBER,
+      repo: REPO,
+      verdict: 'needs_changes',
+      summary: 'x',
+      iteration: 1,
+    });
+
+    // Session pushes a fix — timers should pause again
+    fireMessage(sm, {
+      type: 'push_detected',
+      sessionId: SESSION_ID,
+      prNumber: PR_NUMBER,
+      repo: REPO,
+    });
+
+    vi.advanceTimersByTime(200_000);
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'stuck_session_notified' }),
+    );
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'stuck_session_paused' }),
+    );
+  });
+
+  it('rate-limit mid-countdown saves remainder; resumed fires at the original deadline', () => {
+    const sm = makeMockSessionManager();
+    const broadcast = vi.fn();
+    new StuckSessionMonitor(sm, broadcast);
+
+    fireMessage(sm, sessionStarted());
+
+    // 55s in — 5s remaining to notify, 65s to pause
+    vi.advanceTimersByTime(55_000);
+    fireMessage(sm, {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: JSON.stringify({
+        type: 'rate_limit_event',
+        rate_limit_info: { status: 'rate_limited' },
+      }),
+    });
+
+    // Sit through a long rate-limit window — no broadcasts
+    vi.advanceTimersByTime(30 * 60_000);
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'stuck_session_notified' }),
+    );
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'stuck_session_paused' }),
+    );
+
+    // Resume
+    fireMessage(sm, {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: JSON.stringify({
+        type: 'rate_limit_event',
+        rate_limit_info: { status: 'resumed' },
+      }),
+    });
+
+    // 4s past resume — still under remainder
+    vi.advanceTimersByTime(4_000);
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'stuck_session_notified' }),
+    );
+
+    // 5s past resume — notify fires at the original deadline (not a fresh 60s)
+    vi.advanceTimersByTime(2_000);
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'stuck_session_notified' }),
+    );
+  });
+
+  it('rate-limit while already PR-paused is a no-op; subsequent resumed is also a no-op', () => {
+    const sm = makeMockSessionManager();
+    const broadcast = vi.fn();
+    new StuckSessionMonitor(sm, broadcast);
+
+    fireMessage(sm, sessionStarted());
+    fireMessage(sm, {
+      type: 'pr_created',
+      sessionId: SESSION_ID,
+      prUrl: `https://github.com/${REPO}/pull/${PR_NUMBER}`,
+    });
+
+    // Rate-limited while paused — no remainders to save
+    fireMessage(sm, {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: JSON.stringify({
+        type: 'rate_limit_event',
+        rate_limit_info: { status: 'rate_limited' },
+      }),
+    });
+
+    // Resumed — no remainders to restore
+    fireMessage(sm, {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: JSON.stringify({
+        type: 'rate_limit_event',
+        rate_limit_info: { status: 'resumed' },
+      }),
+    });
+
+    vi.advanceTimersByTime(200_000);
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'stuck_session_notified' }),
+    );
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'stuck_session_paused' }),
+    );
+  });
+
+  it('ignores malformed system event payloads', () => {
+    const sm = makeMockSessionManager();
+    const broadcast = vi.fn();
+    new StuckSessionMonitor(sm, broadcast);
+
+    fireMessage(sm, sessionStarted());
+
+    // Malformed JSON should not throw or affect timers
+    fireMessage(sm, {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: 'not-json',
+    });
+    fireMessage(sm, {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: JSON.stringify({ type: 'something_else' }),
+    });
+
+    // Notify still fires on its original schedule
+    vi.advanceTimersByTime(60_000);
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'stuck_session_notified' }),
+    );
+  });
 });
