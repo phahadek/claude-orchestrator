@@ -7,6 +7,7 @@ vi.mock('../db/queries.js', () => ({
   updatePRState: vi.fn(),
   updateMergeState: vi.fn(),
   setPauseReason: vi.fn(),
+  getPRByNumber: vi.fn().mockReturnValue(null),
 }));
 
 import { PRMergeWatcher } from './PRMergeWatcher';
@@ -15,6 +16,7 @@ import {
   updatePRState,
   updateMergeState,
   setPauseReason,
+  getPRByNumber,
 } from '../db/queries';
 import type { AutoMerger } from './AutoMerger';
 import type { GitHubClient } from './GitHubClient';
@@ -899,5 +901,86 @@ describe('PRMergeWatcher ci_failing auto-recovery', () => {
 
     expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
     expect(vi.mocked(autoMerger.attempt)).not.toHaveBeenCalled();
+  });
+});
+
+// ── checkMergeabilityNow terminal-state guard ────────────────────────────────
+
+describe('PRMergeWatcher.checkMergeabilityNow terminal-state guard', () => {
+  it('does not call categorizeMergeability when PR state is merged', async () => {
+    const pr = makePRRow({ state: 'merged' });
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+    const github = makeMockGitHub();
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(github, sessions, makeMockNotion(), () => {});
+    await watcher.checkMergeabilityNow(42, 'owner/repo');
+
+    expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
+    expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
+  });
+
+  it('does not call categorizeMergeability when PR state is closed', async () => {
+    const pr = makePRRow({ state: 'closed' });
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+    const github = makeMockGitHub();
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(github, sessions, makeMockNotion(), () => {});
+    await watcher.checkMergeabilityNow(42, 'owner/repo');
+
+    expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
+    expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
+  });
+
+  it('suppresses broadcast and sendOrResume when PR merges during categorizeMergeability round-trip (race)', async () => {
+    const openPR = makePRRow({ state: 'open', merge_state: 'clean', session_id: 'coding-session' });
+    const mergedPR = makePRRow({ state: 'merged', merge_state: 'clean' });
+    // First call (checkMergeabilityNow fetch) → open; second call (post-async re-check) → merged
+    vi.mocked(getPRByNumber)
+      .mockReturnValueOnce(openPR)
+      .mockReturnValueOnce(mergedPR);
+    const github = makeMockGitHub();
+    vi.mocked(
+      (github as unknown as { categorizeMergeability: (n: number, r: string) => Promise<unknown> }).categorizeMergeability,
+    ).mockResolvedValue({
+      category: 'ci_failed',
+      mergeState: 'ci_failed',
+      rawMergeableState: 'unstable',
+      failingChecks: [{ name: 'lint', conclusion: 'failure' }],
+    });
+    const sessions = makeMockSessions();
+    const messages: ServerMessage[] = [];
+
+    const watcher = new PRMergeWatcher(github, sessions, makeMockNotion(), (msg) => messages.push(msg));
+    await watcher.checkMergeabilityNow(42, 'owner/repo');
+
+    expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
+    expect(vi.mocked(updateMergeState)).not.toHaveBeenCalled();
+    expect(messages.filter((m) => m.type === 'pr_mergeability_changed')).toHaveLength(0);
+  });
+
+  it('calls updateMergeState and sendOrResume for open PR with ci_failed (normal path regression)', async () => {
+    const pr = makePRRow({ state: 'open', merge_state: 'clean', session_id: 'coding-session' });
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+    const github = makeMockGitHub();
+    vi.mocked(
+      (github as unknown as { categorizeMergeability: (n: number, r: string) => Promise<unknown> }).categorizeMergeability,
+    ).mockResolvedValue({
+      category: 'ci_failed',
+      mergeState: 'ci_failed',
+      rawMergeableState: 'unstable',
+      failingChecks: [{ name: 'lint', conclusion: 'failure' }],
+    });
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(github, sessions, makeMockNotion(), () => {});
+    await watcher.checkMergeabilityNow(42, 'owner/repo');
+
+    expect(vi.mocked(updateMergeState)).toHaveBeenCalled();
+    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledWith(
+      'coding-session',
+      expect.stringMatching(/CI checks are failing/),
+    );
   });
 });

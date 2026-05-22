@@ -139,6 +139,8 @@ export class PRMergeWatcher {
   }
 
   private async runMergeabilityCheck(pr: PullRequestRow): Promise<void> {
+    if (pr.state === 'merged' || pr.state === 'closed') return;
+
     let category: MergeabilityCategory;
     try {
       category = await this.github.categorizeMergeability(
@@ -152,6 +154,12 @@ export class PRMergeWatcher {
       );
       return;
     }
+
+    // Re-read DB after the network round-trip. If the PR merged or closed while
+    // we were waiting on GitHub, suppress all downstream side effects — the
+    // session was endSession()'d on merge and we must not sendOrResume it back to life.
+    const fresh = getPRByNumber(pr.pr_number, pr.repo);
+    if (fresh?.state === 'merged' || fresh?.state === 'closed') return;
 
     // Skip if GitHub hasn't computed mergeability yet
     if (category.category === 'unknown' && category.rawMergeableState === null)
