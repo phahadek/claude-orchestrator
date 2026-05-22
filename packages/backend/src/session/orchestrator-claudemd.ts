@@ -9,6 +9,8 @@ export interface OrchestratorClaudeMdParams {
   prGate?: {
     typeCheck: string;
     build: string;
+    lint?: string;
+    formatCheck?: string;
   };
   /**
    * Bash rules (Rule 5+). Each item is the full rule text — the first line
@@ -71,9 +73,11 @@ export function buildOrchestratorClaudeMd(
     localContext,
   } = params;
 
-  const resolvedPrGate = prGate ?? {
-    typeCheck: 'npx tsc --noEmit',
-    build: 'npx vite build',
+  const resolvedPrGate = {
+    typeCheck: prGate?.typeCheck ?? 'npx tsc --noEmit',
+    build: prGate?.build ?? 'npx vite build',
+    lint: prGate?.lint ?? 'npm run lint',
+    formatCheck: prGate?.formatCheck ?? 'npm run format:check',
   };
   const resolvedBashRules = bashRules ?? [
     'Use `npx` instead of bare tool names.\n`tsc` → `npx tsc`. Bare commands may not be on PATH.',
@@ -196,7 +200,9 @@ Run in order — all must pass before opening the PR:
 3. Restore CLAUDE.md: \`git stash pop\`
 4. \`${resolvedPrGate.typeCheck}\` — must pass.
 5. \`${resolvedPrGate.build}\` — must pass without errors.
-6. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.
+6. \`${resolvedPrGate.lint}\` — must pass with no errors.
+7. \`${resolvedPrGate.formatCheck}\` — must pass with no errors.
+8. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.
 
 ---
 
