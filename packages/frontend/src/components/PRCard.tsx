@@ -109,6 +109,10 @@ export function PRCard({
   const canMerge =
     pr.state === 'open' && verdict === 'approved' && !mergeBlocked;
   const failingChecks = pr.failingChecks ?? [];
+  const showCiBadge =
+    !isFinished &&
+    (pr.mergeState === 'ci_failed' || pr.pauseReason === 'ci_failing');
+  const ciChecksUrl = `https://github.com/${pr.repo}/pull/${pr.prNumber}/checks`;
   const sessionAlive = pr.sessionId !== null;
   // Single context-aware review action:
   // - finished → no button
@@ -216,25 +220,28 @@ export function PRCard({
         <span className={`${styles.verdictBadge} ${verdictClass}`}>
           {verdictLabel}
         </span>
-        {hasConflicts && (
-          <span
-            className={styles.conflictBadge}
-            title={`Merge conflicts on ${pr.headBranch} — rebase onto ${pr.baseBranch} and resolve.`}
-          >
-            ⚠ Merge Conflicts
-          </span>
-        )}
-        {hasCiFailures && (
-          <span
-            className={styles.conflictBadge}
+        {showCiBadge && (
+          <a
+            href={ciChecksUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={styles.ciBadge}
             title={
               failingChecks.length > 0
                 ? `Failing checks: ${failingChecks.join(', ')}`
                 : 'CI checks are failing'
             }
           >
-            ⚠ CI failing
+            ❌ CI failing
             {failingChecks.length > 0 ? `: ${failingChecks.join(', ')}` : ''}
+          </a>
+        )}
+        {hasConflicts && (
+          <span
+            className={styles.conflictBadge}
+            title={`Merge conflicts on ${pr.headBranch} — rebase onto ${pr.baseBranch} and resolve.`}
+          >
+            ⚠ Merge Conflicts
           </span>
         )}
         {isUnstable && (

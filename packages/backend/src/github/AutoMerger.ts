@@ -118,7 +118,11 @@ export class AutoMerger {
           await this.attemptMerge(row);
           return;
         case 'ci_failed':
-          await this.pauseWithReason(row, 'ci_failing');
+          await this.pauseWithReason(
+            row,
+            'ci_failing',
+            poll.mergeability.failingChecks.map((c) => c.name),
+          );
           return;
         case 'conflict':
           // Existing merge-conflict handling owns this case (see PRMergeWatcher
@@ -184,7 +188,11 @@ export class AutoMerger {
           return;
         }
         if (category?.category === 'ci_failed') {
-          await this.pauseWithReason(pr, 'ci_failing');
+          await this.pauseWithReason(
+            pr,
+            'ci_failing',
+            category.failingChecks.map((c) => c.name),
+          );
           return;
         }
       }
@@ -198,12 +206,22 @@ export class AutoMerger {
   private async pauseWithReason(
     pr: PullRequestRow,
     reason: 'ci_failing' | 'auto_merge_failed' | 'pr_closed',
+    failingCheckNames?: string[],
   ): Promise<void> {
     setPauseReason(pr.pr_number, pr.repo, reason);
     if (reason === 'auto_merge_failed') {
       // No native mergeability category to broadcast — just emit a message so
       // the dashboard surfaces the failure.
       updateMergeState(pr.pr_number, pr.repo, 0, 'unknown', null);
+    } else if (reason === 'ci_failing') {
+      const names = failingCheckNames ?? [];
+      updateMergeState(
+        pr.pr_number,
+        pr.repo,
+        0,
+        'ci_failed',
+        names.length > 0 ? names : null,
+      );
     }
     this.broadcast({
       type: 'pr_mergeability_changed',
@@ -211,6 +229,12 @@ export class AutoMerger {
       repo: pr.repo,
       mergeable: false,
       mergeState: reason === 'ci_failing' ? 'ci_failed' : null,
+      failingChecks:
+        reason === 'ci_failing' &&
+        failingCheckNames &&
+        failingCheckNames.length > 0
+          ? failingCheckNames
+          : undefined,
     });
     if (pr.notion_task_id) {
       emitTaskUpdated(pr.notion_task_id);

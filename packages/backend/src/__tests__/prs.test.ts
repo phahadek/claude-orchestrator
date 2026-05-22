@@ -247,6 +247,24 @@ describe('GET /api/prs', () => {
     expect(res.body[0].notionTaskTitle).toBe('My Task Title');
   });
 
+  it('includes pauseReason in the response', async () => {
+    const prWithPause: PullRequestRow = {
+      ...mockPRRow,
+      pause_reason: 'ci_failing',
+    };
+    vi.mocked(queries.getPRs).mockReturnValue([prWithPause]);
+    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body[0].pauseReason).toBe('ci_failing');
+  });
+
+  it('returns pauseReason as null when not set', async () => {
+    vi.mocked(queries.getPRs).mockReturnValue([mockPRRow]);
+    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body[0].pauseReason).toBeNull();
+  });
+
   it('returns PRs with all states (open, merged, closed), not just open', async () => {
     const mergedRow: PullRequestRow = {
       ...mockPRRow,

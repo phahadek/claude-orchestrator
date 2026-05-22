@@ -421,4 +421,104 @@ describe('PRCard', () => {
       expect(screen.queryByText(/⚠ Review failed/)).toBeNull();
     });
   });
+
+  // ── CI badge ─────────────────────────────────────────────────────────────────
+
+  describe('CI badge', () => {
+    it('renders CI badge when mergeState is ci_failed', () => {
+      render(
+        <PRCard pr={makePR({ mergeState: 'ci_failed' })} {...defaultProps} />,
+      );
+      expect(screen.getByText(/CI failing/)).toBeDefined();
+    });
+
+    it('renders CI badge when pause_reason is ci_failing even if mergeState is null', () => {
+      render(
+        <PRCard
+          pr={makePR({ mergeState: null, pauseReason: 'ci_failing' })}
+          {...defaultProps}
+        />,
+      );
+      expect(screen.getByText(/CI failing/)).toBeDefined();
+    });
+
+    it('does NOT render CI badge when mergeState is clean and pauseReason is null', () => {
+      render(
+        <PRCard
+          pr={makePR({ mergeState: 'clean', pauseReason: null })}
+          {...defaultProps}
+        />,
+      );
+      expect(screen.queryByText(/CI failing/)).toBeNull();
+    });
+
+    it('tooltip lists check names when failingChecks is populated', () => {
+      render(
+        <PRCard
+          pr={makePR({
+            mergeState: 'ci_failed',
+            failingChecks: ['lint', 'unit-tests'],
+          })}
+          {...defaultProps}
+        />,
+      );
+      const badge = screen.getByText(/CI failing/);
+      expect(badge.getAttribute('title')).toBe(
+        'Failing checks: lint, unit-tests',
+      );
+    });
+
+    it('tooltip falls back to generic message when failingChecks is null', () => {
+      render(
+        <PRCard
+          pr={makePR({ mergeState: 'ci_failed', failingChecks: null })}
+          {...defaultProps}
+        />,
+      );
+      const badge = screen.getByText(/CI failing/);
+      expect(badge.getAttribute('title')).toBe('CI checks are failing');
+    });
+
+    it('tooltip falls back to generic message when failingChecks is empty', () => {
+      render(
+        <PRCard
+          pr={makePR({ mergeState: 'ci_failed', failingChecks: [] })}
+          {...defaultProps}
+        />,
+      );
+      const badge = screen.getByText(/CI failing/);
+      expect(badge.getAttribute('title')).toBe('CI checks are failing');
+    });
+
+    it('badge is an anchor with target=_blank pointing to the checks URL', () => {
+      render(
+        <PRCard
+          pr={makePR({
+            mergeState: 'ci_failed',
+            repo: 'owner/repo',
+            prNumber: 42,
+          })}
+          {...defaultProps}
+        />,
+      );
+      const badge = screen.getByText(/CI failing/).closest('a');
+      expect(badge).toBeDefined();
+      expect(badge?.getAttribute('target')).toBe('_blank');
+      expect(badge?.getAttribute('href')).toBe(
+        'https://github.com/owner/repo/pull/42/checks',
+      );
+    });
+
+    it('CI badge renders but conflictBadge does NOT render for the same ci_failed state', () => {
+      render(
+        <PRCard
+          pr={makePR({ mergeState: 'ci_failed', failingChecks: ['lint'] })}
+          {...defaultProps}
+        />,
+      );
+      expect(screen.getByText(/CI failing/)).toBeDefined();
+      expect(screen.queryByText('⚠ Merge Conflicts')).toBeNull();
+      expect(screen.queryByText(/CI unstable/)).toBeNull();
+    });
+  });
 });
