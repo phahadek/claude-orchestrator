@@ -979,6 +979,163 @@ describe('AgentSession', () => {
     await runPromise;
   });
 
+  // ── AC: handleCleanExit() does NOT upsert or emit pr_opened for merged PR ──
+  it('does NOT call upsertPullRequest or emit pr_opened when existingPrState is merged', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'merged-upsert-session',
+        event_type: 'text',
+        payload: JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'text',
+                text: 'PR: https://github.com/owner/repo/pull/20',
+              },
+            ],
+          },
+        }),
+        timestamp: Date.now(),
+        message_id: null,
+      },
+    ]);
+    vi.mocked(getPRByNumber).mockReturnValue({
+      pr_number: 20,
+      repo: 'owner/repo',
+      state: 'merged',
+    } as never);
+
+    const session = new AgentSession(
+      'merged-upsert-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const prOpenedEvents: unknown[] = [];
+    session.on('pr_opened', (job: unknown) => prOpenedEvents.push(job));
+
+    const runPromise = session.run();
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    const { upsertPullRequest } = await import('../db/queries');
+    expect(upsertPullRequest).not.toHaveBeenCalled();
+    expect(prOpenedEvents).toHaveLength(0);
+  });
+
+  it('does NOT call upsertPullRequest or emit pr_opened when existingPrState is closed', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'closed-upsert-session',
+        event_type: 'text',
+        payload: JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'text',
+                text: 'PR: https://github.com/owner/repo/pull/21',
+              },
+            ],
+          },
+        }),
+        timestamp: Date.now(),
+        message_id: null,
+      },
+    ]);
+    vi.mocked(getPRByNumber).mockReturnValue({
+      pr_number: 21,
+      repo: 'owner/repo',
+      state: 'closed',
+    } as never);
+
+    const session = new AgentSession(
+      'closed-upsert-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const prOpenedEvents: unknown[] = [];
+    session.on('pr_opened', (job: unknown) => prOpenedEvents.push(job));
+
+    const runPromise = session.run();
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    const { upsertPullRequest } = await import('../db/queries');
+    expect(upsertPullRequest).not.toHaveBeenCalled();
+    expect(prOpenedEvents).toHaveLength(0);
+  });
+
+  it('DOES call upsertPullRequest and emit pr_opened when existingPrState is open', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'open-upsert-session',
+        event_type: 'text',
+        payload: JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'text',
+                text: 'PR: https://github.com/owner/repo/pull/22',
+              },
+            ],
+          },
+        }),
+        timestamp: Date.now(),
+        message_id: null,
+      },
+    ]);
+    vi.mocked(getPRByNumber).mockReturnValue({
+      pr_number: 22,
+      repo: 'owner/repo',
+      state: 'open',
+    } as never);
+
+    const session = new AgentSession(
+      'open-upsert-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const prOpenedEvents: unknown[] = [];
+    session.on('pr_opened', (job: unknown) => prOpenedEvents.push(job));
+
+    const runPromise = session.run();
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    const { upsertPullRequest } = await import('../db/queries');
+    expect(upsertPullRequest).toHaveBeenCalled();
+    expect(prOpenedEvents).toHaveLength(1);
+  });
+
   // ── AC: pr_opened emitted in handleCleanExit() after upsertPullRequest() ──
   it('emits pr_opened event in handleCleanExit() when a PR URL is found at exit', async () => {
     const notion = fakeNotionClient();
