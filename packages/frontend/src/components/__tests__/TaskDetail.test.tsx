@@ -558,6 +558,62 @@ describe('TaskDetail', () => {
     vi.restoreAllMocks();
   });
 
+  // ── Kill button: live session status ──
+
+  it('shows Kill button when task.codeSession.status is starting but live session is running', () => {
+    const codeSession = makeCodeSession({
+      sessionId: 'sess-1',
+      status: 'starting',
+    });
+    const sessions: SessionState[] = [
+      makeSessionState({ sessionId: 'sess-1', status: 'running' }),
+    ];
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={sessions}
+      />,
+    );
+    expect(screen.getByText('Kill')).toBeTruthy();
+  });
+
+  it('does not show Kill button when live session status is done (regression check)', () => {
+    const codeSession = makeCodeSession({
+      sessionId: 'sess-1',
+      status: 'running',
+    });
+    const sessions: SessionState[] = [
+      makeSessionState({ sessionId: 'sess-1', status: 'done' }),
+    ];
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={sessions}
+      />,
+    );
+    expect(screen.queryByText('Kill')).toBeNull();
+  });
+
+  it('shows Kill button via static task status when no live session entry exists', () => {
+    const codeSession = makeCodeSession({
+      sessionId: 'sess-1',
+      status: 'running',
+    });
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={[]}
+      />,
+    );
+    expect(screen.getByText('Kill')).toBeTruthy();
+  });
+
   // ── Token aggregation display ──
 
   it('displays aggregated token count badge when totalTokens > 0', () => {
