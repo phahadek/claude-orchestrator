@@ -108,8 +108,12 @@ function makeMockGitHub(): GitHubClient {
     listOpenPRs: vi.fn().mockResolvedValue([]),
     fetchPR: vi.fn().mockResolvedValue({ headSha: HEAD_SHA }),
     fetchDiff: vi.fn().mockResolvedValue({ diff: 'diff --git a/foo b/foo' }),
-    getMergeability: vi.fn().mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
-    getMergeabilityWithRetry: vi.fn().mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
+    getMergeability: vi
+      .fn()
+      .mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
+    getMergeabilityWithRetry: vi
+      .fn()
+      .mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
     markPRReady: vi.fn().mockResolvedValue(undefined),
     mergePR: vi.fn(),
     getPRState: vi.fn(),
@@ -160,7 +164,10 @@ function wirePushDetectedHandler(
       void (async () => {
         let headSha = prRow.head_sha;
         try {
-          const freshPR = await githubClient.fetchPR(prRow.repo, prRow.pr_number);
+          const freshPR = await githubClient.fetchPR(
+            prRow.repo,
+            prRow.pr_number,
+          );
           headSha = freshPR.headSha;
           if (headSha !== prRow.head_sha) {
             vi.mocked(queries.setHeadSha)(prRow.pr_number, prRow.repo, headSha);
@@ -180,7 +187,16 @@ function wirePushDetectedHandler(
           return;
         }
 
-        if (!shouldAutoReview({ reviewIteration: prRow.review_iteration, headSha, lastReviewedSha: prRow.last_reviewed_sha }, MAX_ITER)) {
+        if (
+          !shouldAutoReview(
+            {
+              reviewIteration: prRow.review_iteration,
+              headSha,
+              lastReviewedSha: prRow.last_reviewed_sha,
+            },
+            MAX_ITER,
+          )
+        ) {
           pendingReReviews.delete(codingSessionId);
           return;
         }
@@ -192,13 +208,23 @@ function wirePushDetectedHandler(
             result = await Promise.race([
               prReviewService.reReviewPR(prRow.pr_number, prRow.repo),
               new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error('Re-review timed out')), PUSH_REVIEW_TIMEOUT_MS),
+                setTimeout(
+                  () => reject(new Error('Re-review timed out')),
+                  PUSH_REVIEW_TIMEOUT_MS,
+                ),
               ),
             ]);
           } catch (e) {
             const summary = e instanceof Error ? e.message : String(e);
-            console.error(`[server] re-review failed for PR #${prRow.pr_number}:`, e);
-            vi.mocked(queries.setPauseReason)(prRow.pr_number, prRow.repo, 'review_failed');
+            console.error(
+              `[server] re-review failed for PR #${prRow.pr_number}:`,
+              e,
+            );
+            vi.mocked(queries.setPauseReason)(
+              prRow.pr_number,
+              prRow.repo,
+              'review_failed',
+            );
             const failMessage = `Re-review for PR #${prRow.pr_number} failed: ${summary}`;
             sessionManager.emit('message', {
               type: 'review_failed',
@@ -222,7 +248,11 @@ function wirePushDetectedHandler(
             return;
           }
 
-          vi.mocked(queries.setLastReviewedSha)(prRow.pr_number, prRow.repo, headSha);
+          vi.mocked(queries.setLastReviewedSha)(
+            prRow.pr_number,
+            prRow.repo,
+            headSha,
+          );
           sessionManager.emit('message', {
             type: 'review_verdict',
             prNumber: prRow.pr_number,
@@ -256,7 +286,9 @@ describe('reReviewPR throw — enriched catch site', () => {
       >,
     );
 
-    vi.spyOn(reviewService, 'reReviewPR').mockRejectedValue(new Error(errorMsg));
+    vi.spyOn(reviewService, 'reReviewPR').mockRejectedValue(
+      new Error(errorMsg),
+    );
 
     wirePushDetectedHandler(sessionManager, reviewService, github);
 
@@ -264,7 +296,9 @@ describe('reReviewPR throw — enriched catch site', () => {
     vi.mocked(queries.getPRBySessionId).mockReturnValue(prRow);
 
     const broadcastedMessages: unknown[] = [];
-    sessionManager.on('message', (msg: unknown) => broadcastedMessages.push(msg));
+    sessionManager.on('message', (msg: unknown) =>
+      broadcastedMessages.push(msg),
+    );
 
     sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
 
@@ -284,10 +318,21 @@ describe('reReviewPR throw — enriched catch site', () => {
   });
 
   it('broadcasts a review_failed WS message with prNumber, repo, and message', async () => {
-    const { broadcastedMessages } = await setupAndTrigger('FOREIGN KEY constraint failed');
+    const { broadcastedMessages } = await setupAndTrigger(
+      'FOREIGN KEY constraint failed',
+    );
     const failedMsg = broadcastedMessages.find(
-      (m): m is { type: string; prNumber: number; repo: string; message: string } =>
-        typeof m === 'object' && m !== null && (m as { type: string }).type === 'review_failed',
+      (
+        m,
+      ): m is {
+        type: string;
+        prNumber: number;
+        repo: string;
+        message: string;
+      } =>
+        typeof m === 'object' &&
+        m !== null &&
+        (m as { type: string }).type === 'review_failed',
     );
     expect(failedMsg).toBeDefined();
     expect(failedMsg!.prNumber).toBe(PR_NUMBER);
@@ -305,10 +350,14 @@ describe('reReviewPR throw — enriched catch site', () => {
   });
 
   it('still emits review_verdict with error verdict', async () => {
-    const { broadcastedMessages } = await setupAndTrigger('FOREIGN KEY constraint failed');
+    const { broadcastedMessages } = await setupAndTrigger(
+      'FOREIGN KEY constraint failed',
+    );
     const verdictMsg = broadcastedMessages.find(
       (m): m is { type: string; verdict: string } =>
-        typeof m === 'object' && m !== null && (m as { type: string }).type === 'review_verdict',
+        typeof m === 'object' &&
+        m !== null &&
+        (m as { type: string }).type === 'review_verdict',
     );
     expect(verdictMsg).toBeDefined();
     expect(verdictMsg!.verdict).toBe('error');
@@ -341,15 +390,24 @@ describe('reReviewPR throw — enriched catch site', () => {
     vi.mocked(queries.getPRBySessionId).mockReturnValue(prRow);
 
     const broadcastedMessages: unknown[] = [];
-    sessionManager.on('message', (msg: unknown) => broadcastedMessages.push(msg));
+    sessionManager.on('message', (msg: unknown) =>
+      broadcastedMessages.push(msg),
+    );
 
     sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     const failedMsg = broadcastedMessages.find(
-      (m) => typeof m === 'object' && m !== null && (m as { type: string }).type === 'review_failed',
+      (m) =>
+        typeof m === 'object' &&
+        m !== null &&
+        (m as { type: string }).type === 'review_failed',
     );
     expect(failedMsg).toBeUndefined();
-    expect(vi.mocked(queries.setPauseReason)).not.toHaveBeenCalledWith(PR_NUMBER, REPO, 'review_failed');
+    expect(vi.mocked(queries.setPauseReason)).not.toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'review_failed',
+    );
   });
 });

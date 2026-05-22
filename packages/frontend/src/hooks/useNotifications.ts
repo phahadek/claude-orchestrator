@@ -148,7 +148,9 @@ export function useNotifications(
 
   useEffect(() => {
     if (!reviewFailedEvent) return;
-    if (prevReviewFailedRef.current?.receivedAt === reviewFailedEvent.receivedAt)
+    if (
+      prevReviewFailedRef.current?.receivedAt === reviewFailedEvent.receivedAt
+    )
       return;
     prevReviewFailedRef.current = reviewFailedEvent;
 

@@ -398,7 +398,10 @@ describe('PRCard', () => {
   describe('pause reason badge', () => {
     it('shows "Review failed" badge when pauseReason is review_failed', () => {
       render(
-        <PRCard pr={makePR({ pauseReason: 'review_failed' })} {...defaultProps} />,
+        <PRCard
+          pr={makePR({ pauseReason: 'review_failed' })}
+          {...defaultProps}
+        />,
       );
       expect(screen.getByText(/⚠ Review failed/)).toBeDefined();
     });
@@ -410,7 +413,10 @@ describe('PRCard', () => {
 
     it('does NOT show "Review failed" badge when pauseReason is a different reason', () => {
       render(
-        <PRCard pr={makePR({ pauseReason: 'stuck_timeout' })} {...defaultProps} />,
+        <PRCard
+          pr={makePR({ pauseReason: 'stuck_timeout' })}
+          {...defaultProps}
+        />,
       );
       expect(screen.queryByText(/⚠ Review failed/)).toBeNull();
     });

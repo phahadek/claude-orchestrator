@@ -340,7 +340,8 @@ describe('useNotifications', () => {
           rf: {
             prNumber: 300,
             repo: 'owner/repo',
-            message: 'Re-review for PR #300 failed: FOREIGN KEY constraint failed',
+            message:
+              'Re-review for PR #300 failed: FOREIGN KEY constraint failed',
             receivedAt: 1000,
           },
         });

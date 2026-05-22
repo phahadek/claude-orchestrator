@@ -152,7 +152,9 @@ describe('setPauseReason() round-trip', () => {
   it('a review_failed pause set by the catch site flows through getPausedPrReasonForTask', () => {
     insertPR({ pr_number: 31, notion_task_id: 'task-review-failed' });
     setPauseReason(31, 'owner/repo', 'review_failed');
-    expect(getPausedPrReasonForTask('task-review-failed')).toBe('review_failed');
+    expect(getPausedPrReasonForTask('task-review-failed')).toBe(
+      'review_failed',
+    );
   });
 });
 
@@ -214,7 +216,9 @@ describe('resetReviewIteration() — review_failed reset coverage', () => {
 
     // Pre-reset: blocked
     expect(getApprovedOpenPRs()).toHaveLength(0);
-    expect(getPausedPrReasonForTask('task-review-failed-2')).toBe('review_failed');
+    expect(getPausedPrReasonForTask('task-review-failed-2')).toBe(
+      'review_failed',
+    );
 
     // Reset (mirrors the re-review endpoint)
     resetReviewIteration(41, 'owner/repo');
