@@ -12,22 +12,25 @@ describe('SessionManager.start() — In Progress status', () => {
 
   it('routes updateStatus through getTaskBackend(projectId) for In Progress', () => {
     // Must call getTaskBackend(projectId).updateStatus(notionTaskId, In Progress)
+    // Allow Prettier-style line break between the object and the chained method call.
     expect(source).toMatch(
-      /getTaskBackend\(projectId\)\.updateStatus\s*\(\s*notionTaskId\s*,\s*'🔄 In Progress'\s*\)/,
+      /getTaskBackend\(projectId\)\s+\.updateStatus\s*\(\s*notionTaskId\s*,\s*'🔄 In Progress'\s*\)/,
     );
   });
 
   it('In Progress call is fire-and-forget with .catch() error handler', () => {
     expect(source).toMatch(
-      /getTaskBackend\(projectId\)\.updateStatus\s*\(\s*notionTaskId\s*,\s*'🔄 In Progress'\s*\)[\s\S]*?\.catch\b/,
+      /getTaskBackend\(projectId\)\s+\.updateStatus\s*\(\s*notionTaskId\s*,\s*'🔄 In Progress'\s*\)[\s\S]*?\.catch\b/,
     );
   });
 
   it('In Progress call is gated on sessionType === standard', () => {
     expect(source).toMatch(/sessionType\s*===\s*'standard'/);
     const gateIdx = source.indexOf("sessionType === 'standard'");
+    // Use the unique .updateStatus line since Prettier splits the chain across lines
+    // and getTaskBackend(projectId) appears earlier in the file in other contexts.
     const inProgressIdx = source.indexOf(
-      "getTaskBackend(projectId).updateStatus(notionTaskId, '🔄 In Progress')",
+      ".updateStatus(notionTaskId, '🔄 In Progress')",
     );
     expect(inProgressIdx).toBeGreaterThan(gateIdx);
   });
@@ -57,9 +60,10 @@ describe('SessionManager.start() — code-only session limit', () => {
   });
 
   it('counts only non-review sessions against the cap', () => {
-    // Must filter sessions by sessionType !== review before counting
+    // Must filter sessions by sessionType !== review before counting.
+    // Allow optional trailing comma (Prettier multiline style).
     expect(source).toMatch(
-      /\.filter\s*\(\s*\(s\)\s*=>\s*s\.sessionType\s*!==\s*'review'\s*\)/,
+      /\.filter\s*\(\s*\(s\)\s*=>\s*s\.sessionType\s*!==\s*'review'\s*,?\s*\)/,
     );
   });
 });
@@ -74,8 +78,9 @@ describe('SessionManager.start() structural check', () => {
       'utf-8',
     );
 
-    // Must contain a .catch() handler (directly or via .then().catch()) to guard against unhandled rejections
-    expect(source).toMatch(/session\.run\(\)/);
+    // Must contain a .catch() handler (directly or via .then().catch()) to guard against unhandled rejections.
+    // Prettier splits `session.run()` across lines: `session\n  .run()`.
+    expect(source).toMatch(/session\s+\.run\(\)/);
     expect(source).toMatch(/\.catch\s*\(\s*\(err\)/);
 
     // Must NOT contain "await session.run()"
@@ -344,8 +349,9 @@ describe('SessionManager.wireSession()', () => {
   });
 
   it('wireSession() calls session.run() fire-and-forget', () => {
-    // run() is called and has a .catch() handler (via .then().catch() chain)
-    expect(source).toMatch(/session\.run\(\)/);
+    // run() is called and has a .catch() handler (via .then().catch() chain).
+    // Prettier splits `session.run()` across lines: `session\n  .run()`.
+    expect(source).toMatch(/session\s+\.run\(\)/);
     expect(source).toMatch(/\.catch\s*\(\s*\(err\)/);
     expect(source).not.toMatch(/await\s+session\.run\(\)/);
   });
@@ -369,7 +375,8 @@ describe('SessionManager.resumeSession()', () => {
   });
 
   it('broadcasts session_status: running after re-attaching', () => {
-    expect(source).toMatch(/session_status.*running|running.*session_status/);
+    // `session_status` and `running` appear in adjacent lines of the emit block.
+    expect(source).toMatch(/session_status.*running|running.*session_status/s);
     expect(source).toMatch(
       /row\.session_id.*status.*running|status.*running.*row\.session_id/s,
     );
@@ -410,8 +417,9 @@ describe('SessionManager.resumeSession() — nudge, timeout, mid-turn detection'
   // The continuation message JSON shape is now produced by CliSessionRunner,
   // not AgentSession (runner abstraction added an indirection).
   it('the continuation message is written to stdin as { type: "user", message: { role: "user", content } }', () => {
+    // Allow optional trailing comma on inner object (Prettier multiline style).
     expect(cliRunnerSource).toMatch(
-      /JSON\.stringify\s*\(\s*\{\s*type:\s*'user'\s*,\s*message:\s*\{\s*role:\s*'user'\s*,\s*content:[^}]+\}\s*\}\s*\)/,
+      /JSON\.stringify\s*\(\s*\{\s*type:\s*'user'\s*,\s*message:\s*\{\s*role:\s*'user'\s*,\s*content:[^}]+\},?\s*\}\s*\)/,
     );
     // Must be terminated with \n so the CLI readline interface receives a complete line
     expect(cliRunnerSource).toMatch(/JSON\.stringify[^)]+\)\s*\+\s*'\\n'/);
