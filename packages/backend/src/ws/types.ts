@@ -211,7 +211,8 @@ export type ServerMessage =
       taskTitle: string;
       sessionId: string;
     }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  | { type: 'pr_pause_cleared'; prNumber: number; repo: string };
 
 // ── Client → Server ──────────────────────────────────────────────
 export type ClientMessage =

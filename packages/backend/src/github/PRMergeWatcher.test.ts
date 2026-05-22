@@ -6,10 +6,12 @@ vi.mock('../db/queries.js', () => ({
   getAllOpenPRs: vi.fn().mockReturnValue([]),
   updatePRState: vi.fn(),
   updateMergeState: vi.fn(),
+  setPauseReason: vi.fn(),
 }));
 
 import { PRMergeWatcher } from './PRMergeWatcher';
-import { getAllOpenPRs, updatePRState } from '../db/queries';
+import { getAllOpenPRs, updatePRState, updateMergeState, setPauseReason } from '../db/queries';
+import type { AutoMerger } from './AutoMerger';
 import type { GitHubClient } from './GitHubClient';
 import type { SessionManager } from '../session/SessionManager';
 import type { NotionClient } from '../notion/NotionClient';
@@ -49,6 +51,12 @@ function makeMockNotion(): NotionClient {
   return {
     updateStatus: vi.fn().mockResolvedValue(undefined),
   } as unknown as NotionClient;
+}
+
+function makeMockAutoMerger(): AutoMerger {
+  return {
+    attempt: vi.fn(),
+  } as unknown as AutoMerger;
 }
 
 function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
@@ -712,5 +720,165 @@ describe('PRMergeWatcher first-poll-after-boot suppression', () => {
     await watcher.poll();
 
     expect(messages.filter((m) => m.type === 'pr_merged')).toHaveLength(1);
+  });
+});
+
+// ── ci_failing auto-recovery ──────────────────────────────────────────────────
+
+describe('PRMergeWatcher ci_failing auto-recovery', () => {
+  function mockCategorize(
+    github: GitHubClient,
+    value: {
+      category: 'clean' | 'conflict' | 'ci_failed' | 'blocked' | 'unknown';
+      mergeState: string;
+      rawMergeableState: string | null;
+      failingChecks: Array<{ name: string; conclusion: string }>;
+    },
+  ): void {
+    vi.mocked(
+      (
+        github as unknown as {
+          categorizeMergeability: (n: number, r: string) => Promise<unknown>;
+        }
+      ).categorizeMergeability,
+    ).mockResolvedValue(value);
+  }
+
+  it('clears pause_reason, calls AutoMerger.attempt, and broadcasts when ci_failing PR becomes clean', async () => {
+    const pr = makePRRow({
+      pause_reason: 'ci_failing',
+      merge_state: 'ci_failed',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorize(github, {
+      category: 'clean',
+      mergeState: 'clean',
+      rawMergeableState: 'clean',
+      failingChecks: [],
+    });
+    const autoMerger = makeMockAutoMerger();
+    const messages: ServerMessage[] = [];
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      (msg) => messages.push(msg),
+    );
+    watcher.setAutoMerger(autoMerger);
+    await watcher.poll();
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(42, 'owner/repo', null);
+    expect(vi.mocked(autoMerger.attempt)).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(messages.some((m) => m.type === 'pr_pause_cleared')).toBe(true);
+  });
+
+  it('clears pause and retries even when merge_state was already clean in DB (PR #311 scenario)', async () => {
+    const pr = makePRRow({
+      pause_reason: 'ci_failing',
+      merge_state: 'clean',
+      failing_checks: null,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorize(github, {
+      category: 'clean',
+      mergeState: 'clean',
+      rawMergeableState: 'clean',
+      failingChecks: [],
+    });
+    const autoMerger = makeMockAutoMerger();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setAutoMerger(autoMerger);
+    await watcher.poll();
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(42, 'owner/repo', null);
+    expect(vi.mocked(autoMerger.attempt)).toHaveBeenCalledWith(42, 'owner/repo');
+  });
+
+  it('does NOT clear pause when merge_state is still ci_failed', async () => {
+    const pr = makePRRow({
+      pause_reason: 'ci_failing',
+      merge_state: 'ci_failed',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorize(github, {
+      category: 'ci_failed',
+      mergeState: 'ci_failed',
+      rawMergeableState: 'unstable',
+      failingChecks: [{ name: 'lint', conclusion: 'failure' }],
+    });
+    const autoMerger = makeMockAutoMerger();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setAutoMerger(autoMerger);
+    await watcher.poll();
+
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
+    expect(vi.mocked(autoMerger.attempt)).not.toHaveBeenCalled();
+  });
+
+  it('does NOT clear pause when pause_reason is stuck_timeout even if merge_state is clean', async () => {
+    const pr = makePRRow({
+      pause_reason: 'stuck_timeout',
+      merge_state: 'ci_failed',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorize(github, {
+      category: 'clean',
+      mergeState: 'clean',
+      rawMergeableState: 'clean',
+      failingChecks: [],
+    });
+    const autoMerger = makeMockAutoMerger();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setAutoMerger(autoMerger);
+    await watcher.poll();
+
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
+    expect(vi.mocked(autoMerger.attempt)).not.toHaveBeenCalled();
+  });
+
+  it('does NOT clear pause when pause_reason is ci_failing and merge_state is unstable', async () => {
+    const pr = makePRRow({
+      pause_reason: 'ci_failing',
+      merge_state: 'ci_failed',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorize(github, {
+      category: 'unknown',
+      mergeState: 'unstable',
+      rawMergeableState: 'unstable',
+      failingChecks: [],
+    });
+    const autoMerger = makeMockAutoMerger();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setAutoMerger(autoMerger);
+    await watcher.poll();
+
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
+    expect(vi.mocked(autoMerger.attempt)).not.toHaveBeenCalled();
   });
 });
