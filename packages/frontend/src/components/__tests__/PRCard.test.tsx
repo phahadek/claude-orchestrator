@@ -427,10 +427,7 @@ describe('PRCard', () => {
   describe('CI badge', () => {
     it('renders CI badge when mergeState is ci_failed', () => {
       render(
-        <PRCard
-          pr={makePR({ mergeState: 'ci_failed' })}
-          {...defaultProps}
-        />,
+        <PRCard pr={makePR({ mergeState: 'ci_failed' })} {...defaultProps} />,
       );
       expect(screen.getByText(/CI failing/)).toBeDefined();
     });
@@ -458,12 +455,17 @@ describe('PRCard', () => {
     it('tooltip lists check names when failingChecks is populated', () => {
       render(
         <PRCard
-          pr={makePR({ mergeState: 'ci_failed', failingChecks: ['lint', 'unit-tests'] })}
+          pr={makePR({
+            mergeState: 'ci_failed',
+            failingChecks: ['lint', 'unit-tests'],
+          })}
           {...defaultProps}
         />,
       );
       const badge = screen.getByText(/CI failing/);
-      expect(badge.getAttribute('title')).toBe('Failing checks: lint, unit-tests');
+      expect(badge.getAttribute('title')).toBe(
+        'Failing checks: lint, unit-tests',
+      );
     });
 
     it('tooltip falls back to generic message when failingChecks is null', () => {
@@ -491,7 +493,11 @@ describe('PRCard', () => {
     it('badge is an anchor with target=_blank pointing to the checks URL', () => {
       render(
         <PRCard
-          pr={makePR({ mergeState: 'ci_failed', repo: 'owner/repo', prNumber: 42 })}
+          pr={makePR({
+            mergeState: 'ci_failed',
+            repo: 'owner/repo',
+            prNumber: 42,
+          })}
           {...defaultProps}
         />,
       );

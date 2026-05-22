@@ -230,7 +230,9 @@ export class AutoMerger {
       mergeable: false,
       mergeState: reason === 'ci_failing' ? 'ci_failed' : null,
       failingChecks:
-        reason === 'ci_failing' && failingCheckNames && failingCheckNames.length > 0
+        reason === 'ci_failing' &&
+        failingCheckNames &&
+        failingCheckNames.length > 0
           ? failingCheckNames
           : undefined,
     });
