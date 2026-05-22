@@ -212,7 +212,10 @@ describe('getMergeReadyPRs', () => {
 
   it('excludes PRs with non-approved verdict', () => {
     insertPR(10, 'task-aaa', {
-      review_result: JSON.stringify({ verdict: 'changes_requested', summary: '' }),
+      review_result: JSON.stringify({
+        verdict: 'changes_requested',
+        summary: '',
+      }),
     });
     expect(getMergeReadyPRs(projectId, milestoneId)).toHaveLength(0);
   });
@@ -244,7 +247,9 @@ describe('getMergeReadyPRs', () => {
   it('matches notion_task_id with or without hyphens', () => {
     cleanDb();
     insertMilestone(milestoneId, projectId, sourceId);
-    insertBoardCache(`board:${sourceId}`, ['aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee']);
+    insertBoardCache(`board:${sourceId}`, [
+      'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    ]);
     insertPR(10, 'aaaaaaaabbbbccccddddeeeeeeeeeeee');
     expect(getMergeReadyPRs(projectId, milestoneId)).toHaveLength(1);
   });

@@ -1101,9 +1101,10 @@ export function getMergeReadyPRs(
 ): PullRequestRow[] {
   // Resolve milestone source_id to build the board cache key.
   const milestone = db
-    .prepare<{ id: string; project_id: string }>(
-      `SELECT source_id FROM milestones WHERE id = @id AND project_id = @project_id`,
-    )
+    .prepare<{
+      id: string;
+      project_id: string;
+    }>(`SELECT source_id FROM milestones WHERE id = @id AND project_id = @project_id`)
     .get({ id: milestoneId, project_id: projectId }) as
     | { source_id: string | null }
     | undefined;
@@ -1114,9 +1115,9 @@ export function getMergeReadyPRs(
   const cacheKey = `board:${boardKey}`;
 
   const boardCache = db
-    .prepare<{ notion_task_id: string }>(
-      `SELECT raw_json FROM task_cache WHERE notion_task_id = @notion_task_id`,
-    )
+    .prepare<{
+      notion_task_id: string;
+    }>(`SELECT raw_json FROM task_cache WHERE notion_task_id = @notion_task_id`)
     .get({ notion_task_id: cacheKey }) as { raw_json: string } | undefined;
 
   if (!boardCache) return [];

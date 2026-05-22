@@ -5,7 +5,8 @@ import supertest from 'supertest';
 vi.mock('../projects/ProjectService.js', () => ({
   ProjectService: {
     getById: vi.fn((id: string) => {
-      if (id === 'proj-1') return { id: 'proj-1', name: 'Test', autoMergeEnabled: false };
+      if (id === 'proj-1')
+        return { id: 'proj-1', name: 'Test', autoMergeEnabled: false };
       return undefined;
     }),
     list: vi.fn(() => []),

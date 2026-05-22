@@ -409,7 +409,12 @@ export function TaskList({
 
   const handleMergeReady = useCallback(() => {
     if (!activeProjectId || !boardId) return;
-    if (!window.confirm(`Merge ${mergeReadyCount} ready PR${mergeReadyCount === 1 ? '' : 's'}?`)) return;
+    if (
+      !window.confirm(
+        `Merge ${mergeReadyCount} ready PR${mergeReadyCount === 1 ? '' : 's'}?`,
+      )
+    )
+      return;
     void projectsApi.mergeReady(activeProjectId, boardId);
   }, [activeProjectId, boardId, mergeReadyCount]);
 

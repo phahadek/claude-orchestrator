@@ -1471,9 +1471,7 @@ describe('TaskList', () => {
 
   describe('Merge Ready button', () => {
     it('is hidden when no tasks have eligible PRs', async () => {
-      mockFetch([
-        makeTask({ taskId: 't1', displayStatus: 'in_review' }),
-      ]);
+      mockFetch([makeTask({ taskId: 't1', displayStatus: 'in_review' })]);
       render(
         <TaskList
           activeProjectId="proj-1"
@@ -1510,7 +1508,10 @@ describe('TaskList', () => {
 
     it('updates count as eligible PRs change', async () => {
       const task1 = makeEligibleTask('t1');
-      const task2 = { ...makeEligibleTask('t2'), pr: { ...makeEligibleTask('t2').pr!, prNumber: 11 } };
+      const task2 = {
+        ...makeEligibleTask('t2'),
+        pr: { ...makeEligibleTask('t2').pr!, prNumber: 11 },
+      };
       mockFetch([task1, task2]);
       render(
         <TaskList
@@ -1552,8 +1553,16 @@ describe('TaskList', () => {
     it('calls the merge-ready API when confirm is accepted', async () => {
       vi.spyOn(window, 'confirm').mockReturnValue(true);
       (fetch as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => [makeEligibleTask('t1')] })
-        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ attempted: [10] }) });
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => [makeEligibleTask('t1')],
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({ attempted: [10] }),
+        });
       render(
         <TaskList
           activeProjectId="proj-1"
@@ -1571,7 +1580,9 @@ describe('TaskList', () => {
       await waitFor(() => {
         const calls = (fetch as ReturnType<typeof vi.fn>).mock.calls;
         const mergeCall = calls.find(
-          (c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).includes('merge-ready'),
+          (c: unknown[]) =>
+            typeof c[0] === 'string' &&
+            (c[0] as string).includes('merge-ready'),
         );
         expect(mergeCall).toBeDefined();
         expect((mergeCall![1] as RequestInit).method).toBe('POST');
@@ -1596,7 +1607,9 @@ describe('TaskList', () => {
       });
       const callsBefore = (fetch as ReturnType<typeof vi.fn>).mock.calls.length;
       fireEvent.click(screen.getByTestId('merge-ready-btn'));
-      expect((fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsBefore);
+      expect((fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+        callsBefore,
+      );
     });
 
     it('does not count paused PRs as eligible', async () => {
