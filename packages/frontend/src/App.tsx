@@ -701,12 +701,14 @@ export default function App() {
         (s) =>
           !s.archived &&
           s.project_id === activeProjectId &&
-          s.sessionType !== 'review' &&
+          s.sessionType === 'standard' &&
           (s.status === 'running' || s.status === 'needs_permission'),
       ).length,
     [sessions, activeProjectId],
   );
 
+  // taskViews is already fetched scoped to activeProjectId + activeBoardId;
+  // both are listed in the dep array to make the milestone scope explicit.
   const autoLaunchQueuedCount = useMemo(
     () =>
       taskViews.filter(
@@ -716,7 +718,7 @@ export default function App() {
           !t.blocked &&
           !t.pauseReason,
       ).length,
-    [taskViews],
+    [taskViews, activeProjectId, activeBoardId],
   );
 
   // Keyboard navigation: sorted active sessions (same order as SessionGrid)
