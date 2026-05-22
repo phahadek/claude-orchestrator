@@ -190,4 +190,54 @@ describe('upsertPullRequest + getPRByNumber', () => {
     expect(row!.notion_task_id).toBe('task-xyz');
     expect(row!.session_id).toBe('sess-1');
   });
+
+  // ── Terminal-state protection (Change 2) ──────────────────────────────────
+
+  it('preserves merged state when upserted with state=open', () => {
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: 'https://github.com/owner/repo/pull/20',
+      pr_number: 20,
+      state: 'merged',
+    });
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: 'https://github.com/owner/repo/pull/20',
+      pr_number: 20,
+      state: 'open',
+    });
+    expect(getPRByNumber(20, 'owner/repo')!.state).toBe('merged');
+  });
+
+  it('preserves closed state when upserted with state=open', () => {
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: 'https://github.com/owner/repo/pull/21',
+      pr_number: 21,
+      state: 'closed',
+    });
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: 'https://github.com/owner/repo/pull/21',
+      pr_number: 21,
+      state: 'open',
+    });
+    expect(getPRByNumber(21, 'owner/repo')!.state).toBe('closed');
+  });
+
+  it('allows forward transition from open to merged', () => {
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: 'https://github.com/owner/repo/pull/22',
+      pr_number: 22,
+      state: 'open',
+    });
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: 'https://github.com/owner/repo/pull/22',
+      pr_number: 22,
+      state: 'merged',
+    });
+    expect(getPRByNumber(22, 'owner/repo')!.state).toBe('merged');
+  });
 });

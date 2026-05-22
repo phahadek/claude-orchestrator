@@ -746,34 +746,36 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               );
             }
           }
-          upsertPullRequest({
-            pr_number: prNumber,
-            pr_url: prUrl,
-            notion_task_id: this.taskId || null,
-            session_id: this.sessionId,
-            repo,
-            title: null,
-            body: null,
-            head_branch: null,
-            base_branch: null,
-            state: 'open',
-            draft: 0,
-            review_result: null,
-            review_at: null,
-            created_at: now,
-            updated_at: now,
-            synced_at: now,
-            node_id: null,
-            head_sha: headSha,
-          });
-          if (!this.prDetectedLive) {
-            this.emit('pr_opened', {
-              prNumber,
+          if (existingPrState !== 'merged' && existingPrState !== 'closed') {
+            upsertPullRequest({
+              pr_number: prNumber,
+              pr_url: prUrl,
+              notion_task_id: this.taskId || null,
+              session_id: this.sessionId,
               repo,
-              taskId: this.taskId,
-              taskUrl: this.taskUrl,
-              contextUrl: this.projectContextUrl,
+              title: null,
+              body: null,
+              head_branch: null,
+              base_branch: null,
+              state: 'open',
+              draft: 0,
+              review_result: null,
+              review_at: null,
+              created_at: now,
+              updated_at: now,
+              synced_at: now,
+              node_id: null,
+              head_sha: headSha,
             });
+            if (!this.prDetectedLive) {
+              this.emit('pr_opened', {
+                prNumber,
+                repo,
+                taskId: this.taskId,
+                taskUrl: this.taskUrl,
+                contextUrl: this.projectContextUrl,
+              });
+            }
           }
         }
       }

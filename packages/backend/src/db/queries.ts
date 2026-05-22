@@ -675,7 +675,7 @@ export function upsertPullRequest(
        @mergeable, @merge_state, @merge_state_checked_at)
     ON CONFLICT(pr_url) DO UPDATE SET
       synced_at              = excluded.synced_at,
-      state                  = excluded.state,
+      state                  = CASE WHEN state IN ('merged', 'closed') THEN state ELSE excluded.state END,
       draft                  = excluded.draft,
       title                  = COALESCE(excluded.title, title),
       body                   = COALESCE(excluded.body, body),
