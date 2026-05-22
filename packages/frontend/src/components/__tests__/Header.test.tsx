@@ -44,7 +44,9 @@ describe('Header', () => {
   });
 
   describe('auto-launch toggle', () => {
-    function makeProject(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
+    function makeProject(
+      overrides: Partial<ProjectConfig> = {},
+    ): ProjectConfig {
       return {
         id: 'proj1',
         name: 'Project 1',
