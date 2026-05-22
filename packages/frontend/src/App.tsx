@@ -274,6 +274,36 @@ export default function App() {
     [send],
   );
 
+  const handleAutoLaunchToggle = useCallback(
+    (patch: {
+      autoLaunchEnabled: boolean;
+      autoLaunchMilestoneId?: string | null;
+    }) => {
+      const projectId = activeProjectIdRef.current;
+      if (!projectId) return;
+      void (async () => {
+        try {
+          const res = await fetch(
+            `/api/projects/${encodeURIComponent(projectId)}`,
+            {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(patch),
+            },
+          );
+          if (!res.ok) return;
+          const refreshed = await fetch('/api/config');
+          if (!refreshed.ok) return;
+          const loaded = (await refreshed.json()) as ProjectConfig[];
+          setProjects(loaded);
+        } catch {
+          /* non-critical — next refresh will reconcile */
+        }
+      })();
+    },
+    [],
+  );
+
   // Fetch TaskView list whenever tasks are ready, project/board changes, or a review session starts
   useEffect(() => {
     if (!activeProjectId) return;
@@ -774,6 +804,7 @@ export default function App() {
           totalCost={totalCost}
           tasks={taskViews}
           incompleteReviewCount={incompleteReviews.length}
+          onAutoLaunchToggle={handleAutoLaunchToggle}
         />
       </ErrorBoundary>
       <div className={styles.mainArea}>
