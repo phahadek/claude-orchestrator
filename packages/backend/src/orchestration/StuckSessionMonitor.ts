@@ -228,10 +228,7 @@ export class StuckSessionMonitor {
     if (state.pauseRemainingMs !== null) {
       const remaining = state.pauseRemainingMs;
       state.pauseDeadline = now + remaining;
-      state.pauseTimer = setTimeout(
-        () => this.firePause(sessionId),
-        remaining,
-      );
+      state.pauseTimer = setTimeout(() => this.firePause(sessionId), remaining);
       state.pauseTimer.unref?.();
       state.pauseRemainingMs = null;
     }
