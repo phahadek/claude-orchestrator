@@ -123,7 +123,10 @@ export const RESUME_NUDGE_MESSAGE =
 
 export class SessionManager extends EventEmitter {
   private sessions = new Map<string, AgentSession>();
-  private pendingStarts = new Map<string, { sessionType: 'standard' | 'review' }>();
+  private pendingStarts = new Map<
+    string,
+    { sessionType: 'standard' | 'review' }
+  >();
 
   /** Last known DisplayStatus per notionTaskId — used to skip no-op broadcasts. */
   private _lastDisplayStatus = new Map<string, DisplayStatus>();

@@ -476,7 +476,8 @@ describe('AutoLauncher', () => {
     });
 
     await launcher.pollOnce();
-    const startMock = (sm as unknown as { start: ReturnType<typeof vi.fn> }).start;
+    const startMock = (sm as unknown as { start: ReturnType<typeof vi.fn> })
+      .start;
     expect(startMock).toHaveBeenCalledTimes(3);
 
     // Second poll — cap is already full, no new launches
@@ -495,8 +496,12 @@ describe('AutoLauncher', () => {
       return `session-${liveCount}`;
     });
     (sm as unknown as Record<string, unknown>).start = startMock;
-    (sm as unknown as Record<string, unknown>).getLiveCodeSessionCount = vi.fn(() => liveCount);
-    (sm as unknown as Record<string, unknown>).hasLiveSessionForTask = vi.fn(() => false);
+    (sm as unknown as Record<string, unknown>).getLiveCodeSessionCount = vi.fn(
+      () => liveCount,
+    );
+    (sm as unknown as Record<string, unknown>).hasLiveSessionForTask = vi.fn(
+      () => false,
+    );
 
     const backend = makeMockBackend([
       makeResolved(makeTask({ id: 'first' })),

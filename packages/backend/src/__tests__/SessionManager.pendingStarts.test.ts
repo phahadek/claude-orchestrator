@@ -107,19 +107,29 @@ vi.mock('../session/ApiSessionRunner', () => ({
 
 // Controllable AgentSession mock: default succeeds, can be overridden per-test.
 vi.mock('../session/AgentSession', () => {
-  const AgentSession = vi.fn().mockImplementation(
-    (_sid: string, _url: string, _ctx: string, _override: unknown,
-     _wt: string, _tid: string, _resume: string, _prompt: string,
-     sessionType: string) => ({
-      sessionType: sessionType ?? 'standard',
-      taskId: null,
-      prUrl: null,
-      hasEnded: true,
-      on: vi.fn(),
-      // never resolves — keeps wireSession from triggering cleanup
-      run: vi.fn().mockReturnValue(new Promise(() => {})),
-    }),
-  );
+  const AgentSession = vi
+    .fn()
+    .mockImplementation(
+      (
+        _sid: string,
+        _url: string,
+        _ctx: string,
+        _override: unknown,
+        _wt: string,
+        _tid: string,
+        _resume: string,
+        _prompt: string,
+        sessionType: string,
+      ) => ({
+        sessionType: sessionType ?? 'standard',
+        taskId: null,
+        prUrl: null,
+        hasEnded: true,
+        on: vi.fn(),
+        // never resolves — keeps wireSession from triggering cleanup
+        run: vi.fn().mockReturnValue(new Promise(() => {})),
+      }),
+    );
   return {
     AgentSession,
     parseNotionPageId: vi.fn().mockReturnValue('notion-task-id-abc'),
@@ -129,16 +139,25 @@ vi.mock('../session/AgentSession', () => {
 import { SessionManager } from '../session/SessionManager';
 import { AgentSession } from '../session/AgentSession';
 
-const TASK_URL = 'https://www.notion.so/Test-Task-abc123def456789012345678901234';
+const TASK_URL =
+  'https://www.notion.so/Test-Task-abc123def456789012345678901234';
 const CTX_URL = 'https://www.notion.so/Context-abc123';
 
 describe('SessionManager.getLiveCodeSessionCount() — behavioral pendingStarts tests', () => {
   beforeEach(() => {
     // Reset AgentSession mock to the default (succeeding) implementation
     vi.mocked(AgentSession).mockImplementation(
-      (_sid: string, _url: string, _ctx: string, _override: unknown,
-       _wt: string, _tid: string, _resume: string, _prompt: string,
-       sessionType: string) => ({
+      (
+        _sid: string,
+        _url: string,
+        _ctx: string,
+        _override: unknown,
+        _wt: string,
+        _tid: string,
+        _resume: string,
+        _prompt: string,
+        sessionType: string,
+      ) => ({
         sessionType: sessionType ?? 'standard',
         taskId: null,
         prUrl: null,

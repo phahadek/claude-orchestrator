@@ -694,12 +694,18 @@ describe('SessionManager.getLiveCodeSessionCount() — pendingStarts', () => {
   it('pendingStarts.delete is called in the launchSession .catch() handler', () => {
     const catchIdx = source.indexOf('launchSession().catch');
     const nextBlock = source.slice(catchIdx, catchIdx + 500);
-    expect(nextBlock).toMatch(/this\.pendingStarts\.delete\s*\(\s*sessionId\s*\)/);
+    expect(nextBlock).toMatch(
+      /this\.pendingStarts\.delete\s*\(\s*sessionId\s*\)/,
+    );
   });
 
   it('pendingStarts.delete is called before this.sessions.set in the success path', () => {
-    const pendingDeleteIdx = source.indexOf('this.pendingStarts.delete(sessionId)');
-    const sessionsSetIdx = source.indexOf('this.sessions.set(sessionId, session)');
+    const pendingDeleteIdx = source.indexOf(
+      'this.pendingStarts.delete(sessionId)',
+    );
+    const sessionsSetIdx = source.indexOf(
+      'this.sessions.set(sessionId, session)',
+    );
     expect(pendingDeleteIdx).toBeGreaterThan(0);
     expect(sessionsSetIdx).toBeGreaterThan(pendingDeleteIdx);
   });
@@ -722,7 +728,9 @@ describe('SessionManager.getLiveCodeSessionCount() — pendingStarts', () => {
     const countFnIdx = source.indexOf('getLiveCodeSessionCount()');
     const countFnBody = source.slice(countFnIdx, countFnIdx + 400);
     // Both sessions and pendingStarts guard on sessionType !== 'review'
-    const reviewGuards = [...countFnBody.matchAll(/sessionType\s*!==\s*'review'/g)];
+    const reviewGuards = [
+      ...countFnBody.matchAll(/sessionType\s*!==\s*'review'/g),
+    ];
     expect(reviewGuards.length).toBeGreaterThanOrEqual(2);
   });
 });
