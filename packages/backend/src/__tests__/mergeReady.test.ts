@@ -59,8 +59,12 @@ describe('POST /projects/:projectId/milestones/:milestoneId/merge-ready', () => 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ attempted: [10, 11] });
     expect(mockAttempt).toHaveBeenCalledTimes(2);
-    expect(mockAttempt).toHaveBeenCalledWith(10, 'owner/repo');
-    expect(mockAttempt).toHaveBeenCalledWith(11, 'owner/repo');
+    expect(mockAttempt).toHaveBeenCalledWith(10, 'owner/repo', {
+      bypassToggle: true,
+    });
+    expect(mockAttempt).toHaveBeenCalledWith(11, 'owner/repo', {
+      bypassToggle: true,
+    });
   });
 
   it('works regardless of autoMergeEnabled (independent of toggle)', async () => {
@@ -75,7 +79,26 @@ describe('POST /projects/:projectId/milestones/:milestoneId/merge-ready', () => 
     );
 
     expect(res.status).toBe(200);
-    expect(mockAttempt).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(mockAttempt).toHaveBeenCalledWith(42, 'owner/repo', {
+      bypassToggle: true,
+    });
+  });
+
+  it('passes bypassToggle=true to AutoMerger.attempt when autoMergeEnabled=false', async () => {
+    const mockAttempt = vi.fn();
+    setAutoMerger({ attempt: mockAttempt } as unknown as AutoMerger);
+    vi.mocked(queries.getMergeReadyPRs).mockReturnValue([
+      { pr_number: 55, repo: 'owner/repo' } as PullRequestRow,
+    ]);
+
+    const res = await supertest(makeApp()).post(
+      '/api/projects/proj-1/milestones/ms-1/merge-ready',
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockAttempt).toHaveBeenCalledWith(55, 'owner/repo', {
+      bypassToggle: true,
+    });
   });
 
   it('returns empty attempted list when no eligible PRs', async () => {
