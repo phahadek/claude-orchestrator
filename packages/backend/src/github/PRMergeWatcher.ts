@@ -6,11 +6,13 @@ import type { TaskBackend } from '../tasks/TaskBackend';
 import { getProjectByGithubRepo } from '../config';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
+import type { AutoMerger } from './AutoMerger';
 import {
   getAllOpenPRs,
   updatePRState,
   updateMergeState,
   getPRByNumber,
+  setPauseReason,
 } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 
@@ -25,6 +27,7 @@ export class PRMergeWatcher {
    * notifications for every PR that closed while the backend was down.
    */
   private firstPollPending = true;
+  private autoMerger: AutoMerger | undefined;
 
   constructor(
     private github: GitHubClient,
@@ -37,6 +40,10 @@ export class PRMergeWatcher {
     private taskBackendOverride: TaskBackend | undefined,
     private broadcast: (msg: ServerMessage) => void,
   ) {}
+
+  setAutoMerger(autoMerger: AutoMerger): void {
+    this.autoMerger = autoMerger;
+  }
 
   private resolveBackendForRepo(repo: string): TaskBackend | undefined {
     if (this.taskBackendOverride) return this.taskBackendOverride;
@@ -159,7 +166,10 @@ export class PRMergeWatcher {
     );
 
     // Only update + broadcast if something actually changed.
-    if (!stateChanged && !failingChecksChanged) return;
+    if (!stateChanged && !failingChecksChanged) {
+      this.tryCIFailingRecovery(pr, category.mergeState);
+      return;
+    }
 
     const mergeableInt = category.category === 'clean' ? 1 : 0;
     const failingNamesOrNull = failingNames.length > 0 ? failingNames : null;
@@ -181,6 +191,8 @@ export class PRMergeWatcher {
     if (pr.notion_task_id) {
       emitTaskUpdated(pr.notion_task_id);
     }
+
+    this.tryCIFailingRecovery(pr, category.mergeState);
 
     // Send session messages only when the state itself transitioned, so the
     // agent doesn't get re-pinged every 5-minute poll for unchanged states.
@@ -225,6 +237,23 @@ export class PRMergeWatcher {
         `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} is blocked by branch protection`,
       );
     }
+  }
+
+  private tryCIFailingRecovery(
+    pr: PullRequestRow,
+    newMergeState: string,
+  ): void {
+    if (pr.pause_reason !== 'ci_failing' || newMergeState !== 'clean') return;
+    setPauseReason(pr.pr_number, pr.repo, null);
+    console.log(
+      `[PRMergeWatcher] PR #${pr.pr_number} CI recovered to clean — clearing ci_failing pause and retrying AutoMerger`,
+    );
+    this.broadcast({
+      type: 'pr_pause_cleared',
+      prNumber: pr.pr_number,
+      repo: pr.repo,
+    });
+    this.autoMerger?.attempt(pr.pr_number, pr.repo);
   }
 
   /**
