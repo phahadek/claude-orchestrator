@@ -18,6 +18,8 @@ const SETTING_KEYS = [
   'session_notify_threshold_seconds',
   'session_pause_threshold_seconds',
   'session_hard_stop_window_seconds',
+  'ci_poll_interval_seconds',
+  'ci_poll_max_minutes',
 ] as const;
 
 type SettingKey = (typeof SETTING_KEYS)[number];
@@ -47,6 +49,10 @@ function applyToRuntime(key: SettingKey, value: string): void {
     runtimeSettings.session_pause_threshold_seconds = Number(value);
   } else if (key === 'session_hard_stop_window_seconds') {
     runtimeSettings.session_hard_stop_window_seconds = Number(value);
+  } else if (key === 'ci_poll_interval_seconds') {
+    runtimeSettings.ci_poll_interval_seconds = Number(value);
+  } else if (key === 'ci_poll_max_minutes') {
+    runtimeSettings.ci_poll_max_minutes = Number(value);
   }
 }
 
@@ -99,6 +105,8 @@ function runtimeSettingsAsRecord(): Record<SettingKey, string> {
     session_hard_stop_window_seconds: String(
       runtimeSettings.session_hard_stop_window_seconds,
     ),
+    ci_poll_interval_seconds: String(runtimeSettings.ci_poll_interval_seconds),
+    ci_poll_max_minutes: String(runtimeSettings.ci_poll_max_minutes),
   };
 }
 

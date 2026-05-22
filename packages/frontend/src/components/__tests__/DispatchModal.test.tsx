@@ -35,6 +35,7 @@ const TEST_PROJECT: ProjectConfig = {
   taskSource: 'notion',
   autoLaunchEnabled: false,
   autoLaunchMilestoneId: null,
+  autoMergeEnabled: false,
 };
 
 function renderModal(

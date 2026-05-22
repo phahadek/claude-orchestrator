@@ -28,6 +28,7 @@ import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
 import { ReviewOrchestrator } from './github/ReviewOrchestrator';
 import { PRMergeWatcher } from './github/PRMergeWatcher';
+import { AutoMerger } from './github/AutoMerger';
 import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
 import { AutoLauncher } from './orchestration/AutoLauncher';
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
@@ -102,6 +103,8 @@ const prMergeWatcher = new PRMergeWatcher(
 // After an approved verdict, the review service should trigger an immediate
 // watcher-style mergeability check so we don't wait for the next 5-min poll.
 prReviewService.setMergeWatcher(prMergeWatcher);
+const autoMerger = new AutoMerger(githubClient, prMergeWatcher, broadcast);
+prReviewService.setAutoMerger(autoMerger);
 app.use(
   '/api',
   createPrsRouter(
@@ -110,6 +113,7 @@ app.use(
     sessionManager,
     undefined,
     prMergeWatcher,
+    autoMerger,
   ),
 );
 app.use('/api', createTasksRouter());

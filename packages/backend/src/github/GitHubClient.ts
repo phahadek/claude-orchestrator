@@ -196,6 +196,69 @@ export class GitHubClient {
     const data = await this.request<GitHubRawPR>(
       `/repos/${r}/pulls/${prNumber}`,
     );
+    return this.categorizeFromRawPR(data, r);
+  }
+
+  /**
+   * Conditional PR status fetch with ETag/If-None-Match support. Returns the
+   * categorized mergeability when GitHub returns 200 (with the new ETag), or
+   * `{ status: 'not_modified' }` when GitHub returns 304 (no body, ETag stays
+   * the same). Used by AutoMerger to avoid burning GitHub quota while polling
+   * a slow-to-change PR.
+   */
+  async fetchPRStatusConditional(
+    prNumber: number,
+    repo: string,
+    etag?: string | null,
+  ): Promise<
+    | { status: 'not_modified'; etag: string | null }
+    | {
+        status: 'ok';
+        etag: string | null;
+        state: 'open' | 'closed' | 'merged';
+        mergeability: MergeabilityCategory;
+        headSha: string | null;
+      }
+  > {
+    const url = `${this.base}/repos/${repo}/pulls/${prNumber}`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    };
+    if (etag) headers['If-None-Match'] = etag;
+    const res = await fetch(url, { headers });
+    if (res.status === 304) {
+      return { status: 'not_modified', etag: etag ?? null };
+    }
+    if (!res.ok) {
+      const text = await res.text();
+      throw new GitHubApiError(res.status, text);
+    }
+    const newEtag = res.headers.get('etag');
+    const data = (await res.json()) as GitHubRawPR & {
+      state: string;
+      merged?: boolean;
+    };
+    const state: 'open' | 'closed' | 'merged' = data.merged
+      ? 'merged'
+      : data.state === 'closed'
+        ? 'closed'
+        : 'open';
+    const mergeability = await this.categorizeFromRawPR(data, repo);
+    return {
+      status: 'ok',
+      etag: newEtag,
+      state,
+      mergeability,
+      headSha: data.head?.sha ?? null,
+    };
+  }
+
+  private async categorizeFromRawPR(
+    data: GitHubRawPR,
+    r: string,
+  ): Promise<MergeabilityCategory> {
     const rawMergeableState = data.mergeable_state ?? null;
     const headSha = data.head?.sha ?? null;
 

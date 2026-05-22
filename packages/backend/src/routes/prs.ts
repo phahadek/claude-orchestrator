@@ -21,6 +21,7 @@ import type { GitHubClient } from '../github/GitHubClient';
 import type { PRReviewService } from '../github/PRReviewService';
 import type { PRReviewResult } from '../github/PRReviewService';
 import type { PRMergeWatcher } from '../github/PRMergeWatcher';
+import type { AutoMerger } from '../github/AutoMerger';
 import type { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
@@ -52,6 +53,7 @@ export function createPrsRouter(
    */
   taskBackendOverride?: TaskBackend,
   mergeWatcher?: PRMergeWatcher,
+  autoMerger?: AutoMerger,
 ): Router {
   const router = Router();
 
@@ -589,6 +591,8 @@ export function createPrsRouter(
         verdict: 'approved',
         summary: result.summary,
       });
+      // Kick off auto-merge for projects with the toggle enabled (no-op otherwise)
+      if (autoMerger) autoMerger.attempt(prNumber, repo);
       res.json(result);
     },
   );

@@ -14,6 +14,7 @@ function toCreatePayload(values: ProjectFormValues) {
     taskSource: values.taskSource,
     autoLaunchEnabled: values.autoLaunchEnabled,
     autoLaunchMilestoneId: values.autoLaunchMilestoneId.trim() || null,
+    autoMergeEnabled: values.autoMergeEnabled,
   };
 }
 

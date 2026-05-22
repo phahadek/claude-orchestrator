@@ -69,6 +69,7 @@ projectsRouter.post('/projects', (req: Request, res: Response) => {
       typeof body.autoLaunchMilestoneId === 'string'
         ? body.autoLaunchMilestoneId
         : null,
+    autoMergeEnabled: body.autoMergeEnabled === true,
   });
   res.status(201).json(project);
 });
@@ -109,6 +110,9 @@ projectsRouter.patch('/projects/:id', (req: Request, res: Response) => {
       typeof body.autoLaunchMilestoneId === 'string'
         ? body.autoLaunchMilestoneId
         : null;
+  }
+  if ('autoMergeEnabled' in body) {
+    patch.auto_merge_enabled = body.autoMergeEnabled === true ? 1 : 0;
   }
 
   const updated = ProjectService.update(id, patch);

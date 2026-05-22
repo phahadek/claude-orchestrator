@@ -13,6 +13,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     taskSource: 'notion',
     autoLaunchEnabled: false,
     autoLaunchMilestoneId: null,
+    autoMergeEnabled: false,
     createdAt: 1,
     updatedAt: 1,
     milestones: [],

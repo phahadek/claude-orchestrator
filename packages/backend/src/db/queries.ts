@@ -1216,15 +1216,18 @@ export function insertProject(p: NewProjectRow): ProjectRow {
     `
     INSERT INTO projects
       (id, name, project_dir, context_url, github_repo, task_source,
-       auto_launch_enabled, auto_launch_milestone_id, created_at, updated_at)
+       auto_launch_enabled, auto_launch_milestone_id, auto_merge_enabled,
+       created_at, updated_at)
     VALUES
       (@id, @name, @project_dir, @context_url, @github_repo, @task_source,
-       @auto_launch_enabled, @auto_launch_milestone_id, @created_at, @updated_at)
+       @auto_launch_enabled, @auto_launch_milestone_id, @auto_merge_enabled,
+       @created_at, @updated_at)
   `,
   ).run({
     ...p,
     auto_launch_enabled: p.auto_launch_enabled ?? 0,
     auto_launch_milestone_id: p.auto_launch_milestone_id ?? null,
+    auto_merge_enabled: p.auto_merge_enabled ?? 0,
     created_at: p.created_at ?? now,
     updated_at: p.updated_at ?? now,
   });
@@ -1258,6 +1261,7 @@ export interface ProjectPatch {
   task_source?: 'notion' | 'yaml';
   auto_launch_enabled?: number;
   auto_launch_milestone_id?: string | null;
+  auto_merge_enabled?: number;
 }
 
 export function updateProject(
@@ -1276,6 +1280,7 @@ export function updateProject(
     task_source: string;
     auto_launch_enabled: number;
     auto_launch_milestone_id: string | null;
+    auto_merge_enabled: number;
     updated_at: number;
   }>(
     `
@@ -1287,6 +1292,7 @@ export function updateProject(
         task_source = @task_source,
         auto_launch_enabled = @auto_launch_enabled,
         auto_launch_milestone_id = @auto_launch_milestone_id,
+        auto_merge_enabled = @auto_merge_enabled,
         updated_at = @updated_at
     WHERE id = @id
   `,
@@ -1311,6 +1317,10 @@ export function updateProject(
       patch.auto_launch_milestone_id !== undefined
         ? patch.auto_launch_milestone_id
         : existing.auto_launch_milestone_id,
+    auto_merge_enabled:
+      patch.auto_merge_enabled !== undefined
+        ? patch.auto_merge_enabled
+        : existing.auto_merge_enabled,
     updated_at: now,
   });
   return getProjectRowById(id);

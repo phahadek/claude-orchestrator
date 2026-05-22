@@ -7,7 +7,12 @@ export type DisplayStatus =
   | 'done'
   | 'backlog';
 
-export type PauseReason = 'max_reviews' | 'stuck_timeout';
+export type PauseReason =
+  | 'max_reviews'
+  | 'stuck_timeout'
+  | 'ci_failing'
+  | 'auto_merge_failed'
+  | 'pr_closed';
 
 export interface TaskView {
   taskId: string;
