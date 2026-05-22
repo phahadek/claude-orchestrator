@@ -171,3 +171,13 @@
   font-size: 0.875rem;
   margin-bottom: 8px;
 }
+
+.fieldError {
+  color: #f38ba8;
+  font-size: 0.8125rem;
+  margin: 2px 0 6px;
+}
+
+.numInputError {
+  border-color: #f38ba8;
+}

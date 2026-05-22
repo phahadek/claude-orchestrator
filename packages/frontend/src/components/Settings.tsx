@@ -14,11 +14,27 @@ interface SettingsValues {
   code_session_model: string;
   review_session_model: string;
   session_mode: string;
+  auto_launch_concurrency: string;
+  auto_launch_poll_interval_ms: string;
   session_notify_threshold_seconds: string;
   session_pause_threshold_seconds: string;
   session_hard_stop_window_seconds: string;
   ci_poll_interval_seconds: string;
   ci_poll_max_minutes: string;
+}
+
+const MIN_POLL_INTERVAL_MS = 5000;
+
+function validateField(
+  key: keyof SettingsValues,
+  value: string,
+): string | null {
+  const num = Number(value);
+  if (!Number.isInteger(num) || isNaN(num)) return 'Must be a whole number';
+  if (key === 'auto_launch_concurrency' && num < 1) return 'Minimum is 1';
+  if (key === 'auto_launch_poll_interval_ms' && num < MIN_POLL_INTERVAL_MS)
+    return `Minimum is ${MIN_POLL_INTERVAL_MS} ms`;
+  return null;
 }
 
 const MODEL_OPTIONS = [
@@ -52,6 +68,9 @@ export function Settings({ initialTab = 'general' }: Props) {
   const [settings, setSettings] = useState<SettingsValues | null>(null);
   const [loading, setLoading] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<
+    Partial<Record<keyof SettingsValues, string>>
+  >({});
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(
     () => localStorage.getItem(NOTIFICATIONS_ENABLED_KEY) !== 'false',
   );
@@ -73,6 +92,17 @@ export function Settings({ initialTab = 'general' }: Props) {
     if (!settings) return;
     const next = { ...settings, [key]: value };
     setSettings(next);
+
+    const error = validateField(key, value);
+    if (error) {
+      setFieldErrors((prev) => ({ ...prev, [key]: error }));
+      return;
+    }
+    setFieldErrors((prev) => {
+      const e = { ...prev };
+      delete e[key];
+      return e;
+    });
     setSaveError(null);
     try {
       await patchSettings({ [key]: value });
@@ -87,38 +117,50 @@ export function Settings({ initialTab = 'general' }: Props) {
     min = 0,
     max = 999,
     step = 1,
+    hint?: string,
   ) {
     const val = Number(settings?.[key] ?? 0);
+    const fieldError = fieldErrors[key];
     return (
-      <div className={styles.field}>
-        <label className={styles.label}>{label}</label>
-        <div className={styles.numControl}>
-          <button
-            type="button"
-            className={styles.stepBtn}
-            onClick={() => handleChange(key, String(Math.max(min, val - step)))}
-            disabled={val <= min}
-          >
-            −
-          </button>
-          <input
-            type="number"
-            className={styles.numInput}
-            value={val}
-            min={min}
-            max={max}
-            step={step}
-            onChange={(e) => handleChange(key, e.target.value)}
-          />
-          <button
-            type="button"
-            className={styles.stepBtn}
-            onClick={() => handleChange(key, String(Math.min(max, val + step)))}
-            disabled={val >= max}
-          >
-            +
-          </button>
+      <div key={key}>
+        <div className={styles.field}>
+          <label className={styles.label}>
+            {label}
+            {hint && <span className={styles.hint}> — {hint}</span>}
+          </label>
+          <div className={styles.numControl}>
+            <button
+              type="button"
+              className={styles.stepBtn}
+              onClick={() =>
+                handleChange(key, String(Math.max(min, val - step)))
+              }
+              disabled={val <= min}
+            >
+              −
+            </button>
+            <input
+              type="number"
+              className={`${styles.numInput}${fieldError ? ` ${styles.numInputError}` : ''}`}
+              value={val}
+              min={min}
+              max={max}
+              step={step}
+              onChange={(e) => handleChange(key, e.target.value)}
+            />
+            <button
+              type="button"
+              className={styles.stepBtn}
+              onClick={() =>
+                handleChange(key, String(Math.min(max, val + step)))
+              }
+              disabled={val >= max}
+            >
+              +
+            </button>
+          </div>
         </div>
+        {fieldError && <p className={styles.fieldError}>{fieldError}</p>}
       </div>
     );
   }
@@ -275,6 +317,28 @@ export function Settings({ initialTab = 'general' }: Props) {
                   0,
                   3600,
                   10,
+                )}
+
+                <h3 className={styles.sectionTitle}>Auto-launch</h3>
+                <p className={styles.hint}>
+                  Controls how the orchestrator picks up and launches Ready
+                  tasks automatically.
+                </p>
+                {numInput(
+                  'auto_launch_concurrency',
+                  'Auto-launch concurrency cap',
+                  1,
+                  100,
+                  1,
+                  'How many coding sessions may run in parallel',
+                )}
+                {numInput(
+                  'auto_launch_poll_interval_ms',
+                  'Auto-launch poll interval (ms)',
+                  MIN_POLL_INTERVAL_MS,
+                  3600000,
+                  1000,
+                  'How often AutoLauncher checks for new Ready tasks',
                 )}
 
                 <h3 className={styles.sectionTitle}>Auto-merge</h3>
