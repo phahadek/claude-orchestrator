@@ -18,9 +18,15 @@ import { Readable, Writable } from 'stream';
 function createMockProc() {
   const stdout = new Readable({ read() {} });
   const stderr = new Readable({ read() {} });
-  const stdin = new Writable({ write(_chunk, _enc, cb) { cb(); } });
+  const stdin = new Writable({
+    write(_chunk, _enc, cb) {
+      cb();
+    },
+  });
   const proc = Object.assign(new EventEmitter(), {
-    stdout, stderr, stdin,
+    stdout,
+    stderr,
+    stdin,
     kill: vi.fn(),
     pid: 99999,
     exitCode: null as number | null,
@@ -222,10 +228,14 @@ describe('CliSessionRunner — readline handler safety', () => {
 
     let consoleErrorCalled = false;
     const origConsoleError = console.error;
-    console.error = (..._args: unknown[]) => { consoleErrorCalled = true; };
+    console.error = (..._args: unknown[]) => {
+      consoleErrorCalled = true;
+    };
 
     let unhandledRejection: Error | undefined;
-    const onUnhandled = (err: Error) => { unhandledRejection = err; };
+    const onUnhandled = (err: Error) => {
+      unhandledRejection = err;
+    };
     process.on('unhandledRejection', onUnhandled);
 
     const onEvent = vi.fn(() => {
@@ -278,8 +288,15 @@ describe('CliSessionRunner — readline handler safety', () => {
     const runPromise = runner.run(
       undefined,
       undefined,
-      { worktreePath: '/fake', model: undefined, allowedTools: [], systemPrompt: undefined },
-      () => { throw new Error('stub throw'); },
+      {
+        worktreePath: '/fake',
+        model: undefined,
+        allowedTools: [],
+        systemPrompt: undefined,
+      },
+      () => {
+        throw new Error('stub throw');
+      },
     );
 
     mockProc.stdout.push(JSON.stringify({ type: 'assistant' }) + '\n');
@@ -289,7 +306,9 @@ describe('CliSessionRunner — readline handler safety', () => {
     mockProc.proc.emit('exit', 0);
     await runPromise;
 
-    expect(logged.some((line) => line.includes('session-error-log-test'))).toBe(true);
+    expect(logged.some((line) => line.includes('session-error-log-test'))).toBe(
+      true,
+    );
     expect(logged.some((line) => line.includes('stub throw'))).toBe(true);
 
     console.error = origConsoleError;
@@ -354,11 +373,18 @@ describe('CliSessionRunner — FK-throw regression', () => {
     const runPromise = runner.run(
       undefined,
       undefined,
-      { worktreePath: '/fake', model: undefined, allowedTools: [], systemPrompt: undefined },
+      {
+        worktreePath: '/fake',
+        model: undefined,
+        allowedTools: [],
+        systemPrompt: undefined,
+      },
       onEvent,
     );
 
-    mockProc.stdout.push(JSON.stringify({ type: 'system', subtype: 'init' }) + '\n');
+    mockProc.stdout.push(
+      JSON.stringify({ type: 'system', subtype: 'init' }) + '\n',
+    );
     await new Promise<void>((resolve) => setTimeout(resolve, 20));
 
     mockProc.stdout.push(null);
@@ -367,7 +393,9 @@ describe('CliSessionRunner — FK-throw regression', () => {
     await expect(runPromise).resolves.toBeDefined();
 
     expect(errors.some((e) => e.includes('fk-regression-session'))).toBe(true);
-    expect(errors.some((e) => e.includes('FOREIGN KEY constraint failed'))).toBe(true);
+    expect(
+      errors.some((e) => e.includes('FOREIGN KEY constraint failed')),
+    ).toBe(true);
 
     console.error = origConsoleError;
   });
