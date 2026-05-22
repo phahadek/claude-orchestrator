@@ -705,7 +705,7 @@ export default function App() {
         (s) =>
           !s.archived &&
           s.project_id === activeProjectId &&
-          s.sessionType === 'standard' &&
+          (s.sessionType ?? 'standard') === 'standard' &&
           (s.status === 'running' || s.status === 'needs_permission'),
       ).length,
     [sessions, activeProjectId],
