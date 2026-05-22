@@ -113,7 +113,14 @@ export class CliSessionRunner implements ISessionRunner {
       } catch {
         return;
       }
-      onEvent(event);
+      try {
+        onEvent(event);
+      } catch (err) {
+        console.error(
+          `[CliSessionRunner] event handler threw for session ${this.sessionId}: ${(err as Error).message}`,
+          err,
+        );
+      }
     });
 
     // Wait for the subprocess to exit.

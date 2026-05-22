@@ -458,21 +458,10 @@ export class SessionManager extends EventEmitter {
       );
     };
 
-    // Launch async — session card is already visible to the frontend via the broadcast below.
-    launchSession().catch((err) => {
-      this.pendingStarts.delete(sessionId);
-      console.error(
-        `[SessionManager] launchSession failed for ${sessionId}: ${err}`,
-      );
-      updateSessionStatus(sessionId, 'error', Date.now());
-      this.emit('message', {
-        type: 'session_ended',
-        sessionId,
-        status: 'error',
-      } satisfies ServerMessage);
-    });
-
-    // Insert session into SQLite before anything writes events
+    // Insert session into SQLite BEFORE launching the subprocess so FK
+    // constraints on session_events are never violated by events that arrive
+    // before the row exists (review sessions have no awaits in launchSession,
+    // so the CLI can spawn and emit events within the same tick).
     const startedAt = Date.now();
     insertSession({
       session_id: sessionId,
@@ -487,6 +476,20 @@ export class SessionManager extends EventEmitter {
       worktree_path: worktreePath,
       session_type: sessionType,
       task_name: taskName ?? null,
+    });
+
+    // Launch async — session card is already visible to the frontend via the broadcast below.
+    launchSession().catch((err) => {
+      this.pendingStarts.delete(sessionId);
+      console.error(
+        `[SessionManager] launchSession failed for ${sessionId}: ${err}`,
+      );
+      updateSessionStatus(sessionId, 'error', Date.now());
+      this.emit('message', {
+        type: 'session_ended',
+        sessionId,
+        status: 'error',
+      } satisfies ServerMessage);
     });
 
     if (sessionType === 'standard') {

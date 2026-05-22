@@ -323,6 +323,10 @@ export function insertEventOrIgnore(e: NewSessionEvent): void {
  * Upsert a session event keyed on session_id + message_id.
  * If `existingId` is provided, updates the existing row's payload in-place.
  * Otherwise inserts a new row. Returns the row ID in both cases.
+ *
+ * Defensive guard: if no sessions row exists for e.session_id the INSERT
+ * would fail the FK constraint and crash the readline listener (which has no
+ * reliable recovery path). Warn-and-return -1 instead so callers stay alive.
  */
 export function upsertSessionEvent(
   e: NewSessionEvent & { message_id?: string | null },
@@ -335,6 +339,13 @@ export function upsertSessionEvent(
       timestamp: e.timestamp,
     });
     return existingId;
+  }
+  const sessionRow = stmtGetSession.get({ session_id: e.session_id });
+  if (!sessionRow) {
+    console.error(
+      `[upsertSessionEvent] no sessions row for ${e.session_id} — dropping event (type=${e.event_type})`,
+    );
+    return -1;
   }
   const result = stmtInsertEvent.run({ message_id: null, ...e });
   return result.lastInsertRowid as number;
