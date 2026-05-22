@@ -123,6 +123,7 @@ export const RESUME_NUDGE_MESSAGE =
 
 export class SessionManager extends EventEmitter {
   private sessions = new Map<string, AgentSession>();
+  private pendingStarts = new Map<string, { sessionType: 'standard' | 'review' }>();
 
   /** Last known DisplayStatus per notionTaskId — used to skip no-op broadcasts. */
   private _lastDisplayStatus = new Map<string, DisplayStatus>();
@@ -249,6 +250,7 @@ export class SessionManager extends EventEmitter {
     }
 
     const sessionId = providedSessionId ?? crypto.randomUUID();
+    this.pendingStarts.set(sessionId, { sessionType });
     console.log(
       `[SessionManager] start ${sessionId} project=${projectId} sessionType=${sessionType}`,
     );
@@ -441,6 +443,7 @@ export class SessionManager extends EventEmitter {
         projectId,
       );
 
+      this.pendingStarts.delete(sessionId);
       this.sessions.set(sessionId, session);
       this.wireSession(
         sessionId,
@@ -454,6 +457,7 @@ export class SessionManager extends EventEmitter {
 
     // Launch async — session card is already visible to the frontend via the broadcast below.
     launchSession().catch((err) => {
+      this.pendingStarts.delete(sessionId);
       console.error(
         `[SessionManager] launchSession failed for ${sessionId}: ${err}`,
       );
@@ -875,6 +879,9 @@ export class SessionManager extends EventEmitter {
     let n = 0;
     for (const s of this.sessions.values()) {
       if (s.sessionType !== 'review') n++;
+    }
+    for (const [id, p] of this.pendingStarts) {
+      if (p.sessionType !== 'review' && !this.sessions.has(id)) n++;
     }
     return n;
   }

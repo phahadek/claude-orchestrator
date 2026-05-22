@@ -670,3 +670,59 @@ describe('CliSessionRunner.sendMessage() — destroyed stdin', () => {
     expect(() => runner.sendMessage('hello')).not.toThrow();
   });
 });
+
+// ── AC: SessionManager pendingStarts — concurrency cap race fix ──────────────
+describe('SessionManager.getLiveCodeSessionCount() — pendingStarts', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('pendingStarts map is declared as a private field', () => {
+    expect(source).toMatch(/private\s+pendingStarts\s*=\s*new Map/);
+  });
+
+  it('pendingStarts.set is called synchronously inside start() before launchSession()', () => {
+    expect(source).toMatch(/this\.pendingStarts\.set\s*\(\s*sessionId/);
+    // pendingStarts.set must appear before the launchSession declaration
+    const pendingSetIdx = source.indexOf('this.pendingStarts.set(sessionId');
+    const launchSessionIdx = source.indexOf('const launchSession = async');
+    expect(pendingSetIdx).toBeGreaterThan(0);
+    expect(pendingSetIdx).toBeLessThan(launchSessionIdx);
+  });
+
+  it('pendingStarts.delete is called in the launchSession .catch() handler', () => {
+    const catchIdx = source.indexOf('launchSession().catch');
+    const nextBlock = source.slice(catchIdx, catchIdx + 500);
+    expect(nextBlock).toMatch(/this\.pendingStarts\.delete\s*\(\s*sessionId\s*\)/);
+  });
+
+  it('pendingStarts.delete is called before this.sessions.set in the success path', () => {
+    const pendingDeleteIdx = source.indexOf('this.pendingStarts.delete(sessionId)');
+    const sessionsSetIdx = source.indexOf('this.sessions.set(sessionId, session)');
+    expect(pendingDeleteIdx).toBeGreaterThan(0);
+    expect(sessionsSetIdx).toBeGreaterThan(pendingDeleteIdx);
+  });
+
+  it('getLiveCodeSessionCount() sums sessions and non-review pendingStarts', () => {
+    expect(source).toMatch(/pendingStarts/);
+    const countFnIdx = source.indexOf('getLiveCodeSessionCount()');
+    const countFnBody = source.slice(countFnIdx, countFnIdx + 400);
+    expect(countFnBody).toMatch(/this\.pendingStarts/);
+    expect(countFnBody).toMatch(/sessionType\s*!==\s*'review'/);
+  });
+
+  it('getLiveCodeSessionCount() skips pendingStarts entries already in sessions to avoid double-count', () => {
+    const countFnIdx = source.indexOf('getLiveCodeSessionCount()');
+    const countFnBody = source.slice(countFnIdx, countFnIdx + 400);
+    expect(countFnBody).toMatch(/!this\.sessions\.has\s*\(\s*id\s*\)/);
+  });
+
+  it('a review sessionType in pendingStarts does not count toward getLiveCodeSessionCount', () => {
+    const countFnIdx = source.indexOf('getLiveCodeSessionCount()');
+    const countFnBody = source.slice(countFnIdx, countFnIdx + 400);
+    // Both sessions and pendingStarts guard on sessionType !== 'review'
+    const reviewGuards = [...countFnBody.matchAll(/sessionType\s*!==\s*'review'/g)];
+    expect(reviewGuards.length).toBeGreaterThanOrEqual(2);
+  });
+});
