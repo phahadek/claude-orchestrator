@@ -37,6 +37,8 @@ export interface PRListItem {
   mergeState: string | null;
   /** Names of failing required check-runs. Populated when mergeState is 'ci_failed'. */
   failingChecks?: string[] | null;
+  /** Non-null when the PR's pipeline is paused awaiting human attention. */
+  pauseReason?: string | null;
 }
 
 export interface PRCardProps {
@@ -257,6 +259,14 @@ export function PRCard({
             title="GitHub has not yet computed mergeability"
           >
             ⚠ Mergeability unknown
+          </span>
+        )}
+        {pr.pauseReason === 'review_failed' && (
+          <span
+            className={styles.conflictBadge}
+            title="Re-review failed unexpectedly — check logs and trigger a manual re-review."
+          >
+            ⚠ Review failed
           </span>
         )}
 

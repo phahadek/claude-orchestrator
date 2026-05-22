@@ -40,6 +40,7 @@ import {
   setHeadSha,
   getSetting,
   setPendingPush,
+  setPauseReason,
 } from './db/queries';
 import { shouldAutoReview, formatReviewFeedback } from './github/reviewUtils';
 import type { PRReviewResult } from './github/PRReviewService';
@@ -281,6 +282,14 @@ sessionManager.on(
             `[server] re-review failed for PR #${prRow.pr_number}:`,
             e,
           );
+          setPauseReason(prRow.pr_number, prRow.repo, 'review_failed');
+          const failMessage = `Re-review for PR #${prRow.pr_number} failed: ${summary}`;
+          sessionManager.emit('message', {
+            type: 'review_failed',
+            prNumber: prRow.pr_number,
+            repo: prRow.repo,
+            message: failMessage,
+          });
           setPRReviewResult(
             prRow.pr_number,
             prRow.repo,

@@ -52,10 +52,17 @@ export function useNotifications(
     summary: string;
     replay?: boolean;
   } | null,
+  reviewFailedEvent?: {
+    prNumber: number;
+    repo: string;
+    message: string;
+    receivedAt: number;
+  } | null,
 ): void {
   const prevRef = useRef<Map<string, SessionSnapshot>>(new Map());
   const initialSyncDoneRef = useRef(false);
   const prevReviewEventRef = useRef<typeof prReviewEvent>(null);
+  const prevReviewFailedRef = useRef<typeof reviewFailedEvent>(null);
 
   useEffect(() => {
     requestPermissionOnce();
@@ -138,6 +145,25 @@ export function useNotifications(
 
     prevRef.current = next;
   }, [sessions]);
+
+  useEffect(() => {
+    if (!reviewFailedEvent) return;
+    if (
+      prevReviewFailedRef.current?.receivedAt === reviewFailedEvent.receivedAt
+    )
+      return;
+    prevReviewFailedRef.current = reviewFailedEvent;
+
+    const { prNumber, message } = reviewFailedEvent;
+    fireNotification(
+      '❌ Review failed unexpectedly',
+      `PR #${prNumber}: ${message}`,
+      () => {
+        window.focus();
+        window.dispatchEvent(new CustomEvent('navigateToPRs'));
+      },
+    );
+  }, [reviewFailedEvent]);
 
   useEffect(() => {
     if (!prReviewEvent) return;

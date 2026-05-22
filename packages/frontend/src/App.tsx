@@ -85,6 +85,7 @@ export default function App() {
     prRefreshTrigger,
     lastPrReviewEvent,
     lastReviewEscalation,
+    lastReviewFailed,
     lastStuckNotification,
     lastStuckPaused,
     lastStuckKilled,
@@ -410,6 +411,22 @@ export default function App() {
   }, [lastReviewEscalation, dismissNotification]);
 
   useEffect(() => {
+    if (!lastReviewFailed) return;
+    const { prNumber, message, receivedAt } = lastReviewFailed;
+    const notifId = `review-failed-${prNumber}-${receivedAt}`;
+    setNotifications((prev) => [
+      ...prev,
+      {
+        id: notifId,
+        message: `❌ PR #${prNumber} re-review failed unexpectedly: ${message}`,
+        status: 'review',
+        onClick: () => setTopView('prs'),
+      },
+    ]);
+    setTimeout(() => dismissNotification(notifId), 10000);
+  }, [lastReviewFailed, dismissNotification]);
+
+  useEffect(() => {
     if (!lastStuckNotification) return;
     const { sessionId, message, receivedAt } = lastStuckNotification;
     const notifId = `stuck-notify-${sessionId}-${receivedAt}`;
@@ -711,7 +728,7 @@ export default function App() {
 
   const anyDragging = isDragging;
 
-  useNotifications(sessions, lastPrReviewEvent);
+  useNotifications(sessions, lastPrReviewEvent, lastReviewFailed);
 
   useEffect(() => {
     function onSelectSession(e: Event) {

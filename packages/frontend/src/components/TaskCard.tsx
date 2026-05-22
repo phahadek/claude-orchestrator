@@ -29,6 +29,7 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
   ci_failing: 'CI is failing — fix the failing checks and push.',
   auto_merge_failed: 'Auto-merge failed — merge manually or investigate.',
   pr_closed: 'PR was closed during auto-merge — reopen or create a new PR.',
+  review_failed: 'Re-review failed unexpectedly — check the backend logs.',
 };
 
 function verdictLabel(verdict: string): string {

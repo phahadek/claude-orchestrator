@@ -102,6 +102,12 @@ export function useSessionStore() {
     message: string;
     receivedAt: number;
   } | null>(null);
+  const [lastReviewFailed, setLastReviewFailed] = useState<{
+    prNumber: number;
+    repo: string;
+    message: string;
+    receivedAt: number;
+  } | null>(null);
   const [lastStuckNotification, setLastStuckNotification] = useState<{
     sessionId: string;
     taskName: string;
@@ -354,6 +360,16 @@ export function useSessionStore() {
       });
       setTaskListRefreshTrigger((n) => n + 1);
     }
+    if (msg.type === 'review_failed') {
+      setLastReviewFailed({
+        prNumber: msg.prNumber,
+        repo: msg.repo,
+        message: msg.message,
+        receivedAt: Date.now(),
+      });
+      setTaskListRefreshTrigger((n) => n + 1);
+      setPrRefreshTrigger((n) => n + 1);
+    }
     if (msg.type === 'stuck_session_notified') {
       setLastStuckNotification({
         sessionId: msg.sessionId,
@@ -485,6 +501,7 @@ export function useSessionStore() {
     prRefreshTrigger,
     lastPrReviewEvent,
     lastReviewEscalation,
+    lastReviewFailed,
     lastStuckNotification,
     lastStuckPaused,
     lastStuckKilled,

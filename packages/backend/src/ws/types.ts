@@ -174,6 +174,12 @@ export type ServerMessage =
       message: string;
     }
   | {
+      type: 'review_failed';
+      prNumber: number;
+      repo: string;
+      message: string;
+    }
+  | {
       type: 'review_incomplete';
       prNumber: number;
       repo: string;
