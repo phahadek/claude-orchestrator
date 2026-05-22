@@ -239,13 +239,20 @@ export class PRMergeWatcher {
     }
   }
 
-  private tryCIFailingRecovery(pr: PullRequestRow, newMergeState: string): void {
+  private tryCIFailingRecovery(
+    pr: PullRequestRow,
+    newMergeState: string,
+  ): void {
     if (pr.pause_reason !== 'ci_failing' || newMergeState !== 'clean') return;
     setPauseReason(pr.pr_number, pr.repo, null);
     console.log(
       `[PRMergeWatcher] PR #${pr.pr_number} CI recovered to clean — clearing ci_failing pause and retrying AutoMerger`,
     );
-    this.broadcast({ type: 'pr_pause_cleared', prNumber: pr.pr_number, repo: pr.repo });
+    this.broadcast({
+      type: 'pr_pause_cleared',
+      prNumber: pr.pr_number,
+      repo: pr.repo,
+    });
     this.autoMerger?.attempt(pr.pr_number, pr.repo);
   }
 

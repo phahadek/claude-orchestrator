@@ -10,7 +10,12 @@ vi.mock('../db/queries.js', () => ({
 }));
 
 import { PRMergeWatcher } from './PRMergeWatcher';
-import { getAllOpenPRs, updatePRState, updateMergeState, setPauseReason } from '../db/queries';
+import {
+  getAllOpenPRs,
+  updatePRState,
+  updateMergeState,
+  setPauseReason,
+} from '../db/queries';
 import type { AutoMerger } from './AutoMerger';
 import type { GitHubClient } from './GitHubClient';
 import type { SessionManager } from '../session/SessionManager';
@@ -768,8 +773,15 @@ describe('PRMergeWatcher ci_failing auto-recovery', () => {
     watcher.setAutoMerger(autoMerger);
     await watcher.poll();
 
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(42, 'owner/repo', null);
-    expect(vi.mocked(autoMerger.attempt)).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      null,
+    );
+    expect(vi.mocked(autoMerger.attempt)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
     expect(messages.some((m) => m.type === 'pr_pause_cleared')).toBe(true);
   });
 
@@ -797,8 +809,15 @@ describe('PRMergeWatcher ci_failing auto-recovery', () => {
     watcher.setAutoMerger(autoMerger);
     await watcher.poll();
 
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(42, 'owner/repo', null);
-    expect(vi.mocked(autoMerger.attempt)).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      null,
+    );
+    expect(vi.mocked(autoMerger.attempt)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
   });
 
   it('does NOT clear pause when merge_state is still ci_failed', async () => {
