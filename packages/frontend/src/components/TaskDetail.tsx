@@ -170,6 +170,17 @@ export function TaskDetail({
     task.codeSession?.status === 'running' ||
     task.codeSession?.status === 'needs_permission';
 
+  function handleKill() {
+    const activeSession = task.codeSession &&
+      (task.codeSession.status === 'running' || task.codeSession.status === 'needs_permission')
+        ? task.codeSession
+        : null;
+    if (!activeSession) return;
+    if (confirm('Kill this session? It will have 15 seconds to wrap up.')) {
+      send({ type: 'kill', sessionId: activeSession.sessionId });
+    }
+  }
+
   const effectiveDisplayStatus = optimisticDisplayStatus ?? task.displayStatus;
   const displayStatusLabel =
     DISPLAY_STATUS_LABELS[effectiveDisplayStatus] ?? effectiveDisplayStatus;
@@ -305,6 +316,11 @@ export function TaskDetail({
             <div className={styles.sectionHeader}>
               <span className={styles.sectionTitle}>Code Session</span>
               <StatusBadge status={task.codeSession.status} />
+              {isCodeActive && (
+                <button className={styles.killButton} onClick={handleKill}>
+                  Kill
+                </button>
+              )}
             </div>
             <div className={styles.transcriptArea}>
               {codeSession ? (
