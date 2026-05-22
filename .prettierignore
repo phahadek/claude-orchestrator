@@ -9,3 +9,4 @@ packages/backend/package-lock.json
 *.db-wal
 *.db-journal
 .claude/**
+CLAUDE.MD
