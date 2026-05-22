@@ -87,12 +87,13 @@ function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
 
 function makeMergeability(
   category: MergeabilityCategory['category'],
+  failingChecks: Array<{ name: string; conclusion: string }> = [],
 ): MergeabilityCategory {
   return {
     category,
     mergeState: category === 'clean' ? 'clean' : category,
     rawMergeableState: category === 'clean' ? 'clean' : category,
-    failingChecks: [],
+    failingChecks,
   };
 }
 
@@ -301,5 +302,35 @@ describe('AutoMerger.attempt() — failure modes', () => {
 
     expect(setPauseReason).not.toHaveBeenCalled();
     expect(github.mergePR).not.toHaveBeenCalled();
+  });
+
+  it('populates failing_checks in DB when ci_failed category has failing check names', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('ci_failed', [
+          { name: 'lint', conclusion: 'failure' },
+          { name: 'unit-tests', conclusion: 'failure' },
+        ]),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(setPauseReason).toHaveBeenCalledWith(42, 'owner/repo', 'ci_failing');
+    expect(updateMergeState).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      0,
+      'ci_failed',
+      ['lint', 'unit-tests'],
+    );
   });
 });
