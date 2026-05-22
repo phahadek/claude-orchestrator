@@ -291,7 +291,7 @@ projectsRouter.post(
 
     for (const pr of eligiblePRs) {
       if (_autoMerger) {
-        _autoMerger.attempt(pr.pr_number, pr.repo);
+        _autoMerger.attempt(pr.pr_number, pr.repo, { bypassToggle: true });
       }
       attempted.push(pr.pr_number);
     }

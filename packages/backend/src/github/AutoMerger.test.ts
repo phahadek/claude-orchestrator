@@ -165,6 +165,52 @@ describe('AutoMerger.attempt() — guards', () => {
     expect(github.fetchPRStatusConditional).not.toHaveBeenCalled();
   });
 
+  it('proceeds into polling loop when bypassToggle=true and autoMergeEnabled=false', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+
+    const { getProjectByGithubRepo } = await import('../config.js');
+    vi.mocked(getProjectByGithubRepo).mockReturnValueOnce({
+      ...projectFixture,
+      autoMergeEnabled: false,
+    });
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo', { bypassToggle: true });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.mergePR).toHaveBeenCalledTimes(1);
+    expect(watcher.handleMerged).toHaveBeenCalled();
+  });
+
+  it('skips polling when autoMergeEnabled=false and no bypassToggle (regression guard)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    const github = makeMockGitHub([]);
+    const watcher = makeMockWatcher();
+
+    const { getProjectByGithubRepo } = await import('../config.js');
+    vi.mocked(getProjectByGithubRepo).mockReturnValueOnce({
+      ...projectFixture,
+      autoMergeEnabled: false,
+    });
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.fetchPRStatusConditional).not.toHaveBeenCalled();
+    expect(github.mergePR).not.toHaveBeenCalled();
+  });
+
   it('de-duplicates concurrent attempt() calls for the same PR', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
     const github = makeMockGitHub([

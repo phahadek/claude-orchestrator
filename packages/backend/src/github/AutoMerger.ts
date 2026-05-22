@@ -36,14 +36,22 @@ export class AutoMerger {
    * Try to auto-merge the given PR. Returns immediately (does not await the
    * polling loop). The loop runs to completion in the background.
    */
-  attempt(prNumber: number, repo: string): void {
+  attempt(
+    prNumber: number,
+    repo: string,
+    options?: { bypassToggle?: boolean },
+  ): void {
     const k = this.key(prNumber, repo);
     if (this.active.has(k)) return;
     this.active.add(k);
-    void this.run(prNumber, repo).finally(() => this.active.delete(k));
+    void this.run(prNumber, repo, options).finally(() => this.active.delete(k));
   }
 
-  private async run(prNumber: number, repo: string): Promise<void> {
+  private async run(
+    prNumber: number,
+    repo: string,
+    options?: { bypassToggle?: boolean },
+  ): Promise<void> {
     const project = getProjectByGithubRepo(repo);
     if (!project) {
       console.log(
@@ -51,7 +59,7 @@ export class AutoMerger {
       );
       return;
     }
-    if (!project.autoMergeEnabled) return;
+    if (!options?.bypassToggle && !project.autoMergeEnabled) return;
 
     const initialRow = getPRByNumber(prNumber, repo);
     if (!initialRow) return;
