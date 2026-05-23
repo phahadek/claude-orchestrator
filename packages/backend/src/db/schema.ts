@@ -212,4 +212,9 @@ export function runMigrations(): void {
   } catch {
     /* already exists */
   }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN metadata TEXT`);
+  } catch {
+    /* already exists */
+  }
 }
