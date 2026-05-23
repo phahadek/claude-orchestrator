@@ -547,7 +547,30 @@ describe('GitHubClient.categorizeMergeability()', () => {
     expect(result.mergeState).toBe('unknown');
   });
 
-  it('still returns ci_failed even if check-runs request fails (graceful degradation)', async () => {
+  it('categorizes unstable + no failing checks as unknown (CI still pending)', async () => {
+    mockPRThenChecks({ mergeable_state: 'unstable' }, [
+      { name: 'lint', status: 'in_progress', conclusion: null },
+      { name: 'unit-tests', status: 'in_progress', conclusion: null },
+    ]);
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo');
+    expect(result.category).toBe('unknown');
+    expect(result.mergeState).toBe('unstable');
+    expect(result.failingChecks).toEqual([]);
+  });
+
+  it('categorizes unstable + one failed check as ci_failed', async () => {
+    mockPRThenChecks({ mergeable_state: 'unstable' }, [
+      { name: 'unit-tests', status: 'completed', conclusion: 'failure' },
+    ]);
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo');
+    expect(result.category).toBe('ci_failed');
+    expect(result.mergeState).toBe('ci_failed');
+    expect(result.failingChecks.map((c) => c.name)).toEqual(['unit-tests']);
+  });
+
+  it('returns unknown when check-runs request fails for unstable PR (graceful degradation)', async () => {
     const fetchSpy = vi
       .fn()
       .mockResolvedValueOnce({
@@ -580,9 +603,8 @@ describe('GitHubClient.categorizeMergeability()', () => {
 
     const client = new GitHubClient();
     const result = await client.categorizeMergeability(42, 'owner/repo');
-    // Empty failingChecks because the secondary call failed; we still categorize
-    // as ci_failed (from the mergeable_state alone).
-    expect(result.category).toBe('ci_failed');
+    // safeGetFailingChecks returns [] on error → unknown (AutoMerger polls until deadline).
+    expect(result.category).toBe('unknown');
     expect(result.failingChecks).toEqual([]);
   });
 });
