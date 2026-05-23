@@ -7,6 +7,7 @@ import { getProjectByGithubRepo } from '../config';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
 import type { AutoMerger } from './AutoMerger';
+import { formatCIFailureFeedback } from './reviewUtils';
 import {
   getAllOpenPRs,
   updatePRState,
@@ -227,10 +228,13 @@ export class PRMergeWatcher {
         `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has failing CI checks: ${failingNames.join(', ') || '(unknown)'}`,
       );
       if (pr.session_id) {
-        const msg =
-          failingNames.length > 0
-            ? `PR #${pr.pr_number} cannot be merged because the following CI checks are failing: ${failingNames.join(', ')}. Investigate the failures and push a fix.`
-            : `PR #${pr.pr_number} cannot be merged because required CI checks are failing. Investigate the failures and push a fix.`;
+        const runUrl = `https://github.com/${pr.repo}/pull/${pr.pr_number}/checks`;
+        const msg = formatCIFailureFeedback({
+          prNumber: pr.pr_number,
+          failingCheckNames: failingNames,
+          runUrl,
+          logExcerpt: null,
+        });
         this.sessions
           .sendOrResume(pr.session_id, msg)
           .catch((err: unknown) =>
