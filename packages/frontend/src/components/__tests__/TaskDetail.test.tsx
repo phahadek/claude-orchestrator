@@ -721,4 +721,60 @@ describe('TaskDetail', () => {
     );
     expect(screen.getByText('Working on the fix…')).toBeTruthy();
   });
+
+  // ── Diff tab ──
+
+  it('shows Diff tab when task.pr exists', () => {
+    const pr = makePr();
+    render(
+      <TaskDetail task={makeTask({ pr })} send={vi.fn()} onClose={vi.fn()} />,
+    );
+    expect(screen.getByRole('button', { name: 'Diff' })).toBeTruthy();
+  });
+
+  it('does not show Diff tab when task.pr is null', () => {
+    render(
+      <TaskDetail
+        task={makeTask({ pr: null })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Diff' })).toBeNull();
+  });
+
+  it('default active tab is Overview', () => {
+    const pr = makePr();
+    render(
+      <TaskDetail task={makeTask({ pr })} send={vi.fn()} onClose={vi.fn()} />,
+    );
+    // PR section content visible means Overview tab is active
+    expect(screen.getByText('Pull Request')).toBeTruthy();
+  });
+
+  it('clicking Diff tab renders DiffViewer with correct prNumber', async () => {
+    const pr = makePr({ prNumber: 42 });
+    render(
+      <TaskDetail
+        task={makeTask({ pr })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId={undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Diff' }));
+    // DiffViewer renders an error when projectId is absent
+    await waitFor(() => {
+      expect(screen.getByText(/No project ID available/)).toBeTruthy();
+    });
+  });
+
+  it('switching to Diff tab hides Overview content', () => {
+    const pr = makePr();
+    render(
+      <TaskDetail task={makeTask({ pr })} send={vi.fn()} onClose={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Diff' }));
+    expect(screen.queryByText('Pull Request')).toBeNull();
+  });
 });

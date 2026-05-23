@@ -5,6 +5,7 @@ import type { DisplayStatus } from '@claude-orchestrator/backend/src/tasks/TaskS
 import type { SessionState } from '../hooks/useSessionStore';
 import { StatusBadge } from './StatusBadge';
 import { EventTranscript } from './EventTranscript';
+import { DiffViewer } from './DiffViewer';
 import { parseReviewResultFromEvents } from './ReviewDetailView';
 import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
 import styles from './TaskDetail.module.css';
@@ -147,6 +148,7 @@ export function TaskDetail({
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [optimisticDisplayStatus, setOptimisticDisplayStatus] =
     useState<DisplayStatus | null>(null);
+  const [activeTab, setActiveTab] = useState<'overview' | 'diff'>('overview');
 
   // Reset state when task changes
   useEffect(() => {
@@ -155,6 +157,7 @@ export function TaskDetail({
     setReviewError(null);
     setFixConflictsInFlight(false);
     setOptimisticDisplayStatus(null);
+    setActiveTab('overview');
   }, [task.taskId]);
 
   // Look up live session state for event transcripts
@@ -306,210 +309,241 @@ export function TaskDetail({
       </div>
 
       <div className={styles.body}>
-        {/* ── Code Session — full transcript, takes bulk of panel ── */}
-        {task.codeSession && (
-          <div className={styles.codeSection}>
-            <div className={styles.sectionHeader}>
-              <span className={styles.sectionTitle}>Code Session</span>
-              <StatusBadge status={task.codeSession.status} />
-              {isCodeActive && (
-                <button className={styles.killButton} onClick={handleKill}>
-                  Kill
-                </button>
-              )}
-            </div>
-            <div className={styles.transcriptArea}>
-              {codeSession ? (
-                <EventTranscript
-                  events={codeSession.events}
-                  permissionDenials={codeSession.permissionDenials}
-                />
-              ) : (
-                <p className={styles.noTranscript}>
-                  Transcript not available — session not loaded.
-                </p>
-              )}
-            </div>
-            {isCodeActive && (
-              <InlineComposer
-                sessionId={task.codeSession.sessionId}
-                send={send}
-              />
-            )}
-          </div>
-        )}
-
-        {/* ── Review session — collapsible transcript ── */}
-        {task.review && (
-          <div className={styles.reviewSection}>
-            <div
-              className={styles.reviewSectionHeader}
-              onClick={() => setShowReviewSection((v) => !v)}
-              role="button"
-              aria-expanded={showReviewSection}
-            >
-              <span className={styles.reviewToggleIcon} aria-hidden="true">
-                {showReviewSection ? '▼' : '▶'}
-              </span>
-              <span className={styles.sectionTitle}>Review</span>
-              {task.review.iterationCount > 0 && (
-                <span className={styles.iterationCount}>
-                  #{task.review.iterationCount}
-                </span>
-              )}
-              {task.review.inputTokens + task.review.outputTokens > 0 && (
-                <span className={styles.reviewTokenCount}>
-                  {formatTokenCount(
-                    task.review.inputTokens + task.review.outputTokens,
-                  )}{' '}
-                  tokens
-                </span>
-              )}
-              {task.review.verdict ? (
-                <span
-                  className={`${styles.verdictPill} ${styles[VERDICT_CSS_KEYS[task.review.verdict] ?? 'verdict--error']}`}
-                >
-                  {VERDICT_LABELS[task.review.verdict] ?? task.review.verdict}
-                </span>
-              ) : task.review.status === 'running' ||
-                task.review.status === 'starting' ? (
-                <span
-                  className={`${styles.verdictPill} ${styles['verdict--pending']}`}
-                >
-                  In progress…
-                </span>
-              ) : null}
-            </div>
-
-            {showReviewSection && (
-              <div className={styles.reviewBody}>
-                {reviewSession ? (
-                  <>
-                    <div className={styles.reviewTranscriptArea}>
-                      <EventTranscript events={reviewSession.events} />
-                    </div>
-                    <button
-                      className={styles.toggleButton}
-                      onClick={() => setShowReviewDimensions((v) => !v)}
-                      aria-expanded={showReviewDimensions}
-                    >
-                      {showReviewDimensions
-                        ? '▼ Hide dimensions'
-                        : '▶ Show dimensions'}
-                    </button>
-                    {showReviewDimensions && (
-                      <ReviewDimensions session={reviewSession} />
-                    )}
-                  </>
-                ) : (
-                  <p className={styles.noTranscript}>
-                    Review transcript not available.
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── Pull Request — compact metadata + action buttons ── */}
+        {/* ── Tab bar — only shown when task has a PR ── */}
         {task.pr && (
-          <div className={styles.prSection}>
-            <div className={styles.sectionHeader}>
-              <span className={styles.sectionTitle}>Pull Request</span>
-            </div>
-
-            {/* Line 1: PR number + title (truncated) + state badge */}
-            <div className={styles.prTitleRow}>
-              <div className={styles.prTitleLeft}>
-                <span className={styles.prNumber}>#{task.pr.prNumber}</span>
-                <span className={styles.prTitleText}>{task.pr.title}</span>
-              </div>
-              <span
-                className={`${styles.prStateBadge} ${styles[`prState--${task.pr.state}${task.pr.draft ? '-draft' : ''}`]}`}
-              >
-                {prStateLabel(task.pr.state, task.pr.draft)}
-              </span>
-            </div>
-
-            {/* Line 2: branch info + GitHub link */}
-            <div className={styles.prBranchRow}>
-              <span className={styles.prBranch}>
-                {task.pr.headBranch} → {task.pr.baseBranch}
-              </span>
-              <a
-                href={task.pr.prUrl}
-                target="_blank"
-                rel="noreferrer"
-                className={styles.githubLink}
-              >
-                GitHub ↗
-              </a>
-            </div>
-
-            {reviewError && (
-              <div className={styles.errorBanner}>{reviewError}</div>
-            )}
-
-            {task.pr.mergeState === 'dirty' && (
-              <div className={styles.conflictBanner}>
-                ⚠ Merge conflicts detected — use Fix Conflicts to have the code
-                session rebase and resolve them.
-              </div>
-            )}
-
-            {/* Line 3 (conditional): action buttons only when PR is open */}
-            {task.pr.state === 'open' && (
-              <div className={styles.prActions}>
-                {task.pr.mergeState !== 'dirty' && (
-                  <button
-                    className={styles.reviewButton}
-                    disabled={reviewInFlight || !projectId}
-                    onClick={() => void handleRunReview()}
-                    title={!projectId ? 'Project ID unavailable' : undefined}
-                  >
-                    {reviewInFlight ? 'Reviewing…' : 'Run Review'}
-                  </button>
-                )}
-                {task.pr.mergeState === 'dirty' && (
-                  <button
-                    className={styles.reReviewButton}
-                    disabled={fixConflictsInFlight}
-                    onClick={() => void handleFixConflicts()}
-                    title="Send rebase instructions to the code session to resolve merge conflicts"
-                  >
-                    {fixConflictsInFlight ? 'Fixing…' : '↺ Fix Conflicts'}
-                  </button>
-                )}
-                {task.review?.verdict === 'approved' &&
-                  task.pr.mergeState !== 'dirty' && (
-                    <button
-                      className={styles.mergeButton}
-                      disabled={mergeInFlight}
-                      onClick={() => void handleMerge()}
-                    >
-                      {mergeInFlight ? 'Merging…' : 'Merge ↓'}
-                    </button>
-                  )}
-                {task.review?.verdict === 'approved' &&
-                  task.pr.mergeState === 'dirty' && (
-                    <button
-                      className={styles.mergeButton}
-                      disabled={true}
-                      title="Cannot merge — PR has merge conflicts"
-                    >
-                      Merge ↓
-                    </button>
-                  )}
-              </div>
-            )}
+          <div className={styles.tabBar}>
+            <button
+              className={`${styles.tabButton} ${activeTab === 'overview' ? styles['tabButton--active'] : ''}`}
+              onClick={() => setActiveTab('overview')}
+            >
+              Overview
+            </button>
+            <button
+              className={`${styles.tabButton} ${activeTab === 'diff' ? styles['tabButton--active'] : ''}`}
+              onClick={() => setActiveTab('diff')}
+            >
+              Diff
+            </button>
           </div>
         )}
 
-        {/* Empty state */}
-        {!task.codeSession && !task.pr && !task.review && (
-          <div className={styles.emptyState}>
-            <p>No active sessions or PRs for this task.</p>
-          </div>
+        {/* ── Overview tab (or full content when no PR) ── */}
+        {(!task.pr || activeTab === 'overview') && (
+          <>
+            {/* ── Code Session — full transcript, takes bulk of panel ── */}
+            {task.codeSession && (
+              <div className={styles.codeSection}>
+                <div className={styles.sectionHeader}>
+                  <span className={styles.sectionTitle}>Code Session</span>
+                  <StatusBadge status={task.codeSession.status} />
+                  {isCodeActive && (
+                    <button className={styles.killButton} onClick={handleKill}>
+                      Kill
+                    </button>
+                  )}
+                </div>
+                <div className={styles.transcriptArea}>
+                  {codeSession ? (
+                    <EventTranscript
+                      events={codeSession.events}
+                      permissionDenials={codeSession.permissionDenials}
+                    />
+                  ) : (
+                    <p className={styles.noTranscript}>
+                      Transcript not available — session not loaded.
+                    </p>
+                  )}
+                </div>
+                {isCodeActive && (
+                  <InlineComposer
+                    sessionId={task.codeSession.sessionId}
+                    send={send}
+                  />
+                )}
+              </div>
+            )}
+
+            {/* ── Review session — collapsible transcript ── */}
+            {task.review && (
+              <div className={styles.reviewSection}>
+                <div
+                  className={styles.reviewSectionHeader}
+                  onClick={() => setShowReviewSection((v) => !v)}
+                  role="button"
+                  aria-expanded={showReviewSection}
+                >
+                  <span className={styles.reviewToggleIcon} aria-hidden="true">
+                    {showReviewSection ? '▼' : '▶'}
+                  </span>
+                  <span className={styles.sectionTitle}>Review</span>
+                  {task.review.iterationCount > 0 && (
+                    <span className={styles.iterationCount}>
+                      #{task.review.iterationCount}
+                    </span>
+                  )}
+                  {task.review.inputTokens + task.review.outputTokens > 0 && (
+                    <span className={styles.reviewTokenCount}>
+                      {formatTokenCount(
+                        task.review.inputTokens + task.review.outputTokens,
+                      )}{' '}
+                      tokens
+                    </span>
+                  )}
+                  {task.review.verdict ? (
+                    <span
+                      className={`${styles.verdictPill} ${styles[VERDICT_CSS_KEYS[task.review.verdict] ?? 'verdict--error']}`}
+                    >
+                      {VERDICT_LABELS[task.review.verdict] ??
+                        task.review.verdict}
+                    </span>
+                  ) : task.review.status === 'running' ||
+                    task.review.status === 'starting' ? (
+                    <span
+                      className={`${styles.verdictPill} ${styles['verdict--pending']}`}
+                    >
+                      In progress…
+                    </span>
+                  ) : null}
+                </div>
+
+                {showReviewSection && (
+                  <div className={styles.reviewBody}>
+                    {reviewSession ? (
+                      <>
+                        <div className={styles.reviewTranscriptArea}>
+                          <EventTranscript events={reviewSession.events} />
+                        </div>
+                        <button
+                          className={styles.toggleButton}
+                          onClick={() => setShowReviewDimensions((v) => !v)}
+                          aria-expanded={showReviewDimensions}
+                        >
+                          {showReviewDimensions
+                            ? '▼ Hide dimensions'
+                            : '▶ Show dimensions'}
+                        </button>
+                        {showReviewDimensions && (
+                          <ReviewDimensions session={reviewSession} />
+                        )}
+                      </>
+                    ) : (
+                      <p className={styles.noTranscript}>
+                        Review transcript not available.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── Pull Request — compact metadata + action buttons ── */}
+            {task.pr && (
+              <div className={styles.prSection}>
+                <div className={styles.sectionHeader}>
+                  <span className={styles.sectionTitle}>Pull Request</span>
+                </div>
+
+                {/* Line 1: PR number + title (truncated) + state badge */}
+                <div className={styles.prTitleRow}>
+                  <div className={styles.prTitleLeft}>
+                    <span className={styles.prNumber}>#{task.pr.prNumber}</span>
+                    <span className={styles.prTitleText}>{task.pr.title}</span>
+                  </div>
+                  <span
+                    className={`${styles.prStateBadge} ${styles[`prState--${task.pr.state}${task.pr.draft ? '-draft' : ''}`]}`}
+                  >
+                    {prStateLabel(task.pr.state, task.pr.draft)}
+                  </span>
+                </div>
+
+                {/* Line 2: branch info + GitHub link */}
+                <div className={styles.prBranchRow}>
+                  <span className={styles.prBranch}>
+                    {task.pr.headBranch} → {task.pr.baseBranch}
+                  </span>
+                  <a
+                    href={task.pr.prUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={styles.githubLink}
+                  >
+                    GitHub ↗
+                  </a>
+                </div>
+
+                {reviewError && (
+                  <div className={styles.errorBanner}>{reviewError}</div>
+                )}
+
+                {task.pr.mergeState === 'dirty' && (
+                  <div className={styles.conflictBanner}>
+                    ⚠ Merge conflicts detected — use Fix Conflicts to have the
+                    code session rebase and resolve them.
+                  </div>
+                )}
+
+                {/* Line 3 (conditional): action buttons only when PR is open */}
+                {task.pr.state === 'open' && (
+                  <div className={styles.prActions}>
+                    {task.pr.mergeState !== 'dirty' && (
+                      <button
+                        className={styles.reviewButton}
+                        disabled={reviewInFlight || !projectId}
+                        onClick={() => void handleRunReview()}
+                        title={
+                          !projectId ? 'Project ID unavailable' : undefined
+                        }
+                      >
+                        {reviewInFlight ? 'Reviewing…' : 'Run Review'}
+                      </button>
+                    )}
+                    {task.pr.mergeState === 'dirty' && (
+                      <button
+                        className={styles.reReviewButton}
+                        disabled={fixConflictsInFlight}
+                        onClick={() => void handleFixConflicts()}
+                        title="Send rebase instructions to the code session to resolve merge conflicts"
+                      >
+                        {fixConflictsInFlight ? 'Fixing…' : '↺ Fix Conflicts'}
+                      </button>
+                    )}
+                    {task.review?.verdict === 'approved' &&
+                      task.pr.mergeState !== 'dirty' && (
+                        <button
+                          className={styles.mergeButton}
+                          disabled={mergeInFlight}
+                          onClick={() => void handleMerge()}
+                        >
+                          {mergeInFlight ? 'Merging…' : 'Merge ↓'}
+                        </button>
+                      )}
+                    {task.review?.verdict === 'approved' &&
+                      task.pr.mergeState === 'dirty' && (
+                        <button
+                          className={styles.mergeButton}
+                          disabled={true}
+                          title="Cannot merge — PR has merge conflicts"
+                        >
+                          Merge ↓
+                        </button>
+                      )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Empty state */}
+            {!task.codeSession && !task.pr && !task.review && (
+              <div className={styles.emptyState}>
+                <p>No active sessions or PRs for this task.</p>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ── Diff tab ── */}
+        {task.pr && activeTab === 'diff' && (
+          <DiffViewer prNumber={task.pr.prNumber} projectId={projectId} />
         )}
       </div>
     </div>
