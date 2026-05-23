@@ -29,6 +29,15 @@ export function handleMessage(
         break;
       }
       msg.tasks.forEach((t) => {
+        if (!t.taskUrl) {
+          ws.send(
+            JSON.stringify({
+              type: 'error',
+              message: 'dispatch task requires a non-empty taskUrl',
+            }),
+          );
+          return;
+        }
         try {
           sessions.start(t.taskUrl, t.projectContextUrl, {
             taskType: t.taskType,

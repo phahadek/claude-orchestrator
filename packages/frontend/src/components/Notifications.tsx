@@ -57,7 +57,9 @@ export function Notifications({
               ) : n.status === 'done' ? (
                 <span className={styles.message}>Session complete</span>
               ) : (
-                <span className={styles.messageError}>Session errored</span>
+                <span className={styles.messageError}>
+                  {n.message ?? 'Session errored'}
+                </span>
               )}
             </div>
           )}

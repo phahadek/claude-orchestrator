@@ -734,3 +734,48 @@ describe('SessionManager.getLiveCodeSessionCount() — pendingStarts', () => {
     expect(reviewGuards.length).toBeGreaterThanOrEqual(2);
   });
 });
+
+// ── AC: SessionManager — error broadcast and rollback on launch failure ───────
+describe('SessionManager — error broadcast and rollback', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('broadcasts an error message when updateStatus(In Progress) fails', () => {
+    // The .catch() on updateStatus must emit a ServerMessage with type: 'error'
+    const inProgressIdx = source.indexOf(
+      "updateStatus(notionTaskId, '🔄 In Progress')",
+    );
+    expect(inProgressIdx).toBeGreaterThan(-1);
+    const catchBlock = source.slice(inProgressIdx, inProgressIdx + 500);
+    expect(catchBlock).toMatch(/\.catch\s*\(/);
+    expect(catchBlock).toMatch(/this\.emit\('message'/);
+    expect(catchBlock).toMatch(/type:\s*'error'/);
+  });
+
+  it('launchSession().catch() rolls back task status to Ready when session type is standard', () => {
+    const launchCatchIdx = source.indexOf('launchSession().catch');
+    expect(launchCatchIdx).toBeGreaterThan(-1);
+    // After the catch block, the source must contain a rollback to Ready
+    const catchBlock = source.slice(launchCatchIdx, launchCatchIdx + 1000);
+    expect(catchBlock).toMatch(/'🗂️ Ready'/);
+    expect(catchBlock).toMatch(
+      /updateStatus\s*\(\s*notionTaskId\s*,\s*'🗂️ Ready'\s*\)/,
+    );
+  });
+
+  it('launchSession().catch() broadcasts an error type ServerMessage', () => {
+    const launchCatchIdx = source.indexOf('launchSession().catch');
+    const catchBlock = source.slice(launchCatchIdx, launchCatchIdx + 2000);
+    expect(catchBlock).toMatch(/this\.emit\('message'/);
+    expect(catchBlock).toMatch(/type:\s*'error'/);
+  });
+
+  it('launchSession rollback emits task_status_changed with Ready status', () => {
+    const launchCatchIdx = source.indexOf('launchSession().catch');
+    const catchBlock = source.slice(launchCatchIdx, launchCatchIdx + 2000);
+    expect(catchBlock).toMatch(/task_status_changed/);
+    expect(catchBlock).toMatch(/'🗂️ Ready'/);
+  });
+});
