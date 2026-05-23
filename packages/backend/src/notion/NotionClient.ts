@@ -374,9 +374,7 @@ export class NotionClient {
       await notionRequest('GET', `/pages/${id}`);
     } catch (err) {
       if (err instanceof NotionApiError && err.statusCode === 404) {
-        throw new Error(`No Notion object found with ID: ${id}`, {
-          cause: err,
-        });
+        throw new NotionApiError(404, `No Notion object found with ID: ${id}`);
       }
       throw err;
     }
