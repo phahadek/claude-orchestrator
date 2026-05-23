@@ -639,7 +639,9 @@ export default function App() {
       )
       .filter((s) => !statusFilter || s.status === statusFilter)
       .filter((s) => !tagFilter || s.tags?.includes(tagFilter))
-      .filter((s) => activeProjectId !== null && s.project_id === activeProjectId);
+      .filter(
+        (s) => activeProjectId !== null && s.project_id === activeProjectId,
+      );
   }, [sessions, searchText, statusFilter, tagFilter, activeProjectId]);
 
   const availableTags = useMemo(() => {

@@ -176,7 +176,9 @@ describe('App — project reconciliation after /api/config', () => {
     render(<App />);
 
     // Before config resolves: header shows no project yet
-    expect(screen.getByTestId('header').getAttribute('data-active-project')).toBe('');
+    expect(
+      screen.getByTestId('header').getAttribute('data-active-project'),
+    ).toBe('');
 
     // After config resolves: header shows server-truth project, never stale
     await waitFor(() => {
