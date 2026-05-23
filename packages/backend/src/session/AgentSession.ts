@@ -12,6 +12,7 @@ import {
   getPRBySessionId,
   getPRByNumber,
   setHeadSha,
+  setPauseReason,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { emitTaskUpdated } from '../routes/tasks';
@@ -135,6 +136,8 @@ export class AgentSession extends EventEmitter {
   public model: string | null = null;
   /** Count of consecutive transient-error retries for this session instance. Resets on clean exit. */
   private retryCount = 0;
+  /** Guard: fires at most once per session to avoid duplicate pause broadcasts. */
+  private inSessionApiErrorFired = false;
 
   /** The underlying I/O adapter (CLI subprocess or Agent SDK). */
   private runner: ISessionRunner;
@@ -327,6 +330,42 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     return (
       payload.includes('api_error') || payload.includes('overloaded_error')
     );
+  }
+
+  /**
+   * Called when a transient API error (529/500) is detected in a live session
+   * that has not exited. Pauses the session immediately without auto-retry since
+   * there is no --resume target while the CLI process is still running.
+   */
+  private handleInSessionApiError(): void {
+    if (this.inSessionApiErrorFired) return;
+    this.inSessionApiErrorFired = true;
+
+    const pr = getPRBySessionId(this.sessionId);
+    if (pr) {
+      setPauseReason(pr.pr_number, pr.repo, 'api_overloaded');
+    }
+
+    const pauseMessage =
+      'The Anthropic API returned a 529 Overloaded or 500 error mid-session. ' +
+      'This session has been paused. Please wait for the API to recover and then ' +
+      'manually resume the session.';
+
+    if (this.sessionManager) {
+      try {
+        this.sessionManager.send(this.sessionId, pauseMessage);
+      } catch (err) {
+        console.warn(
+          `[AgentSession] send failed for ${this.sessionId}: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    this.broadcast({
+      type: 'api_overloaded_paused',
+      sessionId: this.sessionId,
+      ...(pr ? { prNumber: pr.pr_number, repo: pr.repo } : {}),
+    });
   }
 
   /**
@@ -566,6 +605,13 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       content: payload,
       ...(messageId != null && { messageId }),
     });
+
+    // Detect in-session transient API error (529/500) in a live session.
+    // The CLI may surface these without exiting, so the normal exit-based retry
+    // path never fires. Pause immediately instead.
+    if (rawType === 'error' && this.isTransientApiError()) {
+      this.handleInSessionApiError();
+    }
   }
 
   /**

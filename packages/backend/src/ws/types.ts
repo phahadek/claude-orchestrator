@@ -200,6 +200,12 @@ export type ServerMessage =
     }
   | { type: 'stuck_session_killed'; sessionId: string; taskName: string }
   | {
+      type: 'api_overloaded_paused';
+      sessionId: string;
+      prNumber?: number;
+      repo?: string;
+    }
+  | {
       type: 'session_audit';
       sessionId: string;
       prOpened: boolean;

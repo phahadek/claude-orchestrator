@@ -124,6 +124,12 @@ export function useSessionStore() {
     taskName: string;
     receivedAt: number;
   } | null>(null);
+  const [lastApiOverloadedPaused, setLastApiOverloadedPaused] = useState<{
+    sessionId: string;
+    prNumber?: number;
+    repo?: string;
+    receivedAt: number;
+  } | null>(null);
   const [incompleteReviews, setIncompleteReviews] = useState<
     IncompleteReview[]
   >([]);
@@ -394,6 +400,14 @@ export function useSessionStore() {
       });
       setTaskListRefreshTrigger((n) => n + 1);
     }
+    if (msg.type === 'api_overloaded_paused') {
+      setLastApiOverloadedPaused({
+        sessionId: msg.sessionId,
+        prNumber: msg.prNumber,
+        repo: msg.repo,
+        receivedAt: Date.now(),
+      });
+    }
   }, []);
 
   const resetTasks = useCallback(() => {
@@ -505,6 +519,7 @@ export function useSessionStore() {
     lastStuckNotification,
     lastStuckPaused,
     lastStuckKilled,
+    lastApiOverloadedPaused,
     incompleteReviews,
     dismissIncompleteReviews,
     lastTaskUpdate,

@@ -30,6 +30,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
   auto_merge_failed: 'Auto-merge failed — merge manually or investigate.',
   pr_closed: 'PR was closed during auto-merge — reopen or create a new PR.',
   review_failed: 'Re-review failed unexpectedly — check the backend logs.',
+  api_overloaded:
+    'API overloaded (529) — session paused. Resume when the API recovers.',
 };
 
 function verdictLabel(verdict: string): string {

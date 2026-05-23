@@ -276,6 +276,14 @@ export function PRCard({
             ⚠ Review failed
           </span>
         )}
+        {pr.pauseReason === 'api_overloaded' && (
+          <span
+            className={styles.conflictBadge}
+            title="Session paused — Anthropic API returned 529 Overloaded. Resume when the API is available."
+          >
+            ⚠ API Overloaded
+          </span>
+        )}
 
         <div className={styles.buttons}>
           <button

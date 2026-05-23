@@ -58,11 +58,18 @@ export function useNotifications(
     message: string;
     receivedAt: number;
   } | null,
+  apiOverloadedPausedEvent?: {
+    sessionId: string;
+    prNumber?: number;
+    repo?: string;
+    receivedAt: number;
+  } | null,
 ): void {
   const prevRef = useRef<Map<string, SessionSnapshot>>(new Map());
   const initialSyncDoneRef = useRef(false);
   const prevReviewEventRef = useRef<typeof prReviewEvent>(null);
   const prevReviewFailedRef = useRef<typeof reviewFailedEvent>(null);
+  const prevApiOverloadedRef = useRef<typeof apiOverloadedPausedEvent>(null);
 
   useEffect(() => {
     requestPermissionOnce();
@@ -196,4 +203,25 @@ export function useNotifications(
       window.dispatchEvent(new CustomEvent('navigateToPRs'));
     });
   }, [prReviewEvent]);
+
+  useEffect(() => {
+    if (!apiOverloadedPausedEvent) return;
+    if (
+      prevApiOverloadedRef.current?.receivedAt ===
+      apiOverloadedPausedEvent.receivedAt
+    )
+      return;
+    prevApiOverloadedRef.current = apiOverloadedPausedEvent;
+
+    const { sessionId, prNumber } = apiOverloadedPausedEvent;
+    const body = prNumber
+      ? `PR #${prNumber} session paused — API overloaded (529). Resume when available.`
+      : `Session paused — API overloaded (529). Resume when available.`;
+    fireNotification('⚠️ API overloaded — session paused', body, () => {
+      window.focus();
+      window.dispatchEvent(
+        new CustomEvent('selectSession', { detail: { sessionId } }),
+      );
+    });
+  }, [apiOverloadedPausedEvent]);
 }
