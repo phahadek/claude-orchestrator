@@ -1,6 +1,20 @@
 export type TaskSource = 'notion' | 'yaml';
 export type GitMode = 'github' | 'local-only';
 
+export interface DatabaseValidation {
+  type: 'database';
+  title: string;
+  id: string;
+}
+
+export interface PageValidation {
+  type: 'page';
+  childDatabaseId: string | null;
+  childDatabaseTitle: string | null;
+}
+
+export type BoardValidation = DatabaseValidation | PageValidation;
+
 export interface ProjectMilestone {
   id: string;
   projectId: string;
@@ -146,6 +160,21 @@ export const projectsApi = {
     return request<void>(`/api/milestones/${encodeURIComponent(milestoneId)}`, {
       method: 'DELETE',
     });
+  },
+
+  async validateNotionBoard(id: string): Promise<BoardValidation> {
+    const res = await fetch(
+      `/api/notion/validate-board?id=${encodeURIComponent(id)}`,
+    );
+    const body = (await res.json()) as BoardValidation | { error: string };
+    if (!res.ok) {
+      throw new Error(
+        'error' in body && body.error
+          ? body.error
+          : `${res.status} ${res.statusText}`,
+      );
+    }
+    return body as BoardValidation;
   },
 
   createTasksYamlStub(projectId: string): Promise<{ path: string }> {

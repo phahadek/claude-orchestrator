@@ -12,6 +12,7 @@ import {
 } from '../projects/ProjectService';
 import type { AutoMerger } from '../github/AutoMerger';
 import { getMergeReadyPRs } from '../db/queries';
+import { NotionClient, normalizeNotionId } from '../notion/NotionClient';
 
 let _autoMerger: AutoMerger | null = null;
 export function setAutoMerger(merger: AutoMerger): void {
@@ -287,6 +288,34 @@ projectsRouter.post(
     };
     fs.writeFileSync(filePath, yaml.dump(stub, { lineWidth: 120 }), 'utf-8');
     res.status(201).json({ path: filePath });
+  },
+);
+
+// ── Notion board validation ───────────────────────────────────────────────────
+
+projectsRouter.get(
+  '/notion/validate-board',
+  async (req: Request, res: Response) => {
+    const rawId = typeof req.query.id === 'string' ? req.query.id.trim() : '';
+    if (!rawId) {
+      res.status(400).json({ error: 'id query parameter is required' });
+      return;
+    }
+    if (!normalizeNotionId(rawId)) {
+      res
+        .status(400)
+        .json({ error: 'Could not extract a valid Notion ID from the input' });
+      return;
+    }
+    const client = new NotionClient();
+    try {
+      const result = await client.validateBoard(rawId);
+      res.json(result);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Notion validation failed';
+      res.status(400).json({ error: message });
+    }
   },
 );
 

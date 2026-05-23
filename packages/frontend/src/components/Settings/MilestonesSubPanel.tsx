@@ -5,6 +5,7 @@ import {
   projectsApi,
   type Project,
   type ProjectMilestone,
+  type BoardValidation,
 } from '../../api/projects';
 import styles from './ProjectsSettingsPanel.module.css';
 
@@ -38,6 +39,12 @@ function MilestonesSubPanelInner({
   const [confirmDelete, setConfirmDelete] = useState<ProjectMilestone | null>(
     null,
   );
+  const [sourceValidation, setSourceValidation] =
+    useState<BoardValidation | null>(null);
+  const [sourceValidating, setSourceValidating] = useState(false);
+  const [sourceValidationError, setSourceValidationError] = useState<
+    string | null
+  >(null);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -85,6 +92,39 @@ function MilestonesSubPanelInner({
     setEditing(null);
     setDraft(EMPTY_DRAFT);
     setFormError(null);
+    setSourceValidation(null);
+    setSourceValidating(false);
+    setSourceValidationError(null);
+  }
+
+  async function validateNotionSource(value: string) {
+    const trimmed = value.trim();
+    if (!trimmed || project.taskSource !== 'notion') return;
+    setSourceValidating(true);
+    setSourceValidationError(null);
+    setSourceValidation(null);
+    try {
+      const result = await projectsApi.validateNotionBoard(trimmed);
+      setSourceValidation(result);
+      if (result.type === 'page') {
+        if (result.childDatabaseId) {
+          setSourceValidationError(
+            `This is a Notion page, not a database. It contains one child database ("${result.childDatabaseTitle ?? result.childDatabaseId}"). Use it instead?`,
+          );
+        } else {
+          setSourceValidationError(
+            'This is a Notion page, not a database. Please paste the URL of a Notion database.',
+          );
+        }
+      }
+    } catch (err) {
+      setSourceValidationError(
+        err instanceof Error ? err.message : 'Validation failed',
+      );
+      setSourceValidation(null);
+    } finally {
+      setSourceValidating(false);
+    }
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -93,19 +133,33 @@ function MilestonesSubPanelInner({
       setFormError('Name is required');
       return;
     }
+    if (sourceValidation?.type === 'page') {
+      setFormError(
+        'The source ID points to a Notion page, not a database. Please fix the field above.',
+      );
+      return;
+    }
     setSubmitting(true);
     setFormError(null);
     try {
+      const trimmedSource = draft.sourceId.trim();
+      // Prefer the normalized database ID returned by validation
+      const resolvedSourceId =
+        trimmedSource === ''
+          ? null
+          : sourceValidation?.type === 'database'
+            ? sourceValidation.id
+            : trimmedSource;
       if (editing) {
         await projectsApi.updateMilestone(editing.id, {
           name: draft.name,
-          sourceId: draft.sourceId.trim() === '' ? null : draft.sourceId.trim(),
+          sourceId: resolvedSourceId,
           displayOrder: draft.displayOrder,
         });
       } else {
         await projectsApi.createMilestone(project.id, {
           name: draft.name,
-          sourceId: draft.sourceId.trim() === '' ? null : draft.sourceId.trim(),
+          sourceId: resolvedSourceId,
           displayOrder: draft.displayOrder,
         });
       }
@@ -139,9 +193,11 @@ function MilestonesSubPanelInner({
   const sourceLabel =
     project.taskSource === 'yaml'
       ? 'YAML milestone id'
-      : 'Notion data source ID';
+      : 'Notion database URL or ID';
   const sourcePlaceholder =
-    project.taskSource === 'yaml' ? 'm1' : 'paste from Notion URL';
+    project.taskSource === 'yaml'
+      ? 'm1'
+      : 'https://www.notion.so/workspace/My-Board-abc123…';
 
   return (
     <div className={styles.subPanel}>
@@ -239,11 +295,53 @@ function MilestonesSubPanelInner({
                   type="text"
                   className={styles.input}
                   value={draft.sourceId}
-                  onChange={(e) =>
-                    setDraft({ ...draft, sourceId: e.target.value })
-                  }
+                  onChange={(e) => {
+                    setDraft({ ...draft, sourceId: e.target.value });
+                    setSourceValidation(null);
+                    setSourceValidationError(null);
+                  }}
+                  onBlur={(e) => void validateNotionSource(e.target.value)}
                   placeholder={sourcePlaceholder}
                 />
+                {sourceValidating && (
+                  <p className={styles.muted}>Validating…</p>
+                )}
+                {!sourceValidating && sourceValidationError && (
+                  <p className={styles.serverError}>
+                    {sourceValidationError}
+                    {sourceValidation?.type === 'page' &&
+                      sourceValidation.childDatabaseId && (
+                        <>
+                          {' '}
+                          <button
+                            type="button"
+                            className={styles.linkBtn}
+                            onClick={() => {
+                              setDraft({
+                                ...draft,
+                                sourceId:
+                                  sourceValidation.childDatabaseId ?? '',
+                              });
+                              setSourceValidation(null);
+                              setSourceValidationError(null);
+                            }}
+                          >
+                            Use child database
+                          </button>
+                        </>
+                      )}
+                  </p>
+                )}
+                {!sourceValidating &&
+                  !sourceValidationError &&
+                  sourceValidation?.type === 'database' && (
+                    <p className={styles.muted}>
+                      ✓{' '}
+                      {sourceValidation.title
+                        ? sourceValidation.title
+                        : 'Valid Notion database'}
+                    </p>
+                  )}
               </div>
               <div className={styles.formField}>
                 <label htmlFor="ms-order" className={styles.formLabel}>
