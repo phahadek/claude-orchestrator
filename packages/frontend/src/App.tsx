@@ -84,6 +84,10 @@ export default function App() {
     setSessionFavorited,
     prRefreshTrigger,
     lastPrReviewEvent,
+    lastPrMergedEvent,
+    lastPrClosedEvent,
+    lastPrStateChangedEvent,
+    lastPrMergeabilityChangedEvent,
     lastReviewEscalation,
     lastReviewFailed,
     lastStuckNotification,
@@ -1049,6 +1053,10 @@ export default function App() {
                 onCollapse={() => setTopView('sessions')}
                 refreshTrigger={prRefreshTrigger}
                 prReviewEvent={lastPrReviewEvent}
+                prMergedEvent={lastPrMergedEvent}
+                prClosedEvent={lastPrClosedEvent}
+                prStateChangedEvent={lastPrStateChangedEvent}
+                prMergeabilityChangedEvent={lastPrMergeabilityChangedEvent}
               />
             </div>
           </ErrorBoundary>

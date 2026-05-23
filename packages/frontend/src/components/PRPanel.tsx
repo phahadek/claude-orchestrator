@@ -10,6 +10,20 @@ interface Props {
   onCollapse?: () => void;
   refreshTrigger?: number;
   prReviewEvent?: { prNumber: number; verdict: string; summary: string } | null;
+  prMergedEvent?: { prNumber: number; repo: string; sha: string } | null;
+  prClosedEvent?: { prNumber: number; repo: string } | null;
+  prStateChangedEvent?: {
+    prNumber: number;
+    repo: string;
+    mergeable: boolean | null;
+    mergeState: string | null;
+  } | null;
+  prMergeabilityChangedEvent?: {
+    prNumber: number;
+    repo: string;
+    mergeable: boolean | null;
+    mergeState: string | null;
+  } | null;
 }
 
 export function PRPanel({
@@ -18,6 +32,10 @@ export function PRPanel({
   onCollapse,
   refreshTrigger,
   prReviewEvent,
+  prMergedEvent,
+  prClosedEvent,
+  prStateChangedEvent,
+  prMergeabilityChangedEvent,
 }: Props) {
   const [prs, setPRs] = useState<PRListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -85,34 +103,6 @@ export function PRPanel({
     }
   }, [activeProjectId]);
 
-  useEffect(() => {
-    fetchPRs();
-    const interval = setInterval(fetchPRs, 30_000);
-    return () => clearInterval(interval);
-  }, [fetchPRs, activeProjectId]);
-
-  useEffect(() => {
-    if (refreshTrigger) fetchPRs();
-  }, [refreshTrigger, fetchPRs]);
-
-  useEffect(() => {
-    if (!prReviewEvent) return;
-    setPRs((prev) =>
-      prev.map((pr) =>
-        pr.prNumber === prReviewEvent.prNumber
-          ? {
-              ...pr,
-              reviewResult: {
-                verdict: prReviewEvent.verdict as PRReviewResult['verdict'],
-                summary: prReviewEvent.summary,
-              },
-              reviewedAt: new Date().toISOString(),
-            }
-          : pr,
-      ),
-    );
-  }, [prReviewEvent]);
-
   const setError = (prNumber: number, msg: string | null) => {
     setCardErrors((prev) => {
       const next = new Map(prev);
@@ -144,6 +134,81 @@ export function PRPanel({
       return next;
     });
   };
+
+  useEffect(() => {
+    fetchPRs();
+    const interval = setInterval(fetchPRs, 30_000);
+    return () => clearInterval(interval);
+  }, [fetchPRs, activeProjectId]);
+
+  useEffect(() => {
+    if (refreshTrigger) fetchPRs();
+  }, [refreshTrigger, fetchPRs]);
+
+  useEffect(() => {
+    if (!prReviewEvent) return;
+    setPRs((prev) =>
+      prev.map((pr) =>
+        pr.prNumber === prReviewEvent.prNumber
+          ? {
+              ...pr,
+              reviewResult: {
+                verdict: prReviewEvent.verdict as PRReviewResult['verdict'],
+                summary: prReviewEvent.summary,
+              },
+              reviewedAt: new Date().toISOString(),
+            }
+          : pr,
+      ),
+    );
+    setReviewInFlight((prev) => {
+      const next = new Set(prev);
+      next.delete(prReviewEvent.prNumber);
+      return next;
+    });
+    stopElapsed(prReviewEvent.prNumber);
+  }, [prReviewEvent]);
+
+  useEffect(() => {
+    if (!prMergedEvent) return;
+    setMergeInFlight((prev) => {
+      const next = new Set(prev);
+      next.delete(prMergedEvent.prNumber);
+      return next;
+    });
+  }, [prMergedEvent]);
+
+  useEffect(() => {
+    if (!prClosedEvent) return;
+    setRemoveInFlight((prev) => {
+      const next = new Set(prev);
+      next.delete(prClosedEvent.prNumber);
+      return next;
+    });
+  }, [prClosedEvent]);
+
+  useEffect(() => {
+    if (!prStateChangedEvent) return;
+    setApproveInFlight((prev) => {
+      const next = new Set(prev);
+      next.delete(prStateChangedEvent.prNumber);
+      return next;
+    });
+    setFixConflictsInFlight((prev) => {
+      const next = new Set(prev);
+      next.delete(prStateChangedEvent.prNumber);
+      return next;
+    });
+  }, [prStateChangedEvent]);
+
+  useEffect(() => {
+    if (!prMergeabilityChangedEvent) return;
+    setCheckingMergeability((prev) => {
+      const next = new Set(prev);
+      next.delete(prMergeabilityChangedEvent.prNumber);
+      return next;
+    });
+  }, [prMergeabilityChangedEvent]);
 
   const handleReview = async (prNumber: number) => {
     if (!activeProjectId) return;

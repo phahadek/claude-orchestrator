@@ -135,6 +135,28 @@ export function useSessionStore() {
   >([]);
   const [lastTaskUpdate, setLastTaskUpdate] = useState<TaskView | null>(null);
   const [taskListRefreshTrigger, setTaskListRefreshTrigger] = useState(0);
+  const [lastPrMergedEvent, setLastPrMergedEvent] = useState<{
+    prNumber: number;
+    repo: string;
+    sha: string;
+  } | null>(null);
+  const [lastPrClosedEvent, setLastPrClosedEvent] = useState<{
+    prNumber: number;
+    repo: string;
+  } | null>(null);
+  const [lastPrStateChangedEvent, setLastPrStateChangedEvent] = useState<{
+    prNumber: number;
+    repo: string;
+    mergeable: boolean | null;
+    mergeState: string | null;
+  } | null>(null);
+  const [lastPrMergeabilityChangedEvent, setLastPrMergeabilityChangedEvent] =
+    useState<{
+      prNumber: number;
+      repo: string;
+      mergeable: boolean | null;
+      mergeState: string | null;
+    } | null>(null);
 
   const dispatch = useCallback((msg: ServerMessage) => {
     setSynced(true);
@@ -334,18 +356,36 @@ export function useSessionStore() {
       setLastTaskUpdate(msg.task);
     }
     if (msg.type === 'pr_merged') {
+      setLastPrMergedEvent({
+        prNumber: msg.prNumber,
+        repo: msg.repo,
+        sha: msg.sha,
+      });
       setTaskListRefreshTrigger((n) => n + 1);
       setPrRefreshTrigger((n) => n + 1);
     }
     if (msg.type === 'pr_closed') {
+      setLastPrClosedEvent({ prNumber: msg.prNumber, repo: msg.repo });
       setTaskListRefreshTrigger((n) => n + 1);
       setPrRefreshTrigger((n) => n + 1);
     }
     if (msg.type === 'pr_state_changed') {
+      setLastPrStateChangedEvent({
+        prNumber: msg.prNumber,
+        repo: msg.repo,
+        mergeable: msg.mergeable,
+        mergeState: msg.mergeState,
+      });
       setTaskListRefreshTrigger((n) => n + 1);
       setPrRefreshTrigger((n) => n + 1);
     }
     if (msg.type === 'pr_mergeability_changed') {
+      setLastPrMergeabilityChangedEvent({
+        prNumber: msg.prNumber,
+        repo: msg.repo,
+        mergeable: msg.mergeable,
+        mergeState: msg.mergeState,
+      });
       setTaskListRefreshTrigger((n) => n + 1);
       setPrRefreshTrigger((n) => n + 1);
     }
@@ -514,6 +554,10 @@ export function useSessionStore() {
     clearSessionDenials,
     prRefreshTrigger,
     lastPrReviewEvent,
+    lastPrMergedEvent,
+    lastPrClosedEvent,
+    lastPrStateChangedEvent,
+    lastPrMergeabilityChangedEvent,
     lastReviewEscalation,
     lastReviewFailed,
     lastStuckNotification,
