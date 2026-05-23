@@ -86,55 +86,59 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
 
       {task.priority && <div className={styles.priority}>{task.priority}</div>}
 
-      {codeSession && (
-        <div className={styles.sessionRow}>
-          <span
-            className={`${styles.sessionStatus} ${styles[`session-${codeSession.status}`] ?? ''}`}
-          >
-            {codeSession.status}
-          </span>
-          {codeSession.lastMessage && (
-            <span className={styles.lastMessage}>
-              {codeSession.lastMessage}
-            </span>
+      {!isNonCode && (
+        <>
+          {codeSession && (
+            <div className={styles.sessionRow}>
+              <span
+                className={`${styles.sessionStatus} ${styles[`session-${codeSession.status}`] ?? ''}`}
+              >
+                {codeSession.status}
+              </span>
+              {codeSession.lastMessage && (
+                <span className={styles.lastMessage}>
+                  {codeSession.lastMessage}
+                </span>
+              )}
+            </div>
           )}
-        </div>
-      )}
 
-      {!codeSession && <span className={styles.placeholder}>—</span>}
+          {!codeSession && <span className={styles.placeholder}>—</span>}
 
-      {pr ? (
-        <div className={styles.prRow}>
-          <a
-            href={pr.prUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={styles.prLink}
-            onClick={(e) => e.stopPropagation()}
-          >
-            #{pr.prNumber}
-          </a>
-          <span className={styles.prState}>
-            {pr.draft ? 'draft' : pr.state}
-          </span>
-          {pr.mergeState === 'dirty' && (
-            <span
-              className={styles.conflictBadge}
-              title="PR has merge conflicts"
-            >
-              ⚠ Conflict
-            </span>
+          {pr ? (
+            <div className={styles.prRow}>
+              <a
+                href={pr.prUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={styles.prLink}
+                onClick={(e) => e.stopPropagation()}
+              >
+                #{pr.prNumber}
+              </a>
+              <span className={styles.prState}>
+                {pr.draft ? 'draft' : pr.state}
+              </span>
+              {pr.mergeState === 'dirty' && (
+                <span
+                  className={styles.conflictBadge}
+                  title="PR has merge conflicts"
+                >
+                  ⚠ Conflict
+                </span>
+              )}
+              {review?.verdict && (
+                <span
+                  className={`${styles.verdict} ${styles[`verdict-${review.verdict.replace(/_/g, '-')}`] ?? ''}`}
+                >
+                  {verdictLabel(review.verdict)}
+                </span>
+              )}
+            </div>
+          ) : (
+            <span className={styles.placeholder}>—</span>
           )}
-          {review?.verdict && (
-            <span
-              className={`${styles.verdict} ${styles[`verdict-${review.verdict.replace(/_/g, '-')}`] ?? ''}`}
-            >
-              {verdictLabel(review.verdict)}
-            </span>
-          )}
-        </div>
-      ) : (
-        <span className={styles.placeholder}>—</span>
+        </>
       )}
 
       <div className={styles.cardFooter}>

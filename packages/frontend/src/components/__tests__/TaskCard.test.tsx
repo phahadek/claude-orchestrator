@@ -505,4 +505,19 @@ describe('TaskCard', () => {
 
     expect(onClick).not.toHaveBeenCalled();
   });
+
+  // ── Non-Code task rendering ───────────────────────────────────────────────
+
+  it('does not render session placeholder or PR placeholder for non-Code tasks', () => {
+    render(
+      <TaskCard
+        task={makeTask({ taskType: '📋 Planning' })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.queryByText('—')).toBeNull();
+  });
 });
