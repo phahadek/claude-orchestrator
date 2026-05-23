@@ -1,4 +1,11 @@
 #!/usr/bin/env node
+/*
+ * CLI flags:
+ *   --env <path>     — path to the .env file containing NOTION_TOKEN.
+ *   --no-done        — exclude tasks with status ✅ Done.
+ *   --status <value> — filter to tasks with the given Status property value (e.g. "🗂️ Ready").
+ *   --json           — emit raw JSON instead of the human-readable summary.
+ */
 /**
  * notion-query.mjs — Query a Notion database with full pagination.
  *
@@ -10,12 +17,12 @@
  *   node notion-query.mjs <database-id> [options]
  *
  * Options:
- *   --env <path>       Path to the .env file containing NOTION_TOKEN.
- *   --no-done          Exclude tasks with status ✅ Done.
- *   --status <value>   Filter to tasks with the given Status property value (e.g. "🗂️ Ready").
- *   --json             Emit raw JSON instead of the human-readable summary.
+ *   --status <s>       Filter to a single status (e.g. "🗂️ Ready")
+ *   --no-done          Exclude ✅ Done tasks
  *   --property <name>  Name of the status property (default: "Status")
  *   --title <name>     Name of the title property (default: auto-detect)
+ *   --json             Output raw JSON instead of formatted table
+ *   --env <path>       Path to .env file to load NOTION_API_KEY from
  *
  * Environment:
  *   NOTION_API_KEY     Required. Notion integration token (ntn_...).
