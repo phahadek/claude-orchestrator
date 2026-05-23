@@ -310,8 +310,14 @@ export class PRReviewService {
       taskName: `#${prData.id} ${prData.title}`,
     });
 
-    // 3. Persist the review session pairing.
+    // 3. Persist the review session pairing and record the SHA under review.
+    // Setting last_reviewed_sha here (before await verdictPromise) closes a race
+    // window: AgentSession fires push_detected on every result event once
+    // review_session_id is set, and shouldAutoReview returns true when
+    // last_reviewed_sha is null. By recording it now, any push_detected during
+    // the review sees headSha === last_reviewed_sha and is correctly skipped.
     setReviewSessionId(prNumber, repo, sessionId);
+    setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
 
     const aiResult = await verdictPromise;
     const { mergeable } = await this.github.getMergeabilityWithRetry(
@@ -327,8 +333,6 @@ export class PRReviewService {
       mergeable,
     );
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
-    // Set last_reviewed_sha so the next push_detected can compare correctly.
-    setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
     if (finalResult.verdict === 'approved') {
       await this.handleApprovedVerdict(
         prNumber,
@@ -413,6 +417,35 @@ export class PRReviewService {
     }
 
     const prData = await this.github.fetchPR(repo, prNumber);
+
+    // Dedup guard: skip if the head SHA hasn't changed since the last review.
+    // Dedup key: (prNumber, repo, headSha). This is a secondary defence — the
+    // primary protection is that reviewPR() Case 3 now sets last_reviewed_sha
+    // before awaiting the verdict, so shouldAutoReview() in server.ts already
+    // blocks same-SHA re-reviews via push_detected.
+    if (prData.headSha && prData.headSha === pr.last_reviewed_sha) {
+      console.log(
+        `[PRReviewService] reReviewPR PR #${prNumber}: headSha ${prData.headSha} matches last_reviewed_sha — skipping duplicate re-review`,
+      );
+      const stored = (() => {
+        try {
+          return pr.review_result
+            ? (JSON.parse(pr.review_result) as Partial<PRReviewResult>)
+            : null;
+        } catch {
+          return null;
+        }
+      })();
+      return {
+        prNumber,
+        repo,
+        verdict: (stored?.verdict as PRReviewResult['verdict']) ?? 'incomplete',
+        dimensions: (stored?.dimensions as ReviewDimension[]) ?? [],
+        summary: stored?.summary ?? '(no new commits — re-review skipped)',
+        reviewedAt: new Date().toISOString(),
+      };
+    }
+
     const branches =
       prData.baseBranch && prData.headBranch
         ? { base: prData.baseBranch, head: prData.headBranch }
@@ -476,7 +509,7 @@ export class PRReviewService {
       mergeable,
     );
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
-    setLastReviewedSha(prNumber, repo, pr.head_sha ?? null);
+    setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
     if (finalResult.verdict === 'approved') {
       await this.handleApprovedVerdict(
         prNumber,

@@ -11,6 +11,7 @@ vi.mock('../db/queries.js', () => ({
   updatePRDraftStatus: vi.fn(),
   incrementReviewIteration: vi.fn(),
   setLastReviewedSha: vi.fn(),
+  setHeadSha: vi.fn(),
 }));
 
 import { PRReviewService } from './PRReviewService';
@@ -2016,5 +2017,153 @@ describe('PRReviewService.buildPrompt() — size proportionality', () => {
     expect(prompt).toContain('necessary corollary work');
     // Verdict math updated to 5 dimensions
     expect(prompt).toContain('all 5 passed');
+  });
+});
+
+// ── reReviewPR() — same-SHA dedup guard ──────────────────────────────────────
+
+describe('PRReviewService.reReviewPR() — same-SHA dedup guard', () => {
+  const approvedPayload = {
+    verdict: 'approved',
+    dimensions: [
+      { name: 'Diff vs Context spec', passed: true, notes: 'Fixed.' },
+    ],
+    summary: 'Issues addressed.',
+  };
+  const storedNeedsChanges = {
+    verdict: 'needs_changes',
+    dimensions: [
+      { name: 'Diff vs Context spec', passed: false, notes: 'Fix it.' },
+    ],
+    summary: 'Still needs work.',
+  };
+
+  it('two consecutive calls with the same headSha invoke the underlying review exactly once', async () => {
+    const prRowFirstCall = {
+      ...mockPRRow,
+      review_session_id: 'review-session-dedup',
+      head_sha: 'sha-abc',
+      last_reviewed_sha: null,
+      review_result: JSON.stringify(storedNeedsChanges),
+    };
+    const prRowSecondCall = {
+      ...prRowFirstCall,
+      last_reviewed_sha: 'sha-abc',
+    };
+
+    vi.mocked(getPRByNumber)
+      .mockReturnValueOnce(prRowFirstCall as any)
+      .mockReturnValue(prRowSecondCall as any);
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (sessionId: string) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(sessionId, JSON.stringify(approvedPayload)),
+          ),
+        );
+        return sessionId;
+      },
+    );
+
+    const github = makeMockGitHub();
+    (github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...mockPR,
+      headSha: 'sha-abc',
+    });
+
+    const service = new PRReviewService(
+      github,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    // First call: last_reviewed_sha is null → guard does not fire, review runs
+    const first = await service.reReviewPR(42, 'owner/repo');
+    expect(first.verdict).toBe('approved');
+    expect(mockSM.sendOrResume).toHaveBeenCalledTimes(1);
+
+    // Second call: last_reviewed_sha equals headSha → dedup guard fires, skips review
+    const second = await service.reReviewPR(42, 'owner/repo');
+    expect(mockSM.sendOrResume).toHaveBeenCalledTimes(1); // no additional calls
+    expect(second.verdict).toBe('needs_changes'); // returned from stored result
+  });
+
+  it('dedup guard skips incrementReviewIteration and sendOrResume when headSha matches last_reviewed_sha', async () => {
+    const prRowSameSha = {
+      ...mockPRRow,
+      review_session_id: 'review-session-xyz',
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-abc',
+      review_result: JSON.stringify(storedNeedsChanges),
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowSameSha as any);
+
+    const mockSM = makeMockSessionManager();
+    const github = makeMockGitHub();
+    (github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...mockPR,
+      headSha: 'sha-abc',
+    });
+
+    const service = new PRReviewService(
+      github,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    await service.reReviewPR(42, 'owner/repo');
+
+    expect(vi.mocked(incrementReviewIteration)).not.toHaveBeenCalled();
+    expect(mockSM.sendOrResume).not.toHaveBeenCalled();
+  });
+
+  it('does not skip when headSha differs from last_reviewed_sha', async () => {
+    const prRowDifferentSha = {
+      ...mockPRRow,
+      review_session_id: 'review-session-xyz',
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-old',
+      review_result: null,
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowDifferentSha as any);
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (sessionId: string) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(sessionId, JSON.stringify(approvedPayload)),
+          ),
+        );
+        return sessionId;
+      },
+    );
+
+    const github = makeMockGitHub();
+    (github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...mockPR,
+      headSha: 'sha-abc',
+    });
+
+    const service = new PRReviewService(
+      github,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const result = await service.reReviewPR(42, 'owner/repo');
+    expect(result.verdict).toBe('approved');
+    expect(mockSM.sendOrResume).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(incrementReviewIteration)).toHaveBeenCalledTimes(1);
   });
 });
