@@ -8,6 +8,46 @@ import {
 import { NotionTask, NotionApiError, ResolvedTask } from './types';
 import { DependencyResolver } from './DependencyResolver';
 
+// ─── Board validation types ─────────────────────────────────────────────────
+
+export interface DatabaseValidation {
+  type: 'database';
+  title: string;
+  id: string;
+}
+
+export interface PageValidation {
+  type: 'page';
+  childDatabaseId: string | null;
+  childDatabaseTitle: string | null;
+}
+
+export type BoardValidation = DatabaseValidation | PageValidation;
+
+// ─── ID helpers ─────────────────────────────────────────────────────────────
+
+function formatAsUuid(raw: string): string {
+  const clean = raw.replace(/-/g, '');
+  if (clean.length !== 32) return raw;
+  return `${clean.slice(0, 8)}-${clean.slice(8, 12)}-${clean.slice(12, 16)}-${clean.slice(16, 20)}-${clean.slice(20)}`;
+}
+
+export function extractNotionId(input: string): string | null {
+  const cleaned = input.split('?')[0].split('#')[0];
+  const match = cleaned.match(
+    /([0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12})/i,
+  );
+  if (!match) return null;
+  return match[1].replace(/-/g, '');
+}
+
+export function normalizeNotionId(input: string): string | null {
+  const trimmed = input.trim();
+  const raw = extractNotionId(trimmed);
+  if (!raw) return null;
+  return formatAsUuid(raw);
+}
+
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const TASK_PAGE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const NOTION_VERSION = '2022-06-28';
@@ -57,6 +97,22 @@ interface NotionQueryResponse {
   results: NotionPage[];
   has_more: boolean;
   next_cursor: string | null;
+}
+
+interface NotionDatabaseResponse {
+  id: string;
+  object: string;
+  title: Array<{ plain_text?: string; text?: { content: string } }>;
+}
+
+interface NotionChildBlock {
+  id: string;
+  type: string;
+  child_database?: { title: string };
+}
+
+interface NotionBlocksChildrenResponse {
+  results: NotionChildBlock[];
 }
 
 // ─── Cache helpers ──────────────────────────────────────────────────────────
@@ -283,6 +339,70 @@ function taskPageCacheKey(taskId: string): string {
 // ─── NotionClient ───────────────────────────────────────────────────────────
 
 export class NotionClient {
+  /**
+   * Validate that a Notion ID (or URL) refers to a database, not a page.
+   * Returns a discriminated union: { type: 'database', title, id } on success,
+   * or { type: 'page', childDatabaseId, childDatabaseTitle } when the ID is a page.
+   * Throws on network/auth errors or if the ID does not exist.
+   */
+  async validateBoard(input: string): Promise<BoardValidation> {
+    const id = normalizeNotionId(input);
+    if (!id)
+      throw new Error('Could not extract a valid Notion ID from the input');
+
+    // Try as a database first
+    try {
+      const db = await notionRequest<NotionDatabaseResponse>(
+        'GET',
+        `/databases/${id}`,
+      );
+      const title =
+        db.title?.map((t) => t.plain_text ?? t.text?.content ?? '').join('') ??
+        '';
+      return { type: 'database', title, id };
+    } catch (err) {
+      if (
+        !(err instanceof NotionApiError) ||
+        (err.statusCode !== 404 && err.statusCode !== 400)
+      ) {
+        throw err;
+      }
+    }
+
+    // Not a database — check if it's a page
+    try {
+      await notionRequest('GET', `/pages/${id}`);
+    } catch (err) {
+      if (err instanceof NotionApiError && err.statusCode === 404) {
+        throw new Error(`No Notion object found with ID: ${id}`, {
+          cause: err,
+        });
+      }
+      throw err;
+    }
+
+    // It's a page — look for a single embedded child database (bonus)
+    let childDatabaseId: string | null = null;
+    let childDatabaseTitle: string | null = null;
+    try {
+      const children = await notionRequest<NotionBlocksChildrenResponse>(
+        'GET',
+        `/blocks/${id}/children?page_size=100`,
+      );
+      const childDbs = children.results.filter(
+        (b) => b.type === 'child_database',
+      );
+      if (childDbs.length === 1) {
+        childDatabaseId = formatAsUuid(childDbs[0].id.replace(/-/g, ''));
+        childDatabaseTitle = childDbs[0].child_database?.title ?? null;
+      }
+    } catch {
+      // child-database lookup is best-effort
+    }
+
+    return { type: 'page', childDatabaseId, childDatabaseTitle };
+  }
+
   /**
    * Fetch all tasks from a Notion database board.
    * Results are cached per board with a 5-minute TTL.
