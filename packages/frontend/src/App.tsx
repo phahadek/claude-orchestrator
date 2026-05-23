@@ -63,7 +63,7 @@ function getDefaultBoardId(project: ProjectConfig): string {
 function resolveActiveBoardId(project: ProjectConfig): string {
   const stored = localStorage.getItem(getMilestoneKey(project.id));
   const boards = project.boards ?? [];
-  if (stored && (boards.length === 0 || boards.some((b) => b.id === stored))) {
+  if (stored && boards.some((b) => b.id === stored)) {
     return stored;
   }
   return getDefaultBoardId(project);
@@ -639,7 +639,7 @@ export default function App() {
       )
       .filter((s) => !statusFilter || s.status === statusFilter)
       .filter((s) => !tagFilter || s.tags?.includes(tagFilter))
-      .filter((s) => !activeProjectId || s.project_id === activeProjectId);
+      .filter((s) => activeProjectId !== null && s.project_id === activeProjectId);
   }, [sessions, searchText, statusFilter, tagFilter, activeProjectId]);
 
   const availableTags = useMemo(() => {
@@ -669,7 +669,9 @@ export default function App() {
     () =>
       sessions.filter(
         (s) =>
-          !s.archived && (!activeProjectId || s.project_id === activeProjectId),
+          !s.archived &&
+          activeProjectId !== null &&
+          s.project_id === activeProjectId,
       ),
     [sessions, activeProjectId],
   );
