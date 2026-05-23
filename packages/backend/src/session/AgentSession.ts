@@ -9,6 +9,7 @@ import {
   incrementTokens,
   insertSessionAudit,
   setSessionModel,
+  setSessionMetadata,
   getPRBySessionId,
   getPRByNumber,
   setHeadSha,
@@ -24,6 +25,11 @@ import { SessionAuditor } from './SessionAuditor';
 import type { ISessionManager } from './SessionAuditor';
 import type { ISessionRunner } from './SessionRunner';
 import { CliSessionRunner } from './CliSessionRunner';
+import {
+  VALID_EVENT_TYPES,
+  SILENT_SKIP_TYPES,
+  toEventType,
+} from './eventTypes';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
 
@@ -85,30 +91,6 @@ function mergeAssistantContent(
   }
 
   return [...textBlocks, ...toolUseById.values()];
-}
-
-/** Map raw claude CLI event type strings to our DB EventType union. */
-function toEventType(
-  raw: string,
-): 'text' | 'tool_use' | 'tool_result' | 'system' | 'error' {
-  switch (raw) {
-    case 'assistant':
-    case 'text':
-    case 'message':
-      return 'text';
-    case 'tool_use':
-      return 'tool_use';
-    case 'tool_result':
-      return 'tool_result';
-    case 'system':
-    case 'user':
-    case 'file-history-snapshot':
-      return 'system';
-    case 'error':
-      return 'error';
-    default:
-      return 'system';
-  }
 }
 
 export class AgentSession extends EventEmitter {
@@ -383,6 +365,27 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 
     if (rawType === 'system' && (event.subtype as string) === 'init') {
       sessionLog(this.sessionId, `INIT permissionMode=${event.permissionMode}`);
+    }
+
+    // ai-title: persist as session metadata only, no session event
+    if (rawType === 'ai-title') {
+      if (typeof event.aiTitle === 'string') {
+        setSessionMetadata(this.sessionId, { aiTitle: event.aiTitle });
+      }
+      return;
+    }
+
+    // Silent-skip types: known but produce no session event
+    if (SILENT_SKIP_TYPES.has(rawType)) {
+      return;
+    }
+
+    // Log truly unknown types so they're diagnosable; still store as 'system'
+    if (!VALID_EVENT_TYPES.has(rawType)) {
+      sessionLog(
+        this.sessionId,
+        `unknown event type "${rawType}" — storing as system`,
+      );
     }
 
     // Extract model name from first assistant event

@@ -283,6 +283,27 @@ export function getSessionTags(sessionId: string): string[] {
   }
 }
 
+export function setSessionMetadata(
+  sessionId: string,
+  fields: Record<string, unknown>,
+): void {
+  const row = db
+    .prepare('SELECT metadata FROM sessions WHERE session_id = ?')
+    .get(sessionId) as { metadata: string | null } | undefined;
+  let existing: Record<string, unknown> = {};
+  if (row?.metadata) {
+    try {
+      existing = JSON.parse(row.metadata) as Record<string, unknown>;
+    } catch {
+      /* ignore malformed */
+    }
+  }
+  db.prepare('UPDATE sessions SET metadata = ? WHERE session_id = ?').run(
+    JSON.stringify({ ...existing, ...fields }),
+    sessionId,
+  );
+}
+
 // ─── session_events ────────────────────────────────────────────────────────
 
 const stmtInsertEvent = db.prepare<

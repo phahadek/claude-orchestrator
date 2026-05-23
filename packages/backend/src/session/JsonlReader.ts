@@ -8,8 +8,16 @@ import {
   getZeroTokenSessions,
   getEventsBySession,
   incrementTokens,
+  setSessionMetadata,
 } from '../db/queries';
 import type { EventType, NewSession } from '../db/types';
+import {
+  VALID_EVENT_TYPES,
+  SILENT_SKIP_TYPES,
+  toEventType,
+} from './eventTypes';
+
+export { VALID_EVENT_TYPES, SILENT_SKIP_TYPES, toEventType };
 
 export interface RawSessionEvent {
   type: EventType;
@@ -22,43 +30,6 @@ export const DEFAULT_SESSIONS_DIR = path.join(
   '.claude',
   'projects',
 );
-
-// Includes both our internal types and the real types emitted by the Claude CLI.
-const VALID_EVENT_TYPES: ReadonlySet<string> = new Set([
-  'text',
-  'tool_use',
-  'tool_result',
-  'system',
-  'error',
-  // Real Claude CLI event types
-  'user',
-  'assistant',
-  'message',
-  'file-history-snapshot',
-  'result',
-]);
-
-/** Map raw Claude CLI event type strings to our internal EventType union. */
-function toEventType(raw: string): EventType {
-  switch (raw) {
-    case 'assistant':
-    case 'text':
-    case 'message':
-      return 'text';
-    case 'tool_use':
-      return 'tool_use';
-    case 'tool_result':
-      return 'tool_result';
-    case 'system':
-    case 'user':
-    case 'file-history-snapshot':
-      return 'system';
-    case 'error':
-      return 'error';
-    default:
-      return 'system';
-  }
-}
 
 export class JsonlReader {
   constructor(private readonly sessionsDir: string) {}
@@ -87,8 +58,8 @@ export class JsonlReader {
       const stat = fs.statSync(filePath);
       const startedAt = stat.birthtimeMs || stat.mtimeMs;
 
-      const events = this.parseFile(filePath);
-      if (events.length === 0) continue; // Skip empty JSONL files — they produce ghost sessions
+      const { events, metadata } = this.parseFile(filePath);
+      if (events.length === 0 && Object.keys(metadata).length === 0) continue; // Skip empty JSONL files — they produce ghost sessions
 
       const session: NewSession = {
         session_id: sessionId,
@@ -101,6 +72,10 @@ export class JsonlReader {
         pr_url: null,
       };
       insertSessionOrIgnore(session);
+
+      if (Object.keys(metadata).length > 0) {
+        setSessionMetadata(sessionId, metadata);
+      }
 
       for (const ev of events) {
         insertEventOrIgnore({
@@ -119,10 +94,14 @@ export class JsonlReader {
     );
   }
 
-  /** Parse a single .jsonl file into an array of raw events. */
-  parseFile(filePath: string): RawSessionEvent[] {
+  /** Parse a single .jsonl file into events and extracted session metadata. */
+  parseFile(filePath: string): {
+    events: RawSessionEvent[];
+    metadata: Record<string, unknown>;
+  } {
     const lines = fs.readFileSync(filePath, 'utf8').split('\n');
     const events: RawSessionEvent[] = [];
+    const metadata: Record<string, unknown> = {};
 
     for (const line of lines) {
       const trimmed = line.trim();
@@ -139,9 +118,23 @@ export class JsonlReader {
       }
 
       if (typeof obj.type !== 'string' || !VALID_EVENT_TYPES.has(obj.type)) {
+        const truncated = trimmed.slice(0, 500);
         console.warn(
-          `[JsonlReader] unknown event type "${String(obj.type)}" in ${filePath} — skipping`,
+          `[JsonlReader] unknown event type "${String(obj.type)}" in ${filePath} — skipping: ${truncated}`,
         );
+        continue;
+      }
+
+      // ai-title: persist as session metadata, do not emit as an event
+      if (obj.type === 'ai-title') {
+        if (typeof obj.aiTitle === 'string') {
+          metadata.aiTitle = obj.aiTitle;
+        }
+        continue;
+      }
+
+      // Silent-skip types: known but produce no session event
+      if (SILENT_SKIP_TYPES.has(obj.type)) {
         continue;
       }
 
@@ -153,7 +146,7 @@ export class JsonlReader {
       });
     }
 
-    return events;
+    return { events, metadata };
   }
 
   /** Return list of session IDs (filenames) already known in SQLite. */

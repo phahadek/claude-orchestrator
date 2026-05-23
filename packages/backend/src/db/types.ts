@@ -28,6 +28,7 @@ export interface Session {
   total_output_tokens: number;
   model?: string | null;
   task_name: string | null;
+  metadata: string | null; // JSON blob for small session metadata (e.g. aiTitle)
 }
 
 export type NewSession = Omit<
@@ -44,6 +45,7 @@ export type NewSession = Omit<
   | 'total_input_tokens'
   | 'total_output_tokens'
   | 'task_name'
+  | 'metadata'
 > & {
   ended_at?: number | null;
   pr_url?: string | null;
@@ -57,6 +59,7 @@ export type NewSession = Omit<
   total_input_tokens?: number;
   total_output_tokens?: number;
   task_name?: string | null;
+  metadata?: string | null;
 };
 
 // ─── session_events ────────────────────────────────────────────────────────
