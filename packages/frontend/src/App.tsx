@@ -89,6 +89,7 @@ export default function App() {
     lastStuckNotification,
     lastStuckPaused,
     lastStuckKilled,
+    lastApiOverloadedPaused,
     incompleteReviews,
     lastTaskUpdate,
     taskListRefreshTrigger,
@@ -748,7 +749,12 @@ export default function App() {
 
   const anyDragging = isDragging;
 
-  useNotifications(sessions, lastPrReviewEvent, lastReviewFailed);
+  useNotifications(
+    sessions,
+    lastPrReviewEvent,
+    lastReviewFailed,
+    lastApiOverloadedPaused,
+  );
 
   useEffect(() => {
     function onSelectSession(e: Event) {

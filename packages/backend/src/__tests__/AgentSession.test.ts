@@ -48,6 +48,7 @@ vi.mock('../db/queries', () => ({
   getPRByNotionTaskId: vi.fn(() => null),
   getPRByNumber: vi.fn(() => null),
   setHeadSha: vi.fn(),
+  setPauseReason: vi.fn(),
 }));
 
 import { AgentSession } from '../session/AgentSession';
@@ -60,6 +61,7 @@ import {
   upsertSessionEvent,
   getPRBySessionId,
   getPRByNumber,
+  setPauseReason,
 } from '../db/queries';
 
 function fakeNotionClient(): NotionClient {
@@ -1189,5 +1191,261 @@ describe('AgentSession', () => {
     expect(job.prNumber).toBe(42);
     expect(job.repo).toBe('owner/repo');
     expect(job.taskId).toBe('taskabc123');
+  });
+
+  // ── AC: in-session 529/500 detection ────────────────────────────────────────
+
+  it('fires api_overloaded_paused when an error event matching overloaded_error arrives', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'sess-overload',
+        event_type: 'error',
+        payload: JSON.stringify({
+          type: 'error',
+          error: { type: 'overloaded_error', message: 'Overloaded' },
+        }),
+        timestamp: Date.now(),
+        message_id: null,
+      },
+    ]);
+
+    const session = new AgentSession(
+      'sess-overload',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const messages: ServerMessage[] = [];
+    session.on('message', (msg: ServerMessage) => messages.push(msg));
+
+    const runPromise = session.run();
+
+    mockProc.stdout.push(
+      JSON.stringify({
+        type: 'error',
+        error: { type: 'overloaded_error', message: 'Overloaded' },
+      }) + '\n',
+    );
+    await new Promise((r) => setTimeout(r, 50));
+
+    const overloadedMsg = messages.find(
+      (m) => m.type === 'api_overloaded_paused',
+    );
+    expect(overloadedMsg).toBeDefined();
+    expect(
+      (overloadedMsg as { type: string; sessionId: string }).sessionId,
+    ).toBe('sess-overload');
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+  });
+
+  it('calls setPauseReason with api_overloaded when session has a paired PR', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      id: 1,
+      pr_number: 77,
+      pr_url: 'https://github.com/owner/repo/pull/77',
+      notion_task_id: null,
+      session_id: 'sess-with-pr',
+      repo: 'owner/repo',
+      title: 'Test PR',
+      body: null,
+      head_branch: 'feature/x',
+      base_branch: 'dev',
+      state: 'open',
+      draft: 0,
+      review_result: null,
+      review_at: null,
+      created_at: null,
+      updated_at: null,
+      synced_at: new Date().toISOString(),
+      review_session_id: null,
+      review_iteration: 0,
+      head_sha: null,
+      last_reviewed_sha: null,
+      node_id: null,
+      mergeable: null,
+      merge_state: null,
+      merge_state_checked_at: null,
+      failing_checks: null,
+      pending_push: 0,
+      pause_reason: null,
+    });
+    vi.mocked(getEventsBySession).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'sess-with-pr',
+        event_type: 'error',
+        payload: JSON.stringify({
+          type: 'error',
+          error: { type: 'overloaded_error', message: 'Overloaded' },
+        }),
+        timestamp: Date.now(),
+        message_id: null,
+      },
+    ]);
+
+    const sendMock = vi.fn();
+    const sessionManager = { send: sendMock };
+
+    const session = new AgentSession(
+      'sess-with-pr',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+      undefined,
+      undefined,
+      'standard',
+      sessionManager,
+    );
+
+    const runPromise = session.run();
+
+    mockProc.stdout.push(
+      JSON.stringify({
+        type: 'error',
+        error: { type: 'overloaded_error', message: 'Overloaded' },
+      }) + '\n',
+    );
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      77,
+      'owner/repo',
+      'api_overloaded',
+    );
+    expect(sendMock).toHaveBeenCalledWith(
+      'sess-with-pr',
+      expect.stringContaining('529'),
+    );
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+  });
+
+  it('does NOT call setPauseReason but still broadcasts and sends message when session has no paired PR', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(getEventsBySession).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'sess-no-pr',
+        event_type: 'error',
+        payload: JSON.stringify({
+          type: 'error',
+          error: { type: 'api_error', message: 'Internal server error' },
+        }),
+        timestamp: Date.now(),
+        message_id: null,
+      },
+    ]);
+
+    const sendMock = vi.fn();
+    const sessionManager = { send: sendMock };
+
+    const session = new AgentSession(
+      'sess-no-pr',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+      undefined,
+      undefined,
+      'standard',
+      sessionManager,
+    );
+
+    const messages: ServerMessage[] = [];
+    session.on('message', (msg: ServerMessage) => messages.push(msg));
+
+    const runPromise = session.run();
+
+    mockProc.stdout.push(
+      JSON.stringify({
+        type: 'error',
+        error: { type: 'api_error', message: 'Internal server error' },
+      }) + '\n',
+    );
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
+    expect(sendMock).toHaveBeenCalled();
+    const overloadedMsg = messages.find(
+      (m) => m.type === 'api_overloaded_paused',
+    );
+    expect(overloadedMsg).toBeDefined();
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+  });
+
+  it('fires handleInSessionApiError at most once even when multiple error events arrive', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(getEventsBySession).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'sess-dedup',
+        event_type: 'error',
+        payload: JSON.stringify({
+          type: 'error',
+          error: { type: 'overloaded_error', message: 'Overloaded' },
+        }),
+        timestamp: Date.now(),
+        message_id: null,
+      },
+    ]);
+
+    const session = new AgentSession(
+      'sess-dedup',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const messages: ServerMessage[] = [];
+    session.on('message', (msg: ServerMessage) => messages.push(msg));
+
+    const runPromise = session.run();
+
+    const errorLine =
+      JSON.stringify({
+        type: 'error',
+        error: { type: 'overloaded_error', message: 'Overloaded' },
+      }) + '\n';
+    mockProc.stdout.push(errorLine);
+    mockProc.stdout.push(errorLine);
+    await new Promise((r) => setTimeout(r, 50));
+
+    const overloadedMsgs = messages.filter(
+      (m) => m.type === 'api_overloaded_paused',
+    );
+    expect(overloadedMsgs).toHaveLength(1);
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
   });
 });

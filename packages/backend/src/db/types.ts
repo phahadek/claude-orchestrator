@@ -204,7 +204,8 @@ export type PauseReason =
   | 'ci_failing'
   | 'auto_merge_failed'
   | 'pr_closed'
-  | 'review_failed';
+  | 'review_failed'
+  | 'api_overloaded';
 
 export interface PullRequestRow {
   id: number;

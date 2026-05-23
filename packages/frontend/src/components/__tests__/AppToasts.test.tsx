@@ -78,6 +78,7 @@ function baseStoreReturn(sessions: object[] = []) {
     lastStuckNotification: null,
     lastStuckPaused: null,
     lastStuckKilled: null,
+    lastApiOverloadedPaused: null,
     incompleteReviews: [],
     dismissIncompleteReviews: vi.fn(),
     lastTaskUpdate: null,
