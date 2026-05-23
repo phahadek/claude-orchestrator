@@ -217,4 +217,16 @@ export function runMigrations(): void {
   } catch {
     /* already exists */
   }
+  try {
+    db.exec(
+      `ALTER TABLE projects ADD COLUMN git_mode TEXT NOT NULL DEFAULT 'github'`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN review_result TEXT`);
+  } catch {
+    /* already exists */
+  }
 }

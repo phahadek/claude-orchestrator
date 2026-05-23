@@ -71,6 +71,8 @@ function makeAggregate(
     pr_review_result: null,
     pr_review_iteration: null,
     pr_merge_state: null,
+    pr_pause_reason: null,
+    review_session_result: null,
     ...overrides,
   };
 }

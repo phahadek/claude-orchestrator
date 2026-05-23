@@ -109,9 +109,11 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
   let reviewVerdict: string | null = null;
   let reviewSummary: string | null = null;
   if (row.review_session_id) {
-    if (row.pr_review_result) {
+    // Prefer PR-level review result (GitHub flow); fall back to session-level (local-only).
+    const rawReviewResult = row.pr_review_result ?? row.review_session_result;
+    if (rawReviewResult) {
       try {
-        const result = JSON.parse(row.pr_review_result) as PRReviewResult;
+        const result = JSON.parse(rawReviewResult) as PRReviewResult;
         reviewVerdict = result.verdict ?? null;
         reviewSummary = result.summary ?? null;
       } catch {

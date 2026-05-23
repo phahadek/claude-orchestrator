@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { FormEvent } from 'react';
-import type { Project, TaskSource } from '../../api/projects';
+import type { Project, TaskSource, GitMode } from '../../api/projects';
 import styles from './ProjectsSettingsPanel.module.css';
 
 export interface ProjectFormValues {
@@ -9,6 +9,7 @@ export interface ProjectFormValues {
   contextUrl: string;
   githubRepo: string;
   taskSource: TaskSource;
+  gitMode: GitMode;
   autoLaunchEnabled: boolean;
   autoLaunchMilestoneId: string;
   autoMergeEnabled: boolean;
@@ -26,6 +27,7 @@ const EMPTY: ProjectFormValues = {
   contextUrl: '',
   githubRepo: '',
   taskSource: 'notion',
+  gitMode: 'github',
   autoLaunchEnabled: false,
   autoLaunchMilestoneId: '',
   autoMergeEnabled: false,
@@ -38,6 +40,7 @@ function fromProject(p: Project): ProjectFormValues {
     contextUrl: p.contextUrl ?? '',
     githubRepo: p.githubRepo ?? '',
     taskSource: p.taskSource,
+    gitMode: p.gitMode ?? 'github',
     autoLaunchEnabled: p.autoLaunchEnabled,
     autoLaunchMilestoneId: p.autoLaunchMilestoneId ?? '',
     autoMergeEnabled: p.autoMergeEnabled,
@@ -161,6 +164,28 @@ export function ProjectFormModal({
           </div>
 
           <div className={styles.formField}>
+            <label htmlFor="proj-git-mode" className={styles.formLabel}>
+              Git Mode
+            </label>
+            <select
+              id="proj-git-mode"
+              className={styles.input}
+              value={values.gitMode}
+              onChange={(e) =>
+                update(
+                  'gitMode',
+                  e.target.value === 'local-only' ? 'local-only' : 'github',
+                )
+              }
+            >
+              <option value="github">
+                GitHub (default) — PR-based workflow
+              </option>
+              <option value="local-only">Local only — no GitHub remote</option>
+            </select>
+          </div>
+
+          <div className={styles.formField}>
             <label htmlFor="proj-context" className={styles.formLabel}>
               Context URL (optional)
             </label>
@@ -174,19 +199,21 @@ export function ProjectFormModal({
             />
           </div>
 
-          <div className={styles.formField}>
-            <label htmlFor="proj-repo" className={styles.formLabel}>
-              GitHub Repo (optional)
-            </label>
-            <input
-              id="proj-repo"
-              type="text"
-              className={styles.input}
-              value={values.githubRepo}
-              onChange={(e) => update('githubRepo', e.target.value)}
-              placeholder="owner/repo"
-            />
-          </div>
+          {values.gitMode !== 'local-only' && (
+            <div className={styles.formField}>
+              <label htmlFor="proj-repo" className={styles.formLabel}>
+                GitHub Repo (optional)
+              </label>
+              <input
+                id="proj-repo"
+                type="text"
+                className={styles.input}
+                value={values.githubRepo}
+                onChange={(e) => update('githubRepo', e.target.value)}
+                placeholder="owner/repo"
+              />
+            </div>
+          )}
 
           <div className={styles.formField}>
             <label htmlFor="proj-auto-launch" className={styles.formLabel}>
@@ -228,17 +255,19 @@ export function ProjectFormModal({
               </div>
             )}
 
-          <div className={styles.formField}>
-            <label htmlFor="proj-auto-merge" className={styles.formLabel}>
-              <input
-                id="proj-auto-merge"
-                type="checkbox"
-                checked={values.autoMergeEnabled}
-                onChange={(e) => update('autoMergeEnabled', e.target.checked)}
-              />{' '}
-              Auto-merge approved PRs when CI is green
-            </label>
-          </div>
+          {values.gitMode !== 'local-only' && (
+            <div className={styles.formField}>
+              <label htmlFor="proj-auto-merge" className={styles.formLabel}>
+                <input
+                  id="proj-auto-merge"
+                  type="checkbox"
+                  checked={values.autoMergeEnabled}
+                  onChange={(e) => update('autoMergeEnabled', e.target.checked)}
+                />{' '}
+                Auto-merge approved PRs when CI is green
+              </label>
+            </div>
+          )}
 
           {serverError && <p className={styles.serverError}>{serverError}</p>}
 

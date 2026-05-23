@@ -10,11 +10,14 @@ function toCreatePayload(values: ProjectFormValues) {
     name: values.name.trim(),
     projectDir: values.projectDir.trim(),
     contextUrl: values.contextUrl.trim() || null,
-    githubRepo: values.githubRepo.trim() || null,
+    githubRepo:
+      values.gitMode !== 'local-only' ? values.githubRepo.trim() || null : null,
     taskSource: values.taskSource,
+    gitMode: values.gitMode,
     autoLaunchEnabled: values.autoLaunchEnabled,
     autoLaunchMilestoneId: values.autoLaunchMilestoneId.trim() || null,
-    autoMergeEnabled: values.autoMergeEnabled,
+    autoMergeEnabled:
+      values.gitMode !== 'local-only' ? values.autoMergeEnabled : false,
   };
 }
 
@@ -131,6 +134,7 @@ function ProjectsSettingsPanelInner() {
               <th>Name</th>
               <th>Project Dir</th>
               <th>Task Source</th>
+              <th>Git Mode</th>
               <th># Milestones</th>
               <th>GitHub Repo</th>
               <th className={styles.actionsCol}>Actions</th>
@@ -165,8 +169,13 @@ function ProjectsSettingsPanelInner() {
                     </button>
                   )}
                 </td>
+                <td>
+                  <span className={styles.badge}>{p.gitMode ?? 'github'}</span>
+                </td>
                 <td>{p.milestones.length}</td>
-                <td className={styles.mono}>{p.githubRepo ?? '—'}</td>
+                <td className={styles.mono}>
+                  {p.gitMode === 'local-only' ? '—' : (p.githubRepo ?? '—')}
+                </td>
                 <td className={styles.actionsCol}>
                   <button
                     type="button"

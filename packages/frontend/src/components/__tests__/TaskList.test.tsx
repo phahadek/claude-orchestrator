@@ -1207,6 +1207,7 @@ describe('TaskList', () => {
       contextUrl: 'https://notion.so/ctx',
       boardId: 'board-1',
       taskSource: 'notion',
+      gitMode: 'github',
       autoLaunchEnabled: false,
       autoLaunchMilestoneId: null,
       autoMergeEnabled: false,

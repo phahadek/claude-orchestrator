@@ -35,6 +35,11 @@ export interface OrchestratorClaudeMdParams {
    * Omitted when the file is absent (e.g. fresh clone).
    */
   localContext?: string;
+  /**
+   * Git mode for the project. 'local-only' omits PR-related lifecycle steps
+   * and GitHub instructions; 'github' (default) keeps the full PR flow.
+   */
+  gitMode?: 'github' | 'local-only';
 }
 
 /**
@@ -71,6 +76,7 @@ export function buildOrchestratorClaudeMd(
     taskBackend = 'notion',
     taskContent,
     localContext,
+    gitMode = 'github',
   } = params;
 
   const resolvedPrGate = {
@@ -132,9 +138,15 @@ ${
 }
 3. Implement the task per the acceptance criteria.
 4. Pass the pre-PR gate (see Pre-PR Gate section below).
-5. Open a draft PR targeting \`${targetBranch}\` using the required body template.
+${
+  gitMode === 'local-only'
+    ? `5. Commit your changes on the feature branch. **No GitHub PR is required** — this is a local-only project.
+6. **Stop and wait.** The dashboard will show a "Mark Merged" button once the review passes.
+   Await review feedback as follow-up messages and address findings by pushing additional commits.`
+    : `5. Open a draft PR targeting \`${targetBranch}\` using the required body template.
 6. **Stop and wait.** The dashboard sends review feedback as follow-up messages.
-   Address findings by pushing additional commits, then wait again.
+   Address findings by pushing additional commits, then wait again.`
+}
 
 ---
 
@@ -158,7 +170,10 @@ Optimize for speed and token efficiency:
 
 ---
 
-## PR Format Standards
+${
+  gitMode === 'local-only'
+    ? ``
+    : `## PR Format Standards
 
 - **Title**: \`feat: <task-name>\` — no scope prefix like \`(backend)\`, no milestone tags.
 - **How to create the PR**: Use the \`mcp__github__create_pull_request\` MCP tool.
@@ -181,13 +196,18 @@ Optimize for speed and token efficiency:
 \`\`\`
 
 ---
-
+`
+}
 ## Branch Rules
 
 - Branch name: \`feature/<task-name>\` from \`${targetBranch}\`
 - Never commit directly to \`${targetBranch}\` or \`main\`
-- Never merge your own PR
-- One task per session — no scope creep
+${
+  gitMode === 'local-only'
+    ? `- One task per session — no scope creep`
+    : `- Never merge your own PR
+- One task per session — no scope creep`
+}
 
 ---
 

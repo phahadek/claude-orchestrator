@@ -1198,6 +1198,7 @@ export interface TaskAggregateRow {
   review_session_status: string | null;
   review_session_input_tokens: number | null;
   review_session_output_tokens: number | null;
+  review_session_result: string | null; // sessions.review_result (local-only fallback)
   // pull request
   pr_number: number | null;
   pr_url: string | null;
@@ -1231,6 +1232,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       rs.status              AS review_session_status,
       rs.total_input_tokens  AS review_session_input_tokens,
       rs.total_output_tokens AS review_session_output_tokens,
+      rs.review_result       AS review_session_result,
       pr.pr_number,
       pr.pr_url,
       pr.title               AS pr_title,
@@ -1282,6 +1284,15 @@ export function getLatestNonSystemEventPayload(
   return row?.payload ?? null;
 }
 
+export function setSessionReviewResult(
+  sessionId: string,
+  result: string,
+): void {
+  db.prepare<{ session_id: string; review_result: string }>(
+    `UPDATE sessions SET review_result = @review_result WHERE session_id = @session_id`,
+  ).run({ session_id: sessionId, review_result: result });
+}
+
 /** Returns the most recent standard (non-review) session for a given Notion task ID. */
 export function getLatestCodeSessionByNotionTaskId(
   notionTaskId: string,
@@ -1305,16 +1316,17 @@ export function insertProject(p: NewProjectRow): ProjectRow {
   db.prepare<NewProjectRow>(
     `
     INSERT INTO projects
-      (id, name, project_dir, context_url, github_repo, task_source,
+      (id, name, project_dir, context_url, github_repo, task_source, git_mode,
        auto_launch_enabled, auto_launch_milestone_id, auto_merge_enabled,
        created_at, updated_at)
     VALUES
-      (@id, @name, @project_dir, @context_url, @github_repo, @task_source,
+      (@id, @name, @project_dir, @context_url, @github_repo, @task_source, @git_mode,
        @auto_launch_enabled, @auto_launch_milestone_id, @auto_merge_enabled,
        @created_at, @updated_at)
   `,
   ).run({
     ...p,
+    git_mode: p.git_mode ?? 'github',
     auto_launch_enabled: p.auto_launch_enabled ?? 0,
     auto_launch_milestone_id: p.auto_launch_milestone_id ?? null,
     auto_merge_enabled: p.auto_merge_enabled ?? 0,
@@ -1349,6 +1361,7 @@ export interface ProjectPatch {
   context_url?: string | null;
   github_repo?: string | null;
   task_source?: 'notion' | 'yaml';
+  git_mode?: 'github' | 'local-only';
   auto_launch_enabled?: number;
   auto_launch_milestone_id?: string | null;
   auto_merge_enabled?: number;
@@ -1368,6 +1381,7 @@ export function updateProject(
     context_url: string | null;
     github_repo: string | null;
     task_source: string;
+    git_mode: string;
     auto_launch_enabled: number;
     auto_launch_milestone_id: string | null;
     auto_merge_enabled: number;
@@ -1380,6 +1394,7 @@ export function updateProject(
         context_url = @context_url,
         github_repo = @github_repo,
         task_source = @task_source,
+        git_mode = @git_mode,
         auto_launch_enabled = @auto_launch_enabled,
         auto_launch_milestone_id = @auto_launch_milestone_id,
         auto_merge_enabled = @auto_merge_enabled,
@@ -1399,6 +1414,7 @@ export function updateProject(
         ? patch.github_repo
         : existing.github_repo,
     task_source: patch.task_source ?? existing.task_source,
+    git_mode: patch.git_mode ?? existing.git_mode ?? 'github',
     auto_launch_enabled:
       patch.auto_launch_enabled !== undefined
         ? patch.auto_launch_enabled

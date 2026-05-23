@@ -56,6 +56,16 @@ projectsRouter.post('/projects', (req: Request, res: Response) => {
   }
 
   const taskSource = body.taskSource === 'yaml' ? 'yaml' : 'notion';
+  const rawGitMode = body.gitMode;
+  if (
+    rawGitMode !== undefined &&
+    rawGitMode !== 'github' &&
+    rawGitMode !== 'local-only'
+  ) {
+    res.status(400).json({ error: `gitMode must be 'github' or 'local-only'` });
+    return;
+  }
+  const gitMode = rawGitMode === 'local-only' ? 'local-only' : 'github';
   const id =
     typeof body.id === 'string' && body.id ? body.id : crypto.randomUUID();
 
@@ -71,6 +81,7 @@ projectsRouter.post('/projects', (req: Request, res: Response) => {
     contextUrl: typeof body.contextUrl === 'string' ? body.contextUrl : null,
     githubRepo: typeof body.githubRepo === 'string' ? body.githubRepo : null,
     taskSource,
+    gitMode,
     autoLaunchEnabled: body.autoLaunchEnabled === true,
     autoLaunchMilestoneId:
       typeof body.autoLaunchMilestoneId === 'string'
@@ -120,6 +131,12 @@ projectsRouter.patch('/projects/:id', (req: Request, res: Response) => {
   }
   if ('autoMergeEnabled' in body) {
     patch.auto_merge_enabled = body.autoMergeEnabled === true ? 1 : 0;
+  }
+  if (body.gitMode === 'github' || body.gitMode === 'local-only') {
+    patch.git_mode = body.gitMode;
+  } else if ('gitMode' in body && body.gitMode !== undefined) {
+    res.status(400).json({ error: `gitMode must be 'github' or 'local-only'` });
+    return;
   }
 
   const updated = ProjectService.update(id, patch);

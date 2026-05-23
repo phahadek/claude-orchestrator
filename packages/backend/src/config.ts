@@ -15,6 +15,7 @@ export interface ProjectConfig {
   boards?: Board[]; // multi-milestone support — derived from milestones table
   githubRepo?: string; // "owner/repo" — optional; enables PR features
   taskSource: 'notion' | 'yaml'; // honored by getTaskBackend(projectId)
+  gitMode: 'github' | 'local-only'; // 'github' (default) or 'local-only' (no GitHub remote)
   autoLaunchEnabled: boolean; // per-project toggle for the AutoLauncher
   autoLaunchMilestoneId: string | null; // milestone the AutoLauncher polls; null = first milestone
   autoMergeEnabled: boolean; // per-project toggle for the AutoMerger
@@ -105,6 +106,7 @@ function hydrateProject(p: {
   contextUrl: string | null;
   githubRepo: string | null;
   taskSource: 'notion' | 'yaml';
+  gitMode: 'github' | 'local-only';
   autoLaunchEnabled: boolean;
   autoLaunchMilestoneId: string | null;
   autoMergeEnabled: boolean;
@@ -125,6 +127,7 @@ function hydrateProject(p: {
     contextUrl: p.contextUrl ?? '',
     boardId: boards[0]?.id ?? '',
     taskSource: p.taskSource,
+    gitMode: p.gitMode,
     autoLaunchEnabled: p.autoLaunchEnabled,
     autoLaunchMilestoneId: p.autoLaunchMilestoneId,
     autoMergeEnabled: p.autoMergeEnabled,

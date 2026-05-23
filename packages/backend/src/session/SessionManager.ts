@@ -280,21 +280,26 @@ export class SessionManager extends EventEmitter {
       console.warn(`[SessionManager] could not determine main branch: ${err}`);
     }
 
-    try {
-      // Fetch latest dev so sessions don't branch from a stale local ref.
-      // Uses `git fetch origin dev` (not dev:dev) because dev:dev fails when
-      // the local dev branch is checked out in the main repo or any worktree.
-      // The worktree is then based on origin/dev which is always up-to-date.
-      execSync('git fetch origin dev', { cwd: projectDir, timeout: 30_000 });
-    } catch (err) {
-      console.warn(
-        `[SessionManager] git fetch origin dev failed (continuing with local ref): ${err}`,
-      );
+    const isLocalOnly = project.gitMode === 'local-only';
+
+    if (!isLocalOnly) {
+      try {
+        // Fetch latest dev so sessions don't branch from a stale local ref.
+        // Uses `git fetch origin dev` (not dev:dev) because dev:dev fails when
+        // the local dev branch is checked out in the main repo or any worktree.
+        // The worktree is then based on origin/dev which is always up-to-date.
+        execSync('git fetch origin dev', { cwd: projectDir, timeout: 30_000 });
+      } catch (err) {
+        console.warn(
+          `[SessionManager] git fetch origin dev failed (continuing with local ref): ${err}`,
+        );
+      }
     }
 
+    const worktreeBase = isLocalOnly ? 'dev' : 'origin/dev';
     try {
       execSync(
-        `git worktree add "${worktreePath}" -b "${branchName}" origin/dev`,
+        `git worktree add "${worktreePath}" -b "${branchName}" ${worktreeBase}`,
         {
           cwd: projectDir,
         },
@@ -398,6 +403,7 @@ export class SessionManager extends EventEmitter {
             bashRules: orchConfig.bashRules,
             taskBackend: project.taskSource === 'yaml' ? 'local' : 'notion',
             taskContent,
+            gitMode: project.gitMode,
           });
         } catch (err) {
           console.error(

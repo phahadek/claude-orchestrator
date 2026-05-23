@@ -14,6 +14,8 @@ export interface BuildSessionContextParams {
   taskBackend?: 'notion' | 'local';
   /** Pre-fetched task spec markdown. Passed through to orchestrator CLAUDE.md. */
   taskContent?: string;
+  /** Git mode: 'local-only' omits PR instructions; 'github' (default) keeps full PR flow. */
+  gitMode?: 'github' | 'local-only';
 }
 
 /**
@@ -67,6 +69,7 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     bashRules,
     taskBackend,
     taskContent,
+    gitMode,
   } = params;
 
   // Read project-level local context (Notion URLs, board IDs, etc.) if present.
@@ -100,5 +103,6 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     taskBackend,
     taskContent,
     localContext,
+    gitMode,
   });
 }
