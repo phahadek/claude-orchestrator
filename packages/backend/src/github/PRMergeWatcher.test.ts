@@ -440,7 +440,7 @@ describe('PRMergeWatcher categorization branches', () => {
     ).mockResolvedValue(value);
   }
 
-  it('messages session about failing CI checks when transitioning to ci_failed', async () => {
+  it('messages session with structured CI failure format when transitioning to ci_failed', async () => {
     const pr = makePRRow({
       merge_state: 'clean',
       session_id: 'coding-session',
@@ -466,10 +466,22 @@ describe('PRMergeWatcher categorization branches', () => {
     );
     await watcher.poll();
 
-    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledWith(
-      'coding-session',
-      expect.stringMatching(/CI checks are failing.*lint, unit/),
+    const sentMessage = vi.mocked(sessions.sendOrResume).mock
+      .calls[0][1] as string;
+    // Structured format: heading with PR number
+    expect(sentMessage).toMatch(/## CI Failure — PR #42/);
+    // Failing check names rendered as list items
+    expect(sentMessage).toContain('- lint');
+    expect(sentMessage).toContain('- unit');
+    // GitHub checks URL present
+    expect(sentMessage).toContain(
+      'https://github.com/owner/repo/pull/42/checks',
     );
+    // Instruction block present
+    expect(sentMessage).toMatch(/investigate the failures and push a fix/i);
+    // NOT the legacy plain-text format
+    expect(sentMessage).not.toMatch(/CI checks are failing.*lint, unit/);
+
     expect(vi.mocked(updateMergeState)).toHaveBeenCalledWith(
       42,
       'owner/repo',
@@ -1018,7 +1030,7 @@ describe('PRMergeWatcher.checkMergeabilityNow terminal-state guard', () => {
     expect(vi.mocked(updateMergeState)).toHaveBeenCalled();
     expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledWith(
       'coding-session',
-      expect.stringMatching(/CI checks are failing/),
+      expect.stringMatching(/## CI Failure — PR #42/),
     );
   });
 });

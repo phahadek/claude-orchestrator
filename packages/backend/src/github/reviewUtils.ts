@@ -1,5 +1,55 @@
 import type { PRReviewResult } from './PRReviewService';
 
+export interface CIFailureResult {
+  prNumber: number;
+  failingCheckNames: string[];
+  /** URL to the failing GitHub Actions run or PR checks page. */
+  runUrl: string | null;
+  /** Truncated log excerpt from the failing step. */
+  logExcerpt: string | null;
+}
+
+const CI_LOG_EXCERPT_CAP = 800;
+
+function truncateLog(log: string, cap: number): string {
+  if (log.length <= cap) return log;
+  const truncated = log.slice(0, cap);
+  const remainingLines = log.slice(cap).split('\n').length - 1;
+  return `${truncated}\n… [${remainingLines} more line${remainingLines !== 1 ? 's' : ''}]`;
+}
+
+/**
+ * Format CI failure data into a structured message suitable for sending
+ * to the coding session as a fix prompt — mirrors formatReviewFeedback voice.
+ */
+export function formatCIFailureFeedback(ciResult: CIFailureResult): string {
+  const { prNumber, failingCheckNames, runUrl, logExcerpt } = ciResult;
+
+  const checkList =
+    failingCheckNames.length > 0
+      ? failingCheckNames.map((n) => `- ${n}`).join('\n')
+      : '- (unknown)';
+
+  const runSection = runUrl ? `**Run:** ${runUrl}\n\n` : '';
+
+  const logSection = logExcerpt
+    ? `### Failing step output:\n\`\`\`\n${truncateLog(logExcerpt, CI_LOG_EXCERPT_CAP)}\n\`\`\`\n\n`
+    : '';
+
+  return (
+    `## CI Failure — PR #${prNumber}\n\n` +
+    `### Failing checks:\n${checkList}\n\n` +
+    runSection +
+    logSection +
+    `Please investigate the failures and push a fix. ` +
+    `The orchestrator will automatically re-check CI once you push.\n\n` +
+    `**Important:** Do NOT rebase onto dev or merge dev into your branch. ` +
+    `Just commit your fixes and push directly to your feature branch. ` +
+    `Rebasing or merging would pull in unrelated changes from other merged PRs ` +
+    `and pollute the PR diff.`
+  );
+}
+
 /**
  * Pure function — determines whether an auto-review should be triggered.
  * Returns false when the review iteration cap is reached or when no new
