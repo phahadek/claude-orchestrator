@@ -12,10 +12,15 @@ export class NotionTaskBackend implements TaskBackend {
 
   constructor(private readonly client: NotionClient) {}
 
-  async fetchReadyTasks(milestoneId: string, skipCache?: boolean): Promise<ResolvedTask[]> {
+  async fetchReadyTasks(
+    milestoneId: string,
+    skipCache?: boolean,
+  ): Promise<ResolvedTask[]> {
     const milestone = ProjectService.getMilestone(milestoneId);
     if (!milestone) {
-      throw new Error(`[NotionTaskBackend] milestone not found: ${milestoneId}`);
+      throw new Error(
+        `[NotionTaskBackend] milestone not found: ${milestoneId}`,
+      );
     }
     if (!milestone.sourceId) {
       throw new Error(

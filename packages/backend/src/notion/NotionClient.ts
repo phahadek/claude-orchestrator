@@ -1,5 +1,10 @@
 import { config } from '../config';
-import { upsertTaskCache, getCacheAge, getTaskCache, updateTaskCacheStatus } from '../db/queries';
+import {
+  upsertTaskCache,
+  getCacheAge,
+  getTaskCache,
+  updateTaskCacheStatus,
+} from '../db/queries';
 import { NotionTask, NotionApiError, ResolvedTask } from './types';
 import { DependencyResolver } from './DependencyResolver';
 
@@ -18,6 +23,12 @@ export interface NotionTaskPage {
   acceptanceCriteria: string;
   filesSection: string;
   rawMarkdown: string;
+  /**
+   * Per-task LOC budget from the Notion "Expected size" property, used as an
+   * override of the global oversized-PR heuristic. Undefined when the property
+   * is unset (most tasks fall back to the global heuristic).
+   */
+  expectedSize?: number;
 }
 
 // ─── Internal Notion API response shapes ───────────────────────────────────
@@ -37,6 +48,7 @@ interface NotionPage {
     'Depends On': { type: 'rich_text'; rich_text: NotionRichTextItem[] };
     Notes: { type: 'rich_text'; rich_text: NotionRichTextItem[] };
     PR?: { type: 'url'; url: string | null };
+    'Expected size'?: { type: 'number'; number: number | null };
     [key: string]: unknown;
   };
 }
@@ -109,6 +121,21 @@ async function notionRequest<T>(
 
 // ─── Page mapper ────────────────────────────────────────────────────────────
 
+/**
+ * Parse the Depends On field into a list of task IDs.
+ *
+ * `|` is the canonical delimiter; `,` is accepted leniently because it's a
+ * common authoring mistake that previously caused the whole field to be
+ * silently treated as a single unparseable ID.
+ */
+export function parseDependsOn(raw: string): string[] {
+  if (!raw) return [];
+  return raw
+    .split(/[|,]/)
+    .map((id) => id.trim())
+    .filter(Boolean);
+}
+
 function mapPageToTask(page: NotionPage): NotionTask {
   const titleItems = page.properties['Task Name']?.title ?? [];
   const title = titleItems.map((t) => t.text.content).join('');
@@ -119,13 +146,20 @@ function mapPageToTask(page: NotionPage): NotionTask {
 
   const dependsOnRaw =
     page.properties['Depends On']?.rich_text?.[0]?.text?.content ?? '';
-  const dependsOn = dependsOnRaw
-    ? dependsOnRaw.split('|').map((id) => id.trim()).filter(Boolean)
-    : [];
+  const dependsOn = parseDependsOn(dependsOnRaw);
 
   const prUrl = page.properties['PR']?.url ?? undefined;
 
-  return { id: page.id, title, status, type, dependsOn, notionUrl: page.url, prUrl, priority };
+  return {
+    id: page.id,
+    title,
+    status,
+    type,
+    dependsOn,
+    notionUrl: page.url,
+    prUrl,
+    priority,
+  };
 }
 
 // ─── Block helpers for fetchTaskPage ────────────────────────────────────────
@@ -152,20 +186,32 @@ function richTextToString(items: NotionRichText[]): string {
 
 function blockToLine(block: NotionBlock): string {
   const type = block.type as string;
-  const inner = block[type] as { rich_text?: NotionRichText[]; language?: string } | undefined;
+  const inner = block[type] as
+    | { rich_text?: NotionRichText[]; language?: string }
+    | undefined;
   if (!inner) return '';
   const text = inner.rich_text ? richTextToString(inner.rich_text) : '';
   switch (type) {
-    case 'heading_1': return `# ${text}`;
-    case 'heading_2': return `## ${text}`;
-    case 'heading_3': return `### ${text}`;
-    case 'code': return `\`\`\`${inner.language ?? ''}\n${text}\n\`\`\``;
-    case 'bulleted_list_item': return `- ${text}`;
-    case 'numbered_list_item': return `1. ${text}`;
-    case 'quote': return `> ${text}`;
-    case 'callout': return `> ${text}`;
-    case 'divider': return '---';
-    default: return text;
+    case 'heading_1':
+      return `# ${text}`;
+    case 'heading_2':
+      return `## ${text}`;
+    case 'heading_3':
+      return `### ${text}`;
+    case 'code':
+      return `\`\`\`${inner.language ?? ''}\n${text}\n\`\`\``;
+    case 'bulleted_list_item':
+      return `- ${text}`;
+    case 'numbered_list_item':
+      return `1. ${text}`;
+    case 'quote':
+      return `> ${text}`;
+    case 'callout':
+      return `> ${text}`;
+    case 'divider':
+      return '---';
+    default:
+      return text;
   }
 }
 
@@ -182,6 +228,7 @@ export const TOP_LEVEL_SECTIONS = [
   'acceptance criteria',
   'files',
   'implementation notes',
+  'expected size',
 ];
 
 /** Extract the text content of a named heading section from a markdown string. */
@@ -199,7 +246,7 @@ export function parseSection(markdown: string, headingKeyword: string): string {
       } else if (inSection) {
         // Only break on a different known top-level section, not sub-headings
         const isTopLevel = TOP_LEVEL_SECTIONS.some(
-          s => heading.includes(s) && s !== headingKeyword.toLowerCase(),
+          (s) => heading.includes(s) && s !== headingKeyword.toLowerCase(),
         );
         if (isTopLevel) {
           break;
@@ -211,6 +258,22 @@ export function parseSection(markdown: string, headingKeyword: string): string {
     }
   }
   return buf.join('\n').trim();
+}
+
+/**
+ * Extract the Expected size LOC budget from a task-page markdown body.
+ * Returns undefined when the section is missing or its content does not parse
+ * as a positive integer. Used by PRReviewService to override the global
+ * oversized-PR heuristic for tasks that legitimately need more scope.
+ */
+export function parseExpectedSize(markdown: string): number | undefined {
+  const section = parseSection(markdown, 'expected size');
+  if (!section) return undefined;
+  const match = section.match(/-?\d+/);
+  if (!match) return undefined;
+  const n = parseInt(match[0], 10);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return n;
 }
 
 function taskPageCacheKey(taskId: string): string {
@@ -225,7 +288,10 @@ export class NotionClient {
    * Results are cached per board with a 5-minute TTL.
    * Returns ResolvedTask[] with dependency annotations.
    */
-  async fetchReadyTasks(boardId: string, skipCache?: boolean): Promise<ResolvedTask[]> {
+  async fetchReadyTasks(
+    boardId: string,
+    skipCache?: boolean,
+  ): Promise<ResolvedTask[]> {
     if (!skipCache && isBoardCacheFresh(boardId)) {
       const cached = readBoardCache(boardId);
       if (cached) return resolver.resolve(cached);
@@ -255,9 +321,10 @@ export class NotionClient {
         tasks.push(mapPageToTask(page));
       }
 
-      startCursor = response.has_more && response.next_cursor
-        ? response.next_cursor
-        : undefined;
+      startCursor =
+        response.has_more && response.next_cursor
+          ? response.next_cursor
+          : undefined;
     } while (startCursor);
 
     writeBoardCache(boardId, tasks);
@@ -296,6 +363,11 @@ export class NotionClient {
     const page = await notionRequest<NotionPage>('GET', `/pages/${taskId}`);
     const titleItems = page.properties['Task Name']?.title ?? [];
     const name = titleItems.map((t) => t.text.content).join('');
+    const expectedSizeProp = page.properties['Expected size'];
+    const expectedSize =
+      expectedSizeProp?.number != null && expectedSizeProp.number > 0
+        ? expectedSizeProp.number
+        : undefined;
 
     // Fetch page blocks (paginate)
     const lines: string[] = [];
@@ -307,10 +379,18 @@ export class NotionClient {
         const line = blockToLine(block);
         lines.push(line);
       }
-      startCursor = resp.has_more && resp.next_cursor ? resp.next_cursor : undefined;
+      startCursor =
+        resp.has_more && resp.next_cursor ? resp.next_cursor : undefined;
     } while (startCursor);
 
-    const rawMarkdown = lines.join('\n');
+    const bodyMarkdown = lines.join('\n');
+    // Embed Expected size as a top-level section so it travels through
+    // TaskBackend.fetchTaskPage() (which only returns the markdown body) and
+    // can be recovered downstream by parseExpectedSize().
+    const rawMarkdown =
+      expectedSize !== undefined
+        ? `## Expected size\n${expectedSize}\n\n${bodyMarkdown}`
+        : bodyMarkdown;
     const result: NotionTaskPage = {
       taskId,
       name,
@@ -319,6 +399,7 @@ export class NotionClient {
       acceptanceCriteria: parseSection(rawMarkdown, 'acceptance criteria'),
       filesSection: parseSection(rawMarkdown, 'files'),
       rawMarkdown,
+      expectedSize,
     };
 
     upsertTaskCache(cacheKey, JSON.stringify(result));
@@ -331,8 +412,7 @@ export class NotionClient {
    */
   async attachPR(taskId: string, prUrl: string): Promise<void> {
     const page = await notionRequest<NotionPage>('GET', `/pages/${taskId}`);
-    const existing =
-      page.properties.Notes?.rich_text?.[0]?.text?.content ?? '';
+    const existing = page.properties.Notes?.rich_text?.[0]?.text?.content ?? '';
     const updated = existing ? `${existing}\n${prUrl}` : prUrl;
 
     await notionRequest('PATCH', `/pages/${taskId}`, {

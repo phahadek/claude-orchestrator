@@ -66,7 +66,9 @@ export function SessionFilterBar({
       <select
         className={styles.dropdown}
         value={statusFilter ?? ''}
-        onChange={(e) => onStatusChange(e.target.value === '' ? null : e.target.value)}
+        onChange={(e) =>
+          onStatusChange(e.target.value === '' ? null : e.target.value)
+        }
       >
         {STATUS_OPTIONS.map((opt) => (
           <option key={opt.value ?? '__all'} value={opt.value ?? ''}>
@@ -78,12 +80,18 @@ export function SessionFilterBar({
       <select
         className={styles.dropdown}
         value={tagFilter ?? ''}
-        onChange={(e) => onTagChange(e.target.value === '' ? null : e.target.value)}
+        onChange={(e) =>
+          onTagChange(e.target.value === '' ? null : e.target.value)
+        }
         disabled={availableTags.length === 0}
       >
-        <option value="">{availableTags.length === 0 ? 'No tags yet' : 'All tags'}</option>
+        <option value="">
+          {availableTags.length === 0 ? 'No tags yet' : 'All tags'}
+        </option>
         {availableTags.map((tag) => (
-          <option key={tag} value={tag}>{tag}</option>
+          <option key={tag} value={tag}>
+            {tag}
+          </option>
         ))}
       </select>
 

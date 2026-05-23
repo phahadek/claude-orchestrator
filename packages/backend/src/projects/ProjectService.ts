@@ -32,6 +32,9 @@ export interface Project {
   contextUrl: string | null;
   githubRepo: string | null;
   taskSource: TaskSource;
+  autoLaunchEnabled: boolean;
+  autoLaunchMilestoneId: string | null;
+  autoMergeEnabled: boolean;
   createdAt: number;
   updatedAt: number;
   milestones: ProjectMilestone[];
@@ -44,6 +47,9 @@ export interface CreateProjectInput {
   contextUrl?: string | null;
   githubRepo?: string | null;
   taskSource?: TaskSource;
+  autoLaunchEnabled?: boolean;
+  autoLaunchMilestoneId?: string | null;
+  autoMergeEnabled?: boolean;
 }
 
 export interface CreateMilestoneInput {
@@ -74,6 +80,9 @@ function rowToProject(row: ProjectRow, milestones: MilestoneRow[]): Project {
     contextUrl: row.context_url,
     githubRepo: row.github_repo,
     taskSource: row.task_source,
+    autoLaunchEnabled: row.auto_launch_enabled === 1,
+    autoLaunchMilestoneId: row.auto_launch_milestone_id,
+    autoMergeEnabled: row.auto_merge_enabled === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     milestones: milestones.map(rowToMilestone),
@@ -83,7 +92,9 @@ function rowToProject(row: ProjectRow, milestones: MilestoneRow[]): Project {
 export const ProjectService = {
   list(): Project[] {
     const rows = listProjectRows();
-    return rows.map((row) => rowToProject(row, listMilestonesByProject(row.id)));
+    return rows.map((row) =>
+      rowToProject(row, listMilestonesByProject(row.id)),
+    );
   },
 
   count(): number {
@@ -108,6 +119,9 @@ export const ProjectService = {
       context_url: input.contextUrl ?? null,
       github_repo: input.githubRepo ?? null,
       task_source: input.taskSource ?? 'notion',
+      auto_launch_enabled: input.autoLaunchEnabled ? 1 : 0,
+      auto_launch_milestone_id: input.autoLaunchMilestoneId ?? null,
+      auto_merge_enabled: input.autoMergeEnabled ? 1 : 0,
     });
     return rowToProject(row, []);
   },
@@ -142,7 +156,10 @@ export const ProjectService = {
     return rowToMilestone(row);
   },
 
-  updateMilestone(id: string, patch: MilestonePatch): ProjectMilestone | undefined {
+  updateMilestone(
+    id: string,
+    patch: MilestonePatch,
+  ): ProjectMilestone | undefined {
     const row = updateMilestone(id, patch);
     return row ? rowToMilestone(row) : undefined;
   },

@@ -1,7 +1,11 @@
 import { spawn, ChildProcess, execSync } from 'child_process';
 import { createInterface } from 'readline';
 import { config } from '../config';
-import type { ISessionRunner, RawSessionEvent, SessionRunnerOptions } from './SessionRunner';
+import type {
+  ISessionRunner,
+  RawSessionEvent,
+  SessionRunnerOptions,
+} from './SessionRunner';
 
 function log(sessionId: string, ...args: unknown[]) {
   console.log(`[CliSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
@@ -34,10 +38,13 @@ export class CliSessionRunner implements ISessionRunner {
     const spawnArgs = [
       ...(resumeSessionId ? ['--resume', resumeSessionId] : []),
       '--print',
-      '--output-format', 'stream-json',
-      '--input-format', 'stream-json',
+      '--output-format',
+      'stream-json',
+      '--input-format',
+      'stream-json',
       '--verbose',
-      '--permission-mode', 'acceptEdits',
+      '--permission-mode',
+      'acceptEdits',
       ...(model ? ['--model', model] : []),
       '--allowed-tools',
       ...allowedTools,
@@ -53,22 +60,34 @@ export class CliSessionRunner implements ISessionRunner {
       `spawning: cwd=${worktreePath} cmd=${config.claudePath} ${spawnArgs.join(' ')} env={${envStr}}`,
     );
 
-    this.proc = spawn(
-      config.claudePath,
-      spawnArgs,
-      {
-        cwd: worktreePath,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        ...(process.platform !== 'win32' && { detached: true }),
-      },
-    );
+    this.proc = spawn(config.claudePath, spawnArgs, {
+      cwd: worktreePath,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      ...(process.platform !== 'win32' && { detached: true }),
+    });
+
+    // Async stdin errors (e.g. EPIPE when the child exits) must not bubble up
+    // as unhandled 'error' events on the process.
+    this.proc.stdin!.on('error', (err: Error) => {
+      log(this.sessionId, `stdin error (ignored): ${err.message}`);
+    });
 
     // Send initial prompt via stdin (required by --input-format stream-json).
     // Resumed sessions skip the initial prompt — the caller delivers via sendMessage().
     if (!resumeSessionId && initialPrompt) {
-      this.proc.stdin!.write(
-        JSON.stringify({ type: 'user', message: { role: 'user', content: initialPrompt } }) + '\n',
-      );
+      try {
+        this.proc.stdin!.write(
+          JSON.stringify({
+            type: 'user',
+            message: { role: 'user', content: initialPrompt },
+          }) + '\n',
+        );
+      } catch (err) {
+        log(
+          this.sessionId,
+          `initial prompt stdin.write failed (ignored): ${(err as Error).message}`,
+        );
+      }
     }
 
     this.proc.on('error', (err) => {
@@ -94,7 +113,14 @@ export class CliSessionRunner implements ISessionRunner {
       } catch {
         return;
       }
-      onEvent(event);
+      try {
+        onEvent(event);
+      } catch (err) {
+        console.error(
+          `[CliSessionRunner] event handler threw for session ${this.sessionId}: ${(err as Error).message}`,
+          err,
+        );
+      }
     });
 
     // Wait for the subprocess to exit.
@@ -105,7 +131,12 @@ export class CliSessionRunner implements ISessionRunner {
     // Drain remaining buffered lines (5s guard).
     await Promise.race([
       rlDone,
-      new Promise<void>((resolve) => setTimeout(() => { rl.close(); resolve(); }, 5_000)),
+      new Promise<void>((resolve) =>
+        setTimeout(() => {
+          rl.close();
+          resolve();
+        }, 5_000),
+      ),
     ]);
 
     return exitCode;
@@ -113,9 +144,19 @@ export class CliSessionRunner implements ISessionRunner {
 
   sendMessage(message: string): void {
     if (!this.proc?.stdin?.writable) return;
-    this.proc.stdin.write(
-      JSON.stringify({ type: 'user', message: { role: 'user', content: message } }) + '\n',
-    );
+    try {
+      this.proc.stdin.write(
+        JSON.stringify({
+          type: 'user',
+          message: { role: 'user', content: message },
+        }) + '\n',
+      );
+    } catch (err) {
+      log(
+        this.sessionId,
+        `sendMessage stdin.write failed (ignored): ${(err as Error).message}`,
+      );
+    }
   }
 
   endSession(): void {

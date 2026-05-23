@@ -87,13 +87,20 @@ vi.mock('../db/db.js', async () => {
       review_iteration  INTEGER NOT NULL DEFAULT 0,
       head_sha          TEXT,
       last_reviewed_sha TEXT,
-      pending_push      INTEGER NOT NULL DEFAULT 0
+      pending_push      INTEGER NOT NULL DEFAULT 0,
+      pause_reason      TEXT,
+      failing_checks    TEXT
     );
   `);
   return { db };
 });
 
-import { insertSession, insertEventOrIgnore, getSession, incrementTokens } from '../db/queries.js';
+import {
+  insertSession,
+  insertEventOrIgnore,
+  getSession,
+  incrementTokens,
+} from '../db/queries.js';
 import { JsonlReader } from '../session/JsonlReader.js';
 import { db } from '../db/db.js';
 
@@ -177,7 +184,10 @@ describe('backfillTokens', () => {
     for (let i = 0; i < 105; i++) {
       const id = `bf-cap-${String(i).padStart(3, '0')}`;
       makeSession(id);
-      addEvent(id, { type: 'result', usage: { input_tokens: 10, output_tokens: 5 } });
+      addEvent(id, {
+        type: 'result',
+        usage: { input_tokens: 10, output_tokens: 5 },
+      });
     }
 
     reader.backfillTokens();

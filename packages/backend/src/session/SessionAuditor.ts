@@ -55,20 +55,26 @@ export class SessionAuditor {
    * Run all post-session checks and return a SessionAudit record.
    * Non-blocking: GitHub/Notion failures are caught and skipped, not thrown.
    */
-  async audit(session: AuditableSession, exitCode: number | null): Promise<SessionAudit> {
+  async audit(
+    session: AuditableSession,
+    exitCode: number | null,
+  ): Promise<SessionAudit> {
     const violations: string[] = [];
     let prTargetsBranch: string | null = null;
     let specMismatch: string | null = null;
 
     // 1. PR opened on clean exit?
-    const prOpened = session.prUrl != null
-      || (!!session.taskId && getPRByNotionTaskId(session.taskId) != null);
+    const prOpened =
+      session.prUrl != null ||
+      (!!session.taskId && getPRByNotionTaskId(session.taskId) != null);
     if (exitCode === 0 && !prOpened) {
       violations.push('Clean exit but no PR opened');
     }
 
     if (session.prUrl && this.githubClient) {
-      const prMatch = session.prUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
+      const prMatch = session.prUrl.match(
+        /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/,
+      );
       if (prMatch) {
         const repo = prMatch[1];
         const prNumber = parseInt(prMatch[2], 10);
@@ -77,7 +83,9 @@ export class SessionAuditor {
         try {
           pr = await this.githubClient.fetchPR(repo, prNumber);
         } catch (err) {
-          console.warn(`[SessionAuditor] GitHub fetchPR failed — skipping PR checks: ${err}`);
+          console.warn(
+            `[SessionAuditor] GitHub fetchPR failed — skipping PR checks: ${err}`,
+          );
         }
 
         if (pr) {
@@ -102,12 +110,19 @@ export class SessionAuditor {
           if (!body.includes('## Summary')) {
             violations.push('PR body missing required section: ## Summary');
           }
-          if (!body.includes('## Test plan') && !body.includes('## Automated Tests')) {
+          if (
+            !body.includes('## Test plan') &&
+            !body.includes('## Automated Tests')
+          ) {
             violations.push('PR body missing required section: ## Test plan');
           }
 
           // 6. PR content matches task spec?
-          specMismatch = await this.compareToSpec(repo, prNumber, session.taskId);
+          specMismatch = await this.compareToSpec(
+            repo,
+            prNumber,
+            session.taskId,
+          );
           if (specMismatch) {
             violations.push(specMismatch);
           }
@@ -138,7 +153,11 @@ export class SessionAuditor {
    * mismatch, or null if everything looks consistent (or if the check cannot
    * be performed).
    */
-  private async compareToSpec(repo: string, prNumber: number, taskId: string): Promise<string | null> {
+  private async compareToSpec(
+    repo: string,
+    prNumber: number,
+    taskId: string,
+  ): Promise<string | null> {
     if (!this.githubClient || !taskId) return null;
 
     let diffFiles: string[] = [];
@@ -146,19 +165,25 @@ export class SessionAuditor {
       const prDiff = await this.githubClient.fetchDiff(prNumber, repo);
       diffFiles = prDiff.filesChanged;
     } catch (err) {
-      console.warn(`[SessionAuditor] fetchDiff failed — skipping spec comparison: ${err}`);
+      console.warn(
+        `[SessionAuditor] fetchDiff failed — skipping spec comparison: ${err}`,
+      );
       return null;
     }
 
-    let taskMarkdown: string | null = null;
+    let taskMarkdown: string | null;
     try {
       taskMarkdown = await this.resolveBackend().fetchTaskPage(taskId);
     } catch (err) {
-      console.warn(`[SessionAuditor] fetchTaskPage failed — skipping spec comparison: ${err}`);
+      console.warn(
+        `[SessionAuditor] fetchTaskPage failed — skipping spec comparison: ${err}`,
+      );
       return null;
     }
 
-    const filesSection = taskMarkdown ? parseSection(taskMarkdown, 'files') : '';
+    const filesSection = taskMarkdown
+      ? parseSection(taskMarkdown, 'files')
+      : '';
     if (!filesSection.trim()) return null;
 
     // Extract file paths from the filesSection (lines containing slashes or dots)
@@ -180,7 +205,9 @@ export class SessionAuditor {
 
     const parts: string[] = [];
     if (unexpected.length > 0) {
-      parts.push(`PR modifies files not listed in task spec: ${unexpected.join(', ')}`);
+      parts.push(
+        `PR modifies files not listed in task spec: ${unexpected.join(', ')}`,
+      );
     }
     if (missing.length > 0) {
       parts.push(`PR does not touch expected file: ${missing.join(', ')}`);
@@ -189,7 +216,10 @@ export class SessionAuditor {
     return parts.length > 0 ? parts.join('; ') : null;
   }
 
-  private routeFailuresToSession(sessionId: string, violations: string[]): void {
+  private routeFailuresToSession(
+    sessionId: string,
+    violations: string[],
+  ): void {
     if (!this.sessionManager) return;
     const message = [
       'Audit findings for your PR:',

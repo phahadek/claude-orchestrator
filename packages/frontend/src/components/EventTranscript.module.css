@@ -24,7 +24,9 @@
   cursor: pointer;
   font-size: 0.75rem;
   padding: 3px 8px;
-  transition: color 0.15s, border-color 0.15s;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
 }
 
 .copyButton:hover:not(:disabled) {
@@ -45,7 +47,9 @@
   cursor: pointer;
   font-size: 0.75rem;
   padding: 3px 8px;
-  transition: color 0.15s, border-color 0.15s;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
 }
 
 .goToEndButton:hover {
@@ -109,7 +113,7 @@
 }
 
 .toolHeader:hover {
-  background: var(--bg-hover, rgba(255,255,255,0.05));
+  background: var(--bg-hover, rgba(255, 255, 255, 0.05));
 }
 
 .toolChevron {
@@ -125,14 +129,18 @@
 .toolBody {
   overflow: auto;
   max-height: 800px;
-  transition: max-height 0.25s ease, opacity 0.2s ease;
+  transition:
+    max-height 0.25s ease,
+    opacity 0.2s ease;
   opacity: 1;
 }
 
 .toolBodyHidden {
   overflow: hidden;
   max-height: 0;
-  transition: max-height 0.2s ease, opacity 0.15s ease;
+  transition:
+    max-height 0.2s ease,
+    opacity 0.15s ease;
   opacity: 0;
 }
 

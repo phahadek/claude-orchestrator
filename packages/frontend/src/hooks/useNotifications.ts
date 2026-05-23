@@ -14,13 +14,20 @@ function requestPermissionOnce(): void {
   localStorage.setItem(PERMISSION_REQUESTED_KEY, 'true');
   void Notification.requestPermission().then((permission) => {
     // Default notificationsEnabled to true when permission is granted
-    if (permission === 'granted' && localStorage.getItem(NOTIFICATIONS_ENABLED_KEY) === null) {
+    if (
+      permission === 'granted' &&
+      localStorage.getItem(NOTIFICATIONS_ENABLED_KEY) === null
+    ) {
       localStorage.setItem(NOTIFICATIONS_ENABLED_KEY, 'true');
     }
   });
 }
 
-function fireNotification(title: string, body: string, onClick?: () => void): void {
+function fireNotification(
+  title: string,
+  body: string,
+  onClick?: () => void,
+): void {
   if (typeof Notification === 'undefined') return;
   if (Notification.permission !== 'granted') return;
   if (!isNotificationsEnabled()) return;
@@ -37,10 +44,25 @@ interface SessionSnapshot {
   pendingPermissionKey: string | null;
 }
 
-export function useNotifications(sessions: SessionState[], prReviewEvent?: { prNumber: number; verdict: string; summary: string } | null): void {
+export function useNotifications(
+  sessions: SessionState[],
+  prReviewEvent?: {
+    prNumber: number;
+    verdict: string;
+    summary: string;
+    replay?: boolean;
+  } | null,
+  reviewFailedEvent?: {
+    prNumber: number;
+    repo: string;
+    message: string;
+    receivedAt: number;
+  } | null,
+): void {
   const prevRef = useRef<Map<string, SessionSnapshot>>(new Map());
   const initialSyncDoneRef = useRef(false);
   const prevReviewEventRef = useRef<typeof prReviewEvent>(null);
+  const prevReviewFailedRef = useRef<typeof reviewFailedEvent>(null);
 
   useEffect(() => {
     requestPermissionOnce();
@@ -56,7 +78,10 @@ export function useNotifications(sessions: SessionState[], prReviewEvent?: { prN
         const pendingPermissionKey = session.pendingPermission
           ? `${session.pendingPermission.toolName}:${session.pendingPermission.proposedAction}`
           : null;
-        initial.set(session.sessionId, { status: session.status, pendingPermissionKey });
+        initial.set(session.sessionId, {
+          status: session.status,
+          pendingPermissionKey,
+        });
       }
       prevRef.current = initial;
       initialSyncDoneRef.current = true;
@@ -67,7 +92,13 @@ export function useNotifications(sessions: SessionState[], prReviewEvent?: { prN
     const next = new Map<string, SessionSnapshot>();
 
     for (const session of sessions) {
-      const { sessionId, taskName, status, pendingPermission } = session;
+      const {
+        sessionId,
+        taskName,
+        status,
+        pendingPermission,
+        lastStatusReplay,
+      } = session;
       const pendingPermissionKey = pendingPermission
         ? `${pendingPermission.toolName}:${pendingPermission.proposedAction}`
         : null;
@@ -76,10 +107,22 @@ export function useNotifications(sessions: SessionState[], prReviewEvent?: { prN
 
       const prevSnap = prev.get(sessionId);
 
-      if (status === 'done' && prevSnap?.status !== 'done') {
-        fireNotification('✅ Session done', `${taskName} finished successfully.`);
-      } else if (status === 'error' && prevSnap?.status !== 'error') {
-        fireNotification('❌ Session failed', `${taskName} encountered an error.`);
+      // Suppress notifications for transitions whose latest session_status
+      // carried replay: true (sent during the WS reconnect burst). The
+      // snapshot still advances via next.set above so a later non-replay
+      // transition notifies correctly.
+      if (!lastStatusReplay) {
+        if (status === 'done' && prevSnap?.status !== 'done') {
+          fireNotification(
+            '✅ Session done',
+            `${taskName} finished successfully.`,
+          );
+        } else if (status === 'error' && prevSnap?.status !== 'error') {
+          fireNotification(
+            '❌ Session failed',
+            `${taskName} encountered an error.`,
+          );
+        }
       }
 
       if (
@@ -92,7 +135,9 @@ export function useNotifications(sessions: SessionState[], prReviewEvent?: { prN
           `${toolName} requested in ${taskName}. Click to review.`,
           () => {
             window.focus();
-            window.dispatchEvent(new CustomEvent('selectSession', { detail: { sessionId } }));
+            window.dispatchEvent(
+              new CustomEvent('selectSession', { detail: { sessionId } }),
+            );
           },
         );
       }
@@ -102,9 +147,32 @@ export function useNotifications(sessions: SessionState[], prReviewEvent?: { prN
   }, [sessions]);
 
   useEffect(() => {
+    if (!reviewFailedEvent) return;
+    if (
+      prevReviewFailedRef.current?.receivedAt === reviewFailedEvent.receivedAt
+    )
+      return;
+    prevReviewFailedRef.current = reviewFailedEvent;
+
+    const { prNumber, message } = reviewFailedEvent;
+    fireNotification(
+      '❌ Review failed unexpectedly',
+      `PR #${prNumber}: ${message}`,
+      () => {
+        window.focus();
+        window.dispatchEvent(new CustomEvent('navigateToPRs'));
+      },
+    );
+  }, [reviewFailedEvent]);
+
+  useEffect(() => {
     if (!prReviewEvent) return;
     if (prevReviewEventRef.current === prReviewEvent) return;
     prevReviewEventRef.current = prReviewEvent;
+
+    // Replayed pr_review_complete from the WS reconnect burst — advance the
+    // ref so subsequent live events still fire, but skip the notification.
+    if (prReviewEvent.replay) return;
 
     const { prNumber, verdict, summary } = prReviewEvent;
     let title: string;

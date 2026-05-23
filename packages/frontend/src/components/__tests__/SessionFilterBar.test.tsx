@@ -23,14 +23,16 @@ describe('SessionFilterBar', () => {
         onTagChange={vi.fn()}
         availableTags={[]}
         resultCount={5}
-      />
+      />,
     );
 
     const input = screen.getByPlaceholderText('Search sessions...');
     fireEvent.change(input, { target: { value: 'my task' } });
     expect(onSearchChange).not.toHaveBeenCalled();
 
-    act(() => { vi.advanceTimersByTime(150); });
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
     expect(onSearchChange).toHaveBeenCalledWith('my task');
   });
 
@@ -46,7 +48,7 @@ describe('SessionFilterBar', () => {
         onTagChange={vi.fn()}
         availableTags={[]}
         resultCount={3}
-      />
+      />,
     );
 
     const selects = screen.getAllByRole('combobox');
@@ -66,7 +68,7 @@ describe('SessionFilterBar', () => {
         onTagChange={vi.fn()}
         availableTags={[]}
         resultCount={0}
-      />
+      />,
     );
 
     const selects = screen.getAllByRole('combobox');
@@ -85,7 +87,7 @@ describe('SessionFilterBar', () => {
         onTagChange={vi.fn()}
         availableTags={[]}
         resultCount={7}
-      />
+      />,
     );
     expect(screen.getByText('7 sessions')).toBeDefined();
   });
@@ -101,7 +103,7 @@ describe('SessionFilterBar', () => {
         onTagChange={vi.fn()}
         availableTags={[]}
         resultCount={1}
-      />
+      />,
     );
     expect(screen.getByText('1 session')).toBeDefined();
   });
@@ -117,7 +119,7 @@ describe('SessionFilterBar', () => {
         onTagChange={vi.fn()}
         availableTags={['bugfix', 'auth', 'refactor']}
         resultCount={3}
-      />
+      />,
     );
     expect(screen.getByText('bugfix')).toBeDefined();
     expect(screen.getByText('auth')).toBeDefined();
@@ -136,7 +138,7 @@ describe('SessionFilterBar', () => {
         onTagChange={onTagChange}
         availableTags={['bugfix', 'auth']}
         resultCount={2}
-      />
+      />,
     );
     const selects = screen.getAllByRole('combobox');
     fireEvent.change(selects[1], { target: { value: 'bugfix' } });
@@ -155,7 +157,7 @@ describe('SessionFilterBar', () => {
         onTagChange={onTagChange}
         availableTags={['bugfix']}
         resultCount={1}
-      />
+      />,
     );
     const selects = screen.getAllByRole('combobox');
     fireEvent.change(selects[1], { target: { value: '' } });
@@ -165,7 +167,13 @@ describe('SessionFilterBar', () => {
 
 // Filter logic tests — these validate the filtering algorithm used in App.tsx
 describe('session filtering logic', () => {
-  type MinSession = { taskName: string; status: string; project_id?: string | null; archived?: boolean; tags?: string[] };
+  type MinSession = {
+    taskName: string;
+    status: string;
+    project_id?: string | null;
+    archived?: boolean;
+    tags?: string[];
+  };
 
   function applyFilters(
     sessions: MinSession[],
@@ -176,7 +184,11 @@ describe('session filtering logic', () => {
   ): MinSession[] {
     return sessions
       .filter((s) => !s.archived)
-      .filter((s) => !searchText || s.taskName.toLowerCase().includes(searchText.toLowerCase()))
+      .filter(
+        (s) =>
+          !searchText ||
+          s.taskName.toLowerCase().includes(searchText.toLowerCase()),
+      )
       .filter((s) => !statusFilter || s.status === statusFilter)
       .filter((s) => !tagFilter || s.tags?.includes(tagFilter))
       .filter((s) => !activeProjectId || s.project_id === activeProjectId);

@@ -2,8 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { shouldAutoReview } from './reviewUtils';
 
 describe('shouldAutoReview()', () => {
-  const withCap = (reviewIteration: number, headSha: string | null, lastReviewedSha: string | null) =>
-    ({ reviewIteration, headSha, lastReviewedSha });
+  const withCap = (
+    reviewIteration: number,
+    headSha: string | null,
+    lastReviewedSha: string | null,
+  ) => ({ reviewIteration, headSha, lastReviewedSha });
 
   it('returns false when reviewIteration >= maxIterations', () => {
     expect(shouldAutoReview(withCap(3, 'abc', null), 3)).toBe(false);

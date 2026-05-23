@@ -17,6 +17,9 @@ export interface Project {
   contextUrl: string | null;
   githubRepo: string | null;
   taskSource: TaskSource;
+  autoLaunchEnabled: boolean;
+  autoLaunchMilestoneId: string | null;
+  autoMergeEnabled: boolean;
   createdAt: number;
   updatedAt: number;
   milestones: ProjectMilestone[];
@@ -29,6 +32,9 @@ export interface CreateProjectInput {
   contextUrl?: string | null;
   githubRepo?: string | null;
   taskSource: TaskSource;
+  autoLaunchEnabled?: boolean;
+  autoLaunchMilestoneId?: string | null;
+  autoMergeEnabled?: boolean;
 }
 
 export interface UpdateProjectInput {
@@ -37,6 +43,9 @@ export interface UpdateProjectInput {
   contextUrl?: string | null;
   githubRepo?: string | null;
   taskSource?: TaskSource;
+  autoLaunchEnabled?: boolean;
+  autoLaunchMilestoneId?: string | null;
+  autoMergeEnabled?: boolean;
 }
 
 export interface CreateMilestoneInput {
@@ -101,7 +110,10 @@ export const projectsApi = {
     );
   },
 
-  createMilestone(projectId: string, input: CreateMilestoneInput): Promise<ProjectMilestone> {
+  createMilestone(
+    projectId: string,
+    input: CreateMilestoneInput,
+  ): Promise<ProjectMilestone> {
     return request<ProjectMilestone>(
       `/api/projects/${encodeURIComponent(projectId)}/milestones`,
       {
@@ -112,12 +124,18 @@ export const projectsApi = {
     );
   },
 
-  updateMilestone(milestoneId: string, patch: UpdateMilestoneInput): Promise<ProjectMilestone> {
-    return request<ProjectMilestone>(`/api/milestones/${encodeURIComponent(milestoneId)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    });
+  updateMilestone(
+    milestoneId: string,
+    patch: UpdateMilestoneInput,
+  ): Promise<ProjectMilestone> {
+    return request<ProjectMilestone>(
+      `/api/milestones/${encodeURIComponent(milestoneId)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      },
+    );
   },
 
   deleteMilestone(milestoneId: string): Promise<void> {
@@ -129,6 +147,16 @@ export const projectsApi = {
   createTasksYamlStub(projectId: string): Promise<{ path: string }> {
     return request<{ path: string }>(
       `/api/projects/${encodeURIComponent(projectId)}/tasks-yaml-stub`,
+      { method: 'POST' },
+    );
+  },
+
+  mergeReady(
+    projectId: string,
+    milestoneId: string,
+  ): Promise<{ attempted: number[] }> {
+    return request<{ attempted: number[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}/merge-ready`,
       { method: 'POST' },
     );
   },

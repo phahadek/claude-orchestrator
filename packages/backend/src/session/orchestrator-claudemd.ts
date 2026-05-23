@@ -9,6 +9,8 @@ export interface OrchestratorClaudeMdParams {
   prGate?: {
     typeCheck: string;
     build: string;
+    lint?: string;
+    formatCheck?: string;
   };
   /**
    * Bash rules (Rule 5+). Each item is the full rule text — the first line
@@ -55,10 +57,28 @@ export interface OrchestratorClaudeMdParams {
  * 10. Bash rules (permission system)
  * 11. Separator + "# Project Instructions (from project CLAUDE.md)" (added by caller)
  */
-export function buildOrchestratorClaudeMd(params: OrchestratorClaudeMdParams): string {
-  const { taskName, taskUrl, projectContextUrl, targetBranch, worktreePath, prGate, bashRules, taskBackend = 'notion', taskContent, localContext } = params;
+export function buildOrchestratorClaudeMd(
+  params: OrchestratorClaudeMdParams,
+): string {
+  const {
+    taskName,
+    taskUrl,
+    projectContextUrl,
+    targetBranch,
+    worktreePath,
+    prGate,
+    bashRules,
+    taskBackend = 'notion',
+    taskContent,
+    localContext,
+  } = params;
 
-  const resolvedPrGate = prGate ?? { typeCheck: 'npx tsc --noEmit', build: 'npx vite build' };
+  const resolvedPrGate = {
+    typeCheck: prGate?.typeCheck ?? 'npx tsc --noEmit',
+    build: prGate?.build ?? 'npx vite build',
+    lint: prGate?.lint ?? 'npm run lint',
+    formatCheck: prGate?.formatCheck ?? 'npm run format:check',
+  };
   const resolvedBashRules = bashRules ?? [
     'Use `npx` instead of bare tool names.\n`tsc` → `npx tsc`. Bare commands may not be on PATH.',
   ];
@@ -94,20 +114,22 @@ export function buildOrchestratorClaudeMd(params: OrchestratorClaudeMdParams): s
 
 Follow these steps in order — every session:
 
-${taskContent
-  ? `> **Task spec is pre-loaded below.** Do NOT fetch Notion pages — the task content has
+${
+  taskContent
+    ? `> **Task spec is pre-loaded below.** Do NOT fetch Notion pages — the task content has
 > already been injected by the orchestrator. Proceed directly to implementation.
 
 1. Read the **Task Spec** section below — it contains the full task specification.
 2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
-  : taskBackend === 'local'
-  ? `> ⚠️ **YAML task source**: Task context comes from \`tasks.yaml\` in the project root, not Notion.
+    : taskBackend === 'local'
+      ? `> ⚠️ **YAML task source**: Task context comes from \`tasks.yaml\` in the project root, not Notion.
 > Skip step 1 (Notion fetch) and instead read \`tasks.yaml\` for task context.
 
 1. Read \`tasks.yaml\` in the project root for task context (skip Notion fetch).
 2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
-  : `1. Fetch the Notion task page and project context page.
-2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`}
+      : `1. Fetch the Notion task page and project context page.
+2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
+}
 3. Implement the task per the acceptance criteria.
 4. Pass the pre-PR gate (see Pre-PR Gate section below).
 5. Open a draft PR targeting \`${targetBranch}\` using the required body template.
@@ -178,7 +200,9 @@ Run in order — all must pass before opening the PR:
 3. Restore CLAUDE.md: \`git stash pop\`
 4. \`${resolvedPrGate.typeCheck}\` — must pass.
 5. \`${resolvedPrGate.build}\` — must pass without errors.
-6. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.
+6. \`${resolvedPrGate.lint}\` — must pass with no errors.
+7. \`${resolvedPrGate.formatCheck}\` — must pass with no errors.
+8. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.
 
 ---
 
@@ -224,7 +248,9 @@ For multiline commit messages, use \`git commit -F <file>\` and write the file w
 **Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
 Use the Write tool for any file creation. Never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
 
-${bashRulesText}${taskContent ? `
+${bashRulesText}${
+    taskContent
+      ? `
 
 ---
 
@@ -233,7 +259,11 @@ ${bashRulesText}${taskContent ? `
 > This is the full task specification, pre-fetched by the orchestrator.
 > Do NOT re-fetch this from Notion — use the content below as your source of truth.
 
-${taskContent}` : ''}${localContext ? `
+${taskContent}`
+      : ''
+  }${
+    localContext
+      ? `
 
 ---
 
@@ -241,7 +271,9 @@ ${taskContent}` : ''}${localContext ? `
 
 > Host-local context loaded from \`.claude/local-context.md\`.
 
-${localContext}` : ''}`.trimEnd();
+${localContext}`
+      : ''
+  }`.trimEnd();
 }
 
 /**

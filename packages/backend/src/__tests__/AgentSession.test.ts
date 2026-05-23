@@ -46,6 +46,7 @@ vi.mock('../db/queries', () => ({
   setSessionModel: vi.fn(),
   getPRBySessionId: vi.fn(() => null),
   getPRByNotionTaskId: vi.fn(() => null),
+  getPRByNumber: vi.fn(() => null),
   setHeadSha: vi.fn(),
 }));
 
@@ -53,8 +54,13 @@ import { AgentSession } from '../session/AgentSession';
 import { spawn } from 'child_process';
 import type { NotionClient } from '../notion/NotionClient';
 import type { ServerMessage } from '../ws/types';
-import { getRules, getEventsBySession, updateSessionStatus, upsertSessionEvent, getPRBySessionId } from '../db/queries';
-import type { PermissionRule } from '../db/types';
+import {
+  getRules,
+  getEventsBySession,
+  upsertSessionEvent,
+  getPRBySessionId,
+  getPRByNumber,
+} from '../db/queries';
 
 function fakeNotionClient(): NotionClient {
   return {
@@ -77,7 +83,13 @@ describe('AgentSession', () => {
   // DB and broadcast as session_event to the UI.
   it('broadcasts permission event as session_event when CLI emits it', async () => {
     const notion = fakeNotionClient();
-    const session = new AgentSession('s1', 'https://notion.so/task', 'https://notion.so/ctx', notion, '/tmp');
+    const session = new AgentSession(
+      's1',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+    );
 
     vi.mocked(getRules).mockReturnValue([]);
 
@@ -86,7 +98,13 @@ describe('AgentSession', () => {
 
     const runPromise = session.run();
 
-    mockProc.stdout.push(JSON.stringify({ type: 'permission', tool_name: 'Read', tool_input: {} }) + '\n');
+    mockProc.stdout.push(
+      JSON.stringify({
+        type: 'permission',
+        tool_name: 'Read',
+        tool_input: {},
+      }) + '\n',
+    );
     await new Promise((r) => setTimeout(r, 50));
 
     // permission events are broadcast as session_event (type=system)
@@ -101,13 +119,25 @@ describe('AgentSession', () => {
 
   it('does NOT write approve/deny to stdin for permission events (engine removed)', async () => {
     const notion = fakeNotionClient();
-    const session = new AgentSession('s2', 'https://notion.so/task', 'https://notion.so/ctx', notion, '/tmp');
+    const session = new AgentSession(
+      's2',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+    );
 
     vi.mocked(getRules).mockReturnValue([]);
 
     const runPromise = session.run();
 
-    mockProc.stdout.push(JSON.stringify({ type: 'permission', tool_name: 'Bash', tool_input: { command: 'rm -rf /' } }) + '\n');
+    mockProc.stdout.push(
+      JSON.stringify({
+        type: 'permission',
+        tool_name: 'Bash',
+        tool_input: { command: 'rm -rf /' },
+      }) + '\n',
+    );
     await new Promise((r) => setTimeout(r, 50));
 
     // Only the initial prompt should have been written — no approve/deny response
@@ -125,7 +155,13 @@ describe('AgentSession', () => {
   // --permission-mode acceptEdits. They must not throw when called.
   it('approve() is a safe no-op and does not write to stdin', async () => {
     const notion = fakeNotionClient();
-    const session = new AgentSession('s3', 'https://notion.so/task', 'https://notion.so/ctx', notion, '/tmp');
+    const session = new AgentSession(
+      's3',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+    );
 
     vi.mocked(getRules).mockReturnValue([]);
 
@@ -146,7 +182,13 @@ describe('AgentSession', () => {
 
   it('deny() is a safe no-op and does not write to stdin', async () => {
     const notion = fakeNotionClient();
-    const session = new AgentSession('s4', 'https://notion.so/task', 'https://notion.so/ctx', notion, '/tmp');
+    const session = new AgentSession(
+      's4',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+    );
 
     vi.mocked(getRules).mockReturnValue([]);
 
@@ -223,11 +265,19 @@ describe('AgentSession', () => {
   it('PR URL regex matches valid GitHub PR URLs', () => {
     const PR_URL_REGEX = /https:\/\/github\.com\/.+\/pull\/\d+/;
 
-    expect(PR_URL_REGEX.test('https://github.com/owner/repo/pull/123')).toBe(true);
-    expect(PR_URL_REGEX.test('https://github.com/my-org/my-repo/pull/1')).toBe(true);
+    expect(PR_URL_REGEX.test('https://github.com/owner/repo/pull/123')).toBe(
+      true,
+    );
+    expect(PR_URL_REGEX.test('https://github.com/my-org/my-repo/pull/1')).toBe(
+      true,
+    );
     expect(PR_URL_REGEX.test('https://github.com/a/b/pull/99999')).toBe(true);
-    expect(PR_URL_REGEX.test('https://github.com/owner/repo/issues/123')).toBe(false);
-    expect(PR_URL_REGEX.test('https://gitlab.com/owner/repo/pull/123')).toBe(false);
+    expect(PR_URL_REGEX.test('https://github.com/owner/repo/issues/123')).toBe(
+      false,
+    );
+    expect(PR_URL_REGEX.test('https://gitlab.com/owner/repo/pull/123')).toBe(
+      false,
+    );
     expect(PR_URL_REGEX.test('not a url')).toBe(false);
   });
 
@@ -252,8 +302,12 @@ describe('AgentSession', () => {
     session.run();
 
     // The custom prompt should be sent to stdin, not the generated "Fetch both Notion pages" text
-    expect(mockProc.stdinChunks.some((c) => c.includes(customPrompt))).toBe(true);
-    expect(mockProc.stdinChunks.some((c) => c.includes('Fetch both Notion pages'))).toBe(false);
+    expect(mockProc.stdinChunks.some((c) => c.includes(customPrompt))).toBe(
+      true,
+    );
+    expect(
+      mockProc.stdinChunks.some((c) => c.includes('Fetch both Notion pages')),
+    ).toBe(false);
 
     mockProc.stdout.push(null);
     await new Promise((r) => setTimeout(r, 0));
@@ -303,7 +357,14 @@ describe('AgentSession', () => {
     // First upsert returns row ID 42; subsequent calls return 1 (not reached for second call)
     vi.mocked(upsertSessionEvent).mockReturnValueOnce(42).mockReturnValue(1);
 
-    const session = new AgentSession('s-dedup', 'https://notion.so/task', 'https://notion.so/ctx', notion, '/tmp', 'task-id');
+    const session = new AgentSession(
+      's-dedup',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
     const runPromise = session.run();
 
     const msgA1 = JSON.stringify({
@@ -339,12 +400,23 @@ describe('AgentSession', () => {
     vi.mocked(getRules).mockReturnValue([]);
     vi.mocked(upsertSessionEvent).mockReturnValue(1);
 
-    const session = new AgentSession('s-no-id', 'https://notion.so/task', 'https://notion.so/ctx', notion, '/tmp', 'task-id');
+    const session = new AgentSession(
+      's-no-id',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
     const runPromise = session.run();
 
     // Two system events (no message.id)
-    mockProc.stdout.push(JSON.stringify({ type: 'system', subtype: 'init' }) + '\n');
-    mockProc.stdout.push(JSON.stringify({ type: 'system', subtype: 'success' }) + '\n');
+    mockProc.stdout.push(
+      JSON.stringify({ type: 'system', subtype: 'init' }) + '\n',
+    );
+    mockProc.stdout.push(
+      JSON.stringify({ type: 'system', subtype: 'success' }) + '\n',
+    );
     await new Promise((r) => setTimeout(r, 50));
 
     const calls = vi.mocked(upsertSessionEvent).mock.calls;
@@ -367,7 +439,14 @@ describe('AgentSession', () => {
     vi.mocked(getRules).mockReturnValue([]);
     vi.mocked(upsertSessionEvent).mockReturnValue(1);
 
-    const session = new AgentSession('s-filter', 'https://notion.so/task', 'https://notion.so/ctx', notion, '/tmp', 'task-id');
+    const session = new AgentSession(
+      's-filter',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
     const messages: ServerMessage[] = [];
     session.on('message', (msg: ServerMessage) => messages.push(msg));
 
@@ -375,14 +454,19 @@ describe('AgentSession', () => {
 
     const systemOnlyEvent = JSON.stringify({
       type: 'user',
-      message: { role: 'user', content: '<system-reminder>CLAUDE.md bootstrap content</system-reminder>' },
+      message: {
+        role: 'user',
+        content:
+          '<system-reminder>CLAUDE.md bootstrap content</system-reminder>',
+      },
     });
     mockProc.stdout.push(systemOnlyEvent + '\n');
     await new Promise((r) => setTimeout(r, 50));
 
     // Must be stored in DB
     expect(vi.mocked(upsertSessionEvent)).toHaveBeenCalled();
-    const storedPayload = vi.mocked(upsertSessionEvent).mock.calls[0][0].payload;
+    const storedPayload =
+      vi.mocked(upsertSessionEvent).mock.calls[0][0].payload;
     expect(storedPayload).toBe(systemOnlyEvent);
 
     // Must NOT be broadcast as session_event
@@ -400,7 +484,14 @@ describe('AgentSession', () => {
     vi.mocked(getRules).mockReturnValue([]);
     vi.mocked(upsertSessionEvent).mockReturnValue(1);
 
-    const session = new AgentSession('s-real-msg', 'https://notion.so/task', 'https://notion.so/ctx', notion, '/tmp', 'task-id');
+    const session = new AgentSession(
+      's-real-msg',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
     const messages: ServerMessage[] = [];
     session.on('message', (msg: ServerMessage) => messages.push(msg));
 
@@ -419,7 +510,9 @@ describe('AgentSession', () => {
     // Must be broadcast as session_event
     const sessionEvents = messages.filter((m) => m.type === 'session_event');
     expect(sessionEvents).toHaveLength(1);
-    expect((sessionEvents[0] as { content: string }).content).toBe(realUserEvent);
+    expect((sessionEvents[0] as { content: string }).content).toBe(
+      realUserEvent,
+    );
 
     mockProc.stdout.push(null);
     await new Promise((r) => setTimeout(r, 0));
@@ -436,7 +529,17 @@ describe('AgentSession', () => {
         id: 1,
         session_id: 'standard-pr-session',
         event_type: 'text',
-        payload: JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'PR: https://github.com/owner/repo/pull/7' }] } }),
+        payload: JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'text',
+                text: 'PR: https://github.com/owner/repo/pull/7',
+              },
+            ],
+          },
+        }),
         timestamp: Date.now(),
         message_id: null,
       },
@@ -461,6 +564,113 @@ describe('AgentSession', () => {
     expect(notion.updateStatus).toHaveBeenCalledWith('task-id', '👀 In Review');
   });
 
+  // ── AC: handleCleanExit() does NOT regress a merged PR back to In Review ──
+  // After a Merge click, the merge flow sets the local PR row to state='merged'
+  // and the Notion task to '✅ Done'. handleCleanExit then fires for the ended
+  // session and must NOT write '👀 In Review' on top of that.
+  it('does NOT call updateStatus In Review when the PR row is already merged', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'merged-pr-session',
+        event_type: 'text',
+        payload: JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'text',
+                text: 'PR: https://github.com/owner/repo/pull/9',
+              },
+            ],
+          },
+        }),
+        timestamp: Date.now(),
+        message_id: null,
+      },
+    ]);
+    vi.mocked(getPRByNumber).mockReturnValue({
+      pr_number: 9,
+      repo: 'owner/repo',
+      state: 'merged',
+    } as never);
+
+    const session = new AgentSession(
+      'merged-pr-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const messages: ServerMessage[] = [];
+    session.on('message', (msg: ServerMessage) => messages.push(msg));
+
+    const runPromise = session.run();
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    expect(notion.updateStatus).not.toHaveBeenCalled();
+    const statusBroadcasts = messages.filter(
+      (m) => m.type === 'task_status_changed',
+    );
+    expect(statusBroadcasts).toHaveLength(0);
+  });
+
+  it('does NOT call updateStatus In Review when the PR row is closed', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'closed-pr-session',
+        event_type: 'text',
+        payload: JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'text',
+                text: 'PR: https://github.com/owner/repo/pull/10',
+              },
+            ],
+          },
+        }),
+        timestamp: Date.now(),
+        message_id: null,
+      },
+    ]);
+    vi.mocked(getPRByNumber).mockReturnValue({
+      pr_number: 10,
+      repo: 'owner/repo',
+      state: 'closed',
+    } as never);
+
+    const session = new AgentSession(
+      'closed-pr-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const runPromise = session.run();
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    expect(notion.updateStatus).not.toHaveBeenCalled();
+  });
+
   // ── AC: handleCleanExit() does NOT call updateStatus In Review when no PR ──
   it('does NOT call notionClient.updateStatus In Review when no PR URL found at exit', async () => {
     const notion = fakeNotionClient();
@@ -483,7 +693,10 @@ describe('AgentSession', () => {
     mockProc.proc.emit('exit', 0);
     await runPromise;
 
-    expect(notion.updateStatus).not.toHaveBeenCalledWith('task-id', '👀 In Review');
+    expect(notion.updateStatus).not.toHaveBeenCalledWith(
+      'task-id',
+      '👀 In Review',
+    );
   });
 
   // ── AC: pr_opened emitted from handlePRCreatedFromContent (live path) ───────
@@ -545,7 +758,11 @@ describe('AgentSession', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     expect(prOpenedEvents).toHaveLength(1);
-    const job = prOpenedEvents[0] as { prNumber: number; repo: string; taskId: string };
+    const job = prOpenedEvents[0] as {
+      prNumber: number;
+      repo: string;
+      taskId: string;
+    };
     expect(job.prNumber).toBe(77);
     expect(job.repo).toBe('myorg/myrepo');
     expect(job.taskId).toBe('task-live-id');
@@ -593,7 +810,14 @@ describe('AgentSession', () => {
       type: 'assistant',
       message: {
         id: 'msg-nodbl',
-        content: [{ type: 'tool_use', id: toolUseId, name: 'mcp__github__create_pull_request', input: {} }],
+        content: [
+          {
+            type: 'tool_use',
+            id: toolUseId,
+            name: 'mcp__github__create_pull_request',
+            input: {},
+          },
+        ],
       },
     });
     mockProc.stdout.push(assistantEvent + '\n');
@@ -690,7 +914,9 @@ describe('AgentSession', () => {
 
     // push_detected should have fired
     expect(pushEvents).toHaveLength(1);
-    expect((pushEvents[0] as { sessionId: string }).sessionId).toBe('push-session');
+    expect((pushEvents[0] as { sessionId: string }).sessionId).toBe(
+      'push-session',
+    );
 
     // And broadcast as ServerMessage
     const pushMsgs = messages.filter((m) => m.type === 'push_detected');
@@ -753,6 +979,163 @@ describe('AgentSession', () => {
     await runPromise;
   });
 
+  // ── AC: handleCleanExit() does NOT upsert or emit pr_opened for merged PR ──
+  it('does NOT call upsertPullRequest or emit pr_opened when existingPrState is merged', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'merged-upsert-session',
+        event_type: 'text',
+        payload: JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'text',
+                text: 'PR: https://github.com/owner/repo/pull/20',
+              },
+            ],
+          },
+        }),
+        timestamp: Date.now(),
+        message_id: null,
+      },
+    ]);
+    vi.mocked(getPRByNumber).mockReturnValue({
+      pr_number: 20,
+      repo: 'owner/repo',
+      state: 'merged',
+    } as never);
+
+    const session = new AgentSession(
+      'merged-upsert-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const prOpenedEvents: unknown[] = [];
+    session.on('pr_opened', (job: unknown) => prOpenedEvents.push(job));
+
+    const runPromise = session.run();
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    const { upsertPullRequest } = await import('../db/queries');
+    expect(upsertPullRequest).not.toHaveBeenCalled();
+    expect(prOpenedEvents).toHaveLength(0);
+  });
+
+  it('does NOT call upsertPullRequest or emit pr_opened when existingPrState is closed', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'closed-upsert-session',
+        event_type: 'text',
+        payload: JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'text',
+                text: 'PR: https://github.com/owner/repo/pull/21',
+              },
+            ],
+          },
+        }),
+        timestamp: Date.now(),
+        message_id: null,
+      },
+    ]);
+    vi.mocked(getPRByNumber).mockReturnValue({
+      pr_number: 21,
+      repo: 'owner/repo',
+      state: 'closed',
+    } as never);
+
+    const session = new AgentSession(
+      'closed-upsert-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const prOpenedEvents: unknown[] = [];
+    session.on('pr_opened', (job: unknown) => prOpenedEvents.push(job));
+
+    const runPromise = session.run();
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    const { upsertPullRequest } = await import('../db/queries');
+    expect(upsertPullRequest).not.toHaveBeenCalled();
+    expect(prOpenedEvents).toHaveLength(0);
+  });
+
+  it('DOES call upsertPullRequest and emit pr_opened when existingPrState is open', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'open-upsert-session',
+        event_type: 'text',
+        payload: JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'text',
+                text: 'PR: https://github.com/owner/repo/pull/22',
+              },
+            ],
+          },
+        }),
+        timestamp: Date.now(),
+        message_id: null,
+      },
+    ]);
+    vi.mocked(getPRByNumber).mockReturnValue({
+      pr_number: 22,
+      repo: 'owner/repo',
+      state: 'open',
+    } as never);
+
+    const session = new AgentSession(
+      'open-upsert-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const prOpenedEvents: unknown[] = [];
+    session.on('pr_opened', (job: unknown) => prOpenedEvents.push(job));
+
+    const runPromise = session.run();
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    const { upsertPullRequest } = await import('../db/queries');
+    expect(upsertPullRequest).toHaveBeenCalled();
+    expect(prOpenedEvents).toHaveLength(1);
+  });
+
   // ── AC: pr_opened emitted in handleCleanExit() after upsertPullRequest() ──
   it('emits pr_opened event in handleCleanExit() when a PR URL is found at exit', async () => {
     const notion = fakeNotionClient();
@@ -762,7 +1145,17 @@ describe('AgentSession', () => {
         id: 1,
         session_id: 'pr-session',
         event_type: 'text',
-        payload: JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Done! PR: https://github.com/owner/repo/pull/42' }] } }),
+        payload: JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'text',
+                text: 'Done! PR: https://github.com/owner/repo/pull/42',
+              },
+            ],
+          },
+        }),
         timestamp: Date.now(),
         message_id: null,
       },
@@ -788,7 +1181,11 @@ describe('AgentSession', () => {
     await runPromise;
 
     expect(prOpenedEvents).toHaveLength(1);
-    const job = prOpenedEvents[0] as { prNumber: number; repo: string; taskId: string };
+    const job = prOpenedEvents[0] as {
+      prNumber: number;
+      repo: string;
+      taskId: string;
+    };
     expect(job.prNumber).toBe(42);
     expect(job.repo).toBe('owner/repo');
     expect(job.taskId).toBe('taskabc123');

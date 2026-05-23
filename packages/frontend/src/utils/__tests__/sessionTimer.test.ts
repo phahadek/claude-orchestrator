@@ -25,7 +25,11 @@ describe('calcElapsedMs', () => {
   // ── Terminal sessions — fixed duration ────────────────────────────
 
   it('returns ended_at - started_at when ended_at is defined', () => {
-    const session = makeSession({ status: 'done', started_at: 1000, ended_at: 5000 });
+    const session = makeSession({
+      status: 'done',
+      started_at: 1000,
+      ended_at: 5000,
+    });
     expect(calcElapsedMs(session)).toBe(4000);
   });
 
@@ -34,10 +38,7 @@ describe('calcElapsedMs', () => {
       status: 'done',
       started_at: 2000,
       ended_at: undefined,
-      events: [
-        { timestamp: 2500 },
-        { timestamp: 6000 },
-      ],
+      events: [{ timestamp: 2500 }, { timestamp: 6000 }],
     });
     // Should use last event (6000), not Date.now() (10000)
     expect(calcElapsedMs(session)).toBe(4000);
@@ -54,7 +55,11 @@ describe('calcElapsedMs', () => {
   });
 
   it('returns null for terminal session with no ended_at and no events', () => {
-    const session = makeSession({ status: 'killed', started_at: 1000, ended_at: null });
+    const session = makeSession({
+      status: 'killed',
+      started_at: 1000,
+      ended_at: null,
+    });
     expect(calcElapsedMs(session)).toBeNull();
   });
 
@@ -72,7 +77,11 @@ describe('calcElapsedMs', () => {
 
   it('returns Date.now() - started_at when ended_at is null (running)', () => {
     vi.setSystemTime(10_000);
-    const session = makeSession({ status: 'running', started_at: 8000, ended_at: null });
+    const session = makeSession({
+      status: 'running',
+      started_at: 8000,
+      ended_at: null,
+    });
     expect(calcElapsedMs(session)).toBe(2000);
   });
 
@@ -134,7 +143,11 @@ describe('formatElapsed', () => {
   });
 
   it('formats a terminal session duration', () => {
-    const session = makeSession({ status: 'done', started_at: 0, ended_at: 65_000 });
+    const session = makeSession({
+      status: 'done',
+      started_at: 0,
+      ended_at: 65_000,
+    });
     expect(formatElapsed(session)).toBe('1m 5s');
   });
 });

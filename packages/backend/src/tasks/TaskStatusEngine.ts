@@ -1,4 +1,10 @@
-import { getPRByNotionTaskId, getLatestCodeSessionByNotionTaskId, getSetting, getTaskCache } from '../db/queries';
+import {
+  getPRByNotionTaskId,
+  getLatestCodeSessionByNotionTaskId,
+  getSetting,
+  getTaskCache,
+} from '../db/queries';
+import type { PauseReason } from '../db/types';
 
 export type DisplayStatus =
   | 'ready'
@@ -10,13 +16,14 @@ export type DisplayStatus =
   | 'backlog';
 
 export interface TaskStatusInput {
-  notionStatus: string;             // raw Notion status string
+  notionStatus: string; // raw Notion status string
   codeSessionStatus: string | null; // 'running' | 'done' | 'error' | null
-  prState: string | null;           // 'open' | 'merged' | 'closed' | null
-  prDraft: boolean;                 // true if PR is draft
-  reviewVerdict: string | null;     // 'approved' | 'needs_changes' | 'incomplete' | null
-  reviewIterationCount: number;     // how many review cycles
-  reviewIterationCap: number;       // configurable cap from settings
+  prState: string | null; // 'open' | 'merged' | 'closed' | null
+  prDraft: boolean; // true if PR is draft
+  reviewVerdict: string | null; // 'approved' | 'needs_changes' | 'incomplete' | null
+  reviewIterationCount: number; // how many review cycles
+  reviewIterationCap: number; // configurable cap from settings
+  pauseReason?: PauseReason | null; // non-null forces needs_attention (unless terminal/approved)
 }
 
 /**
@@ -27,13 +34,7 @@ export interface TaskStatusInput {
  * Exception: a merged or closed PR always results in 'done'.
  */
 export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
-  const {
-    notionStatus,
-    prState,
-    reviewVerdict,
-    reviewIterationCount,
-    reviewIterationCap,
-  } = input;
+  const { notionStatus, prState, reviewVerdict, pauseReason } = input;
 
   // 1. done — PR merged or closed (terminal override, takes precedence over Notion)
   if (prState === 'merged' || prState === 'closed') {
@@ -44,11 +45,17 @@ export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
   if (notionStatus.includes('Done')) return 'done';
 
   if (notionStatus.includes('In Review')) {
-    // Enrich with review-specific sub-states within the In Review group
-    if (reviewVerdict === 'approved' && prState === 'open') return 'ready_to_merge';
-    if (reviewIterationCount >= reviewIterationCap) return 'needs_attention';
+    // Enrich with review-specific sub-states within the In Review group.
+    // ready_to_merge wins over needs_attention so approved PRs surface
+    // promptly even if a stale pause_reason hasn't been cleared yet.
+    if (reviewVerdict === 'approved' && prState === 'open')
+      return 'ready_to_merge';
+    if (pauseReason) return 'needs_attention';
     return 'in_review';
   }
+
+  // Any non-null pause_reason marks the task as needing attention.
+  if (pauseReason) return 'needs_attention';
 
   if (notionStatus.includes('In Progress')) return 'in_progress';
 
@@ -64,7 +71,9 @@ function getReviewIterationCap(): number {
   const raw = getSetting('max_review_iterations');
   if (!raw) return DEFAULT_MAX_REVIEW_ITERATIONS;
   const parsed = parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_REVIEW_ITERATIONS;
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_MAX_REVIEW_ITERATIONS;
 }
 
 /**
@@ -104,6 +113,6 @@ export function deriveDisplayStatusFromDb(notionTaskId: string): DisplayStatus {
     reviewVerdict,
     reviewIterationCount: prRow?.review_iteration ?? 0,
     reviewIterationCap: getReviewIterationCap(),
+    pauseReason: prRow?.pause_reason ?? null,
   });
 }
-

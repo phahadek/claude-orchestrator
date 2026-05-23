@@ -2,7 +2,13 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ErrorBoundary } from '../ErrorBoundary';
 
-function Thrower({ shouldThrow, label = 'safe' }: { shouldThrow: boolean; label?: string }) {
+function Thrower({
+  shouldThrow,
+  label = 'safe',
+}: {
+  shouldThrow: boolean;
+  label?: string;
+}) {
   if (shouldThrow) throw new Error('boom');
   return <div>{label}</div>;
 }
@@ -11,7 +17,9 @@ describe('ErrorBoundary', () => {
   let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => { /* silence React's logged error */ });
+    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {
+      /* silence React's logged error */
+    });
   });
 
   afterEach(() => {
@@ -44,9 +52,11 @@ describe('ErrorBoundary', () => {
         <Thrower shouldThrow={true} />
       </ErrorBoundary>,
     );
-    const matched = consoleErrorSpy.mock.calls.some((args) =>
-      args.some((arg) => typeof arg === 'string' && arg.includes('LoggedBoundary')) &&
-      args.some((arg) => arg instanceof Error && arg.message === 'boom'),
+    const matched = consoleErrorSpy.mock.calls.some(
+      (args) =>
+        args.some(
+          (arg) => typeof arg === 'string' && arg.includes('LoggedBoundary'),
+        ) && args.some((arg) => arg instanceof Error && arg.message === 'boom'),
     );
     expect(matched).toBe(true);
   });
@@ -87,7 +97,10 @@ describe('ErrorBoundary', () => {
     fireEvent.click(screen.getByRole('button', { name: /reload page/i }));
     expect(reload).toHaveBeenCalled();
 
-    Object.defineProperty(window, 'location', { value: original, configurable: true });
+    Object.defineProperty(window, 'location', {
+      value: original,
+      configurable: true,
+    });
   });
 
   it('a sibling outside the failing boundary continues to render', () => {
@@ -127,7 +140,9 @@ describe('ErrorBoundary', () => {
         fallback={(error, reset) => (
           <div>
             <span>custom-fallback:{error.message}</span>
-            <button type="button" onClick={reset}>custom-reset</button>
+            <button type="button" onClick={reset}>
+              custom-reset
+            </button>
           </div>
         )}
       >

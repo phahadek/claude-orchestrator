@@ -1,4 +1,4 @@
-import type { TaskView, DisplayStatus } from '../types/taskView';
+import type { TaskView, DisplayStatus, PauseReason } from '../types/taskView';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { useDispatch } from '../hooks/useDispatch';
@@ -21,6 +21,15 @@ const STATUS_LABELS: Record<DisplayStatus, string> = {
   ready: '🗂️ Ready',
   done: '✔️ Done',
   backlog: '🗂️ Backlog',
+};
+
+const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
+  max_reviews: 'Max review iterations reached — re-review or close the PR.',
+  stuck_timeout: 'Session stuck — no progress within the timeout window.',
+  ci_failing: 'CI is failing — fix the failing checks and push.',
+  auto_merge_failed: 'Auto-merge failed — merge manually or investigate.',
+  pr_closed: 'PR was closed during auto-merge — reopen or create a new PR.',
+  review_failed: 'Re-review failed unexpectedly — check the backend logs.',
 };
 
 function verdictLabel(verdict: string): string {
@@ -47,9 +56,7 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
   // In Progress and In Review tasks already have an active session — launching
   // another would create a duplicate.
   const isLaunchable =
-    task.notionStatus === '🗂️ Ready' &&
-    !isNonCode &&
-    !task.blocked;
+    task.notionStatus === '🗂️ Ready' && !isNonCode && !task.blocked;
 
   const tooltip = isLaunchable ? '' : launchTooltip(task);
 
@@ -67,22 +74,29 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
     >
       <div className={styles.header}>
         <span className={styles.taskName}>{task.taskName}</span>
-        <span className={`${styles.statusBadge} ${styles[`status-${statusKey}`] ?? ''}`}>
+        <span
+          className={`${styles.statusBadge} ${styles[`status-${statusKey}`] ?? ''}`}
+          title={
+            task.pauseReason ? PAUSE_REASON_LABELS[task.pauseReason] : undefined
+          }
+        >
           {STATUS_LABELS[task.displayStatus]}
         </span>
       </div>
 
-      {task.priority && (
-        <div className={styles.priority}>{task.priority}</div>
-      )}
+      {task.priority && <div className={styles.priority}>{task.priority}</div>}
 
       {codeSession && (
         <div className={styles.sessionRow}>
-          <span className={`${styles.sessionStatus} ${styles[`session-${codeSession.status}`] ?? ''}`}>
+          <span
+            className={`${styles.sessionStatus} ${styles[`session-${codeSession.status}`] ?? ''}`}
+          >
             {codeSession.status}
           </span>
           {codeSession.lastMessage && (
-            <span className={styles.lastMessage}>{codeSession.lastMessage}</span>
+            <span className={styles.lastMessage}>
+              {codeSession.lastMessage}
+            </span>
           )}
         </div>
       )}
@@ -100,12 +114,21 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
           >
             #{pr.prNumber}
           </a>
-          <span className={styles.prState}>{pr.draft ? 'draft' : pr.state}</span>
+          <span className={styles.prState}>
+            {pr.draft ? 'draft' : pr.state}
+          </span>
           {pr.mergeState === 'dirty' && (
-            <span className={styles.conflictBadge} title="PR has merge conflicts">⚠ Conflict</span>
+            <span
+              className={styles.conflictBadge}
+              title="PR has merge conflicts"
+            >
+              ⚠ Conflict
+            </span>
           )}
           {review?.verdict && (
-            <span className={`${styles.verdict} ${styles[`verdict-${review.verdict.replace(/_/g, '-')}`] ?? ''}`}>
+            <span
+              className={`${styles.verdict} ${styles[`verdict-${review.verdict.replace(/_/g, '-')}`] ?? ''}`}
+            >
               {verdictLabel(review.verdict)}
             </span>
           )}
@@ -126,9 +149,10 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
             Notion ↗
           </a>
         )}
-        {(task.totalTokens.input + task.totalTokens.output) > 0 && (
+        {task.totalTokens.input + task.totalTokens.output > 0 && (
           <span className={styles.tokenBadge}>
-            {formatTokenCount(task.totalTokens.input + task.totalTokens.output)} tokens
+            {formatTokenCount(task.totalTokens.input + task.totalTokens.output)}{' '}
+            tokens
           </span>
         )}
         {isNonCode ? (
@@ -139,7 +163,9 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
             disabled={!isLaunchable}
             onClick={handleLaunch}
             title={tooltip || 'Launch session'}
-            aria-label={isLaunchable ? `Launch session for ${task.taskName}` : tooltip}
+            aria-label={
+              isLaunchable ? `Launch session for ${task.taskName}` : tooltip
+            }
           >
             🚀
           </button>

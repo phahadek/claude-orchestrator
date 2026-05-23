@@ -81,7 +81,9 @@ const dryRun = flag('--dry-run');
 const direction = args[0] ?? 'export';
 
 if (direction !== 'export' && direction !== 'sync') {
-  console.error(`Error: unknown direction "${direction}". Use "export" or "sync".`);
+  console.error(
+    `Error: unknown direction "${direction}". Use "export" or "sync".`,
+  );
   process.exit(1);
 }
 
@@ -110,7 +112,9 @@ const JIRA_API_TOKEN = process.env.JIRA_API_TOKEN ?? '';
 const JIRA_PAT = process.env.JIRA_PAT ?? '';
 
 if (!JIRA_BASE_URL) {
-  console.error('Error: JIRA_BASE_URL is required (e.g. https://myorg.atlassian.net)');
+  console.error(
+    'Error: JIRA_BASE_URL is required (e.g. https://myorg.atlassian.net)',
+  );
   process.exit(1);
 }
 
@@ -118,7 +122,9 @@ const isCloud = !!(JIRA_EMAIL && JIRA_API_TOKEN);
 const isServer = !!JIRA_PAT;
 
 if (!isCloud && !isServer) {
-  console.error('Error: set either JIRA_EMAIL + JIRA_API_TOKEN (Cloud) or JIRA_PAT (Server/DC)');
+  console.error(
+    'Error: set either JIRA_EMAIL + JIRA_API_TOKEN (Cloud) or JIRA_PAT (Server/DC)',
+  );
   process.exit(1);
 }
 
@@ -128,7 +134,9 @@ const API_BASE = `${JIRA_BASE_URL}/rest/api/${API_VERSION}`;
 
 function authHeader() {
   if (isCloud) {
-    const encoded = Buffer.from(`${JIRA_EMAIL}:${JIRA_API_TOKEN}`).toString('base64');
+    const encoded = Buffer.from(`${JIRA_EMAIL}:${JIRA_API_TOKEN}`).toString(
+      'base64',
+    );
     return `Basic ${encoded}`;
   }
   return `Bearer ${JIRA_PAT}`;
@@ -182,7 +190,10 @@ function parseYaml(text) {
 
       const trimmed = line.trim();
       const colonIdx = trimmed.indexOf(':');
-      if (colonIdx === -1) { i++; continue; }
+      if (colonIdx === -1) {
+        i++;
+        continue;
+      }
 
       const key = unquote(trimmed.slice(0, colonIdx).trim());
       const rest = trimmed.slice(colonIdx + 1).trim();
@@ -270,7 +281,10 @@ function yamlQuote(str) {
   if (str === null || str === undefined) return '""';
   const s = String(str);
   // Always quote to keep output safe and consistent
-  const escaped = s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+  const escaped = s
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n');
   return `"${escaped}"`;
 }
 
@@ -340,9 +354,9 @@ async function jiraFetch(method, path, body) {
   const opts = {
     method,
     headers: {
-      'Authorization': authHeader(),
+      Authorization: authHeader(),
       'Content-Type': 'application/json',
-      'Accept': 'application/json',
+      Accept: 'application/json',
     },
   };
   if (body !== undefined) opts.body = JSON.stringify(body);
@@ -352,7 +366,9 @@ async function jiraFetch(method, path, body) {
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    throw new Error(`Jira API ${method} ${path} → ${res.status}: ${text.slice(0, 300)}`);
+    throw new Error(
+      `Jira API ${method} ${path} → ${res.status}: ${text.slice(0, 300)}`,
+    );
   }
 
   if (res.status === 204) return null;
@@ -376,18 +392,29 @@ function adfToText(node) {
   const children = node.content ? adfToText(node.content) : '';
 
   switch (node.type) {
-    case 'doc': return children;
-    case 'paragraph': return children + '\n';
-    case 'heading': return children + '\n';
-    case 'text': return node.text ?? '';
-    case 'hardBreak': return '\n';
+    case 'doc':
+      return children;
+    case 'paragraph':
+      return children + '\n';
+    case 'heading':
+      return children + '\n';
+    case 'text':
+      return node.text ?? '';
+    case 'hardBreak':
+      return '\n';
     case 'bulletList':
-    case 'orderedList': return children;
-    case 'listItem': return `- ${children.trim()}\n`;
-    case 'codeBlock': return children;
-    case 'blockquote': return children;
-    case 'rule': return '---\n';
-    default: return children;
+    case 'orderedList':
+      return children;
+    case 'listItem':
+      return `- ${children.trim()}\n`;
+    case 'codeBlock':
+      return children;
+    case 'blockquote':
+      return children;
+    case 'rule':
+      return '---\n';
+    default:
+      return children;
   }
 }
 
@@ -462,7 +489,9 @@ async function runExport() {
   const jql = jqlOverride || config.jql_filter;
 
   if (!jql) {
-    console.error('Error: no JQL filter. Set jql_filter in jira-config.yaml or pass --jql "<query>"');
+    console.error(
+      'Error: no JQL filter. Set jql_filter in jira-config.yaml or pass --jql "<query>"',
+    );
     process.exit(1);
   }
 
@@ -577,7 +606,10 @@ async function runSync() {
 
     // Build description text
     let descText = context;
-    if (ac) descText += (descText ? '\n\nAcceptance Criteria:\n' : 'Acceptance Criteria:\n') + ac;
+    if (ac)
+      descText +=
+        (descText ? '\n\nAcceptance Criteria:\n' : 'Acceptance Criteria:\n') +
+        ac;
 
     // Build description field (ADF for Cloud, plain text for Server)
     const descriptionField = isCloud ? textToAdf(descText) : descText;
@@ -609,7 +641,9 @@ async function runSync() {
       } else {
         // Create new issue
         if (dryRun) {
-          console.log(`[create] ${name} (${issueType}, ${jiraPriority || 'no priority'})`);
+          console.log(
+            `[create] ${name} (${issueType}, ${jiraPriority || 'no priority'})`,
+          );
         } else {
           const created_issue = await jiraFetch('POST', '/issue', { fields });
           console.log(`✅ Created ${created_issue.key}: ${name}`);
@@ -626,7 +660,9 @@ async function runSync() {
     }
   }
 
-  console.log(`\nDone: ${created} created, ${updated} updated, ${failed} failed`);
+  console.log(
+    `\nDone: ${created} created, ${updated} updated, ${failed} failed`,
+  );
   if (failed > 0) process.exit(1);
 }
 
@@ -646,7 +682,9 @@ async function transitionIssue(issueKey, targetStatus) {
       transition: { id: match.id },
     });
   } catch (e) {
-    console.warn(`  ⚠ Could not transition ${issueKey} to "${targetStatus}": ${e.message}`);
+    console.warn(
+      `  ⚠ Could not transition ${issueKey} to "${targetStatus}": ${e.message}`,
+    );
   }
 }
 

@@ -14,6 +14,27 @@ interface SettingsValues {
   code_session_model: string;
   review_session_model: string;
   session_mode: string;
+  auto_launch_concurrency: string;
+  auto_launch_poll_interval_ms: string;
+  session_notify_threshold_seconds: string;
+  session_pause_threshold_seconds: string;
+  session_hard_stop_window_seconds: string;
+  ci_poll_interval_seconds: string;
+  ci_poll_max_minutes: string;
+}
+
+const MIN_POLL_INTERVAL_MS = 5000;
+
+function validateField(
+  key: keyof SettingsValues,
+  value: string,
+): string | null {
+  const num = Number(value);
+  if (!Number.isInteger(num) || isNaN(num)) return 'Must be a whole number';
+  if (key === 'auto_launch_concurrency' && num < 1) return 'Minimum is 1';
+  if (key === 'auto_launch_poll_interval_ms' && num < MIN_POLL_INTERVAL_MS)
+    return `Minimum is ${MIN_POLL_INTERVAL_MS} ms`;
+  return null;
 }
 
 const MODEL_OPTIONS = [
@@ -47,10 +68,14 @@ export function Settings({ initialTab = 'general' }: Props) {
   const [settings, setSettings] = useState<SettingsValues | null>(null);
   const [loading, setLoading] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<
+    Partial<Record<keyof SettingsValues, string>>
+  >({});
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(
     () => localStorage.getItem(NOTIFICATIONS_ENABLED_KEY) !== 'false',
   );
-  const notificationPermission = typeof Notification !== 'undefined' ? Notification.permission : 'default';
+  const notificationPermission =
+    typeof Notification !== 'undefined' ? Notification.permission : 'default';
 
   useEffect(() => {
     setActiveTab(initialTab);
@@ -67,6 +92,17 @@ export function Settings({ initialTab = 'general' }: Props) {
     if (!settings) return;
     const next = { ...settings, [key]: value };
     setSettings(next);
+
+    const error = validateField(key, value);
+    if (error) {
+      setFieldErrors((prev) => ({ ...prev, [key]: error }));
+      return;
+    }
+    setFieldErrors((prev) => {
+      const e = { ...prev };
+      delete e[key];
+      return e;
+    });
     setSaveError(null);
     try {
       await patchSettings({ [key]: value });
@@ -75,33 +111,56 @@ export function Settings({ initialTab = 'general' }: Props) {
     }
   }
 
-  function numInput(key: keyof SettingsValues, label: string, min = 0, max = 999) {
+  function numInput(
+    key: keyof SettingsValues,
+    label: string,
+    min = 0,
+    max = 999,
+    step = 1,
+    hint?: string,
+  ) {
     const val = Number(settings?.[key] ?? 0);
+    const fieldError = fieldErrors[key];
     return (
-      <div className={styles.field}>
-        <label className={styles.label}>{label}</label>
-        <div className={styles.numControl}>
-          <button
-            type="button"
-            className={styles.stepBtn}
-            onClick={() => handleChange(key, String(Math.max(min, val - 1)))}
-            disabled={val <= min}
-          >−</button>
-          <input
-            type="number"
-            className={styles.numInput}
-            value={val}
-            min={min}
-            max={max}
-            onChange={(e) => handleChange(key, e.target.value)}
-          />
-          <button
-            type="button"
-            className={styles.stepBtn}
-            onClick={() => handleChange(key, String(Math.min(max, val + 1)))}
-            disabled={val >= max}
-          >+</button>
+      <div key={key}>
+        <div className={styles.field}>
+          <label className={styles.label}>
+            {label}
+            {hint && <span className={styles.hint}> — {hint}</span>}
+          </label>
+          <div className={styles.numControl}>
+            <button
+              type="button"
+              className={styles.stepBtn}
+              onClick={() =>
+                handleChange(key, String(Math.max(min, val - step)))
+              }
+              disabled={val <= min}
+            >
+              −
+            </button>
+            <input
+              type="number"
+              className={`${styles.numInput}${fieldError ? ` ${styles.numInputError}` : ''}`}
+              value={val}
+              min={min}
+              max={max}
+              step={step}
+              onChange={(e) => handleChange(key, e.target.value)}
+            />
+            <button
+              type="button"
+              className={styles.stepBtn}
+              onClick={() =>
+                handleChange(key, String(Math.min(max, val + step)))
+              }
+              disabled={val >= max}
+            >
+              +
+            </button>
+          </div>
         </div>
+        {fieldError && <p className={styles.fieldError}>{fieldError}</p>}
       </div>
     );
   }
@@ -131,11 +190,26 @@ export function Settings({ initialTab = 'general' }: Props) {
                 {saveError && <p className={styles.error}>{saveError}</p>}
 
                 <h3 className={styles.sectionTitle}>Session Limits</h3>
-                {numInput('max_concurrent_code_sessions', 'Max concurrent code sessions', 1, 100)}
-                {numInput('auto_review_concurrency', 'Max concurrent review sessions', 1, 20)}
+                {numInput(
+                  'max_concurrent_code_sessions',
+                  'Max concurrent code sessions',
+                  1,
+                  100,
+                )}
+                {numInput(
+                  'auto_review_concurrency',
+                  'Max concurrent review sessions',
+                  1,
+                  20,
+                )}
 
                 <h3 className={styles.sectionTitle}>Display</h3>
-                {numInput('card_preview_lines', 'Session card preview lines', 1, 10)}
+                {numInput(
+                  'card_preview_lines',
+                  'Session card preview lines',
+                  1,
+                  10,
+                )}
 
                 <h3 className={styles.sectionTitle}>Auto-review</h3>
                 <div className={styles.field}>
@@ -144,7 +218,10 @@ export function Settings({ initialTab = 'general' }: Props) {
                     type="button"
                     className={`${styles.toggle}${settings?.auto_review === 'true' ? ` ${styles.toggleOn}` : ''}`}
                     onClick={() =>
-                      handleChange('auto_review', settings?.auto_review === 'true' ? 'false' : 'true')
+                      handleChange(
+                        'auto_review',
+                        settings?.auto_review === 'true' ? 'false' : 'true',
+                      )
                     }
                   >
                     {settings?.auto_review === 'true' ? 'On' : 'Off'}
@@ -155,13 +232,19 @@ export function Settings({ initialTab = 'general' }: Props) {
                 <div className={styles.field}>
                   <label className={styles.label}>
                     Session launch mode
-                    <span className={styles.hint}> (cli = subprocess, api = Agent SDK)</span>
+                    <span className={styles.hint}>
+                      {' '}
+                      (cli = subprocess, api = Agent SDK)
+                    </span>
                   </label>
                   <button
                     type="button"
                     className={`${styles.toggle}${settings?.session_mode === 'api' ? ` ${styles.toggleOn}` : ''}`}
                     onClick={() =>
-                      handleChange('session_mode', settings?.session_mode === 'api' ? 'cli' : 'api')
+                      handleChange(
+                        'session_mode',
+                        settings?.session_mode === 'api' ? 'cli' : 'api',
+                      )
                     }
                   >
                     {settings?.session_mode === 'api' ? 'API' : 'CLI'}
@@ -169,8 +252,9 @@ export function Settings({ initialTab = 'general' }: Props) {
                 </div>
                 {settings?.session_mode === 'api' && (
                   <p className={styles.hint}>
-                    API mode requires <code>ANTHROPIC_API_KEY</code> in the backend environment.
-                    Sessions run via the Agent SDK; cost is billed per token.
+                    API mode requires <code>ANTHROPIC_API_KEY</code> in the
+                    backend environment. Sessions run via the Agent SDK; cost is
+                    billed per token.
                   </p>
                 )}
 
@@ -180,10 +264,14 @@ export function Settings({ initialTab = 'general' }: Props) {
                   <select
                     className={styles.select}
                     value={settings?.code_session_model ?? ''}
-                    onChange={(e) => void handleChange('code_session_model', e.target.value)}
+                    onChange={(e) =>
+                      void handleChange('code_session_model', e.target.value)
+                    }
                   >
                     {MODEL_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -192,13 +280,87 @@ export function Settings({ initialTab = 'general' }: Props) {
                   <select
                     className={styles.select}
                     value={settings?.review_session_model ?? ''}
-                    onChange={(e) => void handleChange('review_session_model', e.target.value)}
+                    onChange={(e) =>
+                      void handleChange('review_session_model', e.target.value)
+                    }
                   >
                     {MODEL_OPTIONS.map((o) => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
                     ))}
                   </select>
                 </div>
+
+                <h3 className={styles.sectionTitle}>Stuck-session Timer</h3>
+                <p className={styles.hint}>
+                  Wall-clock thresholds (in seconds) measured since the later of
+                  session start and last review event. Set to 0 to disable.
+                </p>
+                {numInput(
+                  'session_notify_threshold_seconds',
+                  'Notify threshold (seconds)',
+                  0,
+                  86400,
+                  60,
+                )}
+                {numInput(
+                  'session_pause_threshold_seconds',
+                  'Pause threshold (seconds)',
+                  0,
+                  86400,
+                  60,
+                )}
+                {numInput(
+                  'session_hard_stop_window_seconds',
+                  'Hard-stop window after pause (seconds)',
+                  0,
+                  3600,
+                  10,
+                )}
+
+                <h3 className={styles.sectionTitle}>Auto-launch</h3>
+                <p className={styles.hint}>
+                  Controls how the orchestrator picks up and launches Ready
+                  tasks automatically.
+                </p>
+                {numInput(
+                  'auto_launch_concurrency',
+                  'Auto-launch concurrency cap',
+                  1,
+                  100,
+                  1,
+                  'How many coding sessions may run in parallel',
+                )}
+                {numInput(
+                  'auto_launch_poll_interval_ms',
+                  'Auto-launch poll interval (ms)',
+                  MIN_POLL_INTERVAL_MS,
+                  3600000,
+                  1000,
+                  'How often AutoLauncher checks for new Ready tasks',
+                )}
+
+                <h3 className={styles.sectionTitle}>Auto-merge</h3>
+                <p className={styles.hint}>
+                  After auto-review approves a PR, the orchestrator polls CI
+                  status. When CI turns green, it squash-merges to dev
+                  (per-project opt-in under Projects → Edit).
+                </p>
+                {numInput(
+                  'ci_poll_interval_seconds',
+                  'CI poll interval (seconds)',
+                  5,
+                  600,
+                  5,
+                )}
+                {numInput(
+                  'ci_poll_max_minutes',
+                  'CI poll max wait (minutes)',
+                  1,
+                  240,
+                  1,
+                )}
 
                 <h3 className={styles.sectionTitle}>Notifications</h3>
                 <div className={styles.field}>
@@ -214,7 +376,10 @@ export function Settings({ initialTab = 'general' }: Props) {
                     disabled={notificationPermission === 'denied'}
                     onClick={() => {
                       const next = !notificationsEnabled;
-                      localStorage.setItem(NOTIFICATIONS_ENABLED_KEY, String(next));
+                      localStorage.setItem(
+                        NOTIFICATIONS_ENABLED_KEY,
+                        String(next),
+                      );
                       setNotificationsEnabled(next);
                     }}
                   >

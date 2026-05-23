@@ -236,16 +236,16 @@ Required addition to task board schema: a `Depends On` Rich Text property storin
 
 A local SQLite database (file-based, zero setup) stores everything Notion doesn't hold:
 
-| Table | Contents |
-|---|---|
-| `sessions` | session_id, notion_task_id, notion_task_url, project_context_url, status, started_at, ended_at, pr_url |
-| `session_events` | session_id, event_type, payload, timestamp — raw event log from Agent SDK |
-| `permission_events` | session_id, tool_name, proposed_action, decision, decided_at |
-| `permission_rules` | ordered list of glob/regex patterns with allow/deny decisions, managed via the Permission Rules settings UI |
-| `pull_requests` | PR metadata, review state, paired review session, merge state |
-| `session_audits` | post-session compliance check results |
-| `settings` | runtime settings key/value store |
-| `task_cache` | notion_task_id, fetched_at, raw_json — short-lived cache (TTL ~5 min) to avoid redundant API calls |
+| Table               | Contents                                                                                                    |
+| ------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `sessions`          | session_id, notion_task_id, notion_task_url, project_context_url, status, started_at, ended_at, pr_url      |
+| `session_events`    | session_id, event_type, payload, timestamp — raw event log from Agent SDK                                   |
+| `permission_events` | session_id, tool_name, proposed_action, decision, decided_at                                                |
+| `permission_rules`  | ordered list of glob/regex patterns with allow/deny decisions, managed via the Permission Rules settings UI |
+| `pull_requests`     | PR metadata, review state, paired review session, merge state                                               |
+| `session_audits`    | post-session compliance check results                                                                       |
+| `settings`          | runtime settings key/value store                                                                            |
+| `task_cache`        | notion_task_id, fetched_at, raw_json — short-lived cache (TTL ~5 min) to avoid redundant API calls          |
 
 (See [Technical Architecture](./architecture.md) for full column definitions.)
 
@@ -253,24 +253,24 @@ This keeps the orchestrator fast and resilient: if Notion is temporarily unreach
 
 ## Resolved design questions
 
-| Question | Decision |
-|---|---|
-| Frontend framework | React + Vite (TypeScript) |
-| Backend language | Node.js + Express (TypeScript) |
-| Session-to-UI transport | WebSocket (`ws` package) |
-| Notion integration method | Direct REST API (server-side only) + Notion MCP for sessions |
-| Max sessions in parallel | Configurable (default 20 code, 1 review) |
-| Session persistence across restart | JSONL import on startup; active sessions are lost on restart |
-| Auto-approve permission classes | `--permission-mode acceptEdits` + explicit `--allowed-tools` list. No mid-session approval (CLI limitation). |
-| Who owns task status transitions? | Backend only. Sessions are told not to update status. Server sets In Progress on start, In Review on PR, Done on merge. |
-| Session lifecycle after PR | Sessions stay alive until PR is merged. Receive review feedback as follow-up messages. |
-| PR review trigger | Automatic via ReviewOrchestrator (event-driven, serial queue). Manual **Run Review** as fallback. |
-| PR merge detection | Primary: **Merge ↓** button in PRPanel. Fallback: lightweight polling (every 5 min) only for approved PRs. No webhooks (localhost-only design). |
-| Review loop max iterations | Cap at N (default 3, configurable in Settings). Both coding and review sessions stay alive at cap, escalated to attention queue. Manual **Re-review** resets counter. |
-| Review session lifecycle | Persistent: one review session per PR, stays alive for the PR's lifetime. Receives re-review follow-ups instead of being killed and respawned. Accumulates context across review passes. |
-| Review-merge event model | Event-driven, not polling. Push detection from coding session events (`git push` tool calls). Verdict parsing from review session event stream. No GitHub API polling for review state. |
-| Orchestrator `CLAUDE.md` | Merged `CLAUDE.md` written to worktree at spawn: orchestrator rules first (authoritative), project `CLAUDE.md` appended (codebase context). Original never modified. |
-| Token/cost display model | Per-session token counts plus estimated dollar cost (model-aware, computed from per-million input/output rates in `utils/usage.ts` — Opus $15/$75, Sonnet $3/$15, Haiku $0.80/$4). Plan utilization % shown when `plan_token_cap` is configured in Settings (originally the only display model — extended to dollar costs in M2a). |
+| Question                           | Decision                                                                                                                                                                                                                                                                                                                           |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Frontend framework                 | React + Vite (TypeScript)                                                                                                                                                                                                                                                                                                          |
+| Backend language                   | Node.js + Express (TypeScript)                                                                                                                                                                                                                                                                                                     |
+| Session-to-UI transport            | WebSocket (`ws` package)                                                                                                                                                                                                                                                                                                           |
+| Notion integration method          | Direct REST API (server-side only) + Notion MCP for sessions                                                                                                                                                                                                                                                                       |
+| Max sessions in parallel           | Configurable (default 20 code, 1 review)                                                                                                                                                                                                                                                                                           |
+| Session persistence across restart | JSONL import on startup; active sessions are lost on restart                                                                                                                                                                                                                                                                       |
+| Auto-approve permission classes    | `--permission-mode acceptEdits` + explicit `--allowed-tools` list. No mid-session approval (CLI limitation).                                                                                                                                                                                                                       |
+| Who owns task status transitions?  | Backend only. Sessions are told not to update status. Server sets In Progress on start, In Review on PR, Done on merge.                                                                                                                                                                                                            |
+| Session lifecycle after PR         | Sessions stay alive until PR is merged. Receive review feedback as follow-up messages.                                                                                                                                                                                                                                             |
+| PR review trigger                  | Automatic via ReviewOrchestrator (event-driven, serial queue). Manual **Run Review** as fallback.                                                                                                                                                                                                                                  |
+| PR merge detection                 | Primary: **Merge ↓** button in PRPanel. Fallback: lightweight polling (every 5 min) only for approved PRs. No webhooks (localhost-only design).                                                                                                                                                                                    |
+| Review loop max iterations         | Cap at N (default 3, configurable in Settings). Both coding and review sessions stay alive at cap, escalated to attention queue. Manual **Re-review** resets counter.                                                                                                                                                              |
+| Review session lifecycle           | Persistent: one review session per PR, stays alive for the PR's lifetime. Receives re-review follow-ups instead of being killed and respawned. Accumulates context across review passes.                                                                                                                                           |
+| Review-merge event model           | Event-driven, not polling. Push detection from coding session events (`git push` tool calls). Verdict parsing from review session event stream. No GitHub API polling for review state.                                                                                                                                            |
+| Orchestrator `CLAUDE.md`           | Merged `CLAUDE.md` written to worktree at spawn: orchestrator rules first (authoritative), project `CLAUDE.md` appended (codebase context). Original never modified.                                                                                                                                                               |
+| Token/cost display model           | Per-session token counts plus estimated dollar cost (model-aware, computed from per-million input/output rates in `utils/usage.ts` — Opus $15/$75, Sonnet $3/$15, Haiku $0.80/$4). Plan utilization % shown when `plan_token_cap` is configured in Settings (originally the only display model — extended to dollar costs in M2a). |
 
 ## Related documentation
 

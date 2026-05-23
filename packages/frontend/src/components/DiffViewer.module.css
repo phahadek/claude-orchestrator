@@ -25,7 +25,9 @@
   cursor: pointer;
   font-size: 0.75rem;
   padding: 3px 8px;
-  transition: color 0.15s, border-color 0.15s;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
 }
 
 .refreshButton:hover:not(:disabled) {
@@ -56,9 +58,15 @@
 }
 
 @keyframes shimmer {
-  0%   { opacity: 0.6; }
-  50%  { opacity: 1; }
-  100% { opacity: 0.6; }
+  0% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.6;
+  }
 }
 
 /* ── Error state ─────────────────────────────────────────────────── */

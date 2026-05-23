@@ -5,6 +5,7 @@ import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { TaskCard } from './TaskCard';
 import { CompactTaskCard } from './CompactTaskCard';
 import { useDispatch } from '../hooks/useDispatch';
+import { projectsApi } from '../api/projects';
 import styles from './TaskList.module.css';
 
 interface Props {
@@ -58,7 +59,9 @@ function groupByWave(tasks: TaskView[]): Map<number, TaskView[]> {
     map.get(wave)!.push(task);
   }
   for (const [, waveTasks] of map) {
-    waveTasks.sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority));
+    waveTasks.sort(
+      (a, b) => priorityRank(a.priority) - priorityRank(b.priority),
+    );
   }
   return map;
 }
@@ -88,7 +91,7 @@ function ReadySection({
   // Wave 2+ start collapsed by default; wave 1 starts expanded
   const [collapsedWaves, setCollapsedWaves] = useState<Set<number>>(() => {
     const initialMap = groupByWave(tasks);
-    return new Set(Array.from(initialMap.keys()).filter(w => w > 1));
+    return new Set(Array.from(initialMap.keys()).filter((w) => w > 1));
   });
 
   const wave1CodeTasks = tasks.filter((t) => (t.wave ?? 1) === 1 && !t.blocked);
@@ -116,7 +119,11 @@ function ReadySection({
     if (toDispatch.length === 0) return;
     dispatch(toDispatch);
     if (project) {
-      onOptimisticDispatch(wave1CodeTasks.filter((t) => checkedIds.has(t.taskId)).map((t) => t.taskId));
+      onOptimisticDispatch(
+        wave1CodeTasks
+          .filter((t) => checkedIds.has(t.taskId))
+          .map((t) => t.taskId),
+      );
     }
     setCheckedIds(new Set());
   }
@@ -130,10 +137,16 @@ function ReadySection({
     });
   }
 
-  const checkedCount = wave1CodeTasks.filter((t) => checkedIds.has(t.taskId)).length;
+  const checkedCount = wave1CodeTasks.filter((t) =>
+    checkedIds.has(t.taskId),
+  ).length;
 
   return (
-    <div className={styles.group} data-status="ready" data-testid="ready-section">
+    <div
+      className={styles.group}
+      data-status="ready"
+      data-testid="ready-section"
+    >
       <div
         className={`${styles.groupHeader} ${styles.groupHeaderToggle}`}
         onClick={onToggleCollapse}
@@ -170,71 +183,98 @@ function ReadySection({
       </div>
 
       {isExpanded && (
-      <div className={styles.groupCards}>
-        {waveNumbers.map((wave) => {
-          const waveTasks = waveMap.get(wave)!;
-          const isCollapsed = collapsedWaves.has(wave);
-          const isWaveExpanded = !isCollapsed;
+        <div className={styles.groupCards}>
+          {waveNumbers.map((wave) => {
+            const waveTasks = waveMap.get(wave)!;
+            const isCollapsed = collapsedWaves.has(wave);
+            const isWaveExpanded = !isCollapsed;
 
-          return (
-            <div key={wave} className={styles.waveGroup} data-testid={`wave-group-${wave}`}>
+            return (
+              <div
+                key={wave}
+                className={styles.waveGroup}
+                data-testid={`wave-group-${wave}`}
+              >
+                <div
+                  className={styles.waveHeader}
+                  onClick={() => toggleWaveCollapse(wave)}
+                  role="button"
+                  aria-expanded={isWaveExpanded}
+                  data-testid={`wave-header-${wave}`}
+                >
+                  <span className={styles.waveLabel}>
+                    Wave {wave} ({waveTasks.length})
+                  </span>
+                  <span className={styles.waveToggle} aria-hidden="true">
+                    {isWaveExpanded ? '▾' : '▸'}
+                  </span>
+                </div>
+
+                {isWaveExpanded &&
+                  waveTasks.map((task) => (
+                    <CompactTaskCard
+                      key={task.taskId}
+                      task={task}
+                      showCheckbox={
+                        wave === 1 &&
+                        !task.blocked &&
+                        task.taskType.includes('💻')
+                      }
+                      checked={checkedIds.has(task.taskId)}
+                      onCheckChange={toggleCheck}
+                      onClick={() => onSelectTask(task.taskId)}
+                    />
+                  ))}
+              </div>
+            );
+          })}
+
+          {nonCodeTasks.length > 0 && (
+            <div className={styles.waveGroup} data-testid="non-code-wave-group">
               <div
                 className={styles.waveHeader}
-                onClick={() => toggleWaveCollapse(wave)}
-                role="button"
-                aria-expanded={isWaveExpanded}
-                data-testid={`wave-header-${wave}`}
+                data-testid="non-code-wave-header"
               >
-                <span className={styles.waveLabel}>Wave {wave} ({waveTasks.length})</span>
-                <span className={styles.waveToggle} aria-hidden="true">
-                  {isWaveExpanded ? '▾' : '▸'}
-                </span>
+                <span className={styles.waveLabel}>Non-Code</span>
               </div>
-
-              {isWaveExpanded && waveTasks.map((task) => (
-                <CompactTaskCard
-                  key={task.taskId}
-                  task={task}
-                  showCheckbox={wave === 1 && !task.blocked && task.taskType.includes('💻')}
-                  checked={checkedIds.has(task.taskId)}
-                  onCheckChange={toggleCheck}
-                  onClick={() => onSelectTask(task.taskId)}
-                />
-              ))}
+              {nonCodeTasks
+                .sort(
+                  (a, b) => priorityRank(a.priority) - priorityRank(b.priority),
+                )
+                .map((task) => (
+                  <CompactTaskCard
+                    key={task.taskId}
+                    task={task}
+                    showCheckbox={false}
+                    checked={false}
+                    onCheckChange={() => {}}
+                    onClick={() => onSelectTask(task.taskId)}
+                  />
+                ))}
             </div>
-          );
-        })}
-
-        {nonCodeTasks.length > 0 && (
-          <div className={styles.waveGroup} data-testid="non-code-wave-group">
-            <div className={styles.waveHeader} data-testid="non-code-wave-header">
-              <span className={styles.waveLabel}>Non-Code</span>
-            </div>
-            {nonCodeTasks
-              .sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority))
-              .map((task) => (
-                <CompactTaskCard
-                  key={task.taskId}
-                  task={task}
-                  showCheckbox={false}
-                  checked={false}
-                  onCheckChange={() => {}}
-                  onClick={() => onSelectTask(task.taskId)}
-                />
-              ))}
-          </div>
-        )}
-      </div>
+          )}
+        </div>
       )}
     </div>
   );
 }
 
-export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTask, lastTaskUpdate, reviewRefreshTrigger, send, project }: Props) {
+export function TaskList({
+  activeProjectId,
+  boardId,
+  selectedTaskId,
+  onSelectTask,
+  lastTaskUpdate,
+  reviewRefreshTrigger,
+  send,
+  project,
+}: Props) {
   const [tasks, setTasks] = useState<TaskView[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set(['done', 'backlog']));
+  const [collapsed, setCollapsed] = useState<Set<string>>(
+    new Set(['done', 'backlog']),
+  );
 
   const toggleGroup = useCallback((status: string) => {
     setCollapsed((prev) => {
@@ -255,7 +295,7 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
       if (boardId) params.set('boardId', boardId);
       const res = await fetch(`/api/tasks/active?${params.toString()}`);
       if (!res.ok) return;
-      const data = await res.json() as TaskView[];
+      const data = (await res.json()) as TaskView[];
       setTasks(data);
     } catch {
       // ignore fetch errors — stale data remains visible
@@ -306,11 +346,17 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
   }, [lastTaskUpdate, fetchTasks]);
 
   const handleOptimisticDispatch = useCallback((taskIds: string[]) => {
-    setTasks((prev) => prev.map((t) =>
-      taskIds.includes(t.taskId)
-        ? { ...t, notionStatus: '🔄 In Progress', displayStatus: 'in_progress' as DisplayStatus }
-        : t,
-    ));
+    setTasks((prev) =>
+      prev.map((t) =>
+        taskIds.includes(t.taskId)
+          ? {
+              ...t,
+              notionStatus: '🔄 In Progress',
+              displayStatus: 'in_progress' as DisplayStatus,
+            }
+          : t,
+      ),
+    );
   }, []);
 
   const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -326,7 +372,12 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
       setSyncing(false);
       return;
     }
-    const sent = send({ type: 'fetch_tasks', projectId: activeProjectId, milestoneId: boardId, skipCache: true });
+    const sent = send({
+      type: 'fetch_tasks',
+      projectId: activeProjectId,
+      milestoneId: boardId,
+      skipCache: true,
+    });
     if (!sent) {
       // WS not open — clear immediately so the button doesn't stay stuck
       syncPendingRef.current = false;
@@ -335,6 +386,8 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
     }
     // Safety timeout: clear syncing if no tasks_ready arrives within 5 seconds
     if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+    // Timeout ref is shared between this callback and the reviewRefreshTrigger effect — unavoidable
+    // eslint-disable-next-line react-hooks/immutability
     syncTimeoutRef.current = setTimeout(() => {
       syncTimeoutRef.current = null;
       if (syncPendingRef.current) {
@@ -344,8 +397,38 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
     }, 5000);
   }, [activeProjectId, boardId, syncing, send]);
 
+  const mergeReadyCount = tasks.filter(
+    (t) =>
+      t.pr !== null &&
+      t.pr.state === 'open' &&
+      t.review !== null &&
+      t.review.verdict === 'approved' &&
+      t.pauseReason === null &&
+      t.pr.mergeState === 'clean',
+  ).length;
+
+  const handleMergeReady = useCallback(() => {
+    if (!activeProjectId || !boardId) return;
+    if (
+      !window.confirm(
+        `Merge ${mergeReadyCount} ready PR${mergeReadyCount === 1 ? '' : 's'}?`,
+      )
+    )
+      return;
+    void projectsApi.mergeReady(activeProjectId, boardId);
+  }, [activeProjectId, boardId, mergeReadyCount]);
+
   const syncButton = (
     <div className={styles.listHeader}>
+      {mergeReadyCount > 0 && (
+        <button
+          className={styles.mergeReadyBtn}
+          onClick={handleMergeReady}
+          data-testid="merge-ready-btn"
+        >
+          Merge Ready ({mergeReadyCount})
+        </button>
+      )}
       <button
         className={`${styles.syncBtn}${syncing ? ` ${styles.syncBtnLoading}` : ''}`}
         onClick={handleSync}
@@ -354,7 +437,9 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
         title="Sync tasks from Notion"
         data-testid="sync-btn"
       >
-        <span className={styles.syncIcon} aria-hidden="true">↻</span>
+        <span className={styles.syncIcon} aria-hidden="true">
+          ↻
+        </span>
         {syncing ? 'Syncing…' : 'Sync'}
       </button>
     </div>
@@ -390,10 +475,15 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
   const nonCodeTasks = activeTasks.filter((t) => !t.taskType.includes('💻'));
 
   const readyCodeTasks = codeTasks.filter((t) => t.displayStatus === 'ready');
-  const readyNonCodeTasks = nonCodeTasks.filter((t) => t.displayStatus === 'ready');
-  const hasReadyTasks = readyCodeTasks.length > 0 || readyNonCodeTasks.length > 0;
+  const readyNonCodeTasks = nonCodeTasks.filter(
+    (t) => t.displayStatus === 'ready',
+  );
+  const hasReadyTasks =
+    readyCodeTasks.length > 0 || readyNonCodeTasks.length > 0;
 
-  const nonReadyCodeTasks = codeTasks.filter((t) => t.displayStatus !== 'ready');
+  const nonReadyCodeTasks = codeTasks.filter(
+    (t) => t.displayStatus !== 'ready',
+  );
   const nonReadyNonCodeTasks = nonCodeTasks
     .filter((t) => t.displayStatus !== 'ready')
     .sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority));
@@ -474,7 +564,10 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
         })}
 
         {nonReadyNonCodeTasks.length > 0 && (
-          <div className={`${styles.group} ${styles.nonCodeGroup}`} data-testid="non-code-section">
+          <div
+            className={`${styles.group} ${styles.nonCodeGroup}`}
+            data-testid="non-code-section"
+          >
             <div
               className={`${styles.groupHeader} ${styles.groupHeaderToggle}`}
               onClick={() => toggleGroup('planning')}
@@ -486,27 +579,33 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
                 {!collapsed.has('planning') ? '▼' : '▶'}
               </span>
               <span className={styles.groupLabel}>📋 Planning / Testing</span>
-              <span className={styles.groupCount}>{nonReadyNonCodeTasks.length}</span>
+              <span className={styles.groupCount}>
+                {nonReadyNonCodeTasks.length}
+              </span>
             </div>
             {!collapsed.has('planning') && (
-            <div className={styles.groupCards}>
-              {nonReadyNonCodeTasks.map((task) => (
-                <TaskCard
-                  key={task.taskId}
-                  task={task}
-                  selected={task.taskId === selectedTaskId}
-                  onClick={() => onSelectTask(task.taskId)}
-                  send={send}
-                  project={project}
-                />
-              ))}
-            </div>
+              <div className={styles.groupCards}>
+                {nonReadyNonCodeTasks.map((task) => (
+                  <TaskCard
+                    key={task.taskId}
+                    task={task}
+                    selected={task.taskId === selectedTaskId}
+                    onClick={() => onSelectTask(task.taskId)}
+                    send={send}
+                    project={project}
+                  />
+                ))}
+              </div>
             )}
           </div>
         )}
 
         {backlogTasks.length > 0 && (
-          <div className={`${styles.group} ${styles.backlogGroup}`} data-status="backlog" data-testid="backlog-section">
+          <div
+            className={`${styles.group} ${styles.backlogGroup}`}
+            data-status="backlog"
+            data-testid="backlog-section"
+          >
             <div
               className={`${styles.groupHeader} ${styles.groupHeaderToggle}`}
               onClick={() => toggleGroup('backlog')}
@@ -523,7 +622,10 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
             {!collapsed.has('backlog') && (
               <div className={styles.groupCards}>
                 {backlogTasks
-                  .sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority))
+                  .sort(
+                    (a, b) =>
+                      priorityRank(a.priority) - priorityRank(b.priority),
+                  )
                   .map((task) => (
                     <CompactTaskCard
                       key={task.taskId}
@@ -531,7 +633,13 @@ export function TaskList({ activeProjectId, boardId, selectedTaskId, onSelectTas
                       showCheckbox={false}
                       checked={false}
                       onCheckChange={() => {}}
-                      onClick={() => window.open(task.notionUrl, '_blank', 'noopener,noreferrer')}
+                      onClick={() =>
+                        window.open(
+                          task.notionUrl,
+                          '_blank',
+                          'noopener,noreferrer',
+                        )
+                      }
                     />
                   ))}
               </div>

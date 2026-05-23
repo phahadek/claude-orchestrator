@@ -56,7 +56,7 @@ export class DependencyResolver {
   private findBlockers(
     task: NotionTask,
     byId: Map<string, NotionTask>,
-    visited: Set<string>
+    visited: Set<string>,
   ): NotionTask[] {
     const normId = stripHyphens(task.id);
     if (visited.has(normId)) return []; // cycle guard

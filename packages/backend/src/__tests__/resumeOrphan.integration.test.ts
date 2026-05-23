@@ -1,0 +1,376 @@
+/**
+ * Integration tests for SessionManager.resumeOrphanSessions().
+ *
+ * These tests "seed" sessions via the mocked DB layer and call
+ * resumeOrphanSessions() on a real SessionManager. They verify the three
+ * end-to-end behaviors required by the hardening task:
+ *   1. Missing worktree → session marked error, server stays alive, other
+ *      sessions resume normally.
+ *   2. Healthy worktree → session re-attached, status broadcast, resume nudge
+ *      delivered via stdin to the CLI runner.
+ *   3. pr_url carry-forward → AgentSession.prUrl populated from row.pr_url so
+ *      a subsequent clean exit does not delete the PR branch.
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'events';
+import { Readable, Writable } from 'stream';
+
+// ── Module mocks ─────────────────────────────────────────────────────────────
+// All vi.mock calls must appear before importing the code under test.
+
+function createMockProc() {
+  const stdout = new Readable({ read() {} });
+  const stderr = new Readable({ read() {} });
+  const stdinChunks: string[] = [];
+  const stdin = new Writable({
+    write(chunk, _enc, cb) {
+      stdinChunks.push(chunk.toString());
+      cb();
+    },
+  });
+  const proc = Object.assign(new EventEmitter(), {
+    stdout,
+    stderr,
+    stdin,
+    kill: vi.fn(),
+    pid: 12345,
+    exitCode: null as number | null,
+  });
+  return { proc, stdinChunks, stdout, stderr };
+}
+
+let mockProc: ReturnType<typeof createMockProc>;
+
+vi.mock('child_process', () => ({
+  spawn: vi.fn(() => mockProc.proc),
+  execSync: vi.fn(() => ''),
+}));
+
+// fs is mocked so existsSync can be controlled per-test; readFileSync /
+// statSync / writeFileSync are no-ops because the SessionManager paths under
+// test (resumeOrphanSessions → resumeSession) only need existsSync. Anything
+// else used transitively is shimmed below as a safe no-op.
+vi.mock('fs', async () => {
+  const actual = await vi.importActual<typeof import('fs')>('fs');
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      existsSync: vi.fn(() => true),
+      readFileSync: vi.fn(() => ''),
+      writeFileSync: vi.fn(),
+      statSync: vi.fn(() => ({ isFile: () => true })),
+    },
+    existsSync: vi.fn(() => true),
+    readFileSync: vi.fn(() => ''),
+    writeFileSync: vi.fn(),
+    statSync: vi.fn(() => ({ isFile: () => true })),
+  };
+});
+
+const projectFixture = {
+  id: 'test-project',
+  name: 'Test Project',
+  projectDir: '/fake/project',
+  contextUrl: 'https://notion.so/ctx',
+  boardId: 'board-1',
+  githubRepo: 'owner/repo',
+  taskSource: 'notion' as const,
+};
+
+vi.mock('../config', () => ({
+  AUTO_REVIEW_ENABLED: false,
+  AUTO_REVIEW_CONCURRENCY: 1,
+  ALLOWED_TOOLS: [],
+  config: {
+    claudePath: '/fake/claude',
+    maxConcurrentCodeSessions: 20,
+    projectDir: '/fake/project',
+  },
+  getProjectById: vi.fn((id: string) =>
+    id === 'test-project' ? projectFixture : undefined,
+  ),
+  getAllProjects: vi.fn(() => [projectFixture]),
+  normalizePath: (p: string) => p,
+  runtimeSettings: {
+    session_mode: 'cli',
+    code_session_model: '',
+    review_session_model: '',
+    max_concurrent_code_sessions: 20,
+  },
+}));
+
+vi.mock('../session/orchestrator-config', () => ({
+  loadOrchestratorConfig: vi.fn(() => ({
+    allowedTools: [],
+    prGate: { typeCheck: '', build: '' },
+    bootstrapScript: '',
+    bashRules: [],
+  })),
+}));
+
+vi.mock('../session/orchestrator-claudemd', () => ({
+  buildReviewClaudeMd: vi.fn(() => ''),
+}));
+
+vi.mock('../session/ContextBuilder', () => ({
+  buildSessionContext: vi.fn(() => ''),
+}));
+
+const fakeTaskBackend = {
+  fetchTaskPage: vi.fn(async () => ''),
+  fetchReadyTasks: vi.fn(async () => []),
+  updateStatus: vi.fn(async () => {}),
+  attachPR: vi.fn(async () => {}),
+};
+
+vi.mock('../tasks/TaskBackend', () => ({
+  getTaskBackend: vi.fn(() => fakeTaskBackend),
+}));
+
+vi.mock('../routes/tasks', () => ({
+  emitTaskUpdated: vi.fn(),
+}));
+
+vi.mock('../tasks/TaskStatusEngine', () => ({
+  deriveDisplayStatusFromDb: vi.fn(() => 'Running'),
+}));
+
+vi.mock('../db/queries', () => ({
+  getSessionsByStatus: vi.fn(() => []),
+  getSession: vi.fn(),
+  getEventsBySession: vi.fn(() => []),
+  getPRByNotionTaskId: vi.fn(() => null),
+  getPRByNumber: vi.fn(() => null),
+  updateSessionStatus: vi.fn(),
+  insertSession: vi.fn(),
+  insertEvent: vi.fn(),
+  upsertSessionEvent: vi.fn(() => 1),
+  upsertPullRequest: vi.fn(),
+  insertPermissionDenial: vi.fn(),
+  incrementTokens: vi.fn(),
+  insertSessionAudit: vi.fn(),
+  setSessionModel: vi.fn(),
+  getPRBySessionId: vi.fn(() => null),
+  setHeadSha: vi.fn(),
+}));
+
+// Now import the modules under test (after all mocks are in place).
+import fs from 'fs';
+import { spawn, execSync } from 'child_process';
+import {
+  SessionManager,
+  RESUME_NUDGE_MESSAGE,
+} from '../session/SessionManager';
+import * as queries from '../db/queries';
+import type { ServerMessage } from '../ws/types';
+import type { Session } from '../db/types';
+
+function makeRunningSession(overrides: Partial<Session> = {}): Session {
+  return {
+    session_id: 'session-uuid-default',
+    notion_task_id: 'notion-task-id',
+    notion_task_url: 'https://notion.so/task',
+    project_context_url: 'https://notion.so/ctx',
+    project_id: 'test-project',
+    status: 'running',
+    started_at: 1_000_000,
+    ended_at: null,
+    pr_url: null,
+    worktree_path: '/fake/project/.claude/worktrees/session-uuid-default',
+    archived: 0,
+    favorited: 0,
+    session_type: 'standard',
+    note: null,
+    tags: null,
+    model: null,
+    task_name: 'fixture-task',
+    ...overrides,
+  } as Session;
+}
+
+beforeEach(() => {
+  mockProc = createMockProc();
+  vi.clearAllMocks();
+  // execSync no-op stub (used for git fetch / git rev-parse / git worktree).
+  vi.mocked(execSync).mockReturnValue('');
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+// ── Test 1: missing-worktree pre-check ─────────────────────────────────────
+describe('resumeOrphanSessions() — missing-worktree pre-check (integration)', () => {
+  it('marks the orphan with a missing worktree as error and emits session_ended without throwing', async () => {
+    const missing = makeRunningSession({
+      session_id: 'missing-session',
+      worktree_path: '/fake/project/.claude/worktrees/missing-session',
+    });
+    vi.mocked(queries.getSessionsByStatus).mockReturnValue([missing]);
+
+    // fs.existsSync(missing.worktreePath) → false (worktree was deleted).
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    const sm = new SessionManager();
+    const messages: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => messages.push(m));
+
+    // Server-alive proxy: resumeOrphanSessions must not throw.
+    await expect(sm.resumeOrphanSessions()).resolves.not.toThrow();
+
+    // The missing session must be marked as error.
+    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+      'missing-session',
+      'error',
+      expect.any(Number),
+    );
+    // ... and a session_ended (status=error) broadcast must have been emitted.
+    const ended = messages.filter(
+      (m) =>
+        m.type === 'session_ended' &&
+        (m as { sessionId: string }).sessionId === 'missing-session',
+    );
+    expect(ended).toHaveLength(1);
+    expect((ended[0] as { status: string }).status).toBe('error');
+
+    // No CLI process should have been spawned for the missing-worktree orphan.
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('resumes a healthy orphan in the same batch even when another orphan has a missing worktree', async () => {
+    const missing = makeRunningSession({
+      session_id: 'missing-session',
+      worktree_path: '/fake/project/.claude/worktrees/missing-session',
+    });
+    const healthy = makeRunningSession({
+      session_id: 'healthy-session',
+      worktree_path: '/fake/project/.claude/worktrees/healthy-session',
+    });
+    vi.mocked(queries.getSessionsByStatus).mockReturnValue([missing, healthy]);
+
+    // existsSync: false for missing, true for healthy.
+    vi.mocked(fs.existsSync).mockImplementation((p) =>
+      String(p).includes('healthy-session'),
+    );
+    // Return a plausible branch name for git rev-parse on the healthy worktree.
+    vi.mocked(execSync).mockReturnValue('session/healthy-session');
+
+    const sm = new SessionManager();
+    await sm.resumeOrphanSessions();
+
+    // The missing-session orphan is marked error.
+    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+      'missing-session',
+      'error',
+      expect.any(Number),
+    );
+
+    // The healthy-session orphan is added to the live sessions map (re-attached).
+    expect(sm.isAlive('healthy-session')).toBe(true);
+    // Its status was broadcast as running by resumeSession().
+    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+      'healthy-session',
+      'running',
+    );
+  });
+});
+
+// ── Test 2: healthy-worktree → running + nudge + WS events ────────────────
+describe('resumeOrphanSessions() — healthy-worktree resume (integration)', () => {
+  it('re-attaches, broadcasts session_status: running, and delivers the resume nudge over stdin', async () => {
+    vi.useFakeTimers();
+    try {
+      const healthy = makeRunningSession({
+        session_id: 'healthy-session',
+        worktree_path: '/fake/project/.claude/worktrees/healthy-session',
+      });
+      vi.mocked(queries.getSessionsByStatus).mockReturnValue([healthy]);
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(execSync).mockReturnValue('session/healthy-session');
+
+      const sm = new SessionManager();
+      const messages: ServerMessage[] = [];
+      sm.on('message', (m: ServerMessage) => messages.push(m));
+
+      await sm.resumeOrphanSessions();
+
+      // Session is alive (re-attached) and CLI was spawned.
+      expect(sm.isAlive('healthy-session')).toBe(true);
+      expect(spawn).toHaveBeenCalledTimes(1);
+
+      // session_status: running was broadcast on the WS bus.
+      const statusMsgs = messages.filter(
+        (m) =>
+          m.type === 'session_status' &&
+          (m as { sessionId: string; status: string }).sessionId ===
+            'healthy-session' &&
+          (m as { status: string }).status === 'running',
+      );
+      expect(statusMsgs.length).toBeGreaterThanOrEqual(1);
+
+      // The resume nudge is sent via setTimeout(2_000) inside resumeSession().
+      // Advance fake timers past the nudge delay so this.send() runs.
+      await vi.advanceTimersByTimeAsync(2_500);
+
+      // The nudge was written to the CLI's stdin (stream-json format).
+      const stdinJoined = mockProc.stdinChunks.join('');
+      expect(stdinJoined).toContain(RESUME_NUDGE_MESSAGE);
+      expect(stdinJoined).toMatch(/"type":"user"/);
+
+      // A session_event with eventType=user_message was broadcast over WS.
+      const nudgeEvents = messages.filter(
+        (m) =>
+          m.type === 'session_event' &&
+          (m as { eventType: string }).eventType === 'user_message' &&
+          (m as { content: string }).content === RESUME_NUDGE_MESSAGE,
+      );
+      expect(nudgeEvents).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ── Test 3: pr_url carry-forward ─────────────────────────────────────────
+describe('resumeOrphanSessions() — pr_url carry-forward (integration)', () => {
+  it('copies row.pr_url onto AgentSession.prUrl so cleanupWorktree does NOT delete the branch on clean exit', async () => {
+    const prUrl = 'https://github.com/owner/repo/pull/42';
+    const withPr = makeRunningSession({
+      session_id: 'pr-session',
+      worktree_path: '/fake/project/.claude/worktrees/pr-session',
+      pr_url: prUrl,
+    });
+    vi.mocked(queries.getSessionsByStatus).mockReturnValue([withPr]);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(execSync).mockReturnValue('session/pr-session');
+
+    const sm = new SessionManager();
+    await sm.resumeOrphanSessions();
+
+    // The live AgentSession should have prUrl populated.
+    expect(sm.isAlive('pr-session')).toBe(true);
+    const session = (
+      sm as unknown as { sessions: Map<string, { prUrl?: string }> }
+    ).sessions.get('pr-session');
+    expect(session?.prUrl).toBe(prUrl);
+
+    // Simulate a clean CLI exit so the .then() in wireSession() runs and
+    // cleanupWorktree() executes. Branch deletion happens via execSync calls
+    // matching /git branch -D/ — they must NOT fire when prUrl is set.
+    const execSyncCallsBefore = vi.mocked(execSync).mock.calls.length;
+    mockProc.proc.emit('exit', 0);
+    // Drain microtasks so the .then(() => cleanupWorktree(...)) callback runs.
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    const execCallsAfter = vi
+      .mocked(execSync)
+      .mock.calls.slice(execSyncCallsBefore);
+    const branchDeletions = execCallsAfter.filter(
+      ([cmd]) => typeof cmd === 'string' && /git\s+branch\s+-D/.test(cmd),
+    );
+    expect(branchDeletions).toHaveLength(0);
+  });
+});

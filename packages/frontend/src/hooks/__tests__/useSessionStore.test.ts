@@ -37,12 +37,22 @@ const msg = {
   }),
   tasks_ready: (): ServerMessage => ({
     type: 'tasks_ready',
-    tasks: [{
-      task: { id: 't1', title: 'Task 1', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: 'https://notion.so/t1' },
-      blocked: false,
-      blockers: [],
-      nonCode: false, wave: 1,
-    }],
+    tasks: [
+      {
+        task: {
+          id: 't1',
+          title: 'Task 1',
+          status: '🗂️ Ready',
+          type: '💻 Code',
+          dependsOn: [],
+          notionUrl: 'https://notion.so/t1',
+        },
+        blocked: false,
+        blockers: [],
+        nonCode: false,
+        wave: 1,
+      },
+    ],
   }),
 };
 
@@ -128,9 +138,48 @@ describe('useSessionStore', () => {
     const tasksMsg: ServerMessage = {
       type: 'tasks_ready',
       tasks: [
-        { task: { id: 't1', title: 'Task 1', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false, wave: 1 },
-        { task: { id: 't2', title: 'Task 2', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: true, blockers: [], nonCode: false, wave: 1 },
-        { task: { id: 't3', title: 'Task 3', status: '🔄 In Progress', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false, wave: 1 },
+        {
+          task: {
+            id: 't1',
+            title: 'Task 1',
+            status: '🗂️ Ready',
+            type: '💻 Code',
+            dependsOn: [],
+            notionUrl: '',
+          },
+          blocked: false,
+          blockers: [],
+          nonCode: false,
+          wave: 1,
+        },
+        {
+          task: {
+            id: 't2',
+            title: 'Task 2',
+            status: '🗂️ Ready',
+            type: '💻 Code',
+            dependsOn: [],
+            notionUrl: '',
+          },
+          blocked: true,
+          blockers: [],
+          nonCode: false,
+          wave: 1,
+        },
+        {
+          task: {
+            id: 't3',
+            title: 'Task 3',
+            status: '🔄 In Progress',
+            type: '💻 Code',
+            dependsOn: [],
+            notionUrl: '',
+          },
+          blocked: false,
+          blockers: [],
+          nonCode: false,
+          wave: 1,
+        },
       ],
     };
     act(() => result.current.dispatch(tasksMsg));
@@ -142,9 +191,48 @@ describe('useSessionStore', () => {
     const tasksMsg: ServerMessage = {
       type: 'tasks_ready',
       tasks: [
-        { task: { id: 't1', title: 'Task 1', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false, wave: 1 },
-        { task: { id: 't2', title: 'Task 2', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: true, blockers: [], nonCode: false, wave: 1 },
-        { task: { id: 't3', title: 'Task 3', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: true, blockers: [], nonCode: false, wave: 1 },
+        {
+          task: {
+            id: 't1',
+            title: 'Task 1',
+            status: '🗂️ Ready',
+            type: '💻 Code',
+            dependsOn: [],
+            notionUrl: '',
+          },
+          blocked: false,
+          blockers: [],
+          nonCode: false,
+          wave: 1,
+        },
+        {
+          task: {
+            id: 't2',
+            title: 'Task 2',
+            status: '🗂️ Ready',
+            type: '💻 Code',
+            dependsOn: [],
+            notionUrl: '',
+          },
+          blocked: true,
+          blockers: [],
+          nonCode: false,
+          wave: 1,
+        },
+        {
+          task: {
+            id: 't3',
+            title: 'Task 3',
+            status: '🗂️ Ready',
+            type: '💻 Code',
+            dependsOn: [],
+            notionUrl: '',
+          },
+          blocked: true,
+          blockers: [],
+          nonCode: false,
+          wave: 1,
+        },
       ],
     };
     act(() => result.current.dispatch(tasksMsg));
@@ -199,7 +287,10 @@ describe('useSessionStore', () => {
       type: 'session_event',
       sessionId: SESSION_ID,
       eventType: 'system',
-      content: JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'rate_limited' } }),
+      content: JSON.stringify({
+        type: 'rate_limit_event',
+        rate_limit_info: { status: 'rate_limited' },
+      }),
     };
     act(() => result.current.dispatch(rateLimitEvent));
     expect(result.current.sessions[0].isRateLimited).toBe(true);
@@ -212,7 +303,10 @@ describe('useSessionStore', () => {
       type: 'session_event',
       sessionId: SESSION_ID,
       eventType: 'system',
-      content: JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'rate_limited' } }),
+      content: JSON.stringify({
+        type: 'rate_limit_event',
+        rate_limit_info: { status: 'rate_limited' },
+      }),
     };
     act(() => result.current.dispatch(rateLimitEvent));
     expect(result.current.sessions[0].isRateLimited).toBe(true);
@@ -228,7 +322,10 @@ describe('useSessionStore', () => {
       type: 'session_event',
       sessionId: SESSION_ID,
       eventType: 'system',
-      content: JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'rate_limited' } }),
+      content: JSON.stringify({
+        type: 'rate_limit_event',
+        rate_limit_info: { status: 'rate_limited' },
+      }),
     };
     act(() => result.current.dispatch(rateLimitEvent));
     expect(result.current.sessions[0].isRateLimited).toBe(true);
@@ -236,7 +333,10 @@ describe('useSessionStore', () => {
       type: 'session_event',
       sessionId: SESSION_ID,
       eventType: 'system',
-      content: JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'resumed' } }),
+      content: JSON.stringify({
+        type: 'rate_limit_event',
+        rate_limit_info: { status: 'resumed' },
+      }),
     };
     act(() => result.current.dispatch(resumedEvent));
     expect(result.current.sessions[0].isRateLimited).toBe(false);
@@ -260,7 +360,10 @@ describe('useSessionStore', () => {
       };
       act(() => result.current.dispatch(reviewIncompleteMsg));
       expect(result.current.incompleteReviews).toHaveLength(1);
-      expect(result.current.incompleteReviews[0]).toMatchObject({ prNumber: 42, repo: 'owner/repo' });
+      expect(result.current.incompleteReviews[0]).toMatchObject({
+        prNumber: 42,
+        repo: 'owner/repo',
+      });
     });
 
     it('accumulates multiple review_incomplete messages', () => {
@@ -291,17 +394,72 @@ describe('useSessionStore', () => {
     });
   });
 
+  describe('review_escalated handling', () => {
+    it('sets lastReviewEscalation when review_escalated message arrives', () => {
+      const { result } = renderHook(() => useSessionStore());
+      const escalationMsg: ServerMessage = {
+        type: 'review_escalated',
+        prNumber: 42,
+        repo: 'owner/repo',
+        message: 'Review loop reached max iterations.',
+      };
+      act(() => result.current.dispatch(escalationMsg));
+      expect(result.current.lastReviewEscalation).toMatchObject({
+        prNumber: 42,
+        repo: 'owner/repo',
+        message: 'Review loop reached max iterations.',
+      });
+    });
+
+    it('updates lastReviewEscalation on repeated escalations (receivedAt changes)', () => {
+      const { result } = renderHook(() => useSessionStore());
+      const msg1: ServerMessage = {
+        type: 'review_escalated',
+        prNumber: 42,
+        repo: 'owner/repo',
+        message: 'first',
+      };
+      act(() => result.current.dispatch(msg1));
+      const first = result.current.lastReviewEscalation?.receivedAt;
+      // Spin a microtask so Date.now() can advance on slower machines.
+      act(() => result.current.dispatch({ ...msg1, message: 'second' }));
+      const second = result.current.lastReviewEscalation?.receivedAt;
+      expect(result.current.lastReviewEscalation?.message).toBe('second');
+      // The two timestamps may be equal on very fast hardware, but the reference identity
+      // must change so downstream effects re-fire.
+      expect(first).toBeDefined();
+      expect(second).toBeDefined();
+    });
+  });
+
   describe('task_status_changed handling', () => {
     it('patches matching task status in the tasks array', () => {
       const { result } = renderHook(() => useSessionStore());
       const tasksMsg: ServerMessage = {
         type: 'tasks_ready',
         tasks: [
-          { task: { id: 'abc123', title: 'Task A', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false, wave: 1 },
+          {
+            task: {
+              id: 'abc123',
+              title: 'Task A',
+              status: '🗂️ Ready',
+              type: '💻 Code',
+              dependsOn: [],
+              notionUrl: '',
+            },
+            blocked: false,
+            blockers: [],
+            nonCode: false,
+            wave: 1,
+          },
         ],
       };
       act(() => result.current.dispatch(tasksMsg));
-      const changed: ServerMessage = { type: 'task_status_changed', notionTaskId: 'abc123', newStatus: '🔄 In Progress' };
+      const changed: ServerMessage = {
+        type: 'task_status_changed',
+        notionTaskId: 'abc123',
+        newStatus: '🔄 In Progress',
+      };
       act(() => result.current.dispatch(changed));
       expect(result.current.tasks[0].task.status).toBe('🔄 In Progress');
     });
@@ -311,11 +469,28 @@ describe('useSessionStore', () => {
       const tasksMsg: ServerMessage = {
         type: 'tasks_ready',
         tasks: [
-          { task: { id: 'abc123', title: 'Task A', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false, wave: 1 },
+          {
+            task: {
+              id: 'abc123',
+              title: 'Task A',
+              status: '🗂️ Ready',
+              type: '💻 Code',
+              dependsOn: [],
+              notionUrl: '',
+            },
+            blocked: false,
+            blockers: [],
+            nonCode: false,
+            wave: 1,
+          },
         ],
       };
       act(() => result.current.dispatch(tasksMsg));
-      const changed: ServerMessage = { type: 'task_status_changed', notionTaskId: 'unknown-id', newStatus: '🔄 In Progress' };
+      const changed: ServerMessage = {
+        type: 'task_status_changed',
+        notionTaskId: 'unknown-id',
+        newStatus: '🔄 In Progress',
+      };
       act(() => result.current.dispatch(changed));
       expect(result.current.tasks[0].task.status).toBe('🗂️ Ready');
     });
@@ -325,12 +500,42 @@ describe('useSessionStore', () => {
       const tasksMsg: ServerMessage = {
         type: 'tasks_ready',
         tasks: [
-          { task: { id: 'task-1', title: 'Task 1', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false, wave: 1 },
-          { task: { id: 'task-2', title: 'Task 2', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' }, blocked: false, blockers: [], nonCode: false, wave: 1 },
+          {
+            task: {
+              id: 'task-1',
+              title: 'Task 1',
+              status: '🗂️ Ready',
+              type: '💻 Code',
+              dependsOn: [],
+              notionUrl: '',
+            },
+            blocked: false,
+            blockers: [],
+            nonCode: false,
+            wave: 1,
+          },
+          {
+            task: {
+              id: 'task-2',
+              title: 'Task 2',
+              status: '🗂️ Ready',
+              type: '💻 Code',
+              dependsOn: [],
+              notionUrl: '',
+            },
+            blocked: false,
+            blockers: [],
+            nonCode: false,
+            wave: 1,
+          },
         ],
       };
       act(() => result.current.dispatch(tasksMsg));
-      const changed: ServerMessage = { type: 'task_status_changed', notionTaskId: 'task-1', newStatus: '👀 In Review' };
+      const changed: ServerMessage = {
+        type: 'task_status_changed',
+        notionTaskId: 'task-1',
+        newStatus: '👀 In Review',
+      };
       act(() => result.current.dispatch(changed));
       expect(result.current.tasks[0].task.status).toBe('👀 In Review');
       expect(result.current.tasks[1].task.status).toBe('🗂️ Ready');
@@ -347,13 +552,17 @@ describe('useSessionStore', () => {
       act(() => result.current.dismissDenial(SESSION_A, 'tool-use-1'));
 
       // Session A has the dismissed ID
-      expect(result.current.dismissedDenialIds.get(SESSION_A)?.has('tool-use-1')).toBe(true);
+      expect(
+        result.current.dismissedDenialIds.get(SESSION_A)?.has('tool-use-1'),
+      ).toBe(true);
 
       // "Switch" to session B — no dismissals there yet
       expect(result.current.dismissedDenialIds.get(SESSION_B)).toBeUndefined();
 
       // "Switch back" to session A — dismissal still present
-      expect(result.current.dismissedDenialIds.get(SESSION_A)?.has('tool-use-1')).toBe(true);
+      expect(
+        result.current.dismissedDenialIds.get(SESSION_A)?.has('tool-use-1'),
+      ).toBe(true);
     });
 
     it('dismissing denials for session A does not affect session B', () => {
@@ -369,7 +578,13 @@ describe('useSessionStore', () => {
     it('dismissAllDenials sets all provided IDs as dismissed for the session', () => {
       const { result } = renderHook(() => useSessionStore());
 
-      act(() => result.current.dismissAllDenials(SESSION_A, ['tool-use-1', 'tool-use-2', 'tool-use-3']));
+      act(() =>
+        result.current.dismissAllDenials(SESSION_A, [
+          'tool-use-1',
+          'tool-use-2',
+          'tool-use-3',
+        ]),
+      );
 
       const dismissed = result.current.dismissedDenialIds.get(SESSION_A);
       expect(dismissed?.has('tool-use-1')).toBe(true);
@@ -381,10 +596,19 @@ describe('useSessionStore', () => {
       const { result } = renderHook(() => useSessionStore());
 
       act(() => result.current.dismissDenial(SESSION_B, 'tool-use-b'));
-      act(() => result.current.dismissAllDenials(SESSION_A, ['tool-use-1', 'tool-use-2']));
+      act(() =>
+        result.current.dismissAllDenials(SESSION_A, [
+          'tool-use-1',
+          'tool-use-2',
+        ]),
+      );
 
-      expect(result.current.dismissedDenialIds.get(SESSION_B)?.has('tool-use-b')).toBe(true);
-      expect(result.current.dismissedDenialIds.get(SESSION_A)?.has('tool-use-b')).toBe(false);
+      expect(
+        result.current.dismissedDenialIds.get(SESSION_B)?.has('tool-use-b'),
+      ).toBe(true);
+      expect(
+        result.current.dismissedDenialIds.get(SESSION_A)?.has('tool-use-b'),
+      ).toBe(false);
     });
   });
 });

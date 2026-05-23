@@ -96,7 +96,9 @@ vi.mock('../db/db.js', async () => {
       mergeable              INTEGER,
       merge_state            TEXT,
       merge_state_checked_at TEXT,
-      pending_push           INTEGER NOT NULL DEFAULT 0
+      pending_push           INTEGER NOT NULL DEFAULT 0,
+      pause_reason           TEXT,
+      failing_checks         TEXT
     );
   `);
   return { db };
@@ -151,21 +153,91 @@ describe('upsertPullRequest + getPRByNumber', () => {
 
   it('preserves existing notion_task_id when upserted with null', () => {
     // First upsert sets notion_task_id
-    upsertPullRequest({ ...baseRow, pr_url: 'https://github.com/owner/repo/pull/11', pr_number: 11, notion_task_id: 'task-abc' });
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: 'https://github.com/owner/repo/pull/11',
+      pr_number: 11,
+      notion_task_id: 'task-abc',
+    });
     // Second upsert (e.g. from PRSyncJob) passes null — should not overwrite
-    upsertPullRequest({ ...baseRow, pr_url: 'https://github.com/owner/repo/pull/11', pr_number: 11, notion_task_id: null });
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: 'https://github.com/owner/repo/pull/11',
+      pr_number: 11,
+      notion_task_id: null,
+    });
     const row = getPRByNumber(11, 'owner/repo');
     expect(row!.notion_task_id).toBe('task-abc');
   });
 
   it('updates notion_task_id when upserted with a non-null value', () => {
     // Row created by PRSyncJob without notion_task_id
-    upsertPullRequest({ ...baseRow, pr_url: 'https://github.com/owner/repo/pull/12', pr_number: 12 });
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: 'https://github.com/owner/repo/pull/12',
+      pr_number: 12,
+    });
     expect(getPRByNumber(12, 'owner/repo')!.notion_task_id).toBeNull();
     // Session ends and links the task
-    upsertPullRequest({ ...baseRow, pr_url: 'https://github.com/owner/repo/pull/12', pr_number: 12, notion_task_id: 'task-xyz', session_id: 'sess-1' });
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: 'https://github.com/owner/repo/pull/12',
+      pr_number: 12,
+      notion_task_id: 'task-xyz',
+      session_id: 'sess-1',
+    });
     const row = getPRByNumber(12, 'owner/repo');
     expect(row!.notion_task_id).toBe('task-xyz');
     expect(row!.session_id).toBe('sess-1');
+  });
+
+  // ── Terminal-state protection (Change 2) ──────────────────────────────────
+
+  it('preserves merged state when upserted with state=open', () => {
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: 'https://github.com/owner/repo/pull/20',
+      pr_number: 20,
+      state: 'merged',
+    });
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: 'https://github.com/owner/repo/pull/20',
+      pr_number: 20,
+      state: 'open',
+    });
+    expect(getPRByNumber(20, 'owner/repo')!.state).toBe('merged');
+  });
+
+  it('preserves closed state when upserted with state=open', () => {
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: 'https://github.com/owner/repo/pull/21',
+      pr_number: 21,
+      state: 'closed',
+    });
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: 'https://github.com/owner/repo/pull/21',
+      pr_number: 21,
+      state: 'open',
+    });
+    expect(getPRByNumber(21, 'owner/repo')!.state).toBe('closed');
+  });
+
+  it('allows forward transition from open to merged', () => {
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: 'https://github.com/owner/repo/pull/22',
+      pr_number: 22,
+      state: 'open',
+    });
+    upsertPullRequest({
+      ...baseRow,
+      pr_url: 'https://github.com/owner/repo/pull/22',
+      pr_number: 22,
+      state: 'merged',
+    });
+    expect(getPRByNumber(22, 'owner/repo')!.state).toBe('merged');
   });
 });

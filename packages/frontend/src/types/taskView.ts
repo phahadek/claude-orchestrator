@@ -7,11 +7,20 @@ export type DisplayStatus =
   | 'done'
   | 'backlog';
 
+export type PauseReason =
+  | 'max_reviews'
+  | 'stuck_timeout'
+  | 'ci_failing'
+  | 'auto_merge_failed'
+  | 'pr_closed'
+  | 'review_failed';
+
 export interface TaskView {
   taskId: string;
   taskName: string;
   notionStatus: string;
   displayStatus: DisplayStatus;
+  pauseReason: PauseReason | null;
   priority: string;
   notionUrl: string;
   taskType: string;

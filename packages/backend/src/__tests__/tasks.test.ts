@@ -111,7 +111,9 @@ describe('GET /api/tasks/active', () => {
       makeAggregate('task-deferred', '⏸️ Deferred'),
     ]);
 
-    const res = await supertest(buildApp()).get('/api/tasks/active?projectId=proj-1');
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
     expect(res.status).toBe(200);
     const ids = res.body.map((t: { taskId: string }) => t.taskId);
     expect(ids).not.toContain('task-deferred');
@@ -126,7 +128,9 @@ describe('GET /api/tasks/active', () => {
       makeAggregate('task-in-progress', '🔄 In Progress'),
     ]);
 
-    const res = await supertest(buildApp()).get('/api/tasks/active?projectId=proj-1');
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
     expect(res.status).toBe(200);
     const ids = res.body.map((t: { taskId: string }) => t.taskId);
     expect(ids).toContain('task-ready');
@@ -141,7 +145,9 @@ describe('GET /api/tasks/active', () => {
   });
 
   it('returns 404 when project is not found', async () => {
-    const res = await supertest(buildApp()).get('/api/tasks/active?projectId=unknown');
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=unknown',
+    );
     expect(res.status).toBe(404);
   });
 });
@@ -164,9 +170,13 @@ describe('buildTaskViewFromRow — totalTokens', () => {
       }),
     ]);
 
-    const res = await supertest(buildApp()).get('/api/tasks/active?projectId=proj-1');
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
     expect(res.status).toBe(200);
-    const task = res.body.find((t: { taskId: string }) => t.taskId === 'task-tokens');
+    const task = res.body.find(
+      (t: { taskId: string }) => t.taskId === 'task-tokens',
+    );
     expect(task.totalTokens.input).toBe(500);
     expect(task.totalTokens.output).toBe(250);
   });
@@ -185,9 +195,13 @@ describe('buildTaskViewFromRow — totalTokens', () => {
       }),
     ]);
 
-    const res = await supertest(buildApp()).get('/api/tasks/active?projectId=proj-1');
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
     expect(res.status).toBe(200);
-    const task = res.body.find((t: { taskId: string }) => t.taskId === 'task-code-only');
+    const task = res.body.find(
+      (t: { taskId: string }) => t.taskId === 'task-code-only',
+    );
     expect(task.totalTokens.input).toBe(300);
     expect(task.totalTokens.output).toBe(150);
   });
@@ -202,9 +216,13 @@ describe('buildTaskViewFromRow — totalTokens', () => {
       }),
     ]);
 
-    const res = await supertest(buildApp()).get('/api/tasks/active?projectId=proj-1');
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
     expect(res.status).toBe(200);
-    const task = res.body.find((t: { taskId: string }) => t.taskId === 'task-review-tokens');
+    const task = res.body.find(
+      (t: { taskId: string }) => t.taskId === 'task-review-tokens',
+    );
     expect(task.review.inputTokens).toBe(80);
     expect(task.review.outputTokens).toBe(40);
   });
@@ -243,21 +261,30 @@ describe('GET /api/tasks/export?format=yaml', () => {
   });
 
   it('returns 200 with Content-Type application/yaml', async () => {
-    const res = await supertest(buildApp()).get('/api/tasks/export?format=yaml&boardId=board-1');
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/export?format=yaml&boardId=board-1',
+    );
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toMatch(/yaml/);
   });
 
   it('returns valid YAML parseable by js-yaml', async () => {
-    const res = await supertest(buildApp()).get('/api/tasks/export?format=yaml&boardId=board-1');
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/export?format=yaml&boardId=board-1',
+    );
     expect(() => yaml.load(res.text)).not.toThrow();
-    const parsed = yaml.load(res.text) as { board_id: string; tasks: unknown[] };
+    const parsed = yaml.load(res.text) as {
+      board_id: string;
+      tasks: unknown[];
+    };
     expect(parsed).toHaveProperty('tasks');
     expect(Array.isArray(parsed.tasks)).toBe(true);
   });
 
   it('excludes Deferred tasks from the export', async () => {
-    const res = await supertest(buildApp()).get('/api/tasks/export?format=yaml&boardId=board-1');
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/export?format=yaml&boardId=board-1',
+    );
     const parsed = yaml.load(res.text) as { tasks: Array<{ id: string }> };
     const ids = parsed.tasks.map((t) => t.id);
     expect(ids).toContain('task-a');
@@ -265,13 +292,17 @@ describe('GET /api/tasks/export?format=yaml', () => {
   });
 
   it('returns 400 when format is unsupported', async () => {
-    const res = await supertest(buildApp()).get('/api/tasks/export?format=json&boardId=board-1');
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/export?format=json&boardId=board-1',
+    );
     expect(res.status).toBe(400);
   });
 
   it('returns 404 when board is not found in cache', async () => {
     vi.mocked(queries.getTaskCache).mockReturnValue(null);
-    const res = await supertest(buildApp()).get('/api/tasks/export?format=yaml&boardId=unknown-board');
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/export?format=yaml&boardId=unknown-board',
+    );
     expect(res.status).toBe(404);
   });
 });

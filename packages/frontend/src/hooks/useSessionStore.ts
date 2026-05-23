@@ -1,5 +1,8 @@
 import { useState, useCallback } from 'react';
-import type { ServerMessage, PermissionDenial } from '@claude-orchestrator/backend/src/ws/types';
+import type {
+  ServerMessage,
+  PermissionDenial,
+} from '@claude-orchestrator/backend/src/ws/types';
 import type { ResolvedTask } from '@claude-orchestrator/backend/src/notion/types';
 import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
 
@@ -21,7 +24,9 @@ function saveDismissedToStorage(map: Map<string, Set<string>>): void {
     const obj: Record<string, string[]> = {};
     for (const [k, v] of map) obj[k] = [...v];
     localStorage.setItem(DISMISSED_DENIALS_KEY, JSON.stringify(obj));
-  } catch { /* quota or private browsing */ }
+  } catch {
+    /* quota or private browsing */
+  }
 }
 
 export interface SessionState {
@@ -31,7 +36,12 @@ export interface SessionState {
   taskType?: string;
   sessionType?: string;
   status: string;
-  events: { eventType: string; content: string; timestamp: number; messageId?: string }[];
+  events: {
+    eventType: string;
+    content: string;
+    timestamp: number;
+    messageId?: string;
+  }[];
   pendingPermission?: { toolName: string; proposedAction: string };
   permissionDenials?: PermissionDenial[];
   prUrl?: string;
@@ -53,6 +63,13 @@ export interface SessionState {
   /** Session ID of the code session whose PR this review session is reviewing */
   codeSessionId?: string;
   model?: string | null;
+  /**
+   * True when the most recent session_status message that updated `status`
+   * carried `replay: true` (sent during the WS reconnect burst). Set false
+   * by any subsequent live session_status update. Used by useNotifications
+   * to suppress fireNotification for replayed transitions.
+   */
+  lastStatusReplay?: boolean;
 }
 
 export interface IncompleteReview {
@@ -62,14 +79,54 @@ export interface IncompleteReview {
 }
 
 export function useSessionStore() {
-  const [sessions, setSessions] = useState<Map<string, SessionState>>(new Map());
+  const [sessions, setSessions] = useState<Map<string, SessionState>>(
+    new Map(),
+  );
   const [tasks, setTasks] = useState<ResolvedTask[]>([]);
   const [tasksReady, setTasksReady] = useState(false);
   const [synced, setSynced] = useState(false);
-  const [dismissedDenialIds, setDismissedDenialIds] = useState<Map<string, Set<string>>>(loadDismissedFromStorage);
+  const [dismissedDenialIds, setDismissedDenialIds] = useState<
+    Map<string, Set<string>>
+  >(loadDismissedFromStorage);
   const [prRefreshTrigger, setPrRefreshTrigger] = useState(0);
-  const [lastPrReviewEvent, setLastPrReviewEvent] = useState<{ prNumber: number; repo: string; verdict: string; summary: string } | null>(null);
-  const [incompleteReviews, setIncompleteReviews] = useState<IncompleteReview[]>([]);
+  const [lastPrReviewEvent, setLastPrReviewEvent] = useState<{
+    prNumber: number;
+    repo: string;
+    verdict: string;
+    summary: string;
+    replay?: boolean;
+  } | null>(null);
+  const [lastReviewEscalation, setLastReviewEscalation] = useState<{
+    prNumber: number;
+    repo: string;
+    message: string;
+    receivedAt: number;
+  } | null>(null);
+  const [lastReviewFailed, setLastReviewFailed] = useState<{
+    prNumber: number;
+    repo: string;
+    message: string;
+    receivedAt: number;
+  } | null>(null);
+  const [lastStuckNotification, setLastStuckNotification] = useState<{
+    sessionId: string;
+    taskName: string;
+    message: string;
+    receivedAt: number;
+  } | null>(null);
+  const [lastStuckPaused, setLastStuckPaused] = useState<{
+    sessionId: string;
+    taskName: string;
+    receivedAt: number;
+  } | null>(null);
+  const [lastStuckKilled, setLastStuckKilled] = useState<{
+    sessionId: string;
+    taskName: string;
+    receivedAt: number;
+  } | null>(null);
+  const [incompleteReviews, setIncompleteReviews] = useState<
+    IncompleteReview[]
+  >([]);
   const [lastTaskUpdate, setLastTaskUpdate] = useState<TaskView | null>(null);
   const [taskListRefreshTrigger, setTaskListRefreshTrigger] = useState(0);
 
@@ -107,19 +164,37 @@ export function useSessionStore() {
           if (s) {
             let isRateLimited = s.isRateLimited;
             try {
-              const payload = JSON.parse(msg.content) as Record<string, unknown>;
-              if (payload && typeof payload === 'object' && payload.type === 'rate_limit_event') {
-                const info = payload.rate_limit_info as Record<string, unknown> | undefined;
+              const payload = JSON.parse(msg.content) as Record<
+                string,
+                unknown
+              >;
+              if (
+                payload &&
+                typeof payload === 'object' &&
+                payload.type === 'rate_limit_event'
+              ) {
+                const info = payload.rate_limit_info as
+                  | Record<string, unknown>
+                  | undefined;
                 if (info?.status === 'rate_limited') isRateLimited = true;
                 else if (info?.status === 'resumed') isRateLimited = false;
               }
-            } catch { /* not JSON */ }
-            const newEvent = { eventType: msg.eventType, content: msg.content, timestamp: Date.now(), messageId: msg.messageId };
+            } catch {
+              /* not JSON */
+            }
+            const newEvent = {
+              eventType: msg.eventType,
+              content: msg.content,
+              timestamp: Date.now(),
+              messageId: msg.messageId,
+            };
             let events: typeof s.events;
             // Upsert by messageId: if we already have an event with this messageId,
             // replace it in-place instead of appending a duplicate.
             if (msg.messageId) {
-              const idx = s.events.findIndex((e) => e.messageId === msg.messageId);
+              const idx = s.events.findIndex(
+                (e) => e.messageId === msg.messageId,
+              );
               if (idx >= 0) {
                 events = [...s.events];
                 events[idx] = newEvent;
@@ -135,7 +210,12 @@ export function useSessionStore() {
         }
         case 'session_status': {
           const s = next.get(msg.sessionId);
-          if (s) next.set(msg.sessionId, { ...s, status: msg.status });
+          if (s)
+            next.set(msg.sessionId, {
+              ...s,
+              status: msg.status,
+              lastStatusReplay: msg.replay === true,
+            });
           break;
         }
         case 'permission_request': {
@@ -144,7 +224,10 @@ export function useSessionStore() {
             next.set(msg.sessionId, {
               ...s,
               status: 'needs_permission',
-              pendingPermission: { toolName: msg.toolName, proposedAction: msg.proposedAction },
+              pendingPermission: {
+                toolName: msg.toolName,
+                proposedAction: msg.proposedAction,
+              },
             });
           }
           break;
@@ -176,10 +259,18 @@ export function useSessionStore() {
           if (s) {
             next.set(msg.sessionId, {
               ...s,
-              ...(Object.prototype.hasOwnProperty.call(msg, 'note') && { note: msg.note }),
-              ...(Object.prototype.hasOwnProperty.call(msg, 'tags') && { tags: msg.tags }),
-              ...(msg.totalInputTokens != null && { totalInputTokens: msg.totalInputTokens }),
-              ...(msg.totalOutputTokens != null && { totalOutputTokens: msg.totalOutputTokens }),
+              ...(Object.prototype.hasOwnProperty.call(msg, 'note') && {
+                note: msg.note,
+              }),
+              ...(Object.prototype.hasOwnProperty.call(msg, 'tags') && {
+                tags: msg.tags,
+              }),
+              ...(msg.totalInputTokens != null && {
+                totalInputTokens: msg.totalInputTokens,
+              }),
+              ...(msg.totalOutputTokens != null && {
+                totalOutputTokens: msg.totalOutputTokens,
+              }),
               ...(msg.model != null && { model: msg.model }),
             });
           }
@@ -202,18 +293,26 @@ export function useSessionStore() {
       setTaskListRefreshTrigger((n) => n + 1);
     }
     if (msg.type === 'task_status_changed') {
-      setTasks((prev) => prev.map((t) =>
-        t.task.id === msg.notionTaskId
-          ? { ...t, task: { ...t.task, status: msg.newStatus } }
-          : t,
-      ));
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.task.id === msg.notionTaskId
+            ? { ...t, task: { ...t.task, status: msg.newStatus } }
+            : t,
+        ),
+      );
     }
     if (msg.type === 'pr_created') {
       setPrRefreshTrigger((n) => n + 1);
       setTaskListRefreshTrigger((n) => n + 1);
     }
     if (msg.type === 'pr_review_complete') {
-      setLastPrReviewEvent({ prNumber: msg.prNumber, repo: msg.repo, verdict: msg.verdict, summary: msg.summary });
+      setLastPrReviewEvent({
+        prNumber: msg.prNumber,
+        repo: msg.repo,
+        verdict: msg.verdict,
+        summary: msg.summary,
+        replay: msg.replay,
+      });
       setTaskListRefreshTrigger((n) => n + 1);
     }
     if (msg.type === 'session_started') {
@@ -240,8 +339,60 @@ export function useSessionStore() {
       setTaskListRefreshTrigger((n) => n + 1);
       setPrRefreshTrigger((n) => n + 1);
     }
+    if (msg.type === 'pr_mergeability_changed') {
+      setTaskListRefreshTrigger((n) => n + 1);
+      setPrRefreshTrigger((n) => n + 1);
+    }
     if (msg.type === 'review_incomplete') {
-      setIncompleteReviews((prev) => [...prev, { prNumber: msg.prNumber, repo: msg.repo, message: msg.message }]);
+      setIncompleteReviews((prev) => [
+        ...prev,
+        { prNumber: msg.prNumber, repo: msg.repo, message: msg.message },
+      ]);
+    }
+    if (msg.type === 'review_escalated') {
+      // receivedAt makes the value unique per arrival so the toast effect re-fires
+      // even when the same PR escalates twice in a session.
+      setLastReviewEscalation({
+        prNumber: msg.prNumber,
+        repo: msg.repo,
+        message: msg.message,
+        receivedAt: Date.now(),
+      });
+      setTaskListRefreshTrigger((n) => n + 1);
+    }
+    if (msg.type === 'review_failed') {
+      setLastReviewFailed({
+        prNumber: msg.prNumber,
+        repo: msg.repo,
+        message: msg.message,
+        receivedAt: Date.now(),
+      });
+      setTaskListRefreshTrigger((n) => n + 1);
+      setPrRefreshTrigger((n) => n + 1);
+    }
+    if (msg.type === 'stuck_session_notified') {
+      setLastStuckNotification({
+        sessionId: msg.sessionId,
+        taskName: msg.taskName,
+        message: msg.message,
+        receivedAt: Date.now(),
+      });
+    }
+    if (msg.type === 'stuck_session_paused') {
+      setLastStuckPaused({
+        sessionId: msg.sessionId,
+        taskName: msg.taskName,
+        receivedAt: Date.now(),
+      });
+      setTaskListRefreshTrigger((n) => n + 1);
+    }
+    if (msg.type === 'stuck_session_killed') {
+      setLastStuckKilled({
+        sessionId: msg.sessionId,
+        taskName: msg.taskName,
+        receivedAt: Date.now(),
+      });
+      setTaskListRefreshTrigger((n) => n + 1);
     }
   }, []);
 
@@ -258,25 +409,31 @@ export function useSessionStore() {
     });
   }, []);
 
-  const setSessionArchived = useCallback((sessionId: string, archived: boolean) => {
-    setSessions((prev) => {
-      const s = prev.get(sessionId);
-      if (!s) return prev;
-      const next = new Map(prev);
-      next.set(sessionId, { ...s, archived });
-      return next;
-    });
-  }, []);
+  const setSessionArchived = useCallback(
+    (sessionId: string, archived: boolean) => {
+      setSessions((prev) => {
+        const s = prev.get(sessionId);
+        if (!s) return prev;
+        const next = new Map(prev);
+        next.set(sessionId, { ...s, archived });
+        return next;
+      });
+    },
+    [],
+  );
 
-  const setSessionFavorited = useCallback((sessionId: string, favorited: boolean) => {
-    setSessions((prev) => {
-      const s = prev.get(sessionId);
-      if (!s) return prev;
-      const next = new Map(prev);
-      next.set(sessionId, { ...s, favorited });
-      return next;
-    });
-  }, []);
+  const setSessionFavorited = useCallback(
+    (sessionId: string, favorited: boolean) => {
+      setSessions((prev) => {
+        const s = prev.get(sessionId);
+        if (!s) return prev;
+        const next = new Map(prev);
+        next.set(sessionId, { ...s, favorited });
+        return next;
+      });
+    },
+    [],
+  );
 
   const dismissDenial = useCallback((sessionId: string, toolUseId: string) => {
     setDismissedDenialIds((prev) => {
@@ -288,14 +445,17 @@ export function useSessionStore() {
     });
   }, []);
 
-  const dismissAllDenials = useCallback((sessionId: string, toolUseIds: string[]) => {
-    setDismissedDenialIds((prev) => {
-      const next = new Map(prev);
-      next.set(sessionId, new Set(toolUseIds));
-      saveDismissedToStorage(next);
-      return next;
-    });
-  }, []);
+  const dismissAllDenials = useCallback(
+    (sessionId: string, toolUseIds: string[]) => {
+      setDismissedDenialIds((prev) => {
+        const next = new Map(prev);
+        next.set(sessionId, new Set(toolUseIds));
+        saveDismissedToStorage(next);
+        return next;
+      });
+    },
+    [],
+  );
 
   const clearSessionDenials = useCallback((sessionId: string) => {
     setSessions((prev) => {
@@ -317,8 +477,37 @@ export function useSessionStore() {
     setIncompleteReviews([]);
   }, []);
 
-  const readyCount = tasks.filter((t) => !t.blocked && t.task.status === '🗂️ Ready').length;
+  const readyCount = tasks.filter(
+    (t) => !t.blocked && t.task.status === '🗂️ Ready',
+  ).length;
   const blockedCount = tasks.filter((t) => t.blocked).length;
 
-  return { sessions: [...sessions.values()], tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, dismissedDenialIds, dismissDenial, dismissAllDenials, clearSessionDenials, prRefreshTrigger, lastPrReviewEvent, incompleteReviews, dismissIncompleteReviews, lastTaskUpdate, taskListRefreshTrigger };
+  return {
+    sessions: [...sessions.values()],
+    tasks,
+    tasksReady,
+    synced,
+    readyCount,
+    blockedCount,
+    dispatch,
+    resetTasks,
+    deleteSession,
+    setSessionArchived,
+    setSessionFavorited,
+    dismissedDenialIds,
+    dismissDenial,
+    dismissAllDenials,
+    clearSessionDenials,
+    prRefreshTrigger,
+    lastPrReviewEvent,
+    lastReviewEscalation,
+    lastReviewFailed,
+    lastStuckNotification,
+    lastStuckPaused,
+    lastStuckKilled,
+    incompleteReviews,
+    dismissIncompleteReviews,
+    lastTaskUpdate,
+    taskListRefreshTrigger,
+  };
 }

@@ -1,4 +1,10 @@
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { MilestonesSubPanel } from '../MilestonesSubPanel';
 import type { Project, ProjectMilestone } from '../../../api/projects';
@@ -32,12 +38,17 @@ const PROJECT: Project = {
   contextUrl: null,
   githubRepo: null,
   taskSource: 'notion',
+  autoLaunchEnabled: false,
+  autoLaunchMilestoneId: null,
+  autoMergeEnabled: false,
   createdAt: 1,
   updatedAt: 1,
   milestones: [],
 };
 
-function makeMilestone(overrides: Partial<ProjectMilestone> = {}): ProjectMilestone {
+function makeMilestone(
+  overrides: Partial<ProjectMilestone> = {},
+): ProjectMilestone {
   return {
     id: 'm1',
     projectId: 'p1',
@@ -54,8 +65,18 @@ describe('MilestonesSubPanel', () => {
   it('lists milestones returned by GET /api/projects/:id/milestones', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse([
-        makeMilestone({ id: 'm1', name: 'Wave A', sourceId: 'data-src-A', displayOrder: 0 }),
-        makeMilestone({ id: 'm2', name: 'Wave B', sourceId: 'data-src-B', displayOrder: 1 }),
+        makeMilestone({
+          id: 'm1',
+          name: 'Wave A',
+          sourceId: 'data-src-A',
+          displayOrder: 0,
+        }),
+        makeMilestone({
+          id: 'm2',
+          name: 'Wave B',
+          sourceId: 'data-src-B',
+          displayOrder: 1,
+        }),
       ]),
     );
     render(<MilestonesSubPanel project={PROJECT} onBack={vi.fn()} />);
@@ -64,22 +85,33 @@ describe('MilestonesSubPanel', () => {
     expect(screen.getByText('data-src-A')).toBeTruthy();
     expect(screen.getByText('data-src-B')).toBeTruthy();
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/projects/p1/milestones', undefined);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/projects/p1/milestones',
+      undefined,
+    );
   });
 
   it('Add milestone POSTs to /api/projects/:id/milestones', async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse([])) // initial list
-      .mockResolvedValueOnce(jsonResponse(makeMilestone({ id: 'm-new', name: 'New One' }), 201))
-      .mockResolvedValueOnce(jsonResponse([makeMilestone({ id: 'm-new', name: 'New One' })])); // reload
+      .mockResolvedValueOnce(
+        jsonResponse(makeMilestone({ id: 'm-new', name: 'New One' }), 201),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([makeMilestone({ id: 'm-new', name: 'New One' })]),
+      ); // reload
 
     render(<MilestonesSubPanel project={PROJECT} onBack={vi.fn()} />);
     await waitFor(() =>
-      expect(screen.getByText(/No milestones yet for this project/)).toBeTruthy(),
+      expect(
+        screen.getByText(/No milestones yet for this project/),
+      ).toBeTruthy(),
     );
 
     fireEvent.click(screen.getByRole('button', { name: '+ Add milestone' }));
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New One' } });
+    fireEvent.change(screen.getByLabelText('Name'), {
+      target: { value: 'New One' },
+    });
     fireEvent.change(screen.getByLabelText('Notion data source ID'), {
       target: { value: 'data-src-new' },
     });
@@ -99,9 +131,15 @@ describe('MilestonesSubPanel', () => {
 
   it('Edit milestone PATCHes to /api/milestones/:id', async () => {
     fetchMock
-      .mockResolvedValueOnce(jsonResponse([makeMilestone({ id: 'm1', name: 'Old name' })]))
-      .mockResolvedValueOnce(jsonResponse(makeMilestone({ id: 'm1', name: 'New name' })))
-      .mockResolvedValueOnce(jsonResponse([makeMilestone({ id: 'm1', name: 'New name' })]));
+      .mockResolvedValueOnce(
+        jsonResponse([makeMilestone({ id: 'm1', name: 'Old name' })]),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(makeMilestone({ id: 'm1', name: 'New name' })),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse([makeMilestone({ id: 'm1', name: 'New name' })]),
+      );
 
     render(<MilestonesSubPanel project={PROJECT} onBack={vi.fn()} />);
     await waitFor(() => expect(screen.getByText('Old name')).toBeTruthy());
@@ -122,7 +160,9 @@ describe('MilestonesSubPanel', () => {
 
   it('Delete shows confirm dialog and DELETEs /api/milestones/:id on confirm', async () => {
     fetchMock
-      .mockResolvedValueOnce(jsonResponse([makeMilestone({ id: 'm1', name: 'Doomed' })]))
+      .mockResolvedValueOnce(
+        jsonResponse([makeMilestone({ id: 'm1', name: 'Doomed' })]),
+      )
       .mockResolvedValueOnce(emptyResponse(204))
       .mockResolvedValueOnce(jsonResponse([]));
 
@@ -130,13 +170,19 @@ describe('MilestonesSubPanel', () => {
     await waitFor(() => expect(screen.getByText('Doomed')).toBeTruthy());
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
-    expect(screen.getByRole('heading', { name: 'Delete milestone?' })).toBeTruthy();
+    expect(
+      screen.getByRole('heading', { name: 'Delete milestone?' }),
+    ).toBeTruthy();
 
-    const dialog = screen.getByRole('dialog', { name: 'Confirm delete milestone' });
+    const dialog = screen.getByRole('dialog', {
+      name: 'Confirm delete milestone',
+    });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
 
     await waitFor(() =>
-      expect(screen.getByText(/No milestones yet for this project/)).toBeTruthy(),
+      expect(
+        screen.getByText(/No milestones yet for this project/),
+      ).toBeTruthy(),
     );
 
     const deleteCall = fetchMock.mock.calls.find(
@@ -151,7 +197,9 @@ describe('MilestonesSubPanel', () => {
     const yamlProject: Project = { ...PROJECT, taskSource: 'yaml' };
     render(<MilestonesSubPanel project={yamlProject} onBack={vi.fn()} />);
     await waitFor(() =>
-      expect(screen.getByText(/No milestones yet for this project/)).toBeTruthy(),
+      expect(
+        screen.getByText(/No milestones yet for this project/),
+      ).toBeTruthy(),
     );
     fireEvent.click(screen.getByRole('button', { name: '+ Add milestone' }));
     expect(screen.getByLabelText('YAML milestone id')).toBeTruthy();
@@ -162,7 +210,9 @@ describe('MilestonesSubPanel', () => {
     const onBack = vi.fn();
     render(<MilestonesSubPanel project={PROJECT} onBack={onBack} />);
     await waitFor(() =>
-      expect(screen.getByText(/No milestones yet for this project/)).toBeTruthy(),
+      expect(
+        screen.getByText(/No milestones yet for this project/),
+      ).toBeTruthy(),
     );
     fireEvent.click(screen.getByRole('button', { name: '← Projects' }));
     expect(onBack).toHaveBeenCalledOnce();

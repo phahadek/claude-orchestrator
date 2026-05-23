@@ -22,7 +22,9 @@
   color: var(--text-muted);
   padding: 6px 14px 8px;
   margin-bottom: -1px;
-  transition: color 0.15s, border-color 0.15s;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
 }
 
 .tab:hover {
@@ -141,7 +143,10 @@
   cursor: pointer;
   font-size: 0.8125rem;
   color: var(--text-muted);
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
 }
 
 .toggleOn {
@@ -167,3 +172,12 @@
   margin-bottom: 8px;
 }
 
+.fieldError {
+  color: #f38ba8;
+  font-size: 0.8125rem;
+  margin: 2px 0 6px;
+}
+
+.numInputError {
+  border-color: #f38ba8;
+}

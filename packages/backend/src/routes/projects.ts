@@ -5,7 +5,18 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import { normalizePath } from '../config';
-import { ProjectService, type ProjectPatch, type MilestonePatch } from '../projects/ProjectService';
+import {
+  ProjectService,
+  type ProjectPatch,
+  type MilestonePatch,
+} from '../projects/ProjectService';
+import type { AutoMerger } from '../github/AutoMerger';
+import { getMergeReadyPRs } from '../db/queries';
+
+let _autoMerger: AutoMerger | null = null;
+export function setAutoMerger(merger: AutoMerger): void {
+  _autoMerger = merger;
+}
 
 export const projectsRouter = Router();
 
@@ -38,12 +49,15 @@ projectsRouter.post('/projects', (req: Request, res: Response) => {
   }
 
   if (!isExistingDirectory(projectDir)) {
-    res.status(400).json({ error: `projectDir '${projectDir}' does not exist on disk` });
+    res
+      .status(400)
+      .json({ error: `projectDir '${projectDir}' does not exist on disk` });
     return;
   }
 
   const taskSource = body.taskSource === 'yaml' ? 'yaml' : 'notion';
-  const id = typeof body.id === 'string' && body.id ? body.id : crypto.randomUUID();
+  const id =
+    typeof body.id === 'string' && body.id ? body.id : crypto.randomUUID();
 
   if (ProjectService.getById(id)) {
     res.status(409).json({ error: `Project with id '${id}' already exists` });
@@ -57,6 +71,12 @@ projectsRouter.post('/projects', (req: Request, res: Response) => {
     contextUrl: typeof body.contextUrl === 'string' ? body.contextUrl : null,
     githubRepo: typeof body.githubRepo === 'string' ? body.githubRepo : null,
     taskSource,
+    autoLaunchEnabled: body.autoLaunchEnabled === true,
+    autoLaunchMilestoneId:
+      typeof body.autoLaunchMilestoneId === 'string'
+        ? body.autoLaunchMilestoneId
+        : null,
+    autoMergeEnabled: body.autoMergeEnabled === true,
   });
   res.status(201).json(project);
 });
@@ -65,8 +85,13 @@ projectsRouter.patch('/projects/:id', (req: Request, res: Response) => {
   const id = String(req.params.id);
   const body = (req.body as Record<string, unknown>) ?? {};
 
-  if (typeof body.projectDir === 'string' && !isExistingDirectory(body.projectDir)) {
-    res.status(400).json({ error: `projectDir '${body.projectDir}' does not exist on disk` });
+  if (
+    typeof body.projectDir === 'string' &&
+    !isExistingDirectory(body.projectDir)
+  ) {
+    res.status(400).json({
+      error: `projectDir '${body.projectDir}' does not exist on disk`,
+    });
     return;
   }
 
@@ -74,13 +99,27 @@ projectsRouter.patch('/projects/:id', (req: Request, res: Response) => {
   if (typeof body.name === 'string') patch.name = body.name;
   if (typeof body.projectDir === 'string') patch.project_dir = body.projectDir;
   if ('contextUrl' in body) {
-    patch.context_url = typeof body.contextUrl === 'string' ? body.contextUrl : null;
+    patch.context_url =
+      typeof body.contextUrl === 'string' ? body.contextUrl : null;
   }
   if ('githubRepo' in body) {
-    patch.github_repo = typeof body.githubRepo === 'string' ? body.githubRepo : null;
+    patch.github_repo =
+      typeof body.githubRepo === 'string' ? body.githubRepo : null;
   }
   if (body.taskSource === 'notion' || body.taskSource === 'yaml') {
     patch.task_source = body.taskSource;
+  }
+  if ('autoLaunchEnabled' in body) {
+    patch.auto_launch_enabled = body.autoLaunchEnabled === true ? 1 : 0;
+  }
+  if ('autoLaunchMilestoneId' in body) {
+    patch.auto_launch_milestone_id =
+      typeof body.autoLaunchMilestoneId === 'string'
+        ? body.autoLaunchMilestoneId
+        : null;
+  }
+  if ('autoMergeEnabled' in body) {
+    patch.auto_merge_enabled = body.autoMergeEnabled === true ? 1 : 0;
   }
 
   const updated = ProjectService.update(id, patch);
@@ -103,44 +142,54 @@ projectsRouter.delete('/projects/:id', (req: Request, res: Response) => {
 
 // ── Milestones (nested + flat) ───────────────────────────────────────────────
 
-projectsRouter.get('/projects/:id/milestones', (req: Request, res: Response) => {
-  const projectId = String(req.params.id);
-  if (!ProjectService.getById(projectId)) {
-    res.status(404).json({ error: `Project '${projectId}' not found` });
-    return;
-  }
-  res.json(ProjectService.listMilestones(projectId));
-});
+projectsRouter.get(
+  '/projects/:id/milestones',
+  (req: Request, res: Response) => {
+    const projectId = String(req.params.id);
+    if (!ProjectService.getById(projectId)) {
+      res.status(404).json({ error: `Project '${projectId}' not found` });
+      return;
+    }
+    res.json(ProjectService.listMilestones(projectId));
+  },
+);
 
-projectsRouter.post('/projects/:id/milestones', (req: Request, res: Response) => {
-  const projectId = String(req.params.id);
-  if (!ProjectService.getById(projectId)) {
-    res.status(404).json({ error: `Project '${projectId}' not found` });
-    return;
-  }
+projectsRouter.post(
+  '/projects/:id/milestones',
+  (req: Request, res: Response) => {
+    const projectId = String(req.params.id);
+    if (!ProjectService.getById(projectId)) {
+      res.status(404).json({ error: `Project '${projectId}' not found` });
+      return;
+    }
 
-  const body = (req.body as Record<string, unknown>) ?? {};
-  const name = typeof body.name === 'string' ? body.name : '';
-  if (!name) {
-    res.status(400).json({ error: 'name is required' });
-    return;
-  }
+    const body = (req.body as Record<string, unknown>) ?? {};
+    const name = typeof body.name === 'string' ? body.name : '';
+    if (!name) {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
 
-  const id = typeof body.id === 'string' && body.id ? body.id : crypto.randomUUID();
-  if (ProjectService.getMilestone(id)) {
-    res.status(409).json({ error: `Milestone with id '${id}' already exists` });
-    return;
-  }
+    const id =
+      typeof body.id === 'string' && body.id ? body.id : crypto.randomUUID();
+    if (ProjectService.getMilestone(id)) {
+      res
+        .status(409)
+        .json({ error: `Milestone with id '${id}' already exists` });
+      return;
+    }
 
-  const milestone = ProjectService.createMilestone({
-    id,
-    projectId,
-    name,
-    sourceId: typeof body.sourceId === 'string' ? body.sourceId : null,
-    displayOrder: typeof body.displayOrder === 'number' ? body.displayOrder : 0,
-  });
-  res.status(201).json(milestone);
-});
+    const milestone = ProjectService.createMilestone({
+      id,
+      projectId,
+      name,
+      sourceId: typeof body.sourceId === 'string' ? body.sourceId : null,
+      displayOrder:
+        typeof body.displayOrder === 'number' ? body.displayOrder : 0,
+    });
+    res.status(201).json(milestone);
+  },
+);
 
 projectsRouter.patch('/milestones/:id', (req: Request, res: Response) => {
   const id = String(req.params.id);
@@ -151,7 +200,8 @@ projectsRouter.patch('/milestones/:id', (req: Request, res: Response) => {
   if ('sourceId' in body) {
     patch.source_id = typeof body.sourceId === 'string' ? body.sourceId : null;
   }
-  if (typeof body.displayOrder === 'number') patch.display_order = body.displayOrder;
+  if (typeof body.displayOrder === 'number')
+    patch.display_order = body.displayOrder;
 
   const updated = ProjectService.updateMilestone(id, patch);
   if (!updated) {
@@ -173,35 +223,79 @@ projectsRouter.delete('/milestones/:id', (req: Request, res: Response) => {
 
 // ── tasks.yaml stub creation (YAML projects) ─────────────────────────────────
 
-projectsRouter.post('/projects/:id/tasks-yaml-stub', (req: Request, res: Response) => {
-  const projectId = String(req.params.id);
-  const project = ProjectService.getById(projectId);
-  if (!project) {
-    res.status(404).json({ error: `Project '${projectId}' not found` });
-    return;
-  }
-  if (project.taskSource !== 'yaml') {
-    res.status(400).json({ error: `Project '${projectId}' is not configured for YAML task source` });
-    return;
-  }
+projectsRouter.post(
+  '/projects/:id/tasks-yaml-stub',
+  (req: Request, res: Response) => {
+    const projectId = String(req.params.id);
+    const project = ProjectService.getById(projectId);
+    if (!project) {
+      res.status(404).json({ error: `Project '${projectId}' not found` });
+      return;
+    }
+    if (project.taskSource !== 'yaml') {
+      res.status(400).json({
+        error: `Project '${projectId}' is not configured for YAML task source`,
+      });
+      return;
+    }
 
-  const dir = normalizePath(project.projectDir);
-  if (!isExistingDirectory(dir)) {
-    res.status(400).json({ error: `projectDir '${project.projectDir}' does not exist on disk` });
-    return;
-  }
+    const dir = normalizePath(project.projectDir);
+    if (!isExistingDirectory(dir)) {
+      res.status(400).json({
+        error: `projectDir '${project.projectDir}' does not exist on disk`,
+      });
+      return;
+    }
 
-  const filePath = path.join(dir, 'tasks.yaml');
-  if (fs.existsSync(filePath)) {
-    res.status(409).json({ error: 'tasks.yaml already exists', path: filePath });
-    return;
-  }
+    const filePath = path.join(dir, 'tasks.yaml');
+    if (fs.existsSync(filePath)) {
+      res
+        .status(409)
+        .json({ error: 'tasks.yaml already exists', path: filePath });
+      return;
+    }
 
-  const milestones = project.milestones.length > 0
-    ? project.milestones.map((m) => ({ id: m.sourceId ?? m.id, name: m.name, tasks: [] }))
-    : [{ id: 'm1', name: 'Default', tasks: [] }];
+    const milestones =
+      project.milestones.length > 0
+        ? project.milestones.map((m) => ({
+            id: m.sourceId ?? m.id,
+            name: m.name,
+            tasks: [],
+          }))
+        : [{ id: 'm1', name: 'Default', tasks: [] }];
 
-  const stub = { project: { id: project.id, name: project.name }, milestones };
-  fs.writeFileSync(filePath, yaml.dump(stub, { lineWidth: 120 }), 'utf-8');
-  res.status(201).json({ path: filePath });
-});
+    const stub = {
+      project: { id: project.id, name: project.name },
+      milestones,
+    };
+    fs.writeFileSync(filePath, yaml.dump(stub, { lineWidth: 120 }), 'utf-8');
+    res.status(201).json({ path: filePath });
+  },
+);
+
+// ── Merge-Ready bulk merge ────────────────────────────────────────────────────
+
+projectsRouter.post(
+  '/projects/:projectId/milestones/:milestoneId/merge-ready',
+  (req: Request, res: Response) => {
+    const projectId = String(req.params.projectId);
+    const milestoneId = String(req.params.milestoneId);
+
+    if (!ProjectService.getById(projectId)) {
+      res.status(404).json({ error: `Project '${projectId}' not found` });
+      return;
+    }
+
+    const eligiblePRs = getMergeReadyPRs(projectId, milestoneId);
+    const attempted: number[] = [];
+
+    for (const pr of eligiblePRs) {
+      if (_autoMerger) {
+        _autoMerger.attempt(pr.pr_number, pr.repo, { bypassToggle: true });
+      }
+      attempted.push(pr.pr_number);
+    }
+
+    res.json({ attempted });
+  },
+);

@@ -25,7 +25,10 @@ import type { ServerMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { calculateCost } from '@claude-orchestrator/backend/src/utils/usage';
 import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
-import type { Session, EventType } from '@claude-orchestrator/backend/src/db/types';
+import type {
+  Session,
+  EventType,
+} from '@claude-orchestrator/backend/src/db/types';
 import styles from './App.module.css';
 
 interface ArchivedSessionEvent {
@@ -67,7 +70,29 @@ function resolveActiveBoardId(project: ProjectConfig): string {
 }
 
 export default function App() {
-  const { sessions, tasks, tasksReady, synced, readyCount, blockedCount, dispatch, resetTasks, deleteSession, setSessionArchived, setSessionFavorited, prRefreshTrigger, lastPrReviewEvent, incompleteReviews, lastTaskUpdate, taskListRefreshTrigger } = useSessionStore();
+  const {
+    sessions,
+    tasks,
+    tasksReady,
+    synced,
+    readyCount,
+    blockedCount,
+    dispatch,
+    resetTasks,
+    deleteSession,
+    setSessionArchived,
+    setSessionFavorited,
+    prRefreshTrigger,
+    lastPrReviewEvent,
+    lastReviewEscalation,
+    lastReviewFailed,
+    lastStuckNotification,
+    lastStuckPaused,
+    lastStuckKilled,
+    incompleteReviews,
+    lastTaskUpdate,
+    taskListRefreshTrigger,
+  } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const activeProjectIdRef = useRef<string | null>(null);
@@ -81,21 +106,29 @@ export default function App() {
   const { send, connectionState } = useWebSocket(dispatch, (sendNow) => {
     // Called each time the WS (re)connects — fetch tasks if projectId+milestoneId are known
     if (activeProjectIdRef.current && activeBoardIdRef.current) {
-      sendNow({ type: 'fetch_tasks', projectId: activeProjectIdRef.current, milestoneId: activeBoardIdRef.current });
+      sendNow({
+        type: 'fetch_tasks',
+        projectId: activeProjectIdRef.current,
+        milestoneId: activeBoardIdRef.current,
+      });
     }
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
-  const [activeView, setActiveView] = useState<'sessions' | 'history' | 'denials'>('sessions');
+  const [activeView, setActiveView] = useState<
+    'sessions' | 'history' | 'denials'
+  >('sessions');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const notifiedRef = useRef<Set<string>>(new Set());
-  const initialSessionSyncDoneRef = useRef(false);
   const [showReconnected, setShowReconnected] = useState(false);
-  const hasConnectedOnce = useRef(false);
+  const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
   const prevConnectionState = useRef<ConnectionState>('disconnected');
 
   const [cardPreviewLines, setCardPreviewLines] = useState<number>(3);
   const [sessionMode, setSessionMode] = useState<string>('cli');
+  const [autoLaunchCap, setAutoLaunchCap] = useState<number>(1);
+  const [autoLaunchPollIntervalMs, setAutoLaunchPollIntervalMs] =
+    useState<number>(60000);
 
   const [detailWidthPct, setDetailWidthPct] = useState<number>(() => {
     const saved = localStorage.getItem('sessionDetailWidth');
@@ -113,7 +146,6 @@ export default function App() {
   const [taskViews, setTaskViews] = useState<TaskView[]>([]);
   const settingsInitialTab = 'general' as const;
 
-
   useEffect(() => {
     activeBoardIdRef.current = activeBoardId;
   }, [activeBoardId]);
@@ -124,15 +156,15 @@ export default function App() {
 
   useEffect(() => {
     if (connectionState === 'connected') {
-      if (hasConnectedOnce.current) {
+      if (hasConnectedOnce) {
         setShowReconnected(true);
         const timer = setTimeout(() => setShowReconnected(false), 3000);
         return () => clearTimeout(timer);
       }
-      hasConnectedOnce.current = true;
+      setHasConnectedOnce(true);
     }
     prevConnectionState.current = connectionState;
-  }, [connectionState]);
+  }, [connectionState, hasConnectedOnce]);
 
   const dismissNotification = useCallback((id: string) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
@@ -147,16 +179,23 @@ export default function App() {
     }
   }, [sessions, setSessionArchived]);
 
-  const RESUME_MESSAGE = "Limits have reset. Continue where you left off.";
+  const RESUME_MESSAGE = 'Limits have reset. Continue where you left off.';
 
-  const handleResume = useCallback((sessionId: string) => {
-    send({ type: 'send_message', sessionId, message: RESUME_MESSAGE });
-  }, [send]);
+  const handleResume = useCallback(
+    (sessionId: string) => {
+      send({ type: 'send_message', sessionId, message: RESUME_MESSAGE });
+    },
+    [send],
+  );
 
   const handleResumeAll = useCallback(() => {
     for (const s of sessions) {
       if (!s.archived && s.isRateLimited) {
-        send({ type: 'send_message', sessionId: s.sessionId, message: RESUME_MESSAGE });
+        send({
+          type: 'send_message',
+          sessionId: s.sessionId,
+          message: RESUME_MESSAGE,
+        });
       }
     }
   }, [sessions, send]);
@@ -167,9 +206,16 @@ export default function App() {
       .then((s: Record<string, string>) => {
         const lines = Number(s.card_preview_lines);
         if (lines > 0) setCardPreviewLines(lines);
-        if (s.session_mode === 'api' || s.session_mode === 'cli') setSessionMode(s.session_mode);
+        if (s.session_mode === 'api' || s.session_mode === 'cli')
+          setSessionMode(s.session_mode);
+        const cap = Number(s.auto_launch_concurrency);
+        if (cap > 0) setAutoLaunchCap(cap);
+        const pollMs = Number(s.auto_launch_poll_interval_ms);
+        if (pollMs > 0) setAutoLaunchPollIntervalMs(pollMs);
       })
-      .catch(() => {/* keep default */});
+      .catch(() => {
+        /* keep default */
+      });
   }, []);
 
   useEffect(() => {
@@ -181,7 +227,8 @@ export default function App() {
 
         // Restore from localStorage, validate against current project list
         const stored = localStorage.getItem(ACTIVE_PROJECT_KEY);
-        const validProjectId = stored && loaded.some((p) => p.id === stored) ? stored : loaded[0].id;
+        const validProjectId =
+          stored && loaded.some((p) => p.id === stored) ? stored : loaded[0].id;
         const project = loaded.find((p) => p.id === validProjectId)!;
         const boardId = resolveActiveBoardId(project);
 
@@ -189,29 +236,80 @@ export default function App() {
         activeBoardIdRef.current = boardId;
         setActiveProjectId(validProjectId);
         setActiveBoardId(boardId);
-        if (boardId) send({ type: 'fetch_tasks', projectId: validProjectId, milestoneId: boardId });
+        if (boardId)
+          send({
+            type: 'fetch_tasks',
+            projectId: validProjectId,
+            milestoneId: boardId,
+          });
       })
-      .catch(() => {/* leave projects empty — DispatchModal handles the empty case */});
-  }, []);
-
-  const handleProjectChange = useCallback((id: string) => {
-    const project = projects.find((p) => p.id === id);
-    const boardId = project ? resolveActiveBoardId(project) : null;
-    localStorage.setItem(ACTIVE_PROJECT_KEY, id);
-    activeProjectIdRef.current = id;
-    activeBoardIdRef.current = boardId;
-    setActiveProjectId(id);
-    setActiveBoardId(boardId);
-    if (boardId) send({ type: 'fetch_tasks', projectId: id, milestoneId: boardId });
-  }, [send, projects]);
-
-  const handleBoardChange = useCallback((boardId: string) => {
-    if (!activeProjectIdRef.current) return;
-    localStorage.setItem(getMilestoneKey(activeProjectIdRef.current), boardId);
-    activeBoardIdRef.current = boardId;
-    setActiveBoardId(boardId);
-    send({ type: 'fetch_tasks', projectId: activeProjectIdRef.current, milestoneId: boardId });
+      .catch(() => {
+        /* leave projects empty — DispatchModal handles the empty case */
+      });
   }, [send]);
+
+  const handleProjectChange = useCallback(
+    (id: string) => {
+      const project = projects.find((p) => p.id === id);
+      const boardId = project ? resolveActiveBoardId(project) : null;
+      localStorage.setItem(ACTIVE_PROJECT_KEY, id);
+      activeProjectIdRef.current = id;
+      activeBoardIdRef.current = boardId;
+      setActiveProjectId(id);
+      setActiveBoardId(boardId);
+      if (boardId)
+        send({ type: 'fetch_tasks', projectId: id, milestoneId: boardId });
+    },
+    [send, projects],
+  );
+
+  const handleBoardChange = useCallback(
+    (boardId: string) => {
+      if (!activeProjectIdRef.current) return;
+      localStorage.setItem(
+        getMilestoneKey(activeProjectIdRef.current),
+        boardId,
+      );
+      activeBoardIdRef.current = boardId;
+      setActiveBoardId(boardId);
+      send({
+        type: 'fetch_tasks',
+        projectId: activeProjectIdRef.current,
+        milestoneId: boardId,
+      });
+    },
+    [send],
+  );
+
+  const handleAutoLaunchToggle = useCallback(
+    (patch: {
+      autoLaunchEnabled: boolean;
+      autoLaunchMilestoneId?: string | null;
+    }) => {
+      const projectId = activeProjectIdRef.current;
+      if (!projectId) return;
+      void (async () => {
+        try {
+          const res = await fetch(
+            `/api/projects/${encodeURIComponent(projectId)}`,
+            {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(patch),
+            },
+          );
+          if (!res.ok) return;
+          const refreshed = await fetch('/api/config');
+          if (!refreshed.ok) return;
+          const loaded = (await refreshed.json()) as ProjectConfig[];
+          setProjects(loaded);
+        } catch {
+          /* non-critical — next refresh will reconcile */
+        }
+      })();
+    },
+    [],
+  );
 
   // Fetch TaskView list whenever tasks are ready, project/board changes, or a review session starts
   useEffect(() => {
@@ -219,9 +317,13 @@ export default function App() {
     const params = new URLSearchParams({ projectId: activeProjectId });
     if (activeBoardId) params.set('boardId', activeBoardId);
     fetch(`/api/tasks/active?${params}`)
-      .then((r) => r.ok ? r.json() as Promise<TaskView[]> : Promise.resolve([]))
+      .then((r) =>
+        r.ok ? (r.json() as Promise<TaskView[]>) : Promise.resolve([]),
+      )
       .then(setTaskViews)
-      .catch(() => {/* non-critical */});
+      .catch(() => {
+        /* non-critical */
+      });
   }, [activeProjectId, activeBoardId, tasksReady, taskListRefreshTrigger]);
 
   // Merge a single task update in-place so TaskDetail sees live changes without a full re-fetch
@@ -237,19 +339,6 @@ export default function App() {
   }, [lastTaskUpdate]);
 
   useEffect(() => {
-    // First non-empty render = WebSocket initial sync. Mark every existing
-    // done/error session as already-notified so we don't toast them on dashboard
-    // load — they completed in some prior session and the user has already seen them.
-    if (!initialSessionSyncDoneRef.current && sessions.length > 0) {
-      for (const session of sessions) {
-        if (session.status === 'done' || session.status === 'error') {
-          notifiedRef.current.add(session.sessionId);
-        }
-      }
-      initialSessionSyncDoneRef.current = true;
-      return;
-    }
-
     for (const session of sessions) {
       if (
         (session.status === 'done' || session.status === 'error') &&
@@ -257,6 +346,7 @@ export default function App() {
         !notifiedRef.current.has(session.sessionId)
       ) {
         notifiedRef.current.add(session.sessionId);
+        if (session.lastStatusReplay) continue;
         const notifId = `${session.sessionId}-notif`;
         setNotifications((prev) => [
           ...prev,
@@ -288,10 +378,104 @@ export default function App() {
     const notifId = `review-${prNumber}-${Date.now()}`;
     setNotifications((prev) => [
       ...prev,
-      { id: notifId, message, status: 'review', onClick: () => setTopView('prs') },
+      {
+        id: notifId,
+        message,
+        status: 'review',
+        onClick: () => setTopView('prs'),
+      },
     ]);
     setTimeout(() => dismissNotification(notifId), 10000);
   }, [lastPrReviewEvent, dismissNotification]);
+
+  useEffect(() => {
+    if (!lastReviewEscalation) return;
+    const { prNumber, receivedAt } = lastReviewEscalation;
+    const notifId = `escalation-${prNumber}-${receivedAt}`;
+    setNotifications((prev) => [
+      ...prev,
+      {
+        id: notifId,
+        message: `⚠️ PR #${prNumber} review loop hit max iterations — needs your attention`,
+        status: 'review',
+        onClick: () => setTopView('prs'),
+      },
+    ]);
+    setTimeout(() => dismissNotification(notifId), 10000);
+  }, [lastReviewEscalation, dismissNotification]);
+
+  useEffect(() => {
+    if (!lastReviewFailed) return;
+    const { prNumber, message, receivedAt } = lastReviewFailed;
+    const notifId = `review-failed-${prNumber}-${receivedAt}`;
+    setNotifications((prev) => [
+      ...prev,
+      {
+        id: notifId,
+        message: `❌ PR #${prNumber} re-review failed unexpectedly: ${message}`,
+        status: 'review',
+        onClick: () => setTopView('prs'),
+      },
+    ]);
+    setTimeout(() => dismissNotification(notifId), 10000);
+  }, [lastReviewFailed, dismissNotification]);
+
+  useEffect(() => {
+    if (!lastStuckNotification) return;
+    const { sessionId, message, receivedAt } = lastStuckNotification;
+    const notifId = `stuck-notify-${sessionId}-${receivedAt}`;
+    setNotifications((prev) => [
+      ...prev,
+      {
+        id: notifId,
+        message,
+        status: 'review',
+        onClick: () =>
+          window.dispatchEvent(
+            new CustomEvent('selectSession', { detail: { sessionId } }),
+          ),
+      },
+    ]);
+    setTimeout(() => dismissNotification(notifId), 10000);
+  }, [lastStuckNotification, dismissNotification]);
+
+  useEffect(() => {
+    if (!lastStuckPaused) return;
+    const { sessionId, taskName, receivedAt } = lastStuckPaused;
+    const notifId = `stuck-paused-${sessionId}-${receivedAt}`;
+    setNotifications((prev) => [
+      ...prev,
+      {
+        id: notifId,
+        message: `⏸ ${taskName} paused — supervisor flagged this session`,
+        status: 'review',
+        onClick: () =>
+          window.dispatchEvent(
+            new CustomEvent('selectSession', { detail: { sessionId } }),
+          ),
+      },
+    ]);
+    setTimeout(() => dismissNotification(notifId), 10000);
+  }, [lastStuckPaused, dismissNotification]);
+
+  useEffect(() => {
+    if (!lastStuckKilled) return;
+    const { sessionId, taskName, receivedAt } = lastStuckKilled;
+    const notifId = `stuck-killed-${sessionId}-${receivedAt}`;
+    setNotifications((prev) => [
+      ...prev,
+      {
+        id: notifId,
+        message: `🛑 ${taskName} hard-stopped — session continued tool use after pause`,
+        status: 'review',
+        onClick: () =>
+          window.dispatchEvent(
+            new CustomEvent('selectSession', { detail: { sessionId } }),
+          ),
+      },
+    ]);
+    setTimeout(() => dismissNotification(notifId), 10000);
+  }, [lastStuckKilled, dismissNotification]);
 
   const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -299,11 +483,14 @@ export default function App() {
 
     const onMove = (ev: MouseEvent) => {
       const w = window.innerWidth;
-      const pct = 100 - ((ev.clientX / w) * 100);
+      const pct = 100 - (ev.clientX / w) * 100;
       // Left panel must be at least 300px or 25%, whichever is larger
       const leftMinPct = Math.max(25, (MIN_LEFT_PANEL_PX / w) * 100);
       // Right panel must be at least 300px or 20%, whichever is larger
-      const rightMinPct = Math.max(MIN_DETAIL_WIDTH_PCT, (MIN_RIGHT_PANEL_PX / w) * 100);
+      const rightMinPct = Math.max(
+        MIN_DETAIL_WIDTH_PCT,
+        (MIN_RIGHT_PANEL_PX / w) * 100,
+      );
       const maxDetailPct = Math.min(MAX_DETAIL_WIDTH_PCT, 100 - leftMinPct);
       const clamped = Math.min(maxDetailPct, Math.max(rightMinPct, pct));
       detailWidthRef.current = clamped;
@@ -314,7 +501,10 @@ export default function App() {
       setIsDragging(false);
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
-      localStorage.setItem('sessionDetailWidth', String(Math.round(detailWidthRef.current)));
+      localStorage.setItem(
+        'sessionDetailWidth',
+        String(Math.round(detailWidthRef.current)),
+      );
     };
 
     window.addEventListener('mousemove', onMove);
@@ -372,8 +562,10 @@ export default function App() {
           } as ServerMessage);
         }
       })
-      .catch((err) => console.error('[App] failed to load archived session events:', err));
-  }, [selectedId]);
+      .catch((err) =>
+        console.error('[App] failed to load archived session events:', err),
+      );
+  }, [selectedId, dispatch, sessions]);
 
   // Fetch session events for the selected task's code and review sessions if not yet in store.
   // Mirrors the archived-session fetch for the Sessions tab so TaskDetail always has live or
@@ -386,7 +578,8 @@ export default function App() {
     if (!task) return;
 
     const sessionIds: string[] = [];
-    if (task.codeSession?.sessionId) sessionIds.push(task.codeSession.sessionId);
+    if (task.codeSession?.sessionId)
+      sessionIds.push(task.codeSession.sessionId);
     if (task.review?.sessionId) sessionIds.push(task.review.sessionId);
 
     for (const sessionId of sessionIds) {
@@ -425,18 +618,25 @@ export default function App() {
             } as ServerMessage);
           }
         })
-        .catch((err) => console.error('[App] failed to load task session events:', err));
+        .catch((err) =>
+          console.error('[App] failed to load task session events:', err),
+        );
     }
-  }, [selectedTaskId, taskViews]);
+  }, [selectedTaskId, taskViews, dispatch, sessions]);
 
-  const selectedSession = selectedId != null
-    ? (sessions.find((s) => s.sessionId === selectedId) ?? null)
-    : null;
+  const selectedSession =
+    selectedId != null
+      ? (sessions.find((s) => s.sessionId === selectedId) ?? null)
+      : null;
 
   const filteredSessions = useMemo(() => {
     return sessions
       .filter((s) => !s.archived)
-      .filter((s) => !searchText || s.taskName.toLowerCase().includes(searchText.toLowerCase()))
+      .filter(
+        (s) =>
+          !searchText ||
+          s.taskName.toLowerCase().includes(searchText.toLowerCase()),
+      )
       .filter((s) => !statusFilter || s.status === statusFilter)
       .filter((s) => !tagFilter || s.tags?.includes(tagFilter))
       .filter((s) => !activeProjectId || s.project_id === activeProjectId);
@@ -458,40 +658,97 @@ export default function App() {
     setTagFilter(null);
   }
 
-  const runningCount = filteredSessions.filter((s) => ['running', 'starting', 'needs_permission'].includes(s.status)).length;
-  const doneCount = filteredSessions.filter((s) => ['done', 'error', 'killed'].includes(s.status)).length;
+  const runningCount = filteredSessions.filter((s) =>
+    ['running', 'starting', 'needs_permission'].includes(s.status),
+  ).length;
+  const doneCount = filteredSessions.filter((s) =>
+    ['done', 'error', 'killed'].includes(s.status),
+  ).length;
 
   const activeSessions = useMemo(
-    () => sessions.filter((s) => !s.archived && (!activeProjectId || s.project_id === activeProjectId)),
+    () =>
+      sessions.filter(
+        (s) =>
+          !s.archived && (!activeProjectId || s.project_id === activeProjectId),
+      ),
     [sessions, activeProjectId],
   );
 
   const totalTokens = useMemo(
-    () => activeSessions.reduce((sum, s) => sum + (s.totalInputTokens ?? 0) + (s.totalOutputTokens ?? 0), 0),
+    () =>
+      activeSessions.reduce(
+        (sum, s) =>
+          sum + (s.totalInputTokens ?? 0) + (s.totalOutputTokens ?? 0),
+        0,
+      ),
     [activeSessions],
   );
 
   const totalCost = useMemo(
-    () => activeSessions.reduce((sum, s) => sum + calculateCost(s.totalInputTokens ?? 0, s.totalOutputTokens ?? 0, s.model), 0),
+    () =>
+      activeSessions.reduce(
+        (sum, s) =>
+          sum +
+          calculateCost(
+            s.totalInputTokens ?? 0,
+            s.totalOutputTokens ?? 0,
+            s.model,
+          ),
+        0,
+      ),
     [activeSessions],
+  );
+
+  const autoLaunchRunningCount = useMemo(
+    () =>
+      sessions.filter(
+        (s) =>
+          !s.archived &&
+          s.project_id === activeProjectId &&
+          (s.sessionType ?? 'standard') === 'standard' &&
+          (s.status === 'running' || s.status === 'needs_permission'),
+      ).length,
+    [sessions, activeProjectId],
+  );
+
+  // taskViews is already fetched scoped to activeProjectId + activeBoardId;
+  // both are listed in the dep array to make the milestone scope explicit.
+  const autoLaunchQueuedCount = useMemo(
+    () =>
+      taskViews.filter(
+        (t) =>
+          t.displayStatus === 'ready' &&
+          t.taskType === '💻 Code' &&
+          !t.blocked &&
+          !t.pauseReason,
+      ).length,
+    [taskViews, activeProjectId, activeBoardId],
   );
 
   // Keyboard navigation: sorted active sessions (same order as SessionGrid)
   const kbSortedSessions = [...filteredSessions].sort((a, b) => {
     const statusOrder: Record<string, number> = {
-      needs_permission: 0, running: 1, starting: 2, done: 3, error: 3, killed: 3,
+      needs_permission: 0,
+      running: 1,
+      starting: 2,
+      done: 3,
+      error: 3,
+      killed: 3,
     };
     const rank = (statusOrder[a.status] ?? 99) - (statusOrder[b.status] ?? 99);
     if (rank !== 0) return rank;
     return (b.started_at ?? 0) - (a.started_at ?? 0);
   });
-  const keyboardHighlightedId = selectedSessionIndex >= 0 ? kbSortedSessions[selectedSessionIndex]?.sessionId ?? null : null;
+  const keyboardHighlightedId =
+    selectedSessionIndex >= 0
+      ? (kbSortedSessions[selectedSessionIndex]?.sessionId ?? null)
+      : null;
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
 
   const anyDragging = isDragging;
 
-  useNotifications(sessions, lastPrReviewEvent);
+  useNotifications(sessions, lastPrReviewEvent, lastReviewFailed);
 
   useEffect(() => {
     function onSelectSession(e: Event) {
@@ -528,12 +785,18 @@ export default function App() {
     },
     onSelectNext: () =>
       setSelectedSessionIndex((i) =>
-        kbSortedSessions.length > 0 ? (i < 0 ? 0 : (i + 1) % kbSortedSessions.length) : -1,
+        kbSortedSessions.length > 0
+          ? i < 0
+            ? 0
+            : (i + 1) % kbSortedSessions.length
+          : -1,
       ),
     onSelectPrev: () =>
       setSelectedSessionIndex((i) =>
         kbSortedSessions.length > 0
-          ? (i < 0 ? kbSortedSessions.length - 1 : (i - 1 + kbSortedSessions.length) % kbSortedSessions.length)
+          ? i < 0
+            ? kbSortedSessions.length - 1
+            : (i - 1 + kbSortedSessions.length) % kbSortedSessions.length
           : -1,
       ),
     onConfirmSelection: () => {
@@ -552,12 +815,17 @@ export default function App() {
   });
 
   return (
-    <div className={`${styles.appContainer}${anyDragging ? ` ${styles.dragging}` : ''}`}>
+    <div
+      className={`${styles.appContainer}${anyDragging ? ` ${styles.dragging}` : ''}`}
+    >
       <ErrorBoundary
         name="Header"
         fallback={(_error, reset) => (
           <div className={styles.headerError} role="alert">
-            Header failed to render. <button type="button" onClick={reset}>Retry</button>
+            Header failed to render.{' '}
+            <button type="button" onClick={reset}>
+              Retry
+            </button>
           </div>
         )}
       >
@@ -573,6 +841,11 @@ export default function App() {
           totalCost={totalCost}
           tasks={taskViews}
           incompleteReviewCount={incompleteReviews.length}
+          onAutoLaunchToggle={handleAutoLaunchToggle}
+          autoLaunchRunningCount={autoLaunchRunningCount}
+          autoLaunchCap={autoLaunchCap}
+          autoLaunchQueuedCount={autoLaunchQueuedCount}
+          autoLaunchPollIntervalMs={autoLaunchPollIntervalMs}
         />
       </ErrorBoundary>
       <div className={styles.mainArea}>
@@ -597,8 +870,12 @@ export default function App() {
                 onMouseDown={handleResizeMouseDown}
               />
 
-              <div className={styles.rightPanel} style={{ width: `${detailWidthPct}%` }}>
-                {selectedTaskId && taskViews.find((t) => t.taskId === selectedTaskId) ? (
+              <div
+                className={styles.rightPanel}
+                style={{ width: `${detailWidthPct}%` }}
+              >
+                {selectedTaskId &&
+                taskViews.find((t) => t.taskId === selectedTaskId) ? (
                   <ErrorBoundary name="TaskDetail">
                     <TaskDetail
                       task={taskViews.find((t) => t.taskId === selectedTaskId)!}
@@ -620,96 +897,137 @@ export default function App() {
 
         {topView === 'sessions' && (
           <ErrorBoundary name="SessionsView">
-          <div className={styles.contentArea}>
-            <div className={styles.leftPanel}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                <span style={{ flex: 1 }}>
-                  {runningCount > 0 && <span>{runningCount} running</span>}
-                  {runningCount > 0 && doneCount > 0 && <span> · </span>}
-                  {doneCount > 0 && <span>{doneCount} done</span>}
-                  {runningCount === 0 && doneCount === 0 && <span>0 sessions</span>}
-                  {readyCount > 0 && <span> · {readyCount} ready</span>}
-                  {blockedCount > 0 && <span style={{ color: 'var(--color-subtext0, #a6adc8)' }}> · {blockedCount} blocked</span>}
-                </span>
-                <button type="button" onClick={() => setActiveView((v) => v === 'history' ? 'sessions' : 'history')}>
-                  {activeView === 'history' ? 'Hide History' : '🕑 History'}
-                </button>
-                <button type="button" onClick={() => setActiveView((v) => v === 'denials' ? 'sessions' : 'denials')}>
-                  {activeView === 'denials' ? 'Hide Denials' : '📋 Denials'}
-                </button>
-                <button type="button" onClick={() => setShowModal(true)}>
-                  + New Session
-                </button>
+            <div className={styles.contentArea}>
+              <div className={styles.leftPanel}>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    marginBottom: '8px',
+                  }}
+                >
+                  <span style={{ flex: 1 }}>
+                    {runningCount > 0 && <span>{runningCount} running</span>}
+                    {runningCount > 0 && doneCount > 0 && <span> · </span>}
+                    {doneCount > 0 && <span>{doneCount} done</span>}
+                    {runningCount === 0 && doneCount === 0 && (
+                      <span>0 sessions</span>
+                    )}
+                    {readyCount > 0 && <span> · {readyCount} ready</span>}
+                    {blockedCount > 0 && (
+                      <span style={{ color: 'var(--color-subtext0, #a6adc8)' }}>
+                        {' '}
+                        · {blockedCount} blocked
+                      </span>
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setActiveView((v) =>
+                        v === 'history' ? 'sessions' : 'history',
+                      )
+                    }
+                  >
+                    {activeView === 'history' ? 'Hide History' : '🕑 History'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setActiveView((v) =>
+                        v === 'denials' ? 'sessions' : 'denials',
+                      )
+                    }
+                  >
+                    {activeView === 'denials' ? 'Hide Denials' : '📋 Denials'}
+                  </button>
+                  <button type="button" onClick={() => setShowModal(true)}>
+                    + New Session
+                  </button>
+                </div>
+
+                {activeView === 'history' ? (
+                  <HistoryGrid onSelect={setSelectedId} />
+                ) : activeView === 'denials' ? (
+                  <PermissionEventLog />
+                ) : (
+                  <>
+                    <SessionFilterBar
+                      searchText={searchText}
+                      onSearchChange={setSearchText}
+                      statusFilter={statusFilter}
+                      onStatusChange={setStatusFilter}
+                      tagFilter={tagFilter}
+                      onTagChange={setTagFilter}
+                      availableTags={availableTags}
+                      resultCount={filteredSessions.length}
+                      searchInputRef={searchInputRef}
+                    />
+                    <SessionGrid
+                      sessions={filteredSessions}
+                      projects={projects}
+                      selectedId={selectedId}
+                      keyboardSelectedId={keyboardHighlightedId}
+                      onSelect={setSelectedId}
+                      synced={synced}
+                      onArchiveAll={handleArchiveAll}
+                      filtersActive={filtersActive}
+                      onClearFilters={clearFilters}
+                      onResumeAll={handleResumeAll}
+                      onResume={handleResume}
+                      onToggleFavorite={(sessionId, favorited) =>
+                        setSessionFavorited(sessionId, favorited)
+                      }
+                      cardPreviewLines={cardPreviewLines}
+                      sessionMode={sessionMode}
+                    />
+                  </>
+                )}
               </div>
 
-              {activeView === 'history' ? (
-                <HistoryGrid onSelect={setSelectedId} />
-              ) : activeView === 'denials' ? (
-                <PermissionEventLog />
-              ) : (
-                <>
-                  <SessionFilterBar
-                    searchText={searchText}
-                    onSearchChange={setSearchText}
-                    statusFilter={statusFilter}
-                    onStatusChange={setStatusFilter}
-                    tagFilter={tagFilter}
-                    onTagChange={setTagFilter}
-                    availableTags={availableTags}
-                    resultCount={filteredSessions.length}
-                    searchInputRef={searchInputRef}
-                  />
-                  <SessionGrid
-                    sessions={filteredSessions}
-                    projects={projects}
-                    selectedId={selectedId}
-                    keyboardSelectedId={keyboardHighlightedId}
-                    onSelect={setSelectedId}
-                    synced={synced}
-                    onArchiveAll={handleArchiveAll}
-                    filtersActive={filtersActive}
-                    onClearFilters={clearFilters}
-                    onResumeAll={handleResumeAll}
-                    onResume={handleResume}
-                    onToggleFavorite={(sessionId, favorited) => setSessionFavorited(sessionId, favorited)}
-                    cardPreviewLines={cardPreviewLines}
-                    sessionMode={sessionMode}
-                  />
-                </>
-              )}
-            </div>
+              <div
+                className={styles.resizeHandle}
+                onMouseDown={handleResizeMouseDown}
+              />
 
-            <div
-              className={styles.resizeHandle}
-              onMouseDown={handleResizeMouseDown}
-            />
-
-            <div className={styles.rightPanel} style={{ width: `${detailWidthPct}%` }}>
-              {selectedSession ? (
-                <ErrorBoundary name="SessionDetail">
-                  <SessionDetail
-                    session={selectedSession}
-                    send={send}
-                    onClose={() => setSelectedId(null)}
-                    onDelete={(sessionId) => {
-                      deleteSession(sessionId);
-                      setSelectedId(null);
-                    }}
-                    onArchive={(sessionId) => setSessionArchived(sessionId, true)}
-                    onUnarchive={(sessionId) => setSessionArchived(sessionId, false)}
-                    onFavorite={(sessionId) => setSessionFavorited(sessionId, true)}
-                    onUnfavorite={(sessionId) => setSessionFavorited(sessionId, false)}
-                    onResume={handleResume}
-                    sessionMode={sessionMode}
-                  />
-                </ErrorBoundary>
-              ) : (
-                <div className={styles.detailPlaceholder}>
-                  <p>Select a session to view details</p>
-                </div>
-              )}
+              <div
+                className={styles.rightPanel}
+                style={{ width: `${detailWidthPct}%` }}
+              >
+                {selectedSession ? (
+                  <ErrorBoundary name="SessionDetail">
+                    <SessionDetail
+                      session={selectedSession}
+                      send={send}
+                      onClose={() => setSelectedId(null)}
+                      onDelete={(sessionId) => {
+                        deleteSession(sessionId);
+                        setSelectedId(null);
+                      }}
+                      onArchive={(sessionId) =>
+                        setSessionArchived(sessionId, true)
+                      }
+                      onUnarchive={(sessionId) =>
+                        setSessionArchived(sessionId, false)
+                      }
+                      onFavorite={(sessionId) =>
+                        setSessionFavorited(sessionId, true)
+                      }
+                      onUnfavorite={(sessionId) =>
+                        setSessionFavorited(sessionId, false)
+                      }
+                      onResume={handleResume}
+                      sessionMode={sessionMode}
+                    />
+                  </ErrorBoundary>
+                ) : (
+                  <div className={styles.detailPlaceholder}>
+                    <p>Select a session to view details</p>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
           </ErrorBoundary>
         )}
 
@@ -761,16 +1079,19 @@ export default function App() {
         </ErrorBoundary>
       )}
 
-      <Notifications notifications={notifications} onDismiss={dismissNotification} />
+      <Notifications
+        notifications={notifications}
+        onDismiss={dismissNotification}
+      />
       <ShortcutHint />
 
-      {(hasConnectedOnce.current && connectionState !== 'connected') && (
-        <div className={styles.connectionBanner}>
-          Reconnecting...
-        </div>
+      {hasConnectedOnce && connectionState !== 'connected' && (
+        <div className={styles.connectionBanner}>Reconnecting...</div>
       )}
       {showReconnected && (
-        <div className={`${styles.connectionBanner} ${styles.connectionBannerReconnected}`}>
+        <div
+          className={`${styles.connectionBanner} ${styles.connectionBannerReconnected}`}
+        >
           Reconnected
         </div>
       )}

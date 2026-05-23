@@ -1,10 +1,26 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { getSession, getActiveSessions, getArchivedSessions, getSessionsByStatus, getSessionsByProject, deleteSession, archiveSession, unarchiveSession, archiveFinishedSessions, setSessionNote, setSessionTags, favoriteSession, unfavoriteSession, deleteDenialsBySession, getEventsBySession } from '../db/queries';
+import {
+  getSession,
+  getActiveSessions,
+  getArchivedSessions,
+  getSessionsByStatus,
+  getSessionsByProject,
+  deleteSession,
+  archiveSession,
+  unarchiveSession,
+  archiveFinishedSessions,
+  setSessionNote,
+  setSessionTags,
+  favoriteSession,
+  unfavoriteSession,
+  deleteDenialsBySession,
+  getEventsBySession,
+} from '../db/queries';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import type { ServerMessage } from '../ws/types';
 
-let _broadcast: ((msg: ServerMessage) => void) = () => {};
+let _broadcast: (msg: ServerMessage) => void = () => {};
 export function setBroadcast(fn: (msg: ServerMessage) => void): void {
   _broadcast = fn;
 }
@@ -18,15 +34,20 @@ sessionsRouter.get('/archived', (_req: Request, res: Response) => {
 
 // GET /api/sessions?status=running,done&projectId=claude-orchestrator
 sessionsRouter.get('/', (req: Request, res: Response) => {
-  const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : '';
-  const statusParam = typeof req.query.status === 'string' ? req.query.status : '';
+  const projectId =
+    typeof req.query.projectId === 'string' ? req.query.projectId : '';
+  const statusParam =
+    typeof req.query.status === 'string' ? req.query.status : '';
 
   if (projectId) {
     res.json(getSessionsByProject(projectId));
     return;
   }
   if (statusParam) {
-    const statuses = statusParam.split(',').map((s) => s.trim()).filter(Boolean);
+    const statuses = statusParam
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
     res.json(getSessionsByStatus(statuses));
   } else {
     res.json(getActiveSessions());
@@ -152,7 +173,9 @@ sessionsRouter.patch('/:id/tags', (req: Request, res: Response) => {
     res.status(404).json({ error: 'Session not found' });
     return;
   }
-  const tags: string[] = Array.isArray(req.body.tags) ? req.body.tags.map(String) : [];
+  const tags: string[] = Array.isArray(req.body.tags)
+    ? req.body.tags.map(String)
+    : [];
   setSessionTags(sessionId, tags);
   _broadcast({ type: 'session_updated', sessionId, tags });
   res.json({ ok: true });

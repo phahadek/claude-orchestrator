@@ -12,7 +12,9 @@ describe('runMigrations() — favorited column', () => {
       path.join(__dirname, '..', 'db', 'schema.ts'),
       'utf-8',
     );
-    expect(source).toMatch(/ALTER TABLE sessions ADD COLUMN.*favorited INTEGER NOT NULL DEFAULT 0/);
+    expect(source).toMatch(
+      /ALTER TABLE sessions ADD COLUMN.*favorited INTEGER NOT NULL DEFAULT 0/,
+    );
   });
 
   it('wraps the favorited ALTER TABLE in try/catch', () => {
@@ -78,15 +80,17 @@ beforeEach(() => {
 describe('PATCH /api/sessions/:id/favorite', () => {
   it('returns 404 if session not found', async () => {
     vi.mocked(queries.getSession).mockReturnValue(undefined);
-    const res = await supertest(buildApp())
-      .patch('/api/sessions/missing/favorite');
+    const res = await supertest(buildApp()).patch(
+      '/api/sessions/missing/favorite',
+    );
     expect(res.status).toBe(404);
   });
 
   it('sets favorited = 1 and returns 200', async () => {
     vi.mocked(queries.getSession).mockReturnValue(mockSession as never);
-    const res = await supertest(buildApp())
-      .patch('/api/sessions/test-session-1/favorite');
+    const res = await supertest(buildApp()).patch(
+      '/api/sessions/test-session-1/favorite',
+    );
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
     expect(queries.favoriteSession).toHaveBeenCalledWith('test-session-1');
@@ -96,15 +100,17 @@ describe('PATCH /api/sessions/:id/favorite', () => {
 describe('PATCH /api/sessions/:id/unfavorite', () => {
   it('returns 404 if session not found', async () => {
     vi.mocked(queries.getSession).mockReturnValue(undefined);
-    const res = await supertest(buildApp())
-      .patch('/api/sessions/missing/unfavorite');
+    const res = await supertest(buildApp()).patch(
+      '/api/sessions/missing/unfavorite',
+    );
     expect(res.status).toBe(404);
   });
 
   it('sets favorited = 0 and returns 200', async () => {
     vi.mocked(queries.getSession).mockReturnValue(mockSession as never);
-    const res = await supertest(buildApp())
-      .patch('/api/sessions/test-session-1/unfavorite');
+    const res = await supertest(buildApp()).patch(
+      '/api/sessions/test-session-1/unfavorite',
+    );
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
     expect(queries.unfavoriteSession).toHaveBeenCalledWith('test-session-1');

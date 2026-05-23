@@ -72,14 +72,14 @@ sequenceDiagram
     end
 ```
 
-| Layer | Tech | Path |
-|---|---|---|
-| Frontend | React 19 + Vite (TypeScript) | `packages/frontend/` |
-| Backend | Node.js + Express (TypeScript) | `packages/backend/` |
-| Transport | WebSocket (`ws`) | real-time session events |
-| Database | SQLite (`better-sqlite3`) | session metadata, PR tracking, permission rules |
-| Task source | Notion REST API or local YAML | configured per project |
-| Session execution | `claude` CLI subprocess | one process per session, JSONL on stdout |
+| Layer             | Tech                           | Path                                            |
+| ----------------- | ------------------------------ | ----------------------------------------------- |
+| Frontend          | React 19 + Vite (TypeScript)   | `packages/frontend/`                            |
+| Backend           | Node.js + Express (TypeScript) | `packages/backend/`                             |
+| Transport         | WebSocket (`ws`)               | real-time session events                        |
+| Database          | SQLite (`better-sqlite3`)      | session metadata, PR tracking, permission rules |
+| Task source       | Notion REST API or local YAML  | configured per project                          |
+| Session execution | `claude` CLI subprocess        | one process per session, JSONL on stdout        |
 
 ## Quickstart
 
@@ -95,6 +95,7 @@ sequenceDiagram
 ```bash
 git clone https://github.com/phahadek/claude-orchestrator.git && cd claude-orchestrator
 npm install
+git config blame.ignoreRevsFile .git-blame-ignore-revs      # once per clone — hides mass-format commits from blame
 cp packages/backend/.env.example packages/backend/.env       # then edit
 cp .claude/local-context.md.example .claude/local-context.md # gitignored — add your Notion URLs
 npm run dev    # → http://localhost:5173 (dev; Vite proxies API/WS to backend on :3000)

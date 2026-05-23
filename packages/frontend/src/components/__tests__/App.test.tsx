@@ -16,6 +16,8 @@ vi.mock('../../hooks/useSessionStore', () => ({
     setSessionFavorited: vi.fn(),
     prRefreshTrigger: 0,
     lastPrReviewEvent: null,
+    lastReviewEscalation: null,
+    lastReviewFailed: null,
     incompleteReviews: [],
     lastTaskUpdate: null,
     taskListRefreshTrigger: 0,
@@ -69,20 +71,39 @@ vi.mock('../TaskDetail', () => ({
 }));
 
 beforeEach(() => {
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-    ok: true,
-    json: async () => [{ id: 'proj-1', name: 'Project 1', projectDir: '/p', contextUrl: '', boardId: '' }],
-  }));
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          id: 'proj-1',
+          name: 'Project 1',
+          projectDir: '/p',
+          contextUrl: '',
+          boardId: '',
+        },
+      ],
+    }),
+  );
 
   const store: Record<string, string> = {};
   vi.stubGlobal('localStorage', {
     getItem: (k: string) => store[k] ?? null,
-    setItem: (k: string, v: string) => { store[k] = v; },
-    removeItem: (k: string) => { delete store[k]; },
-    clear: () => { Object.keys(store).forEach((k) => delete store[k]); },
+    setItem: (k: string, v: string) => {
+      store[k] = v;
+    },
+    removeItem: (k: string) => {
+      delete store[k];
+    },
+    clear: () => {
+      Object.keys(store).forEach((k) => delete store[k]);
+    },
   });
 
-  vi.spyOn(console, 'error').mockImplementation(() => { /* silence React's logged error */ });
+  vi.spyOn(console, 'error').mockImplementation(() => {
+    /* silence React's logged error */
+  });
 });
 
 afterEach(() => {

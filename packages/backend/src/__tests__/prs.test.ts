@@ -23,14 +23,17 @@ vi.mock('../db/queries.js', () => ({
   updatePRDraftStatus: vi.fn(),
 }));
 
-const mockProjectsByGithubRepo: Record<string, {
-  id: string;
-  name: string;
-  projectDir: string;
-  contextUrl: string;
-  boardId: string;
-  githubRepo: string;
-}> = {
+const mockProjectsByGithubRepo: Record<
+  string,
+  {
+    id: string;
+    name: string;
+    projectDir: string;
+    contextUrl: string;
+    boardId: string;
+    githubRepo: string;
+  }
+> = {
   'owner/repo': {
     id: 'proj-1',
     name: 'Test Project',
@@ -64,7 +67,9 @@ vi.mock('../config.js', () => ({
     }
     return undefined;
   }),
-  getProjectByGithubRepo: vi.fn((repo: string) => mockProjectsByGithubRepo[repo]),
+  getProjectByGithubRepo: vi.fn(
+    (repo: string) => mockProjectsByGithubRepo[repo],
+  ),
   getAllProjects: vi.fn(() => Object.values(mockProjectsByGithubRepo)),
 }));
 
@@ -107,7 +112,9 @@ const mockPRRow: PullRequestRow = {
   mergeable: null,
   merge_state: null,
   merge_state_checked_at: null,
+  failing_checks: null,
   pending_push: 0,
+  pause_reason: null,
 };
 
 const mockPRRowNoTask: PullRequestRow = {
@@ -154,8 +161,23 @@ function makeMockGitHub(): GitHubClient {
     getPRState: vi.fn().mockResolvedValue('merged'),
     fetchDiff: vi.fn(),
     fetchPR: vi.fn().mockResolvedValue(mockGitHubPR),
-    mergePR: vi.fn().mockResolvedValue({ merged: true, message: 'Merged', sha: 'abc123' }),
+    mergePR: vi
+      .fn()
+      .mockResolvedValue({ merged: true, message: 'Merged', sha: 'abc123' }),
     markPRReady: vi.fn().mockResolvedValue(undefined),
+    getMergeability: vi
+      .fn()
+      .mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
+    getMergeabilityWithRetry: vi
+      .fn()
+      .mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
+    getFailingChecks: vi.fn().mockResolvedValue([]),
+    categorizeMergeability: vi.fn().mockResolvedValue({
+      category: 'conflict',
+      mergeState: 'dirty',
+      rawMergeableState: 'dirty',
+      failingChecks: [],
+    }),
   } as unknown as GitHubClient;
 }
 
@@ -193,7 +215,10 @@ function buildApp(
 ) {
   const app = express();
   app.use(express.json());
-  app.use('/api', createPrsRouter(github, prReviewService, sessionManager, notionClient));
+  app.use(
+    '/api',
+    createPrsRouter(github, prReviewService, sessionManager, notionClient),
+  );
   return app;
 }
 
@@ -222,30 +247,78 @@ describe('GET /api/prs', () => {
     expect(res.body[0].notionTaskTitle).toBe('My Task Title');
   });
 
+  it('includes pauseReason in the response', async () => {
+    const prWithPause: PullRequestRow = {
+      ...mockPRRow,
+      pause_reason: 'ci_failing',
+    };
+    vi.mocked(queries.getPRs).mockReturnValue([prWithPause]);
+    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body[0].pauseReason).toBe('ci_failing');
+  });
+
+  it('returns pauseReason as null when not set', async () => {
+    vi.mocked(queries.getPRs).mockReturnValue([mockPRRow]);
+    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body[0].pauseReason).toBeNull();
+  });
+
   it('returns PRs with all states (open, merged, closed), not just open', async () => {
-    const mergedRow: PullRequestRow = { ...mockPRRow, pr_number: 50, state: 'merged' };
-    const closedRow: PullRequestRow = { ...mockPRRow, pr_number: 51, state: 'closed' };
-    vi.mocked(queries.getPRs).mockReturnValue([mockPRRow, mergedRow, closedRow]);
+    const mergedRow: PullRequestRow = {
+      ...mockPRRow,
+      pr_number: 50,
+      state: 'merged',
+    };
+    const closedRow: PullRequestRow = {
+      ...mockPRRow,
+      pr_number: 51,
+      state: 'closed',
+    };
+    vi.mocked(queries.getPRs).mockReturnValue([
+      mockPRRow,
+      mergedRow,
+      closedRow,
+    ]);
     const github = makeMockGitHub();
     // PR 42 is still open on GitHub — no reconciliation should occur for it
-    vi.mocked(github.listOpenPRs).mockResolvedValue([{ ...openGitHubPR, id: 42 }]);
-    const res = await supertest(buildApp(github)).get('/api/prs?projectId=proj-1');
+    vi.mocked(github.listOpenPRs).mockResolvedValue([
+      { ...openGitHubPR, id: 42 },
+    ]);
+    const res = await supertest(buildApp(github)).get(
+      '/api/prs?projectId=proj-1',
+    );
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(3);
-    expect(res.body.map((p: { state: string }) => p.state)).toEqual(['open', 'merged', 'closed']);
+    expect(res.body.map((p: { state: string }) => p.state)).toEqual([
+      'open',
+      'merged',
+      'closed',
+    ]);
   });
 
   it('updates local state to merged when GitHub no longer lists the PR as open', async () => {
-    const staleRow: PullRequestRow = { ...mockPRRow, pr_number: 99, state: 'open' };
+    const staleRow: PullRequestRow = {
+      ...mockPRRow,
+      pr_number: 99,
+      state: 'open',
+    };
     vi.mocked(queries.getPRs).mockReturnValue([staleRow]);
     const github = makeMockGitHub();
     // GitHub returns no open PRs → PR 99 is stale
     vi.mocked(github.listOpenPRs).mockResolvedValue([]);
     vi.mocked(github.getPRState).mockResolvedValue('merged');
 
-    const res = await supertest(buildApp(github)).get('/api/prs?projectId=proj-1');
+    const res = await supertest(buildApp(github)).get(
+      '/api/prs?projectId=proj-1',
+    );
     expect(res.status).toBe(200);
-    expect(vi.mocked(queries.updatePRState)).toHaveBeenCalledWith(99, 'owner/repo', 'merged');
+    expect(vi.mocked(queries.updatePRState)).toHaveBeenCalledWith(
+      99,
+      'owner/repo',
+      'merged',
+    );
     expect(res.body[0].state).toBe('merged');
   });
 
@@ -255,7 +328,9 @@ describe('GET /api/prs', () => {
   });
 
   it('returns 422 when project has no githubRepo', async () => {
-    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-no-repo');
+    const res = await supertest(buildApp()).get(
+      '/api/prs?projectId=proj-no-repo',
+    );
     expect(res.status).toBe(422);
     expect(res.body.error).toMatch(/githubRepo/);
   });
@@ -266,8 +341,9 @@ describe('GET /api/prs', () => {
 describe('POST /api/prs/:prNumber/review', () => {
   it('calls reviewPR and returns review result when PR exists', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
-    const res = await supertest(buildApp())
-      .post('/api/prs/42/review?projectId=proj-1');
+    const res = await supertest(buildApp()).post(
+      '/api/prs/42/review?projectId=proj-1',
+    );
     expect(res.status).toBe(200);
     expect(res.body.verdict).toBe('approved');
     expect(res.body.summary).toBe('Looks good');
@@ -275,19 +351,21 @@ describe('POST /api/prs/:prNumber/review', () => {
 
   it('calls reviewPR even when PR has no notion_task_id (service handles error)', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRowNoTask);
-    const res = await supertest(buildApp())
-      .post('/api/prs/43/review?projectId=proj-1');
+    const res = await supertest(buildApp()).post(
+      '/api/prs/43/review?projectId=proj-1',
+    );
     expect(res.status).toBe(200);
     expect(res.body.verdict).toBe('approved');
   });
 
   it('performs on-demand sync and calls reviewPR when PR is not in DB initially', async () => {
     vi.mocked(queries.getPRByNumber)
-      .mockReturnValueOnce(null)           // first call — not found
-      .mockReturnValueOnce(mockPRRow);     // second call — after upsert
+      .mockReturnValueOnce(null) // first call — not found
+      .mockReturnValueOnce(mockPRRow); // second call — after upsert
     const github = makeMockGitHub();
-    const res = await supertest(buildApp(github))
-      .post('/api/prs/42/review?projectId=proj-1');
+    const res = await supertest(buildApp(github)).post(
+      '/api/prs/42/review?projectId=proj-1',
+    );
     expect(res.status).toBe(200);
     expect(res.body.verdict).toBe('approved');
     expect(vi.mocked(github.fetchPR)).toHaveBeenCalledWith('owner/repo', 42);
@@ -298,16 +376,18 @@ describe('POST /api/prs/:prNumber/review', () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(null);
     const github = makeMockGitHub();
     vi.mocked(github.fetchPR).mockRejectedValue(new Error('Not Found'));
-    const res = await supertest(buildApp(github))
-      .post('/api/prs/42/review?projectId=proj-1');
+    const res = await supertest(buildApp(github)).post(
+      '/api/prs/42/review?projectId=proj-1',
+    );
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/PR #42 not found/);
   });
 
   it('returns 404 when PR is not in DB and still not found after upsert', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(null);
-    const res = await supertest(buildApp())
-      .post('/api/prs/42/review?projectId=proj-1');
+    const res = await supertest(buildApp()).post(
+      '/api/prs/42/review?projectId=proj-1',
+    );
     expect(res.status).toBe(404);
   });
 
@@ -337,21 +417,29 @@ describe('POST /api/prs/:prNumber/review', () => {
 describe('POST /api/prs/:prNumber/merge', () => {
   it('returns 422 with conflict message on 405 GitHubApiError', async () => {
     const github = makeMockGitHub();
-    vi.mocked(github.mergePR).mockRejectedValue(new GitHubApiError(405, 'Not mergeable'));
+    vi.mocked(github.mergePR).mockRejectedValue(
+      new GitHubApiError(405, 'Not mergeable'),
+    );
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
     const res = await supertest(buildApp(github))
       .post('/api/prs/owner/repo/42/merge')
       .send({});
     expect(res.status).toBe(422);
-    expect(res.body.error).toBe('PR has merge conflicts. Use Fix Conflicts to have the code session rebase and resolve them.');
+    expect(res.body.error).toBe(
+      'PR has merge conflicts. Use Fix Conflicts to have the code session rebase and resolve them.',
+    );
   });
 
   it('calls sendOrResume with conflict-fix message on 409 merge conflict', async () => {
     const github = makeMockGitHub();
-    vi.mocked(github.mergePR).mockRejectedValue(new GitHubApiError(409, 'Merge conflict'));
+    vi.mocked(github.mergePR).mockRejectedValue(
+      new GitHubApiError(409, 'Merge conflict'),
+    );
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
     const sessionManager = makeMockSessionManager();
-    const res = await supertest(buildApp(github, makeMockPRReviewService(), sessionManager))
+    const res = await supertest(
+      buildApp(github, makeMockPRReviewService(), sessionManager),
+    )
       .post('/api/prs/owner/repo/42/merge')
       .send({});
     expect(res.status).toBe(422);
@@ -368,7 +456,11 @@ describe('POST /api/prs/:prNumber/merge', () => {
       .send({ commitTitle: 'feat: add something (#42)' });
     expect(res.status).toBe(200);
     expect(res.body.merged).toBe(true);
-    expect(vi.mocked(queries.updatePRState)).toHaveBeenCalledWith(42, 'owner/repo', 'merged');
+    expect(vi.mocked(queries.updatePRState)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'merged',
+    );
   });
 
   it('ends coding session and review session gracefully on merge', async () => {
@@ -379,32 +471,57 @@ describe('POST /api/prs/:prNumber/merge', () => {
     };
     vi.mocked(queries.getPRByNumber).mockReturnValue(prWithSessions);
     const sessionManager = makeMockSessionManager();
-    const res = await supertest(buildApp(makeMockGitHub(), makeMockPRReviewService(), sessionManager))
+    const res = await supertest(
+      buildApp(makeMockGitHub(), makeMockPRReviewService(), sessionManager),
+    )
       .post('/api/prs/owner/repo/42/merge')
       .send({});
     expect(res.status).toBe(200);
-    expect(vi.mocked(sessionManager.endSession)).toHaveBeenCalledWith('coding-session-id');
-    expect(vi.mocked(sessionManager.endSession)).toHaveBeenCalledWith('review-session-id');
+    expect(vi.mocked(sessionManager.endSession)).toHaveBeenCalledWith(
+      'coding-session-id',
+    );
+    expect(vi.mocked(sessionManager.endSession)).toHaveBeenCalledWith(
+      'review-session-id',
+    );
   });
 
   it('calls NotionClient.updateStatus with Done on merge', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
     const notionClient = makeMockNotionClient();
-    const res = await supertest(buildApp(makeMockGitHub(), makeMockPRReviewService(), makeMockSessionManager(), notionClient))
+    const res = await supertest(
+      buildApp(
+        makeMockGitHub(),
+        makeMockPRReviewService(),
+        makeMockSessionManager(),
+        notionClient,
+      ),
+    )
       .post('/api/prs/owner/repo/42/merge')
       .send({});
     expect(res.status).toBe(200);
-    expect(vi.mocked(notionClient.updateStatus)).toHaveBeenCalledWith('notion-task-abc', '✅ Done');
+    expect(vi.mocked(notionClient.updateStatus)).toHaveBeenCalledWith(
+      'notion-task-abc',
+      '✅ Done',
+    );
   });
 
   it('calls emitTaskUpdated after successful Notion update on merge', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
     const notionClient = makeMockNotionClient();
-    const res = await supertest(buildApp(makeMockGitHub(), makeMockPRReviewService(), makeMockSessionManager(), notionClient))
+    const res = await supertest(
+      buildApp(
+        makeMockGitHub(),
+        makeMockPRReviewService(),
+        makeMockSessionManager(),
+        notionClient,
+      ),
+    )
       .post('/api/prs/owner/repo/42/merge')
       .send({});
     expect(res.status).toBe(200);
-    expect(vi.mocked(tasksRoute.emitTaskUpdated)).toHaveBeenCalledWith('notion-task-abc');
+    expect(vi.mocked(tasksRoute.emitTaskUpdated)).toHaveBeenCalledWith(
+      'notion-task-abc',
+    );
   });
 
   it('broadcasts task_status_changed after successful Notion update on merge', async () => {
@@ -412,9 +529,7 @@ describe('POST /api/prs/:prNumber/merge', () => {
     const broadcastedMessages: object[] = [];
     setPRBroadcast((msg) => broadcastedMessages.push(msg));
 
-    await supertest(buildApp())
-      .post('/api/prs/owner/repo/42/merge')
-      .send({});
+    await supertest(buildApp()).post('/api/prs/owner/repo/42/merge').send({});
 
     expect(broadcastedMessages).toContainEqual({
       type: 'task_status_changed',
@@ -453,7 +568,12 @@ describe('POST /api/prs/:prNumber/merge', () => {
     });
 
     const res = await supertest(
-      buildApp(makeMockGitHub(), makeMockPRReviewService(), makeMockSessionManager(), notionClient),
+      buildApp(
+        makeMockGitHub(),
+        makeMockPRReviewService(),
+        makeMockSessionManager(),
+        notionClient,
+      ),
     )
       .post('/api/prs/owner/repo/42/merge')
       .send({});
@@ -476,28 +596,231 @@ describe('POST /api/prs/:prNumber/merge', () => {
   });
 });
 
+// ── Merge failure categorization (409/405 → categorizeMergeability) ─────────
+
+describe('POST /api/prs/:prNumber/merge — failure categorization', () => {
+  function mergeFailingGitHub(category: {
+    category: 'conflict' | 'ci_failed' | 'blocked' | 'unknown' | 'clean';
+    mergeState: string;
+    rawMergeableState: string | null;
+    failingChecks: Array<{ name: string; conclusion: string }>;
+  }): GitHubClient {
+    const github = makeMockGitHub();
+    vi.mocked(github.mergePR).mockRejectedValue(
+      new GitHubApiError(405, 'Not mergeable'),
+    );
+    vi.mocked(
+      (
+        github as unknown as {
+          categorizeMergeability: (n: number, r: string) => Promise<unknown>;
+        }
+      ).categorizeMergeability,
+    ).mockResolvedValue(category);
+    return github;
+  }
+
+  it('on mergeable_state=dirty, returns conflict error and sends rebase message', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const github = mergeFailingGitHub({
+      category: 'conflict',
+      mergeState: 'dirty',
+      rawMergeableState: 'dirty',
+      failingChecks: [],
+    });
+    const sessionManager = makeMockSessionManager();
+    const res = await supertest(
+      buildApp(github, makeMockPRReviewService(), sessionManager),
+    )
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.status).toBe(422);
+    expect(res.body.category).toBe('conflict');
+    expect(res.body.error).toMatch(/merge conflicts/i);
+    expect(vi.mocked(queries.updateMergeState)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      0,
+      'dirty',
+      null,
+    );
+    expect(vi.mocked(sessionManager.sendOrResume)).toHaveBeenCalledWith(
+      'session-xyz',
+      expect.stringContaining('Rebase onto `dev`'),
+    );
+  });
+
+  it('on mergeable_state=unstable, returns ci_failed with failing-check names and messages session', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const github = mergeFailingGitHub({
+      category: 'ci_failed',
+      mergeState: 'ci_failed',
+      rawMergeableState: 'unstable',
+      failingChecks: [
+        { name: 'lint', conclusion: 'failure' },
+        { name: 'unit-tests', conclusion: 'failure' },
+      ],
+    });
+    const sessionManager = makeMockSessionManager();
+    const res = await supertest(
+      buildApp(github, makeMockPRReviewService(), sessionManager),
+    )
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.status).toBe(422);
+    expect(res.body.category).toBe('ci_failed');
+    expect(res.body.failingChecks).toEqual(['lint', 'unit-tests']);
+    expect(res.body.error).toMatch(/CI checks are failing.*lint.*unit-tests/);
+    expect(vi.mocked(queries.updateMergeState)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      0,
+      'ci_failed',
+      ['lint', 'unit-tests'],
+    );
+    expect(vi.mocked(sessionManager.sendOrResume)).toHaveBeenCalledWith(
+      'session-xyz',
+      expect.stringMatching(/CI checks are failing.*lint, unit-tests/),
+    );
+  });
+
+  it('on mergeable_state=blocked with failing checks, treats as ci_failed (not blocked)', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const github = mergeFailingGitHub({
+      category: 'ci_failed',
+      mergeState: 'ci_failed',
+      rawMergeableState: 'blocked',
+      failingChecks: [{ name: 'required-check', conclusion: 'failure' }],
+    });
+    const res = await supertest(buildApp(github))
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.body.category).toBe('ci_failed');
+    expect(res.body.failingChecks).toEqual(['required-check']);
+  });
+
+  it('on mergeable_state=blocked with no failing checks, returns blocked error and does NOT message session', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const github = mergeFailingGitHub({
+      category: 'blocked',
+      mergeState: 'blocked',
+      rawMergeableState: 'blocked',
+      failingChecks: [],
+    });
+    const sessionManager = makeMockSessionManager();
+    const res = await supertest(
+      buildApp(github, makeMockPRReviewService(), sessionManager),
+    )
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.status).toBe(422);
+    expect(res.body.category).toBe('blocked');
+    expect(res.body.error).toMatch(/branch protection/i);
+    expect(vi.mocked(sessionManager.sendOrResume)).not.toHaveBeenCalled();
+    expect(vi.mocked(queries.updateMergeState)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      0,
+      'blocked',
+      null,
+    );
+  });
+
+  it('on mergeable_state=unknown, returns unknown category and generic message', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const github = mergeFailingGitHub({
+      category: 'unknown',
+      mergeState: 'unknown',
+      rawMergeableState: 'unknown',
+      failingChecks: [],
+    });
+    const res = await supertest(buildApp(github))
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.body.category).toBe('unknown');
+    expect(res.body.error).toMatch(/did not report/i);
+  });
+
+  it('falls back to conflict when categorizeMergeability itself throws', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const github = makeMockGitHub();
+    vi.mocked(github.mergePR).mockRejectedValue(
+      new GitHubApiError(409, 'Merge conflict'),
+    );
+    vi.mocked(
+      (
+        github as unknown as {
+          categorizeMergeability: (n: number, r: string) => Promise<unknown>;
+        }
+      ).categorizeMergeability,
+    ).mockRejectedValue(new Error('GitHub down'));
+    const res = await supertest(buildApp(github))
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.status).toBe(422);
+    expect(res.body.category).toBe('conflict');
+  });
+
+  it('broadcasts pr_mergeability_changed with failingChecks for ci_failed', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const github = mergeFailingGitHub({
+      category: 'ci_failed',
+      mergeState: 'ci_failed',
+      rawMergeableState: 'unstable',
+      failingChecks: [{ name: 'typecheck', conclusion: 'failure' }],
+    });
+    const messages: Array<{
+      type: string;
+      mergeState?: string;
+      failingChecks?: string[] | null;
+    }> = [];
+    setPRBroadcast((msg) =>
+      messages.push(
+        msg as {
+          type: string;
+          mergeState?: string;
+          failingChecks?: string[] | null;
+        },
+      ),
+    );
+    await supertest(buildApp(github))
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    const event = messages.find((m) => m.type === 'pr_mergeability_changed');
+    expect(event).toBeDefined();
+    expect(event?.mergeState).toBe('ci_failed');
+    expect(event?.failingChecks).toEqual(['typecheck']);
+    setPRBroadcast(() => {});
+  });
+});
+
 // ── POST /api/prs/:prNumber/re-review ─────────────────────────────────────────
 
 describe('POST /api/prs/:prNumber/re-review', () => {
   it('returns 404 when PR not found', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(null);
-    const res = await supertest(buildApp())
-      .post('/api/prs/owner/repo/42/re-review');
+    const res = await supertest(buildApp()).post(
+      '/api/prs/owner/repo/42/re-review',
+    );
     expect(res.status).toBe(404);
   });
 
   it('resets review_iteration and runs review on success', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
-    const res = await supertest(buildApp())
-      .post('/api/prs/owner/repo/42/re-review');
+    const res = await supertest(buildApp()).post(
+      '/api/prs/owner/repo/42/re-review',
+    );
     expect(res.status).toBe(200);
-    expect(vi.mocked(queries.resetReviewIteration)).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(vi.mocked(queries.resetReviewIteration)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
   });
 
   it('returns 422 when repo not in config', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
-    const res = await supertest(buildApp())
-      .post('/api/prs/unknown/norepo/42/re-review');
+    const res = await supertest(buildApp()).post(
+      '/api/prs/unknown/norepo/42/re-review',
+    );
     expect(res.status).toBe(422);
     expect(res.body.error).toMatch(/No project configured/);
   });
@@ -528,8 +851,9 @@ describe('POST /api/prs/:prNumber/re-review', () => {
 describe('DELETE /api/prs/:prNumber', () => {
   it('returns 200 and calls deletePR when PR exists', async () => {
     vi.mocked(queries.deletePR).mockReturnValue(true);
-    const res = await supertest(buildApp())
-      .delete('/api/prs/42?projectId=proj-1');
+    const res = await supertest(buildApp()).delete(
+      '/api/prs/42?projectId=proj-1',
+    );
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(vi.mocked(queries.deletePR)).toHaveBeenCalledWith(42, 'owner/repo');
@@ -537,8 +861,9 @@ describe('DELETE /api/prs/:prNumber', () => {
 
   it('returns 404 when PR does not exist', async () => {
     vi.mocked(queries.deletePR).mockReturnValue(false);
-    const res = await supertest(buildApp())
-      .delete('/api/prs/99?projectId=proj-1');
+    const res = await supertest(buildApp()).delete(
+      '/api/prs/99?projectId=proj-1',
+    );
     expect(res.status).toBe(404);
   });
 
@@ -553,11 +878,14 @@ describe('DELETE /api/prs/:prNumber', () => {
 describe('DELETE /api/prs/clear', () => {
   it('returns deleted count', async () => {
     vi.mocked(queries.deleteMergedAndClosedPRs).mockReturnValue(3);
-    const res = await supertest(buildApp())
-      .delete('/api/prs/clear?projectId=proj-1');
+    const res = await supertest(buildApp()).delete(
+      '/api/prs/clear?projectId=proj-1',
+    );
     expect(res.status).toBe(200);
     expect(res.body.deleted).toBe(3);
-    expect(vi.mocked(queries.deleteMergedAndClosedPRs)).toHaveBeenCalledWith('owner/repo');
+    expect(vi.mocked(queries.deleteMergedAndClosedPRs)).toHaveBeenCalledWith(
+      'owner/repo',
+    );
   });
 
   it('returns 400 when projectId is missing', async () => {
@@ -571,8 +899,9 @@ describe('DELETE /api/prs/clear', () => {
 describe('GET /api/prs/clear/count', () => {
   it('returns count of merged/closed PRs', async () => {
     vi.mocked(queries.countMergedAndClosedPRs).mockReturnValue(2);
-    const res = await supertest(buildApp())
-      .get('/api/prs/clear/count?projectId=proj-1');
+    const res = await supertest(buildApp()).get(
+      '/api/prs/clear/count?projectId=proj-1',
+    );
     expect(res.status).toBe(200);
     expect(res.body.count).toBe(2);
   });
@@ -583,8 +912,9 @@ describe('GET /api/prs/clear/count', () => {
 describe('POST /api/prs/:owner/:repo/:prNumber/approve', () => {
   it('returns 200 and stores approved verdict when PR exists', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
-    const res = await supertest(buildApp())
-      .post('/api/prs/owner/repo/42/approve');
+    const res = await supertest(buildApp()).post(
+      '/api/prs/owner/repo/42/approve',
+    );
     expect(res.status).toBe(200);
     expect(res.body.verdict).toBe('approved');
     expect(res.body.summary).toBe('Manually approved via dashboard');
@@ -597,8 +927,9 @@ describe('POST /api/prs/:owner/:repo/:prNumber/approve', () => {
 
   it('returns 404 for unknown PR', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(null);
-    const res = await supertest(buildApp())
-      .post('/api/prs/owner/repo/99/approve');
+    const res = await supertest(buildApp()).post(
+      '/api/prs/owner/repo/99/approve',
+    );
     expect(res.status).toBe(404);
     expect(res.body.error).toMatch(/PR #99 not found/);
   });
@@ -607,38 +938,67 @@ describe('POST /api/prs/:owner/:repo/:prNumber/approve', () => {
     const draftPR: PullRequestRow = { ...mockPRRow, draft: 1 };
     vi.mocked(queries.getPRByNumber).mockReturnValue(draftPR);
     const github = makeMockGitHub();
-    const res = await supertest(buildApp(github))
-      .post('/api/prs/owner/repo/42/approve');
+    const res = await supertest(buildApp(github)).post(
+      '/api/prs/owner/repo/42/approve',
+    );
     expect(res.status).toBe(200);
-    expect(vi.mocked(github.markPRReady)).toHaveBeenCalledWith('owner/repo', 42);
-    expect(vi.mocked(queries.updatePRDraftStatus)).toHaveBeenCalledWith(42, 'owner/repo', 0);
+    expect(vi.mocked(github.markPRReady)).toHaveBeenCalledWith(
+      'owner/repo',
+      42,
+    );
+    expect(vi.mocked(queries.updatePRDraftStatus)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      0,
+    );
   });
 
   it('calls markPRReady unconditionally even when approving a non-draft PR (eliminates stale-field race)', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow); // draft: 0
     const github = makeMockGitHub();
-    const res = await supertest(buildApp(github))
-      .post('/api/prs/owner/repo/42/approve');
+    const res = await supertest(buildApp(github)).post(
+      '/api/prs/owner/repo/42/approve',
+    );
     expect(res.status).toBe(200);
-    expect(vi.mocked(github.markPRReady)).toHaveBeenCalledWith('owner/repo', 42);
-    expect(vi.mocked(queries.updatePRDraftStatus)).toHaveBeenCalledWith(42, 'owner/repo', 0);
+    expect(vi.mocked(github.markPRReady)).toHaveBeenCalledWith(
+      'owner/repo',
+      42,
+    );
+    expect(vi.mocked(queries.updatePRDraftStatus)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      0,
+    );
   });
 
   it('calls notionClient.updateStatus with In Review when PR has notion_task_id', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow); // notion_task_id: 'notion-task-abc'
     const notionClient = makeMockNotionClient();
     const res = await supertest(
-      buildApp(makeMockGitHub(), makeMockPRReviewService(), makeMockSessionManager(), notionClient),
+      buildApp(
+        makeMockGitHub(),
+        makeMockPRReviewService(),
+        makeMockSessionManager(),
+        notionClient,
+      ),
     ).post('/api/prs/owner/repo/42/approve');
     expect(res.status).toBe(200);
-    expect(vi.mocked(notionClient.updateStatus)).toHaveBeenCalledWith('notion-task-abc', '👀 In Review');
+    expect(vi.mocked(notionClient.updateStatus)).toHaveBeenCalledWith(
+      'notion-task-abc',
+      '👀 In Review',
+    );
   });
 
   it('does NOT call notionClient.updateStatus when PR has no notion_task_id', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRowNoTask); // notion_task_id: null
     const notionClient = makeMockNotionClient();
     const res = await supertest(
-      buildApp(makeMockGitHub(), makeMockPRReviewService(), makeMockSessionManager(), notionClient),
+      buildApp(
+        makeMockGitHub(),
+        makeMockPRReviewService(),
+        makeMockSessionManager(),
+        notionClient,
+      ),
     ).post('/api/prs/owner/repo/43/approve');
     expect(res.status).toBe(200);
     expect(vi.mocked(notionClient.updateStatus)).not.toHaveBeenCalled();
@@ -653,12 +1013,16 @@ describe('Break 2 (AC) — POST /api/prs/:prNumber/review calls prReviewService.
   it('calls prReviewService.reviewPR() with correct args and returns real verdict, not stub null', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
     const prReviewService = makeMockPRReviewService();
-    const res = await supertest(buildApp(makeMockGitHub(), prReviewService))
-      .post('/api/prs/42/review?projectId=proj-1');
+    const res = await supertest(
+      buildApp(makeMockGitHub(), prReviewService),
+    ).post('/api/prs/42/review?projectId=proj-1');
     expect(res.status).toBe(200);
     // Must invoke reviewPR — not return the old stub { verdict: null }
     expect(vi.mocked(prReviewService.reviewPR)).toHaveBeenCalledWith(
-      42, 'owner/repo', 'proj-1', 'https://notion.so/ctx',
+      42,
+      'owner/repo',
+      'proj-1',
+      'https://notion.so/ctx',
     );
     expect(res.body.verdict).toBe('approved');
     expect(res.body.verdict).not.toBeNull();
@@ -666,4 +1030,3 @@ describe('Break 2 (AC) — POST /api/prs/:prNumber/review calls prReviewService.
     expect(res.body.message ?? '').not.toMatch(/not yet implemented/i);
   });
 });
-

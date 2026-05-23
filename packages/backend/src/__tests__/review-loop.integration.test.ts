@@ -25,6 +25,7 @@ vi.mock('../db/queries.js', () => ({
   setLastReviewedSha: vi.fn(),
   setHeadSha: vi.fn(),
   setPendingPush: vi.fn(),
+  setPauseReason: vi.fn(),
   updatePRDraftStatus: vi.fn(),
   getSetting: vi.fn().mockReturnValue(null),
 }));
@@ -55,7 +56,10 @@ vi.mock('../config.js', () => ({
 
 import { ReviewOrchestrator } from '../github/ReviewOrchestrator.js';
 import { PRReviewService } from '../github/PRReviewService.js';
-import { shouldAutoReview, formatReviewFeedback } from '../github/reviewUtils.js';
+import {
+  shouldAutoReview,
+  formatReviewFeedback,
+} from '../github/reviewUtils.js';
 import * as queries from '../db/queries.js';
 import type { PullRequestRow } from '../db/types.js';
 import type { GitHubClient } from '../github/GitHubClient.js';
@@ -99,6 +103,7 @@ function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
     merge_state: null,
     merge_state_checked_at: null,
     pending_push: 0,
+    pause_reason: null,
     ...overrides,
   };
 }
@@ -126,7 +131,10 @@ function makeApprovedResult(): PRReviewResult {
 }
 
 /** Serialise a verdict into the format that PRReviewService.waitForVerdict() expects. */
-function makeVerdictEventPayload(sessionId: string, verdict: PRReviewResult): object {
+function makeVerdictEventPayload(
+  sessionId: string,
+  verdict: PRReviewResult,
+): object {
   return {
     type: 'session_event',
     sessionId,
@@ -169,8 +177,15 @@ function makeMockGitHub(): GitHubClient {
   return {
     listOpenPRs: vi.fn().mockResolvedValue([]),
     fetchPR: vi.fn().mockResolvedValue({ headSha: NEW_SHA }),
-    fetchDiff: vi.fn().mockResolvedValue({ diff: 'diff --git a/foo.ts b/foo.ts' }),
-    getMergeability: vi.fn().mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
+    fetchDiff: vi
+      .fn()
+      .mockResolvedValue({ diff: 'diff --git a/foo.ts b/foo.ts' }),
+    getMergeability: vi
+      .fn()
+      .mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
+    getMergeabilityWithRetry: vi
+      .fn()
+      .mockResolvedValue({ mergeable: true, mergeableState: 'clean' }),
     markPRReady: vi.fn().mockResolvedValue(undefined),
     mergePR: vi.fn(),
     getPRState: vi.fn(),
@@ -206,92 +221,118 @@ function wirePushDetectedHandler(
 ): Set<string> {
   const pendingReReviews = new Set<string>();
 
-  sessionManager.on('push_detected', ({ sessionId: codingSessionId }: { sessionId: string }) => {
-    if (pendingReReviews.has(codingSessionId)) return;
+  sessionManager.on(
+    'push_detected',
+    ({ sessionId: codingSessionId }: { sessionId: string }) => {
+      if (pendingReReviews.has(codingSessionId)) return;
 
-    const prRow = vi.mocked(queries.getPRBySessionId)(codingSessionId);
-    if (!prRow || prRow.state !== 'open') return;
+      const prRow = vi.mocked(queries.getPRBySessionId)(codingSessionId);
+      if (!prRow || prRow.state !== 'open') return;
 
-    if (!prRow.review_session_id) {
-      vi.mocked(queries.setPendingPush)(prRow.pr_number, prRow.repo, 1);
-      return;
-    }
-
-    pendingReReviews.add(codingSessionId);
-
-    void (async () => {
-      // Fetch fresh PR state
-      let headSha = prRow.head_sha;
-      try {
-        const freshPR = await githubClient.fetchPR(prRow.repo, prRow.pr_number);
-        headSha = freshPR.headSha;
-        if (headSha !== prRow.head_sha) {
-          vi.mocked(queries.setHeadSha)(prRow.pr_number, prRow.repo, headSha);
-        }
-      } catch {
-        // swallow — continue with stale sha
-      }
-
-      const maxIter = getMaxIter();
-
-      // Escalation check (emits review_escalated) — must happen before shouldAutoReview
-      if (prRow.review_iteration >= maxIter) {
-        const message = `Review loop for PR #${prRow.pr_number} reached ${maxIter} iterations without approval. Manual intervention needed.`;
-        sessionManager.emit('message', {
-          type: 'review_escalated',
-          prNumber: prRow.pr_number,
-          repo: prRow.repo,
-          message,
-        });
-        pendingReReviews.delete(codingSessionId);
+      if (!prRow.review_session_id) {
+        vi.mocked(queries.setPendingPush)(prRow.pr_number, prRow.repo, 1);
         return;
       }
 
-      if (!shouldAutoReview(
-        { reviewIteration: prRow.review_iteration, headSha, lastReviewedSha: prRow.last_reviewed_sha },
-        maxIter,
-      )) {
-        pendingReReviews.delete(codingSessionId);
-        return;
-      }
+      pendingReReviews.add(codingSessionId);
 
-      const iteration = prRow.review_iteration + 1;
-      try {
-        let result: PRReviewResult;
+      void (async () => {
+        // Fetch fresh PR state
+        let headSha = prRow.head_sha;
         try {
-          result = await prReviewService.reReviewPR(prRow.pr_number, prRow.repo);
-        } catch (e) {
-          const summary = e instanceof Error ? e.message : String(e);
-          vi.mocked(queries.setPRReviewResult)(prRow.pr_number, prRow.repo, JSON.stringify({ verdict: 'error', summary, dimensions: [] }));
+          const freshPR = await githubClient.fetchPR(
+            prRow.repo,
+            prRow.pr_number,
+          );
+          headSha = freshPR.headSha;
+          if (headSha !== prRow.head_sha) {
+            vi.mocked(queries.setHeadSha)(prRow.pr_number, prRow.repo, headSha);
+          }
+        } catch {
+          // swallow — continue with stale sha
+        }
+
+        const maxIter = getMaxIter();
+
+        // Escalation check (emits review_escalated) — must happen before shouldAutoReview
+        if (prRow.review_iteration >= maxIter) {
+          const message = `Review loop for PR #${prRow.pr_number} reached ${maxIter} iterations without approval. Manual intervention needed.`;
+          sessionManager.emit('message', {
+            type: 'review_escalated',
+            prNumber: prRow.pr_number,
+            repo: prRow.repo,
+            message,
+          });
+          pendingReReviews.delete(codingSessionId);
+          return;
+        }
+
+        if (
+          !shouldAutoReview(
+            {
+              reviewIteration: prRow.review_iteration,
+              headSha,
+              lastReviewedSha: prRow.last_reviewed_sha,
+            },
+            maxIter,
+          )
+        ) {
+          pendingReReviews.delete(codingSessionId);
+          return;
+        }
+
+        const iteration = prRow.review_iteration + 1;
+        try {
+          let result: PRReviewResult;
+          try {
+            result = await prReviewService.reReviewPR(
+              prRow.pr_number,
+              prRow.repo,
+            );
+          } catch (e) {
+            const summary = e instanceof Error ? e.message : String(e);
+            vi.mocked(queries.setPRReviewResult)(
+              prRow.pr_number,
+              prRow.repo,
+              JSON.stringify({ verdict: 'error', summary, dimensions: [] }),
+            );
+            sessionManager.emit('message', {
+              type: 'review_verdict',
+              prNumber: prRow.pr_number,
+              repo: prRow.repo,
+              verdict: 'error',
+              summary,
+              iteration,
+            });
+            return;
+          }
+
+          vi.mocked(queries.setLastReviewedSha)(
+            prRow.pr_number,
+            prRow.repo,
+            headSha,
+          );
           sessionManager.emit('message', {
             type: 'review_verdict',
             prNumber: prRow.pr_number,
             repo: prRow.repo,
-            verdict: 'error',
-            summary,
+            verdict: result.verdict,
+            summary: result.summary,
             iteration,
           });
-          return;
-        }
 
-        vi.mocked(queries.setLastReviewedSha)(prRow.pr_number, prRow.repo, headSha);
-        sessionManager.emit('message', {
-          type: 'review_verdict',
-          prNumber: prRow.pr_number,
-          repo: prRow.repo,
-          verdict: result.verdict,
-          summary: result.summary,
-          iteration,
-        });
-
-        if (result.verdict === 'needs_changes') {
-          await sessionManager.sendOrResume(codingSessionId, formatReviewFeedback(result, iteration));
+          if (result.verdict === 'needs_changes') {
+            await sessionManager.sendOrResume(
+              codingSessionId,
+              formatReviewFeedback(result, iteration),
+            );
+          }
+        } finally {
+          pendingReReviews.delete(codingSessionId);
         }
-      } finally {
-        pendingReReviews.delete(codingSessionId);
-      }
-    })();
-  });
+      })();
+    },
+  );
 
   return pendingReReviews;
 }
@@ -309,7 +350,13 @@ describe('push_detected before review_session_id is set', () => {
     const sessionManager = new MockSessionManager();
     const github = makeMockGitHub();
     const taskBackend = makeMockTaskBackend();
-    const reviewService = new PRReviewService(github, taskBackend, sessionManager as unknown as InstanceType<typeof import('../session/SessionManager.js').SessionManager>);
+    const reviewService = new PRReviewService(
+      github,
+      taskBackend,
+      sessionManager as unknown as InstanceType<
+        typeof import('../session/SessionManager.js').SessionManager
+      >,
+    );
     wirePushDetectedHandler(sessionManager, reviewService, github);
 
     const prRow = makePRRow({ review_session_id: null });
@@ -317,14 +364,24 @@ describe('push_detected before review_session_id is set', () => {
 
     sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
 
-    expect(vi.mocked(queries.setPendingPush)).toHaveBeenCalledWith(PR_NUMBER, REPO, 1);
+    expect(vi.mocked(queries.setPendingPush)).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      1,
+    );
   });
 
   it('does NOT attempt re-review when review session is not set', () => {
     const sessionManager = new MockSessionManager();
     const github = makeMockGitHub();
     const taskBackend = makeMockTaskBackend();
-    const reviewService = new PRReviewService(github, taskBackend, sessionManager as unknown as InstanceType<typeof import('../session/SessionManager.js').SessionManager>);
+    const reviewService = new PRReviewService(
+      github,
+      taskBackend,
+      sessionManager as unknown as InstanceType<
+        typeof import('../session/SessionManager.js').SessionManager
+      >,
+    );
     wirePushDetectedHandler(sessionManager, reviewService, github);
 
     const prRow = makePRRow({ review_session_id: null });
@@ -344,11 +401,19 @@ describe('ReviewOrchestrator.executeReview → pending_push → re-review', () =
     const sessionManager = new MockSessionManager();
     const github = makeMockGitHub();
     const taskBackend = makeMockTaskBackend();
-    const reviewService = new PRReviewService(github, taskBackend, sessionManager as unknown as InstanceType<typeof import('../session/SessionManager.js').SessionManager>);
+    const reviewService = new PRReviewService(
+      github,
+      taskBackend,
+      sessionManager as unknown as InstanceType<
+        typeof import('../session/SessionManager.js').SessionManager
+      >,
+    );
 
-    const orchestrator = new ReviewOrchestrator(
+    const _orchestrator = new ReviewOrchestrator(
       reviewService,
-      sessionManager as unknown as InstanceType<typeof import('../session/SessionManager.js').SessionManager>,
+      sessionManager as unknown as InstanceType<
+        typeof import('../session/SessionManager.js').SessionManager
+      >,
       1,
       true,
     );
@@ -356,13 +421,18 @@ describe('ReviewOrchestrator.executeReview → pending_push → re-review', () =
     // Spy on emit to capture push_detected
     const emittedEvents: Array<{ event: string; payload: unknown }> = [];
     const origEmit = sessionManager.emit.bind(sessionManager);
-    sessionManager.emit = vi.fn().mockImplementation((event: string, ...args: unknown[]) => {
-      emittedEvents.push({ event, payload: args[0] });
-      return origEmit(event, ...args);
-    });
+    sessionManager.emit = vi
+      .fn()
+      .mockImplementation((event: string, ...args: unknown[]) => {
+        emittedEvents.push({ event, payload: args[0] });
+        return origEmit(event, ...args);
+      });
 
     // DB state: PR row with pending_push=1 (push arrived during review)
-    const prRowBeforeReview = makePRRow({ review_session_id: null, pending_push: 0 });
+    const prRowBeforeReview = makePRRow({
+      review_session_id: null,
+      pending_push: 0,
+    });
     const prRowAfterReview = makePRRow({
       review_session_id: REVIEW_SESSION_ID,
       pending_push: 1,
@@ -371,14 +441,21 @@ describe('ReviewOrchestrator.executeReview → pending_push → re-review', () =
 
     vi.mocked(queries.getPRByNumber)
       .mockReturnValueOnce(prRowBeforeReview) // iteration cap check in executeReview
-      .mockReturnValueOnce(prRowAfterReview)  // feedback routing (needs_changes check)
-      .mockReturnValue(prRowAfterReview);     // post-review pending_push check
+      .mockReturnValueOnce(prRowAfterReview) // feedback routing (needs_changes check)
+      .mockReturnValue(prRowAfterReview); // post-review pending_push check
 
     // Mock reviewPR to resolve immediately with needs_changes
-    const reviewSpy = vi.spyOn(reviewService, 'reviewPR').mockResolvedValue(makeNeedsChangesResult());
+    const reviewSpy = vi
+      .spyOn(reviewService, 'reviewPR')
+      .mockResolvedValue(makeNeedsChangesResult());
 
     // Trigger the initial review
-    sessionManager.emit('pr_opened', { prNumber: PR_NUMBER, repo: REPO, taskId: 'notion-task-id', contextUrl: '' });
+    sessionManager.emit('pr_opened', {
+      prNumber: PR_NUMBER,
+      repo: REPO,
+      taskId: 'notion-task-id',
+      contextUrl: '',
+    });
 
     // Wait for async review to complete
     await vi.waitFor(() => {
@@ -388,9 +465,13 @@ describe('ReviewOrchestrator.executeReview → pending_push → re-review', () =
     // Give async chain time to process pending_push
     await new Promise((r) => setTimeout(r, 10));
 
-    const pushDetectedEvent = emittedEvents.find((e) => e.event === 'push_detected');
+    const pushDetectedEvent = emittedEvents.find(
+      (e) => e.event === 'push_detected',
+    );
     expect(pushDetectedEvent).toBeDefined();
-    expect(pushDetectedEvent?.payload).toMatchObject({ sessionId: CODE_SESSION_ID });
+    expect(pushDetectedEvent?.payload).toMatchObject({
+      sessionId: CODE_SESSION_ID,
+    });
   });
 });
 
@@ -401,7 +482,13 @@ describe('re-review needs_changes → feedback sent to code session', () => {
     const sessionManager = new MockSessionManager();
     const github = makeMockGitHub();
     const taskBackend = makeMockTaskBackend();
-    const reviewService = new PRReviewService(github, taskBackend, sessionManager as unknown as InstanceType<typeof import('../session/SessionManager.js').SessionManager>);
+    const reviewService = new PRReviewService(
+      github,
+      taskBackend,
+      sessionManager as unknown as InstanceType<
+        typeof import('../session/SessionManager.js').SessionManager
+      >,
+    );
 
     wirePushDetectedHandler(sessionManager, reviewService, github);
 
@@ -415,10 +502,16 @@ describe('re-review needs_changes → feedback sent to code session', () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
 
     // Mock fetchPR to return a new SHA so shouldAutoReview passes
-    vi.mocked(github.fetchPR).mockResolvedValue({ headSha: NEW_SHA } as ReturnType<typeof github.fetchPR> extends Promise<infer T> ? T : never);
+    vi.mocked(github.fetchPR).mockResolvedValue({
+      headSha: NEW_SHA,
+    } as ReturnType<typeof github.fetchPR> extends Promise<infer T>
+      ? T
+      : never);
 
     // Mock reReviewPR to resolve with needs_changes
-    const reReviewSpy = vi.spyOn(reviewService, 'reReviewPR').mockResolvedValue(makeNeedsChangesResult());
+    const reReviewSpy = vi
+      .spyOn(reviewService, 'reReviewPR')
+      .mockResolvedValue(makeNeedsChangesResult());
 
     sessionManager.sendOrResume = vi.fn().mockResolvedValue(CODE_SESSION_ID);
 
@@ -444,16 +537,27 @@ describe('review iteration counter', () => {
     const sessionManager = new MockSessionManager();
     const github = makeMockGitHub();
     const taskBackend = makeMockTaskBackend();
-    const reviewService = new PRReviewService(github, taskBackend, sessionManager as unknown as InstanceType<typeof import('../session/SessionManager.js').SessionManager>);
+    const reviewService = new PRReviewService(
+      github,
+      taskBackend,
+      sessionManager as unknown as InstanceType<
+        typeof import('../session/SessionManager.js').SessionManager
+      >,
+    );
 
     // Mock the internal sendOrResume on sessionManager so that waitForVerdict gets a verdict
-    sessionManager.sendOrResume = vi.fn().mockImplementation(async (sessionId: string) => {
-      // Emit verdict after a tick
-      setTimeout(() => {
-        sessionManager.emit('message', makeVerdictEventPayload(sessionId, makeNeedsChangesResult()));
-      }, 0);
-      return sessionId;
-    });
+    sessionManager.sendOrResume = vi
+      .fn()
+      .mockImplementation(async (sessionId: string) => {
+        // Emit verdict after a tick
+        setTimeout(() => {
+          sessionManager.emit(
+            'message',
+            makeVerdictEventPayload(sessionId, makeNeedsChangesResult()),
+          );
+        }, 0);
+        return sessionId;
+      });
 
     const prRow = makePRRow({
       review_session_id: REVIEW_SESSION_ID,
@@ -465,15 +569,26 @@ describe('review iteration counter', () => {
 
     await reviewService.reReviewPR(PR_NUMBER, REPO);
 
-    expect(vi.mocked(queries.incrementReviewIteration)).toHaveBeenCalledWith(PR_NUMBER, REPO);
-    expect(vi.mocked(queries.incrementReviewIteration)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(queries.incrementReviewIteration)).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+    );
+    expect(vi.mocked(queries.incrementReviewIteration)).toHaveBeenCalledTimes(
+      1,
+    );
   });
 
   it('emits review_verdict with correct iteration number on push_detected re-review', async () => {
     const sessionManager = new MockSessionManager();
     const github = makeMockGitHub();
     const taskBackend = makeMockTaskBackend();
-    const reviewService = new PRReviewService(github, taskBackend, sessionManager as unknown as InstanceType<typeof import('../session/SessionManager.js').SessionManager>);
+    const reviewService = new PRReviewService(
+      github,
+      taskBackend,
+      sessionManager as unknown as InstanceType<
+        typeof import('../session/SessionManager.js').SessionManager
+      >,
+    );
     wirePushDetectedHandler(sessionManager, reviewService, github);
 
     const prRow = makePRRow({
@@ -484,9 +599,15 @@ describe('review iteration counter', () => {
     });
     vi.mocked(queries.getPRBySessionId).mockReturnValue(prRow);
     vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
-    vi.mocked(github.fetchPR).mockResolvedValue({ headSha: NEW_SHA } as ReturnType<typeof github.fetchPR> extends Promise<infer T> ? T : never);
+    vi.mocked(github.fetchPR).mockResolvedValue({
+      headSha: NEW_SHA,
+    } as ReturnType<typeof github.fetchPR> extends Promise<infer T>
+      ? T
+      : never);
 
-    const reReviewSpy = vi.spyOn(reviewService, 'reReviewPR').mockResolvedValue(makeApprovedResult());
+    const reReviewSpy = vi
+      .spyOn(reviewService, 'reReviewPR')
+      .mockResolvedValue(makeApprovedResult());
     sessionManager.sendOrResume = vi.fn().mockResolvedValue(CODE_SESSION_ID);
 
     const messages: object[] = [];
@@ -497,7 +618,9 @@ describe('review iteration counter', () => {
     await vi.waitFor(() => expect(reReviewSpy).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 10));
 
-    const verdictMsg = messages.find((m: object) => (m as { type: string }).type === 'review_verdict');
+    const verdictMsg = messages.find(
+      (m: object) => (m as { type: string }).type === 'review_verdict',
+    );
     expect(verdictMsg).toMatchObject({ type: 'review_verdict', iteration: 2 });
   });
 });
@@ -509,9 +632,20 @@ describe('escalation at review iteration cap', () => {
     const sessionManager = new MockSessionManager();
     const github = makeMockGitHub();
     const taskBackend = makeMockTaskBackend();
-    const reviewService = new PRReviewService(github, taskBackend, sessionManager as unknown as InstanceType<typeof import('../session/SessionManager.js').SessionManager>);
+    const reviewService = new PRReviewService(
+      github,
+      taskBackend,
+      sessionManager as unknown as InstanceType<
+        typeof import('../session/SessionManager.js').SessionManager
+      >,
+    );
     const MAX_ITER = 3;
-    wirePushDetectedHandler(sessionManager, reviewService, github, () => MAX_ITER);
+    wirePushDetectedHandler(
+      sessionManager,
+      reviewService,
+      github,
+      () => MAX_ITER,
+    );
 
     // review_iteration is at cap — should escalate
     const prRow = makePRRow({
@@ -521,7 +655,11 @@ describe('escalation at review iteration cap', () => {
       head_sha: HEAD_SHA,
     });
     vi.mocked(queries.getPRBySessionId).mockReturnValue(prRow);
-    vi.mocked(github.fetchPR).mockResolvedValue({ headSha: NEW_SHA } as ReturnType<typeof github.fetchPR> extends Promise<infer T> ? T : never);
+    vi.mocked(github.fetchPR).mockResolvedValue({
+      headSha: NEW_SHA,
+    } as ReturnType<typeof github.fetchPR> extends Promise<infer T>
+      ? T
+      : never);
 
     const messages: object[] = [];
     sessionManager.on('message', (msg: object) => messages.push(msg));
@@ -532,7 +670,9 @@ describe('escalation at review iteration cap', () => {
 
     await new Promise((r) => setTimeout(r, 20));
 
-    const escalated = messages.find((m) => (m as { type: string }).type === 'review_escalated');
+    const escalated = messages.find(
+      (m) => (m as { type: string }).type === 'review_escalated',
+    );
     expect(escalated).toBeDefined();
     expect(escalated).toMatchObject({
       type: 'review_escalated',
@@ -548,7 +688,13 @@ describe('escalation at review iteration cap', () => {
     const sessionManager = new MockSessionManager();
     const github = makeMockGitHub();
     const taskBackend = makeMockTaskBackend();
-    const reviewService = new PRReviewService(github, taskBackend, sessionManager as unknown as InstanceType<typeof import('../session/SessionManager.js').SessionManager>);
+    const reviewService = new PRReviewService(
+      github,
+      taskBackend,
+      sessionManager as unknown as InstanceType<
+        typeof import('../session/SessionManager.js').SessionManager
+      >,
+    );
     wirePushDetectedHandler(sessionManager, reviewService, github, () => 2);
 
     const prRow = makePRRow({
@@ -556,7 +702,11 @@ describe('escalation at review iteration cap', () => {
       review_iteration: 2,
     });
     vi.mocked(queries.getPRBySessionId).mockReturnValue(prRow);
-    vi.mocked(github.fetchPR).mockResolvedValue({ headSha: NEW_SHA } as ReturnType<typeof github.fetchPR> extends Promise<infer T> ? T : never);
+    vi.mocked(github.fetchPR).mockResolvedValue({
+      headSha: NEW_SHA,
+    } as ReturnType<typeof github.fetchPR> extends Promise<infer T>
+      ? T
+      : never);
 
     const reReviewSpy = vi.spyOn(reviewService, 'reReviewPR');
 
@@ -571,31 +721,53 @@ describe('escalation at review iteration cap', () => {
     const sessionManager = new MockSessionManager();
     const github = makeMockGitHub();
     const taskBackend = makeMockTaskBackend();
-    const reviewService = new PRReviewService(github, taskBackend, sessionManager as unknown as InstanceType<typeof import('../session/SessionManager.js').SessionManager>);
+    const reviewService = new PRReviewService(
+      github,
+      taskBackend,
+      sessionManager as unknown as InstanceType<
+        typeof import('../session/SessionManager.js').SessionManager
+      >,
+    );
 
     const orchestrator = new ReviewOrchestrator(
       reviewService,
-      sessionManager as unknown as InstanceType<typeof import('../session/SessionManager.js').SessionManager>,
+      sessionManager as unknown as InstanceType<
+        typeof import('../session/SessionManager.js').SessionManager
+      >,
       1,
       true,
     );
     void orchestrator; // used implicitly via sessionManager event listeners
 
     // PR is already at the iteration cap
-    const prRow = makePRRow({ review_iteration: 3, review_session_id: REVIEW_SESSION_ID });
+    const prRow = makePRRow({
+      review_iteration: 3,
+      review_session_id: REVIEW_SESSION_ID,
+    });
     vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
     vi.mocked(queries.getSetting).mockReturnValue(null); // use default cap of 3
 
     const messages: object[] = [];
     sessionManager.on('message', (msg: object) => messages.push(msg));
 
-    sessionManager.emit('pr_opened', { prNumber: PR_NUMBER, repo: REPO, taskId: 'task-id', contextUrl: '' });
+    sessionManager.emit('pr_opened', {
+      prNumber: PR_NUMBER,
+      repo: REPO,
+      taskId: 'task-id',
+      contextUrl: '',
+    });
 
     await new Promise((r) => setTimeout(r, 20));
 
-    const escalated = messages.find((m) => (m as { type: string }).type === 'review_escalated');
+    const escalated = messages.find(
+      (m) => (m as { type: string }).type === 'review_escalated',
+    );
     expect(escalated).toBeDefined();
-    expect(escalated).toMatchObject({ type: 'review_escalated', prNumber: PR_NUMBER, repo: REPO });
+    expect(escalated).toMatchObject({
+      type: 'review_escalated',
+      prNumber: PR_NUMBER,
+      repo: REPO,
+    });
   });
 });
 
@@ -603,22 +775,47 @@ describe('escalation at review iteration cap', () => {
 
 describe('shouldAutoReview', () => {
   it('returns false when iteration >= cap', () => {
-    expect(shouldAutoReview({ reviewIteration: 3, headSha: 'abc', lastReviewedSha: 'old' }, 3)).toBe(false);
+    expect(
+      shouldAutoReview(
+        { reviewIteration: 3, headSha: 'abc', lastReviewedSha: 'old' },
+        3,
+      ),
+    ).toBe(false);
   });
 
   it('returns false when headSha equals lastReviewedSha (no new commits)', () => {
-    expect(shouldAutoReview({ reviewIteration: 0, headSha: 'same', lastReviewedSha: 'same' }, 3)).toBe(false);
+    expect(
+      shouldAutoReview(
+        { reviewIteration: 0, headSha: 'same', lastReviewedSha: 'same' },
+        3,
+      ),
+    ).toBe(false);
   });
 
   it('returns false when headSha is null', () => {
-    expect(shouldAutoReview({ reviewIteration: 0, headSha: null, lastReviewedSha: 'old' }, 3)).toBe(false);
+    expect(
+      shouldAutoReview(
+        { reviewIteration: 0, headSha: null, lastReviewedSha: 'old' },
+        3,
+      ),
+    ).toBe(false);
   });
 
   it('returns true when new commits exist and under cap', () => {
-    expect(shouldAutoReview({ reviewIteration: 1, headSha: 'new', lastReviewedSha: 'old' }, 3)).toBe(true);
+    expect(
+      shouldAutoReview(
+        { reviewIteration: 1, headSha: 'new', lastReviewedSha: 'old' },
+        3,
+      ),
+    ).toBe(true);
   });
 
   it('returns true when lastReviewedSha is null (first review)', () => {
-    expect(shouldAutoReview({ reviewIteration: 0, headSha: 'abc', lastReviewedSha: null }, 3)).toBe(true);
+    expect(
+      shouldAutoReview(
+        { reviewIteration: 0, headSha: 'abc', lastReviewedSha: null },
+        3,
+      ),
+    ).toBe(true);
   });
 });

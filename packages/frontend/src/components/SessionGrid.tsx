@@ -5,8 +5,15 @@ import { SessionCard } from './SessionCard';
 import { ErrorBoundary } from './ErrorBoundary';
 import styles from './SessionGrid.module.css';
 
-const ALL_STATUSES = ['running', 'starting', 'needs_permission', 'done', 'error', 'killed'] as const;
-type Status = typeof ALL_STATUSES[number];
+const ALL_STATUSES = [
+  'running',
+  'starting',
+  'needs_permission',
+  'done',
+  'error',
+  'killed',
+] as const;
+type Status = (typeof ALL_STATUSES)[number];
 
 const STATUS_LABELS: Record<Status, string> = {
   running: 'Running',
@@ -58,7 +65,22 @@ interface Props {
   sessionMode?: string;
 }
 
-export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboardSelectedId, synced, onArchiveAll, filtersActive, onClearFilters, onResumeAll, onResume, onToggleFavorite, cardPreviewLines, sessionMode }: Props) {
+export function SessionGrid({
+  sessions,
+  projects,
+  onSelect,
+  selectedId,
+  keyboardSelectedId,
+  synced,
+  onArchiveAll,
+  filtersActive,
+  onClearFilters,
+  onResumeAll,
+  onResume,
+  onToggleFavorite,
+  cardPreviewLines,
+  sessionMode,
+}: Props) {
   const [activeFilters, setActiveFilters] = useState<Set<Status>>(new Set());
 
   function toggleFilter(status: Status) {
@@ -74,12 +96,17 @@ export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboard
   }
 
   const visibleSessions = sessions.filter((s) => !s.archived);
-  const archivableCount = visibleSessions.filter((s) => ['done', 'error', 'killed'].includes(s.status)).length;
-  const rateLimitedCount = visibleSessions.filter((s) => s.isRateLimited).length;
+  const archivableCount = visibleSessions.filter((s) =>
+    ['done', 'error', 'killed'].includes(s.status),
+  ).length;
+  const rateLimitedCount = visibleSessions.filter(
+    (s) => s.isRateLimited,
+  ).length;
 
-  const filtered = activeFilters.size === 0
-    ? visibleSessions
-    : visibleSessions.filter((s) => activeFilters.has(s.status as Status));
+  const filtered =
+    activeFilters.size === 0
+      ? visibleSessions
+      : visibleSessions.filter((s) => activeFilters.has(s.status as Status));
 
   const sorted = [...filtered].sort((a, b) => {
     const favoritedDiff = (b.favorited ? 1 : 0) - (a.favorited ? 1 : 0);
@@ -92,7 +119,11 @@ export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboard
   const statusesInUse = new Set(visibleSessions.map((s) => s.status as Status));
 
   // Build a map from project_id → { color, name } for card rendering
-  const projectMap = new Map(projects.filter((p) => p.id).map((p) => [p.id, { color: projectColor(p.id), name: p.name }]));
+  const projectMap = new Map(
+    projects
+      .filter((p) => p.id)
+      .map((p) => [p.id, { color: projectColor(p.id), name: p.name }]),
+  );
   const multiProject = projects.length > 1;
 
   return (
@@ -104,7 +135,9 @@ export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboard
               key={status}
               className={[
                 styles['filter-toggle'],
-                activeFilters.has(status) ? styles['filter-toggle--active'] : '',
+                activeFilters.has(status)
+                  ? styles['filter-toggle--active']
+                  : '',
               ].join(' ')}
               onClick={() => toggleFilter(status)}
             >
@@ -142,25 +175,39 @@ export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboard
         <div className={styles['session-grid']}>
           {[0, 1, 2].map((i) => (
             <div key={i} className={styles['skeleton-card']}>
-              <div className={styles['skeleton-line']} style={{ width: '60%' }} />
-              <div className={styles['skeleton-line']} style={{ width: '40%' }} />
-              <div className={styles['skeleton-line']} style={{ width: '80%' }} />
+              <div
+                className={styles['skeleton-line']}
+                style={{ width: '60%' }}
+              />
+              <div
+                className={styles['skeleton-line']}
+                style={{ width: '40%' }}
+              />
+              <div
+                className={styles['skeleton-line']}
+                style={{ width: '80%' }}
+              />
             </div>
           ))}
         </div>
       )}
 
-      {synced && sorted.length === 0 && visibleSessions.length === 0 && !filtersActive && (
-        <div className={styles['session-grid-empty']}>
-          <p>No sessions yet. Dispatch a task to get started.</p>
-        </div>
-      )}
+      {synced &&
+        sorted.length === 0 &&
+        visibleSessions.length === 0 &&
+        !filtersActive && (
+          <div className={styles['session-grid-empty']}>
+            <p>No sessions yet. Dispatch a task to get started.</p>
+          </div>
+        )}
 
       {synced && visibleSessions.length === 0 && filtersActive && (
         <div className={styles['session-grid-empty']}>
           <p>No sessions match your filters.</p>
           {onClearFilters && (
-            <button type="button" onClick={onClearFilters}>Clear filters</button>
+            <button type="button" onClick={onClearFilters}>
+              Clear filters
+            </button>
           )}
         </div>
       )}
@@ -174,18 +221,26 @@ export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboard
       {sorted.length > 0 && (
         <div className={styles['session-grid']}>
           {sorted.map((s) => {
-            const proj = s.project_id ? projectMap.get(s.project_id) : undefined;
+            const proj = s.project_id
+              ? projectMap.get(s.project_id)
+              : undefined;
             return (
               <div
                 key={s.sessionId}
-                className={s.sessionId === keyboardSelectedId ? styles['card-keyboard-selected'] : undefined}
+                className={
+                  s.sessionId === keyboardSelectedId
+                    ? styles['card-keyboard-selected']
+                    : undefined
+                }
               >
                 <ErrorBoundary
                   name={`SessionCard:${s.sessionId}`}
                   fallback={(_error, reset) => (
                     <div className={styles.cardError} role="alert">
                       <span>Session card failed to render</span>
-                      <button type="button" onClick={reset}>Retry</button>
+                      <button type="button" onClick={reset}>
+                        Retry
+                      </button>
                     </div>
                   )}
                 >
@@ -195,8 +250,14 @@ export function SessionGrid({ sessions, projects, onSelect, selectedId, keyboard
                     onClick={() => onSelect(s.sessionId)}
                     projectColor={proj?.color}
                     projectName={multiProject ? proj?.name : undefined}
-                    onResume={onResume ? () => onResume(s.sessionId) : undefined}
-                    onToggleFavorite={onToggleFavorite ? () => onToggleFavorite(s.sessionId, !s.favorited) : undefined}
+                    onResume={
+                      onResume ? () => onResume(s.sessionId) : undefined
+                    }
+                    onToggleFavorite={
+                      onToggleFavorite
+                        ? () => onToggleFavorite(s.sessionId, !s.favorited)
+                        : undefined
+                    }
                     previewLines={cardPreviewLines}
                     sessionMode={sessionMode}
                   />

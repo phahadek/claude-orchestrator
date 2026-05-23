@@ -22,7 +22,10 @@ export function extractText(payload: unknown, rawContent: string): string {
       const content = msg.content;
       if (Array.isArray(content)) {
         const texts = content
-          .filter((b): b is Record<string, unknown> => typeof b === 'object' && b !== null)
+          .filter(
+            (b): b is Record<string, unknown> =>
+              typeof b === 'object' && b !== null,
+          )
           .filter((b) => b.type === 'text')
           .map((b) => String(b.text ?? ''));
         if (texts.length > 0) return texts.join('\n');
@@ -47,7 +50,10 @@ export function extractBashCommand(input: unknown): string | null {
 }
 
 /** Extract a short contextual detail string for common tools (e.g. filename for Read/Write/Edit). */
-export function extractToolDetail(toolName: string, input: unknown): string | null {
+export function extractToolDetail(
+  toolName: string,
+  input: unknown,
+): string | null {
   if (typeof input !== 'object' || input === null) return null;
   const inp = input as Record<string, unknown>;
   switch (toolName) {
@@ -69,7 +75,9 @@ export function extractToolDetail(toolName: string, input: unknown): string | nu
 }
 
 /** Extract tool name and input from a tool_use event payload. */
-export function extractToolUse(payload: unknown): { toolName: string; input: unknown } | null {
+export function extractToolUse(
+  payload: unknown,
+): { toolName: string; input: unknown } | null {
   if (typeof payload !== 'object' || payload === null) return null;
   const p = payload as Record<string, unknown>;
 
@@ -88,14 +96,21 @@ export function extractToolUse(payload: unknown): { toolName: string; input: unk
 
   let input = rawInput;
   if (typeof input === 'string') {
-    try { input = JSON.parse(input); } catch { /* leave as string */ }
+    try {
+      input = JSON.parse(input);
+    } catch {
+      /* leave as string */
+    }
   }
 
   return { toolName, input };
 }
 
 /** Extract displayable content from a tool_result event payload. */
-export function extractToolResult(payload: unknown, rawContent: string): string {
+export function extractToolResult(
+  payload: unknown,
+  rawContent: string,
+): string {
   if (typeof payload === 'string') return payload.replace(/\\n/g, '\n');
   if (payload === null || typeof payload !== 'object') return rawContent;
 
@@ -144,7 +159,8 @@ export function isHiddenSystemEvent(payload: unknown): boolean {
   const p = payload as Record<string, unknown>;
   const rawType = typeof p.type === 'string' ? p.type : '';
   if (HIDDEN_SYSTEM_RAW_TYPES.has(rawType)) return true;
-  if (typeof p.subtype === 'string' && HIDDEN_SYSTEM_SUBTYPES.has(p.subtype)) return true;
+  if (typeof p.subtype === 'string' && HIDDEN_SYSTEM_SUBTYPES.has(p.subtype))
+    return true;
   return false;
 }
 
@@ -154,7 +170,10 @@ export function extractSystem(
   rawContent: string,
 ): { rawType: string; display: string } {
   if (typeof payload !== 'object' || payload === null) {
-    return { rawType: 'system', display: typeof payload === 'string' ? payload : rawContent };
+    return {
+      rawType: 'system',
+      display: typeof payload === 'string' ? payload : rawContent,
+    };
   }
 
   const p = payload as Record<string, unknown>;
@@ -180,7 +199,10 @@ export function extractSystem(
           // Strip entire tag+content blocks (e.g. <system-reminder>...</system-reminder>),
           // then strip any remaining standalone tags, to remove system-injected content.
           const stripped = b.text
-            .replace(/<([a-zA-Z][a-zA-Z0-9_-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g, '')
+            .replace(
+              /<([a-zA-Z][a-zA-Z0-9_-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g,
+              '',
+            )
             .replace(/<[^>]+>/g, '')
             .trim();
           if (stripped) parts.push(stripped);
@@ -227,7 +249,11 @@ export function summarizeEvent(
             for (const block of blocks) {
               if (typeof block !== 'object' || block === null) continue;
               const b = block as Record<string, unknown>;
-              if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+              if (
+                b.type === 'text' &&
+                typeof b.text === 'string' &&
+                b.text.trim()
+              ) {
                 return truncateStr(b.text.trim(), maxLen);
               }
             }
@@ -236,18 +262,26 @@ export function summarizeEvent(
               if (typeof block !== 'object' || block === null) continue;
               const b = block as Record<string, unknown>;
               if (b.type === 'tool_use') {
-                const toolName = typeof b.name === 'string' ? b.name : 'tool_use';
+                const toolName =
+                  typeof b.name === 'string' ? b.name : 'tool_use';
                 let input: unknown = b.input;
                 if (typeof input === 'string') {
-                  try { input = JSON.parse(input); } catch { /* leave */ }
+                  try {
+                    input = JSON.parse(input);
+                  } catch {
+                    /* leave */
+                  }
                 }
                 if (toolName === 'Bash') {
                   const bashCmd = extractBashCommand(input);
-                  return bashCmd != null ? `🔧 ${toolName} $ ${bashCmd}` : `🔧 ${toolName}`;
+                  return bashCmd != null
+                    ? `🔧 ${toolName} $ ${bashCmd}`
+                    : `🔧 ${toolName}`;
                 }
                 const detail = extractToolDetail(toolName, input);
                 if (detail != null) {
-                  const truncated = detail.length > 40 ? detail.slice(0, 40) + '…' : detail;
+                  const truncated =
+                    detail.length > 40 ? detail.slice(0, 40) + '…' : detail;
                   return `🔧 ${toolName} (${truncated})`;
                 }
                 return `🔧 ${toolName}`;
@@ -265,11 +299,14 @@ export function summarizeEvent(
       if (!parsed) return truncateStr(event.content, maxLen);
       if (parsed.toolName === 'Bash') {
         const bashCmd = extractBashCommand(parsed.input);
-        return bashCmd != null ? `🔧 ${parsed.toolName} $ ${bashCmd}` : `🔧 ${parsed.toolName}`;
+        return bashCmd != null
+          ? `🔧 ${parsed.toolName} $ ${bashCmd}`
+          : `🔧 ${parsed.toolName}`;
       }
       const detail = extractToolDetail(parsed.toolName, parsed.input);
       if (detail != null) {
-        const truncated = detail.length > 40 ? detail.slice(0, 40) + '…' : detail;
+        const truncated =
+          detail.length > 40 ? detail.slice(0, 40) + '…' : detail;
         return `🔧 ${parsed.toolName} (${truncated})`;
       }
       return `🔧 ${parsed.toolName}`;
@@ -290,10 +327,14 @@ export function summarizeEvent(
       return truncateStr(event.content, maxLen);
 
     case 'error': {
-      const p = typeof payload === 'object' && payload !== null
-        ? payload as Record<string, unknown>
-        : null;
-      return truncateStr(p ? String(p.message ?? event.content) : event.content, maxLen);
+      const p =
+        typeof payload === 'object' && payload !== null
+          ? (payload as Record<string, unknown>)
+          : null;
+      return truncateStr(
+        p ? String(p.message ?? event.content) : event.content,
+        maxLen,
+      );
     }
 
     default:

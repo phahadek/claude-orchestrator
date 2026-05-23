@@ -11,6 +11,9 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     contextUrl: 'https://notion.so/ctx',
     githubRepo: 'owner/repo',
     taskSource: 'notion',
+    autoLaunchEnabled: false,
+    autoLaunchMilestoneId: null,
+    autoMergeEnabled: false,
     createdAt: 1,
     updatedAt: 1,
     milestones: [],
@@ -23,7 +26,9 @@ describe('ProjectFormModal', () => {
     render(<ProjectFormModal onCancel={vi.fn()} onSubmit={vi.fn()} />);
     expect(screen.getByRole('heading', { name: 'Add project' })).toBeTruthy();
     expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('');
-    expect((screen.getByLabelText('Project Dir') as HTMLInputElement).value).toBe('');
+    expect(
+      (screen.getByLabelText('Project Dir') as HTMLInputElement).value,
+    ).toBe('');
   });
 
   it('renders edit form pre-populated from initialProject', () => {
@@ -35,8 +40,12 @@ describe('ProjectFormModal', () => {
       />,
     );
     expect(screen.getByRole('heading', { name: 'Edit project' })).toBeTruthy();
-    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Project One');
-    expect((screen.getByLabelText('Project Dir') as HTMLInputElement).value).toBe('/abs/p1');
+    expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe(
+      'Project One',
+    );
+    expect(
+      (screen.getByLabelText('Project Dir') as HTMLInputElement).value,
+    ).toBe('/abs/p1');
   });
 
   it('shows client-side validation errors for missing required fields and does not call onSubmit', () => {
@@ -51,9 +60,15 @@ describe('ProjectFormModal', () => {
   it('calls onSubmit with trimmed values when valid', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     render(<ProjectFormModal onCancel={vi.fn()} onSubmit={onSubmit} />);
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'My Project' } });
-    fireEvent.change(screen.getByLabelText('Project Dir'), { target: { value: '/abs/path' } });
-    fireEvent.change(screen.getByLabelText('Task Source'), { target: { value: 'yaml' } });
+    fireEvent.change(screen.getByLabelText('Name'), {
+      target: { value: 'My Project' },
+    });
+    fireEvent.change(screen.getByLabelText('Project Dir'), {
+      target: { value: '/abs/path' },
+    });
+    fireEvent.change(screen.getByLabelText('Task Source'), {
+      target: { value: 'yaml' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
     const arg = onSubmit.mock.calls[0][0];
@@ -63,13 +78,19 @@ describe('ProjectFormModal', () => {
   });
 
   it('surfaces server error message when onSubmit rejects', async () => {
-    const onSubmit = vi.fn().mockRejectedValue(new Error('projectDir does not exist on disk'));
+    const onSubmit = vi
+      .fn()
+      .mockRejectedValue(new Error('projectDir does not exist on disk'));
     render(<ProjectFormModal onCancel={vi.fn()} onSubmit={onSubmit} />);
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'X' } });
-    fireEvent.change(screen.getByLabelText('Project Dir'), { target: { value: '/missing' } });
+    fireEvent.change(screen.getByLabelText('Project Dir'), {
+      target: { value: '/missing' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
     await waitFor(() =>
-      expect(screen.getByText('projectDir does not exist on disk')).toBeTruthy(),
+      expect(
+        screen.getByText('projectDir does not exist on disk'),
+      ).toBeTruthy(),
     );
   });
 

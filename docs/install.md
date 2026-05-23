@@ -111,16 +111,16 @@ The container mounts two host paths:
 
 All configuration lives in `packages/backend/.env`. See `packages/backend/.env.example` for a complete template.
 
-| Variable | Required | Description | Example |
-|---|---|---|---|
-| `NOTION_API_KEY` | If any project's task source is `notion` | Notion integration token | `ntn_...` |
-| `GITHUB_TOKEN` | Yes | GitHub PAT with `repo` scope | `ghp_...` |
-| `GITHUB_REPO` | No | Fallback `owner/repo` used only when `GitHubClient` is called without a project context (e.g. CLI scripts). Each project's own `githubRepo` (set in **Settings → Projects**) takes precedence and is required for the dashboard's PR features. | `owner/repo` |
-| `PORT` | No | Backend HTTP port | `3000` |
-| `DB_PATH` | No | SQLite database file | `./dashboard.db` |
-| `SESSIONS_DIR` | No | Claude CLI sessions directory | `~/.claude/projects` |
-| `AUTO_REVIEW` | No | Enable automated PR review | `true` |
-| `AUTO_REVIEW_CONCURRENCY` | No | Parallel review sessions | `1` |
+| Variable                  | Required                                 | Description                                                                                                                                                                                                                                    | Example              |
+| ------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| `NOTION_API_KEY`          | If any project's task source is `notion` | Notion integration token                                                                                                                                                                                                                       | `ntn_...`            |
+| `GITHUB_TOKEN`            | Yes                                      | GitHub PAT with `repo` scope                                                                                                                                                                                                                   | `ghp_...`            |
+| `GITHUB_REPO`             | No                                       | Fallback `owner/repo` used only when `GitHubClient` is called without a project context (e.g. CLI scripts). Each project's own `githubRepo` (set in **Settings → Projects**) takes precedence and is required for the dashboard's PR features. | `owner/repo`         |
+| `PORT`                    | No                                       | Backend HTTP port                                                                                                                                                                                                                              | `3000`               |
+| `DB_PATH`                 | No                                       | SQLite database file                                                                                                                                                                                                                           | `./dashboard.db`     |
+| `SESSIONS_DIR`            | No                                       | Claude CLI sessions directory                                                                                                                                                                                                                  | `~/.claude/projects` |
+| `AUTO_REVIEW`             | No                                       | Enable automated PR review                                                                                                                                                                                                                     | `true`               |
+| `AUTO_REVIEW_CONCURRENCY` | No                                       | Parallel review sessions                                                                                                                                                                                                                       | `1`                  |
 
 ## Project & milestone configuration
 

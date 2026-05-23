@@ -47,7 +47,9 @@ const DEFAULTS: ResolvedOrchestratorConfig = {
  * Falls back to Node.js/Vite defaults if the file does not exist or is invalid.
  * The file is read fresh on every call — no server restart needed to pick up changes.
  */
-export function loadOrchestratorConfig(projectDir: string): ResolvedOrchestratorConfig {
+export function loadOrchestratorConfig(
+  projectDir: string,
+): ResolvedOrchestratorConfig {
   const configPath = path.join(projectDir, '.claude', 'orchestrator.json');
   if (!fs.existsSync(configPath)) {
     return DEFAULTS;
@@ -65,7 +67,9 @@ export function loadOrchestratorConfig(projectDir: string): ResolvedOrchestrator
       bashRules: parsed.bashRules ?? DEFAULTS.bashRules,
     };
   } catch (err) {
-    console.warn(`[orchestrator-config] failed to parse ${configPath}: ${err} — using defaults`);
+    console.warn(
+      `[orchestrator-config] failed to parse ${configPath}: ${err} — using defaults`,
+    );
     return DEFAULTS;
   }
 }

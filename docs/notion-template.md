@@ -49,12 +49,12 @@ Document your session workflow here. The orchestrator injects these instructions
 
 A table linking to child pages (design docs, architecture docs, coding guidelines) so sessions can fetch additional context when needed.
 
-| Page | Purpose |
-|---|---|
-| Project Context (this page) | Master context, session instructions |
-| Product Design Doc | Goals, UI layout, component breakdown |
-| Technical Architecture | Tech stack, project structure |
-| Coding Guidelines | Conventions, patterns, rules |
+| Page                        | Purpose                               |
+| --------------------------- | ------------------------------------- |
+| Project Context (this page) | Master context, session instructions  |
+| Product Design Doc          | Goals, UI layout, component breakdown |
+| Technical Architecture      | Tech stack, project structure         |
+| Coding Guidelines           | Conventions, patterns, rules          |
 
 ---
 
@@ -68,28 +68,28 @@ Each milestone is a separate Notion **database** (not a page). Create one as a c
 
 ### Required properties
 
-| Property | Type | Options |
-|---|---|---|
-| `Task Name` | Title | _(default title column)_ |
-| `Status` | Select | See status options below |
-| `Type` | Select | `💻 Code`, `📋 Planning`, `🧪 Testing` |
-| `Priority` | Select | `🔴 High`, `🟡 Medium`, `🟢 Low` |
+| Property     | Type      | Options                                    |
+| ------------ | --------- | ------------------------------------------ |
+| `Task Name`  | Title     | _(default title column)_                   |
+| `Status`     | Select    | See status options below                   |
+| `Type`       | Select    | `💻 Code`, `📋 Planning`, `🧪 Testing`     |
+| `Priority`   | Select    | `🔴 High`, `🟡 Medium`, `🟢 Low`           |
 | `Depends On` | Rich Text | Pipe-delimited page IDs (e.g., `id1\|id2`) |
-| `Notes` | Rich Text | Short human-facing notes |
+| `Notes`      | Rich Text | Short human-facing notes                   |
 
 ### Status options
 
 Configure these exact values for the `Status` select property:
 
-| Value | Meaning |
-|---|---|
-| `🔲 Backlog` | Defined but not yet validated |
-| `🗂️ Ready` | Scoped, reviewed, ready to be picked up |
-| `🔄 In Progress` | Actively being worked on |
-| `👀 In Review` | PR open, awaiting review or merge |
-| `✅ Done` | Merged, verified, closed |
-| `🚫 Blocked` | Cannot proceed (document blocker in Notes) |
-| `⏭️ Deferred` | Moved out of scope |
+| Value            | Meaning                                    |
+| ---------------- | ------------------------------------------ |
+| `🔲 Backlog`     | Defined but not yet validated              |
+| `🗂️ Ready`       | Scoped, reviewed, ready to be picked up    |
+| `🔄 In Progress` | Actively being worked on                   |
+| `👀 In Review`   | PR open, awaiting review or merge          |
+| `✅ Done`        | Merged, verified, closed                   |
+| `🚫 Blocked`     | Cannot proceed (document blocker in Notes) |
+| `⏭️ Deferred`    | Moved out of scope                         |
 
 > **Important:** The dashboard matches these exact status strings (including emoji prefixes) when deriving task display status. Use them exactly as shown.
 
@@ -105,30 +105,37 @@ Each task is a page inside a milestone database. Use this template for the page 
 
 ```markdown
 ## Summary
+
 One sentence: what is being built and why.
 
 ## Dependencies
+
 - [Task name this depends on]
-- Or: *None -- Wave 1.*
+- Or: _None -- Wave 1._
 
 ## Context
+
 Design rationale, implementation spec, code skeletons, constraints.
 
 ## Acceptance Criteria
 
 ### Automated tests
+
 - [ ] Compiler passes (`tsc --noEmit`)
 - [ ] Unit tests pass
 - [ ] [specific test assertions]
 
 ### Manual verification
+
 - [ ] [runtime behavior checks]
 
 ## Files / paths affected
-- `path/to/file.ts` *(new -- description)*
-- `path/to/other.ts` *(update -- description)*
+
+- `path/to/file.ts` _(new -- description)_
+- `path/to/other.ts` _(update -- description)_
 
 ## Implementation notes
+
 > To be filled in during/after implementation.
 ```
 

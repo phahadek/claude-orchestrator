@@ -30,7 +30,15 @@ export interface PRListItem {
   createdAt: string;
   updatedAt: string;
   reviewIteration?: number;
+  /**
+   * Categorized non-mergeability reason from the backend. One of:
+   * 'clean' | 'dirty' | 'ci_failed' | 'blocked' | 'unstable' | 'unknown' | null
+   */
   mergeState: string | null;
+  /** Names of failing required check-runs. Populated when mergeState is 'ci_failed'. */
+  failingChecks?: string[] | null;
+  /** Non-null when the PR's pipeline is paused awaiting human attention. */
+  pauseReason?: string | null;
 }
 
 export interface PRCardProps {
@@ -44,6 +52,9 @@ export interface PRCardProps {
   onApprove: (prNumber: number) => void;
   reviewInFlight: boolean;
   mergeInFlight: boolean;
+  /** True while the frontend is asking the backend for a fresh mergeability check
+   *  right before opening a merge. Drives the "Checking mergeability..." label. */
+  checkingMergeability?: boolean;
   removeInFlight: boolean;
   reReviewInFlight: boolean;
   fixConflictsInFlight: boolean;
@@ -70,6 +81,7 @@ export function PRCard({
   onApprove,
   reviewInFlight,
   mergeInFlight,
+  checkingMergeability = false,
   removeInFlight,
   reReviewInFlight,
   fixConflictsInFlight,
@@ -82,7 +94,25 @@ export function PRCard({
   const isFinished = pr.state === 'merged' || pr.state === 'closed';
   const verdict = pr.reviewResult?.verdict ?? null;
   const hasConflicts = !isFinished && pr.mergeState === 'dirty';
-  const canMerge = pr.state === 'open' && verdict === 'approved' && !hasConflicts;
+  const hasCiFailures = !isFinished && pr.mergeState === 'ci_failed';
+  const isBlocked = !isFinished && pr.mergeState === 'blocked';
+  const isUnstable = !isFinished && pr.mergeState === 'unstable';
+  const isUnknownMergeState = !isFinished && pr.mergeState === 'unknown';
+  // Block merge for any non-clean merge_state value (null is treated as "not
+  // yet checked" and falls through to the backend's pre-merge check).
+  const mergeBlocked =
+    hasConflicts ||
+    hasCiFailures ||
+    isBlocked ||
+    isUnstable ||
+    isUnknownMergeState;
+  const canMerge =
+    pr.state === 'open' && verdict === 'approved' && !mergeBlocked;
+  const failingChecks = pr.failingChecks ?? [];
+  const showCiBadge =
+    !isFinished &&
+    (pr.mergeState === 'ci_failed' || pr.pauseReason === 'ci_failing');
+  const ciChecksUrl = `https://github.com/${pr.repo}/pull/${pr.prNumber}/checks`;
   const sessionAlive = pr.sessionId !== null;
   // Single context-aware review action:
   // - finished → no button
@@ -97,10 +127,12 @@ export function PRCard({
         ? 'fix-conflicts'
         : verdict === 'approved'
           ? null
-          : (verdict === 'needs_changes' || verdict === 'incomplete') && sessionAlive
+          : (verdict === 'needs_changes' || verdict === 'incomplete') &&
+              sessionAlive
             ? 're-review'
             : 'run-review';
-  const showApproveButton = !isFinished && verdict !== 'approved' && !hasConflicts;
+  const showApproveButton =
+    !isFinished && verdict !== 'approved' && !hasConflicts;
 
   const verdictClass = isFinished
     ? styles[`state-${pr.state}`]
@@ -108,8 +140,12 @@ export function PRCard({
       ? styles[`verdict-${verdict.replace('_', '-')}`]
       : styles['verdict-none'];
   const verdictLabel = isFinished
-    ? pr.state === 'merged' ? '✓ Merged' : '✕ Closed'
-    : verdict ? VERDICT_LABELS[verdict] : '— Not reviewed';
+    ? pr.state === 'merged'
+      ? '✓ Merged'
+      : '✕ Closed'
+    : verdict
+      ? VERDICT_LABELS[verdict]
+      : '— Not reviewed';
 
   const handleMerge = () => {
     const confirmed = window.confirm(
@@ -152,7 +188,9 @@ export function PRCard({
                     {pr.notionTaskTitle} ↗
                   </a>
                 ) : (
-                  <span className={styles.notionTitle}>{pr.notionTaskTitle}</span>
+                  <span className={styles.notionTitle}>
+                    {pr.notionTaskTitle}
+                  </span>
                 )}
               </div>
             )}
@@ -179,9 +217,64 @@ export function PRCard({
       </div>
 
       <div className={styles.cardActions}>
-        <span className={`${styles.verdictBadge} ${verdictClass}`}>{verdictLabel}</span>
+        <span className={`${styles.verdictBadge} ${verdictClass}`}>
+          {verdictLabel}
+        </span>
+        {showCiBadge && (
+          <a
+            href={ciChecksUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={styles.ciBadge}
+            title={
+              failingChecks.length > 0
+                ? `Failing checks: ${failingChecks.join(', ')}`
+                : 'CI checks are failing'
+            }
+          >
+            ❌ CI failing
+            {failingChecks.length > 0 ? `: ${failingChecks.join(', ')}` : ''}
+          </a>
+        )}
         {hasConflicts && (
-          <span className={styles.conflictBadge} title="PR has merge conflicts">⚠ Merge Conflicts</span>
+          <span
+            className={styles.conflictBadge}
+            title={`Merge conflicts on ${pr.headBranch} — rebase onto ${pr.baseBranch} and resolve.`}
+          >
+            ⚠ Merge Conflicts
+          </span>
+        )}
+        {isUnstable && (
+          <span
+            className={styles.conflictBadge}
+            title="CI is unstable — checks may be failing"
+          >
+            ⚠ CI unstable
+          </span>
+        )}
+        {isBlocked && (
+          <span
+            className={styles.conflictBadge}
+            title="Blocked by branch protection — a required review or status is missing."
+          >
+            ⚠ Blocked by branch protection
+          </span>
+        )}
+        {isUnknownMergeState && (
+          <span
+            className={styles.conflictBadge}
+            title="GitHub has not yet computed mergeability"
+          >
+            ⚠ Mergeability unknown
+          </span>
+        )}
+        {pr.pauseReason === 'review_failed' && (
+          <span
+            className={styles.conflictBadge}
+            title="Re-review failed unexpectedly — check logs and trigger a manual re-review."
+          >
+            ⚠ Review failed
+          </span>
         )}
 
         <div className={styles.buttons}>
@@ -247,10 +340,14 @@ export function PRCard({
           <button
             type="button"
             className={styles.mergeButton}
-            disabled={!canMerge || mergeInFlight}
+            disabled={!canMerge || mergeInFlight || checkingMergeability}
             onClick={handleMerge}
           >
-            {mergeInFlight ? 'Merging...' : 'Merge ↓'}
+            {checkingMergeability
+              ? 'Checking mergeability...'
+              : mergeInFlight
+                ? 'Merging...'
+                : 'Merge ↓'}
           </button>
         </div>
       </div>
@@ -269,17 +366,23 @@ export function PRCard({
           {detailsOpen && (
             <div className={styles.detailsBody}>
               {pr.reviewResult.verdict === 'error' ? (
-                <div className={styles.reviewError}>Review failed: {pr.reviewResult.summary}</div>
+                <div className={styles.reviewError}>
+                  Review failed: {pr.reviewResult.summary}
+                </div>
               ) : (
                 <>
                   {(pr.reviewResult.dimensions ?? []).map((dim) => (
                     <div key={dim.name} className={styles.dimension}>
-                      <span className={styles.dimIcon}>{dim.passed ? '✅' : '⚠️'}</span>
+                      <span className={styles.dimIcon}>
+                        {dim.passed ? '✅' : '⚠️'}
+                      </span>
                       <span className={styles.dimName}>{dim.name}</span>
                       <span className={styles.dimNotes}>{dim.notes}</span>
                     </div>
                   ))}
-                  <div className={styles.reviewSummary}>{pr.reviewResult.summary}</div>
+                  <div className={styles.reviewSummary}>
+                    {pr.reviewResult.summary}
+                  </div>
                 </>
               )}
             </div>

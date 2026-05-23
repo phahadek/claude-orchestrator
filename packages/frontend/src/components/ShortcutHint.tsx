@@ -25,7 +25,9 @@ export function ShortcutHint() {
             <tbody>
               {SHORTCUTS.map(({ key, desc }) => (
                 <tr key={key}>
-                  <td className={styles.key}><kbd>{key}</kbd></td>
+                  <td className={styles.key}>
+                    <kbd>{key}</kbd>
+                  </td>
                   <td className={styles.desc}>{desc}</td>
                 </tr>
               ))}

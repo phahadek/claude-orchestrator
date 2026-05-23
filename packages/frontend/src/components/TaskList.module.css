@@ -15,6 +15,28 @@
   flex-shrink: 0;
 }
 
+.mergeReadyBtn {
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  margin-right: 6px;
+  transition:
+    background-color 0.1s ease,
+    color 0.1s ease;
+}
+
+.mergeReadyBtn:hover {
+  background: #22c55e;
+  color: #fff;
+  border-color: #22c55e;
+}
+
 .syncBtn {
   display: flex;
   align-items: center;
@@ -26,7 +48,9 @@
   cursor: pointer;
   background: var(--bg-elevated);
   color: var(--text-muted);
-  transition: background-color 0.1s ease, color 0.1s ease;
+  transition:
+    background-color 0.1s ease,
+    color 0.1s ease;
 }
 
 .syncBtn:hover:not(:disabled) {
@@ -80,7 +104,9 @@
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* Empty state */
@@ -178,7 +204,9 @@
   cursor: pointer;
   background: var(--bg-elevated);
   color: var(--text-muted);
-  transition: background-color 0.1s ease, color 0.1s ease;
+  transition:
+    background-color 0.1s ease,
+    color 0.1s ease;
 }
 
 .selectAllBtn:hover:not(:disabled),

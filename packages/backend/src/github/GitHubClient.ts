@@ -1,6 +1,23 @@
 import { GITHUB_TOKEN, GITHUB_REPO } from '../config';
-import { GitHubApiError, PullRequest, PRDiff, MergeResult } from './types';
+import {
+  GitHubApiError,
+  PullRequest,
+  PRDiff,
+  MergeResult,
+  FailingCheck,
+  MergeabilityCategory,
+} from './types';
 import { getPRByNumber } from '../db/queries';
+
+/** GitHub check-run conclusions that indicate the check did not pass. */
+const FAILING_CHECK_CONCLUSIONS: ReadonlySet<string> = new Set([
+  'failure',
+  'timed_out',
+  'action_required',
+  'cancelled',
+  'stale',
+  'startup_failure',
+]);
 
 export class GitHubClient {
   private readonly base = 'https://api.github.com';
@@ -8,8 +25,8 @@ export class GitHubClient {
 
   constructor() {
     this.headers = {
-      'Authorization': `Bearer ${GITHUB_TOKEN}`,
-      'Accept': 'application/vnd.github+json',
+      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      Accept: 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
     };
   }
@@ -17,12 +34,15 @@ export class GitHubClient {
   async listOpenPRs(repo?: string): Promise<PullRequest[]> {
     const r = repo ?? GITHUB_REPO;
     const data = await this.request<GitHubRawPR[]>(
-      `/repos/${r}/pulls?state=open&per_page=100`
+      `/repos/${r}/pulls?state=open&per_page=100`,
     );
-    return data.map(pr => mapPR(pr));
+    return data.map((pr) => mapPR(pr));
   }
 
-  async getPRState(prNumber: number, repo?: string): Promise<'open' | 'merged' | 'closed'> {
+  async getPRState(
+    prNumber: number,
+    repo?: string,
+  ): Promise<'open' | 'merged' | 'closed'> {
     const r = repo ?? GITHUB_REPO;
     const data = await this.request<{ state: string; merged: boolean }>(
       `/repos/${r}/pulls/${prNumber}`,
@@ -33,33 +53,66 @@ export class GitHubClient {
   }
 
   async fetchPR(repo: string, prNumber: number): Promise<PullRequest> {
-    const data = await this.request<GitHubRawPR>(`/repos/${repo}/pulls/${prNumber}`);
+    const data = await this.request<GitHubRawPR>(
+      `/repos/${repo}/pulls/${prNumber}`,
+    );
     return mapPR(data);
   }
 
-  async getMergeability(prNumber: number, repo?: string): Promise<{ mergeable: boolean | null; mergeableState: string | null }> {
+  async getMergeability(
+    prNumber: number,
+    repo?: string,
+  ): Promise<{ mergeable: boolean | null; mergeableState: string | null }> {
     const r = repo ?? GITHUB_REPO;
-    const data = await this.request<GitHubRawPR>(`/repos/${r}/pulls/${prNumber}`);
+    const data = await this.request<GitHubRawPR>(
+      `/repos/${r}/pulls/${prNumber}`,
+    );
     return {
       mergeable: data.mergeable ?? null,
       mergeableState: data.mergeable_state ?? null,
     };
   }
 
-  async fetchDiff(prId: number, repo?: string, branches?: { base: string; head: string }): Promise<PRDiff> {
+  // Retry getMergeability with exponential backoff (2s, 4s, 8s, 16s, 32s) when
+  // GitHub returns mergeable: null. After all 5 retries, returns the last (still-null) result.
+  async getMergeabilityWithRetry(
+    prNumber: number,
+    repo?: string,
+    sleep: (ms: number) => Promise<void> = (ms) =>
+      new Promise((r) => setTimeout(r, ms)),
+  ): Promise<{ mergeable: boolean | null; mergeableState: string | null }> {
+    const delays = [2000, 4000, 8000, 16000, 32000];
+    let result = await this.getMergeability(prNumber, repo);
+    for (const delay of delays) {
+      if (result.mergeable !== null) return result;
+      await sleep(delay);
+      result = await this.getMergeability(prNumber, repo);
+    }
+    if (result.mergeable === null) {
+      console.warn(
+        `[GitHubClient] getMergeability still null after retries for PR #${prNumber} in ${repo ?? GITHUB_REPO} — skipping`,
+      );
+    }
+    return result;
+  }
+
+  async fetchDiff(
+    prId: number,
+    repo?: string,
+    branches?: { base: string; head: string },
+  ): Promise<PRDiff> {
     const r = repo ?? GITHUB_REPO;
     let diff: string;
     if (branches) {
       // Explicit three-dot compare endpoint — guarantees merge-base semantics
       diff = await this.request<string>(
         `/repos/${r}/compare/${branches.base}...${branches.head}`,
-        { headers: { ...this.headers, 'Accept': 'application/vnd.github.diff' } }
+        { headers: { ...this.headers, Accept: 'application/vnd.github.diff' } },
       );
     } else {
-      diff = await this.request<string>(
-        `/repos/${r}/pulls/${prId}`,
-        { headers: { ...this.headers, 'Accept': 'application/vnd.github.diff' } }
-      );
+      diff = await this.request<string>(`/repos/${r}/pulls/${prId}`, {
+        headers: { ...this.headers, Accept: 'application/vnd.github.diff' },
+      });
     }
     const filesChanged = parseDiffFiles(diff);
     return { prId, diff, filesChanged };
@@ -93,22 +146,217 @@ export class GitHubClient {
       const text = await res.text();
       throw new GitHubApiError(res.status, text);
     }
-    const body = await res.json() as { errors?: Array<{ message: string }> };
+    const body = (await res.json()) as { errors?: Array<{ message: string }> };
     if (body.errors?.length) {
-      throw new GitHubApiError(422, body.errors.map(e => e.message).join('; '));
+      throw new GitHubApiError(
+        422,
+        body.errors.map((e) => e.message).join('; '),
+      );
     }
   }
 
-  async mergePR(prId: number, commitTitle: string, repo?: string): Promise<MergeResult> {
+  /**
+   * Fetch failing check-runs for a given commit SHA. Used to distinguish
+   * "blocked by failing CI" from "blocked by branch protection" when a merge
+   * attempt fails with 409/405 or when mergeable_state is `unstable`/`blocked`.
+   */
+  async getFailingChecks(sha: string, repo?: string): Promise<FailingCheck[]> {
     const r = repo ?? GITHUB_REPO;
-    const data = await this.request<{ merged: boolean; message: string; sha: string | null }>(
-      `/repos/${r}/pulls/${prId}/merge`,
-      {
-        method: 'PUT',
-        headers: { ...this.headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ merge_method: 'squash', commit_title: commitTitle }),
-      }
+    const data = await this.request<{
+      check_runs: Array<{
+        name: string;
+        status: string;
+        conclusion: string | null;
+      }>;
+    }>(`/repos/${r}/commits/${sha}/check-runs?per_page=100`);
+    return data.check_runs
+      .filter(
+        (c) =>
+          c.status === 'completed' &&
+          c.conclusion !== null &&
+          FAILING_CHECK_CONCLUSIONS.has(c.conclusion),
+      )
+      .map((c) => ({ name: c.name, conclusion: c.conclusion as string }));
+  }
+
+  /**
+   * Map GitHub's mergeable_state (plus check-runs when relevant) onto a single
+   * category so the dashboard can tell merge conflicts apart from CI failures
+   * and branch-protection blocks. Returns `clean` when mergeable, otherwise one
+   * of `conflict` / `ci_failed` / `blocked` / `unknown`.
+   *
+   * Called after a 409/405 merge failure to pick the right remediation, and by
+   * PRMergeWatcher polling so the state is reflected before the user clicks Merge.
+   */
+  async categorizeMergeability(
+    prNumber: number,
+    repo?: string,
+  ): Promise<MergeabilityCategory> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<GitHubRawPR>(
+      `/repos/${r}/pulls/${prNumber}`,
     );
+    return this.categorizeFromRawPR(data, r);
+  }
+
+  /**
+   * Conditional PR status fetch with ETag/If-None-Match support. Returns the
+   * categorized mergeability when GitHub returns 200 (with the new ETag), or
+   * `{ status: 'not_modified' }` when GitHub returns 304 (no body, ETag stays
+   * the same). Used by AutoMerger to avoid burning GitHub quota while polling
+   * a slow-to-change PR.
+   */
+  async fetchPRStatusConditional(
+    prNumber: number,
+    repo: string,
+    etag?: string | null,
+  ): Promise<
+    | { status: 'not_modified'; etag: string | null }
+    | {
+        status: 'ok';
+        etag: string | null;
+        state: 'open' | 'closed' | 'merged';
+        mergeability: MergeabilityCategory;
+        headSha: string | null;
+      }
+  > {
+    const url = `${this.base}/repos/${repo}/pulls/${prNumber}`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    };
+    if (etag) headers['If-None-Match'] = etag;
+    const res = await fetch(url, { headers });
+    if (res.status === 304) {
+      return { status: 'not_modified', etag: etag ?? null };
+    }
+    if (!res.ok) {
+      const text = await res.text();
+      throw new GitHubApiError(res.status, text);
+    }
+    const newEtag = res.headers.get('etag');
+    const data = (await res.json()) as GitHubRawPR & {
+      state: string;
+      merged?: boolean;
+    };
+    const state: 'open' | 'closed' | 'merged' = data.merged
+      ? 'merged'
+      : data.state === 'closed'
+        ? 'closed'
+        : 'open';
+    const mergeability = await this.categorizeFromRawPR(data, repo);
+    return {
+      status: 'ok',
+      etag: newEtag,
+      state,
+      mergeability,
+      headSha: data.head?.sha ?? null,
+    };
+  }
+
+  private async categorizeFromRawPR(
+    data: GitHubRawPR,
+    r: string,
+  ): Promise<MergeabilityCategory> {
+    const rawMergeableState = data.mergeable_state ?? null;
+    const headSha = data.head?.sha ?? null;
+
+    if (rawMergeableState === 'dirty' || rawMergeableState === 'behind') {
+      return {
+        category: 'conflict',
+        mergeState: 'dirty',
+        rawMergeableState,
+        failingChecks: [],
+      };
+    }
+    if (rawMergeableState === 'unstable') {
+      const failingChecks = headSha
+        ? await this.safeGetFailingChecks(headSha, r)
+        : [];
+      if (failingChecks.length > 0) {
+        return {
+          category: 'ci_failed',
+          mergeState: 'ci_failed',
+          rawMergeableState,
+          failingChecks,
+        };
+      }
+      return {
+        category: 'unknown',
+        mergeState: 'unstable',
+        rawMergeableState,
+        failingChecks: [],
+      };
+    }
+    if (rawMergeableState === 'blocked') {
+      const failingChecks = headSha
+        ? await this.safeGetFailingChecks(headSha, r)
+        : [];
+      if (failingChecks.length > 0) {
+        return {
+          category: 'ci_failed',
+          mergeState: 'ci_failed',
+          rawMergeableState,
+          failingChecks,
+        };
+      }
+      return {
+        category: 'blocked',
+        mergeState: 'blocked',
+        rawMergeableState,
+        failingChecks: [],
+      };
+    }
+    if (rawMergeableState === 'clean') {
+      return {
+        category: 'clean',
+        mergeState: 'clean',
+        rawMergeableState,
+        failingChecks: [],
+      };
+    }
+    return {
+      category: 'unknown',
+      mergeState: rawMergeableState ?? 'unknown',
+      rawMergeableState,
+      failingChecks: [],
+    };
+  }
+
+  private async safeGetFailingChecks(
+    sha: string,
+    repo: string,
+  ): Promise<FailingCheck[]> {
+    try {
+      return await this.getFailingChecks(sha, repo);
+    } catch (err) {
+      console.warn(
+        `[GitHubClient] getFailingChecks failed for ${sha} in ${repo}:`,
+        (err as Error).message,
+      );
+      return [];
+    }
+  }
+
+  async mergePR(
+    prId: number,
+    commitTitle: string,
+    repo?: string,
+  ): Promise<MergeResult> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<{
+      merged: boolean;
+      message: string;
+      sha: string | null;
+    }>(`/repos/${r}/pulls/${prId}/merge`, {
+      method: 'PUT',
+      headers: { ...this.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        merge_method: 'squash',
+        commit_title: commitTitle,
+      }),
+    });
     return { merged: data.merged, message: data.message, sha: data.sha };
   }
 
@@ -178,4 +426,128 @@ function parseDiffFiles(diff: string): string[] {
     }
   }
   return files;
+}
+
+export interface SizeSignal {
+  linesAdded: number;
+  linesDeleted: number;
+  filesTouched: number;
+  specFileCount: number;
+  oversizeRatio: number; // filesTouched / max(specFileCount, 1); 0 when no spec list
+  exceededAbsoluteFloor: boolean; // (linesAdded + linesDeleted) > 800
+  /**
+   * Per-task LOC override from the Notion "Expected size" property. When set,
+   * `isOversized` uses only `linesAdded + linesDeleted > expectedSize` and
+   * skips the absolute-floor + file-ratio defaults so refactors and
+   * infrastructure tasks aren't mis-flagged.
+   */
+  expectedSize?: number;
+}
+
+/** Absolute LOC floor above which a PR is flagged for size-proportionality review. */
+export const SIZE_ABSOLUTE_FLOOR = 800;
+/** File-count ratio above which a PR is flagged (filesTouched / specFileCount). */
+export const SIZE_FILE_RATIO_LIMIT = 3;
+
+/**
+ * Files whose diffs should be excluded from the LOC count because they are
+ * machine-generated and their churn is not representative of human-written change.
+ * Matched as a suffix (file basename) or by file extension.
+ */
+const GENERATED_FILE_PATTERNS: ReadonlyArray<RegExp> = [
+  /(^|\/)package-lock\.json$/,
+  /(^|\/)yarn\.lock$/,
+  /(^|\/)pnpm-lock\.yaml$/,
+  /\.snap$/,
+  /\.svg$/,
+];
+
+function isGeneratedFile(path: string): boolean {
+  return GENERATED_FILE_PATTERNS.some((re) => re.test(path));
+}
+
+/** Extract spec file paths from the "Files / paths affected" section of a task spec. */
+function parseSpecFiles(specFilesSection: string): string[] {
+  if (!specFilesSection.trim()) return [];
+  return specFilesSection
+    .split('\n')
+    .map((line) => line.replace(/^[-*\s]+/, '').trim())
+    .filter(
+      (line) => line.length > 0 && (line.includes('/') || line.includes('.')),
+    );
+}
+
+/**
+ * Compute size proportionality signal for a PR diff vs. its task spec.
+ * Lines added/deleted are summed across non-generated files only.
+ * Files touched counts the total number of files in the diff (including generated).
+ *
+ * When `expectedSize` is provided (from the task's "Expected size" property),
+ * it is recorded on the returned signal and overrides the default heuristic in
+ * `isOversized`.
+ */
+export function computeSizeSignal(
+  diff: string,
+  specFilesSection: string,
+  expectedSize?: number,
+): SizeSignal {
+  const specFiles = parseSpecFiles(specFilesSection);
+  const specFileCount = specFiles.length;
+
+  let linesAdded = 0;
+  let linesDeleted = 0;
+  const files = new Set<string>();
+  let currentFile: string | null = null;
+  let currentFileIsGenerated = false;
+
+  for (const line of diff.split('\n')) {
+    // New file section
+    if (line.startsWith('diff --git a/')) {
+      const m = line.match(/^diff --git a\/.+ b\/(.+)$/);
+      currentFile = m ? m[1] : null;
+      if (currentFile) {
+        files.add(currentFile);
+        currentFileIsGenerated = isGeneratedFile(currentFile);
+      } else {
+        currentFileIsGenerated = false;
+      }
+      continue;
+    }
+    if (currentFile === null) continue;
+    if (currentFileIsGenerated) continue;
+    // Ignore the file-header lines (---/+++), only count real +/− body lines.
+    if (line.startsWith('+++') || line.startsWith('---')) continue;
+    if (line.startsWith('+')) linesAdded++;
+    else if (line.startsWith('-')) linesDeleted++;
+  }
+
+  const filesTouched = files.size;
+  const oversizeRatio = specFileCount > 0 ? filesTouched / specFileCount : 0;
+  const exceededAbsoluteFloor = linesAdded + linesDeleted > SIZE_ABSOLUTE_FLOOR;
+
+  return {
+    linesAdded,
+    linesDeleted,
+    filesTouched,
+    specFileCount,
+    oversizeRatio,
+    exceededAbsoluteFloor,
+    expectedSize,
+  };
+}
+
+/**
+ * True when the PR exceeds the size budget. When `expectedSize` is set on the
+ * signal, only `linesAdded + linesDeleted > expectedSize` matters — the
+ * absolute-floor and file-ratio defaults are bypassed. Without an override,
+ * the global heuristic (>800 LOC OR >3× spec files) applies.
+ */
+export function isOversized(signal: SizeSignal): boolean {
+  if (signal.expectedSize !== undefined) {
+    return signal.linesAdded + signal.linesDeleted > signal.expectedSize;
+  }
+  if (signal.exceededAbsoluteFloor) return true;
+  if (signal.specFileCount > 0 && signal.oversizeRatio > SIZE_FILE_RATIO_LIMIT)
+    return true;
+  return false;
 }

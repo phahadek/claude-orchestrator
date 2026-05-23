@@ -20,7 +20,9 @@ describe('useDispatch', () => {
     const project = makeProject();
 
     const { result } = renderHook(() => useDispatch(send, project));
-    result.current([{ taskUrl: 'https://notion.so/task-1', taskType: '💻 Code' }]);
+    result.current([
+      { taskUrl: 'https://notion.so/task-1', taskType: '💻 Code' },
+    ]);
 
     expect(send).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenCalledWith({
