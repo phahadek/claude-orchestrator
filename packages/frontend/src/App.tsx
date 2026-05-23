@@ -897,6 +897,10 @@ export default function App() {
                       sessions={sessions}
                       onClose={() => setSelectedTaskId(null)}
                       projectId={activeProjectId ?? undefined}
+                      isLocalOnly={
+                        projects.find((p) => p.id === activeProjectId)
+                          ?.gitMode === 'local-only'
+                      }
                     />
                   </ErrorBoundary>
                 ) : (

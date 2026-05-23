@@ -29,6 +29,7 @@ export interface Session {
   model?: string | null;
   task_name: string | null;
   metadata: string | null; // JSON blob for small session metadata (e.g. aiTitle)
+  review_result: string | null; // JSON — verdict stored for local-only review sessions
 }
 
 export type NewSession = Omit<
@@ -46,6 +47,7 @@ export type NewSession = Omit<
   | 'total_output_tokens'
   | 'task_name'
   | 'metadata'
+  | 'review_result'
 > & {
   ended_at?: number | null;
   pr_url?: string | null;
@@ -60,6 +62,7 @@ export type NewSession = Omit<
   total_output_tokens?: number;
   task_name?: string | null;
   metadata?: string | null;
+  review_result?: string | null;
 };
 
 // ─── session_events ────────────────────────────────────────────────────────
@@ -144,6 +147,7 @@ export interface TaskCache {
 // ─── projects ──────────────────────────────────────────────────────────────
 
 export type TaskSource = 'notion' | 'yaml';
+export type GitMode = 'github' | 'local-only';
 
 export interface ProjectRow {
   id: string;
@@ -152,6 +156,7 @@ export interface ProjectRow {
   context_url: string | null;
   github_repo: string | null;
   task_source: TaskSource;
+  git_mode: GitMode;
   auto_launch_enabled: number; // 0 | 1 (SQLite boolean)
   auto_launch_milestone_id: string | null;
   auto_merge_enabled: number; // 0 | 1 (SQLite boolean)
@@ -166,10 +171,12 @@ export type NewProjectRow = Omit<
   | 'auto_launch_enabled'
   | 'auto_launch_milestone_id'
   | 'auto_merge_enabled'
+  | 'git_mode'
 > & {
   auto_launch_enabled?: number;
   auto_launch_milestone_id?: string | null;
   auto_merge_enabled?: number;
+  git_mode?: GitMode;
   created_at?: number;
   updated_at?: number;
 };

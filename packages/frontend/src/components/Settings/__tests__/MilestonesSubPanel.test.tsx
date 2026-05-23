@@ -38,6 +38,7 @@ const PROJECT: Project = {
   contextUrl: null,
   githubRepo: null,
   taskSource: 'notion',
+  gitMode: 'github',
   autoLaunchEnabled: false,
   autoLaunchMilestoneId: null,
   autoMergeEnabled: false,

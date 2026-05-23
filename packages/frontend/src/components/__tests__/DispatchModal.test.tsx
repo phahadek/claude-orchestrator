@@ -33,6 +33,7 @@ const TEST_PROJECT: ProjectConfig = {
   contextUrl: 'https://notion.so/context',
   boardId: 'test-board-id',
   taskSource: 'notion',
+  gitMode: 'github',
   autoLaunchEnabled: false,
   autoLaunchMilestoneId: null,
   autoMergeEnabled: false,

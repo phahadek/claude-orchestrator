@@ -8,6 +8,7 @@ import { EventTranscript } from './EventTranscript';
 import { DiffViewer } from './DiffViewer';
 import { parseReviewResultFromEvents } from './ReviewDetailView';
 import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
+import { sessionsApi } from '../api/projects';
 import styles from './TaskDetail.module.css';
 
 // ── Display status helpers ─────────────────────────────────────────
@@ -129,6 +130,8 @@ interface Props {
   onClose: () => void;
   sessions?: SessionState[];
   projectId?: string;
+  /** When true, shows the "Mark Merged" button for local-only projects. */
+  isLocalOnly?: boolean;
 }
 
 // ── TaskDetail ────────────────────────────────────────────────────
@@ -139,11 +142,13 @@ export function TaskDetail({
   onClose,
   sessions = [],
   projectId,
+  isLocalOnly = false,
 }: Props) {
   const [showReviewSection, setShowReviewSection] = useState(true);
   const [showReviewDimensions, setShowReviewDimensions] = useState(false);
   const [reviewInFlight, setReviewInFlight] = useState(false);
   const [mergeInFlight, setMergeInFlight] = useState(false);
+  const [markMergedInFlight, setMarkMergedInFlight] = useState(false);
   const [fixConflictsInFlight, setFixConflictsInFlight] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [optimisticDisplayStatus, setOptimisticDisplayStatus] =
@@ -261,6 +266,29 @@ export function TaskDetail({
       setReviewError(err instanceof Error ? err.message : 'Network error');
     } finally {
       setMergeInFlight(false);
+    }
+  }
+
+  async function handleMarkMerged() {
+    const sessionId = task.codeSession?.sessionId ?? task.review?.sessionId;
+    if (!sessionId) return;
+    if (
+      !confirm(
+        'Mark this task as merged/done? The Notion task will move to ✅ Done.',
+      )
+    )
+      return;
+    setMarkMergedInFlight(true);
+    setReviewError(null);
+    try {
+      await sessionsApi.markMerged(sessionId);
+      setOptimisticDisplayStatus('done');
+    } catch (err) {
+      setReviewError(
+        err instanceof Error ? err.message : 'Failed to mark merged',
+      );
+    } finally {
+      setMarkMergedInFlight(false);
     }
   }
 
@@ -433,6 +461,40 @@ export function TaskDetail({
                     )}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* ── Mark Merged — local-only projects, no PR ── */}
+            {isLocalOnly && !task.pr && (task.codeSession || task.review) && (
+              <div className={styles.prSection}>
+                <div className={styles.sectionHeader}>
+                  <span className={styles.sectionTitle}>Mark as Done</span>
+                </div>
+                {reviewError && (
+                  <div className={styles.errorBanner}>{reviewError}</div>
+                )}
+                <div className={styles.prActions}>
+                  <button
+                    className={styles.mergeButton}
+                    disabled={
+                      markMergedInFlight ||
+                      effectiveDisplayStatus === 'done' ||
+                      !(
+                        task.review?.verdict === 'approved' ||
+                        task.codeSession?.status === 'done'
+                      )
+                    }
+                    onClick={() => void handleMarkMerged()}
+                    title={
+                      task.review?.verdict !== 'approved' &&
+                      task.codeSession?.status !== 'done'
+                        ? 'Available after code session completes or review approves'
+                        : undefined
+                    }
+                  >
+                    {markMergedInFlight ? 'Marking…' : 'Mark Merged ↓'}
+                  </button>
+                </div>
               </div>
             )}
 

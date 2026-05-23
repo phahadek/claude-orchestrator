@@ -17,6 +17,8 @@ import {
   deleteDenialsBySession,
   getEventsBySession,
 } from '../db/queries';
+import { getProjectById } from '../config';
+import { getTaskBackend } from '../tasks/TaskBackend';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import type { ServerMessage } from '../ws/types';
 
@@ -179,4 +181,49 @@ sessionsRouter.patch('/:id/tags', (req: Request, res: Response) => {
   setSessionTags(sessionId, tags);
   _broadcast({ type: 'session_updated', sessionId, tags });
   res.json({ ok: true });
+});
+
+// POST /api/sessions/:id/mark-merged
+// For local-only projects: mark the task as Done (mirrors the merge step for GitHub projects).
+sessionsRouter.post('/:id/mark-merged', async (req: Request, res: Response) => {
+  const sessionId = String(req.params.id);
+  const session = getSession(sessionId);
+  if (!session) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+
+  const projectId = session.project_id ?? '';
+  const project = getProjectById(projectId);
+  if (!project) {
+    res.status(400).json({ error: 'Session has no associated project' });
+    return;
+  }
+  if (project.gitMode !== 'local-only') {
+    res
+      .status(400)
+      .json({ error: 'mark-merged is only available for local-only projects' });
+    return;
+  }
+
+  const notionTaskId = session.notion_task_id;
+  if (!notionTaskId) {
+    res.status(400).json({ error: 'Session has no associated task' });
+    return;
+  }
+
+  try {
+    await getTaskBackend(projectId).updateStatus(notionTaskId, '✅ Done');
+    _broadcast({
+      type: 'task_status_changed',
+      notionTaskId,
+      newStatus: '✅ Done',
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({
+      error:
+        err instanceof Error ? err.message : 'Failed to update task status',
+    });
+  }
 });

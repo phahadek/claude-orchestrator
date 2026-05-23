@@ -1,4 +1,5 @@
 export type TaskSource = 'notion' | 'yaml';
+export type GitMode = 'github' | 'local-only';
 
 export interface ProjectMilestone {
   id: string;
@@ -17,6 +18,7 @@ export interface Project {
   contextUrl: string | null;
   githubRepo: string | null;
   taskSource: TaskSource;
+  gitMode: GitMode;
   autoLaunchEnabled: boolean;
   autoLaunchMilestoneId: string | null;
   autoMergeEnabled: boolean;
@@ -32,6 +34,7 @@ export interface CreateProjectInput {
   contextUrl?: string | null;
   githubRepo?: string | null;
   taskSource: TaskSource;
+  gitMode?: GitMode;
   autoLaunchEnabled?: boolean;
   autoLaunchMilestoneId?: string | null;
   autoMergeEnabled?: boolean;
@@ -43,6 +46,7 @@ export interface UpdateProjectInput {
   contextUrl?: string | null;
   githubRepo?: string | null;
   taskSource?: TaskSource;
+  gitMode?: GitMode;
   autoLaunchEnabled?: boolean;
   autoLaunchMilestoneId?: string | null;
   autoMergeEnabled?: boolean;
@@ -157,6 +161,15 @@ export const projectsApi = {
   ): Promise<{ attempted: number[] }> {
     return request<{ attempted: number[] }>(
       `/api/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}/merge-ready`,
+      { method: 'POST' },
+    );
+  },
+};
+
+export const sessionsApi = {
+  markMerged(sessionId: string): Promise<{ ok: boolean }> {
+    return request<{ ok: boolean }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/mark-merged`,
       { method: 'POST' },
     );
   },
