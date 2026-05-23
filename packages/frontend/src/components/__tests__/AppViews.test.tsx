@@ -47,12 +47,6 @@ vi.mock('../HistoryGrid', () => ({
   HistoryGrid: () => <div data-testid="history-grid">HistoryGrid</div>,
 }));
 
-vi.mock('../PermissionRules', () => ({
-  PermissionRules: () => (
-    <div data-testid="permission-rules">PermissionRules</div>
-  ),
-}));
-
 vi.mock('../Notifications', () => ({
   Notifications: () => null,
 }));

@@ -14,7 +14,6 @@ import type { ServerMessage } from './ws/types';
 import {
   permissionEventsRouter,
   permissionDenialsRouter,
-  permissionRulesRouter,
 } from './routes/rules';
 import configRouter from './routes/config';
 import settingsRouter, { loadRuntimeSettingsFromDb } from './routes/settings';
@@ -90,7 +89,6 @@ const app = express();
 app.use(express.json());
 app.use('/api/permission-events', permissionEventsRouter);
 app.use('/api/permission-denials', permissionDenialsRouter);
-app.use('/api/permission-rules', permissionRulesRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/sessions', sessionsRouter);
 // PRMergeWatcher created early so routes and sync jobs can delegate lifecycle to it.
