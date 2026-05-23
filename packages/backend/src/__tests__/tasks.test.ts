@@ -29,7 +29,7 @@ vi.mock('../config.js', () => ({
   }),
 }));
 
-import { createTasksRouter } from '../routes/tasks.js';
+import { createTasksRouter, summarizeEvent } from '../routes/tasks.js';
 import * as queries from '../db/queries.js';
 import type { NotionTask } from '../notion/types.js';
 
@@ -304,5 +304,121 @@ describe('GET /api/tasks/export?format=yaml', () => {
       '/api/tasks/export?format=yaml&boardId=unknown-board',
     );
     expect(res.status).toBe(404);
+  });
+});
+
+// ── summarizeEvent — tool-call formatting ─────────────────────────────────────
+
+function toolUsePayload(name: string, input: Record<string, unknown>): string {
+  return JSON.stringify({
+    type: 'assistant',
+    message: {
+      content: [{ type: 'tool_use', name, input }],
+    },
+  });
+}
+
+function toolUseTopLevel(name: string, input: Record<string, unknown>): string {
+  return JSON.stringify({ type: 'tool_use', name, input });
+}
+
+describe('summarizeEvent — tool-call formatting', () => {
+  it('Read shows the basename of file_path', () => {
+    expect(
+      summarizeEvent(
+        toolUsePayload('Read', { file_path: 'src/components/App.tsx' }),
+      ),
+    ).toBe('Read(App.tsx)');
+  });
+
+  it('Write shows the basename of file_path', () => {
+    expect(
+      summarizeEvent(
+        toolUsePayload('Write', { file_path: '/absolute/path/index.ts' }),
+      ),
+    ).toBe('Write(index.ts)');
+  });
+
+  it('Edit shows the basename of file_path', () => {
+    expect(
+      summarizeEvent(
+        toolUsePayload('Edit', { file_path: 'packages/backend/src/server.ts' }),
+      ),
+    ).toBe('Edit(server.ts)');
+  });
+
+  it('Bash shows the first token of the command', () => {
+    expect(
+      summarizeEvent(toolUsePayload('Bash', { command: 'git status --short' })),
+    ).toBe('Bash(git)');
+  });
+
+  it('Bash with a single-word command', () => {
+    expect(summarizeEvent(toolUsePayload('Bash', { command: 'npx' }))).toBe(
+      'Bash(npx)',
+    );
+  });
+
+  it('Grep shows the pattern', () => {
+    expect(
+      summarizeEvent(toolUsePayload('Grep', { pattern: 'useState' })),
+    ).toBe('Grep(useState)');
+  });
+
+  it('Glob shows the pattern', () => {
+    expect(
+      summarizeEvent(toolUsePayload('Glob', { pattern: '**/*.tsx' })),
+    ).toBe('Glob(**/*.tsx)');
+  });
+
+  it('Agent shows the description', () => {
+    expect(
+      summarizeEvent(
+        toolUsePayload('Agent', { description: 'Explore codebase' }),
+      ),
+    ).toBe('Agent(Explore codebase)');
+  });
+
+  it('WebFetch shows the url', () => {
+    expect(
+      summarizeEvent(
+        toolUsePayload('WebFetch', { url: 'https://example.com/api' }),
+      ),
+    ).toBe('WebFetch(https://example.com/api)');
+  });
+
+  it('WebSearch shows the query', () => {
+    expect(
+      summarizeEvent(
+        toolUsePayload('WebSearch', { query: 'vitest mock module' }),
+      ),
+    ).toBe('WebSearch(vitest mock module)');
+  });
+
+  it('unknown tool falls back to bare tool name (no brackets)', () => {
+    expect(
+      summarizeEvent(toolUsePayload('UnknownTool', { something: 'value' })),
+    ).toBe('UnknownTool');
+  });
+
+  it('enforces 80-char cap with ellipsis', () => {
+    const longArg = 'a'.repeat(100);
+    const result = summarizeEvent(toolUsePayload('Grep', { pattern: longArg }));
+    expect(result.length).toBe(80);
+    expect(result.endsWith('…')).toBe(true);
+  });
+
+  it('works with top-level tool_use event shape', () => {
+    expect(
+      summarizeEvent(toolUseTopLevel('Read', { file_path: 'src/App.tsx' })),
+    ).toBe('Read(App.tsx)');
+  });
+
+  it('Read with Windows-style backslash path shows basename', () => {
+    expect(
+      summarizeEvent(
+        toolUsePayload('Read', { file_path: 'src\\components\\App.tsx' }),
+      ),
+    ).toBe('Read(App.tsx)');
   });
 });

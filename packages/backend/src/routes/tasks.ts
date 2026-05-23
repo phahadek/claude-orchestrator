@@ -170,8 +170,46 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
   };
 }
 
+const TOOL_MAX = 80;
+
+function extractToolArg(name: string, input: Record<string, unknown>): string {
+  const str = (v: unknown) => (typeof v === 'string' ? v : '');
+  switch (name) {
+    case 'Read':
+    case 'Write':
+    case 'Edit': {
+      const p = str(input.file_path);
+      return p ? (p.replace(/\\/g, '/').split('/').pop() ?? p) : '';
+    }
+    case 'Bash':
+      return str(input.command).trim().split(/\s+/)[0] ?? '';
+    case 'Grep':
+      return str(input.pattern);
+    case 'Glob':
+      return str(input.pattern);
+    case 'Agent':
+      return str(input.description);
+    case 'WebFetch':
+      return str(input.url);
+    case 'WebSearch':
+      return str(input.query);
+    default:
+      return '';
+  }
+}
+
+function formatToolCall(name: string, input: unknown): string {
+  const inputObj =
+    typeof input === 'object' && input !== null
+      ? (input as Record<string, unknown>)
+      : {};
+  const arg = extractToolArg(name, inputObj);
+  const label = arg ? `${name}(${arg})` : name;
+  return label.length > TOOL_MAX ? label.slice(0, TOOL_MAX - 1) + '…' : label;
+}
+
 /** Extract a brief human-readable summary from a raw session event payload (max 120 chars). */
-function summarizeEvent(payload: string): string {
+export function summarizeEvent(payload: string): string {
   let parsed: unknown;
   try {
     parsed = JSON.parse(payload);
@@ -202,8 +240,7 @@ function summarizeEvent(payload: string): string {
         return text.length > 120 ? text.slice(0, 117) + '…' : text;
       }
       if (b.type === 'tool_use' && typeof b.name === 'string') {
-        const label = `[${b.name}]`;
-        return label.length > 120 ? label.slice(0, 117) + '…' : label;
+        return formatToolCall(b.name, b.input);
       }
     }
   }
@@ -215,8 +252,7 @@ function summarizeEvent(payload: string): string {
 
   // tool_use event: { type: 'tool_use', name: '...', input: {...} }
   if (typeof p.name === 'string') {
-    const label = `[${p.name}]`;
-    return label.length > 120 ? label.slice(0, 117) + '…' : label;
+    return formatToolCall(p.name, p.input);
   }
 
   return '';
