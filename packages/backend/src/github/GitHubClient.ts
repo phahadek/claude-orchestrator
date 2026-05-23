@@ -274,11 +274,19 @@ export class GitHubClient {
       const failingChecks = headSha
         ? await this.safeGetFailingChecks(headSha, r)
         : [];
+      if (failingChecks.length > 0) {
+        return {
+          category: 'ci_failed',
+          mergeState: 'ci_failed',
+          rawMergeableState,
+          failingChecks,
+        };
+      }
       return {
-        category: 'ci_failed',
-        mergeState: 'ci_failed',
+        category: 'unknown',
+        mergeState: 'unstable',
         rawMergeableState,
-        failingChecks,
+        failingChecks: [],
       };
     }
     if (rawMergeableState === 'blocked') {
