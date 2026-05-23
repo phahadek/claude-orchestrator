@@ -108,16 +108,6 @@ export default function App() {
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  const { send, connectionState } = useWebSocket(dispatch, (sendNow) => {
-    // Called each time the WS (re)connects — fetch tasks if projectId+milestoneId are known
-    if (activeProjectIdRef.current && activeBoardIdRef.current) {
-      sendNow({
-        type: 'fetch_tasks',
-        projectId: activeProjectIdRef.current,
-        milestoneId: activeBoardIdRef.current,
-      });
-    }
-  });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [activeView, setActiveView] = useState<
@@ -128,6 +118,37 @@ export default function App() {
   const [showReconnected, setShowReconnected] = useState(false);
   const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
   const prevConnectionState = useRef<ConnectionState>('disconnected');
+
+  const dismissNotification = useCallback((id: string) => {
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+  }, []);
+
+  const handleWsMessage = useCallback(
+    (msg: Parameters<typeof dispatch>[0]) => {
+      if (msg.type === 'error') {
+        const notifId = crypto.randomUUID();
+        setNotifications((prev) => [
+          ...prev,
+          { id: notifId, message: msg.message, status: 'error' },
+        ]);
+        setTimeout(() => dismissNotification(notifId), 10_000);
+        return;
+      }
+      dispatch(msg);
+    },
+    [dispatch, dismissNotification],
+  );
+
+  const { send, connectionState } = useWebSocket(handleWsMessage, (sendNow) => {
+    // Called each time the WS (re)connects — fetch tasks if projectId+milestoneId are known
+    if (activeProjectIdRef.current && activeBoardIdRef.current) {
+      sendNow({
+        type: 'fetch_tasks',
+        projectId: activeProjectIdRef.current,
+        milestoneId: activeBoardIdRef.current,
+      });
+    }
+  });
 
   const [cardPreviewLines, setCardPreviewLines] = useState<number>(3);
   const [sessionMode, setSessionMode] = useState<string>('cli');
@@ -170,10 +191,6 @@ export default function App() {
     }
     prevConnectionState.current = connectionState;
   }, [connectionState, hasConnectedOnce]);
-
-  const dismissNotification = useCallback((id: string) => {
-    setNotifications((prev) => prev.filter((n) => n.id !== id));
-  }, []);
 
   const handleArchiveAll = useCallback(async () => {
     await fetch('/api/sessions/archive-finished', { method: 'POST' });

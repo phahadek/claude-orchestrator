@@ -252,11 +252,30 @@ describe('DispatchModal', () => {
       { type: 'dispatch' }
     >;
     expect(dispatchMsg.tasks).toHaveLength(2);
-    expect(dispatchMsg.tasks[0].taskUrl).toBe('https://notion.so/t1');
-    expect(dispatchMsg.tasks[1].taskUrl).toBe('https://notion.so/t2');
+    expect(dispatchMsg.tasks[0].taskUrl).toBe('t1');
+    expect(dispatchMsg.tasks[1].taskUrl).toBe('t2');
     expect(typeof dispatchMsg.tasks[0].projectContextUrl).toBe('string');
     expect(dispatchMsg.tasks[0].projectId).toBe(PROJECT_ID);
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('dispatches t.task.id (not t.task.notionUrl) as taskUrl', () => {
+    const task = makeTask('yaml-task-id', 'YAML Task');
+    renderModal([task], true, send, onClose);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: /launch/i }));
+
+    const dispatchMsg = send.mock.calls
+      .map((c) => c[0] as ClientMessage)
+      .find((m) => m.type === 'dispatch') as Extract<
+      ClientMessage,
+      { type: 'dispatch' }
+    >;
+    expect(dispatchMsg).toBeDefined();
+    expect(dispatchMsg.tasks[0].taskUrl).toBe('yaml-task-id');
+    expect(dispatchMsg.tasks[0].taskUrl).not.toBe(
+      'https://notion.so/yaml-task-id',
+    );
   });
 
   it('does not send dispatch or close when no tasks selected', () => {

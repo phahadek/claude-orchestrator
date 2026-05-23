@@ -21,3 +21,19 @@ describe('ws/router.ts — fetch_tasks milestone-based routing', () => {
     expect(routerSource).toMatch(/\.fetchReadyTasks\(msg\.milestoneId/);
   });
 });
+
+describe('ws/router.ts — dispatch empty taskUrl rejection', () => {
+  it('rejects tasks with empty taskUrl before calling sessions.start', () => {
+    expect(routerSource).toMatch(/!t\.taskUrl/);
+    expect(routerSource).toMatch(/dispatch task requires a non-empty taskUrl/);
+  });
+
+  it('sends a structured error message for empty taskUrl', () => {
+    const emptyTaskUrlBlock = routerSource.slice(
+      routerSource.indexOf('!t.taskUrl'),
+      routerSource.indexOf('sessions.start'),
+    );
+    expect(emptyTaskUrlBlock).toMatch(/ws\.send/);
+    expect(emptyTaskUrlBlock).toMatch(/type.*error|error.*type/);
+  });
+});

@@ -496,6 +496,26 @@ export class SessionManager extends EventEmitter {
         sessionId,
         status: 'error',
       } satisfies ServerMessage);
+      // Roll back task status to Ready so the card doesn't stay stuck In Progress.
+      if (sessionType === 'standard' && notionTaskId) {
+        getTaskBackend(projectId)
+          .updateStatus(notionTaskId, '🗂️ Ready')
+          .then(() => {
+            this.emit('message', {
+              type: 'task_status_changed',
+              notionTaskId,
+              newStatus: '🗂️ Ready',
+            } satisfies ServerMessage);
+            emitTaskUpdated(notionTaskId);
+          })
+          .catch((e) =>
+            console.error(`[SessionManager] rollback to Ready failed: ${e}`),
+          );
+      }
+      this.emit('message', {
+        type: 'error',
+        message: `Session launch failed: ${err instanceof Error ? err.message : String(err)}`,
+      } satisfies ServerMessage);
     });
 
     if (sessionType === 'standard') {
@@ -509,9 +529,13 @@ export class SessionManager extends EventEmitter {
           } satisfies ServerMessage);
           emitTaskUpdated(notionTaskId);
         })
-        .catch((e) =>
-          console.error(`[SessionManager] failed to set In Progress: ${e}`),
-        );
+        .catch((e) => {
+          console.error(`[SessionManager] failed to set In Progress: ${e}`);
+          this.emit('message', {
+            type: 'error',
+            message: `Failed to update task status to In Progress: ${e}`,
+          } satisfies ServerMessage);
+        });
     }
 
     // Look up the PR for review sessions so the card can display "Review of #N" and link to code session

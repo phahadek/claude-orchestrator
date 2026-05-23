@@ -6,14 +6,14 @@ import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 export function useDispatch(
   send: (msg: ClientMessage) => void,
   project: ProjectConfig | null,
-): (tasks: Array<{ taskUrl: string; taskType?: string }>) => void {
+): (tasks: Array<{ taskId: string; taskType?: string }>) => void {
   return useCallback(
     (tasks) => {
       if (!project || tasks.length === 0) return;
       send({
         type: 'dispatch',
         tasks: tasks.map((t) => ({
-          taskUrl: t.taskUrl,
+          taskUrl: t.taskId,
           projectContextUrl: project.contextUrl,
           taskType: t.taskType,
           projectId: project.id,

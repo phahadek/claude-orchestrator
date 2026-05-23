@@ -446,14 +446,15 @@ describe('TaskCard', () => {
     expect((btn as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('Launch button dispatches single task when clicked', () => {
+  it('Launch button dispatches single task when clicked, using taskId not notionUrl', () => {
     const send = vi.fn();
     const project = makeProject();
     const task = makeTask({
+      taskId: 'task-abc',
       notionStatus: '🗂️ Ready',
       taskType: '💻 Code',
       blocked: false,
-      notionUrl: 'https://notion.so/task-1',
+      notionUrl: 'https://notion.so/task-abc',
     });
 
     render(
@@ -473,13 +474,21 @@ describe('TaskCard', () => {
       type: 'dispatch',
       tasks: [
         {
-          taskUrl: 'https://notion.so/task-1',
+          taskUrl: 'task-abc',
           projectContextUrl: 'https://notion.so/context',
           taskType: '💻 Code',
           projectId: 'proj-1',
         },
       ],
     });
+    // Verify taskId is used, not notionUrl
+    const dispatchCall = send.mock.calls.find(
+      (c) => (c[0] as { type: string }).type === 'dispatch',
+    );
+    expect(dispatchCall?.[0].tasks[0].taskUrl).toBe('task-abc');
+    expect(dispatchCall?.[0].tasks[0].taskUrl).not.toBe(
+      'https://notion.so/task-abc',
+    );
   });
 
   it('Launch button click does not propagate to card onClick', () => {

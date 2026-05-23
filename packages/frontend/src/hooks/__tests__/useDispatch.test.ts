@@ -15,21 +15,39 @@ function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
 }
 
 describe('useDispatch', () => {
-  it('sends a dispatch WS message with the correct shape for a single task', () => {
+  it('sends a dispatch WS message with taskId mapped to taskUrl for a single task', () => {
     const send = vi.fn();
     const project = makeProject();
 
     const { result } = renderHook(() => useDispatch(send, project));
-    result.current([
-      { taskUrl: 'https://notion.so/task-1', taskType: '💻 Code' },
-    ]);
+    result.current([{ taskId: 'notion-page-id-123', taskType: '💻 Code' }]);
 
     expect(send).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenCalledWith({
       type: 'dispatch',
       tasks: [
         {
-          taskUrl: 'https://notion.so/task-1',
+          taskUrl: 'notion-page-id-123',
+          projectContextUrl: 'https://notion.so/context',
+          taskType: '💻 Code',
+          projectId: 'proj-1',
+        },
+      ],
+    });
+  });
+
+  it('passes YAML task id as taskUrl (not a URL)', () => {
+    const send = vi.fn();
+    const project = makeProject();
+
+    const { result } = renderHook(() => useDispatch(send, project));
+    result.current([{ taskId: 't2-ready-unblocked', taskType: '💻 Code' }]);
+
+    expect(send).toHaveBeenCalledWith({
+      type: 'dispatch',
+      tasks: [
+        {
+          taskUrl: 't2-ready-unblocked',
           projectContextUrl: 'https://notion.so/context',
           taskType: '💻 Code',
           projectId: 'proj-1',
@@ -52,7 +70,7 @@ describe('useDispatch', () => {
     const send = vi.fn();
 
     const { result } = renderHook(() => useDispatch(send, null));
-    result.current([{ taskUrl: 'https://notion.so/task-1' }]);
+    result.current([{ taskId: 'some-task-id' }]);
 
     expect(send).not.toHaveBeenCalled();
   });
@@ -63,21 +81,21 @@ describe('useDispatch', () => {
 
     const { result } = renderHook(() => useDispatch(send, project));
     result.current([
-      { taskUrl: 'https://notion.so/task-1', taskType: '💻 Code' },
-      { taskUrl: 'https://notion.so/task-2', taskType: '💻 Code' },
+      { taskId: 'task-id-1', taskType: '💻 Code' },
+      { taskId: 'task-id-2', taskType: '💻 Code' },
     ]);
 
     expect(send).toHaveBeenCalledWith({
       type: 'dispatch',
       tasks: [
         {
-          taskUrl: 'https://notion.so/task-1',
+          taskUrl: 'task-id-1',
           projectContextUrl: 'https://notion.so/context',
           taskType: '💻 Code',
           projectId: 'proj-1',
         },
         {
-          taskUrl: 'https://notion.so/task-2',
+          taskUrl: 'task-id-2',
           projectContextUrl: 'https://notion.so/context',
           taskType: '💻 Code',
           projectId: 'proj-1',
