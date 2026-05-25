@@ -73,7 +73,8 @@ export type EventType =
   | 'tool_result'
   | 'system'
   | 'error'
-  | 'user_message';
+  | 'user_message'
+  | 'rate_limit';
 
 export interface SessionEvent {
   id: number;
