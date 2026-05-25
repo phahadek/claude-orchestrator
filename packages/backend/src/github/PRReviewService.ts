@@ -226,17 +226,9 @@ export class PRReviewService {
       ].join('\n');
       this.sessionManager.send(existingReviewSessionId, followUp);
       const aiResult = await verdictPromise;
-      const { mergeable } = await this.github.getMergeabilityWithRetry(
-        prNumber,
-        repo,
-      );
-      const sizedResult = this.appendSizeProportionalityDimension(
+      const finalResult = this.appendSizeProportionalityDimension(
         aiResult,
         sizeSignal,
-      );
-      const finalResult = this.appendMergeConflictDimension(
-        sizedResult,
-        mergeable,
       );
       setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
       if (finalResult.verdict === 'approved') {
@@ -283,17 +275,9 @@ export class PRReviewService {
         prNumber,
         repo,
       );
-      const { mergeable } = await this.github.getMergeabilityWithRetry(
-        prNumber,
-        repo,
-      );
-      const sizedResult = this.appendSizeProportionalityDimension(
+      const finalResult = this.appendSizeProportionalityDimension(
         aiResult,
         sizeSignal,
-      );
-      const finalResult = this.appendMergeConflictDimension(
-        sizedResult,
-        mergeable,
       );
       setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
       if (finalResult.verdict === 'approved') {
@@ -336,17 +320,9 @@ export class PRReviewService {
     setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
 
     const aiResult = await verdictPromise;
-    const { mergeable } = await this.github.getMergeabilityWithRetry(
-      prNumber,
-      repo,
-    );
-    const sizedResult = this.appendSizeProportionalityDimension(
+    const finalResult = this.appendSizeProportionalityDimension(
       aiResult,
       sizeSignal,
-    );
-    const finalResult = this.appendMergeConflictDimension(
-      sizedResult,
-      mergeable,
     );
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
     if (finalResult.verdict === 'approved') {
@@ -615,17 +591,9 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       prNumber,
       repo,
     );
-    const { mergeable } = await this.github.getMergeabilityWithRetry(
-      prNumber,
-      repo,
-    );
-    const sizedResult = this.appendSizeProportionalityDimension(
+    const finalResult = this.appendSizeProportionalityDimension(
       aiResult,
       sizeSignal,
-    );
-    const finalResult = this.appendMergeConflictDimension(
-      sizedResult,
-      mergeable,
     );
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
     setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
@@ -794,49 +762,13 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     return null;
   }
 
-  private appendMergeConflictDimension(
-    result: PRReviewResult,
-    mergeable: boolean | null,
-  ): PRReviewResult {
-    // When GitHub returns null, mergeability is still being computed — skip the dimension entirely.
-    if (mergeable === null) {
-      return result;
-    }
-
-    const passed = mergeable === true;
-    const conflictDim: ReviewDimension = {
-      name: 'Merge conflicts',
-      passed,
-      notes: passed
-        ? 'No merge conflicts detected.'
-        : 'PR has merge conflicts with base branch. Rebase and resolve before re-review.',
-    };
-
-    const dimensions = [...(result.dimensions ?? []), conflictDim];
-    const passedCount = dimensions.filter((d) => d.passed).length;
-
-    let verdict: PRReviewResult['verdict'];
-    if (result.verdict === 'error' || result.verdict === 'incomplete') {
-      verdict = result.verdict; // Never override error/incomplete
-    } else if (passedCount === dimensions.length) {
-      verdict = 'approved';
-    } else if (passedCount === 0) {
-      verdict = 'incomplete';
-    } else {
-      verdict = 'needs_changes';
-    }
-
-    return { ...result, dimensions, verdict };
-  }
-
   /**
    * Normalize the Size proportionality dimension and re-derive the overall verdict.
    * The LLM owns the pass/fail call (it sees the size signal in the prompt). When
    * the LLM forgets to emit the dimension, we synthesize one from the heuristic:
    *   - in budget → pass
    *   - oversized → fail (no justification was offered)
-   * Verdict is recomputed using the same passedCount === dimensions.length pattern
-   * as appendMergeConflictDimension; error/incomplete inputs are preserved.
+   * error/incomplete verdict inputs are preserved.
    */
   private appendSizeProportionalityDimension(
     result: PRReviewResult,

@@ -654,11 +654,9 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
   });
 });
 
-// ── Merge conflict dimension ──────────────────────────────────────────────────
+// ── Verdict ignores mergeability state ───────────────────────────────────────
 
-describe('PRReviewService — merge conflict dimension', () => {
-  // Payload now includes the 5th Size proportionality dimension that the LLM is
-  // asked to produce alongside the original four.
+describe('PRReviewService — verdict ignores mergeability state', () => {
   const allPassedAIPayload = {
     verdict: 'approved',
     dimensions: [
@@ -679,19 +677,11 @@ describe('PRReviewService — merge conflict dimension', () => {
     summary: 'All five AI dimensions passed.',
   };
 
-  it('includes 6th Merge conflicts dimension with passed=true when mergeable=true', async () => {
+  it('all Claude dimensions passing → approved even when PR has merge conflicts (mergeable=false)', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
 
     const mockSM = makeMockSessionManager();
     const mockGH = makeMockGitHub();
-    vi.mocked(mockGH.getMergeability).mockResolvedValue({
-      mergeable: true,
-      mergeableState: 'clean',
-    });
-    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({
-      mergeable: true,
-      mergeableState: 'clean',
-    });
 
     const service = new PRReviewService(
       mockGH,
@@ -719,134 +709,45 @@ describe('PRReviewService — merge conflict dimension', () => {
       makeMockDiffSource(),
     );
 
-    expect(result.dimensions).toHaveLength(6);
-    const conflictDim = result.dimensions!.find(
-      (d) => d.name === 'Merge conflicts',
-    );
-    expect(conflictDim).toBeDefined();
-    expect(conflictDim!.passed).toBe(true);
     expect(result.verdict).toBe('approved');
-  });
-
-  it('includes 6th Merge conflicts dimension with passed=false when mergeable=false, downgrading verdict to needs_changes', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
-
-    const mockSM = makeMockSessionManager();
-    const mockGH = makeMockGitHub();
-    vi.mocked(mockGH.getMergeability).mockResolvedValue({
-      mergeable: false,
-      mergeableState: 'dirty',
-    });
-    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({
-      mergeable: false,
-      mergeableState: 'dirty',
-    });
-
-    const service = new PRReviewService(
-      mockGH,
-      makeMockNotion(),
-      mockSM as any,
-      'proj-1',
-      'https://notion.so/ctx',
-    );
-
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
-        const id = opts.sessionId;
-        setImmediate(() =>
-          mockSM.emit(
-            'message',
-            makeSessionEventMessage(id, JSON.stringify(allPassedAIPayload)),
-          ),
-        );
-        return id;
-      },
-    );
-
-    const result = await service.reviewPR(
-      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
-      makeMockDiffSource(),
-    );
-
-    expect(result.dimensions).toHaveLength(6);
-    const conflictDim = result.dimensions!.find(
-      (d) => d.name === 'Merge conflicts',
-    );
-    expect(conflictDim).toBeDefined();
-    expect(conflictDim!.passed).toBe(false);
-    expect(conflictDim!.notes).toContain('merge conflicts');
-    expect(result.verdict).toBe('needs_changes');
-  });
-
-  it('skips Merge conflicts dimension when mergeable=null (GitHub still computing), preserving AI verdict', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
-
-    const mockSM = makeMockSessionManager();
-    const mockGH = makeMockGitHub();
-    vi.mocked(mockGH.getMergeability).mockResolvedValue({
-      mergeable: null,
-      mergeableState: null,
-    });
-    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({
-      mergeable: null,
-      mergeableState: null,
-    });
-
-    const service = new PRReviewService(
-      mockGH,
-      makeMockNotion(),
-      mockSM as any,
-      'proj-1',
-      'https://notion.so/ctx',
-    );
-
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
-        const id = opts.sessionId;
-        setImmediate(() =>
-          mockSM.emit(
-            'message',
-            makeSessionEventMessage(id, JSON.stringify(allPassedAIPayload)),
-          ),
-        );
-        return id;
-      },
-    );
-
-    const result = await service.reviewPR(
-      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
-      makeMockDiffSource(),
-    );
-
-    // No Merge conflicts dimension appended — GitHub hasn't computed it yet
+    expect(result.dimensions).toHaveLength(5);
     const conflictDim = result.dimensions!.find(
       (d) => d.name === 'Merge conflicts',
     );
     expect(conflictDim).toBeUndefined();
-    // AI verdict (approved) is preserved — not downgraded to needs_changes
-    expect(result.verdict).toBe('approved');
-    // 5 LLM dimensions remain (Size proportionality already included by the LLM)
-    expect(result.dimensions).toHaveLength(5);
+    expect(vi.mocked(mockGH.getMergeabilityWithRetry)).not.toHaveBeenCalled();
   });
 
-  it('preserves incomplete verdict when session killed with mergeable=null, no conflict dim appended', async () => {
+  it('any substantive dimension failing → needs_changes regardless of mergeability', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
-    // Empty events → parseReviewResult returns incomplete (JSON parse failure)
-    vi.mocked(getEventsBySession).mockReturnValue([]);
+
+    const oneFailedPayload = {
+      verdict: 'needs_changes',
+      dimensions: [
+        {
+          name: 'Title and description vs task Summary',
+          passed: true,
+          notes: 'ok',
+        },
+        {
+          name: 'Diff vs Context spec',
+          passed: false,
+          notes: 'Missing export.',
+        },
+        { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
+        {
+          name: 'Changed files vs Files/paths affected list',
+          passed: true,
+          notes: 'ok',
+        },
+        { name: 'Size proportionality', passed: true, notes: 'In budget.' },
+      ],
+      summary: 'One dimension failed.',
+    };
 
     const mockSM = makeMockSessionManager();
-    const mockGH = makeMockGitHub();
-    vi.mocked(mockGH.getMergeability).mockResolvedValue({
-      mergeable: null,
-      mergeableState: null,
-    });
-    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({
-      mergeable: null,
-      mergeableState: null,
-    });
-
     const service = new PRReviewService(
-      mockGH,
+      makeMockGitHub(),
       makeMockNotion(),
       mockSM as any,
       'proj-1',
@@ -856,7 +757,44 @@ describe('PRReviewService — merge conflict dimension', () => {
     (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
       (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
         const id = opts.sessionId;
-        // Simulate killed session: session_ended fires with no prior verdict
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(id, JSON.stringify(oneFailedPayload)),
+          ),
+        );
+        return id;
+      },
+    );
+
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(result.verdict).toBe('needs_changes');
+    const conflictDim = result.dimensions!.find(
+      (d) => d.name === 'Merge conflicts',
+    );
+    expect(conflictDim).toBeUndefined();
+  });
+
+  it('zero passing dimensions (session killed) → incomplete', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+    vi.mocked(getEventsBySession).mockReturnValue([]);
+
+    const mockSM = makeMockSessionManager();
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
         setImmediate(() =>
           mockSM.emit('message', {
             type: 'session_ended',
@@ -874,56 +812,10 @@ describe('PRReviewService — merge conflict dimension', () => {
     );
 
     expect(result.verdict).toBe('incomplete');
-    // mergeable=null → dimension is skipped entirely
     const conflictDim = result.dimensions?.find(
       (d) => d.name === 'Merge conflicts',
     );
     expect(conflictDim).toBeUndefined();
-  });
-
-  it('preserves incomplete verdict when session killed with mergeable=true', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
-    vi.mocked(getEventsBySession).mockReturnValue([]);
-
-    const mockSM = makeMockSessionManager();
-    const mockGH = makeMockGitHub();
-    vi.mocked(mockGH.getMergeability).mockResolvedValue({
-      mergeable: true,
-      mergeableState: 'clean',
-    });
-    vi.mocked(mockGH.getMergeabilityWithRetry).mockResolvedValue({
-      mergeable: true,
-      mergeableState: 'clean',
-    });
-
-    const service = new PRReviewService(
-      mockGH,
-      makeMockNotion(),
-      mockSM as any,
-      'proj-1',
-      'https://notion.so/ctx',
-    );
-
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
-      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
-        const id = opts.sessionId;
-        setImmediate(() =>
-          mockSM.emit('message', {
-            type: 'session_ended',
-            sessionId: id,
-            status: 'killed',
-          }),
-        );
-        return id;
-      },
-    );
-
-    const result = await service.reviewPR(
-      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
-      makeMockDiffSource(),
-    );
-
-    expect(result.verdict).toBe('incomplete');
   });
 });
 
