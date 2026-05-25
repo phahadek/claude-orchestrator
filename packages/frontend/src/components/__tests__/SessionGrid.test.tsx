@@ -166,6 +166,86 @@ describe('SessionGrid', () => {
     expect(cards[0].textContent).toContain('Favorited Done');
   });
 
+  it('archive button has title attribute and both full and short label spans', () => {
+    const sessions = [
+      makeSession({ sessionId: 's1', taskName: 'Task One', status: 'done' }),
+    ];
+    render(
+      <SessionGrid
+        sessions={sessions}
+        projects={[]}
+        onSelect={vi.fn()}
+        selectedId={null}
+        keyboardSelectedId={null}
+        synced={true}
+        onArchiveAll={vi.fn()}
+      />,
+    );
+    const archiveBtn = screen.getByTitle(
+      'Archive done / error / killed sessions',
+    );
+    expect(archiveBtn).toBeDefined();
+    expect(archiveBtn.textContent).toContain('Archive done/error/killed');
+    expect(archiveBtn.textContent).toContain('Archive');
+  });
+
+  it('clicking archive button invokes onArchiveAll', () => {
+    const onArchiveAll = vi.fn();
+    const sessions = [
+      makeSession({ sessionId: 's1', taskName: 'Task One', status: 'done' }),
+    ];
+    render(
+      <SessionGrid
+        sessions={sessions}
+        projects={[]}
+        onSelect={vi.fn()}
+        selectedId={null}
+        keyboardSelectedId={null}
+        synced={true}
+        onArchiveAll={onArchiveAll}
+      />,
+    );
+    fireEvent.click(
+      screen.getByTitle('Archive done / error / killed sessions'),
+    );
+    expect(onArchiveAll).toHaveBeenCalledOnce();
+  });
+
+  it('filter toggle pills apply and clear correctly', () => {
+    const sessions = [
+      makeSession({
+        sessionId: 's1',
+        taskName: 'Running Task',
+        status: 'running',
+      }),
+      makeSession({ sessionId: 's2', taskName: 'Done Task', status: 'done' }),
+    ];
+    render(
+      <SessionGrid
+        sessions={sessions}
+        projects={[]}
+        onSelect={vi.fn()}
+        selectedId={null}
+        keyboardSelectedId={null}
+        synced={true}
+        onArchiveAll={vi.fn()}
+      />,
+    );
+    // Both cards visible initially
+    expect(screen.getByText('Running Task')).toBeDefined();
+    expect(screen.getByText('Done Task')).toBeDefined();
+
+    // Click Running filter
+    fireEvent.click(screen.getByRole('button', { name: 'Running' }));
+    expect(screen.getByText('Running Task')).toBeDefined();
+    expect(screen.queryByText('Done Task')).toBeNull();
+
+    // Clear filter
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(screen.getByText('Running Task')).toBeDefined();
+    expect(screen.getByText('Done Task')).toBeDefined();
+  });
+
   it('calls onSelect with the correct sessionId when a card is clicked', () => {
     const onSelect = vi.fn();
     const sessions = [

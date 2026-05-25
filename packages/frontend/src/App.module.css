@@ -123,6 +123,38 @@
   background: rgba(30, 30, 46, 0.1);
 }
 
+.sessionsHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.sessionsCount {
+  flex: 1;
+}
+
+.sessionsActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 768px) {
+  .sessionsHeader {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .sessionsCount {
+    width: 100%;
+  }
+
+  .sessionsActions {
+    width: 100%;
+  }
+}
+
 .connectionBanner {
   position: fixed;
   top: 0;

@@ -156,8 +156,12 @@ export function SessionGrid({
             <button
               className={styles['archive-all-button']}
               onClick={onArchiveAll}
+              title="Archive done / error / killed sessions"
             >
-              Archive done/error/killed
+              <span className={styles['archive-label-full']}>
+                Archive done/error/killed
+              </span>
+              <span className={styles['archive-label-short']}>Archive</span>
             </button>
           )}
           {rateLimitedCount > 0 && onResumeAll && (
