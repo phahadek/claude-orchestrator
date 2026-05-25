@@ -81,6 +81,7 @@ const _reviewOrchestrator = new ReviewOrchestrator(
   sessionManager,
   AUTO_REVIEW_CONCURRENCY,
   AUTO_REVIEW_ENABLED,
+  githubClient,
 );
 
 const PORT = parseInt(process.env.PORT ?? '3000');

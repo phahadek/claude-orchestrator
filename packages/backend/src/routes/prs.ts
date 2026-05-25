@@ -21,6 +21,7 @@ import type { MergeabilityCategory } from '../github/types';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { PRReviewService } from '../github/PRReviewService';
 import type { PRReviewResult } from '../github/PRReviewService';
+import { GitHubDiffSource } from '../github/DiffSource';
 import type { PRMergeWatcher } from '../github/PRMergeWatcher';
 import type { AutoMerger } from '../github/AutoMerger';
 import type { SessionManager } from '../session/SessionManager';
@@ -188,7 +189,12 @@ export function createPrsRouter(
     const contextUrl = project.contextUrl;
     try {
       const result = await Promise.race([
-        prReviewService.reviewPR(prNumber, repo, projectId, contextUrl),
+        prReviewService.reviewPR(
+          { type: 'pr', prNumber, repo },
+          new GitHubDiffSource(github, repo, prNumber),
+          projectId,
+          contextUrl,
+        ),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('Review timed out')), 120_000),
         ),
@@ -531,8 +537,8 @@ export function createPrsRouter(
       try {
         const result = await Promise.race([
           prReviewService.reviewPR(
-            prNumber,
-            repo,
+            { type: 'pr', prNumber, repo },
+            new GitHubDiffSource(github, repo, prNumber),
             project.id,
             project.contextUrl,
           ),

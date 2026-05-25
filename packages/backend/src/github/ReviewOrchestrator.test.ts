@@ -11,6 +11,8 @@ vi.mock('../db/queries.js', () => ({
   updatePRDraftStatus: vi.fn(),
   setPendingPush: vi.fn(),
   setPauseReason: vi.fn(),
+  getLocalBranchBySession: vi.fn(),
+  getSession: vi.fn(),
 }));
 
 const projectFixture = {
@@ -38,6 +40,8 @@ import {
   getPRByNumber,
   updatePRDraftStatus,
   setPauseReason,
+  getLocalBranchBySession,
+  getSession,
 } from '../db/queries';
 import type { PRReviewService } from './PRReviewService';
 import type { GitHubClient } from './GitHubClient';
@@ -765,5 +769,146 @@ describe('ReviewOrchestrator — Notion status update on approved verdict', () =
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(nc.updateStatus)).not.toHaveBeenCalled();
+  });
+});
+
+// ── local_branch_submitted ────────────────────────────────────────────────────
+
+const baseLocalBranchRow = {
+  id: 10,
+  project_id: 'proj-1',
+  session_id: 'session-local-1',
+  branch_name: 'feature/my-local-branch',
+  base_branch: 'dev',
+  status: 'open',
+  review_result: null,
+  created_at: '2024-01-01T00:00:00Z',
+  updated_at: '2024-01-01T00:00:00Z',
+};
+
+const baseSessionRow = {
+  session_id: 'session-local-1',
+  notion_task_id: 'task-local-abc',
+  notion_task_url: null,
+  project_context_url: null,
+  project_id: 'proj-1',
+  status: 'done',
+  started_at: 1000,
+  ended_at: null,
+  pr_url: null,
+  worktree_path: '/path/to/worktree',
+  archived: 0,
+  favorited: 0,
+  session_type: 'standard',
+  note: null,
+  tags: null,
+  total_input_tokens: 0,
+  total_output_tokens: 0,
+  task_name: null,
+  metadata: null,
+  review_result: null,
+};
+
+describe('ReviewOrchestrator — local_branch_submitted', () => {
+  it('queues a review job when local_branch_submitted fires', async () => {
+    vi.mocked(getLocalBranchBySession).mockReturnValue(
+      baseLocalBranchRow as any,
+    );
+    vi.mocked(getSession).mockReturnValue(baseSessionRow as any);
+
+    const rs = makeMockReviewService({
+      prNumber: 10,
+      repo: 'local/feature/my-local-branch',
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'LGTM',
+      reviewedAt: new Date().toISOString(),
+    });
+    const sm = makeMockSessionManager();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('message', {
+      type: 'local_branch_submitted',
+      projectId: 'proj-1',
+      sessionId: 'session-local-1',
+      branchName: 'feature/my-local-branch',
+      baseBranch: 'dev',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+    const [workItem] = vi.mocked(rs.reviewPR).mock.calls[0];
+    expect(workItem).toMatchObject({
+      type: 'local_branch',
+      localBranchId: 10,
+      branchName: 'feature/my-local-branch',
+      baseBranch: 'dev',
+    });
+  });
+
+  it('does not queue when local_branch_submitted fires but enabled === false', async () => {
+    vi.mocked(getLocalBranchBySession).mockReturnValue(
+      baseLocalBranchRow as any,
+    );
+    vi.mocked(getSession).mockReturnValue(baseSessionRow as any);
+
+    const rs = makeMockReviewService();
+    const sm = makeMockSessionManager();
+    new ReviewOrchestrator(rs, sm as any, 1, false);
+
+    sm.emit('message', {
+      type: 'local_branch_submitted',
+      projectId: 'proj-1',
+      sessionId: 'session-local-1',
+      branchName: 'feature/my-local-branch',
+      baseBranch: 'dev',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it('skips review when local_branch_submitted fires with no worktree_path', async () => {
+    vi.mocked(getLocalBranchBySession).mockReturnValue(
+      baseLocalBranchRow as any,
+    );
+    vi.mocked(getSession).mockReturnValue({
+      ...baseSessionRow,
+      worktree_path: null,
+    } as any);
+
+    const rs = makeMockReviewService();
+    const sm = makeMockSessionManager();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('message', {
+      type: 'local_branch_submitted',
+      projectId: 'proj-1',
+      sessionId: 'session-local-1',
+      branchName: 'feature/my-local-branch',
+      baseBranch: 'dev',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it('queues a review job when pr_opened fires (regression)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const rs = makeMockReviewService();
+    const sm = makeMockSessionManager();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+    const [workItem] = vi.mocked(rs.reviewPR).mock.calls[0];
+    expect(workItem).toMatchObject({
+      type: 'pr',
+      prNumber: 1,
+      repo: 'owner/repo',
+    });
   });
 });

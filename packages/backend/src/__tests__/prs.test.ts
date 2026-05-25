@@ -1019,8 +1019,8 @@ describe('Break 2 (AC) — POST /api/prs/:prNumber/review calls prReviewService.
     expect(res.status).toBe(200);
     // Must invoke reviewPR — not return the old stub { verdict: null }
     expect(vi.mocked(prReviewService.reviewPR)).toHaveBeenCalledWith(
-      42,
-      'owner/repo',
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      expect.objectContaining({ fetchDiff: expect.any(Function) }),
       'proj-1',
       'https://notion.so/ctx',
     );
