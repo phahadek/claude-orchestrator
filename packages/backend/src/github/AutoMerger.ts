@@ -1,11 +1,30 @@
-import { getProjectByGithubRepo, runtimeSettings } from '../config';
-import { getPRByNumber, setPauseReason, updateMergeState } from '../db/queries';
+import {
+  getProjectByGithubRepo,
+  getProjectById,
+  runtimeSettings,
+} from '../config';
+import {
+  getPRByNumber,
+  setPauseReason,
+  updateMergeState,
+  getApprovedOpenPRs,
+  getApprovedLocalBranches,
+  markLocalBranchMerged,
+  setLocalBranchPauseReason,
+  getSession,
+} from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
 import { GitHubApiError } from './types';
 import type { PRMergeWatcher } from './PRMergeWatcher';
 import type { PullRequestRow } from '../db/types';
 import type { ServerMessage } from '../ws/types';
 import { emitTaskUpdated } from '../routes/tasks';
+import { loadOrchestratorConfig } from '../session/orchestrator-config';
+import type { SessionManager } from '../session/SessionManager';
+import { getTaskBackend } from '../tasks/TaskBackend';
+import { squashMergeLocal } from '../orchestration/localMergeRunner';
+import { detectMergeConflict } from '../orchestration/localBranchHelpers';
+import { formatMergeConflictFeedback } from './reviewUtils';
 
 const MIN_POLL_INTERVAL_MS = 5_000;
 
@@ -26,10 +45,149 @@ export class AutoMerger {
     private github: GitHubClient,
     private mergeWatcher: PRMergeWatcher,
     private broadcast: (msg: ServerMessage) => void,
+    private sessions?: SessionManager,
   ) {}
 
   private key(prNumber: number, repo: string): string {
     return `${repo}#${prNumber}`;
+  }
+
+  /**
+   * Poll both pull_requests and local_branches for merge-ready items and
+   * dispatch to the appropriate merge handler. PRs go through the existing
+   * attempt() loop; local branches are squash-merged immediately.
+   */
+  async pollOnce(): Promise<void> {
+    const approvedPRs = getApprovedOpenPRs();
+    for (const pr of approvedPRs) {
+      this.attempt(pr.pr_number, pr.repo);
+    }
+
+    const approvedLocalBranches = getApprovedLocalBranches();
+    for (const row of approvedLocalBranches) {
+      await this.handleLocalBranchMerge(row);
+    }
+  }
+
+  private async handleLocalBranchMerge(
+    row: ReturnType<typeof getApprovedLocalBranches>[number],
+  ): Promise<void> {
+    const session = row.session_id ? getSession(row.session_id) : undefined;
+    if (!session) {
+      console.warn(
+        `[AutoMerger] local branch #${row.id} (${row.branch_name}): session ${row.session_id} not found — skipping`,
+      );
+      return;
+    }
+
+    const worktreePath = session.worktree_path;
+    if (!worktreePath) {
+      console.warn(
+        `[AutoMerger] local branch #${row.id} (${row.branch_name}): no worktree_path on session — skipping`,
+      );
+      return;
+    }
+
+    const hasConflict = await detectMergeConflict(
+      worktreePath,
+      row.base_branch,
+      row.branch_name,
+    ).catch((err: unknown) => {
+      console.warn(
+        `[AutoMerger] local branch #${row.id}: detectMergeConflict failed: ${(err as Error).message}`,
+      );
+      return false;
+    });
+
+    if (hasConflict) {
+      setLocalBranchPauseReason(row.id, 'merge_conflict');
+      if (this.sessions && session.session_id) {
+        this.sessions
+          .sendOrResume(
+            session.session_id,
+            formatMergeConflictFeedback({
+              branchName: row.branch_name,
+              baseBranch: row.base_branch,
+            }),
+          )
+          .catch((err: unknown) =>
+            console.warn(
+              `[AutoMerger] local branch #${row.id}: sendOrResume failed: ${(err as Error).message}`,
+            ),
+          );
+      }
+      return;
+    }
+
+    const taskName = session.task_name ?? row.branch_name;
+
+    const result = await squashMergeLocal({
+      worktreePath,
+      baseBranch: row.base_branch,
+      featureBranch: row.branch_name,
+      taskName,
+    }).catch((err: unknown) => {
+      console.warn(
+        `[AutoMerger] local branch #${row.id}: squashMergeLocal threw: ${(err as Error).message}`,
+      );
+      return { merged: false as const, conflict: false };
+    });
+
+    if (!result.merged) {
+      if (result.conflict) {
+        setLocalBranchPauseReason(row.id, 'merge_conflict');
+        if (this.sessions && session.session_id) {
+          this.sessions
+            .sendOrResume(
+              session.session_id,
+              formatMergeConflictFeedback({
+                branchName: row.branch_name,
+                baseBranch: row.base_branch,
+              }),
+            )
+            .catch((err: unknown) =>
+              console.warn(
+                `[AutoMerger] local branch #${row.id}: sendOrResume failed: ${(err as Error).message}`,
+              ),
+            );
+        }
+      }
+      return;
+    }
+
+    const commitSha = result.commitSha ?? null;
+
+    markLocalBranchMerged(row.id, commitSha);
+
+    if (this.sessions && session.session_id) {
+      this.sessions.endSession(session.session_id);
+    }
+
+    if (session.notion_task_id) {
+      const project = getProjectById(row.project_id);
+      if (project) {
+        const backend = getTaskBackend(row.project_id);
+        backend
+          .updateStatus(session.notion_task_id, '✅ Done')
+          .catch((err: unknown) =>
+            console.warn(
+              `[AutoMerger] local branch #${row.id}: updateStatus failed: ${(err as Error).message}`,
+            ),
+          );
+      }
+    }
+
+    this.broadcast({
+      type: 'local_branch_merged',
+      projectId: row.project_id,
+      sessionId: session.session_id,
+      branchName: row.branch_name,
+      commitSha,
+    });
+
+    console.log(
+      `[AutoMerger] local branch ${row.branch_name} squash-merged into ${row.base_branch} (${commitSha ?? 'no sha'})`,
+    );
   }
 
   /**
@@ -71,6 +229,10 @@ export class AutoMerger {
     }
     if (initialRow.state !== 'open') return;
 
+    const ciCheckNames = loadOrchestratorConfig(
+      project.projectDir,
+    ).ci_check_name;
+
     const intervalSec = Math.max(1, runtimeSettings.ci_poll_interval_seconds);
     const intervalMs = Math.max(intervalSec * 1000, MIN_POLL_INTERVAL_MS);
     const deadline =
@@ -95,7 +257,12 @@ export class AutoMerger {
 
       let poll;
       try {
-        poll = await this.github.fetchPRStatusConditional(prNumber, repo, etag);
+        poll = await this.github.fetchPRStatusConditional(
+          prNumber,
+          repo,
+          etag,
+          ciCheckNames,
+        );
       } catch (err) {
         console.warn(
           `[AutoMerger] PR #${prNumber}: status fetch failed: ${(err as Error).message}`,
@@ -123,7 +290,7 @@ export class AutoMerger {
       const category = poll.mergeability.category;
       switch (category) {
         case 'clean':
-          await this.attemptMerge(row);
+          await this.attemptMerge(row, ciCheckNames);
           return;
         case 'ci_failed':
           await this.pauseWithReason(
@@ -159,7 +326,10 @@ export class AutoMerger {
     }
   }
 
-  private async attemptMerge(pr: PullRequestRow): Promise<void> {
+  private async attemptMerge(
+    pr: PullRequestRow,
+    ciCheckNames: string[] = [],
+  ): Promise<void> {
     const commitTitle = pr.title ?? `Merge PR #${pr.pr_number}`;
     try {
       const result = await this.github.mergePR(
@@ -185,6 +355,7 @@ export class AutoMerger {
           category = await this.github.categorizeMergeability(
             pr.pr_number,
             pr.repo,
+            ciCheckNames,
           );
         } catch {
           category = null;

@@ -4,6 +4,7 @@ import type { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { getProjectByGithubRepo } from '../config';
+import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
 import type { AutoMerger } from './AutoMerger';
@@ -142,11 +143,17 @@ export class PRMergeWatcher {
   private async runMergeabilityCheck(pr: PullRequestRow): Promise<void> {
     if (pr.state === 'merged' || pr.state === 'closed') return;
 
+    const project = getProjectByGithubRepo(pr.repo);
+    const ciCheckNames = project
+      ? loadOrchestratorConfig(project.projectDir).ci_check_name
+      : [];
+
     let category: MergeabilityCategory;
     try {
       category = await this.github.categorizeMergeability(
         pr.pr_number,
         pr.repo,
+        ciCheckNames,
       );
     } catch (err) {
       console.warn(

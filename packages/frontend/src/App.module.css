@@ -123,6 +123,38 @@
   background: rgba(30, 30, 46, 0.1);
 }
 
+.sessionsHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.sessionsCount {
+  flex: 1;
+}
+
+.sessionsActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 768px) {
+  .sessionsHeader {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .sessionsCount {
+    width: 100%;
+  }
+
+  .sessionsActions {
+    width: 100%;
+  }
+}
+
 .connectionBanner {
   position: fixed;
   top: 0;
@@ -140,4 +172,48 @@
 .connectionBannerReconnected {
   background: #a6e3a1;
   color: #1e1e2e;
+}
+
+/* ── Mobile backdrop (tap-outside dismiss) ───────────────────────── */
+.mobileBackdrop {
+  display: none;
+}
+
+/* ── Mobile (<768px): detail pane as full-screen overlay ─────────── */
+@media (max-width: 768px) {
+  .contentArea {
+    position: relative;
+  }
+
+  .leftPanel {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .resizeHandle {
+    display: none;
+  }
+
+  /* Hidden by default on mobile; shown via contentAreaHasDetail */
+  .rightPanel {
+    display: none;
+    position: absolute;
+    inset: 0;
+    min-width: 0;
+    z-index: 10;
+  }
+
+  .contentAreaHasDetail .rightPanel {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Transparent backdrop behind the overlay to capture tap-outside */
+  .mobileBackdrop {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 9;
+    cursor: pointer;
+  }
 }

@@ -32,6 +32,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
   review_failed: 'Re-review failed unexpectedly — check the backend logs.',
   api_overloaded:
     'API overloaded (529) — session paused. Resume when the API recovers.',
+  merge_conflict:
+    'Merge conflict detected — rebase onto the base branch and resolve conflicts.',
 };
 
 function verdictLabel(verdict: string): string {

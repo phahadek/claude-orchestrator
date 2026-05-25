@@ -218,7 +218,7 @@ export function AnalyticsPanel({ activeProjectId }: Props) {
                   Token usage per session (last {barChartData.length})
                 </h3>
                 <div className={styles.chartContainer}>
-                  <ResponsiveContainer width="100%" height={280}>
+                  <ResponsiveContainer width="100%" minHeight={240}>
                     <BarChart
                       data={barChartData}
                       margin={{ top: 8, right: 16, left: 0, bottom: 60 }}

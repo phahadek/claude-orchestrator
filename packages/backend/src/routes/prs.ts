@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { getProjectById, getProjectByGithubRepo } from '../config';
+import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import {
   getPRs,
   getPRByNumber,
@@ -14,12 +15,14 @@ import {
   resetReviewIteration,
   setPRReviewResult,
   updatePRDraftStatus,
+  getSessionsByProject,
 } from '../db/queries';
 import { GitHubApiError } from '../github/types';
 import type { MergeabilityCategory } from '../github/types';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { PRReviewService } from '../github/PRReviewService';
 import type { PRReviewResult } from '../github/PRReviewService';
+import { GitHubDiffSource } from '../github/DiffSource';
 import type { PRMergeWatcher } from '../github/PRMergeWatcher';
 import type { AutoMerger } from '../github/AutoMerger';
 import type { SessionManager } from '../session/SessionManager';
@@ -72,10 +75,65 @@ export function createPrsRouter(
       return;
     }
     const project = getProjectById(projectId);
-    if (!project?.githubRepo) {
+    if (!project) {
+      res.status(400).json({ error: 'Project not found' });
+      return;
+    }
+
+    const autoMergeEnabled = project.autoMergeEnabled;
+
+    // Local-only projects: return code sessions as unified local_branch items
+    if (project.gitMode === 'local-only') {
+      const sessions = getSessionsByProject(projectId);
+      const codeSessions = sessions.filter(
+        (s) => s.session_type === 'standard' && !s.archived,
+      );
+      const reviewSessions = sessions.filter(
+        (s) => s.session_type === 'review',
+      );
+
+      // Build map of notion_task_id -> latest review session result
+      const reviewResultByTask = new Map<string, PRReviewResult>();
+      for (const rs of reviewSessions) {
+        if (!rs.notion_task_id || !rs.review_result) continue;
+        const existing = reviewResultByTask.get(rs.notion_task_id);
+        if (!existing) {
+          try {
+            reviewResultByTask.set(
+              rs.notion_task_id,
+              JSON.parse(rs.review_result) as PRReviewResult,
+            );
+          } catch {
+            // skip malformed JSON
+          }
+        }
+      }
+
+      const localItems = codeSessions.map((s) => ({
+        type: 'local_branch' as const,
+        sessionId: s.session_id,
+        branchName: `session/${s.session_id}`,
+        baseBranch: 'dev',
+        status: s.status,
+        reviewResult: s.notion_task_id
+          ? (reviewResultByTask.get(s.notion_task_id) ?? null)
+          : null,
+        createdAt: new Date(s.started_at).toISOString(),
+        autoMergeEnabled,
+        notionTaskId: s.notion_task_id,
+        notionTaskTitle: s.notion_task_id
+          ? getTaskTitleFromCache(s.notion_task_id)
+          : null,
+      }));
+      res.json(localItems);
+      return;
+    }
+
+    if (!project.githubRepo) {
       res.status(422).json({ error: 'Project has no githubRepo configured' });
       return;
     }
+
     const repo = project.githubRepo;
     const rows = getPRs(repo);
 
@@ -101,11 +159,13 @@ export function createPrsRouter(
     }
 
     const items = rows.map((pr) => ({
+      type: 'pr' as const,
       prNumber: pr.pr_number,
       prUrl: pr.pr_url,
       title: pr.title,
       headBranch: pr.head_branch,
-      baseBranch: pr.base_branch,
+      branchName: pr.head_branch ?? '',
+      baseBranch: pr.base_branch ?? '',
       state: reconciledStates.get(pr.pr_number) ?? pr.state,
       notionTaskId: pr.notion_task_id,
       notionTaskTitle: pr.notion_task_id
@@ -124,6 +184,7 @@ export function createPrsRouter(
       mergeState: pr.merge_state ?? null,
       failingChecks: parseFailingChecks(pr.failing_checks),
       pauseReason: pr.pause_reason ?? null,
+      autoMergeEnabled,
     }));
     res.json(items);
   });
@@ -187,7 +248,12 @@ export function createPrsRouter(
     const contextUrl = project.contextUrl;
     try {
       const result = await Promise.race([
-        prReviewService.reviewPR(prNumber, repo, projectId, contextUrl),
+        prReviewService.reviewPR(
+          { type: 'pr', prNumber, repo },
+          new GitHubDiffSource(github, repo, prNumber),
+          projectId,
+          contextUrl,
+        ),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('Review timed out')), 120_000),
         ),
@@ -220,7 +286,15 @@ export function createPrsRouter(
       const repo = `${req.params.owner}/${req.params.repoName}`;
       const prNumber = parseInt(String(req.params.prNumber), 10);
       try {
-        const category = await github.categorizeMergeability(prNumber, repo);
+        const repoProject = getProjectByGithubRepo(repo);
+        const ciCheckNames = repoProject
+          ? loadOrchestratorConfig(repoProject.projectDir).ci_check_name
+          : [];
+        const category = await github.categorizeMergeability(
+          prNumber,
+          repo,
+          ciCheckNames,
+        );
         const failingNames = category.failingChecks.map((c) => c.name);
         const failingNamesOrNull =
           failingNames.length > 0 ? failingNames : null;
@@ -269,6 +343,10 @@ export function createPrsRouter(
     async (req: Request, res: Response) => {
       const repo = `${req.params.owner}/${req.params.repoName}`;
       const prNumber = parseInt(String(req.params.prNumber), 10);
+      const mergeProject = getProjectByGithubRepo(repo);
+      const mergeCiCheckNames = mergeProject
+        ? loadOrchestratorConfig(mergeProject.projectDir).ci_check_name
+        : [];
       const prRow = getPRByNumber(prNumber, repo);
       const commitTitle =
         typeof (req.body as { commitTitle?: string }).commitTitle === 'string'
@@ -380,7 +458,11 @@ export function createPrsRouter(
           // categories it can act on (conflicts → rebase, ci_failed → fix).
           let category: MergeabilityCategory;
           try {
-            category = await github.categorizeMergeability(prNumber, repo);
+            category = await github.categorizeMergeability(
+              prNumber,
+              repo,
+              mergeCiCheckNames,
+            );
           } catch (catErr) {
             console.warn(
               '[prs] categorizeMergeability failed:',
@@ -514,8 +596,8 @@ export function createPrsRouter(
       try {
         const result = await Promise.race([
           prReviewService.reviewPR(
-            prNumber,
-            repo,
+            { type: 'pr', prNumber, repo },
+            new GitHubDiffSource(github, repo, prNumber),
             project.id,
             project.contextUrl,
           ),

@@ -1,17 +1,28 @@
-import { getProjectByGithubRepo } from '../config';
+import { getProjectByGithubRepo, getProjectById } from '../config';
 import {
   setPRReviewResult,
   getSetting,
   getPRByNumber,
   setPendingPush,
   setPauseReason,
+  getLocalBranchBySession,
+  setLocalBranchPauseReason,
   getSession,
 } from '../db/queries';
-import type { PRReviewService, PRReviewResult } from './PRReviewService';
+import type {
+  PRReviewService,
+  PRReviewResult,
+  WorkItem,
+} from './PRReviewService';
 import type { SessionManager } from '../session/SessionManager';
+import type { GitHubClient } from './GitHubClient';
 import type { ReviewJob } from './types';
-import { formatReviewFeedback } from './reviewUtils';
+import { GitHubDiffSource, LocalDiffSource } from './DiffSource';
+import { formatReviewFeedback, formatCIFailureFeedback } from './reviewUtils';
+import { runVerifyAsGate } from '../orchestration/verifyRunner';
+import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
+import type { ServerMessage } from '../ws/types';
 
 const REVIEW_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_ITERATIONS = 3;
@@ -25,8 +36,22 @@ function getMaxReviewIterations(): number {
     : DEFAULT_MAX_ITERATIONS;
 }
 
+interface LocalBranchJob {
+  type: 'local_branch';
+  localBranchId: number;
+  projectId: string;
+  sessionId: string;
+  branchName: string;
+  baseBranch: string;
+  worktreePath: string;
+  taskId: string | null;
+  contextUrl: string;
+}
+
+type QueuedJob = (ReviewJob & { type?: 'pr' }) | LocalBranchJob;
+
 export class ReviewOrchestrator {
-  private queue: ReviewJob[] = [];
+  private queue: QueuedJob[] = [];
   private running = 0;
   /** SHA of the last autofix commit per PR, keyed by "prNumber:repo". */
   private lastAutofixShas = new Map<string, string>();
@@ -36,8 +61,10 @@ export class ReviewOrchestrator {
     private sessionManager: SessionManager,
     private maxConcurrency: number = 1,
     private enabled: boolean = true,
+    private github?: GitHubClient,
   ) {
     sessionManager.on('pr_opened', (job: ReviewJob) => this.onPrOpened(job));
+    sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
   }
 
   private onPrOpened(job: ReviewJob): void {
@@ -52,17 +79,68 @@ export class ReviewOrchestrator {
     void this.drain();
   }
 
+  private onMessage(msg: ServerMessage): void {
+    if (!this.enabled) return;
+    if (msg.type !== 'local_branch_submitted') return;
+
+    const { projectId, sessionId, branchName, baseBranch } = msg;
+
+    const sessionRow = getSession(sessionId);
+    if (!sessionRow?.worktree_path) {
+      console.warn(
+        `[ReviewOrchestrator] local_branch_submitted for session ${sessionId} — no worktree_path, skipping`,
+      );
+      return;
+    }
+
+    const localBranchRow = getLocalBranchBySession(sessionId);
+    if (!localBranchRow) {
+      console.warn(
+        `[ReviewOrchestrator] local_branch_submitted for session ${sessionId} — no local_branch row found, skipping`,
+      );
+      return;
+    }
+
+    const project = getProjectById(projectId);
+    const contextUrl = project?.contextUrl ?? '';
+
+    this.queue.push({
+      type: 'local_branch',
+      localBranchId: localBranchRow.id,
+      projectId,
+      sessionId,
+      branchName,
+      baseBranch,
+      worktreePath: sessionRow.worktree_path,
+      taskId: sessionRow.notion_task_id,
+      contextUrl,
+    });
+    void this.drain();
+  }
+
   private async drain(): Promise<void> {
     while (this.running < this.maxConcurrency && this.queue.length > 0) {
       this.running++;
       const job = this.queue.shift()!;
       try {
-        await this.executeReview(job);
+        if (job.type === 'local_branch') {
+          await this.executeLocalBranchReview(job);
+        } else {
+          await this.executeReview(job as ReviewJob);
+        }
       } catch (e) {
-        console.error(
-          `[ReviewOrchestrator] review failed for PR #${job.prNumber}:`,
-          e,
-        );
+        if (job.type === 'local_branch') {
+          console.error(
+            `[ReviewOrchestrator] review failed for local branch ${job.branchName}:`,
+            e,
+          );
+        } else {
+          const prJob = job as ReviewJob;
+          console.error(
+            `[ReviewOrchestrator] review failed for PR #${prJob.prNumber}:`,
+            e,
+          );
+        }
       } finally {
         this.running--;
         void this.drain();
@@ -83,6 +161,87 @@ export class ReviewOrchestrator {
       return true;
     }
     return false;
+  }
+
+  private async executeLocalBranchReview(job: LocalBranchJob): Promise<void> {
+    const project = getProjectById(job.projectId);
+    if (project) {
+      const config = loadOrchestratorConfig(project.projectDir);
+      const verifyResult = await runVerifyAsGate(
+        job.worktreePath,
+        config.verify,
+      );
+      if (!verifyResult.passed) {
+        setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
+        this.sessionManager.send(
+          job.sessionId,
+          formatCIFailureFeedback({
+            source: 'verify',
+            failedCommand: verifyResult.failedCommand,
+            truncatedOutput: verifyResult.truncatedOutput,
+          }),
+        );
+        return;
+      }
+    }
+
+    const diffSource = new LocalDiffSource(
+      job.worktreePath,
+      job.baseBranch,
+      job.branchName,
+    );
+
+    const workItem: WorkItem = {
+      type: 'local_branch',
+      localBranchId: job.localBranchId,
+      branchName: job.branchName,
+      baseBranch: job.baseBranch,
+      sessionId: job.sessionId,
+      taskId: job.taskId,
+    };
+
+    let result: PRReviewResult;
+    try {
+      result = await Promise.race([
+        this.reviewService.reviewPR(
+          workItem,
+          diffSource,
+          job.projectId,
+          job.contextUrl,
+        ),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error('Review timed out')),
+            REVIEW_TIMEOUT_MS,
+          ),
+        ),
+      ]);
+    } catch (e) {
+      const summary =
+        e instanceof Error && e.message === 'Review timed out'
+          ? 'Review timed out'
+          : String(e);
+      this.sessionManager.emit('message', {
+        type: 'pr_review_complete',
+        prNumber: job.localBranchId,
+        repo: `local/${job.branchName}`,
+        verdict: 'error',
+        summary,
+      });
+      return;
+    }
+
+    this.sessionManager.emit('message', {
+      type: 'pr_review_complete',
+      prNumber: job.localBranchId,
+      repo: `local/${job.branchName}`,
+      verdict: result.verdict,
+      summary: result.summary,
+    });
+
+    if (result.verdict === 'needs_changes') {
+      this.sessionManager.send(job.sessionId, formatReviewFeedback(result, 0));
+    }
   }
 
   private async executeReview(job: ReviewJob): Promise<void> {
@@ -177,12 +336,26 @@ export class ReviewOrchestrator {
       sessionId: prRow?.review_session_id ?? '',
     });
 
+    const diffSource = this.github
+      ? new GitHubDiffSource(this.github, job.repo, job.prNumber)
+      : {
+          fetchDiff: async () => {
+            throw new Error('No GitHub client available for diff');
+          },
+        };
+
+    const workItem: WorkItem = {
+      type: 'pr',
+      prNumber: job.prNumber,
+      repo: job.repo,
+    };
+
     let result: PRReviewResult;
     try {
       result = await Promise.race([
         this.reviewService.reviewPR(
-          job.prNumber,
-          job.repo,
+          workItem,
+          diffSource,
           project.id,
           job.contextUrl,
         ),

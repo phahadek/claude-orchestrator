@@ -6,8 +6,12 @@ import {
   updatePRDraftStatus,
   incrementReviewIteration,
   setLastReviewedSha,
+  setLocalBranchReviewResult,
+  getLocalBranchById,
 } from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
+import type { DiffSource } from './DiffSource';
+import { GitHubDiffSource } from './DiffSource';
 import {
   computeSizeSignal,
   isOversized,
@@ -41,6 +45,17 @@ export interface PRReviewResult {
   summary: string;
   reviewedAt: string;
 }
+
+export type WorkItem =
+  | { type: 'pr'; prNumber: number; repo: string }
+  | {
+      type: 'local_branch';
+      localBranchId: number;
+      branchName: string;
+      baseBranch: string;
+      sessionId: string;
+      taskId?: string | null;
+    };
 
 /**
  * Shared review-instructions block: the JSON schema, verdict rules, and the
@@ -152,11 +167,21 @@ export class PRReviewService {
   }
 
   async reviewPR(
-    prNumber: number,
-    repo: string,
+    workItem: WorkItem,
+    diffSource: DiffSource,
     projectId: string = this.defaultProjectId,
     projectContextUrl: string = this.defaultProjectContextUrl,
   ): Promise<PRReviewResult> {
+    if (workItem.type === 'local_branch') {
+      return this.reviewLocalBranch(
+        workItem,
+        diffSource,
+        projectId,
+        projectContextUrl,
+      );
+    }
+
+    const { prNumber, repo } = workItem;
     const prRow = getPRByNumber(prNumber, repo);
     if (!prRow) {
       throw new Error(`PR #${prNumber} in ${repo} not found in database`);
@@ -177,20 +202,13 @@ export class PRReviewService {
         repo,
       );
       const prData = await this.github.fetchPR(repo, prNumber);
-      const diffData = await this.github.fetchDiff(prNumber, repo, {
-        base: prData.baseBranch,
-        head: prData.headBranch,
-      });
+      const diff = await diffSource.fetchDiff();
       // Recompute size signal against the FULL refreshed diff each iteration.
       const { filesSection, expectedSize } = await this.fetchSizeSignalInputs(
         projectId,
         prRow.notion_task_id,
       );
-      const sizeSignal = computeSizeSignal(
-        diffData.diff,
-        filesSection,
-        expectedSize,
-      );
+      const sizeSignal = computeSizeSignal(diff, filesSection, expectedSize);
       const followUp = [
         `The code session has pushed new commits to PR #${prNumber}.`,
         `Please re-review the updated diff against the same task spec.`,
@@ -201,7 +219,7 @@ export class PRReviewService {
         ``,
         `### Updated Diff`,
         '```',
-        diffData.diff,
+        diff,
         '```',
         this.renderSizeSignalForFollowUp(sizeSignal),
         REVIEW_JSON_SCHEMA_BLOCK,
@@ -233,10 +251,8 @@ export class PRReviewService {
     }
 
     const prData = await this.github.fetchPR(repo, prNumber);
-    const diffData = await this.github.fetchDiff(prNumber, repo, {
-      base: prData.baseBranch,
-      head: prData.headBranch,
-    });
+    const diff = await diffSource.fetchDiff();
+    const diffData = { prId: prNumber, diff, filesChanged: [] };
 
     if (!prRow.notion_task_id) {
       throw new Error(`PR #${prNumber} has no linked Notion task`);
@@ -248,7 +264,7 @@ export class PRReviewService {
     const taskUrl = `https://www.notion.so/${prRow.notion_task_id}`;
     const prompt = this.buildPrompt(prData, diffData, taskBody);
     const sizeSignal = computeSizeSignal(
-      diffData.diff,
+      diff,
       parseSection(taskBody, 'files'),
       parseExpectedSize(taskBody),
     );
@@ -344,6 +360,103 @@ export class PRReviewService {
     return finalResult;
   }
 
+  private async reviewLocalBranch(
+    workItem: Extract<WorkItem, { type: 'local_branch' }>,
+    diffSource: DiffSource,
+    projectId: string,
+    projectContextUrl: string,
+  ): Promise<PRReviewResult> {
+    const { localBranchId, branchName, baseBranch, taskId } = workItem;
+    const localBranchRow = getLocalBranchById(localBranchId);
+    if (!localBranchRow) {
+      throw new Error(`Local branch row #${localBranchId} not found`);
+    }
+
+    const diff = await diffSource.fetchDiff();
+
+    let taskBody = '';
+    if (taskId) {
+      try {
+        taskBody = await this.resolveBackend(projectId).fetchTaskPage(taskId);
+      } catch (e) {
+        console.warn(
+          `[PRReviewService] fetchTaskPage failed for local branch review (task ${taskId}):`,
+          e,
+        );
+      }
+    }
+
+    const sizeSignal = computeSizeSignal(
+      diff,
+      parseSection(taskBody, 'files'),
+      parseExpectedSize(taskBody),
+    );
+
+    const prompt = this.buildLocalBranchPrompt(
+      branchName,
+      baseBranch,
+      diff,
+      taskBody,
+      sizeSignal,
+    );
+
+    // Use a synthetic prNumber/repo for the verdict listener (not a real PR)
+    const syntheticPrNumber = localBranchId;
+    const syntheticRepo = `local/${branchName}`;
+
+    const sessionId = crypto.randomUUID();
+    const verdictPromise = this.waitForVerdict(
+      sessionId,
+      syntheticPrNumber,
+      syntheticRepo,
+    );
+
+    const taskUrl = taskId
+      ? `https://www.notion.so/${taskId}`
+      : projectContextUrl;
+    this.sessionManager.start(taskUrl, projectContextUrl, {
+      sessionId,
+      sessionType: 'review',
+      customPrompt: prompt,
+      projectId,
+      taskName: branchName,
+    });
+
+    const aiResult = await verdictPromise;
+    const sizedResult = this.appendSizeProportionalityDimension(
+      aiResult,
+      sizeSignal,
+    );
+
+    setLocalBranchReviewResult(localBranchId, JSON.stringify(sizedResult));
+    return sizedResult;
+  }
+
+  private buildLocalBranchPrompt(
+    branchName: string,
+    baseBranch: string,
+    diff: string,
+    taskBody: string,
+    sizeSignal: ReturnType<typeof computeSizeSignal>,
+  ): string {
+    return `You are a code reviewer. Compare the following local branch diff against its task specification.
+
+## Branch Metadata
+Branch: ${branchName}
+Base: ${baseBranch}
+
+## Diff
+${diff}
+
+## Task Specification
+${taskBody || '(no task specification available)'}
+
+${this.formatSizeSignalSection(sizeSignal)}
+
+## Your task
+${REVIEW_JSON_SCHEMA_BLOCK}`;
+  }
+
   /**
    * Handle post-verdict side effects when a PR is approved: transition draft → ready
    * on GitHub, and update the Notion task status to 👀 In Review.
@@ -413,7 +526,13 @@ export class PRReviewService {
     const pr = getPRByNumber(prNumber, repo);
     if (!pr?.review_session_id) {
       // No paired review session — fall back to fresh review
-      return this.reviewPR(prNumber, repo, projectId, projectContextUrl);
+      const diffSource = new GitHubDiffSource(this.github, repo, prNumber);
+      return this.reviewPR(
+        { type: 'pr', prNumber, repo },
+        diffSource,
+        projectId,
+        projectContextUrl,
+      );
     }
 
     const prData = await this.github.fetchPR(repo, prNumber);

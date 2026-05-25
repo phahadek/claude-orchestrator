@@ -14,7 +14,8 @@ export type PauseReason =
   | 'auto_merge_failed'
   | 'pr_closed'
   | 'review_failed'
-  | 'api_overloaded';
+  | 'api_overloaded'
+  | 'merge_conflict';
 
 export interface TaskView {
   taskId: string;

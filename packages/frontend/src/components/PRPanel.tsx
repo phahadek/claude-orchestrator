@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { PRCard } from './PRCard';
-import type { PRListItem, PRReviewResult } from './PRCard';
+import { WorkItemCard } from './WorkItemCard';
+import type { WorkItemListItem, PRReviewResult } from './WorkItemCard';
 import { ErrorBoundary } from './ErrorBoundary';
 import styles from './PRPanel.module.css';
 
@@ -51,7 +51,7 @@ export function PRPanel({
   autofixEvent,
   reviewStartedEvent,
 }: Props) {
-  const [prs, setPRs] = useState<PRListItem[]>([]);
+  const [prs, setPRs] = useState<WorkItemListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [networkError, setNetworkError] = useState(false);
   const [noRepo, setNoRepo] = useState(false);
@@ -104,7 +104,7 @@ export function PRPanel({
         setNetworkError(true);
         return;
       }
-      const data = (await prsRes.json()) as PRListItem[];
+      const data = (await prsRes.json()) as WorkItemListItem[];
       setPRs(data);
       setNetworkError(false);
       setNoRepo(false);
@@ -165,17 +165,17 @@ export function PRPanel({
   useEffect(() => {
     if (!prReviewEvent) return;
     setPRs((prev) =>
-      prev.map((pr) =>
-        pr.prNumber === prReviewEvent.prNumber
+      prev.map((item) =>
+        item.type === 'pr' && item.prNumber === prReviewEvent.prNumber
           ? {
-              ...pr,
+              ...item,
               reviewResult: {
                 verdict: prReviewEvent.verdict as PRReviewResult['verdict'],
                 summary: prReviewEvent.summary,
               },
               reviewedAt: new Date().toISOString(),
             }
-          : pr,
+          : item,
       ),
     );
     setReviewInFlight((prev) => {
@@ -289,9 +289,9 @@ export function PRPanel({
   };
 
   const handleMerge = async (prNumber: number) => {
-    const pr = prs.find((p) => p.prNumber === prNumber);
-    if (!pr) return;
-    const [owner, repoName] = pr.repo.split('/');
+    const item = prs.find((p) => p.type === 'pr' && p.prNumber === prNumber);
+    if (!item || item.type !== 'pr') return;
+    const [owner, repoName] = item.repo.split('/');
     setError(prNumber, null);
     // Pre-merge mergeability check: ask the backend to query GitHub (with retry)
     // right before opening the merge. Shows a "checking mergeability..." state
@@ -358,9 +358,9 @@ export function PRPanel({
   };
 
   const handleReReview = async (prNumber: number) => {
-    const pr = prs.find((p) => p.prNumber === prNumber);
-    if (!pr) return;
-    const [owner, repoName] = pr.repo.split('/');
+    const item = prs.find((p) => p.type === 'pr' && p.prNumber === prNumber);
+    if (!item || item.type !== 'pr') return;
+    const [owner, repoName] = item.repo.split('/');
     setReReviewInFlight((prev) => new Set(prev).add(prNumber));
     setError(prNumber, null);
     try {
@@ -395,9 +395,9 @@ export function PRPanel({
   };
 
   const handleFixConflicts = async (prNumber: number) => {
-    const pr = prs.find((p) => p.prNumber === prNumber);
-    if (!pr) return;
-    const [owner, repoName] = pr.repo.split('/');
+    const item = prs.find((p) => p.type === 'pr' && p.prNumber === prNumber);
+    if (!item || item.type !== 'pr') return;
+    const [owner, repoName] = item.repo.split('/');
     setFixConflictsInFlight((prev) => new Set(prev).add(prNumber));
     setError(prNumber, null);
     try {
@@ -428,9 +428,9 @@ export function PRPanel({
   };
 
   const handleApprove = async (prNumber: number) => {
-    const pr = prs.find((p) => p.prNumber === prNumber);
-    if (!pr) return;
-    const [owner, repoName] = pr.repo.split('/');
+    const item = prs.find((p) => p.type === 'pr' && p.prNumber === prNumber);
+    if (!item || item.type !== 'pr') return;
+    const [owner, repoName] = item.repo.split('/');
     setApproveInFlight((prev) => new Set(prev).add(prNumber));
     setError(prNumber, null);
     try {
@@ -505,36 +505,38 @@ export function PRPanel({
     <div className={styles.panel}>
       <div className={styles.headerBar}>
         <span className={styles.panelTitle}>Open Pull Requests</span>
-        {clearableCount > 0 && (
+        <div className={styles.headerButtons}>
+          {clearableCount > 0 && (
+            <button
+              type="button"
+              className={styles.clearButton}
+              onClick={handleClearMergedClosed}
+              disabled={clearInFlight}
+              title={`Remove ${clearableCount} merged/closed PR${clearableCount !== 1 ? 's' : ''}`}
+            >
+              {clearInFlight
+                ? 'Clearing...'
+                : `Clear merged/closed (${clearableCount})`}
+            </button>
+          )}
           <button
             type="button"
-            className={styles.clearButton}
-            onClick={handleClearMergedClosed}
-            disabled={clearInFlight}
-            title={`Remove ${clearableCount} merged/closed PR${clearableCount !== 1 ? 's' : ''}`}
+            className={styles.refreshButton}
+            onClick={fetchPRs}
           >
-            {clearInFlight
-              ? 'Clearing...'
-              : `Clear merged/closed (${clearableCount})`}
+            ↻ Refresh
           </button>
-        )}
-        <button
-          type="button"
-          className={styles.refreshButton}
-          onClick={fetchPRs}
-        >
-          ↻ Refresh
-        </button>
-        {onCollapse && (
-          <button
-            type="button"
-            className={styles.collapseButton}
-            onClick={onCollapse}
-            title="Collapse PR panel"
-          >
-            ✕
-          </button>
-        )}
+          {onCollapse && (
+            <button
+              type="button"
+              className={styles.collapseButton}
+              onClick={onCollapse}
+              title="Collapse PR panel"
+            >
+              ✕
+            </button>
+          )}
+        </div>
       </div>
 
       {noRepo && (
@@ -559,57 +561,64 @@ export function PRPanel({
           <div className={styles.emptyState}>No open pull requests.</div>
         ) : (
           <div className={styles.prList}>
-            {prs.map((pr) => (
-              <ErrorBoundary
-                key={pr.prNumber}
-                name={`PRCard:${pr.prNumber}`}
-                fallback={(_error, reset) => (
-                  <div className={styles.cardError} role="alert">
-                    <span>PR card failed to render</span>
-                    <button type="button" onClick={reset}>
-                      Retry
-                    </button>
-                  </div>
-                )}
-              >
-                {autofixStatus.get(pr.prNumber) === 'running' && (
-                  <div className={styles.autofixBadge}>⚙ Autofix running…</div>
-                )}
-                {autofixStatus.get(pr.prNumber) === 'done' && (
-                  <div
-                    className={`${styles.autofixBadge} ${styles.autofixDone}`}
-                  >
-                    ✓ Autofix applied
-                  </div>
-                )}
-                {autofixStatus.get(pr.prNumber) === 'failed' && (
-                  <div
-                    className={`${styles.autofixBadge} ${styles.autofixFailed}`}
-                  >
-                    ⚠ Autofix failed (proceeding)
-                  </div>
-                )}
-                <PRCard
-                  pr={pr}
-                  onReview={handleReview}
-                  onMerge={handleMerge}
-                  onRemove={handleRemovePR}
-                  onViewSession={onViewSession}
-                  onReReview={handleReReview}
-                  onFixConflicts={handleFixConflicts}
-                  onApprove={handleApprove}
-                  reviewInFlight={reviewInFlight.has(pr.prNumber)}
-                  mergeInFlight={mergeInFlight.has(pr.prNumber)}
-                  checkingMergeability={checkingMergeability.has(pr.prNumber)}
-                  removeInFlight={removeInFlight.has(pr.prNumber)}
-                  reReviewInFlight={reReviewInFlight.has(pr.prNumber)}
-                  fixConflictsInFlight={fixConflictsInFlight.has(pr.prNumber)}
-                  approveInFlight={approveInFlight.has(pr.prNumber)}
-                  reviewElapsed={reviewElapsed.get(pr.prNumber) ?? 0}
-                  error={cardErrors.get(pr.prNumber) ?? null}
-                />
-              </ErrorBoundary>
-            ))}
+            {prs.map((item) => {
+              const itemKey =
+                item.type === 'pr'
+                  ? `pr-${item.prNumber}`
+                  : `local-${item.sessionId}`;
+              const prNumber = item.type === 'pr' ? item.prNumber : 0;
+              return (
+                <ErrorBoundary
+                  key={itemKey}
+                  name={`WorkItemCard:${itemKey}`}
+                  fallback={(_error, reset) => (
+                    <div className={styles.cardError} role="alert">
+                      <span>PR card failed to render</span>
+                      <button type="button" onClick={reset}>
+                        Retry
+                      </button>
+                    </div>
+                  )}
+                >
+                  {autofixStatus.get(prNumber) === 'running' && (
+                    <div className={styles.autofixBadge}>⚙ Autofix running…</div>
+                  )}
+                  {autofixStatus.get(prNumber) === 'done' && (
+                    <div
+                      className={`${styles.autofixBadge} ${styles.autofixDone}`}
+                    >
+                      ✓ Autofix applied
+                    </div>
+                  )}
+                  {autofixStatus.get(prNumber) === 'failed' && (
+                    <div
+                      className={`${styles.autofixBadge} ${styles.autofixFailed}`}
+                    >
+                      ⚠ Autofix failed (proceeding)
+                    </div>
+                  )}
+                  <WorkItemCard
+                    item={item}
+                    onReview={handleReview}
+                    onMerge={handleMerge}
+                    onRemove={handleRemovePR}
+                    onViewSession={onViewSession}
+                    onReReview={handleReReview}
+                    onFixConflicts={handleFixConflicts}
+                    onApprove={handleApprove}
+                    reviewInFlight={reviewInFlight.has(prNumber)}
+                    mergeInFlight={mergeInFlight.has(prNumber)}
+                    checkingMergeability={checkingMergeability.has(prNumber)}
+                    removeInFlight={removeInFlight.has(prNumber)}
+                    reReviewInFlight={reReviewInFlight.has(prNumber)}
+                    fixConflictsInFlight={fixConflictsInFlight.has(prNumber)}
+                    approveInFlight={approveInFlight.has(prNumber)}
+                    reviewElapsed={reviewElapsed.get(prNumber) ?? 0}
+                    error={cardErrors.get(prNumber) ?? null}
+                  />
+                </ErrorBoundary>
+              );
+            })}
           </div>
         ))}
     </div>

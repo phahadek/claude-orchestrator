@@ -17,6 +17,8 @@ import type {
   NewProjectRow,
   MilestoneRow,
   NewMilestoneRow,
+  LocalBranchRow,
+  NewLocalBranchRow,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -1521,4 +1523,103 @@ export function deleteMilestone(id: string): boolean {
     .prepare<{ id: string }>(`DELETE FROM milestones WHERE id = @id`)
     .run({ id });
   return result.changes > 0;
+}
+
+// ─── local_branches ────────────────────────────────────────────────────────
+
+export function insertLocalBranch(row: NewLocalBranchRow): LocalBranchRow {
+  const result = db
+    .prepare(
+      `INSERT INTO local_branches
+        (project_id, session_id, branch_name, base_branch, status, review_result, created_at, updated_at)
+       VALUES
+        (@project_id, @session_id, @branch_name, @base_branch, @status, @review_result, @created_at, @updated_at)`,
+    )
+    .run(row);
+  return getLocalBranchById(result.lastInsertRowid as number)!;
+}
+
+export function getLocalBranchById(id: number): LocalBranchRow | undefined {
+  return db.prepare(`SELECT * FROM local_branches WHERE id = ?`).get(id) as
+    | LocalBranchRow
+    | undefined;
+}
+
+export function getLocalBranchBySession(
+  sessionId: string,
+): LocalBranchRow | undefined {
+  return db
+    .prepare(`SELECT * FROM local_branches WHERE session_id = ? LIMIT 1`)
+    .get(sessionId) as LocalBranchRow | undefined;
+}
+
+export function getOpenLocalBranchesByProject(
+  projectId: string,
+): LocalBranchRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM local_branches WHERE project_id = ? AND status = 'open' ORDER BY created_at DESC`,
+    )
+    .all(projectId) as LocalBranchRow[];
+}
+
+export function updateLocalBranchStatus(
+  id: number,
+  status: string,
+  reviewResult?: string | null,
+): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE local_branches SET status = ?, review_result = COALESCE(?, review_result), updated_at = ? WHERE id = ?`,
+  ).run(status, reviewResult ?? null, now, id);
+}
+
+export function setLocalBranchReviewResult(
+  id: number,
+  reviewResult: string,
+): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE local_branches SET review_result = ?, updated_at = ? WHERE id = ?`,
+  ).run(reviewResult, now, id);
+}
+
+export function setLocalBranchPauseReason(
+  id: number,
+  reason: PauseReason | null,
+): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE local_branches SET pause_reason = ?, updated_at = ? WHERE id = ?`,
+  ).run(reason, now, id);
+}
+
+/**
+ * Approved open local branches eligible for auto-merge. Only returns rows where
+ * the associated project has auto_merge_enabled = 1, review verdict is 'approved',
+ * and no pause_reason is set.
+ */
+export function getApprovedLocalBranches(): LocalBranchRow[] {
+  return db
+    .prepare(
+      `
+    SELECT lb.* FROM local_branches lb
+    JOIN projects p ON lb.project_id = p.id
+    WHERE lb.status = 'open'
+      AND lb.review_result LIKE '%approved%'
+      AND lb.pause_reason IS NULL
+      AND p.auto_merge_enabled = 1
+  `,
+    )
+    .all() as LocalBranchRow[];
+}
+
+export function markLocalBranchMerged(
+  id: number,
+  commitSha: string | null,
+): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE local_branches SET status = 'merged', merge_commit_sha = ?, updated_at = ? WHERE id = ?`,
+  ).run(commitSha ?? null, now, id);
 }

@@ -78,4 +78,8 @@ export interface ReviewJob {
   contextUrl: string;
   /** True when the triggering push was the autofix commit (not a coding-session push). */
   autofixOnly?: boolean;
+  /** Populated for local-only mode; absent for GitHub mode. */
+  sessionId?: string;
+  worktreePath?: string;
+  projectId?: string;
 }

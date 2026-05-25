@@ -14,7 +14,13 @@ import {
   getPRByNumber,
   setHeadSha,
   setPauseReason,
+  getProjectRowById,
+  insertLocalBranch,
 } from '../db/queries';
+import {
+  getCurrentBranch,
+  hasNonEmptyDiff,
+} from '../orchestration/localBranchHelpers';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { emitTaskUpdated } from '../routes/tasks';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -850,6 +856,61 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           .catch((e) =>
             console.error(`[AgentSession] updateStatus failed: ${e}`),
           );
+      }
+
+      // Local-only project: detect a non-empty diff and emit submission event.
+      if (this.projectId) {
+        const project = getProjectRowById(this.projectId);
+        if (project?.git_mode === 'local-only') {
+          try {
+            const branchName = await getCurrentBranch(this.worktreePath);
+            const baseBranch = 'dev';
+            if (branchName && branchName !== baseBranch) {
+              const hasDiff = await hasNonEmptyDiff(
+                this.worktreePath,
+                baseBranch,
+                branchName,
+              );
+              if (hasDiff) {
+                const now = new Date().toISOString();
+                insertLocalBranch({
+                  project_id: this.projectId,
+                  session_id: this.sessionId,
+                  branch_name: branchName,
+                  base_branch: baseBranch,
+                  status: 'open',
+                  review_result: null,
+                  created_at: now,
+                  updated_at: now,
+                });
+                this.broadcast({
+                  type: 'local_branch_submitted',
+                  projectId: this.projectId,
+                  sessionId: this.sessionId,
+                  branchName,
+                  baseBranch,
+                });
+                this.taskBackend()
+                  .updateStatus(this.taskId, '👀 In Review')
+                  .then(() => {
+                    this.broadcast({
+                      type: 'task_status_changed',
+                      notionTaskId: this.taskId,
+                      newStatus: '👀 In Review',
+                    });
+                    emitTaskUpdated(this.taskId);
+                  })
+                  .catch((e) =>
+                    console.error(`[AgentSession] updateStatus failed: ${e}`),
+                  );
+              }
+            }
+          } catch (e) {
+            console.error(
+              `[AgentSession] local-only submission check failed: ${e}`,
+            );
+          }
+        }
       }
     }
 
