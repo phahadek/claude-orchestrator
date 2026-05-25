@@ -1,9 +1,47 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ErrorBoundary } from '../ErrorBoundary';
-import { projectsApi, type Project } from '../../api/projects';
+import {
+  projectsApi,
+  type Project,
+  type OrchestratorConfig,
+  type OrchestratorConfigResponse,
+} from '../../api/projects';
 import { ProjectFormModal, type ProjectFormValues } from './ProjectFormModal';
 import { MilestonesSubPanel } from './MilestonesSubPanel';
 import styles from './ProjectsSettingsPanel.module.css';
+
+function ConfigReadOnly({ config }: { config: OrchestratorConfig }) {
+  const fields: Array<{ label: string; value: string[] | string }> = [
+    { label: 'autofix', value: config.autofix },
+    { label: 'verify', value: config.verify },
+    { label: 'ci_check_name', value: config.ci_check_name },
+    { label: 'allowed_tools', value: config.allowed_tools },
+    { label: 'bash_rules', value: config.bash_rules },
+    { label: 'bootstrap_script', value: config.bootstrap_script },
+  ];
+  return (
+    <table className={styles.table}>
+      <tbody>
+        {fields.map(({ label, value }) => (
+          <tr key={label}>
+            <th style={{ width: '40%' }}>{label}</th>
+            <td className={styles.mono}>
+              {Array.isArray(value) ? (
+                value.length === 0 ? (
+                  <span className={styles.muted}>(none)</span>
+                ) : (
+                  value.join(', ')
+                )
+              ) : (
+                value || <span className={styles.muted}>(none)</span>
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
 
 function middleEllipsis(str: string, maxLen = 40): string {
   if (str.length <= maxLen) return str;
@@ -37,6 +75,10 @@ function ProjectsSettingsPanelInner() {
   const [confirmDelete, setConfirmDelete] = useState<Project | null>(null);
   const [stubBusy, setStubBusy] = useState<string | null>(null);
   const [stubMessage, setStubMessage] = useState<string | null>(null);
+  const [configFor, setConfigFor] = useState<Project | null>(null);
+  const [configData, setConfigData] =
+    useState<OrchestratorConfigResponse | null>(null);
+  const [configLoading, setConfigLoading] = useState(false);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -82,6 +124,21 @@ function ProjectsSettingsPanelInner() {
       await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete project');
+    }
+  }
+
+  async function handleShowConfig(p: Project) {
+    setConfigFor(p);
+    setConfigData(null);
+    setConfigLoading(true);
+    try {
+      const data = await projectsApi.getOrchestratorConfig(p.id);
+      setConfigData(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load config');
+      setConfigFor(null);
+    } finally {
+      setConfigLoading(false);
     }
   }
 
@@ -188,6 +245,13 @@ function ProjectsSettingsPanelInner() {
                   <button
                     type="button"
                     className={styles.linkBtn}
+                    onClick={() => void handleShowConfig(p)}
+                  >
+                    Config
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.linkBtn}
                     onClick={() => setEditing(p)}
                   >
                     Edit
@@ -219,6 +283,43 @@ function ProjectsSettingsPanelInner() {
           onCancel={() => setEditing(null)}
           onSubmit={handleUpdate}
         />
+      )}
+
+      {configFor && (
+        <div
+          className={styles.modalOverlay}
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Orchestrator config for ${configFor.name}`}
+          onClick={() => setConfigFor(null)}
+        >
+          <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <h3 className={styles.modalTitle}>
+              Orchestrator config — {configFor.name}
+            </h3>
+            {configLoading ? (
+              <p className={styles.muted}>Loading…</p>
+            ) : configData ? (
+              <>
+                {!configData.present && (
+                  <p className={styles.muted}>
+                    No .claude-orchestrator.yml found — using defaults.
+                  </p>
+                )}
+                <ConfigReadOnly config={configData.config} />
+              </>
+            ) : null}
+            <div className={styles.modalActions}>
+              <button
+                type="button"
+                className={styles.btnSecondary}
+                onClick={() => setConfigFor(null)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {confirmDelete && (

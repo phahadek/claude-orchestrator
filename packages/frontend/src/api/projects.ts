@@ -1,6 +1,20 @@
 export type TaskSource = 'notion' | 'yaml';
 export type GitMode = 'github' | 'local-only';
 
+export interface OrchestratorConfig {
+  autofix: string[];
+  verify: string[];
+  ci_check_name: string[];
+  allowed_tools: string[];
+  bash_rules: string[];
+  bootstrap_script: string;
+}
+
+export interface OrchestratorConfigResponse {
+  present: boolean;
+  config: OrchestratorConfig;
+}
+
 export interface DatabaseValidation {
   type: 'database';
   title: string;
@@ -191,6 +205,14 @@ export const projectsApi = {
     return request<{ attempted: number[] }>(
       `/api/projects/${encodeURIComponent(projectId)}/milestones/${encodeURIComponent(milestoneId)}/merge-ready`,
       { method: 'POST' },
+    );
+  },
+
+  getOrchestratorConfig(
+    projectId: string,
+  ): Promise<OrchestratorConfigResponse> {
+    return request<OrchestratorConfigResponse>(
+      `/api/projects/${encodeURIComponent(projectId)}/orchestrator-config`,
     );
   },
 };
