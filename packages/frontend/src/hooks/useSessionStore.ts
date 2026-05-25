@@ -157,6 +157,19 @@ export function useSessionStore() {
       mergeable: boolean | null;
       mergeState: string | null;
     } | null>(null);
+  const [lastAutofixEvent, setLastAutofixEvent] = useState<{
+    type: 'autofix_started' | 'autofix_complete';
+    prNumber: number;
+    repo: string;
+    success?: boolean;
+    summary?: string;
+    receivedAt: number;
+  } | null>(null);
+  const [lastReviewStartedEvent, setLastReviewStartedEvent] = useState<{
+    prNumber: number;
+    sessionId: string;
+    receivedAt: number;
+  } | null>(null);
 
   const dispatch = useCallback((msg: ServerMessage) => {
     setSynced(true);
@@ -440,6 +453,31 @@ export function useSessionStore() {
       });
       setTaskListRefreshTrigger((n) => n + 1);
     }
+    if (msg.type === 'autofix_started') {
+      setLastAutofixEvent({
+        type: 'autofix_started',
+        prNumber: msg.prNumber,
+        repo: msg.repo,
+        receivedAt: Date.now(),
+      });
+    }
+    if (msg.type === 'autofix_complete') {
+      setLastAutofixEvent({
+        type: 'autofix_complete',
+        prNumber: msg.prNumber,
+        repo: msg.repo,
+        success: msg.success,
+        summary: msg.summary,
+        receivedAt: Date.now(),
+      });
+    }
+    if (msg.type === 'review_started') {
+      setLastReviewStartedEvent({
+        prNumber: msg.prNumber,
+        sessionId: msg.sessionId,
+        receivedAt: Date.now(),
+      });
+    }
     if (msg.type === 'api_overloaded_paused') {
       setLastApiOverloadedPaused({
         sessionId: msg.sessionId,
@@ -568,5 +606,7 @@ export function useSessionStore() {
     dismissIncompleteReviews,
     lastTaskUpdate,
     taskListRefreshTrigger,
+    lastAutofixEvent,
+    lastReviewStartedEvent,
   };
 }

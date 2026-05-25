@@ -98,6 +98,8 @@ export default function App() {
     incompleteReviews,
     lastTaskUpdate,
     taskListRefreshTrigger,
+    lastAutofixEvent,
+    lastReviewStartedEvent,
   } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -1108,6 +1110,8 @@ export default function App() {
                 prClosedEvent={lastPrClosedEvent}
                 prStateChangedEvent={lastPrStateChangedEvent}
                 prMergeabilityChangedEvent={lastPrMergeabilityChangedEvent}
+                autofixEvent={lastAutofixEvent}
+                reviewStartedEvent={lastReviewStartedEvent}
               />
             </div>
           </ErrorBoundary>

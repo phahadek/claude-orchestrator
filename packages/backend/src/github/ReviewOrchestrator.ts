@@ -21,6 +21,7 @@ import { GitHubDiffSource, LocalDiffSource } from './DiffSource';
 import { formatReviewFeedback, formatCIFailureFeedback } from './reviewUtils';
 import { runVerifyAsGate } from '../orchestration/verifyRunner';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
+import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import type { ServerMessage } from '../ws/types';
 
 const REVIEW_TIMEOUT_MS = 120_000;
@@ -52,6 +53,8 @@ type QueuedJob = (ReviewJob & { type?: 'pr' }) | LocalBranchJob;
 export class ReviewOrchestrator {
   private queue: QueuedJob[] = [];
   private running = 0;
+  /** SHA of the last autofix commit per PR, keyed by "prNumber:repo". */
+  private lastAutofixShas = new Map<string, string>();
 
   constructor(
     private reviewService: PRReviewService,
@@ -143,6 +146,21 @@ export class ReviewOrchestrator {
         void this.drain();
       }
     }
+  }
+
+  /**
+   * Returns true (and consumes the entry) when the given SHA is the autofix
+   * commit that was pushed during the last executeReview() for this PR.
+   * Used by the push_detected handler to skip re-reviews for autofix-only pushes
+   * so they do not count against the iteration cap.
+   */
+  consumeAutofixSha(prNumber: number, repo: string, sha: string): boolean {
+    const key = `${prNumber}:${repo}`;
+    if (this.lastAutofixShas.get(key) === sha) {
+      this.lastAutofixShas.delete(key);
+      return true;
+    }
+    return false;
   }
 
   private async executeLocalBranchReview(job: LocalBranchJob): Promise<void> {
@@ -250,6 +268,73 @@ export class ReviewOrchestrator {
       });
       return;
     }
+
+    // ── Autofix step ──────────────────────────────────────────────────────────
+    const autofixCommands = loadAutofixCommands(project.projectDir);
+    if (autofixCommands.length > 0) {
+      this.sessionManager.emit('message', {
+        type: 'autofix_started',
+        prNumber: job.prNumber,
+        repo: job.repo,
+      });
+
+      const worktreePath = prRow?.session_id
+        ? (getSession(prRow.session_id)?.worktree_path ?? '')
+        : '';
+
+      let autofixSuccess = true;
+      let autofixSummary = 'no worktree available — autofix skipped';
+
+      if (worktreePath) {
+        try {
+          const result = await runAutofix(
+            worktreePath,
+            project.projectDir,
+            autofixCommands,
+            (msg) =>
+              console.log(
+                `[ReviewOrchestrator] autofix PR #${job.prNumber}: ${msg}`,
+              ),
+          );
+          autofixSuccess = result.success;
+          autofixSummary = result.summary;
+          if (result.commitSha) {
+            this.lastAutofixShas.set(
+              `${job.prNumber}:${job.repo}`,
+              result.commitSha,
+            );
+          }
+        } catch (err) {
+          autofixSuccess = false;
+          autofixSummary = `autofix threw: ${String(err)}`;
+          console.error(
+            `[ReviewOrchestrator] autofix error for PR #${job.prNumber}:`,
+            err,
+          );
+        }
+      }
+
+      this.sessionManager.emit('message', {
+        type: 'autofix_complete',
+        prNumber: job.prNumber,
+        repo: job.repo,
+        success: autofixSuccess,
+        summary: autofixSummary,
+      });
+
+      if (!autofixSuccess) {
+        console.warn(
+          `[ReviewOrchestrator] autofix failed for PR #${job.prNumber} (fail open): ${autofixSummary}`,
+        );
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    this.sessionManager.emit('message', {
+      type: 'review_started',
+      prNumber: job.prNumber,
+      sessionId: prRow?.review_session_id ?? '',
+    });
 
     const diffSource = this.github
       ? new GitHubDiffSource(this.github, job.repo, job.prNumber)

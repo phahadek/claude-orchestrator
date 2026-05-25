@@ -225,6 +225,15 @@ export type ServerMessage =
     }
   | { type: 'error'; message: string }
   | { type: 'pr_pause_cleared'; prNumber: number; repo: string }
+  | { type: 'autofix_started'; prNumber: number; repo: string }
+  | {
+      type: 'autofix_complete';
+      prNumber: number;
+      repo: string;
+      success: boolean;
+      summary?: string;
+    }
+  | { type: 'review_started'; prNumber: number; sessionId: string }
   | {
       type: 'local_branch_submitted';
       projectId: string;

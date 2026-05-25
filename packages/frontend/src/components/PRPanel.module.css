@@ -143,6 +143,26 @@
   flex-shrink: 0;
 }
 
+.autofixBadge {
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #313244;
+  color: #a6adc8;
+  border: 1px solid #45475a;
+  margin-bottom: 2px;
+}
+
+.autofixDone {
+  color: #a6e3a1;
+  border-color: #a6e3a1;
+}
+
+.autofixFailed {
+  color: #fab387;
+  border-color: #fab387;
+}
+
 @media (max-width: 768px) {
   .headerBar {
     flex-direction: column;
