@@ -326,9 +326,9 @@ export class SessionManager extends EventEmitter {
     // Run bootstrap script if configured (after worktree creation, before session spawn).
     // cwd is the main project root so git rev-parse --show-toplevel resolves correctly.
     // The worktree path is passed as $1 so the script can operate on it.
-    if (orchConfig.bootstrapScript) {
+    if (orchConfig.bootstrap_script) {
       try {
-        execSync(`bash ${orchConfig.bootstrapScript} "${worktreePath}"`, {
+        execSync(`bash ${orchConfig.bootstrap_script} "${worktreePath}"`, {
           cwd: projectDir,
           timeout: 120_000,
           stdio: 'pipe',
@@ -399,8 +399,10 @@ export class SessionManager extends EventEmitter {
             targetBranch: 'dev',
             projectDir,
             worktreePath,
-            prGate: orchConfig.prGate,
-            bashRules: orchConfig.bashRules,
+            bashRules:
+              orchConfig.bash_rules.length > 0
+                ? orchConfig.bash_rules
+                : undefined,
             taskBackend: project.taskSource === 'yaml' ? 'local' : 'notion',
             taskContent,
             gitMode: project.gitMode,
@@ -446,7 +448,7 @@ export class SessionManager extends EventEmitter {
         sessionType,
         this,
         this.githubClient,
-        orchConfig.allowedTools,
+        orchConfig.allowed_tools,
         sessionMode === 'api' ? sessionContextContent : undefined,
         runner,
         projectId,
@@ -696,7 +698,7 @@ export class SessionManager extends EventEmitter {
       row.session_type ?? 'standard',
       this,
       this.githubClient,
-      orchConfig.allowedTools,
+      orchConfig.allowed_tools,
       undefined, // no systemPromptContent for resume (session already has context)
       resumeRunner,
       row.project_id ?? '',
@@ -1094,7 +1096,7 @@ export class SessionManager extends EventEmitter {
       row.session_type ?? 'standard',
       this,
       this.githubClient,
-      orchConfigResume.allowedTools,
+      orchConfigResume.allowed_tools,
       undefined, // no systemPromptContent for resume
       sendOrResumeRunner,
       row.project_id ?? '',
