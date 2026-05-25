@@ -28,6 +28,8 @@ function getMaxReviewIterations(): number {
 export class ReviewOrchestrator {
   private queue: ReviewJob[] = [];
   private running = 0;
+  /** SHA of the last autofix commit per PR, keyed by "prNumber:repo". */
+  private lastAutofixShas = new Map<string, string>();
 
   constructor(
     private reviewService: PRReviewService,
@@ -66,6 +68,21 @@ export class ReviewOrchestrator {
         void this.drain();
       }
     }
+  }
+
+  /**
+   * Returns true (and consumes the entry) when the given SHA is the autofix
+   * commit that was pushed during the last executeReview() for this PR.
+   * Used by the push_detected handler to skip re-reviews for autofix-only pushes
+   * so they do not count against the iteration cap.
+   */
+  consumeAutofixSha(prNumber: number, repo: string, sha: string): boolean {
+    const key = `${prNumber}:${repo}`;
+    if (this.lastAutofixShas.get(key) === sha) {
+      this.lastAutofixShas.delete(key);
+      return true;
+    }
+    return false;
   }
 
   private async executeReview(job: ReviewJob): Promise<void> {
@@ -122,6 +139,12 @@ export class ReviewOrchestrator {
           );
           autofixSuccess = result.success;
           autofixSummary = result.summary;
+          if (result.commitSha) {
+            this.lastAutofixShas.set(
+              `${job.prNumber}:${job.repo}`,
+              result.commitSha,
+            );
+          }
         } catch (err) {
           autofixSuccess = false;
           autofixSummary = `autofix threw: ${String(err)}`;

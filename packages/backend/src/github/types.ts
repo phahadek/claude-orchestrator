@@ -76,4 +76,6 @@ export interface ReviewJob {
   taskId: string;
   taskUrl: string;
   contextUrl: string;
+  /** True when the triggering push was the autofix commit (not a coding-session push). */
+  autofixOnly?: boolean;
 }

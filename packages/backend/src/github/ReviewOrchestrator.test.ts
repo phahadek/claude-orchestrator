@@ -922,3 +922,123 @@ describe('ReviewOrchestrator — autofix WS messages', () => {
     expect(vi.mocked(runAutofix)).toHaveBeenCalledTimes(2);
   });
 });
+
+// ── Autofix-only iteration suppression ───────────────────────────────────────
+// AC: "Autofix-only iterations (where the coding session did not push) do not
+// increment the iteration counter."
+// Mechanism: executeReview() stores the autofix commit SHA after autofix pushes.
+// The server.ts push_detected handler calls consumeAutofixSha() — if it matches,
+// the push was autofix-only and the re-review (which would increment) is skipped.
+
+describe('ReviewOrchestrator — consumeAutofixSha (autofix-only iteration detection)', () => {
+  it('consumeAutofixSha returns false when no autofix commit was recorded', () => {
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orchestrator = new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    expect(orchestrator.consumeAutofixSha(1, 'owner/repo', 'any-sha')).toBe(
+      false,
+    );
+  });
+
+  it('consumeAutofixSha returns true after executeReview stores the autofix SHA', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      commitSha: 'autofix-sha-123',
+      summary: '1 file changed',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orchestrator = new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(
+      orchestrator.consumeAutofixSha(1, 'owner/repo', 'autofix-sha-123'),
+    ).toBe(true);
+  });
+
+  it('consumeAutofixSha returns false for a non-matching SHA', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      commitSha: 'autofix-sha-123',
+      summary: '1 file changed',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orchestrator = new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(
+      orchestrator.consumeAutofixSha(1, 'owner/repo', 'different-sha'),
+    ).toBe(false);
+  });
+
+  it('consumeAutofixSha is consumed (returns false on second call)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      commitSha: 'autofix-sha-abc',
+      summary: 'done',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orchestrator = new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    // First call consumes the entry
+    expect(
+      orchestrator.consumeAutofixSha(1, 'owner/repo', 'autofix-sha-abc'),
+    ).toBe(true);
+    // Second call returns false — the SHA was already consumed
+    expect(
+      orchestrator.consumeAutofixSha(1, 'owner/repo', 'autofix-sha-abc'),
+    ).toBe(false);
+  });
+
+  it('does not store autofix SHA when autofix produces no commit', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    // No commitSha — autofix ran but produced no diff
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      summary: 'no diff',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orchestrator = new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(orchestrator.consumeAutofixSha(1, 'owner/repo', 'any-sha')).toBe(
+      false,
+    );
+  });
+});

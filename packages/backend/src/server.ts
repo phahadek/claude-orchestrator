@@ -74,9 +74,9 @@ const prReviewService = new PRReviewService(
   undefined,
   sessionManager,
 );
-// Constructed for its side effect: subscribes to sessionManager 'pr_opened' events.
-// The reference is intentionally not retained (kept alive via the event listener).
-const _reviewOrchestrator = new ReviewOrchestrator(
+// Retained so push_detected handler can call consumeAutofixSha() to detect
+// autofix-only pushes and suppress iteration-counter increments for them.
+const reviewOrchestrator = new ReviewOrchestrator(
   prReviewService,
   sessionManager,
   AUTO_REVIEW_CONCURRENCY,
@@ -225,6 +225,24 @@ sessionManager.on(
           `[server] failed to fetch latest PR state for #${prRow.pr_number} after retry:`,
           fetchError,
         );
+      }
+
+      // Skip re-review when the only push since the last review was the autofix
+      // commit — the code at that SHA was already reviewed in executeReview().
+      // This prevents autofix-only iterations from counting against the cap.
+      if (
+        headSha &&
+        reviewOrchestrator.consumeAutofixSha(
+          prRow.pr_number,
+          prRow.repo,
+          headSha,
+        )
+      ) {
+        console.log(
+          `[server] push_detected: autofix-only push for PR #${prRow.pr_number} — skipping re-review`,
+        );
+        pendingReReviews.delete(codingSessionId);
+        return;
       }
 
       const maxIter = getMaxReviewIterations();
