@@ -154,11 +154,6 @@ export function TaskDetail({
   const [mobileOpenSection, setMobileOpenSection] = useState<
     'review' | 'pr' | null
   >('review');
-  const [isMobile, setIsMobile] = useState(
-    () =>
-      typeof window !== 'undefined' &&
-      window.matchMedia('(max-width: 767px)').matches,
-  );
   const [showReviewDimensions, setShowReviewDimensions] = useState(false);
   const [reviewInFlight, setReviewInFlight] = useState(false);
   const [mergeInFlight, setMergeInFlight] = useState(false);
@@ -169,13 +164,6 @@ export function TaskDetail({
     useState<DisplayStatus | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'diff'>('overview');
   const [sessionOverlayOpen, setSessionOverlayOpen] = useState(false);
-
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 767px)');
-    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
-  }, []);
 
   // Reset state when task changes
   useEffect(() => {
