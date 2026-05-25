@@ -103,7 +103,12 @@ const prMergeWatcher = new PRMergeWatcher(
 // After an approved verdict, the review service should trigger an immediate
 // watcher-style mergeability check so we don't wait for the next 5-min poll.
 prReviewService.setMergeWatcher(prMergeWatcher);
-const autoMerger = new AutoMerger(githubClient, prMergeWatcher, broadcast);
+const autoMerger = new AutoMerger(
+  githubClient,
+  prMergeWatcher,
+  broadcast,
+  sessionManager,
+);
 prMergeWatcher.setAutoMerger(autoMerger);
 prReviewService.setAutoMerger(autoMerger);
 setAutoMerger(autoMerger);

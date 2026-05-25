@@ -247,4 +247,9 @@ export function runMigrations(): void {
   } catch {
     /* already exists */
   }
+  try {
+    db.exec(`ALTER TABLE local_branches ADD COLUMN merge_commit_sha TEXT`);
+  } catch {
+    /* already exists */
+  }
 }

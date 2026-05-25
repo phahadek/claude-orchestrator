@@ -1593,3 +1593,33 @@ export function setLocalBranchPauseReason(
     `UPDATE local_branches SET pause_reason = ?, updated_at = ? WHERE id = ?`,
   ).run(reason, now, id);
 }
+
+/**
+ * Approved open local branches eligible for auto-merge. Only returns rows where
+ * the associated project has auto_merge_enabled = 1, review verdict is 'approved',
+ * and no pause_reason is set.
+ */
+export function getApprovedLocalBranches(): LocalBranchRow[] {
+  return db
+    .prepare(
+      `
+    SELECT lb.* FROM local_branches lb
+    JOIN projects p ON lb.project_id = p.id
+    WHERE lb.status = 'open'
+      AND lb.review_result LIKE '%approved%'
+      AND lb.pause_reason IS NULL
+      AND p.auto_merge_enabled = 1
+  `,
+    )
+    .all() as LocalBranchRow[];
+}
+
+export function markLocalBranchMerged(
+  id: number,
+  commitSha: string | null,
+): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE local_branches SET status = 'merged', merge_commit_sha = ?, updated_at = ? WHERE id = ?`,
+  ).run(commitSha ?? null, now, id);
+}

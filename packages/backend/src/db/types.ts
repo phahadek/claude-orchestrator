@@ -215,12 +215,17 @@ export interface LocalBranchRow {
   status: LocalBranchStatus;
   review_result: string | null; // JSON verdict
   pause_reason: PauseReason | null;
+  merge_commit_sha: string | null;
   created_at: string;
   updated_at: string;
 }
 
-export type NewLocalBranchRow = Omit<LocalBranchRow, 'id' | 'pause_reason'> & {
+export type NewLocalBranchRow = Omit<
+  LocalBranchRow,
+  'id' | 'pause_reason' | 'merge_commit_sha'
+> & {
   pause_reason?: PauseReason | null;
+  merge_commit_sha?: string | null;
 };
 
 // ─── pull_requests ──────────────────────────────────────────────────────────
@@ -236,7 +241,8 @@ export type PauseReason =
   | 'auto_merge_failed'
   | 'pr_closed'
   | 'review_failed'
-  | 'api_overloaded';
+  | 'api_overloaded'
+  | 'merge_conflict';
 
 export interface PullRequestRow {
   id: number;

@@ -25,12 +25,18 @@ vi.mock('../db/queries.js', () => ({
   getPRByNumber: vi.fn(),
   setPauseReason: vi.fn(),
   updateMergeState: vi.fn(),
+  getApprovedOpenPRs: vi.fn().mockReturnValue([]),
+  getApprovedLocalBranches: vi.fn().mockReturnValue([]),
+  markLocalBranchMerged: vi.fn(),
+  setLocalBranchPauseReason: vi.fn(),
+  getSession: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
   getProjectByGithubRepo: vi.fn((repo: string) =>
     repo === 'owner/repo' ? projectFixture : undefined,
   ),
+  getProjectById: vi.fn(() => projectFixture),
   runtimeSettings: runtimeSettingsFixture,
 }));
 
@@ -38,11 +44,41 @@ vi.mock('../routes/tasks.js', () => ({
   emitTaskUpdated: vi.fn(),
 }));
 
+vi.mock('../orchestration/localMergeRunner.js', () => ({
+  squashMergeLocal: vi.fn(),
+}));
+
+vi.mock('../orchestration/localBranchHelpers.js', () => ({
+  detectMergeConflict: vi.fn().mockResolvedValue(false),
+}));
+
+vi.mock('../tasks/TaskBackend.js', () => ({
+  getTaskBackend: vi.fn(() => ({
+    updateStatus: vi.fn().mockResolvedValue(undefined),
+  })),
+}));
+
+vi.mock('../session/orchestrator-config.js', () => ({
+  loadOrchestratorConfig: vi.fn(() => ({ verify: [], ci_check_name: [] })),
+}));
+
 import { AutoMerger } from './AutoMerger';
-import { getPRByNumber, setPauseReason, updateMergeState } from '../db/queries';
+import {
+  getPRByNumber,
+  setPauseReason,
+  updateMergeState,
+  getApprovedOpenPRs,
+  getApprovedLocalBranches,
+  markLocalBranchMerged,
+  setLocalBranchPauseReason,
+  getSession,
+} from '../db/queries';
+import { squashMergeLocal } from '../orchestration/localMergeRunner';
+import { detectMergeConflict } from '../orchestration/localBranchHelpers';
+import { getTaskBackend } from '../tasks/TaskBackend';
 import type { GitHubClient } from './GitHubClient';
 import type { PRMergeWatcher } from './PRMergeWatcher';
-import type { PullRequestRow } from '../db/types';
+import type { PullRequestRow, LocalBranchRow, Session } from '../db/types';
 import type { MergeabilityCategory } from './types';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -378,5 +414,280 @@ describe('AutoMerger.attempt() — failure modes', () => {
       'ci_failed',
       ['lint', 'unit-tests'],
     );
+  });
+});
+
+// ── pollOnce() helpers ────────────────────────────────────────────────────────
+
+function makeLocalBranchRow(
+  overrides: Partial<LocalBranchRow> = {},
+): LocalBranchRow {
+  return {
+    id: 10,
+    project_id: 'proj-1',
+    session_id: 'coding-session-1',
+    branch_name: 'feature/my-task',
+    base_branch: 'dev',
+    status: 'open',
+    review_result: JSON.stringify({ verdict: 'approved', summary: 'ok' }),
+    pause_reason: null,
+    merge_commit_sha: null,
+    created_at: '2024-01-01T00:00:00Z',
+    updated_at: '2024-01-01T00:00:00Z',
+    ...overrides,
+  };
+}
+
+function makeSessionRow(overrides: Partial<Session> = {}): Session {
+  return {
+    session_id: 'coding-session-1',
+    notion_task_id: 'task-abc',
+    notion_task_url: 'https://notion.so/task-abc',
+    project_context_url: null,
+    project_id: 'proj-1',
+    status: 'running',
+    started_at: Date.now(),
+    ended_at: null,
+    pr_url: null,
+    worktree_path: '/tmp/worktree-1',
+    archived: 0,
+    favorited: 0,
+    session_type: 'standard',
+    note: null,
+    tags: null,
+    total_input_tokens: 0,
+    total_output_tokens: 0,
+    model: null,
+    task_name: 'My Task',
+    metadata: null,
+    review_result: null,
+    ...overrides,
+  };
+}
+
+function makeMockSessions(): {
+  sendOrResume: ReturnType<typeof vi.fn>;
+  endSession: ReturnType<typeof vi.fn>;
+} {
+  return {
+    sendOrResume: vi.fn().mockResolvedValue('coding-session-1'),
+    endSession: vi.fn(),
+  };
+}
+
+// ── pollOnce() — PR dispatch (regression guard) ───────────────────────────────
+
+describe('AutoMerger.pollOnce() — PR dispatch regression', () => {
+  it('calls attempt() for each approved open PR', async () => {
+    const pr = makePRRow();
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getApprovedLocalBranches).mockReturnValue([]);
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ pause_reason: 'stuck_timeout' }), // paused → attempt exits early
+    );
+
+    const github = makeMockGitHub([]);
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {});
+
+    await merger.pollOnce();
+
+    // fetchPRStatusConditional would be called in the run() loop if not paused
+    // here the row is paused so it exits early — but the key check is that
+    // getPRByNumber was invoked (meaning attempt() started for the PR).
+    expect(getPRByNumber).toHaveBeenCalledWith(42, 'owner/repo');
+  });
+
+  it('does NOT call squashMergeLocal for PR rows', async () => {
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([makePRRow()]);
+    vi.mocked(getApprovedLocalBranches).mockReturnValue([]);
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ pause_reason: 'stuck_timeout' }),
+    );
+
+    const github = makeMockGitHub([]);
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {});
+
+    await merger.pollOnce();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(squashMergeLocal).not.toHaveBeenCalled();
+  });
+});
+
+// ── pollOnce() — local branch dispatch ───────────────────────────────────────
+
+describe('AutoMerger.pollOnce() — local branch dispatch', () => {
+  it('skips local branches with no session row', async () => {
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([]);
+    vi.mocked(getApprovedLocalBranches).mockReturnValue([makeLocalBranchRow()]);
+    vi.mocked(getSession).mockReturnValue(undefined);
+
+    const github = makeMockGitHub([]);
+    const watcher = makeMockWatcher();
+    const sessions = makeMockSessions();
+    const merger = new AutoMerger(
+      github,
+      watcher,
+      () => {},
+      sessions as unknown as import('../session/SessionManager').SessionManager,
+    );
+
+    await merger.pollOnce();
+
+    expect(squashMergeLocal).not.toHaveBeenCalled();
+    expect(sessions.endSession).not.toHaveBeenCalled();
+  });
+
+  it('skips local branches where session has no worktree_path', async () => {
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([]);
+    vi.mocked(getApprovedLocalBranches).mockReturnValue([makeLocalBranchRow()]);
+    vi.mocked(getSession).mockReturnValue(
+      makeSessionRow({ worktree_path: null }),
+    );
+
+    const github = makeMockGitHub([]);
+    const watcher = makeMockWatcher();
+    const sessions = makeMockSessions();
+    const merger = new AutoMerger(
+      github,
+      watcher,
+      () => {},
+      sessions as unknown as import('../session/SessionManager').SessionManager,
+    );
+
+    await merger.pollOnce();
+
+    expect(squashMergeLocal).not.toHaveBeenCalled();
+  });
+
+  it('pauses with merge_conflict and sends feedback when conflict detected', async () => {
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([]);
+    vi.mocked(getApprovedLocalBranches).mockReturnValue([makeLocalBranchRow()]);
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(detectMergeConflict).mockResolvedValueOnce(true);
+
+    const github = makeMockGitHub([]);
+    const watcher = makeMockWatcher();
+    const sessions = makeMockSessions();
+    const merger = new AutoMerger(
+      github,
+      watcher,
+      () => {},
+      sessions as unknown as import('../session/SessionManager').SessionManager,
+    );
+
+    await merger.pollOnce();
+
+    expect(setLocalBranchPauseReason).toHaveBeenCalledWith(
+      10,
+      'merge_conflict',
+    );
+    expect(sessions.sendOrResume).toHaveBeenCalledWith(
+      'coding-session-1',
+      expect.stringContaining('Merge Conflict'),
+    );
+    expect(squashMergeLocal).not.toHaveBeenCalled();
+  });
+
+  it('calls squashMergeLocal with correct args on clean branch', async () => {
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([]);
+    vi.mocked(getApprovedLocalBranches).mockReturnValue([makeLocalBranchRow()]);
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(detectMergeConflict).mockResolvedValueOnce(false);
+    vi.mocked(squashMergeLocal).mockResolvedValueOnce({
+      merged: true,
+      commitSha: 'abc123',
+    });
+
+    const github = makeMockGitHub([]);
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {});
+
+    await merger.pollOnce();
+
+    expect(squashMergeLocal).toHaveBeenCalledWith({
+      worktreePath: '/tmp/worktree-1',
+      baseBranch: 'dev',
+      featureBranch: 'feature/my-task',
+      taskName: 'My Task',
+    });
+  });
+
+  it('marks branch merged, ends session, updates task, and broadcasts on success', async () => {
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([]);
+    vi.mocked(getApprovedLocalBranches).mockReturnValue([makeLocalBranchRow()]);
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(detectMergeConflict).mockResolvedValueOnce(false);
+    vi.mocked(squashMergeLocal).mockResolvedValueOnce({
+      merged: true,
+      commitSha: 'abc123',
+    });
+
+    const mockBackend = { updateStatus: vi.fn().mockResolvedValue(undefined) };
+    vi.mocked(getTaskBackend).mockReturnValueOnce(
+      mockBackend as unknown as ReturnType<typeof getTaskBackend>,
+    );
+
+    const broadcasts: import('../../ws/types').ServerMessage[] = [];
+    const github = makeMockGitHub([]);
+    const watcher = makeMockWatcher();
+    const sessions = makeMockSessions();
+    const merger = new AutoMerger(
+      github,
+      watcher,
+      (msg) => broadcasts.push(msg),
+      sessions as unknown as import('../session/SessionManager').SessionManager,
+    );
+
+    await merger.pollOnce();
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(markLocalBranchMerged).toHaveBeenCalledWith(10, 'abc123');
+    expect(sessions.endSession).toHaveBeenCalledWith('coding-session-1');
+    expect(mockBackend.updateStatus).toHaveBeenCalledWith(
+      'task-abc',
+      '✅ Done',
+    );
+    expect(broadcasts).toContainEqual(
+      expect.objectContaining({
+        type: 'local_branch_merged',
+        projectId: 'proj-1',
+        sessionId: 'coding-session-1',
+        branchName: 'feature/my-task',
+        commitSha: 'abc123',
+      }),
+    );
+  });
+
+  it('pauses with merge_conflict when squashMergeLocal returns conflict', async () => {
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([]);
+    vi.mocked(getApprovedLocalBranches).mockReturnValue([makeLocalBranchRow()]);
+    vi.mocked(getSession).mockReturnValue(makeSessionRow());
+    vi.mocked(detectMergeConflict).mockResolvedValueOnce(false);
+    vi.mocked(squashMergeLocal).mockResolvedValueOnce({
+      merged: false,
+      conflict: true,
+    });
+
+    const sessions = makeMockSessions();
+    const github = makeMockGitHub([]);
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(
+      github,
+      watcher,
+      () => {},
+      sessions as unknown as import('../session/SessionManager').SessionManager,
+    );
+
+    await merger.pollOnce();
+
+    expect(setLocalBranchPauseReason).toHaveBeenCalledWith(
+      10,
+      'merge_conflict',
+    );
+    expect(sessions.sendOrResume).toHaveBeenCalled();
+    expect(markLocalBranchMerged).not.toHaveBeenCalled();
   });
 });

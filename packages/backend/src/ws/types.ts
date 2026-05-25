@@ -231,6 +231,13 @@ export type ServerMessage =
       sessionId: string;
       branchName: string;
       baseBranch: string;
+    }
+  | {
+      type: 'local_branch_merged';
+      projectId: string;
+      sessionId: string;
+      branchName: string;
+      commitSha: string | null;
     };
 
 // ── Client → Server ──────────────────────────────────────────────
