@@ -410,66 +410,59 @@ describe('loadOrchestratorConfig', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('returns Node.js defaults when no config file exists', () => {
+  it('returns empty defaults when no config file exists', () => {
     const config = loadOrchestratorConfig(tmpDir);
-    expect(config.allowedTools).toEqual([]);
-    expect(config.prGate.typeCheck).toBe('npx tsc --noEmit');
-    expect(config.prGate.build).toBe('npx vite build');
-    expect(config.bootstrapScript).toBe('');
-    expect(config.bashRules.length).toBeGreaterThan(0);
-    expect(config.bashRules[0]).toContain('npx');
+    expect(config.allowed_tools).toEqual([]);
+    expect(config.verify).toEqual([]);
+    expect(config.bootstrap_script).toBe('');
+    expect(config.bash_rules).toEqual([]);
   });
 
-  it('reads custom config from .claude/orchestrator.json', () => {
-    const claudeDir = path.join(tmpDir, '.claude');
-    fs.mkdirSync(claudeDir, { recursive: true });
+  it('reads custom config from .claude-orchestrator.yml', () => {
     fs.writeFileSync(
-      path.join(claudeDir, 'orchestrator.json'),
-      JSON.stringify({
-        allowedTools: ['Bash(dotnet:*)'],
-        prGate: { typeCheck: 'dotnet build', build: 'dotnet test' },
-        bootstrapScript: './bootstrap.sh',
-        bashRules: ['Use `dotnet` instead of `npm`.'],
-      }),
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      [
+        'allowed_tools:',
+        '  - Bash(dotnet:*)',
+        'verify:',
+        '  - dotnet build',
+        '  - dotnet test',
+        'bootstrap_script: ./bootstrap.sh',
+        'bash_rules:',
+        '  - Use `dotnet` instead of `npm`.',
+      ].join('\n'),
       'utf-8',
     );
 
     const config = loadOrchestratorConfig(tmpDir);
-    expect(config.allowedTools).toEqual(['Bash(dotnet:*)']);
-    expect(config.prGate.typeCheck).toBe('dotnet build');
-    expect(config.prGate.build).toBe('dotnet test');
-    expect(config.bootstrapScript).toBe('./bootstrap.sh');
-    expect(config.bashRules).toEqual(['Use `dotnet` instead of `npm`.']);
+    expect(config.allowed_tools).toEqual(['Bash(dotnet:*)']);
+    expect(config.verify).toEqual(['dotnet build', 'dotnet test']);
+    expect(config.bootstrap_script).toBe('./bootstrap.sh');
+    expect(config.bash_rules).toEqual(['Use `dotnet` instead of `npm`.']);
   });
 
   it('falls back to defaults for missing fields in partial config', () => {
-    const claudeDir = path.join(tmpDir, '.claude');
-    fs.mkdirSync(claudeDir, { recursive: true });
     fs.writeFileSync(
-      path.join(claudeDir, 'orchestrator.json'),
-      JSON.stringify({
-        allowedTools: ['Bash(dotnet:*)'],
-      }),
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      'allowed_tools:\n  - Bash(dotnet:*)\n',
       'utf-8',
     );
 
     const config = loadOrchestratorConfig(tmpDir);
-    expect(config.allowedTools).toEqual(['Bash(dotnet:*)']);
-    expect(config.prGate.typeCheck).toBe('npx tsc --noEmit');
-    expect(config.prGate.build).toBe('npx vite build');
-    expect(config.bootstrapScript).toBe('');
+    expect(config.allowed_tools).toEqual(['Bash(dotnet:*)']);
+    expect(config.verify).toEqual([]);
+    expect(config.bootstrap_script).toBe('');
   });
 
-  it('returns defaults when config file is invalid JSON', () => {
-    const claudeDir = path.join(tmpDir, '.claude');
-    fs.mkdirSync(claudeDir, { recursive: true });
+  it('returns defaults when config file is invalid YAML', () => {
     fs.writeFileSync(
-      path.join(claudeDir, 'orchestrator.json'),
-      'not json',
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      ': invalid: yaml: {',
       'utf-8',
     );
 
     const config = loadOrchestratorConfig(tmpDir);
-    expect(config.prGate.typeCheck).toBe('npx tsc --noEmit');
+    expect(config.verify).toEqual([]);
+    expect(config.allowed_tools).toEqual([]);
   });
 });
