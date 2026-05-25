@@ -6,6 +6,7 @@ import {
   setPendingPush,
   setPauseReason,
   getLocalBranchBySession,
+  setLocalBranchPauseReason,
   getSession,
 } from '../db/queries';
 import type {
@@ -17,7 +18,9 @@ import type { SessionManager } from '../session/SessionManager';
 import type { GitHubClient } from './GitHubClient';
 import type { ReviewJob } from './types';
 import { GitHubDiffSource, LocalDiffSource } from './DiffSource';
-import { formatReviewFeedback } from './reviewUtils';
+import { formatReviewFeedback, formatCIFailureFeedback } from './reviewUtils';
+import { runVerifyAsGate } from '../orchestration/verifyRunner';
+import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import type { ServerMessage } from '../ws/types';
 
 const REVIEW_TIMEOUT_MS = 120_000;
@@ -143,6 +146,24 @@ export class ReviewOrchestrator {
   }
 
   private async executeLocalBranchReview(job: LocalBranchJob): Promise<void> {
+    const project = getProjectById(job.projectId);
+    if (project) {
+      const config = loadOrchestratorConfig(project.projectDir);
+      const verifyResult = await runVerifyAsGate(job.worktreePath, config.verify);
+      if (!verifyResult.passed) {
+        setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
+        this.sessionManager.send(
+          job.sessionId,
+          formatCIFailureFeedback({
+            source: 'verify',
+            failedCommand: verifyResult.failedCommand,
+            truncatedOutput: verifyResult.truncatedOutput,
+          }),
+        );
+        return;
+      }
+    }
+
     const diffSource = new LocalDiffSource(
       job.worktreePath,
       job.baseBranch,

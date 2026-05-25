@@ -1583,3 +1583,13 @@ export function setLocalBranchReviewResult(
     `UPDATE local_branches SET review_result = ?, updated_at = ? WHERE id = ?`,
   ).run(reviewResult, now, id);
 }
+
+export function setLocalBranchPauseReason(
+  id: number,
+  reason: PauseReason | null,
+): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE local_branches SET pause_reason = ?, updated_at = ? WHERE id = ?`,
+  ).run(reason, now, id);
+}

@@ -40,8 +40,20 @@ describe('shouldAutoReview()', () => {
   });
 });
 
-describe('formatCIFailureFeedback()', () => {
+describe('formatCIFailureFeedback() — source: github (regression)', () => {
   it('renders failing check names as a list', () => {
+    const result = formatCIFailureFeedback({
+      source: 'github',
+      prNumber: 42,
+      failingCheckNames: ['lint', 'unit-tests'],
+      runUrl: null,
+      logExcerpt: null,
+    });
+    expect(result).toContain('- lint');
+    expect(result).toContain('- unit-tests');
+  });
+
+  it('works without explicit source field (backward compat)', () => {
     const result = formatCIFailureFeedback({
       prNumber: 42,
       failingCheckNames: ['lint', 'unit-tests'],
@@ -93,7 +105,6 @@ describe('formatCIFailureFeedback()', () => {
     });
     expect(result).toContain('… [');
     expect(result).toContain('more line');
-    // The excerpt in the output should be capped (not the full 900 chars of x's)
     const excerptStart = result.indexOf('xxx');
     const excerptEnd = result.indexOf('\n…');
     expect(excerptEnd - excerptStart).toBeLessThanOrEqual(800);
@@ -140,5 +151,71 @@ describe('formatCIFailureFeedback()', () => {
       logExcerpt: null,
     });
     expect(result).toContain('PR #99');
+  });
+});
+
+describe('formatCIFailureFeedback() — source: verify', () => {
+  it('renders the failed command', () => {
+    const result = formatCIFailureFeedback({
+      source: 'verify',
+      failedCommand: 'npm run lint',
+      truncatedOutput: undefined,
+    });
+    expect(result).toContain('npm run lint');
+  });
+
+  it('renders truncated output when provided', () => {
+    const result = formatCIFailureFeedback({
+      source: 'verify',
+      failedCommand: 'npm run lint',
+      truncatedOutput: 'error: lint failed on line 42',
+    });
+    expect(result).toContain('error: lint failed on line 42');
+  });
+
+  it('omits output section when truncatedOutput is undefined', () => {
+    const result = formatCIFailureFeedback({
+      source: 'verify',
+      failedCommand: 'npm run lint',
+      truncatedOutput: undefined,
+    });
+    expect(result).not.toContain('Command output:');
+  });
+
+  it('includes "investigate and push a fix" instruction block', () => {
+    const result = formatCIFailureFeedback({
+      source: 'verify',
+      failedCommand: 'npm run build',
+      truncatedOutput: 'build error',
+    });
+    expect(result).toMatch(/investigate the failures and push a fix/i);
+  });
+
+  it('includes the do-not-rebase instruction block', () => {
+    const result = formatCIFailureFeedback({
+      source: 'verify',
+      failedCommand: 'npm test',
+      truncatedOutput: undefined,
+    });
+    expect(result).toContain('Do NOT rebase onto dev');
+    expect(result).toContain('push directly to your feature branch');
+  });
+
+  it('does not contain a PR number reference', () => {
+    const result = formatCIFailureFeedback({
+      source: 'verify',
+      failedCommand: 'npm test',
+      truncatedOutput: undefined,
+    });
+    expect(result).not.toMatch(/PR #\d+/);
+  });
+
+  it('falls back to (unknown) when failedCommand is undefined', () => {
+    const result = formatCIFailureFeedback({
+      source: 'verify',
+      failedCommand: undefined,
+      truncatedOutput: undefined,
+    });
+    expect(result).toContain('(unknown)');
   });
 });

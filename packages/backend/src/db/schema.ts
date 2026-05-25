@@ -242,4 +242,9 @@ export function runMigrations(): void {
   } catch {
     /* already exists */
   }
+  try {
+    db.exec(`ALTER TABLE local_branches ADD COLUMN pause_reason TEXT`);
+  } catch {
+    /* already exists */
+  }
 }

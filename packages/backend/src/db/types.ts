@@ -214,11 +214,14 @@ export interface LocalBranchRow {
   base_branch: string;
   status: LocalBranchStatus;
   review_result: string | null; // JSON verdict
+  pause_reason: PauseReason | null;
   created_at: string;
   updated_at: string;
 }
 
-export type NewLocalBranchRow = Omit<LocalBranchRow, 'id'>;
+export type NewLocalBranchRow = Omit<LocalBranchRow, 'id' | 'pause_reason'> & {
+  pause_reason?: PauseReason | null;
+};
 
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
