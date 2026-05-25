@@ -259,6 +259,7 @@ sessionManager.on(
       if (prRow.review_iteration >= maxIter) {
         const message = `Review loop for PR #${prRow.pr_number} reached ${maxIter} iterations without approval. Manual intervention needed.`;
         console.warn(`[server] ${message}`);
+        setPauseReason(prRow.pr_number, prRow.repo, 'max_reviews');
         sessionManager.emit('message', {
           type: 'review_escalated',
           prNumber: prRow.pr_number,
