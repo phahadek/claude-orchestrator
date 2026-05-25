@@ -9,7 +9,6 @@ import {
   getEventsBySession,
   incrementTokens,
   setSessionMetadata,
-  setDerivedTitle,
 } from '../db/queries';
 import type { EventType, NewSession } from '../db/types';
 import {
