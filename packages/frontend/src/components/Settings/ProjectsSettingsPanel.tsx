@@ -5,12 +5,6 @@ import { ProjectFormModal, type ProjectFormValues } from './ProjectFormModal';
 import { MilestonesSubPanel } from './MilestonesSubPanel';
 import styles from './ProjectsSettingsPanel.module.css';
 
-function middleEllipsis(str: string, maxLen = 40): string {
-  if (str.length <= maxLen) return str;
-  const half = Math.floor((maxLen - 1) / 2);
-  return str.slice(0, half) + '…' + str.slice(str.length - half);
-}
-
 function toCreatePayload(values: ProjectFormValues) {
   return {
     name: values.name.trim(),
@@ -25,6 +19,12 @@ function toCreatePayload(values: ProjectFormValues) {
     autoMergeEnabled:
       values.gitMode !== 'local-only' ? values.autoMergeEnabled : false,
   };
+}
+
+function middleEllipsis(str: string, maxLen = 40): string {
+  if (str.length <= maxLen) return str;
+  const half = Math.floor((maxLen - 1) / 2);
+  return str.slice(0, half) + '…' + str.slice(str.length - half);
 }
 
 function ProjectsSettingsPanelInner() {
