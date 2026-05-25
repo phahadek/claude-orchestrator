@@ -918,6 +918,10 @@ export default function App() {
                         projects.find((p) => p.id === activeProjectId)
                           ?.gitMode === 'local-only'
                       }
+                      autoMergeEnabled={
+                        projects.find((p) => p.id === activeProjectId)
+                          ?.autoMergeEnabled ?? false
+                      }
                     />
                   </ErrorBoundary>
                 ) : (

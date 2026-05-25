@@ -132,6 +132,8 @@ interface Props {
   projectId?: string;
   /** When true, shows the "Mark Merged" button for local-only projects. */
   isLocalOnly?: boolean;
+  /** When true, hides the "Mark Merged" button — AutoMerger handles merging. */
+  autoMergeEnabled?: boolean;
 }
 
 // ── TaskDetail ────────────────────────────────────────────────────
@@ -143,6 +145,7 @@ export function TaskDetail({
   sessions = [],
   projectId,
   isLocalOnly = false,
+  autoMergeEnabled = false,
 }: Props) {
   const [showReviewSection, setShowReviewSection] = useState(true);
   const [showReviewDimensions, setShowReviewDimensions] = useState(false);
@@ -464,8 +467,8 @@ export function TaskDetail({
               </div>
             )}
 
-            {/* ── Mark Merged — local-only projects, no PR ── */}
-            {isLocalOnly && !task.pr && (task.codeSession || task.review) && (
+            {/* ── Mark Merged — local-only projects, no PR, manual merge only ── */}
+            {isLocalOnly && !task.pr && !autoMergeEnabled && (task.codeSession || task.review) && (
               <div className={styles.prSection}>
                 <div className={styles.sectionHeader}>
                   <span className={styles.sectionTitle}>Mark as Done</span>

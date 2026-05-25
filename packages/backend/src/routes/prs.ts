@@ -14,6 +14,7 @@ import {
   resetReviewIteration,
   setPRReviewResult,
   updatePRDraftStatus,
+  getSessionsByProject,
 } from '../db/queries';
 import { GitHubApiError } from '../github/types';
 import type { MergeabilityCategory } from '../github/types';
@@ -72,10 +73,63 @@ export function createPrsRouter(
       return;
     }
     const project = getProjectById(projectId);
-    if (!project?.githubRepo) {
+    if (!project) {
+      res.status(400).json({ error: 'Project not found' });
+      return;
+    }
+
+    const autoMergeEnabled = project.autoMergeEnabled;
+
+    // Local-only projects: return code sessions as unified local_branch items
+    if (project.gitMode === 'local-only') {
+      const sessions = getSessionsByProject(projectId);
+      const codeSessions = sessions.filter(
+        (s) => s.session_type === 'standard' && !s.archived,
+      );
+      const reviewSessions = sessions.filter((s) => s.session_type === 'review');
+
+      // Build map of notion_task_id -> latest review session result
+      const reviewResultByTask = new Map<string, PRReviewResult>();
+      for (const rs of reviewSessions) {
+        if (!rs.notion_task_id || !rs.review_result) continue;
+        const existing = reviewResultByTask.get(rs.notion_task_id);
+        if (!existing) {
+          try {
+            reviewResultByTask.set(
+              rs.notion_task_id,
+              JSON.parse(rs.review_result) as PRReviewResult,
+            );
+          } catch {
+            // skip malformed JSON
+          }
+        }
+      }
+
+      const localItems = codeSessions.map((s) => ({
+        type: 'local_branch' as const,
+        sessionId: s.session_id,
+        branchName: `session/${s.session_id}`,
+        baseBranch: 'dev',
+        status: s.status,
+        reviewResult: s.notion_task_id
+          ? (reviewResultByTask.get(s.notion_task_id) ?? null)
+          : null,
+        createdAt: new Date(s.started_at).toISOString(),
+        autoMergeEnabled,
+        notionTaskId: s.notion_task_id,
+        notionTaskTitle: s.notion_task_id
+          ? getTaskTitleFromCache(s.notion_task_id)
+          : null,
+      }));
+      res.json(localItems);
+      return;
+    }
+
+    if (!project.githubRepo) {
       res.status(422).json({ error: 'Project has no githubRepo configured' });
       return;
     }
+
     const repo = project.githubRepo;
     const rows = getPRs(repo);
 
@@ -101,11 +155,13 @@ export function createPrsRouter(
     }
 
     const items = rows.map((pr) => ({
+      type: 'pr' as const,
       prNumber: pr.pr_number,
       prUrl: pr.pr_url,
       title: pr.title,
       headBranch: pr.head_branch,
-      baseBranch: pr.base_branch,
+      branchName: pr.head_branch ?? '',
+      baseBranch: pr.base_branch ?? '',
       state: reconciledStates.get(pr.pr_number) ?? pr.state,
       notionTaskId: pr.notion_task_id,
       notionTaskTitle: pr.notion_task_id
@@ -124,6 +180,7 @@ export function createPrsRouter(
       mergeState: pr.merge_state ?? null,
       failingChecks: parseFailingChecks(pr.failing_checks),
       pauseReason: pr.pause_reason ?? null,
+      autoMergeEnabled,
     }));
     res.json(items);
   });
