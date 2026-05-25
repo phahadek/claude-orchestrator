@@ -13,6 +13,7 @@ import {
 import type { AutoMerger } from '../github/AutoMerger';
 import { getMergeReadyPRs } from '../db/queries';
 import { NotionClient, normalizeNotionId } from '../notion/NotionClient';
+import { loadOrchestratorConfig } from '../session/orchestrator-config';
 
 let _autoMerger: AutoMerger | null = null;
 export function setAutoMerger(merger: AutoMerger): void {
@@ -316,6 +317,26 @@ projectsRouter.get(
         err instanceof Error ? err.message : 'Notion validation failed';
       res.status(400).json({ error: message });
     }
+  },
+);
+
+// ── Orchestrator config (read-only) ──────────────────────────────────────────
+
+projectsRouter.get(
+  '/projects/:id/orchestrator-config',
+  (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const project = ProjectService.getById(id);
+    if (!project) {
+      res.status(404).json({ error: `Project '${id}' not found` });
+      return;
+    }
+
+    const dir = normalizePath(project.projectDir);
+    const configFile = path.join(dir, '.claude-orchestrator.yml');
+    const present = fs.existsSync(configFile);
+    const config = loadOrchestratorConfig(dir);
+    res.json({ present, config });
   },
 );
 
