@@ -21,6 +21,7 @@ vi.mock('../db/queries.js', () => ({
   resetReviewIteration: vi.fn(),
   setPRReviewResult: vi.fn(),
   updatePRDraftStatus: vi.fn(),
+  getSessionsByProject: vi.fn().mockReturnValue([]),
 }));
 
 const mockProjectsByGithubRepo: Record<
@@ -54,6 +55,8 @@ vi.mock('../config.js', () => ({
         contextUrl: 'https://notion.so/ctx',
         boardId: 'board-1',
         githubRepo: 'owner/repo',
+        gitMode: 'github',
+        autoMergeEnabled: false,
       };
     }
     if (id === 'proj-no-repo') {
@@ -63,6 +66,30 @@ vi.mock('../config.js', () => ({
         projectDir: '/test2',
         contextUrl: 'https://notion.so/ctx2',
         boardId: 'board-2',
+        gitMode: 'github',
+        autoMergeEnabled: false,
+      };
+    }
+    if (id === 'proj-local') {
+      return {
+        id: 'proj-local',
+        name: 'Local Project',
+        projectDir: '/test3',
+        contextUrl: null,
+        boardId: 'board-3',
+        gitMode: 'local-only',
+        autoMergeEnabled: false,
+      };
+    }
+    if (id === 'proj-local-automerge') {
+      return {
+        id: 'proj-local-automerge',
+        name: 'Local AutoMerge Project',
+        projectDir: '/test4',
+        contextUrl: null,
+        boardId: 'board-4',
+        gitMode: 'local-only',
+        autoMergeEnabled: true,
       };
     }
     return undefined;
@@ -333,6 +360,198 @@ describe('GET /api/prs', () => {
     );
     expect(res.status).toBe(422);
     expect(res.body.error).toMatch(/githubRepo/);
+  });
+
+  it('tags each PR item with type: pr', async () => {
+    vi.mocked(queries.getPRs).mockReturnValue([mockPRRow]);
+    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body[0].type).toBe('pr');
+  });
+
+  it('includes autoMergeEnabled from project on PR items', async () => {
+    vi.mocked(queries.getPRs).mockReturnValue([mockPRRow]);
+    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body[0].autoMergeEnabled).toBe(false);
+  });
+});
+
+// ── GET /api/prs — local-only unified payload ─────────────────────────────────
+
+describe('GET /api/prs — local-only project returns local_branch items', () => {
+  it('returns 200 with empty array for local-only project with no sessions', async () => {
+    vi.mocked(queries.getSessionsByProject).mockReturnValue([]);
+    const res = await supertest(buildApp()).get(
+      '/api/prs?projectId=proj-local',
+    );
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(0);
+  });
+
+  it('returns local_branch items for local-only project code sessions', async () => {
+    vi.mocked(queries.getSessionsByProject).mockReturnValue([
+      {
+        session_id: 'sess-1',
+        notion_task_id: 'task-abc',
+        notion_task_url: null,
+        project_context_url: null,
+        project_id: 'proj-local',
+        status: 'done',
+        started_at: 1700000000000,
+        ended_at: 1700000010000,
+        pr_url: null,
+        worktree_path: '/tmp/sess-1',
+        archived: 0,
+        favorited: 0,
+        session_type: 'standard',
+        note: null,
+        tags: null,
+        total_input_tokens: 100,
+        total_output_tokens: 50,
+        model: null,
+        task_name: null,
+        metadata: null,
+        review_result: null,
+      },
+    ]);
+    const res = await supertest(buildApp()).get(
+      '/api/prs?projectId=proj-local',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].type).toBe('local_branch');
+    expect(res.body[0].sessionId).toBe('sess-1');
+    expect(res.body[0].branchName).toBe('session/sess-1');
+    expect(res.body[0].autoMergeEnabled).toBe(false);
+  });
+
+  it('includes review result from paired review session', async () => {
+    const reviewResult = JSON.stringify({
+      verdict: 'approved',
+      summary: 'Looks good',
+      dimensions: [],
+    });
+    vi.mocked(queries.getSessionsByProject).mockReturnValue([
+      {
+        session_id: 'sess-1',
+        notion_task_id: 'task-abc',
+        notion_task_url: null,
+        project_context_url: null,
+        project_id: 'proj-local',
+        status: 'done',
+        started_at: 1700000000000,
+        ended_at: null,
+        pr_url: null,
+        worktree_path: '/tmp/sess-1',
+        archived: 0,
+        favorited: 0,
+        session_type: 'standard',
+        note: null,
+        tags: null,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        model: null,
+        task_name: null,
+        metadata: null,
+        review_result: null,
+      },
+      {
+        session_id: 'review-1',
+        notion_task_id: 'task-abc',
+        notion_task_url: null,
+        project_context_url: null,
+        project_id: 'proj-local',
+        status: 'done',
+        started_at: 1700000005000,
+        ended_at: null,
+        pr_url: null,
+        worktree_path: null,
+        archived: 0,
+        favorited: 0,
+        session_type: 'review',
+        note: null,
+        tags: null,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        model: null,
+        task_name: null,
+        metadata: null,
+        review_result: reviewResult,
+      },
+    ]);
+    const res = await supertest(buildApp()).get(
+      '/api/prs?projectId=proj-local',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body[0].reviewResult.verdict).toBe('approved');
+  });
+
+  it('excludes archived sessions from local_branch items', async () => {
+    vi.mocked(queries.getSessionsByProject).mockReturnValue([
+      {
+        session_id: 'sess-archived',
+        notion_task_id: null,
+        notion_task_url: null,
+        project_context_url: null,
+        project_id: 'proj-local',
+        status: 'done',
+        started_at: 1700000000000,
+        ended_at: null,
+        pr_url: null,
+        worktree_path: null,
+        archived: 1,
+        favorited: 0,
+        session_type: 'standard',
+        note: null,
+        tags: null,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        model: null,
+        task_name: null,
+        metadata: null,
+        review_result: null,
+      },
+    ]);
+    const res = await supertest(buildApp()).get(
+      '/api/prs?projectId=proj-local',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(0);
+  });
+
+  it('sets autoMergeEnabled: true from project on local_branch items', async () => {
+    vi.mocked(queries.getSessionsByProject).mockReturnValue([
+      {
+        session_id: 'sess-2',
+        notion_task_id: null,
+        notion_task_url: null,
+        project_context_url: null,
+        project_id: 'proj-local-automerge',
+        status: 'done',
+        started_at: 1700000000000,
+        ended_at: null,
+        pr_url: null,
+        worktree_path: null,
+        archived: 0,
+        favorited: 0,
+        session_type: 'standard',
+        note: null,
+        tags: null,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        model: null,
+        task_name: null,
+        metadata: null,
+        review_result: null,
+      },
+    ]);
+    const res = await supertest(buildApp()).get(
+      '/api/prs?projectId=proj-local-automerge',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body[0].autoMergeEnabled).toBe(true);
   });
 });
 

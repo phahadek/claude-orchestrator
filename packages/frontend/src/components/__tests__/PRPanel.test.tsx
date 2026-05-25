@@ -1,15 +1,17 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PRPanel } from '../PRPanel';
-import type { PRListItem } from '../PRCard';
+import type { PRWorkItem } from '../WorkItemCard';
 
-function makePR(overrides: Partial<PRListItem> = {}): PRListItem {
+function makePR(overrides: Partial<PRWorkItem> = {}): PRWorkItem {
   return {
+    type: 'pr',
     prNumber: 1,
     prUrl: 'https://github.com/owner/repo/pull/1',
     repo: 'owner/repo',
     title: 'My PR',
     headBranch: 'feature/foo',
+    branchName: 'feature/foo',
     baseBranch: 'dev',
     state: 'open',
     notionTaskId: null,
@@ -21,6 +23,7 @@ function makePR(overrides: Partial<PRListItem> = {}): PRListItem {
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     mergeState: null,
+    autoMergeEnabled: false,
     ...overrides,
   };
 }
@@ -98,7 +101,7 @@ describe('PRPanel — inflight state cleared by WS events', () => {
   type MockFetch = ReturnType<typeof vi.fn>;
 
   function setupFetch(
-    prs: PRListItem[],
+    prs: PRWorkItem[],
     actionMatcher: (url: string, opts?: RequestInit) => boolean,
     actionPromise: Promise<unknown>,
   ) {
@@ -532,11 +535,11 @@ describe('PRPanel — per-card ErrorBoundary isolation', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-    vi.doUnmock('../PRCard');
+    vi.doUnmock('../WorkItemCard');
     vi.resetModules();
   });
 
-  it('a throw inside one PRCard does not crash PRPanel; other PR cards still render', async () => {
+  it('a throw inside one WorkItemCard does not crash PRPanel; other cards still render', async () => {
     const prs = [
       makePR({ prNumber: 1, title: 'PR One' }),
       makePR({ prNumber: 2, title: 'Broken PR' }),
@@ -549,10 +552,10 @@ describe('PRPanel — per-card ErrorBoundary isolation', () => {
     });
 
     vi.resetModules();
-    vi.doMock('../PRCard', () => ({
-      PRCard: ({ pr }: { pr: PRListItem }) => {
-        if (pr.prNumber === 2) throw new Error('boom');
-        return <div data-testid={`pr-${pr.prNumber}`}>{pr.title}</div>;
+    vi.doMock('../WorkItemCard', () => ({
+      WorkItemCard: ({ item }: { item: PRWorkItem }) => {
+        if (item.type === 'pr' && item.prNumber === 2) throw new Error('boom');
+        return <div data-testid={`pr-${item.prNumber}`}>{item.title}</div>;
       },
     }));
 
