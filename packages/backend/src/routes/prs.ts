@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { getProjectById, getProjectByGithubRepo } from '../config';
+import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import {
   getPRs,
   getPRByNumber,
@@ -220,7 +221,15 @@ export function createPrsRouter(
       const repo = `${req.params.owner}/${req.params.repoName}`;
       const prNumber = parseInt(String(req.params.prNumber), 10);
       try {
-        const category = await github.categorizeMergeability(prNumber, repo);
+        const repoProject = getProjectByGithubRepo(repo);
+        const ciCheckNames = repoProject
+          ? loadOrchestratorConfig(repoProject.projectDir).ci_check_name
+          : [];
+        const category = await github.categorizeMergeability(
+          prNumber,
+          repo,
+          ciCheckNames,
+        );
         const failingNames = category.failingChecks.map((c) => c.name);
         const failingNamesOrNull =
           failingNames.length > 0 ? failingNames : null;
@@ -269,6 +278,10 @@ export function createPrsRouter(
     async (req: Request, res: Response) => {
       const repo = `${req.params.owner}/${req.params.repoName}`;
       const prNumber = parseInt(String(req.params.prNumber), 10);
+      const mergeProject = getProjectByGithubRepo(repo);
+      const mergeCiCheckNames = mergeProject
+        ? loadOrchestratorConfig(mergeProject.projectDir).ci_check_name
+        : [];
       const prRow = getPRByNumber(prNumber, repo);
       const commitTitle =
         typeof (req.body as { commitTitle?: string }).commitTitle === 'string'
@@ -380,7 +393,11 @@ export function createPrsRouter(
           // categories it can act on (conflicts → rebase, ci_failed → fix).
           let category: MergeabilityCategory;
           try {
-            category = await github.categorizeMergeability(prNumber, repo);
+            category = await github.categorizeMergeability(
+              prNumber,
+              repo,
+              mergeCiCheckNames,
+            );
           } catch (catErr) {
             console.warn(
               '[prs] categorizeMergeability failed:',

@@ -187,16 +187,22 @@ export class GitHubClient {
    *
    * Called after a 409/405 merge failure to pick the right remediation, and by
    * PRMergeWatcher polling so the state is reflected before the user clicks Merge.
+   *
+   * @param ciCheckNames When non-empty, only checks in this list are considered
+   *   when categorizing CI failures. Checks not in the list are ignored. A named
+   *   check absent from the PR's check-runs is treated as pending (unknown).
+   *   When empty (default), all checks count — existing behaviour.
    */
   async categorizeMergeability(
     prNumber: number,
     repo?: string,
+    ciCheckNames: string[] = [],
   ): Promise<MergeabilityCategory> {
     const r = repo ?? GITHUB_REPO;
     const data = await this.request<GitHubRawPR>(
       `/repos/${r}/pulls/${prNumber}`,
     );
-    return this.categorizeFromRawPR(data, r);
+    return this.categorizeFromRawPR(data, r, ciCheckNames);
   }
 
   /**
@@ -210,6 +216,7 @@ export class GitHubClient {
     prNumber: number,
     repo: string,
     etag?: string | null,
+    ciCheckNames: string[] = [],
   ): Promise<
     | { status: 'not_modified'; etag: string | null }
     | {
@@ -245,7 +252,11 @@ export class GitHubClient {
       : data.state === 'closed'
         ? 'closed'
         : 'open';
-    const mergeability = await this.categorizeFromRawPR(data, repo);
+    const mergeability = await this.categorizeFromRawPR(
+      data,
+      repo,
+      ciCheckNames,
+    );
     return {
       status: 'ok',
       etag: newEtag,
@@ -258,6 +269,7 @@ export class GitHubClient {
   private async categorizeFromRawPR(
     data: GitHubRawPR,
     r: string,
+    ciCheckNames: string[] = [],
   ): Promise<MergeabilityCategory> {
     const rawMergeableState = data.mergeable_state ?? null;
     const headSha = data.head?.sha ?? null;
@@ -271,9 +283,10 @@ export class GitHubClient {
       };
     }
     if (rawMergeableState === 'unstable') {
-      const failingChecks = headSha
-        ? await this.safeGetFailingChecks(headSha, r)
-        : [];
+      const checksResult = headSha
+        ? await this.getChecksForCategorization(headSha, r, ciCheckNames)
+        : { failingChecks: [] as FailingCheck[], hasMissingNamedCheck: false };
+      const { failingChecks } = checksResult;
       if (failingChecks.length > 0) {
         return {
           category: 'ci_failed',
@@ -290,15 +303,24 @@ export class GitHubClient {
       };
     }
     if (rawMergeableState === 'blocked') {
-      const failingChecks = headSha
-        ? await this.safeGetFailingChecks(headSha, r)
-        : [];
+      const { failingChecks, hasMissingNamedCheck } = headSha
+        ? await this.getChecksForCategorization(headSha, r, ciCheckNames)
+        : { failingChecks: [], hasMissingNamedCheck: false };
       if (failingChecks.length > 0) {
         return {
           category: 'ci_failed',
           mergeState: 'ci_failed',
           rawMergeableState,
           failingChecks,
+        };
+      }
+      // A named check that hasn't reported yet is treated as pending, not passing.
+      if (hasMissingNamedCheck) {
+        return {
+          category: 'unknown',
+          mergeState: 'blocked',
+          rawMergeableState,
+          failingChecks: [],
         };
       }
       return {
@@ -324,19 +346,59 @@ export class GitHubClient {
     };
   }
 
-  private async safeGetFailingChecks(
+  /**
+   * Fetch check-runs for a commit and return failing checks, optionally filtered
+   * to `ciCheckNames`. When `ciCheckNames` is non-empty, also reports whether any
+   * named check has not yet appeared in the check-run list (pending/unreported).
+   */
+  private async getChecksForCategorization(
     sha: string,
     repo: string,
-  ): Promise<FailingCheck[]> {
+    ciCheckNames: string[],
+  ): Promise<{ failingChecks: FailingCheck[]; hasMissingNamedCheck: boolean }> {
+    let allCheckRuns: Array<{
+      name: string;
+      status: string;
+      conclusion: string | null;
+    }>;
     try {
-      return await this.getFailingChecks(sha, repo);
+      const data = await this.request<{
+        check_runs: Array<{
+          name: string;
+          status: string;
+          conclusion: string | null;
+        }>;
+      }>(`/repos/${repo}/commits/${sha}/check-runs?per_page=100`);
+      allCheckRuns = data.check_runs;
     } catch (err) {
       console.warn(
         `[GitHubClient] getFailingChecks failed for ${sha} in ${repo}:`,
         (err as Error).message,
       );
-      return [];
+      return { failingChecks: [], hasMissingNamedCheck: false };
     }
+
+    const allFailingChecks = allCheckRuns
+      .filter(
+        (c) =>
+          c.status === 'completed' &&
+          c.conclusion !== null &&
+          FAILING_CHECK_CONCLUSIONS.has(c.conclusion),
+      )
+      .map((c) => ({ name: c.name, conclusion: c.conclusion as string }));
+
+    if (ciCheckNames.length === 0) {
+      return { failingChecks: allFailingChecks, hasMissingNamedCheck: false };
+    }
+
+    const reportedNames = new Set(allCheckRuns.map((c) => c.name));
+    const failingChecks = allFailingChecks.filter((c) =>
+      ciCheckNames.includes(c.name),
+    );
+    const hasMissingNamedCheck = ciCheckNames.some(
+      (name) => !reportedNames.has(name),
+    );
+    return { failingChecks, hasMissingNamedCheck };
   }
 
   async mergePR(
