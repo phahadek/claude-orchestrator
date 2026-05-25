@@ -174,18 +174,25 @@ export class LocalTaskBackend implements TaskBackend {
   }
 
   async fetchReadyTasks(
-    milestoneId: string,
+    milestoneId: string | null,
     _skipCache?: boolean,
   ): Promise<ResolvedTask[]> {
     const file = this.readFile();
-    const milestone = file.milestones.find((m) => m.id === milestoneId);
-    if (!milestone) {
-      throw new Error(
-        `[LocalTaskBackend] milestone not found in ${this.filePath}: ${milestoneId}`,
+    let allTasks: ReturnType<typeof this.mapToNotionTask>[];
+    if (milestoneId === null) {
+      allTasks = file.milestones.flatMap((m) =>
+        m.tasks.map((t) => this.mapToNotionTask(t)),
       );
+    } else {
+      const milestone = file.milestones.find((m) => m.id === milestoneId);
+      if (!milestone) {
+        throw new Error(
+          `[LocalTaskBackend] milestone not found in ${this.filePath}: ${milestoneId}`,
+        );
+      }
+      allTasks = milestone.tasks.map((t) => this.mapToNotionTask(t));
+      upsertTaskCache(`board:${milestoneId}`, JSON.stringify(allTasks));
     }
-    const allTasks = milestone.tasks.map((t) => this.mapToNotionTask(t));
-    upsertTaskCache(`board:${milestoneId}`, JSON.stringify(allTasks));
     for (const task of allTasks) {
       upsertTaskCache(task.id, JSON.stringify(task));
     }

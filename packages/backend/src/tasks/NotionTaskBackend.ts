@@ -13,9 +13,14 @@ export class NotionTaskBackend implements TaskBackend {
   constructor(private readonly client: NotionClient) {}
 
   async fetchReadyTasks(
-    milestoneId: string,
+    milestoneId: string | null,
     skipCache?: boolean,
   ): Promise<ResolvedTask[]> {
+    if (milestoneId === null) {
+      throw new Error(
+        `[NotionTaskBackend] milestoneId is required for Notion projects`,
+      );
+    }
     const milestone = ProjectService.getMilestone(milestoneId);
     if (!milestone) {
       throw new Error(

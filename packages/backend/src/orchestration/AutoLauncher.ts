@@ -98,20 +98,24 @@ export class AutoLauncher {
   }
 
   private async processProject(project: ProjectConfig): Promise<void> {
-    const milestoneId = this.resolveMilestoneId(project);
-    if (!milestoneId) {
-      console.warn(
-        `[AutoLauncher] project ${project.id}: no milestone configured — skipping`,
-      );
-      return;
-    }
-
     const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
     const backend = resolveBackend(project.id);
-    // Only Notion projects are auto-launched (YAML projects are local/manual).
-    if (backend.type !== 'notion') return;
 
-    const tasks = await backend.fetchReadyTasks(milestoneId, true);
+    let milestoneId: string | null = null;
+    if (backend.type === 'notion') {
+      milestoneId = this.resolveMilestoneId(project);
+      if (!milestoneId) {
+        console.warn(
+          `[AutoLauncher] project ${project.id}: no milestone configured — skipping`,
+        );
+        return;
+      }
+    }
+
+    const tasks = await backend.fetchReadyTasks(
+      milestoneId,
+      backend.type === 'notion' ? true : undefined,
+    );
     const candidates = tasks.filter((t) => this.isLaunchCandidate(t));
     if (candidates.length === 0) return;
 
