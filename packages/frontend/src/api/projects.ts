@@ -193,7 +193,6 @@ export const projectsApi = {
       { method: 'POST' },
     );
   },
-
 };
 
 export const sessionsApi = {
