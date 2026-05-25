@@ -137,3 +137,24 @@ export function formatReviewFeedback(
     `and pollute the PR diff.`
   );
 }
+
+/**
+ * Format a merge conflict notification for a local branch coding session.
+ * Asks the session to rebase onto the base branch and resolve conflicts.
+ */
+export function formatMergeConflictFeedback(args: {
+  branchName: string;
+  baseBranch: string;
+}): string {
+  const { branchName, baseBranch } = args;
+  return (
+    `## Merge Conflict — \`${branchName}\`\n\n` +
+    `The auto-merger detected conflicts when attempting to squash-merge ` +
+    `\`${branchName}\` into \`${baseBranch}\`.\n\n` +
+    `### Action required:\n` +
+    `1. Rebase your branch onto \`${baseBranch}\`: \`git rebase ${baseBranch}\`\n` +
+    `2. Resolve any conflict markers in the affected files.\n` +
+    `3. Complete the rebase: \`git rebase --continue\`\n\n` +
+    `The orchestrator will automatically re-attempt the merge once conflicts are resolved.`
+  );
+}
