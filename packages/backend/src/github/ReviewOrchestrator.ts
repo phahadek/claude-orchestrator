@@ -149,7 +149,10 @@ export class ReviewOrchestrator {
     const project = getProjectById(job.projectId);
     if (project) {
       const config = loadOrchestratorConfig(project.projectDir);
-      const verifyResult = await runVerifyAsGate(job.worktreePath, config.verify);
+      const verifyResult = await runVerifyAsGate(
+        job.worktreePath,
+        config.verify,
+      );
       if (!verifyResult.passed) {
         setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
         this.sessionManager.send(
