@@ -118,7 +118,7 @@ describe('JsonlReader — parseFile new event types', () => {
     const reader = new JsonlReader(tmpDir);
     const { events, metadata } = reader.parseFile(filePath);
 
-    expect(metadata).toEqual({ aiTitle: 'Test Session Title' });
+    expect(metadata).toEqual({ derivedTitle: 'Test Session Title' });
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe('system'); // 'user' maps to 'system'
   });
@@ -197,7 +197,7 @@ describe('JsonlReader — parseFile new event types', () => {
 });
 
 describe('JsonlReader — importAll with new event types', () => {
-  it('ai-title persisted as metadata on the session row', async () => {
+  it('ai-title populates derivedTitle in session metadata', async () => {
     const sessionId = 'import-ai-title-01';
     writeJsonl(`${sessionId}.jsonl`, [
       { type: 'ai-title', aiTitle: 'My Imported Title', sessionId },
@@ -210,7 +210,67 @@ describe('JsonlReader — importAll with new event types', () => {
     const row = getSessionRow(sessionId);
     expect(row).toBeDefined();
     const meta = JSON.parse(row!.metadata ?? '{}') as Record<string, unknown>;
-    expect(meta.aiTitle).toBe('My Imported Title');
+    expect(meta.derivedTitle).toBe('My Imported Title');
+  });
+
+  it('ai-title initialises metadata as { derivedTitle } when metadata is null', async () => {
+    const sessionId = 'import-ai-title-null-meta-01';
+    writeJsonl(`${sessionId}.jsonl`, [
+      { type: 'ai-title', aiTitle: 'Fresh Title', sessionId },
+      { type: 'user', message: { role: 'user', content: 'hi' }, uuid: 'u1' },
+    ]);
+
+    const reader = new JsonlReader(tmpDir);
+    await reader.importAll();
+
+    const row = getSessionRow(sessionId);
+    expect(row).toBeDefined();
+    const rawMeta = row!.metadata;
+    // metadata must be valid JSON containing derivedTitle
+    const meta = JSON.parse(rawMeta ?? 'null') as Record<string, unknown>;
+    expect(meta).not.toBeNull();
+    expect(meta.derivedTitle).toBe('Fresh Title');
+  });
+
+  it('ai-title merges derivedTitle without overwriting existing metadata keys', async () => {
+    const sessionId = 'import-ai-title-merge-01';
+    writeJsonl(`${sessionId}.jsonl`, [
+      { type: 'ai-title', aiTitle: 'Merged Title', sessionId },
+      { type: 'user', message: { role: 'user', content: 'hi' }, uuid: 'u1' },
+    ]);
+
+    const reader = new JsonlReader(tmpDir);
+    await reader.importAll();
+
+    // Simulate pre-existing metadata key by writing directly after import
+    db.prepare(
+      "UPDATE sessions SET metadata = json_patch(COALESCE(metadata, '{}'), ?) WHERE session_id = ?",
+    ).run(JSON.stringify({ existingKey: 'keep-me' }), sessionId);
+
+    // Re-run importAll — session is already known so won't re-import,
+    // but we verify setDerivedTitle merges properly via direct call
+    const { setDerivedTitle } = await import('../db/queries.js');
+    setDerivedTitle(sessionId, 'Updated Title');
+
+    const row = getSessionRow(sessionId);
+    const meta = JSON.parse(row!.metadata ?? '{}') as Record<string, unknown>;
+    expect(meta.derivedTitle).toBe('Updated Title');
+    expect(meta.existingKey).toBe('keep-me');
+  });
+
+  it('ai-title event is NOT stored as a session_events row (regression)', async () => {
+    const sessionId = 'import-ai-title-no-event-01';
+    writeJsonl(`${sessionId}.jsonl`, [
+      { type: 'ai-title', aiTitle: 'Title Only', sessionId },
+      { type: 'user', message: { role: 'user', content: 'hi' }, uuid: 'u1' },
+    ]);
+
+    const reader = new JsonlReader(tmpDir);
+    await reader.importAll();
+
+    const events = getEventRows(sessionId);
+    const aiTitleEvents = events.filter((e) => e.event_type === 'ai-title');
+    expect(aiTitleEvents).toHaveLength(0);
   });
 
   it('queue-operation/last-prompt/attachment events not stored as session events', async () => {

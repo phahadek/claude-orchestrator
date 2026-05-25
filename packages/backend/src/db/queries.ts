@@ -285,6 +285,10 @@ export function getSessionTags(sessionId: string): string[] {
   }
 }
 
+export function setDerivedTitle(sessionId: string, title: string): void {
+  setSessionMetadata(sessionId, { derivedTitle: title });
+}
+
 export function setSessionMetadata(
   sessionId: string,
   fields: Record<string, unknown>,
