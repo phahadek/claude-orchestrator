@@ -5,13 +5,13 @@ export interface OrchestratorClaudeMdParams {
   targetBranch: string;
   /** Absolute path to the worktree directory. Injected into Git Isolation rules. */
   worktreePath: string;
-  /** Pre-PR gate commands. Defaults to Node.js/Vite commands when omitted. */
-  prGate?: {
-    typeCheck: string;
-    build: string;
-    lint?: string;
-    formatCheck?: string;
-  };
+  /**
+   * Verify commands the session runs before opening the PR (typecheck, build, tests).
+   * Format and lint are handled by orchestrator autofix — not included here.
+   * Rendered from the project's `.claude-orchestrator.yml` verify list.
+   * When empty or omitted, the gate shows a "no local verify" fallback.
+   */
+  verify?: string[];
   /**
    * Bash rules (Rule 5+). Each item is the full rule text — the first line
    * becomes the bold heading, subsequent lines become the body paragraph.
@@ -71,7 +71,7 @@ export function buildOrchestratorClaudeMd(
     projectContextUrl,
     targetBranch,
     worktreePath,
-    prGate,
+    verify,
     bashRules,
     taskBackend = 'notion',
     taskContent,
@@ -79,12 +79,6 @@ export function buildOrchestratorClaudeMd(
     gitMode = 'github',
   } = params;
 
-  const resolvedPrGate = {
-    typeCheck: prGate?.typeCheck ?? 'npx tsc --noEmit',
-    build: prGate?.build ?? 'npx vite build',
-    lint: prGate?.lint ?? 'npm run lint',
-    formatCheck: prGate?.formatCheck ?? 'npm run format:check',
-  };
   const resolvedBashRules = bashRules ?? [
     'Use `npx` instead of bare tool names.\n`tsc` → `npx tsc`. Bare commands may not be on PATH.',
   ];
@@ -211,18 +205,24 @@ ${
 
 ---
 
-## Pre-PR Gate
+${(() => {
+  const verifyItems = verify && verify.length > 0 ? verify : null;
+  const verifySteps = verifyItems
+    ? verifyItems
+        .map((cmd, i) => `${i + 4}. \`${cmd}\` — must pass.`)
+        .join('\n')
+    : `4. No local verify step configured — CI is the gate.`;
+  const stageNum = verifyItems ? verifyItems.length + 4 : 5;
+  return `## Pre-PR Gate
 
 Run in order — all must pass before opening the PR:
 
 1. Stash CLAUDE.md before rebasing: \`git stash push CLAUDE.md\`
 2. Rebase onto \`${targetBranch}\` and resolve any conflicts.
 3. Restore CLAUDE.md: \`git stash pop\`
-4. \`${resolvedPrGate.typeCheck}\` — must pass.
-5. \`${resolvedPrGate.build}\` — must pass without errors.
-6. \`${resolvedPrGate.lint}\` — must pass with no errors.
-7. \`${resolvedPrGate.formatCheck}\` — must pass with no errors.
-8. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.
+${verifySteps}
+${stageNum}. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.`;
+})()}
 
 ---
 

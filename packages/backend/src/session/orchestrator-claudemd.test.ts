@@ -53,8 +53,9 @@ describe('buildOrchestratorClaudeMd', () => {
 
     // Section 7: Pre-PR gate
     expect(result).toContain('## Pre-PR Gate');
-    expect(result).toContain('npx tsc --noEmit');
-    expect(result).toContain('npx vite build');
+    expect(result).toContain(
+      'No local verify step configured — CI is the gate.',
+    );
 
     // Section 8: Forbidden actions
     expect(result).toContain('## Forbidden Actions');
@@ -72,20 +73,18 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(result).toContain('mcp__github__create_pull_request');
   });
 
-  it('uses custom prGate commands when provided', () => {
+  it('lists each verify command in the Pre-PR Gate when verify is non-empty', () => {
     const result = buildOrchestratorClaudeMd({
       ...defaultParams,
-      prGate: { typeCheck: 'dotnet build', build: 'dotnet test' },
+      verify: ['dotnet build', 'dotnet test'],
     });
-    expect(result).toContain('`dotnet build`');
-    expect(result).toContain('`dotnet test`');
-    // Pre-PR Gate section should not contain the Node.js defaults
     const prGateSection = result.slice(
       result.indexOf('## Pre-PR Gate'),
       result.indexOf('## Forbidden Actions'),
     );
-    expect(prGateSection).not.toContain('npx tsc');
-    expect(prGateSection).not.toContain('npx vite');
+    expect(prGateSection).toContain('`dotnet build`');
+    expect(prGateSection).toContain('`dotnet test`');
+    expect(prGateSection).not.toContain('No local verify step');
   });
 
   it('uses custom bashRules when provided', () => {
@@ -121,13 +120,30 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(result).toContain('**Rule 6 — Rule B.**');
   });
 
-  it('falls back to npx default when prGate and bashRules are omitted', () => {
+  it('shows fallback message when verify is omitted, renders npx rule default', () => {
     const result = buildOrchestratorClaudeMd(defaultParams);
-    expect(result).toContain('npx tsc --noEmit');
-    expect(result).toContain('npx vite build');
+    expect(result).toContain(
+      'No local verify step configured — CI is the gate.',
+    );
     expect(result).toContain(
       '**Rule 5 — Use `npx` instead of bare tool names.**',
     );
+  });
+
+  it('shows fallback message when verify is an empty array', () => {
+    const result = buildOrchestratorClaudeMd({ ...defaultParams, verify: [] });
+    expect(result).toContain(
+      'No local verify step configured — CI is the gate.',
+    );
+  });
+
+  it('does not include format or lint commands in the Pre-PR Gate', () => {
+    const prGateSection = buildOrchestratorClaudeMd(defaultParams).slice(
+      buildOrchestratorClaudeMd(defaultParams).indexOf('## Pre-PR Gate'),
+      buildOrchestratorClaudeMd(defaultParams).indexOf('## Forbidden Actions'),
+    );
+    expect(prGateSection).not.toContain('npm run lint');
+    expect(prGateSection).not.toContain('npm run format');
   });
 
   it('includes worktree path in Git Isolation section', () => {
