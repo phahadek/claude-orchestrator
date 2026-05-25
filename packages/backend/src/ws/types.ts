@@ -224,7 +224,14 @@ export type ServerMessage =
       sessionId: string;
     }
   | { type: 'error'; message: string }
-  | { type: 'pr_pause_cleared'; prNumber: number; repo: string };
+  | { type: 'pr_pause_cleared'; prNumber: number; repo: string }
+  | {
+      type: 'local_branch_submitted';
+      projectId: string;
+      sessionId: string;
+      branchName: string;
+      baseBranch: string;
+    };
 
 // ── Client → Server ──────────────────────────────────────────────
 export type ClientMessage =

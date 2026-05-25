@@ -98,6 +98,19 @@ export function runMigrations(): void {
       updated_at    INTEGER NOT NULL,
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS local_branches (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id    TEXT NOT NULL,
+      session_id    TEXT NOT NULL,
+      branch_name   TEXT NOT NULL,
+      base_branch   TEXT NOT NULL DEFAULT 'dev',
+      status        TEXT NOT NULL DEFAULT 'open',
+      review_result TEXT,
+      created_at    TEXT NOT NULL,
+      updated_at    TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_local_branches_project_status ON local_branches(project_id, status);
   `);
 
   // Idempotent column additions for existing databases
