@@ -12,6 +12,7 @@ vi.mock('../db/queries.js', () => ({
   setPendingPush: vi.fn(),
   setPauseReason: vi.fn(),
   getLocalBranchBySession: vi.fn(),
+  setLocalBranchPauseReason: vi.fn(),
   getSession: vi.fn(),
 }));
 
@@ -22,6 +23,16 @@ const projectFixture = {
   projectDir: '/tmp',
   contextUrl: 'https://notion.so/ctx',
   boardId: 'board-1',
+  gitMode: 'github' as const,
+};
+
+const localOnlyProjectFixture = {
+  id: 'proj-local',
+  name: 'Local Project',
+  projectDir: '/repos/local',
+  contextUrl: 'https://notion.so/ctx-local',
+  boardId: 'board-local',
+  gitMode: 'local-only' as const,
 };
 
 vi.mock('../config.js', () => ({
@@ -29,9 +40,26 @@ vi.mock('../config.js', () => ({
     repo === 'owner/repo' ? projectFixture : undefined,
   ),
   getAllProjects: vi.fn(() => [projectFixture]),
-  getProjectById: vi.fn((id: string) =>
-    id === 'proj-1' ? projectFixture : undefined,
-  ),
+  getProjectById: vi.fn((id: string) => {
+    if (id === 'proj-1') return projectFixture;
+    if (id === 'proj-local') return localOnlyProjectFixture;
+    return undefined;
+  }),
+}));
+
+vi.mock('../orchestration/verifyRunner.js', () => ({
+  runVerifyAsGate: vi.fn().mockResolvedValue({ passed: true }),
+}));
+
+vi.mock('../session/orchestrator-config.js', () => ({
+  loadOrchestratorConfig: vi.fn().mockReturnValue({
+    verify: [],
+    autofix: [],
+    ci_check_name: [],
+    allowed_tools: [],
+    bash_rules: [],
+    bootstrap_script: '',
+  }),
 }));
 
 import { ReviewOrchestrator } from './ReviewOrchestrator';
@@ -41,8 +69,11 @@ import {
   updatePRDraftStatus,
   setPauseReason,
   getLocalBranchBySession,
+  setLocalBranchPauseReason,
   getSession,
 } from '../db/queries';
+import { runVerifyAsGate } from '../orchestration/verifyRunner';
+import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import type { PRReviewService } from './PRReviewService';
 import type { GitHubClient } from './GitHubClient';
 import type { PullRequest } from './types';
@@ -910,5 +941,229 @@ describe('ReviewOrchestrator — local_branch_submitted', () => {
       prNumber: 1,
       repo: 'owner/repo',
     });
+    expect(vi.mocked(runVerifyAsGate)).not.toHaveBeenCalled();
+  });
+});
+
+// ── Verify-as-gate for local-only projects ────────────────────────────────────
+
+const verifyLocalBranchRow = {
+  id: 5,
+  project_id: 'proj-local',
+  session_id: 'coding-session-local',
+  branch_name: 'feature/my-task',
+  base_branch: 'dev',
+  status: 'open',
+  review_result: null,
+  pause_reason: null,
+  created_at: '2026-01-01T00:00:00.000Z',
+  updated_at: '2026-01-01T00:00:00.000Z',
+};
+
+const verifySessionRow = {
+  session_id: 'coding-session-local',
+  notion_task_id: 'task-local',
+  notion_task_url: 'https://notion.so/task-local',
+  project_context_url: 'https://notion.so/ctx-local',
+  project_id: 'proj-local',
+  status: 'done',
+  started_at: 1000,
+  ended_at: null,
+  pr_url: null,
+  worktree_path: '/repos/local/worktree',
+  archived: 0,
+  favorited: 0,
+  session_type: 'standard',
+  note: null,
+  tags: null,
+  total_input_tokens: 0,
+  total_output_tokens: 0,
+  task_name: null,
+  metadata: null,
+  review_result: null,
+};
+
+describe('ReviewOrchestrator — verify-as-gate: local-only, empty verify list', () => {
+  it('proceeds to review when verify list is empty (no-op)', async () => {
+    vi.mocked(getSession).mockReturnValue(verifySessionRow as any);
+    vi.mocked(getLocalBranchBySession).mockReturnValue(
+      verifyLocalBranchRow as any,
+    );
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      verify: [],
+      autofix: [],
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('message', {
+      type: 'local_branch_submitted',
+      projectId: 'proj-local',
+      sessionId: 'coding-session-local',
+      branchName: 'feature/my-task',
+      baseBranch: 'dev',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setLocalBranchPauseReason)).not.toHaveBeenCalled();
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalled();
+  });
+});
+
+describe('ReviewOrchestrator — verify-as-gate: local-only, all verify commands pass', () => {
+  it('proceeds to review when all verify commands pass', async () => {
+    vi.mocked(getSession).mockReturnValue(verifySessionRow as any);
+    vi.mocked(getLocalBranchBySession).mockReturnValue(
+      verifyLocalBranchRow as any,
+    );
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      verify: ['npm run lint', 'npm test'],
+      autofix: [],
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('message', {
+      type: 'local_branch_submitted',
+      projectId: 'proj-local',
+      sessionId: 'coding-session-local',
+      branchName: 'feature/my-task',
+      baseBranch: 'dev',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setLocalBranchPauseReason)).not.toHaveBeenCalled();
+    expect(vi.mocked(runVerifyAsGate)).toHaveBeenCalledWith(
+      expect.any(String),
+      ['npm run lint', 'npm test'],
+    );
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalled();
+  });
+});
+
+describe('ReviewOrchestrator — verify-as-gate: local-only, first verify command fails', () => {
+  it('sets ci_failing pause on local_branches row and sends structured feedback', async () => {
+    vi.mocked(getSession).mockReturnValue(verifySessionRow as any);
+    vi.mocked(getLocalBranchBySession).mockReturnValue(
+      verifyLocalBranchRow as any,
+    );
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      verify: ['npm run lint'],
+      autofix: [],
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    vi.mocked(runVerifyAsGate).mockResolvedValue({
+      passed: false,
+      failedCommand: 'npm run lint',
+      truncatedOutput: 'error: lint failed on line 42',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('message', {
+      type: 'local_branch_submitted',
+      projectId: 'proj-local',
+      sessionId: 'coding-session-local',
+      branchName: 'feature/my-task',
+      baseBranch: 'dev',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Must set ci_failing pause on the local_branches row
+    expect(vi.mocked(setLocalBranchPauseReason)).toHaveBeenCalledWith(
+      5,
+      'ci_failing',
+    );
+
+    // Must send structured CI failure feedback to coding session
+    expect(vi.mocked(sm.send)).toHaveBeenCalledOnce();
+    const [sessionId, message] = vi.mocked(sm.send).mock.calls[0];
+    expect(sessionId).toBe('coding-session-local');
+    expect(message).toContain('npm run lint');
+    expect(message).toContain('error: lint failed on line 42');
+    expect(message).toMatch(/investigate the failures and push a fix/i);
+
+    // Must NOT spawn review
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it('skips review when local_branch row not found (onMessage guard)', async () => {
+    vi.mocked(getSession).mockReturnValue(verifySessionRow as any);
+    vi.mocked(getLocalBranchBySession).mockReturnValue(undefined);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('message', {
+      type: 'local_branch_submitted',
+      projectId: 'proj-local',
+      sessionId: 'coding-session-local',
+      branchName: 'feature/my-task',
+      baseBranch: 'dev',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setLocalBranchPauseReason)).not.toHaveBeenCalled();
+    expect(vi.mocked(sm.send)).not.toHaveBeenCalled();
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+  });
+});
+
+describe('ReviewOrchestrator — verify-as-gate: verify runs AFTER autofix (ordering check)', () => {
+  it('calls runVerifyAsGate with the worktreePath from the submitted job', async () => {
+    vi.mocked(getLocalBranchBySession).mockReturnValue(
+      verifyLocalBranchRow as any,
+    );
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      verify: ['npm run lint'],
+      autofix: [],
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
+    vi.mocked(getSession).mockReturnValue({
+      ...verifySessionRow,
+      worktree_path: '/repos/local/worktree-42',
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('message', {
+      type: 'local_branch_submitted',
+      projectId: 'proj-local',
+      sessionId: 'coding-session-local',
+      branchName: 'feature/my-task',
+      baseBranch: 'dev',
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(runVerifyAsGate)).toHaveBeenCalledWith(
+      '/repos/local/worktree-42',
+      expect.any(Array),
+    );
   });
 });

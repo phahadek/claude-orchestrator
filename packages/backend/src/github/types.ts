@@ -76,4 +76,8 @@ export interface ReviewJob {
   taskId: string;
   taskUrl: string;
   contextUrl: string;
+  /** Populated for local-only mode; absent for GitHub mode. */
+  sessionId?: string;
+  worktreePath?: string;
+  projectId?: string;
 }
