@@ -15,11 +15,11 @@ export interface TaskBackend {
   /**
    * Fetch tasks that are ready to be dispatched for the given milestone.
    * For Notion projects, milestoneId is resolved to the milestone row's source_id
-   * (the Notion database ID). For YAML projects, it filters tasks by milestone in
-   * the per-project tasks.yaml.
+   * (the Notion database ID). For YAML projects, pass null to fetch all tasks
+   * across all milestones, or a milestone id to scope to one.
    */
   fetchReadyTasks(
-    milestoneId: string,
+    milestoneId: string | null,
     skipCache?: boolean,
   ): Promise<ResolvedTask[]>;
 
