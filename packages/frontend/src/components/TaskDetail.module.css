@@ -690,10 +690,77 @@
   color: var(--text-muted);
 }
 
+/* ── Mobile session overlay ───────────────────────────────────────── */
+.sessionOverlayBackdrop {
+  display: none;
+}
+
+.sessionOverlay {
+  display: none;
+}
+
+/* ── Mobile compact session summary ──────────────────────────────── */
+.sessionSummary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 16px 12px;
+}
+
+.sessionSummaryMessage {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.sessionSummaryTokens {
+  font-size: 0.75rem;
+  color: var(--text-faint);
+}
+
+.viewSessionButton {
+  align-self: flex-start;
+  background: rgba(137, 180, 250, 0.1);
+  border: 1px solid rgba(137, 180, 250, 0.3);
+  border-radius: var(--radius-sm);
+  color: #89b4fa;
+  cursor: pointer;
+  font-size: 0.82rem;
+  padding: 5px 12px;
+  transition: background 0.15s;
+}
+
+.viewSessionButton:hover {
+  background: rgba(137, 180, 250, 0.2);
+}
+
 /* ── Mobile overlay: remove left border when rendering as overlay ── */
 @media (max-width: 768px) {
   .panel {
     border-left: none;
+    position: relative;
+  }
+
+  .sessionOverlayBackdrop {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 9;
+    cursor: pointer;
+  }
+
+  .sessionOverlay {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    overflow: hidden;
   }
 
   /* ── Compact header chrome to free vertical space on narrow viewports ── */
