@@ -195,9 +195,7 @@ describe('ToolCallGroup (single call — SingleCallEntry)', () => {
   });
 
   it('body is hidden when collapsed', () => {
-    const calls = [
-      makeCallPair('Bash', { command: 'ls -la' }, 'total 42'),
-    ];
+    const calls = [makeCallPair('Bash', { command: 'ls -la' }, 'total 42')];
     render(<ToolCallGroup toolName="Bash" calls={calls} />);
     expect(screen.queryByText(/\$ ls -la/)).toBeNull();
     expect(screen.queryByText('total 42')).toBeNull();
@@ -259,9 +257,7 @@ describe('ToolCallGroup (single call — SingleCallEntry)', () => {
 
   it('does not truncate result of exactly 20 lines', () => {
     const lines = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`);
-    const calls = [
-      makeCallPair('Bash', { command: 'ls' }, lines.join('\n')),
-    ];
+    const calls = [makeCallPair('Bash', { command: 'ls' }, lines.join('\n'))];
     render(<ToolCallGroup toolName="Bash" calls={calls} />);
     fireEvent.click(screen.getByRole('button', { name: /🔧 Bash/ }));
     expect(screen.getByText(/line 20/)).toBeTruthy();
@@ -281,9 +277,7 @@ describe('ToolCallGroup (single call — SingleCallEntry)', () => {
   });
 
   it('aria-expanded reflects open/closed state', () => {
-    const calls = [
-      makeCallPair('Read', { file_path: '/a.ts' }, 'r'),
-    ];
+    const calls = [makeCallPair('Read', { file_path: '/a.ts' }, 'r')];
     render(<ToolCallGroup toolName="Read" calls={calls} />);
     const btn = screen.getByRole('button', { name: /🔧 Read/ });
     expect(btn.getAttribute('aria-expanded')).toBe('false');
