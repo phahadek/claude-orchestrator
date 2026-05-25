@@ -461,36 +461,38 @@ export function PRPanel({
     <div className={styles.panel}>
       <div className={styles.headerBar}>
         <span className={styles.panelTitle}>Open Pull Requests</span>
-        {clearableCount > 0 && (
+        <div className={styles.headerButtons}>
+          {clearableCount > 0 && (
+            <button
+              type="button"
+              className={styles.clearButton}
+              onClick={handleClearMergedClosed}
+              disabled={clearInFlight}
+              title={`Remove ${clearableCount} merged/closed PR${clearableCount !== 1 ? 's' : ''}`}
+            >
+              {clearInFlight
+                ? 'Clearing...'
+                : `Clear merged/closed (${clearableCount})`}
+            </button>
+          )}
           <button
             type="button"
-            className={styles.clearButton}
-            onClick={handleClearMergedClosed}
-            disabled={clearInFlight}
-            title={`Remove ${clearableCount} merged/closed PR${clearableCount !== 1 ? 's' : ''}`}
+            className={styles.refreshButton}
+            onClick={fetchPRs}
           >
-            {clearInFlight
-              ? 'Clearing...'
-              : `Clear merged/closed (${clearableCount})`}
+            ↻ Refresh
           </button>
-        )}
-        <button
-          type="button"
-          className={styles.refreshButton}
-          onClick={fetchPRs}
-        >
-          ↻ Refresh
-        </button>
-        {onCollapse && (
-          <button
-            type="button"
-            className={styles.collapseButton}
-            onClick={onCollapse}
-            title="Collapse PR panel"
-          >
-            ✕
-          </button>
-        )}
+          {onCollapse && (
+            <button
+              type="button"
+              className={styles.collapseButton}
+              onClick={onCollapse}
+              title="Collapse PR panel"
+            >
+              ✕
+            </button>
+          )}
+        </div>
       </div>
 
       {noRepo && (
