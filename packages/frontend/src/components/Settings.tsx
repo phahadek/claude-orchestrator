@@ -21,6 +21,7 @@ interface SettingsValues {
   session_hard_stop_window_seconds: string;
   ci_poll_interval_seconds: string;
   ci_poll_max_minutes: string;
+  max_review_iterations: string;
 }
 
 const MIN_POLL_INTERVAL_MS = 5000;
@@ -32,6 +33,7 @@ function validateField(
   const num = Number(value);
   if (!Number.isInteger(num) || isNaN(num)) return 'Must be a whole number';
   if (key === 'auto_launch_concurrency' && num < 1) return 'Minimum is 1';
+  if (key === 'max_review_iterations' && num < 1) return 'Minimum is 1';
   if (key === 'auto_launch_poll_interval_ms' && num < MIN_POLL_INTERVAL_MS)
     return `Minimum is ${MIN_POLL_INTERVAL_MS} ms`;
   return null;
@@ -212,6 +214,12 @@ export function Settings({ initialTab = 'general' }: Props) {
                 )}
 
                 <h3 className={styles.sectionTitle}>Auto-review</h3>
+                {numInput(
+                  'max_review_iterations',
+                  'Max review iterations',
+                  1,
+                  20,
+                )}
                 <div className={styles.field}>
                   <label className={styles.label}>Enable auto-review</label>
                   <button

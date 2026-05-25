@@ -180,6 +180,8 @@ export interface RuntimeSettings {
   ci_poll_interval_seconds: number;
   /** Auto-merger: minutes before the merge attempt gives up and pauses. */
   ci_poll_max_minutes: number;
+  /** Max review iterations before escalating to manual. */
+  max_review_iterations: number;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -208,4 +210,5 @@ export const runtimeSettings: RuntimeSettings = {
   ),
   ci_poll_interval_seconds: Number(process.env.CI_POLL_INTERVAL_SECONDS ?? 30),
   ci_poll_max_minutes: Number(process.env.CI_POLL_MAX_MINUTES ?? 30),
+  max_review_iterations: 3,
 };
