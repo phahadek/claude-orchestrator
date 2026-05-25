@@ -581,7 +581,9 @@ export function PRPanel({
                   )}
                 >
                   {autofixStatus.get(prNumber) === 'running' && (
-                    <div className={styles.autofixBadge}>⚙ Autofix running…</div>
+                    <div className={styles.autofixBadge}>
+                      ⚙ Autofix running…
+                    </div>
                   )}
                   {autofixStatus.get(prNumber) === 'done' && (
                     <div
