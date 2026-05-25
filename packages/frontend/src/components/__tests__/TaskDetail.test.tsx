@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import { TaskDetail } from '../TaskDetail';
@@ -84,6 +84,20 @@ function makeReview(
     ...overrides,
   };
 }
+
+// jsdom does not implement matchMedia — provide a default desktop stub.
+beforeEach(() => {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: vi.fn((query: string) => ({
+      matches: false, // desktop by default
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+});
 
 describe('TaskDetail', () => {
   it('renders task name', () => {
@@ -804,5 +818,100 @@ describe('TaskDetail', () => {
     const mobileBlockStart = css.lastIndexOf('@media (max-width: 768px)');
     const desktopCss = css.slice(0, mobileBlockStart);
     expect(desktopCss).toContain('padding: 14px 16px');
+  });
+
+  // ── Mobile accordion ──
+
+  function setMobileViewport(matches: boolean) {
+    window.matchMedia = vi.fn((query: string) => ({
+      matches,
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })) as unknown as typeof window.matchMedia;
+  }
+
+  it('desktop: both REVIEW and PULL REQUEST sections can be expanded simultaneously', () => {
+    setMobileViewport(false); // desktop viewport
+    const pr = makePr();
+    const review = makeReview({ verdict: 'approved' });
+    render(
+      <TaskDetail
+        task={makeTask({ pr, review })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    // Both sections visible by default on desktop
+    expect(screen.getByText('Review')).toBeTruthy();
+    expect(screen.getByText('Pull Request')).toBeTruthy();
+    // REVIEW content (verdict pill) visible
+    expect(screen.getByText('✅ Approved')).toBeTruthy();
+    // PR content visible
+    expect(screen.getByText('#42')).toBeTruthy();
+  });
+
+  it('mobile: expanding REVIEW collapses PULL REQUEST', () => {
+    setMobileViewport(true); // mobile viewport
+    const pr = makePr();
+    const review = makeReview({ verdict: 'approved' });
+    render(
+      <TaskDetail
+        task={makeTask({ pr, review })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    // Initially REVIEW is open (body visible), PR body is collapsed
+    expect(screen.getByText('Review transcript not available.')).toBeTruthy();
+    expect(screen.queryByText('#42')).toBeNull();
+
+    // Expand PR section → REVIEW body should collapse
+    fireEvent.click(screen.getByRole('button', { name: /pull request/i, hidden: true }));
+    expect(screen.queryByText('Review transcript not available.')).toBeNull();
+    expect(screen.getByText('#42')).toBeTruthy();
+  });
+
+  it('mobile: expanding PULL REQUEST collapses REVIEW', () => {
+    setMobileViewport(true); // mobile viewport
+    const pr = makePr();
+    const review = makeReview({ verdict: 'needs_changes' });
+    render(
+      <TaskDetail
+        task={makeTask({ pr, review })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    // REVIEW is open initially, click PR to expand it
+    fireEvent.click(screen.getByRole('button', { name: /pull request/i, hidden: true }));
+    expect(screen.getByText('#42')).toBeTruthy();
+    // Click REVIEW section header (name starts with "Review", not "Run Review")
+    fireEvent.click(screen.getByRole('button', { name: /^review/i }));
+    expect(screen.queryByText('#42')).toBeNull();
+    expect(screen.getByText('⚠️ Needs Changes')).toBeTruthy();
+  });
+
+  it('mobile: section-toggle handlers track which section is open', () => {
+    setMobileViewport(true); // mobile viewport
+    const pr = makePr();
+    const review = makeReview({ verdict: 'approved' });
+    render(
+      <TaskDetail
+        task={makeTask({ pr, review })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    // Start: REVIEW open (name starts with "Review", distinguishes from "Run Review")
+    const reviewHeader = screen.getByRole('button', { name: /^review/i });
+    expect(reviewHeader.getAttribute('aria-expanded')).toBe('true');
+
+    // Click PR header → PR opens
+    const prHeader = screen.getByRole('button', { name: /pull request/i, hidden: true });
+    fireEvent.click(prHeader);
+    expect(prHeader.getAttribute('aria-expanded')).toBe('true');
+    expect(reviewHeader.getAttribute('aria-expanded')).toBe('false');
   });
 });

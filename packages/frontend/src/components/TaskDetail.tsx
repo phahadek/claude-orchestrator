@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
 import type { DisplayStatus } from '@claude-orchestrator/backend/src/tasks/TaskStatusEngine';
@@ -148,6 +148,10 @@ export function TaskDetail({
   autoMergeEnabled = false,
 }: Props) {
   const [showReviewSection, setShowReviewSection] = useState(true);
+  const [mobileOpenSection, setMobileOpenSection] = useState<'review' | 'pr' | null>('review');
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches,
+  );
   const [showReviewDimensions, setShowReviewDimensions] = useState(false);
   const [reviewInFlight, setReviewInFlight] = useState(false);
   const [mergeInFlight, setMergeInFlight] = useState(false);
@@ -158,9 +162,17 @@ export function TaskDetail({
     useState<DisplayStatus | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'diff'>('overview');
 
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)');
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
   // Reset state when task changes
   useEffect(() => {
     setShowReviewSection(true);
+    setMobileOpenSection('review');
     setShowReviewDimensions(false);
     setReviewError(null);
     setFixConflictsInFlight(false);
@@ -295,6 +307,23 @@ export function TaskDetail({
     }
   }
 
+  // Accordion: on mobile, REVIEW and PULL REQUEST are mutually exclusive when both exist.
+  const mobileAccordionActive = isMobile && !!task.review && !!task.pr;
+  const isReviewExpanded = mobileAccordionActive ? mobileOpenSection === 'review' : showReviewSection;
+  const isPrExpanded = mobileAccordionActive ? mobileOpenSection === 'pr' : true;
+
+  const handleReviewToggle = useCallback(() => {
+    if (mobileAccordionActive) {
+      setMobileOpenSection((prev) => (prev === 'review' ? null : 'review'));
+    } else {
+      setShowReviewSection((v) => !v);
+    }
+  }, [mobileAccordionActive]);
+
+  const handlePrToggle = useCallback(() => {
+    setMobileOpenSection((prev) => (prev === 'pr' ? null : 'pr'));
+  }, []);
+
   return (
     <div className={styles.panel}>
       {/* ── Header ── */}
@@ -399,12 +428,12 @@ export function TaskDetail({
               <div className={styles.reviewSection}>
                 <div
                   className={styles.reviewSectionHeader}
-                  onClick={() => setShowReviewSection((v) => !v)}
+                  onClick={handleReviewToggle}
                   role="button"
-                  aria-expanded={showReviewSection}
+                  aria-expanded={isReviewExpanded}
                 >
                   <span className={styles.reviewToggleIcon} aria-hidden="true">
-                    {showReviewSection ? '▼' : '▶'}
+                    {isReviewExpanded ? '▼' : '▶'}
                   </span>
                   <span className={styles.sectionTitle}>Review</span>
                   {task.review.iterationCount > 0 && (
@@ -437,7 +466,7 @@ export function TaskDetail({
                   ) : null}
                 </div>
 
-                {showReviewSection && (
+                {isReviewExpanded && (
                   <div className={styles.reviewBody}>
                     {reviewSession ? (
                       <>
@@ -507,95 +536,113 @@ export function TaskDetail({
             {/* ── Pull Request — compact metadata + action buttons ── */}
             {task.pr && (
               <div className={styles.prSection}>
-                <div className={styles.sectionHeader}>
-                  <span className={styles.sectionTitle}>Pull Request</span>
-                </div>
-
-                {/* Line 1: PR number + title (truncated) + state badge */}
-                <div className={styles.prTitleRow}>
-                  <div className={styles.prTitleLeft}>
-                    <span className={styles.prNumber}>#{task.pr.prNumber}</span>
-                    <span className={styles.prTitleText}>{task.pr.title}</span>
+                {mobileAccordionActive ? (
+                  <div
+                    className={styles.prSectionHeaderMobile}
+                    onClick={handlePrToggle}
+                    role="button"
+                    aria-expanded={isPrExpanded}
+                  >
+                    <span className={styles.reviewToggleIcon} aria-hidden="true">
+                      {isPrExpanded ? '▼' : '▶'}
+                    </span>
+                    <span className={styles.sectionTitle}>Pull Request</span>
                   </div>
-                  <span
-                    className={`${styles.prStateBadge} ${styles[`prState--${task.pr.state}${task.pr.draft ? '-draft' : ''}`]}`}
-                  >
-                    {prStateLabel(task.pr.state, task.pr.draft)}
-                  </span>
-                </div>
-
-                {/* Line 2: branch info + GitHub link */}
-                <div className={styles.prBranchRow}>
-                  <span className={styles.prBranch}>
-                    {task.pr.headBranch} → {task.pr.baseBranch}
-                  </span>
-                  <a
-                    href={task.pr.prUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className={styles.githubLink}
-                  >
-                    GitHub ↗
-                  </a>
-                </div>
-
-                {reviewError && (
-                  <div className={styles.errorBanner}>{reviewError}</div>
-                )}
-
-                {task.pr.mergeState === 'dirty' && (
-                  <div className={styles.conflictBanner}>
-                    ⚠ Merge conflicts detected — use Fix Conflicts to have the
-                    code session rebase and resolve them.
+                ) : (
+                  <div className={styles.sectionHeader}>
+                    <span className={styles.sectionTitle}>Pull Request</span>
                   </div>
                 )}
 
-                {/* Line 3 (conditional): action buttons only when PR is open */}
-                {task.pr.state === 'open' && (
-                  <div className={styles.prActions}>
-                    {task.pr.mergeState !== 'dirty' && (
-                      <button
-                        className={styles.reviewButton}
-                        disabled={reviewInFlight || !projectId}
-                        onClick={() => void handleRunReview()}
-                        title={
-                          !projectId ? 'Project ID unavailable' : undefined
-                        }
+                {isPrExpanded && (
+                  <>
+                    {/* Line 1: PR number + title (truncated) + state badge */}
+                    <div className={styles.prTitleRow}>
+                      <div className={styles.prTitleLeft}>
+                        <span className={styles.prNumber}>#{task.pr.prNumber}</span>
+                        <span className={styles.prTitleText}>{task.pr.title}</span>
+                      </div>
+                      <span
+                        className={`${styles.prStateBadge} ${styles[`prState--${task.pr.state}${task.pr.draft ? '-draft' : ''}`]}`}
                       >
-                        {reviewInFlight ? 'Reviewing…' : 'Run Review'}
-                      </button>
+                        {prStateLabel(task.pr.state, task.pr.draft)}
+                      </span>
+                    </div>
+
+                    {/* Line 2: branch info + GitHub link */}
+                    <div className={styles.prBranchRow}>
+                      <span className={styles.prBranch}>
+                        {task.pr.headBranch} → {task.pr.baseBranch}
+                      </span>
+                      <a
+                        href={task.pr.prUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className={styles.githubLink}
+                      >
+                        GitHub ↗
+                      </a>
+                    </div>
+
+                    {reviewError && (
+                      <div className={styles.errorBanner}>{reviewError}</div>
                     )}
+
                     {task.pr.mergeState === 'dirty' && (
-                      <button
-                        className={styles.reReviewButton}
-                        disabled={fixConflictsInFlight}
-                        onClick={() => void handleFixConflicts()}
-                        title="Send rebase instructions to the code session to resolve merge conflicts"
-                      >
-                        {fixConflictsInFlight ? 'Fixing…' : '↺ Fix Conflicts'}
-                      </button>
+                      <div className={styles.conflictBanner}>
+                        ⚠ Merge conflicts detected — use Fix Conflicts to have the
+                        code session rebase and resolve them.
+                      </div>
                     )}
-                    {task.review?.verdict === 'approved' &&
-                      task.pr.mergeState !== 'dirty' && (
-                        <button
-                          className={styles.mergeButton}
-                          disabled={mergeInFlight}
-                          onClick={() => void handleMerge()}
-                        >
-                          {mergeInFlight ? 'Merging…' : 'Merge ↓'}
-                        </button>
-                      )}
-                    {task.review?.verdict === 'approved' &&
-                      task.pr.mergeState === 'dirty' && (
-                        <button
-                          className={styles.mergeButton}
-                          disabled={true}
-                          title="Cannot merge — PR has merge conflicts"
-                        >
-                          Merge ↓
-                        </button>
-                      )}
-                  </div>
+
+                    {/* Line 3 (conditional): action buttons only when PR is open */}
+                    {task.pr.state === 'open' && (
+                      <div className={styles.prActions}>
+                        {task.pr.mergeState !== 'dirty' && (
+                          <button
+                            className={styles.reviewButton}
+                            disabled={reviewInFlight || !projectId}
+                            onClick={() => void handleRunReview()}
+                            title={
+                              !projectId ? 'Project ID unavailable' : undefined
+                            }
+                          >
+                            {reviewInFlight ? 'Reviewing…' : 'Run Review'}
+                          </button>
+                        )}
+                        {task.pr.mergeState === 'dirty' && (
+                          <button
+                            className={styles.reReviewButton}
+                            disabled={fixConflictsInFlight}
+                            onClick={() => void handleFixConflicts()}
+                            title="Send rebase instructions to the code session to resolve merge conflicts"
+                          >
+                            {fixConflictsInFlight ? 'Fixing…' : '↺ Fix Conflicts'}
+                          </button>
+                        )}
+                        {task.review?.verdict === 'approved' &&
+                          task.pr.mergeState !== 'dirty' && (
+                            <button
+                              className={styles.mergeButton}
+                              disabled={mergeInFlight}
+                              onClick={() => void handleMerge()}
+                            >
+                              {mergeInFlight ? 'Merging…' : 'Merge ↓'}
+                            </button>
+                          )}
+                        {task.review?.verdict === 'approved' &&
+                          task.pr.mergeState === 'dirty' && (
+                            <button
+                              className={styles.mergeButton}
+                              disabled={true}
+                              title="Cannot merge — PR has merge conflicts"
+                            >
+                              Merge ↓
+                            </button>
+                          )}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             )}
