@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import {
   formatTokenCount,
@@ -34,6 +35,23 @@ interface Props {
   autoLaunchPollIntervalMs?: number;
 }
 
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return false;
+    return window.matchMedia('(max-width: 768px)').matches;
+  });
+
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const mq = window.matchMedia('(max-width: 768px)');
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
+  return isMobile;
+}
+
 export function Header({
   projects,
   activeProjectId,
@@ -52,6 +70,8 @@ export function Header({
   autoLaunchQueuedCount,
   autoLaunchPollIntervalMs,
 }: Props) {
+  const isMobile = useIsMobile();
+
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
   const boards = activeProject?.boards ?? [];
   const showAutoLaunchToggle =
@@ -87,54 +107,150 @@ export function Header({
     }
   }
 
+  const navContent = (
+    <nav className={styles.nav}>
+      <button
+        type="button"
+        className={`${styles.navLink}${activeView === 'tasks' ? ` ${styles.navLinkActive}` : ''}`}
+        onClick={() => onViewChange('tasks')}
+      >
+        Tasks
+      </button>
+      <button
+        type="button"
+        className={`${styles.navLink}${activeView === 'sessions' ? ` ${styles.navLinkActive}` : ''}`}
+        onClick={() => onViewChange('sessions')}
+      >
+        Sessions
+      </button>
+      <button
+        type="button"
+        className={`${styles.navLink}${activeView === 'prs' ? ` ${styles.navLinkActive}` : ''}`}
+        onClick={() => onViewChange('prs')}
+      >
+        PRs
+        {incompleteReviewCount != null && incompleteReviewCount > 0 && (
+          <span
+            className={styles.incompleteBadge}
+            title="Incomplete review — needs attention"
+          >
+            {incompleteReviewCount}
+          </span>
+        )}
+      </button>
+      <button
+        type="button"
+        className={`${styles.navLink}${activeView === 'analytics' ? ` ${styles.navLinkActive}` : ''}`}
+        onClick={() => onViewChange('analytics')}
+      >
+        Analytics
+      </button>
+      <button
+        type="button"
+        className={`${styles.navLink}${activeView === 'settings' ? ` ${styles.navLinkActive}` : ''}`}
+        onClick={() => onViewChange('settings')}
+      >
+        Settings
+      </button>
+    </nav>
+  );
+
+  const autoLaunchContent = showAutoLaunchToggle ? (
+    <>
+      <button
+        type="button"
+        className={`${styles.autoLaunchPill}${isOnThisMilestone ? ` ${styles.autoLaunchPillOn}` : ''}`}
+        onClick={handleAutoLaunchClick}
+        disabled={!activeBoardId || !onAutoLaunchToggle}
+        title={autoLaunchTooltip}
+        aria-pressed={isOnThisMilestone}
+        aria-label={
+          isOnThisMilestone
+            ? 'Auto-launch ON for this milestone'
+            : otherMilestoneName
+              ? `Auto-launch active on ${otherMilestoneName}`
+              : 'Auto-launch OFF'
+        }
+      >
+        <span aria-hidden="true">🤖</span>
+        <span className={styles.autoLaunchLabel}>Auto-launch</span>
+        <span className={styles.autoLaunchState}>
+          {isOnThisMilestone ? 'ON' : 'OFF'}
+        </span>
+      </button>
+      {isOnThisMilestone &&
+        autoLaunchCap != null &&
+        autoLaunchRunningCount != null && (
+          <span
+            className={styles.autoLaunchCounter}
+            title={`${autoLaunchRunningCount} running, ${autoLaunchQueuedCount ?? 0} queued, cap ${autoLaunchCap}. Auto-launch checks every ${Math.round((autoLaunchPollIntervalMs ?? 60000) / 1000)}s.`}
+            data-testid="auto-launch-counter"
+          >
+            🤖 {autoLaunchRunningCount}/{autoLaunchCap}
+            {(autoLaunchQueuedCount ?? 0) > 0 && (
+              <span className={styles.autoLaunchQueued}>
+                +{autoLaunchQueuedCount} queued
+              </span>
+            )}
+          </span>
+        )}
+    </>
+  ) : null;
+
+  const tokenContent =
+    totalTokens != null && totalTokens > 0 ? (
+      <button
+        type="button"
+        className={styles.tokenSummary}
+        onClick={() => onViewChange('analytics')}
+        title="View token analytics"
+      >
+        {formatTokenCount(totalTokens)} tokens
+        {totalCost != null && totalCost > 0
+          ? ` (~${formatCost(totalCost)})`
+          : ''}
+      </button>
+    ) : null;
+
+  if (isMobile) {
+    return (
+      <header className={`${styles.header} ${styles.headerMobile}`}>
+        <div className={styles.mobileRow1} data-testid="mobile-row1">
+          {navContent}
+        </div>
+        <div className={styles.mobileRow2} data-testid="mobile-row2">
+          <ProjectSwitcher
+            projects={projects}
+            activeProjectId={activeProjectId}
+            onProjectChange={onProjectChange}
+          />
+          {boards.length > 1 && (
+            <select
+              className={styles.milestoneSelect}
+              value={activeBoardId ?? ''}
+              onChange={(e) => onBoardChange(e.target.value)}
+            >
+              {boards.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+          )}
+          {autoLaunchContent}
+          {tasks && tasks.length > 0 && (
+            <MilestoneProgress tasks={tasks} compact />
+          )}
+          {tokenContent}
+        </div>
+      </header>
+    );
+  }
+
   return (
     <header className={styles.header}>
       <span className={styles.appName}>Claude Code Orchestrator</span>
-      <nav className={styles.nav}>
-        <button
-          type="button"
-          className={`${styles.navLink}${activeView === 'tasks' ? ` ${styles.navLinkActive}` : ''}`}
-          onClick={() => onViewChange('tasks')}
-        >
-          Tasks
-        </button>
-        <button
-          type="button"
-          className={`${styles.navLink}${activeView === 'sessions' ? ` ${styles.navLinkActive}` : ''}`}
-          onClick={() => onViewChange('sessions')}
-        >
-          Sessions
-        </button>
-        <button
-          type="button"
-          className={`${styles.navLink}${activeView === 'prs' ? ` ${styles.navLinkActive}` : ''}`}
-          onClick={() => onViewChange('prs')}
-        >
-          PRs
-          {incompleteReviewCount != null && incompleteReviewCount > 0 && (
-            <span
-              className={styles.incompleteBadge}
-              title="Incomplete review — needs attention"
-            >
-              {incompleteReviewCount}
-            </span>
-          )}
-        </button>
-        <button
-          type="button"
-          className={`${styles.navLink}${activeView === 'analytics' ? ` ${styles.navLinkActive}` : ''}`}
-          onClick={() => onViewChange('analytics')}
-        >
-          Analytics
-        </button>
-        <button
-          type="button"
-          className={`${styles.navLink}${activeView === 'settings' ? ` ${styles.navLinkActive}` : ''}`}
-          onClick={() => onViewChange('settings')}
-        >
-          Settings
-        </button>
-      </nav>
+      {navContent}
       <div className={styles.divider} />
       <ProjectSwitcher
         projects={projects}
@@ -160,43 +276,7 @@ export function Header({
       {showAutoLaunchToggle && (
         <>
           <div className={styles.divider} />
-          <button
-            type="button"
-            className={`${styles.autoLaunchPill}${isOnThisMilestone ? ` ${styles.autoLaunchPillOn}` : ''}`}
-            onClick={handleAutoLaunchClick}
-            disabled={!activeBoardId || !onAutoLaunchToggle}
-            title={autoLaunchTooltip}
-            aria-pressed={isOnThisMilestone}
-            aria-label={
-              isOnThisMilestone
-                ? 'Auto-launch ON for this milestone'
-                : otherMilestoneName
-                  ? `Auto-launch active on ${otherMilestoneName}`
-                  : 'Auto-launch OFF'
-            }
-          >
-            <span aria-hidden="true">🤖</span>
-            <span className={styles.autoLaunchLabel}>Auto-launch</span>
-            <span className={styles.autoLaunchState}>
-              {isOnThisMilestone ? 'ON' : 'OFF'}
-            </span>
-          </button>
-          {isOnThisMilestone &&
-            autoLaunchCap != null &&
-            autoLaunchRunningCount != null && (
-              <span
-                className={styles.autoLaunchCounter}
-                title={`${autoLaunchRunningCount} running, ${autoLaunchQueuedCount ?? 0} queued, cap ${autoLaunchCap}. Auto-launch checks every ${Math.round((autoLaunchPollIntervalMs ?? 60000) / 1000)}s.`}
-                data-testid="auto-launch-counter"
-              >
-                🤖 {autoLaunchRunningCount}/{autoLaunchCap}
-                {(autoLaunchQueuedCount ?? 0) > 0 && (
-                  <span className={styles.autoLaunchQueued}>
-                    +{autoLaunchQueuedCount} queued
-                  </span>
-                )}
-              </span>
-            )}
+          {autoLaunchContent}
         </>
       )}
       {tasks && tasks.length > 0 && (
@@ -205,20 +285,10 @@ export function Header({
           <MilestoneProgress tasks={tasks} />
         </>
       )}
-      {totalTokens != null && totalTokens > 0 && (
+      {tokenContent && (
         <>
           <div className={styles.divider} />
-          <button
-            type="button"
-            className={styles.tokenSummary}
-            onClick={() => onViewChange('analytics')}
-            title="View token analytics"
-          >
-            {formatTokenCount(totalTokens)} tokens
-            {totalCost != null && totalCost > 0
-              ? ` (~${formatCost(totalCost)})`
-              : ''}
-          </button>
+          {tokenContent}
         </>
       )}
     </header>
