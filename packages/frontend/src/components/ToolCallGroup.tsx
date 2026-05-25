@@ -17,6 +17,8 @@ interface Props {
   calls: CallPair[];
 }
 
+const RESULT_PREVIEW_LINES = 20;
+
 /** Extract the first tool_use block's input from a text/assistant event. */
 function extractCallInput(textEvent: CallPair['textEvent']): unknown {
   const payload = tryParseJson(textEvent.content);
@@ -60,19 +62,102 @@ function inputLabel(toolName: string, input: unknown): string {
   return toolName;
 }
 
+function headerDetail(toolName: string, input: unknown): string | null {
+  if (toolName === 'Bash') {
+    return (
+      ((input as Record<string, unknown> | null)?.description as
+        | string
+        | undefined) ??
+      extractBashCommand(input)?.slice(0, 40) ??
+      null
+    );
+  }
+  return extractToolDetail(toolName, input);
+}
+
 export function ToolCallGroup({ toolName, calls }: Props) {
+  if (calls.length === 1) {
+    return <SingleCallEntry toolName={toolName} call={calls[0]} />;
+  }
+  return <MultiCallGroup toolName={toolName} calls={calls} />;
+}
+
+function SingleCallEntry({
+  toolName,
+  call,
+}: {
+  toolName: string;
+  call: CallPair;
+}) {
+  const [open, setOpen] = useState(false);
+  const input = extractCallInput(call.textEvent);
+  const isBash = toolName === 'Bash';
+  const rawDetail = headerDetail(toolName, input);
+  const headerSuffix = rawDetail
+    ? ` (${rawDetail.length > 40 ? rawDetail.slice(0, 40) + '…' : rawDetail})`
+    : '';
+
+  const resultPayload = tryParseJson(call.resultEvent.content);
+  const rawResult = extractToolResult(resultPayload, call.resultEvent.content);
+  let result = rawResult;
+  try {
+    const parsed = JSON.parse(rawResult);
+    if (typeof parsed === 'object' && parsed !== null) {
+      result = JSON.stringify(parsed, null, 2);
+    }
+  } catch {
+    /* not JSON */
+  }
+
+  const resultLines = result.split('\n');
+  const truncated = resultLines.length > RESULT_PREVIEW_LINES;
+  const resultPreview = truncated
+    ? resultLines.slice(0, RESULT_PREVIEW_LINES).join('\n') +
+      `\n… (+${resultLines.length - RESULT_PREVIEW_LINES} lines)`
+    : result;
+
+  function toggle() {
+    setOpen((o) => !o);
+  }
+
+  return (
+    <div className={styles.group}>
+      <div
+        className={styles.groupHeader}
+        role="button"
+        tabIndex={0}
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') toggle();
+        }}
+        aria-expanded={open}
+      >
+        <span className={styles.chevron}>{open ? '▼' : '▶'}</span>
+        🔧 {toolName}
+        {headerSuffix}
+      </div>
+      {open && (
+        <div className={styles.callBody}>
+          {isBash && extractBashCommand(input) != null ? (
+            <pre className={styles.args}>$ {extractBashCommand(input)}</pre>
+          ) : (
+            <pre className={styles.args}>{JSON.stringify(input, null, 2)}</pre>
+          )}
+          {resultPreview.trim() && (
+            <pre className={styles.result}>{resultPreview}</pre>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MultiCallGroup({ toolName, calls }: Props) {
   const [expanded, setExpanded] = useState(false);
 
   const firstInput =
     calls.length > 0 ? extractCallInput(calls[0].textEvent) : null;
-  const rawDetail =
-    toolName === 'Bash'
-      ? (((firstInput as Record<string, unknown> | null)?.description as
-          | string
-          | undefined) ??
-        extractBashCommand(firstInput)?.slice(0, 40) ??
-        null)
-      : extractToolDetail(toolName, firstInput);
+  const rawDetail = headerDetail(toolName, firstInput);
   const headerSuffix = rawDetail
     ? ` (${rawDetail.length > 40 ? rawDetail.slice(0, 40) + '…' : rawDetail})`
     : '';
