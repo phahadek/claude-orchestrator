@@ -868,7 +868,9 @@ describe('TaskDetail', () => {
     expect(screen.queryByText('#42')).toBeNull();
 
     // Expand PR section → REVIEW body should collapse
-    fireEvent.click(screen.getByRole('button', { name: /pull request/i, hidden: true }));
+    fireEvent.click(
+      screen.getByRole('button', { name: /pull request/i, hidden: true }),
+    );
     expect(screen.queryByText('Review transcript not available.')).toBeNull();
     expect(screen.getByText('#42')).toBeTruthy();
   });
@@ -885,7 +887,9 @@ describe('TaskDetail', () => {
       />,
     );
     // REVIEW is open initially, click PR to expand it
-    fireEvent.click(screen.getByRole('button', { name: /pull request/i, hidden: true }));
+    fireEvent.click(
+      screen.getByRole('button', { name: /pull request/i, hidden: true }),
+    );
     expect(screen.getByText('#42')).toBeTruthy();
     // Click REVIEW section header (name starts with "Review", not "Run Review")
     fireEvent.click(screen.getByRole('button', { name: /^review/i }));
@@ -909,7 +913,10 @@ describe('TaskDetail', () => {
     expect(reviewHeader.getAttribute('aria-expanded')).toBe('true');
 
     // Click PR header → PR opens
-    const prHeader = screen.getByRole('button', { name: /pull request/i, hidden: true });
+    const prHeader = screen.getByRole('button', {
+      name: /pull request/i,
+      hidden: true,
+    });
     fireEvent.click(prHeader);
     expect(prHeader.getAttribute('aria-expanded')).toBe('true');
     expect(reviewHeader.getAttribute('aria-expanded')).toBe('false');

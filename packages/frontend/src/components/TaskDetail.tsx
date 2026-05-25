@@ -148,9 +148,13 @@ export function TaskDetail({
   autoMergeEnabled = false,
 }: Props) {
   const [showReviewSection, setShowReviewSection] = useState(true);
-  const [mobileOpenSection, setMobileOpenSection] = useState<'review' | 'pr' | null>('review');
+  const [mobileOpenSection, setMobileOpenSection] = useState<
+    'review' | 'pr' | null
+  >('review');
   const [isMobile, setIsMobile] = useState(
-    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches,
+    () =>
+      typeof window !== 'undefined' &&
+      window.matchMedia('(max-width: 767px)').matches,
   );
   const [showReviewDimensions, setShowReviewDimensions] = useState(false);
   const [reviewInFlight, setReviewInFlight] = useState(false);
@@ -309,8 +313,12 @@ export function TaskDetail({
 
   // Accordion: on mobile, REVIEW and PULL REQUEST are mutually exclusive when both exist.
   const mobileAccordionActive = isMobile && !!task.review && !!task.pr;
-  const isReviewExpanded = mobileAccordionActive ? mobileOpenSection === 'review' : showReviewSection;
-  const isPrExpanded = mobileAccordionActive ? mobileOpenSection === 'pr' : true;
+  const isReviewExpanded = mobileAccordionActive
+    ? mobileOpenSection === 'review'
+    : showReviewSection;
+  const isPrExpanded = mobileAccordionActive
+    ? mobileOpenSection === 'pr'
+    : true;
 
   const handleReviewToggle = useCallback(() => {
     if (mobileAccordionActive) {
@@ -543,7 +551,10 @@ export function TaskDetail({
                     role="button"
                     aria-expanded={isPrExpanded}
                   >
-                    <span className={styles.reviewToggleIcon} aria-hidden="true">
+                    <span
+                      className={styles.reviewToggleIcon}
+                      aria-hidden="true"
+                    >
                       {isPrExpanded ? '▼' : '▶'}
                     </span>
                     <span className={styles.sectionTitle}>Pull Request</span>
@@ -559,8 +570,12 @@ export function TaskDetail({
                     {/* Line 1: PR number + title (truncated) + state badge */}
                     <div className={styles.prTitleRow}>
                       <div className={styles.prTitleLeft}>
-                        <span className={styles.prNumber}>#{task.pr.prNumber}</span>
-                        <span className={styles.prTitleText}>{task.pr.title}</span>
+                        <span className={styles.prNumber}>
+                          #{task.pr.prNumber}
+                        </span>
+                        <span className={styles.prTitleText}>
+                          {task.pr.title}
+                        </span>
                       </div>
                       <span
                         className={`${styles.prStateBadge} ${styles[`prState--${task.pr.state}${task.pr.draft ? '-draft' : ''}`]}`}
@@ -590,8 +605,8 @@ export function TaskDetail({
 
                     {task.pr.mergeState === 'dirty' && (
                       <div className={styles.conflictBanner}>
-                        ⚠ Merge conflicts detected — use Fix Conflicts to have the
-                        code session rebase and resolve them.
+                        ⚠ Merge conflicts detected — use Fix Conflicts to have
+                        the code session rebase and resolve them.
                       </div>
                     )}
 
@@ -617,7 +632,9 @@ export function TaskDetail({
                             onClick={() => void handleFixConflicts()}
                             title="Send rebase instructions to the code session to resolve merge conflicts"
                           >
-                            {fixConflictsInFlight ? 'Fixing…' : '↺ Fix Conflicts'}
+                            {fixConflictsInFlight
+                              ? 'Fixing…'
+                              : '↺ Fix Conflicts'}
                           </button>
                         )}
                         {task.review?.verdict === 'approved' &&
