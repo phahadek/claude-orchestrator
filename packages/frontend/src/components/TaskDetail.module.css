@@ -675,6 +675,21 @@
   margin: 0;
 }
 
+/* ── PR section header — mobile accordion variant ────────────────── */
+.prSectionHeaderMobile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  cursor: pointer;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.prSectionHeaderMobile:hover .sectionTitle {
+  color: var(--text-muted);
+}
+
 /* ── Mobile overlay: remove left border when rendering as overlay ── */
 @media (max-width: 768px) {
   .panel {
