@@ -6,7 +6,9 @@ import styles from '../ShortcutHint.module.css';
 describe('ShortcutHint', () => {
   it('renders the trigger button at desktop viewport (regression)', () => {
     render(<ShortcutHint />);
-    expect(screen.getByRole('button', { name: /keyboard shortcuts/i })).toBeDefined();
+    expect(
+      screen.getByRole('button', { name: /keyboard shortcuts/i }),
+    ).toBeDefined();
   });
 
   it('container uses the CSS class that hides at mobile via media query', () => {
