@@ -197,8 +197,8 @@ function LocalBranchCard({
 
 // ── PR card (GitHub pull request) ─────────────────────────────────
 
-export function WorkItemCard({
-  item,
+function PRWorkItemCard({
+  item: pr,
   onReview,
   onMerge,
   onRemove,
@@ -215,12 +215,7 @@ export function WorkItemCard({
   approveInFlight,
   reviewElapsed,
   error,
-}: WorkItemCardProps) {
-  if (item.type === 'local_branch') {
-    return <LocalBranchCard item={item} onViewSession={onViewSession} />;
-  }
-
-  const pr = item;
+}: Omit<WorkItemCardProps, 'item'> & { item: PRWorkItem }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
 
   const isFinished = pr.state === 'merged' || pr.state === 'closed';
@@ -523,6 +518,17 @@ export function WorkItemCard({
       )}
     </div>
   );
+}
+
+// ── Dispatcher ────────────────────────────────────────────────────
+
+export function WorkItemCard(props: WorkItemCardProps) {
+  if (props.item.type === 'local_branch') {
+    return (
+      <LocalBranchCard item={props.item} onViewSession={props.onViewSession} />
+    );
+  }
+  return <PRWorkItemCard {...props} item={props.item} />;
 }
 
 // ── Backward-compat named export ──────────────────────────────────
