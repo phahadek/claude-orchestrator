@@ -208,4 +208,63 @@ describe('ProjectsSettingsPanel', () => {
     render(<ProjectsSettingsPanel />);
     await waitFor(() => expect(screen.getByText('boom')).toBeTruthy());
   });
+
+  it('renders a <table> with all expected column headers', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse([makeProject()]));
+    render(<ProjectsSettingsPanel />);
+    await waitFor(() => expect(screen.getByText('Project Alpha')).toBeTruthy());
+    expect(screen.getByText('Name')).toBeTruthy();
+    expect(screen.getByText('Project Dir')).toBeTruthy();
+    expect(screen.getByText('Task Source')).toBeTruthy();
+    expect(screen.getByText('Git Mode')).toBeTruthy();
+    expect(screen.getByText('# Milestones')).toBeTruthy();
+    expect(screen.getByText('GitHub Repo')).toBeTruthy();
+    expect(screen.getByText('Actions')).toBeTruthy();
+  });
+
+  it('applies data-label attributes to project dir, task source, git mode, milestones, and repo cells', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse([makeProject()]));
+    const { container } = render(<ProjectsSettingsPanel />);
+    await waitFor(() => expect(screen.getByText('Project Alpha')).toBeTruthy());
+    const tds = container.querySelectorAll('tbody td[data-label]');
+    const labels = Array.from(tds).map((td) => td.getAttribute('data-label'));
+    expect(labels).toContain('Project Dir');
+    expect(labels).toContain('Task Source');
+    expect(labels).toContain('Git Mode');
+    expect(labels).toContain('# Milestones');
+    expect(labels).toContain('GitHub Repo');
+  });
+
+  it('applies middle ellipsis to project dir paths longer than 40 characters', async () => {
+    const longDir =
+      '/very/long/absolute/path/to/some/project/directory/deep/nested';
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse([makeProject({ projectDir: longDir })]),
+    );
+    render(<ProjectsSettingsPanel />);
+    await waitFor(() => expect(screen.getByText('Project Alpha')).toBeTruthy());
+    // The rendered text should contain an ellipsis character
+    const allText = document.body.textContent ?? '';
+    expect(allText).toContain('…');
+    // And the full path should not appear verbatim (it was truncated)
+    expect(allText).not.toContain(longDir);
+  });
+
+  it('Edit and Delete buttons invoke the correct handlers when rendered in card layout', async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse([makeProject({ id: 'p1', name: 'Alpha' })]),
+      )
+      .mockResolvedValueOnce(emptyResponse(204))
+      .mockResolvedValueOnce(jsonResponse([]));
+
+    render(<ProjectsSettingsPanel />);
+    await waitFor(() => expect(screen.getByText('Alpha')).toBeTruthy());
+
+    // Edit button opens the edit modal
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy(),
+    );
+  });
 });

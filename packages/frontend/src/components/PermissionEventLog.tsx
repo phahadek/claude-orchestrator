@@ -220,6 +220,7 @@ function DenialRow({ row }: { row: PermissionDenialRow }) {
             {expanded ? 'less' : 'more'}
           </button>
         )}
+        <span className={styles.mobileInput}>{inputText}</span>
       </td>
     </tr>
   );
