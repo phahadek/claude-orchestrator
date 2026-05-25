@@ -93,6 +93,20 @@
   color: var(--ctp-peach);
 }
 
+.archive-label-short {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .archive-label-full {
+    display: none;
+  }
+
+  .archive-label-short {
+    display: inline;
+  }
+}
+
 .resume-all-button {
   background: rgba(249, 226, 175, 0.1);
   border: 1px solid rgba(249, 226, 175, 0.4);

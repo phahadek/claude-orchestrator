@@ -934,15 +934,8 @@ export default function App() {
           <ErrorBoundary name="SessionsView">
             <div className={styles.contentArea}>
               <div className={styles.leftPanel}>
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    marginBottom: '8px',
-                  }}
-                >
-                  <span style={{ flex: 1 }}>
+                <div className={styles.sessionsHeader}>
+                  <span className={styles.sessionsCount}>
                     {runningCount > 0 && <span>{runningCount} running</span>}
                     {runningCount > 0 && doneCount > 0 && <span> · </span>}
                     {doneCount > 0 && <span>{doneCount} done</span>}
@@ -957,29 +950,31 @@ export default function App() {
                       </span>
                     )}
                   </span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setActiveView((v) =>
-                        v === 'history' ? 'sessions' : 'history',
-                      )
-                    }
-                  >
-                    {activeView === 'history' ? 'Hide History' : '🕑 History'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setActiveView((v) =>
-                        v === 'denials' ? 'sessions' : 'denials',
-                      )
-                    }
-                  >
-                    {activeView === 'denials' ? 'Hide Denials' : '📋 Denials'}
-                  </button>
-                  <button type="button" onClick={() => setShowModal(true)}>
-                    + New Session
-                  </button>
+                  <div className={styles.sessionsActions}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setActiveView((v) =>
+                          v === 'history' ? 'sessions' : 'history',
+                        )
+                      }
+                    >
+                      {activeView === 'history' ? 'Hide History' : '🕑 History'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setActiveView((v) =>
+                          v === 'denials' ? 'sessions' : 'denials',
+                        )
+                      }
+                    >
+                      {activeView === 'denials' ? 'Hide Denials' : '📋 Denials'}
+                    </button>
+                    <button type="button" onClick={() => setShowModal(true)}>
+                      + New Session
+                    </button>
+                  </div>
                 </div>
 
                 {activeView === 'history' ? (
