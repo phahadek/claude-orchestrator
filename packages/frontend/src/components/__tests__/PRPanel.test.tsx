@@ -451,6 +451,76 @@ describe('PRPanel — inflight state cleared by WS events', () => {
   });
 });
 
+describe('PRPanel — header layout', () => {
+  function setupFetch() {
+    (fetch as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+      if (url.includes('/api/prs?'))
+        return Promise.resolve({ ok: true, status: 200, json: async () => [] });
+      if (url.includes('clear/count'))
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ count: 0 }),
+        });
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
+    });
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn());
+    setupFetch();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('desktop: header renders title and action buttons (regression)', async () => {
+    render(<PRPanel activeProjectId="proj-1" onCollapse={() => {}} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Open Pull Requests')).toBeDefined();
+      expect(screen.getByRole('button', { name: /refresh/i })).toBeDefined();
+      expect(screen.getByTitle('Collapse PR panel')).toBeDefined();
+    });
+  });
+
+  it('mobile: action buttons are grouped in a container below the title', async () => {
+    render(<PRPanel activeProjectId="proj-1" onCollapse={() => {}} />);
+
+    await waitFor(() =>
+      expect(screen.getByText('Open Pull Requests')).toBeDefined(),
+    );
+
+    const title = screen.getByText('Open Pull Requests');
+    const refreshBtn = screen.getByRole('button', { name: /refresh/i });
+
+    // Buttons are wrapped in their own container (not direct siblings of the title)
+    expect(refreshBtn.parentElement).not.toBe(title.parentElement);
+    // Both share a common ancestor (headerBar)
+    expect(title.parentElement?.contains(refreshBtn)).toBe(true);
+  });
+
+  it('Refresh button retains its click handler', async () => {
+    render(<PRPanel activeProjectId="proj-1" />);
+    await waitFor(() => screen.getByRole('button', { name: /refresh/i }));
+
+    const fetchMock = fetch as ReturnType<typeof vi.fn>;
+    const callsBefore = fetchMock.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: /refresh/i }));
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(callsBefore);
+  });
+
+  it('Close button retains its click handler', async () => {
+    const onCollapse = vi.fn();
+    render(<PRPanel activeProjectId="proj-1" onCollapse={onCollapse} />);
+    await waitFor(() => screen.getByTitle('Collapse PR panel'));
+
+    fireEvent.click(screen.getByTitle('Collapse PR panel'));
+    expect(onCollapse).toHaveBeenCalledOnce();
+  });
+});
+
 describe('PRPanel — per-card ErrorBoundary isolation', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn());
