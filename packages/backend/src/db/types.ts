@@ -202,6 +202,24 @@ export type NewMilestoneRow = Omit<
   updated_at?: number;
 };
 
+// ─── local_branches ────────────────────────────────────────────────────────
+
+export type LocalBranchStatus = 'open' | 'merged' | 'abandoned';
+
+export interface LocalBranchRow {
+  id: number;
+  project_id: string;
+  session_id: string;
+  branch_name: string;
+  base_branch: string;
+  status: LocalBranchStatus;
+  review_result: string | null; // JSON verdict
+  created_at: string;
+  updated_at: string;
+}
+
+export type NewLocalBranchRow = Omit<LocalBranchRow, 'id'>;
+
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
 /**
