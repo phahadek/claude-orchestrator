@@ -24,6 +24,18 @@ interface Props {
     mergeable: boolean | null;
     mergeState: string | null;
   } | null;
+  autofixEvent?: {
+    type: 'autofix_started' | 'autofix_complete';
+    prNumber: number;
+    success?: boolean;
+    summary?: string;
+    receivedAt: number;
+  } | null;
+  reviewStartedEvent?: {
+    prNumber: number;
+    sessionId: string;
+    receivedAt: number;
+  } | null;
 }
 
 export function PRPanel({
@@ -36,6 +48,8 @@ export function PRPanel({
   prClosedEvent,
   prStateChangedEvent,
   prMergeabilityChangedEvent,
+  autofixEvent,
+  reviewStartedEvent,
 }: Props) {
   const [prs, setPRs] = useState<PRListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -63,6 +77,9 @@ export function PRPanel({
   const [clearInFlight, setClearInFlight] = useState(false);
   const [clearableCount, setClearableCount] = useState(0);
   const [cardErrors, setCardErrors] = useState<Map<number, string>>(new Map());
+  const [autofixStatus, setAutofixStatus] = useState<
+    Map<number, 'running' | 'done' | 'failed'>
+  >(new Map());
 
   const elapsedTimers = useRef<Map<number, ReturnType<typeof setInterval>>>(
     new Map(),
@@ -167,6 +184,11 @@ export function PRPanel({
       return next;
     });
     stopElapsed(prReviewEvent.prNumber);
+    setAutofixStatus((prev) => {
+      const next = new Map(prev);
+      next.delete(prReviewEvent.prNumber);
+      return next;
+    });
   }, [prReviewEvent]);
 
   useEffect(() => {
@@ -209,6 +231,28 @@ export function PRPanel({
       return next;
     });
   }, [prMergeabilityChangedEvent]);
+
+  useEffect(() => {
+    if (!autofixEvent) return;
+    setAutofixStatus((prev) => {
+      const next = new Map(prev);
+      if (autofixEvent.type === 'autofix_started') {
+        next.set(autofixEvent.prNumber, 'running');
+      } else {
+        next.set(
+          autofixEvent.prNumber,
+          autofixEvent.success ? 'done' : 'failed',
+        );
+      }
+      return next;
+    });
+  }, [autofixEvent]);
+
+  useEffect(() => {
+    if (!reviewStartedEvent) return;
+    setReviewInFlight((prev) => new Set(prev).add(reviewStartedEvent.prNumber));
+    startElapsed(reviewStartedEvent.prNumber);
+  }, [reviewStartedEvent]);
 
   const handleReview = async (prNumber: number) => {
     if (!activeProjectId) return;
@@ -528,6 +572,23 @@ export function PRPanel({
                   </div>
                 )}
               >
+                {autofixStatus.get(pr.prNumber) === 'running' && (
+                  <div className={styles.autofixBadge}>⚙ Autofix running…</div>
+                )}
+                {autofixStatus.get(pr.prNumber) === 'done' && (
+                  <div
+                    className={`${styles.autofixBadge} ${styles.autofixDone}`}
+                  >
+                    ✓ Autofix applied
+                  </div>
+                )}
+                {autofixStatus.get(pr.prNumber) === 'failed' && (
+                  <div
+                    className={`${styles.autofixBadge} ${styles.autofixFailed}`}
+                  >
+                    ⚠ Autofix failed (proceeding)
+                  </div>
+                )}
                 <PRCard
                   pr={pr}
                   onReview={handleReview}

@@ -5,11 +5,13 @@ import {
   getPRByNumber,
   setPendingPush,
   setPauseReason,
+  getSession,
 } from '../db/queries';
 import type { PRReviewService, PRReviewResult } from './PRReviewService';
 import type { SessionManager } from '../session/SessionManager';
 import type { ReviewJob } from './types';
 import { formatReviewFeedback } from './reviewUtils';
+import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 
 const REVIEW_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_ITERATIONS = 3;
@@ -90,6 +92,67 @@ export class ReviewOrchestrator {
       });
       return;
     }
+
+    // ── Autofix step ──────────────────────────────────────────────────────────
+    const autofixCommands = loadAutofixCommands(project.projectDir);
+    if (autofixCommands.length > 0) {
+      this.sessionManager.emit('message', {
+        type: 'autofix_started',
+        prNumber: job.prNumber,
+        repo: job.repo,
+      });
+
+      const worktreePath = prRow?.session_id
+        ? (getSession(prRow.session_id)?.worktree_path ?? '')
+        : '';
+
+      let autofixSuccess = true;
+      let autofixSummary = 'no worktree available — autofix skipped';
+
+      if (worktreePath) {
+        try {
+          const result = await runAutofix(
+            worktreePath,
+            project.projectDir,
+            autofixCommands,
+            (msg) =>
+              console.log(
+                `[ReviewOrchestrator] autofix PR #${job.prNumber}: ${msg}`,
+              ),
+          );
+          autofixSuccess = result.success;
+          autofixSummary = result.summary;
+        } catch (err) {
+          autofixSuccess = false;
+          autofixSummary = `autofix threw: ${String(err)}`;
+          console.error(
+            `[ReviewOrchestrator] autofix error for PR #${job.prNumber}:`,
+            err,
+          );
+        }
+      }
+
+      this.sessionManager.emit('message', {
+        type: 'autofix_complete',
+        prNumber: job.prNumber,
+        repo: job.repo,
+        success: autofixSuccess,
+        summary: autofixSummary,
+      });
+
+      if (!autofixSuccess) {
+        console.warn(
+          `[ReviewOrchestrator] autofix failed for PR #${job.prNumber} (fail open): ${autofixSummary}`,
+        );
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    this.sessionManager.emit('message', {
+      type: 'review_started',
+      prNumber: job.prNumber,
+      sessionId: prRow?.review_session_id ?? '',
+    });
 
     let result: PRReviewResult;
     try {

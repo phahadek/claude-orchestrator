@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 
 // ── Mocks (must come before imports of the modules under test) ──────────────
@@ -6,11 +6,17 @@ import { EventEmitter } from 'events';
 vi.mock('../db/queries.js', () => ({
   setPRReviewResult: vi.fn(),
   getPRByNumber: vi.fn(),
+  getSession: vi.fn().mockReturnValue(undefined),
   getSetting: vi.fn().mockReturnValue(undefined),
   incrementReviewIteration: vi.fn(),
   updatePRDraftStatus: vi.fn(),
   setPendingPush: vi.fn(),
   setPauseReason: vi.fn(),
+}));
+
+vi.mock('../session/autofix-runner.js', () => ({
+  loadAutofixCommands: vi.fn().mockReturnValue([]),
+  runAutofix: vi.fn().mockResolvedValue({ success: true, summary: 'no diff' }),
 }));
 
 const projectFixture = {
@@ -36,9 +42,11 @@ import { ReviewOrchestrator } from './ReviewOrchestrator';
 import {
   setPRReviewResult,
   getPRByNumber,
+  getSession,
   updatePRDraftStatus,
   setPauseReason,
 } from '../db/queries';
+import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import type { PRReviewService } from './PRReviewService';
 import type { GitHubClient } from './GitHubClient';
 import type { PullRequest } from './types';
@@ -260,8 +268,10 @@ describe('ReviewOrchestrator — pr_review_complete broadcast', () => {
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toMatchObject({
+    const reviewComplete = messages.find(
+      (m: any) => m.type === 'pr_review_complete',
+    );
+    expect(reviewComplete).toMatchObject({
       type: 'pr_review_complete',
       prNumber: 1,
       repo: 'owner/repo',
@@ -461,6 +471,10 @@ describe('ReviewOrchestrator — incomplete verdict', () => {
 // ── Timeout handling ──────────────────────────────────────────────────────────
 
 describe('ReviewOrchestrator — timeout', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('stores error verdict and broadcasts error event on timeout', async () => {
     vi.useFakeTimers();
 
@@ -495,13 +509,13 @@ describe('ReviewOrchestrator — timeout', () => {
     expect(stored.summary).toContain('timed out');
     expect(Array.isArray(stored.dimensions)).toBe(true);
 
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toMatchObject({
+    const reviewComplete = messages.find(
+      (m: any) => m.type === 'pr_review_complete',
+    );
+    expect(reviewComplete).toMatchObject({
       type: 'pr_review_complete',
       verdict: 'error',
     });
-
-    vi.useRealTimers();
   });
 
   it('stores error verdict with dimensions: [] when executeReview catches a non-timeout error', async () => {
@@ -606,7 +620,10 @@ describe('ReviewOrchestrator — draft PR transition on approved verdict', () =>
     // PRReviewService.handleApprovedVerdict() inside reviewPR(). The orchestrator
     // reads the pre-review draft status and includes draft: false in the broadcast.
     expect(vi.mocked(gc.markPRReady)).not.toHaveBeenCalled();
-    expect(messages[0]).toMatchObject({
+    const reviewComplete = messages.find(
+      (m: any) => m.type === 'pr_review_complete',
+    );
+    expect(reviewComplete).toMatchObject({
       type: 'pr_review_complete',
       verdict: 'approved',
       draft: false,
@@ -765,5 +782,143 @@ describe('ReviewOrchestrator — Notion status update on approved verdict', () =
     await new Promise((r) => setTimeout(r, 30));
 
     expect(vi.mocked(nc.updateStatus)).not.toHaveBeenCalled();
+  });
+});
+
+// ── Autofix WS messages ───────────────────────────────────────────────────────
+
+describe('ReviewOrchestrator — autofix WS messages', () => {
+  it('emits autofix_started and autofix_complete before review when commands are configured', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({ success: true, summary: 'done' });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    const types = messages.map((m: any) => m.type as string);
+    const autofixStartedIdx = types.indexOf('autofix_started');
+    const autofixCompleteIdx = types.indexOf('autofix_complete');
+    const reviewStartedIdx = types.indexOf('review_started');
+    const prReviewCompleteIdx = types.indexOf('pr_review_complete');
+
+    expect(autofixStartedIdx).toBeGreaterThanOrEqual(0);
+    expect(autofixCompleteIdx).toBeGreaterThan(autofixStartedIdx);
+    expect(reviewStartedIdx).toBeGreaterThan(autofixCompleteIdx);
+    expect(prReviewCompleteIdx).toBeGreaterThan(reviewStartedIdx);
+  });
+
+  it('does NOT emit autofix_started when no autofix commands are configured', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue([]);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(
+      messages.find((m: any) => m.type === 'autofix_started'),
+    ).toBeUndefined();
+    expect(
+      messages.find((m: any) => m.type === 'autofix_complete'),
+    ).toBeUndefined();
+  });
+
+  it('emits review_started even when autofix is skipped (no commands)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue([]);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(
+      messages.find((m: any) => m.type === 'review_started'),
+    ).toBeDefined();
+  });
+
+  it('proceeds to review session even when autofix fails (fail open)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: false,
+      summary: 'lint failed',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+  });
+
+  it('autofix_complete carries success:false when runAutofix reports failure', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: false,
+      summary: 'lint error',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    const completeMsg = messages.find(
+      (m: any) => m.type === 'autofix_complete',
+    ) as any;
+    expect(completeMsg).toBeDefined();
+    expect(completeMsg.success).toBe(false);
+    expect(completeMsg.summary).toContain('lint error');
+  });
+
+  it('calls runAutofix on every executeReview invocation', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({ success: true, summary: 'done' });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 2, true);
+
+    sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
+    sm.emit('pr_opened', { ...baseJob, prNumber: 2 });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(runAutofix)).toHaveBeenCalledTimes(2);
   });
 });
