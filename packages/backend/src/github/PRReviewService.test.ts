@@ -12,6 +12,8 @@ vi.mock('../db/queries.js', () => ({
   incrementReviewIteration: vi.fn(),
   setLastReviewedSha: vi.fn(),
   setHeadSha: vi.fn(),
+  setLocalBranchReviewResult: vi.fn(),
+  getLocalBranchById: vi.fn(),
 }));
 
 import { PRReviewService } from './PRReviewService';
@@ -22,11 +24,14 @@ import {
   setReviewSessionId,
   updatePRDraftStatus,
   incrementReviewIteration,
+  setLocalBranchReviewResult,
+  getLocalBranchById,
 } from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
 import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
 import type { PullRequest, PRDiff } from './types';
 import type { SessionEvent } from '../db/types';
+import type { DiffSource } from './DiffSource';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -116,6 +121,10 @@ function makeMockSessionManager() {
     isAlive: vi.fn().mockReturnValue(false),
     sendOrResume: vi.fn().mockResolvedValue('resumed-session-id'),
   });
+}
+
+function makeMockDiffSource(diff: string = mockDiff.diff): DiffSource {
+  return { fetchDiff: vi.fn().mockResolvedValue(diff) };
 }
 
 function makeAssistantEvent(text: string): SessionEvent {
@@ -462,7 +471,10 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
       },
     );
 
-    const result = await service.reviewPR(42, 'owner/repo');
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
 
     expect(startMock).toHaveBeenCalledOnce();
     const [, , opts] = startMock.mock.calls[0];
@@ -521,7 +533,10 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
       },
     );
 
-    const result = await service.reviewPR(42, 'owner/repo');
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
 
     expect(result.verdict).toBe('needs_changes');
     const [, , opts] = startMock.mock.calls[0];
@@ -566,7 +581,10 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
       },
     );
 
-    const result = await service.reviewPR(42, 'owner/repo');
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
 
     expect(listenerCountAtStart).toBeGreaterThanOrEqual(1);
     expect(result.verdict).toBe('approved');
@@ -606,7 +624,10 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
       },
     );
 
-    const result = await service.reviewPR(42, 'owner/repo');
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
 
     expect(result.verdict).toBe('approved');
     expect(result.summary).toBe('Approved immediately.');
@@ -624,9 +645,12 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
       'https://notion.so/ctx',
     );
 
-    await expect(service.reviewPR(99, 'owner/repo')).rejects.toThrow(
-      'not found in database',
-    );
+    await expect(
+      service.reviewPR(
+        { type: 'pr', prNumber: 99, repo: 'owner/repo' },
+        makeMockDiffSource(),
+      ),
+    ).rejects.toThrow('not found in database');
   });
 });
 
@@ -690,7 +714,10 @@ describe('PRReviewService — merge conflict dimension', () => {
       },
     );
 
-    const result = await service.reviewPR(42, 'owner/repo');
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
 
     expect(result.dimensions).toHaveLength(6);
     const conflictDim = result.dimensions!.find(
@@ -736,7 +763,10 @@ describe('PRReviewService — merge conflict dimension', () => {
       },
     );
 
-    const result = await service.reviewPR(42, 'owner/repo');
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
 
     expect(result.dimensions).toHaveLength(6);
     const conflictDim = result.dimensions!.find(
@@ -783,7 +813,10 @@ describe('PRReviewService — merge conflict dimension', () => {
       },
     );
 
-    const result = await service.reviewPR(42, 'owner/repo');
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
 
     // No Merge conflicts dimension appended — GitHub hasn't computed it yet
     const conflictDim = result.dimensions!.find(
@@ -835,7 +868,10 @@ describe('PRReviewService — merge conflict dimension', () => {
       },
     );
 
-    const result = await service.reviewPR(42, 'owner/repo');
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
 
     expect(result.verdict).toBe('incomplete');
     // mergeable=null → dimension is skipped entirely
@@ -882,7 +918,10 @@ describe('PRReviewService — merge conflict dimension', () => {
       },
     );
 
-    const result = await service.reviewPR(42, 'owner/repo');
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
 
     expect(result.verdict).toBe('incomplete');
   });
@@ -1072,7 +1111,10 @@ describe('PRReviewService.reviewPR() — approved verdict calls handleApprovedVe
       },
     );
 
-    const result = await service.reviewPR(42, 'owner/repo');
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
 
     expect(result.verdict).toBe('approved');
     expect(vi.mocked(mockGH.markPRReady)).toHaveBeenCalledWith(
@@ -1134,7 +1176,10 @@ describe('PRReviewService.reviewPR() — approved verdict calls handleApprovedVe
       },
     );
 
-    const result = await service.reviewPR(42, 'owner/repo');
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
 
     expect(result.verdict).toBe('needs_changes');
     expect(vi.mocked(mockGH.markPRReady)).not.toHaveBeenCalled();
@@ -1170,7 +1215,10 @@ describe('PRReviewService.reviewPR() — approved verdict calls handleApprovedVe
       },
     );
 
-    await service.reviewPR(42, 'owner/repo');
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
 
     expect(vi.mocked(mockNotion.updateStatus)).toHaveBeenCalledWith(
       'task-abc123',
@@ -1209,7 +1257,11 @@ describe('PRReviewService.reviewPR() — approved verdict calls handleApprovedVe
       },
     );
 
-    await service.reviewPR(42, 'owner/repo', 'specific-project-id');
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+      'specific-project-id',
+    );
 
     expect(handleSpy).toHaveBeenCalledWith(
       42,
@@ -1263,7 +1315,10 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
       'proj-1',
       'https://notion.so/ctx',
     );
-    const result = await service.reviewPR(42, 'owner/repo');
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
 
     expect(mockSM.start).not.toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledWith(
@@ -1304,7 +1359,10 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
       'proj-1',
       'https://notion.so/ctx',
     );
-    const result = await service.reviewPR(42, 'owner/repo');
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
 
     expect(mockSM.start).not.toHaveBeenCalled();
     expect(mockSM.sendOrResume).toHaveBeenCalledWith(
@@ -1344,7 +1402,10 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
       'proj-1',
       'https://notion.so/ctx',
     );
-    const result = await service.reviewPR(42, 'owner/repo');
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
 
     expect(startMock).toHaveBeenCalledOnce();
     expect(mockSM.send).not.toHaveBeenCalled();
@@ -1387,7 +1448,10 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
       'proj-1',
       'https://notion.so/ctx',
     );
-    await service.reviewPR(42, 'owner/repo');
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
 
     const [, followUp] = (mockSM.send as ReturnType<typeof vi.fn>).mock
       .calls[0];
@@ -1433,7 +1497,10 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
       'proj-1',
       'https://notion.so/ctx',
     );
-    await service.reviewPR(42, 'owner/repo');
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
 
     expect(vi.mocked(setReviewSessionId)).not.toHaveBeenCalled();
   });
@@ -1793,7 +1860,10 @@ describe('PRReviewService — Size proportionality dimension', () => {
       },
     );
 
-    const result = await service.reviewPR(42, 'owner/repo');
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
     const sizeDim = result.dimensions!.find(
       (d) => d.name === 'Size proportionality',
     );
@@ -1813,11 +1883,6 @@ describe('PRReviewService — Size proportionality dimension', () => {
 
     const mockSM = makeMockSessionManager();
     const mockGH = makeMockGitHub();
-    vi.mocked(mockGH.fetchDiff).mockResolvedValue({
-      prId: 42,
-      diff: makeOversizedDiff(1500),
-      filesChanged: ['packages/backend/src/foo.ts'],
-    });
 
     const service = new PRReviewService(
       mockGH,
@@ -1838,7 +1903,11 @@ describe('PRReviewService — Size proportionality dimension', () => {
       },
     );
 
-    const result = await service.reviewPR(42, 'owner/repo');
+    // Pass the oversized diff through the DiffSource (not github.fetchDiff)
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(makeOversizedDiff(1500)),
+    );
     const sizeDim = result.dimensions!.find(
       (d) => d.name === 'Size proportionality',
     );
@@ -1892,7 +1961,10 @@ describe('PRReviewService — Size proportionality dimension', () => {
       },
     );
 
-    const result = await service.reviewPR(42, 'owner/repo');
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
     const sizeDim = result.dimensions!.find(
       (d) => d.name === 'Size proportionality',
     );
@@ -2165,5 +2237,221 @@ describe('PRReviewService.reReviewPR() — same-SHA dedup guard', () => {
     expect(result.verdict).toBe('approved');
     expect(mockSM.sendOrResume).toHaveBeenCalledTimes(1);
     expect(vi.mocked(incrementReviewIteration)).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── reviewPR() — DiffSource populates prompt ──────────────────────────────────
+
+describe('PRReviewService.reviewPR() — DiffSource populates prompt', () => {
+  it('uses diff returned by DiffSource in the reviewer prompt', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+
+    const customDiff = 'diff --git a/custom.ts b/custom.ts\n+const x = 1;\n';
+    const diffSource = makeMockDiffSource(customDiff);
+
+    const approvedPayload = {
+      verdict: 'approved',
+      dimensions: [
+        {
+          name: 'Title and description vs task Summary',
+          passed: true,
+          notes: 'ok',
+        },
+        { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
+        { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
+        {
+          name: 'Changed files vs Files/paths affected list',
+          passed: true,
+          notes: 'ok',
+        },
+        { name: 'Size proportionality', passed: true, notes: 'ok' },
+      ],
+      summary: 'All good.',
+    };
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (
+        _a: string,
+        _b: string,
+        opts: { sessionId: string; customPrompt: string },
+      ) => {
+        // Verify the custom diff appears in the prompt
+        expect(opts.customPrompt).toContain(customDiff);
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(approvedPayload),
+            ),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      diffSource,
+    );
+    expect(result.verdict).toBe('approved');
+    expect(diffSource.fetchDiff).toHaveBeenCalledOnce();
+  });
+});
+
+// ── reviewPR() — local branch verdict persistence ─────────────────────────────
+
+describe('PRReviewService.reviewPR() — local branch verdict persistence', () => {
+  const localBranchRow = {
+    id: 7,
+    project_id: 'proj-1',
+    session_id: 'session-lb-1',
+    branch_name: 'feature/local-test',
+    base_branch: 'dev',
+    status: 'open',
+    review_result: null,
+    created_at: '2024-01-01T00:00:00Z',
+    updated_at: '2024-01-01T00:00:00Z',
+  };
+
+  it('persists verdict to local_branches.review_result for local_branch work items', async () => {
+    vi.mocked(getLocalBranchById).mockReturnValue(localBranchRow as any);
+
+    const approvedPayload = {
+      verdict: 'approved',
+      dimensions: [
+        {
+          name: 'Title and description vs task Summary',
+          passed: true,
+          notes: 'ok',
+        },
+        { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
+        { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
+        {
+          name: 'Changed files vs Files/paths affected list',
+          passed: true,
+          notes: 'ok',
+        },
+        { name: 'Size proportionality', passed: true, notes: 'ok' },
+      ],
+      summary: 'LGTM.',
+    };
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_a: string, _b: string, opts: { sessionId: string }) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(approvedPayload),
+            ),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const result = await service.reviewPR(
+      {
+        type: 'local_branch',
+        localBranchId: 7,
+        branchName: 'feature/local-test',
+        baseBranch: 'dev',
+        sessionId: 'session-lb-1',
+        taskId: null,
+      },
+      makeMockDiffSource(),
+    );
+
+    expect(result.verdict).toBe('approved');
+    expect(vi.mocked(setLocalBranchReviewResult)).toHaveBeenCalledWith(
+      7,
+      expect.any(String),
+    );
+    const storedJson = vi.mocked(setLocalBranchReviewResult).mock.calls[0][1];
+    const stored = JSON.parse(storedJson) as { verdict: string };
+    expect(stored.verdict).toBe('approved');
+    // Must NOT write to pull_requests
+    expect(vi.mocked(setPRReviewResult)).not.toHaveBeenCalled();
+  });
+
+  it('persists verdict to pull_requests.review_result for pr work items (regression)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
+
+    const approvedPayload = {
+      verdict: 'approved',
+      dimensions: [
+        {
+          name: 'Title and description vs task Summary',
+          passed: true,
+          notes: 'ok',
+        },
+        { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
+        { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
+        {
+          name: 'Changed files vs Files/paths affected list',
+          passed: true,
+          notes: 'ok',
+        },
+        { name: 'Size proportionality', passed: true, notes: 'ok' },
+      ],
+      summary: 'All good.',
+    };
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_a: string, _b: string, opts: { sessionId: string }) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(approvedPayload),
+            ),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      expect.any(String),
+    );
+    // Must NOT write to local_branches
+    expect(vi.mocked(setLocalBranchReviewResult)).not.toHaveBeenCalled();
   });
 });

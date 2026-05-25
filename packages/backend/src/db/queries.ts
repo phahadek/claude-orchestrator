@@ -1573,3 +1573,13 @@ export function updateLocalBranchStatus(
     `UPDATE local_branches SET status = ?, review_result = COALESCE(?, review_result), updated_at = ? WHERE id = ?`,
   ).run(status, reviewResult ?? null, now, id);
 }
+
+export function setLocalBranchReviewResult(
+  id: number,
+  reviewResult: string,
+): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE local_branches SET review_result = ?, updated_at = ? WHERE id = ?`,
+  ).run(reviewResult, now, id);
+}
