@@ -86,7 +86,9 @@ export function createPrsRouter(
       const codeSessions = sessions.filter(
         (s) => s.session_type === 'standard' && !s.archived,
       );
-      const reviewSessions = sessions.filter((s) => s.session_type === 'review');
+      const reviewSessions = sessions.filter(
+        (s) => s.session_type === 'review',
+      );
 
       // Build map of notion_task_id -> latest review session result
       const reviewResultByTask = new Map<string, PRReviewResult>();

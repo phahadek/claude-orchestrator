@@ -382,7 +382,9 @@ describe('GET /api/prs', () => {
 describe('GET /api/prs — local-only project returns local_branch items', () => {
   it('returns 200 with empty array for local-only project with no sessions', async () => {
     vi.mocked(queries.getSessionsByProject).mockReturnValue([]);
-    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-local');
+    const res = await supertest(buildApp()).get(
+      '/api/prs?projectId=proj-local',
+    );
     expect(res.status).toBe(200);
     expect(Array.isArray(res.body)).toBe(true);
     expect(res.body).toHaveLength(0);
@@ -414,7 +416,9 @@ describe('GET /api/prs — local-only project returns local_branch items', () =>
         review_result: null,
       },
     ]);
-    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-local');
+    const res = await supertest(buildApp()).get(
+      '/api/prs?projectId=proj-local',
+    );
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(1);
     expect(res.body[0].type).toBe('local_branch');
@@ -477,7 +481,9 @@ describe('GET /api/prs — local-only project returns local_branch items', () =>
         review_result: reviewResult,
       },
     ]);
-    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-local');
+    const res = await supertest(buildApp()).get(
+      '/api/prs?projectId=proj-local',
+    );
     expect(res.status).toBe(200);
     expect(res.body[0].reviewResult.verdict).toBe('approved');
   });
@@ -508,7 +514,9 @@ describe('GET /api/prs — local-only project returns local_branch items', () =>
         review_result: null,
       },
     ]);
-    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-local');
+    const res = await supertest(buildApp()).get(
+      '/api/prs?projectId=proj-local',
+    );
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(0);
   });

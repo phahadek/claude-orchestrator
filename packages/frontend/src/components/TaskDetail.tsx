@@ -468,38 +468,41 @@ export function TaskDetail({
             )}
 
             {/* ── Mark Merged — local-only projects, no PR, manual merge only ── */}
-            {isLocalOnly && !task.pr && !autoMergeEnabled && (task.codeSession || task.review) && (
-              <div className={styles.prSection}>
-                <div className={styles.sectionHeader}>
-                  <span className={styles.sectionTitle}>Mark as Done</span>
+            {isLocalOnly &&
+              !task.pr &&
+              !autoMergeEnabled &&
+              (task.codeSession || task.review) && (
+                <div className={styles.prSection}>
+                  <div className={styles.sectionHeader}>
+                    <span className={styles.sectionTitle}>Mark as Done</span>
+                  </div>
+                  {reviewError && (
+                    <div className={styles.errorBanner}>{reviewError}</div>
+                  )}
+                  <div className={styles.prActions}>
+                    <button
+                      className={styles.mergeButton}
+                      disabled={
+                        markMergedInFlight ||
+                        effectiveDisplayStatus === 'done' ||
+                        !(
+                          task.review?.verdict === 'approved' ||
+                          task.codeSession?.status === 'done'
+                        )
+                      }
+                      onClick={() => void handleMarkMerged()}
+                      title={
+                        task.review?.verdict !== 'approved' &&
+                        task.codeSession?.status !== 'done'
+                          ? 'Available after code session completes or review approves'
+                          : undefined
+                      }
+                    >
+                      {markMergedInFlight ? 'Marking…' : 'Mark Merged ↓'}
+                    </button>
+                  </div>
                 </div>
-                {reviewError && (
-                  <div className={styles.errorBanner}>{reviewError}</div>
-                )}
-                <div className={styles.prActions}>
-                  <button
-                    className={styles.mergeButton}
-                    disabled={
-                      markMergedInFlight ||
-                      effectiveDisplayStatus === 'done' ||
-                      !(
-                        task.review?.verdict === 'approved' ||
-                        task.codeSession?.status === 'done'
-                      )
-                    }
-                    onClick={() => void handleMarkMerged()}
-                    title={
-                      task.review?.verdict !== 'approved' &&
-                      task.codeSession?.status !== 'done'
-                        ? 'Available after code session completes or review approves'
-                        : undefined
-                    }
-                  >
-                    {markMergedInFlight ? 'Marking…' : 'Mark Merged ↓'}
-                  </button>
-                </div>
-              </div>
-            )}
+              )}
 
             {/* ── Pull Request — compact metadata + action buttons ── */}
             {task.pr && (

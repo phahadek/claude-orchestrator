@@ -28,7 +28,9 @@ function makePR(overrides: Partial<PRWorkItem> = {}): PRWorkItem {
   };
 }
 
-function makeLocal(overrides: Partial<LocalBranchWorkItem> = {}): LocalBranchWorkItem {
+function makeLocal(
+  overrides: Partial<LocalBranchWorkItem> = {},
+): LocalBranchWorkItem {
   return {
     type: 'local_branch',
     sessionId: 'sess-abc',
@@ -76,7 +78,12 @@ describe('WorkItemCard — local_branch', () => {
   });
 
   it('shows branch name as title for local_branch', () => {
-    render(<WorkItemCard item={makeLocal({ branchName: 'session/my-session' })} {...defaultProps} />);
+    render(
+      <WorkItemCard
+        item={makeLocal({ branchName: 'session/my-session' })}
+        {...defaultProps}
+      />,
+    );
     expect(screen.getByText('session/my-session')).toBeDefined();
   });
 
@@ -89,7 +96,11 @@ describe('WorkItemCard — local_branch', () => {
     render(
       <WorkItemCard
         item={makeLocal({
-          reviewResult: { verdict: 'approved', summary: 'Looks good', dimensions: [] },
+          reviewResult: {
+            verdict: 'approved',
+            summary: 'Looks good',
+            dimensions: [],
+          },
         })}
         {...defaultProps}
       />,
@@ -101,7 +112,11 @@ describe('WorkItemCard — local_branch', () => {
     render(
       <WorkItemCard
         item={makeLocal({
-          reviewResult: { verdict: 'needs_changes', summary: 'Fix this', dimensions: [] },
+          reviewResult: {
+            verdict: 'needs_changes',
+            summary: 'Fix this',
+            dimensions: [],
+          },
         })}
         {...defaultProps}
       />,
@@ -159,7 +174,13 @@ describe('WorkItemCard — pr (regression)', () => {
   it('shows approved badge when verdict is approved', () => {
     render(
       <WorkItemCard
-        item={makePR({ reviewResult: { verdict: 'approved', dimensions: [], summary: 'Looks good' } })}
+        item={makePR({
+          reviewResult: {
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'Looks good',
+          },
+        })}
         {...defaultProps}
       />,
     );
@@ -175,7 +196,9 @@ describe('WorkItemCard — pr (regression)', () => {
   it('enables Merge button when verdict is approved and state is open', () => {
     render(
       <WorkItemCard
-        item={makePR({ reviewResult: { verdict: 'approved', dimensions: [], summary: '' } })}
+        item={makePR({
+          reviewResult: { verdict: 'approved', dimensions: [], summary: '' },
+        })}
         {...defaultProps}
       />,
     );
@@ -189,19 +212,26 @@ describe('WorkItemCard — pr (regression)', () => {
   });
 
   it('shows "Merged" badge when state is merged', () => {
-    render(<WorkItemCard item={makePR({ state: 'merged' })} {...defaultProps} />);
+    render(
+      <WorkItemCard item={makePR({ state: 'merged' })} {...defaultProps} />,
+    );
     expect(screen.getByText('✓ Merged')).toBeDefined();
   });
 
   it('shows "Closed" badge when state is closed', () => {
-    render(<WorkItemCard item={makePR({ state: 'closed' })} {...defaultProps} />);
+    render(
+      <WorkItemCard item={makePR({ state: 'closed' })} {...defaultProps} />,
+    );
     expect(screen.getByText('✕ Closed')).toBeDefined();
   });
 
   it('shows merge-conflict badge for mergeState=dirty', () => {
     render(
       <WorkItemCard
-        item={makePR({ reviewResult: { verdict: 'approved', dimensions: [], summary: '' }, mergeState: 'dirty' })}
+        item={makePR({
+          reviewResult: { verdict: 'approved', dimensions: [], summary: '' },
+          mergeState: 'dirty',
+        })}
         {...defaultProps}
       />,
     );
@@ -226,7 +256,9 @@ describe('WorkItemCard — verdict badge for both types', () => {
   it('renders approved verdict for pr type', () => {
     render(
       <WorkItemCard
-        item={makePR({ reviewResult: { verdict: 'approved', summary: 'ok', dimensions: [] } })}
+        item={makePR({
+          reviewResult: { verdict: 'approved', summary: 'ok', dimensions: [] },
+        })}
         {...defaultProps}
       />,
     );
@@ -236,7 +268,9 @@ describe('WorkItemCard — verdict badge for both types', () => {
   it('renders approved verdict for local_branch type', () => {
     render(
       <WorkItemCard
-        item={makeLocal({ reviewResult: { verdict: 'approved', summary: 'ok', dimensions: [] } })}
+        item={makeLocal({
+          reviewResult: { verdict: 'approved', summary: 'ok', dimensions: [] },
+        })}
         {...defaultProps}
       />,
     );
@@ -246,7 +280,13 @@ describe('WorkItemCard — verdict badge for both types', () => {
   it('renders needs_changes verdict for pr type', () => {
     render(
       <WorkItemCard
-        item={makePR({ reviewResult: { verdict: 'needs_changes', summary: 'fix', dimensions: [] } })}
+        item={makePR({
+          reviewResult: {
+            verdict: 'needs_changes',
+            summary: 'fix',
+            dimensions: [],
+          },
+        })}
         {...defaultProps}
       />,
     );
@@ -256,7 +296,13 @@ describe('WorkItemCard — verdict badge for both types', () => {
   it('renders needs_changes verdict for local_branch type', () => {
     render(
       <WorkItemCard
-        item={makeLocal({ reviewResult: { verdict: 'needs_changes', summary: 'fix', dimensions: [] } })}
+        item={makeLocal({
+          reviewResult: {
+            verdict: 'needs_changes',
+            summary: 'fix',
+            dimensions: [],
+          },
+        })}
         {...defaultProps}
       />,
     );

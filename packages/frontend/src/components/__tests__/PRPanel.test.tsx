@@ -485,9 +485,7 @@ describe('PRPanel — per-card ErrorBoundary isolation', () => {
     vi.doMock('../WorkItemCard', () => ({
       WorkItemCard: ({ item }: { item: PRWorkItem }) => {
         if (item.type === 'pr' && item.prNumber === 2) throw new Error('boom');
-        return (
-          <div data-testid={`pr-${item.prNumber}`}>{item.title}</div>
-        );
+        return <div data-testid={`pr-${item.prNumber}`}>{item.title}</div>;
       },
     }));
 

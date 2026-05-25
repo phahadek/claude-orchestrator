@@ -520,8 +520,7 @@ export function PRPanel({
                 item.type === 'pr'
                   ? `pr-${item.prNumber}`
                   : `local-${item.sessionId}`;
-              const prNumber =
-                item.type === 'pr' ? item.prNumber : 0;
+              const prNumber = item.type === 'pr' ? item.prNumber : 0;
               return (
                 <ErrorBoundary
                   key={itemKey}
