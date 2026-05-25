@@ -10,6 +10,14 @@ vi.mock('../db/queries.js', () => ({
   getPRByNumber: vi.fn().mockReturnValue(null),
 }));
 
+vi.mock('../config.js', () => ({
+  getProjectByGithubRepo: vi.fn().mockReturnValue(null),
+}));
+
+vi.mock('../session/orchestrator-config.js', () => ({
+  loadOrchestratorConfig: vi.fn().mockReturnValue({ ci_check_name: [] }),
+}));
+
 import { PRMergeWatcher } from './PRMergeWatcher';
 import {
   getAllOpenPRs,

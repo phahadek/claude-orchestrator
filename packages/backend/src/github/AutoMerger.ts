@@ -6,6 +6,7 @@ import type { PRMergeWatcher } from './PRMergeWatcher';
 import type { PullRequestRow } from '../db/types';
 import type { ServerMessage } from '../ws/types';
 import { emitTaskUpdated } from '../routes/tasks';
+import { loadOrchestratorConfig } from '../session/orchestrator-config';
 
 const MIN_POLL_INTERVAL_MS = 5_000;
 
@@ -71,6 +72,10 @@ export class AutoMerger {
     }
     if (initialRow.state !== 'open') return;
 
+    const ciCheckNames = loadOrchestratorConfig(
+      project.projectDir,
+    ).ci_check_name;
+
     const intervalSec = Math.max(1, runtimeSettings.ci_poll_interval_seconds);
     const intervalMs = Math.max(intervalSec * 1000, MIN_POLL_INTERVAL_MS);
     const deadline =
@@ -95,7 +100,12 @@ export class AutoMerger {
 
       let poll;
       try {
-        poll = await this.github.fetchPRStatusConditional(prNumber, repo, etag);
+        poll = await this.github.fetchPRStatusConditional(
+          prNumber,
+          repo,
+          etag,
+          ciCheckNames,
+        );
       } catch (err) {
         console.warn(
           `[AutoMerger] PR #${prNumber}: status fetch failed: ${(err as Error).message}`,
@@ -123,7 +133,7 @@ export class AutoMerger {
       const category = poll.mergeability.category;
       switch (category) {
         case 'clean':
-          await this.attemptMerge(row);
+          await this.attemptMerge(row, ciCheckNames);
           return;
         case 'ci_failed':
           await this.pauseWithReason(
@@ -159,7 +169,10 @@ export class AutoMerger {
     }
   }
 
-  private async attemptMerge(pr: PullRequestRow): Promise<void> {
+  private async attemptMerge(
+    pr: PullRequestRow,
+    ciCheckNames: string[] = [],
+  ): Promise<void> {
     const commitTitle = pr.title ?? `Merge PR #${pr.pr_number}`;
     try {
       const result = await this.github.mergePR(
@@ -185,6 +198,7 @@ export class AutoMerger {
           category = await this.github.categorizeMergeability(
             pr.pr_number,
             pr.repo,
+            ciCheckNames,
           );
         } catch {
           category = null;

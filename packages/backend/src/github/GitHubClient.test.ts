@@ -609,6 +609,152 @@ describe('GitHubClient.categorizeMergeability()', () => {
   });
 });
 
+// ── ciCheckNames filtering ────────────────────────────────────────────────────
+
+describe('GitHubClient.categorizeMergeability() — ciCheckNames filtering', () => {
+  function mockPRThenChecks(
+    prResponse: { mergeable_state: string | null; head_sha?: string },
+    checkRuns: Array<{
+      name: string;
+      status: string;
+      conclusion: string | null;
+    }> = [],
+  ): ReturnType<typeof vi.fn> {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'application/json' },
+        json: async () => ({
+          node_id: 'PR_1',
+          number: 42,
+          title: 'Test PR',
+          body: null,
+          html_url: 'https://github.com/owner/repo/pull/42',
+          url: 'https://api.github.com/repos/owner/repo/pulls/42',
+          head: { ref: 'feature/x', sha: prResponse.head_sha ?? 'sha-abc' },
+          base: { ref: 'dev' },
+          state: 'open',
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+          mergeable: null,
+          mergeable_state: prResponse.mergeable_state,
+          draft: false,
+        }),
+        text: async () => '',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'application/json' },
+        json: async () => ({ check_runs: checkRuns }),
+        text: async () => '',
+      });
+    vi.stubGlobal('fetch', fetchSpy);
+    return fetchSpy;
+  }
+
+  it('empty ciCheckNames preserves ci_failed for unstable with failing checks', async () => {
+    mockPRThenChecks({ mergeable_state: 'unstable' }, [
+      { name: 'lint', status: 'completed', conclusion: 'failure' },
+    ]);
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo', []);
+    expect(result.category).toBe('ci_failed');
+    expect(result.failingChecks.map((c) => c.name)).toEqual(['lint']);
+  });
+
+  it('empty ciCheckNames preserves blocked state when no checks fail', async () => {
+    mockPRThenChecks({ mergeable_state: 'blocked' }, [
+      { name: 'lint', status: 'completed', conclusion: 'success' },
+    ]);
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo', []);
+    expect(result.category).toBe('blocked');
+  });
+
+  it('empty ciCheckNames preserves conflict state', async () => {
+    mockPRThenChecks({ mergeable_state: 'dirty' });
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo', []);
+    expect(result.category).toBe('conflict');
+  });
+
+  it('empty ciCheckNames preserves clean state', async () => {
+    mockPRThenChecks({ mergeable_state: 'clean' });
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo', []);
+    expect(result.category).toBe('clean');
+  });
+
+  it('non-empty ciCheckNames ignores failures on checks not in the list (unstable)', async () => {
+    mockPRThenChecks({ mergeable_state: 'unstable' }, [
+      { name: 'lint', status: 'completed', conclusion: 'failure' },
+      { name: 'build', status: 'completed', conclusion: 'success' },
+    ]);
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo', [
+      'build',
+    ]);
+    // lint failure should be ignored — only build counts, and build passed
+    expect(result.category).toBe('unknown');
+    expect(result.failingChecks).toEqual([]);
+  });
+
+  it('non-empty ciCheckNames reports ci_failed when a named check fails (unstable)', async () => {
+    mockPRThenChecks({ mergeable_state: 'unstable' }, [
+      { name: 'lint', status: 'completed', conclusion: 'failure' },
+      { name: 'build', status: 'completed', conclusion: 'failure' },
+    ]);
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo', [
+      'build',
+    ]);
+    expect(result.category).toBe('ci_failed');
+    expect(result.failingChecks.map((c) => c.name)).toEqual(['build']);
+  });
+
+  it('non-empty ciCheckNames ignores failures on checks not in the list (blocked)', async () => {
+    mockPRThenChecks({ mergeable_state: 'blocked' }, [
+      { name: 'lint', status: 'completed', conclusion: 'failure' },
+      { name: 'build', status: 'completed', conclusion: 'success' },
+    ]);
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo', [
+      'build',
+    ]);
+    // lint failure ignored; build passed and is present — blocked (not CI, other reason)
+    expect(result.category).toBe('blocked');
+    expect(result.failingChecks).toEqual([]);
+  });
+
+  it('non-empty ciCheckNames reports unknown when a named check has not yet reported (blocked)', async () => {
+    mockPRThenChecks({ mergeable_state: 'blocked' }, [
+      { name: 'lint', status: 'completed', conclusion: 'success' },
+      // 'build' is absent from check-runs — not yet reported
+    ]);
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo', [
+      'build',
+    ]);
+    // named check 'build' hasn't reported → treat as pending (unknown, not blocked)
+    expect(result.category).toBe('unknown');
+    expect(result.failingChecks).toEqual([]);
+  });
+
+  it('non-empty ciCheckNames reports unknown when a named check is still in_progress (unstable)', async () => {
+    mockPRThenChecks({ mergeable_state: 'unstable' }, [
+      { name: 'build', status: 'in_progress', conclusion: null },
+    ]);
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo', [
+      'build',
+    ]);
+    // build is in_progress — not a failure, not yet done → unknown
+    expect(result.category).toBe('unknown');
+    expect(result.failingChecks).toEqual([]);
+  });
+});
+
 describe('computeSizeSignal()', () => {
   const TWO_FILE_SPEC =
     '- packages/backend/src/foo.ts\n- packages/backend/src/bar.ts';
