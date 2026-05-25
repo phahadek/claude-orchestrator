@@ -128,7 +128,7 @@ export class JsonlReader {
       // ai-title: persist as session metadata, do not emit as an event
       if (obj.type === 'ai-title') {
         if (typeof obj.aiTitle === 'string') {
-          metadata.aiTitle = obj.aiTitle;
+          metadata.derivedTitle = obj.aiTitle;
         }
         continue;
       }
