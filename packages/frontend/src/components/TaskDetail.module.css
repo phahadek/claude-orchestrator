@@ -680,4 +680,55 @@
   .panel {
     border-left: none;
   }
+
+  /* ── Compact header chrome to free vertical space on narrow viewports ── */
+  .header {
+    gap: 3px;
+    padding: 5px 12px;
+  }
+
+  .taskName {
+    font-size: 0.82rem;
+    line-height: 1.2;
+  }
+
+  .headerMeta {
+    gap: 4px;
+  }
+
+  .displayStatusBadge {
+    font-size: 0.72rem;
+    padding: 1px 6px;
+  }
+
+  .priorityBadge {
+    font-size: 0.7rem;
+    padding: 0 5px;
+  }
+
+  .totalTokensBadge {
+    font-size: 0.7rem;
+  }
+
+  .notionLink {
+    font-size: 0.72rem;
+  }
+
+  .tabBar {
+    padding: 0 8px;
+  }
+
+  .tabButton {
+    font-size: 0.75rem;
+    padding: 3px 8px;
+  }
+
+  .sectionHeader {
+    gap: 6px;
+    padding: 4px 12px;
+  }
+
+  .sectionTitle {
+    font-size: 0.72rem;
+  }
 }

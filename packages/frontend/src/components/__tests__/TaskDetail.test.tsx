@@ -1,5 +1,7 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
+import * as fs from 'fs';
+import * as path from 'path';
 import { TaskDetail } from '../TaskDetail';
 import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
@@ -776,5 +778,31 @@ describe('TaskDetail', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Diff' }));
     expect(screen.queryByText('Pull Request')).toBeNull();
+  });
+
+  // ── Mobile header chrome compaction ──
+
+  it('TaskDetail.module.css contains mobile media query for header chrome compaction', () => {
+    const cssPath = path.join(__dirname, '../TaskDetail.module.css');
+    const css = fs.readFileSync(cssPath, 'utf-8');
+    // The mobile media query block must target the key header chrome selectors.
+    // Desktop styles must remain in their original (non-media-query) blocks —
+    // this verifies we are overriding, not replacing, the desktop values.
+    const mobileBlockStart = css.lastIndexOf('@media (max-width: 768px)');
+    expect(mobileBlockStart).toBeGreaterThan(-1);
+    const mobileBlock = css.slice(mobileBlockStart);
+    expect(mobileBlock).toContain('.header');
+    expect(mobileBlock).toContain('.taskName');
+    expect(mobileBlock).toContain('.tabButton');
+    expect(mobileBlock).toContain('.sectionHeader');
+  });
+
+  it('desktop header padding is not overridden outside mobile media query', () => {
+    const cssPath = path.join(__dirname, '../TaskDetail.module.css');
+    const css = fs.readFileSync(cssPath, 'utf-8');
+    // Desktop .header rule must retain its original padding (regression guard).
+    const mobileBlockStart = css.lastIndexOf('@media (max-width: 768px)');
+    const desktopCss = css.slice(0, mobileBlockStart);
+    expect(desktopCss).toContain('padding: 14px 16px');
   });
 });
