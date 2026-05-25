@@ -6,9 +6,11 @@ import type { SessionState } from '../hooks/useSessionStore';
 import { StatusBadge } from './StatusBadge';
 import { EventTranscript } from './EventTranscript';
 import { DiffViewer } from './DiffViewer';
+import { SessionDetail } from './SessionDetail';
 import { parseReviewResultFromEvents } from './ReviewDetailView';
 import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
 import { sessionsApi } from '../api/projects';
+import { useIsMobile } from '../hooks/useIsMobile';
 import styles from './TaskDetail.module.css';
 
 // ── Display status helpers ─────────────────────────────────────────
@@ -147,6 +149,7 @@ export function TaskDetail({
   isLocalOnly = false,
   autoMergeEnabled = false,
 }: Props) {
+  const isMobile = useIsMobile();
   const [showReviewSection, setShowReviewSection] = useState(true);
   const [mobileOpenSection, setMobileOpenSection] = useState<
     'review' | 'pr' | null
@@ -165,6 +168,7 @@ export function TaskDetail({
   const [optimisticDisplayStatus, setOptimisticDisplayStatus] =
     useState<DisplayStatus | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'diff'>('overview');
+  const [sessionOverlayOpen, setSessionOverlayOpen] = useState(false);
 
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 767px)');
@@ -182,6 +186,7 @@ export function TaskDetail({
     setFixConflictsInFlight(false);
     setOptimisticDisplayStatus(null);
     setActiveTab('overview');
+    setSessionOverlayOpen(false);
   }, [task.taskId]);
 
   // Look up live session state for event transcripts
@@ -334,6 +339,28 @@ export function TaskDetail({
 
   return (
     <div className={styles.panel}>
+      {/* ── Mobile session overlay ── */}
+      {isMobile && sessionOverlayOpen && codeSession && (
+        <>
+          <div
+            className={styles.sessionOverlayBackdrop}
+            onClick={() => setSessionOverlayOpen(false)}
+            aria-hidden="true"
+            data-testid="session-overlay-backdrop"
+          />
+          <div className={styles.sessionOverlay} data-testid="session-overlay">
+            <SessionDetail
+              session={codeSession}
+              send={send}
+              onClose={() => setSessionOverlayOpen(false)}
+              onDelete={() => setSessionOverlayOpen(false)}
+              onArchive={() => setSessionOverlayOpen(false)}
+              onUnarchive={() => setSessionOverlayOpen(false)}
+            />
+          </div>
+        </>
+      )}
+
       {/* ── Header ── */}
       <div className={styles.header}>
         <div className={styles.headerTop}>
@@ -398,7 +425,7 @@ export function TaskDetail({
         {/* ── Overview tab (or full content when no PR) ── */}
         {(!task.pr || activeTab === 'overview') && (
           <>
-            {/* ── Code Session — full transcript, takes bulk of panel ── */}
+            {/* ── Code Session — full transcript on desktop, compact summary on mobile ── */}
             {task.codeSession && (
               <div className={styles.codeSection}>
                 <div className={styles.sectionHeader}>
@@ -410,23 +437,58 @@ export function TaskDetail({
                     </button>
                   )}
                 </div>
-                <div className={styles.transcriptArea}>
-                  {codeSession ? (
-                    <EventTranscript
-                      events={codeSession.events}
-                      permissionDenials={codeSession.permissionDenials}
-                    />
-                  ) : (
-                    <p className={styles.noTranscript}>
-                      Transcript not available — session not loaded.
-                    </p>
-                  )}
-                </div>
-                {isCodeActive && (
-                  <InlineComposer
-                    sessionId={task.codeSession.sessionId}
-                    send={send}
-                  />
+                {isMobile ? (
+                  <div className={styles.sessionSummary}>
+                    {task.codeSession.lastMessage && (
+                      <p className={styles.sessionSummaryMessage}>
+                        {task.codeSession.lastMessage}
+                      </p>
+                    )}
+                    {task.codeSession.inputTokens +
+                      task.codeSession.outputTokens >
+                      0 && (
+                      <span className={styles.sessionSummaryTokens}>
+                        {formatTokenCount(
+                          task.codeSession.inputTokens +
+                            task.codeSession.outputTokens,
+                        )}{' '}
+                        tokens
+                      </span>
+                    )}
+                    <button
+                      className={styles.viewSessionButton}
+                      onClick={() => setSessionOverlayOpen(true)}
+                    >
+                      View full session
+                    </button>
+                    {isCodeActive && (
+                      <InlineComposer
+                        sessionId={task.codeSession.sessionId}
+                        send={send}
+                      />
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <div className={styles.transcriptArea}>
+                      {codeSession ? (
+                        <EventTranscript
+                          events={codeSession.events}
+                          permissionDenials={codeSession.permissionDenials}
+                        />
+                      ) : (
+                        <p className={styles.noTranscript}>
+                          Transcript not available — session not loaded.
+                        </p>
+                      )}
+                    </div>
+                    {isCodeActive && (
+                      <InlineComposer
+                        sessionId={task.codeSession.sessionId}
+                        send={send}
+                      />
+                    )}
+                  </>
                 )}
               </div>
             )}

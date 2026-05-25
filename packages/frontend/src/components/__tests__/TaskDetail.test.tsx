@@ -85,8 +85,16 @@ function makeReview(
   };
 }
 
+// ── useIsMobile mock ────────────────────────────────────────────────
+// Controls the mobile/desktop mode for each test without touching browser globals.
+let isMobileValue = false;
+vi.mock('../../hooks/useIsMobile', () => ({
+  useIsMobile: () => isMobileValue,
+}));
+
 // jsdom does not implement matchMedia — provide a default desktop stub.
 beforeEach(() => {
+  isMobileValue = false;
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
     value: vi.fn((query: string) => ({
@@ -920,5 +928,68 @@ describe('TaskDetail', () => {
     fireEvent.click(prHeader);
     expect(prHeader.getAttribute('aria-expanded')).toBe('true');
     expect(reviewHeader.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  // ── Mobile: compact session summary ──────────────────────────────
+
+  it('desktop: renders full embedded session transcript (regression)', () => {
+    // isMobileValue is false by default (set in beforeEach)
+    const codeSession = makeCodeSession({ sessionId: 'sess-1' });
+    const sessions: SessionState[] = [
+      makeSessionState({ sessionId: 'sess-1', events: [] }),
+    ];
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={sessions}
+      />,
+    );
+    // Full transcript renders (EventTranscript empty-state)
+    expect(screen.getByText('No events yet.')).toBeTruthy();
+    // No "View full session" button on desktop
+    expect(screen.queryByText('View full session')).toBeNull();
+  });
+
+  it('mobile: renders compact session summary and "View full session" button', () => {
+    isMobileValue = true;
+    const codeSession = makeCodeSession({
+      sessionId: 'sess-1',
+      lastMessage: 'Working on implementation…',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    // Compact summary shows last message
+    expect(screen.getByText('Working on implementation…')).toBeTruthy();
+    // Shows "View full session" button
+    expect(screen.getByText('View full session')).toBeTruthy();
+    // Full transcript NOT rendered on mobile
+    expect(screen.queryByText('No events yet.')).toBeNull();
+  });
+
+  it('mobile: tapping "View full session" opens SessionDetail overlay', () => {
+    isMobileValue = true;
+    const codeSession = makeCodeSession({ sessionId: 'sess-1' });
+    const sessions: SessionState[] = [
+      makeSessionState({ sessionId: 'sess-1', events: [] }),
+    ];
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={sessions}
+      />,
+    );
+    fireEvent.click(screen.getByText('View full session'));
+    expect(screen.getByTestId('session-overlay')).toBeTruthy();
   });
 });
