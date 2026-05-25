@@ -1,9 +1,56 @@
 import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Header } from '../Header';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
+import type { TaskView } from '../../types/taskView';
+
+function mockMatchMedia(matches: boolean) {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+}
+
+function makeTask(overrides: Partial<TaskView> = {}): TaskView {
+  return {
+    taskId: 't1',
+    taskName: 'Task 1',
+    notionStatus: '✅ Done',
+    displayStatus: 'done',
+    pauseReason: null,
+    priority: 'P2',
+    notionUrl: '',
+    taskType: 'Code',
+    blocked: false,
+    blockerNames: [],
+    wave: 1,
+    codeSession: null,
+    pr: null,
+    review: null,
+    totalTokens: { input: 0, output: 0 },
+    ...overrides,
+  };
+}
 
 describe('Header', () => {
+  beforeEach(() => {
+    // Default to desktop viewport
+    mockMatchMedia(false);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   const defaultProps = {
     projects: [],
     activeProjectId: null,
@@ -41,6 +88,133 @@ describe('Header', () => {
     render(<Header {...defaultProps} onViewChange={onViewChange} />);
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
     expect(onViewChange).toHaveBeenCalledWith('settings');
+  });
+
+  describe('desktop layout regression', () => {
+    it('shows app name on desktop', () => {
+      render(<Header {...defaultProps} />);
+      expect(screen.getByText('Claude Code Orchestrator')).toBeDefined();
+    });
+
+    it('renders all 5 nav tabs on desktop', () => {
+      render(<Header {...defaultProps} />);
+      expect(screen.getByRole('button', { name: 'Tasks' })).toBeDefined();
+      expect(screen.getByRole('button', { name: 'Sessions' })).toBeDefined();
+      expect(screen.getByRole('button', { name: 'PRs' })).toBeDefined();
+      expect(screen.getByRole('button', { name: 'Analytics' })).toBeDefined();
+      expect(screen.getByRole('button', { name: 'Settings' })).toBeDefined();
+    });
+
+    it('does not render mobile rows on desktop', () => {
+      render(<Header {...defaultProps} />);
+      expect(screen.queryByTestId('mobile-row1')).toBeNull();
+      expect(screen.queryByTestId('mobile-row2')).toBeNull();
+    });
+  });
+
+  describe('mobile layout (<768px)', () => {
+    beforeEach(() => {
+      mockMatchMedia(true);
+    });
+
+    it('hides the app name on mobile', () => {
+      render(<Header {...defaultProps} />);
+      expect(screen.queryByText('Claude Code Orchestrator')).toBeNull();
+    });
+
+    it('renders nav tabs in mobile-row1', () => {
+      render(<Header {...defaultProps} />);
+      const row1 = screen.getByTestId('mobile-row1');
+      expect(row1).toBeDefined();
+      // All nav tabs are present inside row1
+      expect(row1.querySelector('nav')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Tasks' })).toBeDefined();
+      expect(screen.getByRole('button', { name: 'Sessions' })).toBeDefined();
+      expect(screen.getByRole('button', { name: 'PRs' })).toBeDefined();
+      expect(screen.getByRole('button', { name: 'Analytics' })).toBeDefined();
+      expect(screen.getByRole('button', { name: 'Settings' })).toBeDefined();
+    });
+
+    it('renders controls in mobile-row2', () => {
+      render(<Header {...defaultProps} />);
+      const row2 = screen.getByTestId('mobile-row2');
+      expect(row2).toBeDefined();
+    });
+
+    it('renders compact MilestoneProgress in mobile-row2 when tasks are provided', () => {
+      const tasks = [
+        makeTask({ notionStatus: '✅ Done' }),
+        makeTask({ taskId: 't2', notionStatus: '🔄 In Progress' }),
+      ];
+      render(<Header {...defaultProps} tasks={tasks} />);
+      const row2 = screen.getByTestId('mobile-row2');
+      const compactProgress = row2.querySelector(
+        '[data-testid="compact-milestone-progress"]',
+      );
+      expect(compactProgress).toBeTruthy();
+    });
+
+    it('renders token summary in mobile-row2 when tokens are provided', () => {
+      render(<Header {...defaultProps} totalTokens={50000} totalCost={0.5} />);
+      const row2 = screen.getByTestId('mobile-row2');
+      expect(row2.textContent).toContain('tokens');
+    });
+
+    it('renders milestone select in mobile-row2 when multiple boards exist', () => {
+      const project: ProjectConfig = {
+        id: 'proj1',
+        name: 'Project 1',
+        projectDir: '/tmp/proj1',
+        contextUrl: '',
+        boardId: 'm1',
+        boards: [
+          { id: 'm1', sourceId: 'src1', name: 'M1' },
+          { id: 'm2', sourceId: 'src2', name: 'M2' },
+        ],
+        taskSource: 'notion',
+        gitMode: 'github',
+        autoLaunchEnabled: false,
+        autoLaunchMilestoneId: null,
+        autoMergeEnabled: false,
+      };
+      render(
+        <Header
+          {...defaultProps}
+          projects={[project]}
+          activeProjectId="proj1"
+          activeBoardId="m1"
+        />,
+      );
+      const row2 = screen.getByTestId('mobile-row2');
+      expect(row2.querySelector('select')).toBeTruthy();
+    });
+
+    it('renders auto-launch toggle in mobile-row2 for eligible projects', () => {
+      const project: ProjectConfig = {
+        id: 'proj1',
+        name: 'Project 1',
+        projectDir: '/tmp/proj1',
+        contextUrl: '',
+        boardId: 'm1',
+        boards: [{ id: 'm1', sourceId: 'src1', name: 'M1' }],
+        taskSource: 'notion',
+        gitMode: 'github',
+        autoLaunchEnabled: false,
+        autoLaunchMilestoneId: null,
+        autoMergeEnabled: false,
+      };
+      render(
+        <Header
+          {...defaultProps}
+          projects={[project]}
+          activeProjectId="proj1"
+          activeBoardId="m1"
+          onAutoLaunchToggle={vi.fn()}
+        />,
+      );
+      const row2 = screen.getByTestId('mobile-row2');
+      expect(row2.querySelector('[aria-label*="Auto-launch"]')).toBeTruthy();
+    });
   });
 
   describe('auto-launch toggle', () => {

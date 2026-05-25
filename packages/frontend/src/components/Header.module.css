@@ -37,6 +37,7 @@
   transition:
     background 0.15s,
     color 0.15s;
+  white-space: nowrap;
 }
 
 .navLink:hover {
@@ -52,6 +53,7 @@
   width: 1px;
   height: 20px;
   background: var(--border);
+  flex-shrink: 0;
 }
 
 .milestoneSelect {
@@ -95,6 +97,7 @@
     background 0.15s,
     border-color 0.15s,
     color 0.15s;
+  white-space: nowrap;
 }
 
 .autoLaunchPill:hover:not(:disabled) {
@@ -184,4 +187,53 @@
   font-weight: 700;
   line-height: 1;
   vertical-align: middle;
+}
+
+/* Mobile two-row layout */
+@media (max-width: 768px) {
+  .headerMobile {
+    height: auto;
+    flex-direction: column;
+    gap: 0;
+    padding: 0;
+    align-items: stretch;
+  }
+
+  .mobileRow1 {
+    display: flex;
+    align-items: center;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border);
+    scrollbar-width: none;
+  }
+
+  .mobileRow1::-webkit-scrollbar {
+    display: none;
+  }
+
+  .mobileRow1 .nav {
+    gap: 2px;
+    flex-shrink: 0;
+  }
+
+  .mobileRow1 .navLinkActive {
+    scroll-snap-align: center;
+  }
+
+  .mobileRow2 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 6px 12px;
+    scrollbar-width: none;
+  }
+
+  .mobileRow2::-webkit-scrollbar {
+    display: none;
+  }
 }
