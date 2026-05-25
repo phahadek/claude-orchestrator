@@ -86,13 +86,7 @@ export function groupSessionEvents(events: SessionEvent[]): RenderItem[] {
           }
         }
 
-        if (calls.length >= 2) {
-          items.push({ kind: 'group', toolName, calls });
-        } else {
-          for (let k = startIdx; k <= firstEndIdx; k++) {
-            items.push({ kind: 'event', event: events[k] });
-          }
-        }
+        items.push({ kind: 'group', toolName, calls });
       } else {
         items.push({ kind: 'event', event: events[i] });
         i++;
