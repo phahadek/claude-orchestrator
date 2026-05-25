@@ -4,6 +4,7 @@ import { useSessionStore } from './hooks/useSessionStore';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useNotifications } from './hooks/useNotifications';
+import { useIsMobile } from './hooks/useIsMobile';
 import { Header } from './components/Header';
 import type { TopView } from './components/Header';
 import { SessionGrid } from './components/SessionGrid';
@@ -171,6 +172,7 @@ export default function App() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskViews, setTaskViews] = useState<TaskView[]>([]);
   const settingsInitialTab = 'general' as const;
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     activeBoardIdRef.current = activeBoardId;
@@ -805,6 +807,8 @@ export default function App() {
     onDismiss: () => {
       if (showModal) {
         setShowModal(false);
+      } else if (selectedTaskId) {
+        setSelectedTaskId(null);
       } else if (selectedId) {
         setSelectedId(null);
       } else if (filtersActive) {
@@ -882,7 +886,9 @@ export default function App() {
       <div className={styles.mainArea}>
         {topView === 'tasks' && (
           <ErrorBoundary name="TasksView">
-            <div className={styles.contentArea}>
+            <div
+              className={`${styles.contentArea}${selectedTaskId && taskViews.find((t) => t.taskId === selectedTaskId) ? ` ${styles.contentAreaHasDetail}` : ''}`}
+            >
               <div className={styles.leftPanel}>
                 <TaskList
                   activeProjectId={activeProjectId}
@@ -901,9 +907,19 @@ export default function App() {
                 onMouseDown={handleResizeMouseDown}
               />
 
+              {selectedTaskId &&
+                taskViews.find((t) => t.taskId === selectedTaskId) && (
+                  <div
+                    className={styles.mobileBackdrop}
+                    onClick={() => setSelectedTaskId(null)}
+                    aria-hidden="true"
+                    data-testid="task-mobile-backdrop"
+                  />
+                )}
+
               <div
                 className={styles.rightPanel}
-                style={{ width: `${detailWidthPct}%` }}
+                style={isMobile ? undefined : { width: `${detailWidthPct}%` }}
               >
                 {selectedTaskId &&
                 taskViews.find((t) => t.taskId === selectedTaskId) ? (
@@ -932,7 +948,9 @@ export default function App() {
 
         {topView === 'sessions' && (
           <ErrorBoundary name="SessionsView">
-            <div className={styles.contentArea}>
+            <div
+              className={`${styles.contentArea}${selectedSession ? ` ${styles.contentAreaHasDetail}` : ''}`}
+            >
               <div className={styles.leftPanel}>
                 <div
                   style={{
@@ -1026,9 +1044,18 @@ export default function App() {
                 onMouseDown={handleResizeMouseDown}
               />
 
+              {selectedSession && (
+                <div
+                  className={styles.mobileBackdrop}
+                  onClick={() => setSelectedId(null)}
+                  aria-hidden="true"
+                  data-testid="session-mobile-backdrop"
+                />
+              )}
+
               <div
                 className={styles.rightPanel}
-                style={{ width: `${detailWidthPct}%` }}
+                style={isMobile ? undefined : { width: `${detailWidthPct}%` }}
               >
                 {selectedSession ? (
                   <ErrorBoundary name="SessionDetail">
