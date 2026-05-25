@@ -146,11 +146,7 @@ vi.mock('../TaskDetail', () => ({
 vi.mock('../SessionDetail', () => ({
   SessionDetail: ({ onClose }: { onClose: () => void }) => (
     <div data-testid="session-detail">
-      <button
-        type="button"
-        onClick={onClose}
-        aria-label="Close session detail"
-      >
+      <button type="button" onClick={onClose} aria-label="Close session detail">
         ✕
       </button>
     </div>
@@ -303,9 +299,7 @@ describe('App — mobile overlay: task detail', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /close task detail/i }));
 
-    await waitFor(() =>
-      expect(screen.queryByTestId('task-detail')).toBeNull(),
-    );
+    await waitFor(() => expect(screen.queryByTestId('task-detail')).toBeNull());
   });
 
   it('contentArea has detail class when task is selected', async () => {
@@ -416,9 +410,8 @@ describe('App — mobile overlay: session detail', () => {
 // ── Keyboard dismiss tests ─────────────────────────────────────────
 describe('App — keyboard dismiss', () => {
   it('onDismiss from useKeyboardShortcuts dismisses task detail', async () => {
-    const { useKeyboardShortcuts } = await import(
-      '../../hooks/useKeyboardShortcuts'
-    );
+    const { useKeyboardShortcuts } =
+      await import('../../hooks/useKeyboardShortcuts');
     const mockImpl = vi.mocked(useKeyboardShortcuts);
 
     let capturedDismiss: (() => void) | undefined;
@@ -433,15 +426,12 @@ describe('App — keyboard dismiss', () => {
 
     capturedDismiss?.();
 
-    await waitFor(() =>
-      expect(screen.queryByTestId('task-detail')).toBeNull(),
-    );
+    await waitFor(() => expect(screen.queryByTestId('task-detail')).toBeNull());
   });
 
   it('onDismiss from useKeyboardShortcuts dismisses session detail', async () => {
-    const { useKeyboardShortcuts } = await import(
-      '../../hooks/useKeyboardShortcuts'
-    );
+    const { useKeyboardShortcuts } =
+      await import('../../hooks/useKeyboardShortcuts');
     const mockImpl = vi.mocked(useKeyboardShortcuts);
 
     let capturedDismiss: (() => void) | undefined;
