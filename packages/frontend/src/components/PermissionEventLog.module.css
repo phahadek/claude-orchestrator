@@ -212,3 +212,88 @@
 .modalDelete:hover {
   background: #c62828;
 }
+
+/* ── Mobile-only full input span (hidden on desktop) ─────────── */
+.mobileInput {
+  display: none;
+}
+
+/* ── Mobile card layout (<768px) ─────────────────────────────── */
+@media (max-width: 768px) {
+  .table {
+    display: block;
+  }
+
+  .table thead {
+    display: none;
+  }
+
+  .table tbody {
+    display: block;
+  }
+
+  .table tbody tr {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    border: 1px solid #2a2a2a;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    overflow: hidden;
+  }
+
+  .table td {
+    border-bottom: none;
+    padding: 6px 10px;
+  }
+
+  .timeCell {
+    display: none;
+  }
+
+  .sessionCell {
+    grid-column: 1;
+    grid-row: 1;
+    background: #2a2a2a;
+    border-bottom: 1px solid #333;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .toolCell {
+    grid-column: 2;
+    grid-row: 1;
+    background: #2a2a2a;
+    border-bottom: 1px solid #333;
+    white-space: nowrap;
+    font-size: 0.75rem;
+  }
+
+  .actionCell {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    max-width: 100%;
+    overflow: hidden;
+    padding: 8px 10px;
+  }
+
+  /* Desktop truncation: hidden on mobile */
+  .actionText {
+    display: none;
+  }
+
+  .expandBtn {
+    display: none;
+  }
+
+  /* Full input in scrollable pre on mobile */
+  .mobileInput {
+    display: block;
+    white-space: pre;
+    overflow-x: auto;
+    word-break: normal;
+    font-family: monospace;
+    font-size: 0.75rem;
+  }
+}

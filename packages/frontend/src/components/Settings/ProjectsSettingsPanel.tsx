@@ -59,6 +59,12 @@ function toCreatePayload(values: ProjectFormValues) {
   };
 }
 
+function middleEllipsis(str: string, maxLen = 40): string {
+  if (str.length <= maxLen) return str;
+  const half = Math.floor((maxLen - 1) / 2);
+  return str.slice(0, half) + '…' + str.slice(str.length - half);
+}
+
 function ProjectsSettingsPanelInner() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -210,8 +216,10 @@ function ProjectsSettingsPanelInner() {
                     {p.name}
                   </button>
                 </td>
-                <td className={styles.mono}>{p.projectDir}</td>
-                <td>
+                <td data-label="Project Dir" className={styles.mono}>
+                  {middleEllipsis(p.projectDir)}
+                </td>
+                <td data-label="Task Source">
                   <span className={styles.badge}>{p.taskSource}</span>
                   {p.taskSource === 'yaml' && (
                     <button
@@ -226,11 +234,11 @@ function ProjectsSettingsPanelInner() {
                     </button>
                   )}
                 </td>
-                <td>
+                <td data-label="Git Mode">
                   <span className={styles.badge}>{p.gitMode ?? 'github'}</span>
                 </td>
-                <td>{p.milestones.length}</td>
-                <td className={styles.mono}>
+                <td data-label="# Milestones">{p.milestones.length}</td>
+                <td data-label="GitHub Repo" className={styles.mono}>
                   {p.gitMode === 'local-only' ? '—' : (p.githubRepo ?? '—')}
                 </td>
                 <td className={styles.actionsCol}>

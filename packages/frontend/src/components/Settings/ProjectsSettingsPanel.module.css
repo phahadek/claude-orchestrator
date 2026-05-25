@@ -256,3 +256,71 @@
   font-size: 0.8125rem;
   margin: 8px 0 0;
 }
+
+/* ── Mobile card layout (<768px) ─────────────────────────────── */
+@media (max-width: 768px) {
+  .table {
+    display: block;
+  }
+
+  .table thead {
+    display: none;
+  }
+
+  .table tbody {
+    display: block;
+  }
+
+  .table tbody tr {
+    display: block;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    overflow: hidden;
+  }
+
+  .table td {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border);
+    border-right: none;
+  }
+
+  .table td:last-child {
+    border-bottom: none;
+  }
+
+  .table td[data-label]::before {
+    content: attr(data-label);
+    flex: 0 0 110px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  /* Name cell — card header */
+  .table tbody tr > td:first-child {
+    background: var(--bg-secondary);
+    font-weight: 600;
+    padding: 8px 12px;
+  }
+
+  /* Actions cell — right-aligned card footer */
+  .actionsCol {
+    width: auto;
+    white-space: normal;
+    justify-content: flex-end;
+  }
+
+  /* Project dir — clip long paths */
+  .mono {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+}
