@@ -9,7 +9,7 @@ export interface BuildSessionContextParams {
   targetBranch: string;
   projectDir: string;
   worktreePath: string;
-  prGate?: { typeCheck: string; build: string };
+  verify?: string[];
   bashRules?: string[];
   taskBackend?: 'notion' | 'local';
   /** Pre-fetched task spec markdown. Passed through to orchestrator CLAUDE.md. */
@@ -65,7 +65,7 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     targetBranch,
     projectDir,
     worktreePath,
-    prGate,
+    verify,
     bashRules,
     taskBackend,
     taskContent,
@@ -98,7 +98,7 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     projectContextUrl,
     targetBranch,
     worktreePath,
-    prGate,
+    verify,
     bashRules,
     taskBackend,
     taskContent,
