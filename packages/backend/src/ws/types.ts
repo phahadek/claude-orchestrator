@@ -233,7 +233,14 @@ export type ServerMessage =
       success: boolean;
       summary?: string;
     }
-  | { type: 'review_started'; prNumber: number; sessionId: string };
+  | { type: 'review_started'; prNumber: number; sessionId: string }
+  | {
+      type: 'local_branch_submitted';
+      projectId: string;
+      sessionId: string;
+      branchName: string;
+      baseBranch: string;
+    };
 
 // ── Client → Server ──────────────────────────────────────────────
 export type ClientMessage =
