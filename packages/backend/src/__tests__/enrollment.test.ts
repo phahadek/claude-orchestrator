@@ -71,7 +71,9 @@ describe('requestEnrollment()', () => {
     const { code } = requestEnrollment('Test', 'UA', '127.0.0.1');
     const entry = pendingEnrollments.get(code);
     expect(entry).toBeDefined();
-    expect(entry!.expiresAt).toBeGreaterThanOrEqual(before + 5 * 60 * 1000 - 50);
+    expect(entry!.expiresAt).toBeGreaterThanOrEqual(
+      before + 5 * 60 * 1000 - 50,
+    );
     expect(entry!.expiresAt).toBeLessThanOrEqual(before + 5 * 60 * 1000 + 50);
   });
 });

@@ -44,7 +44,9 @@ export function requireDeviceAuth(
       next();
       return;
     }
-    res.status(401).json({ error: 'unauthorized', code: 'device_not_enrolled' });
+    res
+      .status(401)
+      .json({ error: 'unauthorized', code: 'device_not_enrolled' });
     return;
   }
 
@@ -54,9 +56,12 @@ export function requireDeviceAuth(
     return;
   }
 
-  const ip = (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0].trim()
-    ?? req.socket.remoteAddress
-    ?? null;
+  const ip =
+    (req.headers['x-forwarded-for'] as string | undefined)
+      ?.split(',')[0]
+      .trim() ??
+    req.socket.remoteAddress ??
+    null;
   updateDeviceLastSeen(device.id, ip, Date.now());
 
   (req as Request & { device: DeviceRow }).device = device;

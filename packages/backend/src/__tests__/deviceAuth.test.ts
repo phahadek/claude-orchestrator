@@ -47,8 +47,12 @@ function buildApp() {
   app.use(express.json());
   app.use(requireDeviceAuth);
   app.get('/api/protected', (_req, res) => res.json({ ok: true }));
-  app.get('/api/enrollment/bootstrap', (_req, res) => res.json({ bootstrap: true }));
-  app.get('/api/enrollment/request', (_req, res) => res.json({ request: true }));
+  app.get('/api/enrollment/bootstrap', (_req, res) =>
+    res.json({ bootstrap: true }),
+  );
+  app.get('/api/enrollment/request', (_req, res) =>
+    res.json({ request: true }),
+  );
   return app;
 }
 

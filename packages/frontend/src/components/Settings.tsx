@@ -178,7 +178,11 @@ export function Settings({ initialTab = 'general' }: Props) {
             className={`${styles.tab}${activeTab === t ? ` ${styles.tabActive}` : ''}`}
             onClick={() => setActiveTab(t)}
           >
-            {t === 'general' ? 'General' : t === 'projects' ? 'Projects' : 'Devices'}
+            {t === 'general'
+              ? 'General'
+              : t === 'projects'
+                ? 'Projects'
+                : 'Devices'}
           </button>
         ))}
       </div>
