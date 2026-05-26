@@ -102,26 +102,28 @@ vi.mock('../session/ApiSessionRunner', () => ({
 }));
 
 vi.mock('../session/AgentSession', () => {
-  const AgentSession = vi.fn().mockImplementation(
-    (
-      _sid: string,
-      _url: string,
-      _ctx: string,
-      _override: unknown,
-      _wt: string,
-      _tid: string,
-      _resume: string,
-      _prompt: string,
-      sessionType: string,
-    ) => ({
-      sessionType: sessionType ?? 'standard',
-      taskId: null,
-      prUrl: null,
-      hasEnded: true,
-      on: vi.fn(),
-      run: vi.fn().mockReturnValue(new Promise(() => {})),
-    }),
-  );
+  const AgentSession = vi
+    .fn()
+    .mockImplementation(
+      (
+        _sid: string,
+        _url: string,
+        _ctx: string,
+        _override: unknown,
+        _wt: string,
+        _tid: string,
+        _resume: string,
+        _prompt: string,
+        sessionType: string,
+      ) => ({
+        sessionType: sessionType ?? 'standard',
+        taskId: null,
+        prUrl: null,
+        hasEnded: true,
+        on: vi.fn(),
+        run: vi.fn().mockReturnValue(new Promise(() => {})),
+      }),
+    );
   return {
     AgentSession,
     parseNotionPageId: vi.fn().mockImplementation((url: string) => url),
