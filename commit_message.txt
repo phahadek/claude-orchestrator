@@ -1,3 +1,0 @@
-feat: AI vs human commit/PR attribution + server-side PR body validation
-
-AI-Authored-By: claude-sonnet-4-6 (session: f98ff4ec)
