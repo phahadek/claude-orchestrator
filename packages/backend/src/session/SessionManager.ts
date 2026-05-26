@@ -22,6 +22,7 @@ import {
   normalizePath,
   runtimeSettings,
 } from '../config';
+import { getCorporateMode } from '../config/corporateMode';
 import {
   insertSession,
   updateSessionStatus,
@@ -275,6 +276,23 @@ export class SessionManager extends EventEmitter {
     const project = getProjectById(projectId);
     if (!project) {
       throw new Error(`Project not found: ${projectId}`);
+    }
+
+    const corporateMode = getCorporateMode();
+    if (corporateMode.gates.requireZDR && !project.dataResidencyConfirmed) {
+      recordEvent({
+        event_type: 'session_launch_refused_zdr',
+        actor_type: 'system',
+        project_id: projectId,
+        payload: {
+          projectId,
+          reason: 'data_residency_confirmed is false; corporate mode requireZDR gate blocked session launch',
+        },
+      });
+      throw new Error(
+        `Session launch refused: project "${project.name}" has not confirmed Zero Data Retention (ZDR). ` +
+        `Enable the Data Residency attestation in project Settings before launching sessions in corporate mode.`,
+      );
     }
 
     const sessionId = providedSessionId ?? crypto.randomUUID();

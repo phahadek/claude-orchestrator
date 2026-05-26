@@ -13,6 +13,7 @@ export interface ProjectFormValues {
   autoLaunchEnabled: boolean;
   autoLaunchMilestoneId: string;
   autoMergeEnabled: boolean;
+  dataResidencyConfirmed: boolean;
 }
 
 interface Props {
@@ -31,6 +32,7 @@ const EMPTY: ProjectFormValues = {
   autoLaunchEnabled: false,
   autoLaunchMilestoneId: '',
   autoMergeEnabled: false,
+  dataResidencyConfirmed: false,
 };
 
 function fromProject(p: Project): ProjectFormValues {
@@ -44,6 +46,7 @@ function fromProject(p: Project): ProjectFormValues {
     autoLaunchEnabled: p.autoLaunchEnabled,
     autoLaunchMilestoneId: p.autoLaunchMilestoneId ?? '',
     autoMergeEnabled: p.autoMergeEnabled,
+    dataResidencyConfirmed: p.dataResidencyConfirmed ?? false,
   };
 }
 
@@ -268,6 +271,27 @@ export function ProjectFormModal({
               </label>
             </div>
           )}
+
+          <div className={styles.formField}>
+            <label htmlFor="proj-zdr" className={styles.formLabel}>
+              <input
+                id="proj-zdr"
+                type="checkbox"
+                checked={values.dataResidencyConfirmed}
+                onChange={(e) =>
+                  update('dataResidencyConfirmed', e.target.checked)
+                }
+              />{' '}
+              I confirm Zero Data Retention (ZDR) is enabled for this
+              Anthropic account
+            </label>
+            <p className={styles.fieldHelp}>
+              This is a user attestation — the orchestrator cannot
+              programmatically verify ZDR. In corporate mode, sessions will
+              not launch unless this box is checked. Toggling this setting
+              is recorded in the audit log.
+            </p>
+          </div>
 
           {serverError && <p className={styles.serverError}>{serverError}</p>}
 

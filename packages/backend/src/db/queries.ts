@@ -1476,6 +1476,7 @@ export interface ProjectPatch {
   auto_merge_enabled?: number;
   milestone_branching?: 'two_tier' | 'flat' | null;
   task_source_config?: string | null;
+  data_residency_confirmed?: number;
 }
 
 export function updateProject(
@@ -1498,6 +1499,7 @@ export function updateProject(
     auto_merge_enabled: number;
     milestone_branching: string | null;
     task_source_config: string | null;
+    data_residency_confirmed: number;
     updated_at: number;
   }>(
     `
@@ -1513,6 +1515,7 @@ export function updateProject(
         auto_merge_enabled = @auto_merge_enabled,
         milestone_branching = @milestone_branching,
         task_source_config = @task_source_config,
+        data_residency_confirmed = @data_residency_confirmed,
         updated_at = @updated_at
     WHERE id = @id
   `,
@@ -1550,6 +1553,10 @@ export function updateProject(
       'task_source_config' in patch
         ? (patch.task_source_config ?? null)
         : (existing.task_source_config ?? null),
+    data_residency_confirmed:
+      patch.data_residency_confirmed !== undefined
+        ? patch.data_residency_confirmed
+        : (existing.data_residency_confirmed ?? 0),
     updated_at: now,
   });
   return getProjectRowById(id);

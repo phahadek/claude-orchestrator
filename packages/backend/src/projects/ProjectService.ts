@@ -20,6 +20,7 @@ import type {
   GitMode,
 } from '../db/types';
 import type { NonMilestoneSourceConfig } from '../tasks/TaskBackend';
+import { recordEvent } from '../audit/AuditLog';
 
 export interface ProjectMilestone {
   id: string;
@@ -45,6 +46,7 @@ export interface Project {
   milestoneBranching: 'two_tier' | 'flat' | null;
   nonMilestoneSourceConfig: NonMilestoneSourceConfig | null;
   taskSourceConfig: string | null;
+  dataResidencyConfirmed: boolean;
   createdAt: number;
   updatedAt: number;
   milestones: ProjectMilestone[];
@@ -61,6 +63,7 @@ export interface CreateProjectInput {
   autoLaunchEnabled?: boolean;
   autoLaunchMilestoneId?: string | null;
   autoMergeEnabled?: boolean;
+  dataResidencyConfirmed?: boolean;
 }
 
 export interface CreateMilestoneInput {
@@ -108,6 +111,7 @@ function rowToProject(row: ProjectRow, milestones: MilestoneRow[]): Project {
     milestoneBranching: row.milestone_branching ?? null,
     nonMilestoneSourceConfig,
     taskSourceConfig: row.task_source_config ?? null,
+    dataResidencyConfirmed: (row.data_residency_confirmed ?? 0) === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     milestones: milestones.map(rowToMilestone),
@@ -148,6 +152,7 @@ export const ProjectService = {
       auto_launch_enabled: input.autoLaunchEnabled ? 1 : 0,
       auto_launch_milestone_id: input.autoLaunchMilestoneId ?? null,
       auto_merge_enabled: input.autoMergeEnabled ? 1 : 0,
+      data_residency_confirmed: input.dataResidencyConfirmed ? 1 : 0,
     });
     return rowToProject(row, []);
   },
@@ -192,6 +197,26 @@ export const ProjectService = {
 
   deleteMilestone(id: string): boolean {
     return deleteMilestone(id);
+  },
+
+  setDataResidencyConfirmed(
+    projectId: string,
+    newValue: boolean,
+  ): Project | undefined {
+    const existing = getProjectRowById(projectId);
+    if (!existing) return undefined;
+    const previousValue = (existing.data_residency_confirmed ?? 0) === 1;
+    const row = updateProject(projectId, {
+      data_residency_confirmed: newValue ? 1 : 0,
+    });
+    if (!row) return undefined;
+    recordEvent({
+      event_type: 'data_residency_flag_toggled',
+      actor_type: 'human',
+      project_id: projectId,
+      payload: { projectId, previousValue, newValue },
+    });
+    return rowToProject(row, listMilestonesByProject(projectId));
   },
 };
 

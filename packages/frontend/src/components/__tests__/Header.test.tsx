@@ -176,6 +176,7 @@ describe('Header', () => {
         autoLaunchEnabled: false,
         autoLaunchMilestoneId: null,
         autoMergeEnabled: false,
+        dataResidencyConfirmed: false,
       };
       render(
         <Header
@@ -202,6 +203,7 @@ describe('Header', () => {
         autoLaunchEnabled: false,
         autoLaunchMilestoneId: null,
         autoMergeEnabled: false,
+        dataResidencyConfirmed: false,
       };
       render(
         <Header
@@ -236,6 +238,7 @@ describe('Header', () => {
         autoLaunchEnabled: false,
         autoLaunchMilestoneId: null,
         autoMergeEnabled: false,
+        dataResidencyConfirmed: false,
         ...overrides,
       };
     }
@@ -446,6 +449,7 @@ describe('Header', () => {
         autoLaunchEnabled: true,
         autoLaunchMilestoneId: 'm1',
         autoMergeEnabled: false,
+        dataResidencyConfirmed: false,
         ...overrides,
       };
     }

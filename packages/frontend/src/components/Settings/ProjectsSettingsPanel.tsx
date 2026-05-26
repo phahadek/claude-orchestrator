@@ -56,6 +56,7 @@ function toCreatePayload(values: ProjectFormValues) {
     autoLaunchMilestoneId: values.autoLaunchMilestoneId.trim() || null,
     autoMergeEnabled:
       values.gitMode !== 'local-only' ? values.autoMergeEnabled : false,
+    dataResidencyConfirmed: values.dataResidencyConfirmed,
   };
 }
 

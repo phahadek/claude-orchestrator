@@ -43,6 +43,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     autoLaunchEnabled: false,
     autoLaunchMilestoneId: null,
     autoMergeEnabled: false,
+    dataResidencyConfirmed: false,
     createdAt: 1,
     updatedAt: 1,
     milestones: [],

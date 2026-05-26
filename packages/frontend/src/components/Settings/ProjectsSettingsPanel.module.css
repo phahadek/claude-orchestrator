@@ -251,6 +251,13 @@
   margin: 0;
 }
 
+.fieldHelp {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  margin: 2px 0 0;
+  line-height: 1.4;
+}
+
 .serverError {
   color: #f38ba8;
   font-size: 0.8125rem;

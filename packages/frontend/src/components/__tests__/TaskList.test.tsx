@@ -1211,6 +1211,7 @@ describe('TaskList', () => {
       autoLaunchEnabled: false,
       autoLaunchMilestoneId: null,
       autoMergeEnabled: false,
+      dataResidencyConfirmed: false,
     };
 
     render(
