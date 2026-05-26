@@ -7,8 +7,8 @@
 
 ## Task Assignment
 
-- **Task**: Introduce milestone-feature-branch + task-branch model
-- **Notion task**: https://www.notion.so/Introduce-milestone-feature-branch-task-branch-model-36b22f9152f3818e9b5bf64f289295a5
+- **Task**: Add human approval gate to auto-merge (corporate mode)
+- **Notion task**: https://www.notion.so/Add-human-approval-gate-to-auto-merge-corporate-mode-36b22f9152f381e08effd1bbc8ac0198
 - **Project context**: https://www.notion.so/33222f9152f38188b65fd912e40890a2
 
 ---
@@ -110,7 +110,7 @@ Run in order — all must pass before opening the PR:
 
 ## Git Isolation
 
-> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\7e919f05-cc41-417c-90a7-adaee2ef3159`.**
+> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\5c89e9e5-9929-4f3e-8896-a2c7f3487e4c`.**
 > This is your `cwd`. All commands run here. Never navigate to or operate on any parent directory.
 
 - All git commands must run inside the worktree directory (your `cwd`)
@@ -150,69 +150,42 @@ Use the Write tool for any file creation. Never use `cat >`, `printf >`, or `ech
 > Do NOT re-fetch this from Notion — use the content below as your source of truth.
 
 ## Summary
-Replace the current session/<UUID> backend-managed branch model with the per-project switchable model designed in Wave-1. Each project chooses between two_tier (task-branch → feature/<milestone-slug> → dev) and flat (task-branch → dev). Backend's branching responsibility is reduced to setting the worktree starting point; the session names and creates its own task branch.
+When corporate mode is on, the auto-merge path must wait for GitHub's PR review state to be APPROVED by a human reviewer before merging — in addition to existing CI / no-pause-reason gates.
 ## Dependencies
-- Design governance & PR flow (human review gate + branching + non-milestone workflow) — see that page for the full design rationale and resolved OQs
+- Introduce milestone-feature-branch + task-branch model
+- Implement corporate-mode config layer
 ## Context
-The Wave-1 governance design (Task 2) specifies a per-project branching switch with the model and behaviours below. This task implements it.
-### Per-project switch
-New SQLite column on projects:
-```sql
-ALTER TABLE projects ADD COLUMN milestone_branching TEXT NULL;
--- NULL       → fall back to corporate-mode default
--- 'two_tier' → explicit two-tier
--- 'flat'     → explicit flat
-```
-Resolution order at session start:
-1. If project.milestone_branching is non-NULL, use it.
-1. Else, if getCorporateMode().enabled === true, use two_tier.
-1. Else, use flat.
-### What the backend does
-Backend's branching responsibility is reduced to setting the starting point of the worktree's checkout. It does not create task branches.
-
-Worktree creation uses git worktree add --detach <path> <starting-point> — no placeholder branch the session has to rename. The session creates its own task branch as its first git op.
-### Removed code
-SessionManager.ts:268, :671, :1022 (the three hardcoded session/<UUID> sites) are deleted, replaced by starting-point resolution + detached worktree.
-### Milestone branch — lazy creation
-```typescript
-async function ensureMilestoneBranch(milestoneSlug: string): Promise<void> {
-  const ref = `feature/${milestoneSlug}`;
-  if (await git.refExists(ref)) return;
-  await git.fetch('origin', 'dev');
-  await git.branchCreate(ref, 'origin/dev');
-  await git.push('origin', ref);
-}
-```
-Triggered first time a session launches in that milestone, in two_tier mode. No-op on subsequent task launches. No "milestone setup" step required.
-### CLAUDE.md prompt update
-orchestrator-claudemd.ts — remove the "create feature branch from dev" instruction text. The session is told what branch it's on (the starting point); it creates its own task branch from there with its own naming.
+Today, packages/backend/src/github/AutoMerger.ts:run() checks pause_reason (line ~89) and CI status (line ~96-149) before calling GitHub's merge endpoint. There is no approval-state check. In corporate mode, this must become a hard gate.
+### What changes
+1. Add a GitHub API call to fetch the PR's current review state. The current GitHubClient.ts already has GraphQL access (used for markPullRequestReadyForReview) — extend with a getReviewState(prNumber) method.
+1. In AutoMerger.run(), after the CI-status check, branch on getCorporateMode().gates.requireHumanApproval:
+1. When approval has not yet been given but everything else is green, the PR stays open with a new pause reason (awaiting_human_approval). The poll loop keeps checking.
+1. If the human leaves a CHANGES_REQUESTED review, route the change request through the reviewer-comment-routing task's logic (next task). For this task: at minimum, pause with human_changes_requested and a notification.
 ### Files likely to change
-- packages/backend/src/db/schema.ts (update — add milestone_branching column)
-- packages/backend/src/session/SessionManager.ts:262-312 (update — replace worktree-add + branch-create with starting-point resolution + worktreeAddDetached)
-- packages/backend/src/session/SessionManager.ts:268, :671, :1022 (delete — the three hardcoded session/<sessionId> sites)
-- packages/backend/src/session/SessionManager.ts:895-905 (update — cleanup unchanged for task branch; ensure milestone branch is left intact)
-- packages/backend/src/session/branchModel.ts (new — resolveStartingPoint, ensureMilestoneBranch, slug derivation helpers)
-- packages/backend/src/session/orchestrator-claudemd.ts (update — branching instructions)
-> ⚠️ Pause-reason additions and approval-gate / body-validator wiring live in T10 / T11 / T12, not this task.
+- packages/backend/src/github/AutoMerger.ts (update — new gate)
+- packages/backend/src/github/GitHubClient.ts (update — add getReviewState)
+- packages/backend/src/session/types.ts or wherever pause reasons live (update — add new reasons)
+## Design specifics inherited from Wave-1
+Per the governance design (Task 2):
+- Insertion point in AutoMerger.run(): after the existing CI-status check (~line 96-149), before calling GitHubClient.mergePR().
+- New GitHubClient.getReviewState(prNumber) method — extends the existing GraphQL access used by markPullRequestReadyForReview.
+- Pause-reason additions (declared in T6, used here): awaiting_human_approval, human_changes_requested.
+- Observation: poll-based, riding the existing 5s AutoMerger cycle. No webhooks (revisit if M6 expands to shared-instance, currently Future Scope).
+- isAIReviewer predicate dependency: T12 (attribution) provides the canonical predicate. Until T12 lands, fall back to checking the reviewer username against a configured ai_reviewer_usernames set in settings.
+- Non-corporate mode is unchanged — no approval check is performed; existing CI-green + no-pause-reason gate remains.
 ## Acceptance criteria
 ### 🤖 Automated tests
 tsc --noEmit passes for both packages
-Migration adds projects.milestone_branching column with NULL default
-Unit test: resolveStartingPoint returns feature/<milestone-slug> for milestone task + two_tier mode
-Unit test: resolveStartingPoint returns dev for milestone task + flat mode
-Unit test: resolveStartingPoint returns dev for non-milestone task regardless of mode
-Unit test: resolution order — explicit project setting wins over corporate-mode default
-Unit test: ensureMilestoneBranch creates feature/<slug> from origin/dev when missing; no-ops when present
-Unit test: starting a session in two_tier mode for the first task in a milestone creates the milestone branch then the worktree (mock git ops or use a temp repo)
-Unit test: cleanup leaves the task branch in place when a PR is open; milestone branch is never touched on cleanup
-Existing session-start tests pass with the new branch model
+Unit test: in corporate mode with an APPROVED review state, auto-merge proceeds
+Unit test: in corporate mode with no review state (REVIEW_REQUIRED), auto-merge does not call the merge endpoint and pauses with awaiting_human_approval
+Unit test: in corporate mode with CHANGES_REQUESTED, auto-merge pauses with human_changes_requested
+Unit test: in non-corporate mode, existing behaviour is preserved (no approval check)
 ### 👁️ Manual verification
 Covered by the Manual Verification Gate task.
 ## Files / paths affected
-- packages/backend/src/db/schema.ts (update)
-- packages/backend/src/session/SessionManager.ts (update — starting-point resolution, cleanup, resume; delete three hardcoded branch sites)
-- packages/backend/src/session/orchestrator-claudemd.ts (update — branching instructions)
-- packages/backend/src/session/branchModel.ts (new)
+- packages/backend/src/github/AutoMerger.ts (update)
+- packages/backend/src/github/GitHubClient.ts (update)
+- Pause-reason type definition (update)
 ## Implementation notes
 > To be filled in during/after implementation.
 
@@ -221,502 +194,504 @@ Covered by the Manual Verification Gate task.
 > These are the current contents of files listed in the task spec.
 > They were pre-read by the orchestrator so you can skip exploration.
 
-### `packages/backend/src/db/schema.ts`
+### `packages/backend/src/github/AutoMerger.ts`
 ```
-import { db } from './db';
+import {
+  getProjectByGithubRepo,
+  getProjectById,
+  runtimeSettings,
+} from '../config';
+import {
+  getPRByNumber,
+  setPauseReason,
+  updateMergeState,
+  getApprovedOpenPRs,
+  getApprovedLocalBranches,
+  markLocalBranchMerged,
+  setLocalBranchPauseReason,
+  getSession,
+} from '../db/queries';
+import type { GitHubClient } from './GitHubClient';
+import { GitHubApiError } from './types';
+import type { PRMergeWatcher } from './PRMergeWatcher';
+import type { PullRequestRow } from '../db/types';
+import type { ServerMessage } from '../ws/types';
+import { emitTaskUpdated } from '../routes/tasks';
+import { loadOrchestratorConfig } from '../session/orchestrator-config';
+import type { SessionManager } from '../session/SessionManager';
+import { getTaskBackend } from '../tasks/TaskBackend';
+import { squashMergeLocal } from '../orchestration/localMergeRunner';
+import { detectMergeConflict } from '../orchestration/localBranchHelpers';
+import { formatMergeConflictFeedback } from './reviewUtils';
 
-export function runMigrations(): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      session_id          TEXT    PRIMARY KEY,
-      notion_task_id      TEXT,
-      notion_task_url     TEXT,
-      project_context_url TEXT,
-      status              TEXT    NOT NULL,
-      started_at          INTEGER NOT NULL,
-      ended_at            INTEGER,
-      pr_url              TEXT,
-      worktree_path       TEXT,
-      favorited           INTEGER NOT NULL DEFAULT 0
-    );
-
-    CREATE TABLE IF NOT EXISTS session_events (
-      id           INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id   TEXT    NOT NULL,
-      event_type   TEXT    NOT NULL,
-      payload      TEXT    NOT NULL,
-      timestamp    INTEGER NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS permission_events (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id      TEXT    NOT NULL,
-      tool_name       TEXT    NOT NULL,
-      proposed_action TEXT,
-      decision        TEXT    NOT NULL,
-      rule_matched    TEXT,
-      decided_at      INTEGER NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS permission_rules (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      order_index INTEGER NOT NULL,
-      pattern     TEXT    NOT NULL,
-      match_type  TEXT    NOT NULL,
-      decision    TEXT    NOT NULL,
-      label       TEXT,
-      enabled     INTEGER NOT NULL DEFAULT 1
-    );
-
-    CREATE TABLE IF NOT EXISTS permission_denials (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id  TEXT    NOT NULL,
-      tool_name   TEXT    NOT NULL,
-      tool_use_id TEXT    NOT NULL,
-      tool_input  TEXT    NOT NULL,
-      timestamp   INTEGER NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS task_cache (
-      notion_task_id TEXT    PRIMARY KEY,
-      fetched_at     INTEGER NOT NULL,
-      raw_json       TEXT    NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS settings (
-      key   TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS session_audits (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id    TEXT NOT NULL,
-      pr_opened     INTEGER NOT NULL DEFAULT 0,
-      pr_targets    TEXT,
-      task_status   TEXT,
-      violations    TEXT NOT NULL DEFAULT '[]',
-      spec_mismatch TEXT,
-      audited_at    TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS projects (
-      id           TEXT    PRIMARY KEY,
-      name         TEXT    NOT NULL,
-      project_dir  TEXT    NOT NULL,
-      context_url  TEXT,
-      github_repo  TEXT,
-      task_source  TEXT    NOT NULL DEFAULT 'notion',
-      created_at   INTEGER NOT NULL,
-      updated_at   INTEGER NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS milestones (
-      id            TEXT    PRIMARY KEY,
-      project_id    TEXT    NOT NULL,
-      name          TEXT    NOT NULL,
-      source_id     TEXT,
-      display_order INTEGER NOT NULL DEFAULT 0,
-      created_at    INTEGER NOT NULL,
-      updated_at    INTEGER NOT NULL,
-      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS local_branches (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id    TEXT NOT NULL,
-      session_id    TEXT NOT NULL,
-      branch_name   TEXT NOT NULL,
-      base_branch   TEXT NOT NULL DEFAULT 'dev',
-      status        TEXT NOT NULL DEFAULT 'open',
-      review_result TEXT,
-      created_at    TEXT NOT NULL,
-      updated_at    TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_local_branches_project_status ON local_branches(project_id, status);
-  `);
-
-  // Idempotent column additions for existing databases
-  try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN worktree_path TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(
-      `ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`,
-    );
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN project_id TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(
-      `ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'standard'`,
-    );
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN note TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN tags TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE session_events ADD COLUMN message_id TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(
-      `ALTER TABLE sessions ADD COLUMN favorited INTEGER NOT NULL DEFAULT 0`,
-    );
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(
-      `ALTER TABLE sessions ADD COLUMN total_input_tokens INTEGER NOT NULL DEFAULT 0`,
-    );
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(
-      `ALTER TABLE sessions ADD COLUMN total_output_tokens INTEGER NOT NULL DEFAULT 0`,
-    );
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN review_session_id TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(
-      `ALTER TABLE pull_requests ADD COLUMN review_iteration INTEGER NOT NULL DEFAULT 0`,
-    );
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN head_sha TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN last_reviewed_sha TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(
-      `ALTER TABLE projects ADD COLUMN auto_launch_enabled INTEGER NOT NULL DEFAULT 0`,
-    );
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE projects ADD COLUMN auto_launch_milestone_id TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN pause_reason TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN failing_checks TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(
-      `ALTER TABLE projects ADD COLUMN auto_merge_enabled INTEGER NOT NULL DEFAULT 0`,
-    );
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN metadata TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(
-      `ALTER TABLE projects ADD COLUMN git_mode TEXT NOT NULL DEFAULT 'github'`,
-    );
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN review_result TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE local_branches ADD COLUMN pause_reason TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE local_branches ADD COLUMN merge_commit_sha TEXT`);
-  } catch {
-    /* already exists */
-  }
-}
-
-```
-
-### `packages/backend/src/session/orchestrator-claudemd.ts`
-```
-export interface OrchestratorClaudeMdParams {
-  taskName: string;
-  taskUrl: string;
-  projectContextUrl: string;
-  targetBranch: string;
-  /** Absolute path to the worktree directory. Injected into Git Isolation rules. */
-  worktreePath: string;
-  /**
-   * Verify commands the session runs before opening the PR (typecheck, build, tests).
-   * Format and lint are handled by orchestrator autofix — not included here.
-   * Rendered from the project's `.claude-orchestrator.yml` verify list.
-   * When empty or omitted, the gate shows a "no local verify" fallback.
-   */
-  verify?: string[];
-  /**
-   * Bash rules (Rule 5+). Each item is the full rule text — the first line
-   * becomes the bold heading, subsequent lines become the body paragraph.
-   * Defaults to the `npx` convention when omitted.
-   */
-  bashRules?: string[];
-  /**
-   * Task backend type. When 'local', the lifecycle instructions are adjusted
-   * to skip Notion fetch steps and read tasks.yaml instead.
-   */
-  taskBackend?: 'notion' | 'local';
-  /**
-   * Pre-fetched task spec markdown. When provided, the task content is injected
-   * directly into the CLAUDE.md and the session skips Notion fetching entirely.
-   */
-  taskContent?: string;
-  /**
-   * Optional contents of `.claude/local-context.md` from the project root.
-   * Appended to the merged CLAUDE.md so orchestrator-launched sessions see the
-   * same host-local context (Notion URLs, etc.) as direct Claude Code sessions.
-   * Omitted when the file is absent (e.g. fresh clone).
-   */
-  localContext?: string;
-  /**
-   * Git mode for the project. 'local-only' omits PR-related lifecycle steps
-   * and GitHub instructions; 'github' (default) keeps the full PR flow.
-   */
-  gitMode?: 'github' | 'local-only';
-}
+const MIN_POLL_INTERVAL_MS = 5_000;
 
 /**
- * Build the orchestrator CLAUDE.md header content to inject into each session worktree.
+ * Drives the post-approval auto-merge flow. After review reaches an approved
+ * verdict and CI turns green, squash-merges the PR to dev and lets
+ * PRMergeWatcher complete the lifecycle. On any other outcome the task is
+ * paused with a pause_reason so a human picks it up.
  *
- * Returns a markdown string with all orchestrator rule sections (sections 1-9).
- * Section 10 — the separator and "# Project Instructions" heading — is appended by
- * the caller along with the project's own CLAUDE.md content.
- *
- * Section inventory:
- *  1. Header with override warning
- *  2. Task assignment (task name, Notion URL, project context URL)
- *  3. Lifecycle steps
- *  4. Status ownership
- *  5. PR format standards
- *  6. Branch rules
- *  7. Pre-PR gate
- *  8. Forbidden actions
- *  9. Git isolation
- * 10. Bash rules (permission system)
- * 11. Separator + "# Project Instructions (from project CLAUDE.md)" (added by caller)
+ * Per-project — only runs for projects with `autoMergeEnabled === true`.
+ * Skips PRs already paused (honors any existing pause_reason).
  */
-export function buildOrchestratorClaudeMd(
-  params: OrchestratorClaudeMdParams,
-): string {
-  const {
-    taskName,
-    taskUrl,
-    projectContextUrl,
-    targetBranch,
-    worktreePath,
-    verify,
-    bashRules,
-    taskBackend = 'notion',
-    taskContent,
-    localContext,
-    gitMode = 'github',
-  } = params;
+export class AutoMerger {
+  /** In-flight auto-merge loops keyed by `${repo}#${prNumber}` to prevent double-runs. */
+  private active = new Set<string>();
 
-  const resolvedBashRules = bashRules ?? [
-    'Use `npx` instead of bare tool names.\n`tsc` → `npx tsc`. Bare commands may not be on PATH.',
-  ];
+  constructor(
+    private github: GitHubClient,
+    private mergeWatcher: PRMergeWatcher,
+    private broadcast: (msg: ServerMessage) => void,
+    private sessions?: SessionManager,
+  ) {}
 
-  const bashRulesText = resolvedBashRules
-    .map((rule, i) => {
-      const ruleNum = i + 5;
-      const lines = rule.split('\n');
-      const heading = lines[0];
-      const body = lines.slice(1).join('\n');
-      return `**Rule ${ruleNum} — ${heading}**${body ? '\n' + body : ''}`;
-    })
-    .join('\n\n');
+  private key(prNumber: number, repo: string): string {
+    return `${repo}#${prNumber}`;
+  }
 
-  // Sections 1-9 — returned by this function.
-  // Section 10 (separator + project instructions heading) is written by the caller.
-  return `# Orchestrator Rules (DO NOT OVERRIDE)
+  /**
+   * Poll both pull_requests and local_branches for merge-ready items and
+   * dispatch to the appropriate merge handler. PRs go through the existing
+   * attempt() loop; local branches are squash-merged immediately.
+   */
+  async pollOnce(): Promise<void> {
+    const approvedPRs = getApprovedOpenPRs();
+    for (const pr of approvedPRs) {
+      this.attempt(pr.pr_number, pr.repo);
+    }
 
-> ⚠️ These rules are injected by the dashboard orchestrator and take priority over any
-> project-level instructions below. Do not remove, reorder, or override them.
+    const approvedLocalBranches = getApprovedLocalBranches();
+    for (const row of approvedLocalBranches) {
+      await this.handleLocalBranchMerge(row);
+    }
+  }
 
----
+  private async handleLocalBranchMerge(
+    row: ReturnType<typeof getApprovedLocalBranches>[number],
+  ): Promise<void> {
+    const session = row.session_id ? getSession(row.session_id) : undefined;
+    if (!session) {
+      console.warn(
+        `[AutoMerger] local branch #${row.id} (${row.branch_name}): session ${row.session_id} not found — skipping`,
+      );
+      return;
+    }
 
-## Task Assignment
+    const worktreePath = session.worktree_path;
+    if (!worktreePath) {
+      console.warn(
+        `[AutoMerger] local branch #${row.id} (${row.branch_name}): no worktree_path on session — skipping`,
+      );
+      return;
+    }
 
-- **Task**: ${taskName}
-- **Notion task**: ${taskUrl}
-- **Project context**: ${projectContextUrl}
+    const hasConflict = await detectMergeConflict(
+      worktreePath,
+      row.base_branch,
+      row.branch_name,
+    ).catch((err: unknown) => {
+      console.warn(
+        `[AutoMerger] local branch #${row.id}: detectMergeConflict failed: ${(err as Error).message}`,
+      );
+      return false;
+    });
 
----
+    if (hasConflict) {
+      setLocalBranchPauseReason(row.id, 'merge_conflict');
+      if (this.sessions && session.session_id) {
+        this.sessions
+          .sendOrResume(
+            session.session_id,
+            formatMergeConflictFeedback({
+              branchName: row.branch_name,
+              baseBranch: row.base_branch,
+            }),
+          )
+          .catch((err: unknown) =>
+            console.warn(
+              `[AutoMerger] local branch #${row.id}: sendOrResume failed: ${(err as Error).message}`,
+            ),
+          );
+      }
+      return;
+    }
 
-## Lifecycle
+    const taskName = session.task_name ?? row.branch_name;
 
-Follow these steps in order — every session:
+    const result = await squashMergeLocal({
+      worktreePath,
+      baseBranch: row.base_branch,
+      featureBranch: row.branch_name,
+      taskName,
+    }).catch((err: unknown) => {
+      console.warn(
+        `[AutoMerger] local branch #${row.id}: squashMergeLocal threw: ${(err as Error).message}`,
+      );
+      return { merged: false as const, conflict: false };
+    });
 
-${
-  taskContent
-    ? `> **Task spec is pre-loaded below.** Do NOT fetch Notion pages — the task content has
-> already been injected by the orchestrator. Proceed directly to implementation.
+    if (!result.merged) {
+      if (result.conflict) {
+        setLocalBranchPauseReason(row.id, 'merge_conflict');
+        if (this.sessions && session.session_id) {
+          this.sessions
+            .sendOrResume(
+              session.session_id,
+              formatMergeConflictFeedback({
+                branchName: row.branch_name,
+                baseBranch: row.base_branch,
+              }),
+            )
+            .catch((err: unknown) =>
+              console.warn(
+                `[AutoMerger] local branch #${row.id}: sendOrResume failed: ${(err as Error).message}`,
+              ),
+            );
+        }
+      }
+      return;
+    }
 
-1. Read the **Task Spec** section below — it contains the full task specification.
-2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
-    : taskBackend === 'local'
-      ? `> ⚠️ **YAML task source**: Task context comes from \`tasks.yaml\` in the project root, not Notion.
-> Skip step 1 (Notion fetch) and instead read \`tasks.yaml\` for task context.
+    const commitSha = result.commitSha ?? null;
 
-1. Read \`tasks.yaml\` in the project root for task context (skip Notion fetch).
-2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
-      : `1. Fetch the Notion task page and project context page.
-2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
-}
-3. Implement the task per the acceptance criteria.
-4. Pass the pre-PR gate (see Pre-PR Gate section below).
-${
-  gitMode === 'local-only'
-    ? `5. Commit your changes on the feature branch. **No GitHub PR is required** — this is a local-only project.
-6. **Stop and wait.** The dashboard will show a "Mark Merged" button once the review passes.
-   Await review feedback as follow-up messages and address findings by pushing additional commits.`
-    : `5. Open a draft PR targeting \`${targetBranch}\` using the required body template.
-6. **Stop and wait.** The dashboard sends review feedback as follow-up messages.
-   Address findings by pushing additional commits, then wait again.`
-}
+    markLocalBranchMerged(row.id, commitSha);
 
----
+    if (this.sessions && session.session_id) {
+      this.sessions.endSession(session.session_id);
+    }
 
-## Status Ownership
+    if (session.notion_task_id) {
+      const project = getProjectById(row.project_id);
+      if (project) {
+        const backend = getTaskBackend(row.project_id);
+        backend
+          .updateStatus(session.notion_task_id, '✅ Done')
+          .catch((err: unknown) =>
+            console.warn(
+              `[AutoMerger] local branch #${row.id}: updateStatus failed: ${(err as Error).message}`,
+            ),
+          );
+      }
+    }
 
-**Do NOT update Notion task status.**
-**Do NOT call any Notion API to change task status.**
-The orchestrator backend handles all status transitions (In Progress → In Review → Done).
+    this.broadcast({
+      type: 'local_branch_merged',
+      projectId: row.project_id,
+      sessionId: session.session_id,
+      branchName: row.branch_name,
+      commitSha,
+    });
 
----
+    console.log(
+      `[AutoMerger] local branch ${row.branch_name} squash-merged into ${row.base_branch} (${commitSha ?? 'no sha'})`,
+    );
+  }
 
-## Efficiency Rules
+  /**
+   * Try to auto-merge the given PR. Returns immediately (does not await the
+   * polling loop). The loop runs to completion in the background.
+   */
+  attempt(
+    prNumber: number,
+    repo: string,
+    options?: { bypassToggle?: boolean },
+  ): void {
+    const k = this.key(prNumber, repo);
+    if (this.active.has(k)) return;
+    this.active.add(k);
+    void this.run(prNumber, repo, options).finally(() => this.active.delete(k));
+  }
 
-This session runs in \`--print\` mode with no human watching the output.
-Optimize for speed and token efficiency:
+  private async run(
+    prNumber: number,
+    repo: string,
+    options?: { bypassToggle?: boolean },
+  ): Promise<void> {
+    const project = getProjectByGithubRepo(repo);
+    if (!project) {
+      console.log(
+        `[AutoMerger] PR #${prNumber}: no project for repo ${repo} — skipping`,
+      );
+      return;
+    }
+    if (!options?.bypassToggle && !project.autoMergeEnabled) return;
 
-- **Do NOT use TodoWrite.** No one sees the todo list. Track your progress internally.
-- **Do NOT use Agent subagents for exploration.** Use Glob and Grep directly.
-- **Minimize tool calls.** Batch independent reads. Don't re-read files you already read.
-- **Keep commit messages and PR descriptions concise.** One sentence summaries, not essays.
+    const initialRow = getPRByNumber(prNumber, repo);
+    if (!initialRow) return;
+    if (initialRow.pause_reason !== null) {
+      console.log(
+        `[AutoMerger] PR #${prNumber}: paused (${initialRow.pause_reason}) — skipping`,
+      );
+      return;
+    }
+    if (initialRow.state !== 'open') return;
 
----
+    const ciCheckNames = loadOrchestratorConfig(
+      project.projectDir,
+    ).ci_check_name;
 
-${
-  gitMode === 'local-only'
-    ? ``
-    : `## PR Format Standards
+    const intervalSec = Math.max(1, runtimeSettings.ci_poll_interval_seconds);
+    const intervalMs = Math.max(intervalSec * 1000, MIN_POLL_INTERVAL_MS);
+    const deadline =
+      Date.now() + Math.max(1, runtimeSettings.ci_poll_max_minutes) * 60_000;
 
-- **Title**: \`feat: <task-name>\` — no scope prefix like \`(backend)\`, no milestone tags.
-- **How to create the PR**: Use the \`mcp__github__create_pull_request\` MCP tool.
-  Do NOT use \`gh pr create\` — the \`gh\` CLI is not on PATH.
-  Pass \`draft: true\`, \`base: "${targetBranch}"\`, and the full body as the \`body\` parameter.
-- **Required body sections** (no omissions, no reordering):
+    let etag: string | null = null;
 
-\`\`\`
-## Summary
-<1-3 sentences: what changed and why>
+    console.log(
+      `[AutoMerger] starting for PR #${prNumber} in ${repo} (interval=${intervalSec}s, max=${runtimeSettings.ci_poll_max_minutes}m)`,
+    );
 
-## Notion Task
-<link to the Notion task page>
+    while (Date.now() < deadline) {
+      // Re-read the PR row each iteration so external pause/close updates are honored.
+      const row = getPRByNumber(prNumber, repo);
+      if (!row) return;
+      if (row.pause_reason !== null) {
+       
+[... truncated]
+```
 
-## Automated Tests
-<list tests added/modified, or "No test changes">
+### `packages/backend/src/github/GitHubClient.ts`
+```
+import { GITHUB_TOKEN, GITHUB_REPO } from '../config';
+import {
+  GitHubApiError,
+  PullRequest,
+  PRDiff,
+  MergeResult,
+  FailingCheck,
+  MergeabilityCategory,
+} from './types';
+import { getPRByNumber } from '../db/queries';
 
-## Files Changed
-<bulleted list of files with brief description of each change>
-\`\`\`
+/** GitHub check-run conclusions that indicate the check did not pass. */
+const FAILING_CHECK_CONCLUSIONS: ReadonlySet<string> = new Set([
+  'failure',
+  'timed_out',
+  'action_required',
+  'cancelled',
+  'stale',
+  'startup_failure',
+]);
 
----
-`
-}
-## Branch Rules
+export class GitHubClient {
+  private readonly base = 'https://api.github.com';
+  private readonly headers: HeadersInit;
 
-- Branch name: \`feature/<task-name>\` from \`${targetBranch}\`
-- Never commit directly to \`${targetBranch}\` or \`main\`
-${
-  gitMode === 'local-only'
-    ? `- One task per session — no scope creep`
-    : `- Never merge your own PR
-- One task per session — no scope creep`
-}
+  constructor() {
+    this.headers = {
+      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    };
+  }
 
----
+  async listOpenPRs(repo?: string): Promise<PullRequest[]> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<GitHubRawPR[]>(
+      `/repos/${r}/pulls?state=open&per_page=100`,
+    );
+    return data.map((pr) => mapPR(pr));
+  }
 
-${(() => {
-  const verifyItems = verify && verify.length > 0 ? verify : null;
-  const verifySteps = verifyItems
-    ? verifyItems
-        .map((cmd, i) => `${i + 4}. \`${cmd}\` — must pass.`)
-        .join('\n')
-    : `4. No local verify step configured — CI is the gate.`;
-  const stageNum = verifyItems ? verifyItems.length + 4 : 5;
-  return `## Pre-PR Gate
+  async getPRState(
+    prNumber: number,
+    repo?: string,
+  ): Promise<'open' | 'merged' | 'closed'> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<{ state: string; merged: boolean }>(
+      `/repos/${r}/pulls/${prNumber}`,
+    );
+    if (data.merged) return 'merged';
+    if (data.state === 'closed') return 'closed';
+    return 'open';
+  }
 
-Run in order — all must pass before opening the PR:
+  async fetchPR(repo: string, prNumber: number): Promise<PullRequest> {
+    const data = await this.request<GitHubRawPR>(
+      `/repos/${repo}/pulls/${prNumber}`,
+    );
+    return mapPR(data);
+  }
 
-1. Stash CLAUDE.md before rebasing: \`git stash push CLAUDE.md\`
-2. Rebase onto \`${targetBranch}\` and resolve any conflicts.
-3. Restore CLAUDE.md: \`git stash pop\`
-${verifySteps}
-${stageNum}. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.`;
-})()}
+  async getMergeability(
+    prNumber: number,
+    repo?: string,
+  ): Promise<{ mergeable: boolean | null; mergeableState: string | null }> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<GitHubRawPR>(
+      `/repos/${r}/pulls/${prNumber}`,
+    );
+    return {
+      mergeable: data.mergeable ?? null,
+      mergeableState: data.mergeable_state ?? null,
+    };
+  }
 
----
+  // Retry getMergeability with exponential backoff (2s, 4s, 8s, 16s, 32s) when
+  // GitHub returns mergeable: null. After all 5 retries, returns the last (still-null) result.
+  async getMergeabilityWithRetry(
+    prNumber: number,
+    repo?: string,
+    sleep: (ms: number) => Promise<void> = (ms) =>
+      new Promise((r) => setTimeout(r, ms)),
+  ): Promise<{ mergeable: boolean | null; mergeableState: string | null }> {
+    const delays = [2000, 4000, 8000, 16000, 32000];
+    let result = await this.getMergeability(prNumber, repo);
+    for (const delay of delays) {
+      if (result.mergeable !== null) return result;
+      await sleep(delay);
+      result = await this.getMergeability(prNumber, repo);
+    }
+    if (result.mergeable === null) {
+      console.warn(
+        `[GitHubClient] getMergeability still null after retries for PR #${prNumber} in ${repo ?? GITHUB_REPO} — skipping`,
+      );
+    }
+    return result;
+  }
 
-## Forbidden Actions
+  async fetchDiff(
+    prId: number,
+    repo?: string,
+    branches?: { base: string; head: string },
+  ): Promise<PRDiff> {
+    const r = repo ?? GITHUB_REPO;
+    let diff: string;
+    if (branches) {
+      // Explicit three-dot compare endpoint — guarantees merge-base semantics
+      diff = await this.request<string>(
+        `/repos/${r}/compare/${branches.base}...${branches.head}`,
+        { headers: { ...this.headers, Accept: 'application/vnd.github.diff' } },
+      );
+    } else {
+      diff = await this.request<string>(`/repos/${r}/pulls/${prId}`, {
+        headers: { ...this.headers, Accept: 'application/vnd.github.diff' },
+      });
+    }
+    const filesChanged = parseDiffFiles(diff);
+    return { prId, diff, filesChanged };
+  }
 
-- Never push directly to \`main\`
-- Never force push (\`--force\`)
-- Never delete branches that live outside this worktree
-- Never run \`git reset --hard\` on the main 
+  async markPRReady(repo: string, prNumber: number): Promise<void> {
+    const prRow = getPRByNumber(prNumber, repo);
+    if (!prRow?.node_id) {
+      const pr = await this.fetchPR(repo, prNumber);
+      await this.markPRReadyByNodeId(pr.nodeId);
+      return;
+    }
+    await this.markPRReadyByNodeId(prRow.node_id);
+  }
+
+  private async markPRReadyByNodeId(nodeId: string): Promise<void> {
+    const query = `mutation($pullRequestId: ID!) {
+      markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) {
+        pullRequest { isDraft }
+      }
+    }`;
+    const res = await fetch('https://api.github.com/graphql', {
+      method: 'POST',
+      headers: {
+        ...this.headers,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query, variables: { pullRequestId: nodeId } }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new GitHubApiError(res.status, text);
+    }
+    const body = (await res.json()) as { errors?: Array<{ message: string }> };
+    if (body.errors?.length) {
+      throw new GitHubApiError(
+        422,
+        body.errors.map((e) => e.message).join('; '),
+      );
+    }
+  }
+
+  /**
+   * Fetch failing check-runs for a given commit SHA. Used to distinguish
+   * "blocked by failing CI" from "blocked by branch protection" when a merge
+   * attempt fails with 409/405 or when mergeable_state is `unstable`/`blocked`.
+   */
+  async getFailingChecks(sha: string, repo?: string): Promise<FailingCheck[]> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<{
+      check_runs: Array<{
+        name: string;
+        status: string;
+        conclusion: string | null;
+      }>;
+    }>(`/repos/${r}/commits/${sha}/check-runs?per_page=100`);
+    return data.check_runs
+      .filter(
+        (c) =>
+          c.status === 'completed' &&
+          c.conclusion !== null &&
+          FAILING_CHECK_CONCLUSIONS.has(c.conclusion),
+      )
+      .map((c) => ({ name: c.name, conclusion: c.conclusion as string }));
+  }
+
+  /**
+   * Map GitHub's mergeable_state (plus check-runs when relevant) onto a single
+   * category so the dashboard can tell merge conflicts apart from CI failures
+   * and branch-protection blocks. Returns `clean` when mergeable, otherwise one
+   * of `conflict` / `ci_failed` / `blocked` / `unknown`.
+   *
+   * Called after a 409/405 merge failure to pick the right remediation, and by
+   * PRMergeWatcher polling so the state is reflected before the user clicks Merge.
+   *
+   * @param ciCheckNames When non-empty, only checks in this list are considered
+   *   when categorizing CI failures. Checks not in the list are ignored. A named
+   *   check absent from the PR's check-runs is treated as pending (unknown).
+   *   When empty (default), all checks count — existing behaviour.
+   */
+  async categorizeMergeability(
+    prNumber: number,
+    repo?: string,
+    ciCheckNames: string[] = [],
+  ): Promise<MergeabilityCategory> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<GitHubRawPR>(
+      `/repos/${r}/pulls/${prNumber}`,
+    );
+    return this.categorizeFromRawPR(data, r, ciCheckNames);
+  }
+
+  /**
+   * Conditional PR status fetch with ETag/If-None-Match support. Returns the
+   * categorized mergeability when GitHub returns 200 (with the new ETag), or
+   * `{ status: 'not_modified' }` when GitHub returns 304 (no body, ETag stays
+   * the same). Used by AutoMerger to avoid burning GitHub quota while polling
+   * a slow-to-change PR.
+   */
+  async fetchPRStatusConditional(
+    prNumber: number,
+    repo: string,
+    etag?: string | null,
+    ciCheckNames: string[] = [],
+  ): Promise<
+    | { status: 'not_modified'; etag: string | null }
+    | {
+        status: 'ok';
+        etag: string | null;
+        state: 'open' | 'closed' | 'merged';
+        mergeability: MergeabilityCategory;
+        headSha: string | null;
+      }
+  > {
+    const url = `${this.base}/repos/${repo}/pulls/${prNumber}`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    };
+    if (etag) headers['If-None-Match'] = etag;
+    const res = await fetch(url, { headers });
+    if (res.status === 304) {
+      return { status: 'not_modified',
 [... truncated]
 ```
 
