@@ -22,7 +22,6 @@ import {
   normalizePath,
   runtimeSettings,
 } from '../config';
-import { getCorporateMode } from '../config/corporateMode';
 import {
   insertSession,
   updateSessionStatus,
