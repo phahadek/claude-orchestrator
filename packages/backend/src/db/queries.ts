@@ -95,6 +95,72 @@ export function updateSessionStatus(
   });
 }
 
+const stmtMarkSessionDone = db.prepare<{
+  session_id: string;
+  ended_at: number;
+  pr_url: string | null;
+}>(`
+  UPDATE sessions
+  SET status = 'done', ended_at = @ended_at, pr_url = COALESCE(@pr_url, pr_url)
+  WHERE session_id = @session_id
+`);
+
+/**
+ * Atomically mark a session as done, setting ended_at and pr_url in a single
+ * write. Preferred over updateSessionStatus for clean-exit paths because it
+ * also persists pr_url without a second round-trip.
+ * pr_url is only overwritten when non-null — existing value is preserved otherwise.
+ */
+export function markSessionDone(
+  sessionId: string,
+  endedAt: number,
+  prUrl?: string | null,
+): void {
+  stmtMarkSessionDone.run({
+    session_id: sessionId,
+    ended_at: endedAt,
+    pr_url: prUrl ?? null,
+  });
+}
+
+/**
+ * Backfill sessions that are stuck at status='running' but whose last recorded
+ * event is a 'result' event (the CLI's clean-exit signal). These sessions
+ * completed normally but the done transition was missed — most likely because
+ * the downstream review pipeline threw before handleCleanExit could persist it.
+ * Returns the number of sessions updated.
+ */
+export function backfillStuckResultSessions(): number {
+  const stuckRows = db
+    .prepare(
+      `
+    SELECT s.session_id, e.timestamp AS last_ts
+    FROM sessions s
+    JOIN session_events e ON e.session_id = s.session_id
+    WHERE s.status = 'running'
+      AND e.id = (
+        SELECT MAX(id) FROM session_events WHERE session_id = s.session_id
+      )
+      AND e.event_type = 'result'
+  `,
+    )
+    .all() as Array<{ session_id: string; last_ts: number }>;
+
+  if (stuckRows.length === 0) return 0;
+
+  const updateStmt = db.prepare(
+    `UPDATE sessions SET status = 'done', ended_at = ? WHERE session_id = ? AND status = 'running'`,
+  );
+
+  for (const row of stuckRows) {
+    updateStmt.run(row.last_ts, row.session_id);
+    console.log(
+      `[backfill] session ${row.session_id.slice(0, 8)} running→done (last_event=result at ${new Date(row.last_ts).toISOString()})`,
+    );
+  }
+  return stuckRows.length;
+}
+
 export function getSession(sessionId: string): Session | undefined {
   return stmtGetSession.get({ session_id: sessionId }) as Session | undefined;
 }

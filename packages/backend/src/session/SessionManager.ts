@@ -23,6 +23,7 @@ import {
   getPRByNotionTaskId,
   getEventsBySession,
   getPRByNumber,
+  backfillStuckResultSessions,
 } from '../db/queries';
 import type { Session } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -795,6 +796,15 @@ export class SessionManager extends EventEmitter {
    * as unkillable ghosts. Called from server.ts after migrations and imports.
    */
   async resumeOrphanSessions(): Promise<void> {
+    // Backfill sessions that completed (last event = result) but got stuck at
+    // 'running' because the review pipeline threw mid-handleCleanExit.
+    const backfilled = backfillStuckResultSessions();
+    if (backfilled > 0) {
+      console.log(
+        `[SessionManager] backfilled ${backfilled} stuck session(s) from running→done`,
+      );
+    }
+
     const orphans = getSessionsByStatus(['running']);
     if (orphans.length === 0) return;
     console.log(
