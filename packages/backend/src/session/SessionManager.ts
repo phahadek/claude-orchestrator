@@ -758,7 +758,7 @@ export class SessionManager extends EventEmitter {
       undefined, // taskBackendOverride — production resolves via getTaskBackend
       worktreePath,
       row.task_id ?? '',
-      row.session_id, // resumeSessionId — passes --resume to CLI / SDK
+      row.cli_conversation_id ?? row.session_id, // resumeSessionId — CLI's own conversation_id for --resume
       undefined,
       row.session_type ?? 'standard',
       this,
@@ -1201,7 +1201,7 @@ export class SessionManager extends EventEmitter {
       undefined, // taskBackendOverride — production resolves via getTaskBackend
       worktreePath,
       taskId,
-      sessionId, // resumeSessionId — restores conversation history via --resume / SDK resume
+      row.cli_conversation_id ?? sessionId, // resumeSessionId — CLI's own conversation_id for --resume
       undefined,
       row.session_type ?? 'standard',
       this,

@@ -46,6 +46,7 @@ vi.mock('../db/queries', () => ({
   insertSessionAudit: vi.fn(),
   incrementTokens: vi.fn(),
   setSessionModel: vi.fn(),
+  setCliConversationId: vi.fn(),
   getPRBySessionId: vi.fn(() => null),
   getPRByNotionTaskId: vi.fn(() => null),
   getPRByNumber: vi.fn(() => null),
@@ -65,6 +66,7 @@ import {
   getPRBySessionId,
   getPRByNumber,
   setPauseReason,
+  setCliConversationId,
 } from '../db/queries';
 
 function fakeNotionClient(): NotionClient {
@@ -1594,6 +1596,73 @@ describe('AgentSession', () => {
       (m) => m.type === 'api_overloaded_paused',
     );
     expect(overloadedMsgs).toHaveLength(1);
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+  });
+
+  // ── AC: cli_conversation_id captured from system:init ────────────────────
+  it('captures session_id from system:init event and persists it as cli_conversation_id', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+
+    const session = new AgentSession(
+      'sess-cap',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+    const runPromise = session.run();
+
+    mockProc.stdout.push(
+      JSON.stringify({
+        type: 'system',
+        subtype: 'init',
+        session_id: 'cli-uuid-from-init',
+        permissionMode: 'acceptEdits',
+      }) + '\n',
+    );
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(setCliConversationId).toHaveBeenCalledWith(
+      'sess-cap',
+      'cli-uuid-from-init',
+    );
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+  });
+
+  it('does NOT call setCliConversationId when system:init has no session_id', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+
+    const session = new AgentSession(
+      'sess-no-id',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+    const runPromise = session.run();
+
+    mockProc.stdout.push(
+      JSON.stringify({
+        type: 'system',
+        subtype: 'init',
+        permissionMode: 'acceptEdits',
+      }) + '\n',
+    );
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(setCliConversationId).not.toHaveBeenCalled();
 
     mockProc.stdout.push(null);
     await new Promise((r) => setTimeout(r, 0));

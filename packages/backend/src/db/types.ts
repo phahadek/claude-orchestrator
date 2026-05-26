@@ -30,6 +30,7 @@ export interface Session {
   task_name: string | null;
   metadata: string | null; // JSON blob for small session metadata (e.g. aiTitle)
   review_result: string | null; // JSON — verdict stored for local-only review sessions
+  cli_conversation_id: string | null; // session_id from the CLI's system:init event, used for --resume
 }
 
 export type NewSession = Omit<
@@ -48,6 +49,7 @@ export type NewSession = Omit<
   | 'task_name'
   | 'metadata'
   | 'review_result'
+  | 'cli_conversation_id'
 > & {
   ended_at?: number | null;
   pr_url?: string | null;
@@ -63,6 +65,7 @@ export type NewSession = Omit<
   task_name?: string | null;
   metadata?: string | null;
   review_result?: string | null;
+  cli_conversation_id?: string | null;
 };
 
 // ─── session_events ────────────────────────────────────────────────────────

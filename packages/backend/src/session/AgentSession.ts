@@ -11,6 +11,7 @@ import {
   insertSessionAudit,
   setSessionModel,
   setSessionMetadata,
+  setCliConversationId,
   getPRBySessionId,
   getPRByNumber,
   setHeadSha,
@@ -111,6 +112,8 @@ export class AgentSession extends EventEmitter {
   public prUrl: string | undefined;
   /** True once a session_ended message has been broadcast. */
   public hasEnded = false;
+  /** The session_id emitted by the CLI in its system:init event — used for --resume. */
+  private cliConversationId: string | undefined;
   /** Maps message_id → DB row id for deduplicating streaming assistant events. */
   private messageIdMap = new Map<string, number>();
   /** Maps message_id → accumulated content blocks, so text is not lost when
@@ -238,7 +241,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     while (true) {
       // Clear per-run pending tool-call maps so stale IDs from a previous run
       // do not interfere with the retried transport's tool events.
-      if (resumeIdForSpawn === this.sessionId) {
+      if (resumeIdForSpawn !== undefined) {
         this.pendingGHToolUseIds.clear();
         this.pendingBashCommands.clear();
         this.pendingPushFileToolUseIds.clear();
@@ -290,7 +293,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         });
         await new Promise<void>((resolve) => setTimeout(resolve, delay));
         if (this.isKilling) return;
-        resumeIdForSpawn = this.sessionId;
+        resumeIdForSpawn = this.cliConversationId ?? this.sessionId;
         this.broadcast({
           type: 'session_status',
           sessionId: this.sessionId,
@@ -378,6 +381,14 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 
     if (rawType === 'system' && (event.subtype as string) === 'init') {
       sessionLog(this.sessionId, `INIT permissionMode=${event.permissionMode}`);
+      if (typeof event.session_id === 'string' && event.session_id) {
+        this.cliConversationId = event.session_id;
+        setCliConversationId(this.sessionId, event.session_id);
+        sessionLog(
+          this.sessionId,
+          `captured cli_conversation_id=${event.session_id}`,
+        );
+      }
     }
 
     // ai-title: persist as session metadata only, no session event

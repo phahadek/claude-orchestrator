@@ -336,6 +336,15 @@ export function setSessionModel(sessionId: string, model: string): void {
   );
 }
 
+export function setCliConversationId(
+  sessionId: string,
+  cliConversationId: string,
+): void {
+  db.prepare(
+    'UPDATE sessions SET cli_conversation_id = ? WHERE session_id = ?',
+  ).run(cliConversationId, sessionId);
+}
+
 export function setSessionTags(sessionId: string, tags: string[]): void {
   db.prepare('UPDATE sessions SET tags = ? WHERE session_id = ?').run(
     JSON.stringify(tags),

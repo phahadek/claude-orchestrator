@@ -335,4 +335,9 @@ export function runMigrations(): void {
   } catch {
     /* already exists */
   }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN cli_conversation_id TEXT`);
+  } catch {
+    /* already exists */
+  }
 }
