@@ -1,0 +1,8 @@
+fix: capture CLI's session_id from system:init and use it for --resume
+
+The orchestrator was passing its own UUID as the --resume argument, but the
+Claude CLI expects its own conversation_id (emitted in the system:init event).
+This adds cli_conversation_id column to sessions, captures it on first run,
+and uses it in resumeSession/sendOrResume/retry paths.
+
+AI-Authored-By: claude-sonnet-4-6 (session: 9527d381)
