@@ -135,6 +135,16 @@ export function runMigrations(): void {
       token       TEXT    NOT NULL UNIQUE,
       revoked     INTEGER NOT NULL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS pr_review_comments_routed (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      pr_number  INTEGER NOT NULL,
+      repo       TEXT    NOT NULL,
+      comment_id TEXT    NOT NULL,
+      routed_at  INTEGER NOT NULL,
+      UNIQUE(pr_number, repo, comment_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_pr_review_comments_routed_pr ON pr_review_comments_routed(pr_number, repo);
   `);
 
   // Idempotent column additions for existing databases

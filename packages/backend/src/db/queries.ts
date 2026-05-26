@@ -1706,6 +1706,38 @@ export function markLocalBranchMerged(
   ).run(commitSha ?? null, now, id);
 }
 
+// ─── pr_review_comments_routed ────────────────────────────────────────────────
+
+export function getRoutedCommentIds(prNumber: number, repo: string): Set<string> {
+  const rows = db
+    .prepare<{ pr_number: number; repo: string }>(
+      `SELECT comment_id FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo`,
+    )
+    .all({ pr_number: prNumber, repo }) as { comment_id: string }[];
+  return new Set(rows.map((r) => r.comment_id));
+}
+
+export function markCommentsRouted(
+  prNumber: number,
+  repo: string,
+  commentIds: string[],
+): void {
+  if (commentIds.length === 0) return;
+  const now = Date.now();
+  const stmt = db.prepare<{
+    pr_number: number;
+    repo: string;
+    comment_id: string;
+    routed_at: number;
+  }>(
+    `INSERT OR IGNORE INTO pr_review_comments_routed (pr_number, repo, comment_id, routed_at)
+     VALUES (@pr_number, @repo, @comment_id, @routed_at)`,
+  );
+  for (const comment_id of commentIds) {
+    stmt.run({ pr_number: prNumber, repo, comment_id, routed_at: now });
+  }
+}
+
 // ─── devices ────────────────────────────────────────────────────────────────
 
 const stmtInsertDevice = db.prepare<NewDeviceRow>(`
