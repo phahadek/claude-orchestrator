@@ -336,7 +336,8 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 import path from 'path';
 
 const worktree = process.env.WORKTREE_DIR ?? process.cwd();
-const dbPath = process.env.DEV_DB ?? path.join(worktree, '.dev-state', 'dev.db');
+const dbPath =
+  process.env.DEV_DB ?? path.join(worktree, '.dev-state', 'dev.db');
 ```
 
 **Shell script example (bootstrap or verify script):**
