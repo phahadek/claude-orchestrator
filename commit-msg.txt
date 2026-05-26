@@ -1,0 +1,3 @@
+fix: refresh projects in App after milestone create/delete so Header dropdown updates immediately
+
+AI-Authored-By: claude-sonnet-4-6 (session: d3ec3795)

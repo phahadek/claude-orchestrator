@@ -168,9 +168,9 @@ function ProjectsSettingsPanelInner({ onMilestonesChanged }: OuterProps) {
         project={drillIn}
         onBack={() => setDrillIn(null)}
         onMilestonesChanged={() => {
-            void reload();
-            onMilestonesChanged?.();
-          }}
+          void reload();
+          onMilestonesChanged?.();
+        }}
       />
     );
   }
