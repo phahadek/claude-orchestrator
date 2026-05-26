@@ -145,6 +145,13 @@ export function runMigrations(): void {
       UNIQUE(pr_number, repo, comment_id)
     );
     CREATE INDEX IF NOT EXISTS idx_pr_review_comments_routed_pr ON pr_review_comments_routed(pr_number, repo);
+
+    CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events(session_id, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_session_events_session_id_event_type ON session_events(session_id, event_type);
+    CREATE INDEX IF NOT EXISTS idx_session_events_timestamp ON session_events(timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_sessions_archived_started_at ON sessions(archived, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sessions_notion_task_id_session_type ON sessions(task_id, session_type, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_pull_requests_notion_task_id_pr_number ON pull_requests(notion_task_id, pr_number DESC);
   `);
 
   // Idempotent column additions for existing databases

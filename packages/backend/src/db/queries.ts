@@ -1270,6 +1270,7 @@ export interface TaskAggregateRow {
   code_session_ended_at: number | null;
   code_session_input_tokens: number | null;
   code_session_output_tokens: number | null;
+  code_session_last_event_payload: string | null;
   // review session (session_type = 'review')
   review_session_id: string | null;
   review_session_status: string | null;
@@ -1293,9 +1294,40 @@ export interface TaskAggregateRow {
 export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
   if (taskIds.length === 0) return [];
   const placeholders = taskIds.map(() => '?').join(', ');
+  // Single query using window functions (ROW_NUMBER) to pick the latest code session,
+  // review session, and PR per task — avoids N×3 correlated subqueries.
+  // The inline event-payload subquery runs once per matched code session and is
+  // O(1) with idx_session_events_session_id_id covering (session_id, id DESC).
   return db
     .prepare(
       `
+    WITH
+      ranked_code AS (
+        SELECT *,
+          ROW_NUMBER() OVER (
+            PARTITION BY REPLACE(COALESCE(task_id, ''), '-', '')
+            ORDER BY started_at DESC
+          ) AS rn
+        FROM sessions
+        WHERE session_type = 'standard' OR session_type IS NULL
+      ),
+      ranked_review AS (
+        SELECT *,
+          ROW_NUMBER() OVER (
+            PARTITION BY REPLACE(COALESCE(task_id, ''), '-', '')
+            ORDER BY started_at DESC
+          ) AS rn
+        FROM sessions
+        WHERE session_type = 'review'
+      ),
+      ranked_pr AS (
+        SELECT *,
+          ROW_NUMBER() OVER (
+            PARTITION BY REPLACE(COALESCE(notion_task_id, ''), '-', '')
+            ORDER BY pr_number DESC
+          ) AS rn
+        FROM pull_requests
+      )
     SELECT
       tc.task_id,
       tc.raw_json,
@@ -1305,6 +1337,12 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       cs.ended_at            AS code_session_ended_at,
       cs.total_input_tokens  AS code_session_input_tokens,
       cs.total_output_tokens AS code_session_output_tokens,
+      (
+        SELECT payload FROM session_events
+        WHERE session_id = cs.session_id
+          AND event_type NOT IN ('system', 'user_message')
+        ORDER BY id DESC LIMIT 1
+      )                      AS code_session_last_event_payload,
       rs.session_id          AS review_session_id,
       rs.status              AS review_session_status,
       rs.total_input_tokens  AS review_session_input_tokens,
@@ -1322,21 +1360,15 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       pr.merge_state         AS pr_merge_state,
       pr.pause_reason        AS pr_pause_reason
     FROM task_cache tc
-    LEFT JOIN sessions cs ON cs.session_id = (
-      SELECT session_id FROM sessions
-      WHERE REPLACE(task_id, '-', '') = REPLACE(tc.task_id, '-', '') AND session_type = 'standard'
-      ORDER BY started_at DESC LIMIT 1
-    )
-    LEFT JOIN sessions rs ON rs.session_id = (
-      SELECT session_id FROM sessions
-      WHERE REPLACE(task_id, '-', '') = REPLACE(tc.task_id, '-', '') AND session_type = 'review'
-      ORDER BY started_at DESC LIMIT 1
-    )
-    LEFT JOIN pull_requests pr ON pr.id = (
-      SELECT id FROM pull_requests
-      WHERE REPLACE(notion_task_id, '-', '') = REPLACE(SUBSTR(tc.task_id, INSTR(tc.task_id, ':') + 1), '-', '')
-      ORDER BY pr_number DESC LIMIT 1
-    )
+    LEFT JOIN ranked_code cs
+      ON REPLACE(cs.task_id, '-', '') = REPLACE(tc.task_id, '-', '')
+      AND cs.rn = 1
+    LEFT JOIN ranked_review rs
+      ON REPLACE(rs.task_id, '-', '') = REPLACE(tc.task_id, '-', '')
+      AND rs.rn = 1
+    LEFT JOIN ranked_pr pr
+      ON REPLACE(pr.notion_task_id, '-', '') = REPLACE(SUBSTR(tc.task_id, INSTR(tc.task_id, ':') + 1), '-', '')
+      AND pr.rn = 1
     WHERE tc.task_id IN (${placeholders})
     ORDER BY tc.fetched_at DESC
   `,

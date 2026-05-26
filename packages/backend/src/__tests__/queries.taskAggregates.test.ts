@@ -23,7 +23,9 @@ vi.mock('../db/db.js', async () => {
       tags                TEXT,
       task_name           TEXT,
       total_input_tokens  INTEGER NOT NULL DEFAULT 0,
-      total_output_tokens INTEGER NOT NULL DEFAULT 0
+      total_output_tokens INTEGER NOT NULL DEFAULT 0,
+      review_result       TEXT,
+      metadata            TEXT
     );
     CREATE TABLE IF NOT EXISTS task_cache (
       task_id    TEXT    PRIMARY KEY,
@@ -104,6 +106,34 @@ vi.mock('../db/db.js', async () => {
       project_dir TEXT NOT NULL,
       board_id    TEXT,
       repo        TEXT
+    );
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts         INTEGER NOT NULL,
+      event_type TEXT    NOT NULL,
+      actor_type TEXT    NOT NULL,
+      actor_id   TEXT,
+      project_id TEXT,
+      task_id    TEXT,
+      payload    TEXT    NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS devices (
+      id          TEXT    PRIMARY KEY,
+      name        TEXT    NOT NULL,
+      user_agent  TEXT,
+      last_ip     TEXT,
+      last_seen   INTEGER,
+      enrolled_at INTEGER NOT NULL,
+      token       TEXT    NOT NULL UNIQUE,
+      revoked     INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS pr_review_comments_routed (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      pr_number  INTEGER NOT NULL,
+      repo       TEXT    NOT NULL,
+      comment_id TEXT    NOT NULL,
+      routed_at  INTEGER NOT NULL,
+      UNIQUE(pr_number, repo, comment_id)
     );
   `);
   return { db };
