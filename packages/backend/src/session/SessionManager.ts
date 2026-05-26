@@ -9,6 +9,8 @@ import { buildReviewClaudeMd } from './orchestrator-claudemd';
 import { loadOrchestratorConfig } from './orchestrator-config';
 import { CliSessionRunner } from './CliSessionRunner';
 import { ApiSessionRunner } from './ApiSessionRunner';
+import { DockerSessionRunner, reapOrphanContainers } from './DockerSessionRunner';
+import { getCorporateMode } from '../config/corporateMode';
 import {
   config,
   getProjectById,
@@ -350,7 +352,9 @@ export class SessionManager extends EventEmitter {
     const runner =
       sessionMode === 'api'
         ? new ApiSessionRunner(sessionId)
-        : new CliSessionRunner(sessionId);
+        : getCorporateMode().gates.dockerMandatory
+          ? new DockerSessionRunner(sessionId)
+          : new CliSessionRunner(sessionId);
 
     // Pre-fetch task content from Notion so sessions skip Notion calls entirely.
     // This is async — the session card is shown immediately, context is written
@@ -697,7 +701,9 @@ export class SessionManager extends EventEmitter {
     const resumeRunner =
       resumeSessionMode === 'api'
         ? new ApiSessionRunner(row.session_id)
-        : new CliSessionRunner(row.session_id);
+        : getCorporateMode().gates.dockerMandatory
+          ? new DockerSessionRunner(row.session_id)
+          : new CliSessionRunner(row.session_id);
 
     const session = new AgentSession(
       row.session_id, // keep original ID — same card, same transcript
@@ -813,6 +819,12 @@ export class SessionManager extends EventEmitter {
       console.log(
         `[SessionManager] backfilled ${backfilled} stuck session(s) from running→done`,
       );
+    }
+
+    // Reap orphaned Docker containers/networks from sessions no longer active.
+    if (getCorporateMode().gates.dockerMandatory) {
+      const liveIds = new Set(this.sessions.keys());
+      reapOrphanContainers(liveIds);
     }
 
     const orphans = getSessionsByStatus(['running']);
