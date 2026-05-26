@@ -19,6 +19,7 @@ import type {
   TaskSource,
   GitMode,
 } from '../db/types';
+import type { NonMilestoneSourceConfig } from '../tasks/TaskBackend';
 
 export interface ProjectMilestone {
   id: string;
@@ -42,6 +43,7 @@ export interface Project {
   autoLaunchMilestoneId: string | null;
   autoMergeEnabled: boolean;
   milestoneBranching: 'two_tier' | 'flat' | null;
+  nonMilestoneSourceConfig: NonMilestoneSourceConfig | null;
   createdAt: number;
   updatedAt: number;
   milestones: ProjectMilestone[];
@@ -81,6 +83,16 @@ function rowToMilestone(row: MilestoneRow): ProjectMilestone {
 }
 
 function rowToProject(row: ProjectRow, milestones: MilestoneRow[]): Project {
+  let nonMilestoneSourceConfig: NonMilestoneSourceConfig | null = null;
+  if (row.non_milestone_source_config) {
+    try {
+      nonMilestoneSourceConfig = JSON.parse(
+        row.non_milestone_source_config,
+      ) as NonMilestoneSourceConfig;
+    } catch {
+      // ignore malformed JSON
+    }
+  }
   return {
     id: row.id,
     name: row.name,
@@ -93,6 +105,7 @@ function rowToProject(row: ProjectRow, milestones: MilestoneRow[]): Project {
     autoLaunchMilestoneId: row.auto_launch_milestone_id,
     autoMergeEnabled: row.auto_merge_enabled === 1,
     milestoneBranching: row.milestone_branching ?? null,
+    nonMilestoneSourceConfig,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     milestones: milestones.map(rowToMilestone),

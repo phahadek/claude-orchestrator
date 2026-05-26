@@ -120,6 +120,8 @@ export interface StartOptions {
   sessionId?: string;
   /** Milestone row id used for starting-point resolution in two_tier branch mode. */
   milestoneId?: string | null;
+  /** Whether this is a milestone task or a non-milestone task; recorded in the audit log. */
+  taskKind?: 'milestone' | 'non_milestone';
 }
 
 /** How long to suppress lastMessage-only task_updated broadcasts per task (ms). */
@@ -256,6 +258,7 @@ export class SessionManager extends EventEmitter {
       taskName,
       sessionId: providedSessionId,
       milestoneId = null,
+      taskKind,
     } = options ?? {};
 
     if (sessionType !== 'review') {
@@ -534,7 +537,11 @@ export class SessionManager extends EventEmitter {
       actor_id: sessionId,
       project_id: projectId || null,
       task_id: notionTaskId || null,
-      payload: { session_type: sessionType, task_url: taskUrl },
+      payload: {
+        session_type: sessionType,
+        task_url: taskUrl,
+        task_kind: taskKind ?? (milestoneId ? 'milestone' : 'non_milestone'),
+      },
     });
 
     // Launch async — session card is already visible to the frontend via the broadcast below.

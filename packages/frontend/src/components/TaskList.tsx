@@ -285,15 +285,24 @@ export function TaskList({
     });
   }, []);
 
+  const NON_MILESTONE_BOARD_ID = '__non_milestone__';
+  const isNonMilestoneView = boardId === NON_MILESTONE_BOARD_ID;
+
   const fetchTasks = useCallback(async () => {
     if (!activeProjectId) {
       setLoading(false);
       return;
     }
     try {
-      const params = new URLSearchParams({ projectId: activeProjectId });
-      if (boardId) params.set('boardId', boardId);
-      const res = await fetch(`/api/tasks/active?${params.toString()}`);
+      let url: string;
+      if (isNonMilestoneView) {
+        url = `/api/tasks/non-milestone?projectId=${encodeURIComponent(activeProjectId)}`;
+      } else {
+        const params = new URLSearchParams({ projectId: activeProjectId });
+        if (boardId) params.set('boardId', boardId);
+        url = `/api/tasks/active?${params.toString()}`;
+      }
+      const res = await fetch(url);
       if (!res.ok) return;
       const data = (await res.json()) as TaskView[];
       setTasks(data);
@@ -302,7 +311,7 @@ export function TaskList({
     } finally {
       setLoading(false);
     }
-  }, [activeProjectId, boardId]);
+  }, [activeProjectId, boardId, isNonMilestoneView]);
 
   // Full re-fetch only on mount and when projectId/boardId changes
   useEffect(() => {
@@ -368,8 +377,10 @@ export function TaskList({
     if (!activeProjectId || syncing) return;
     setSyncing(true);
     syncPendingRef.current = true;
-    if (!boardId) {
-      setSyncing(false);
+    if (!boardId || isNonMilestoneView) {
+      // Non-milestone view: re-fetch from REST directly (no WS sync support yet).
+      void fetchTasks().finally(() => setSyncing(false));
+      syncPendingRef.current = false;
       return;
     }
     const sent = send({

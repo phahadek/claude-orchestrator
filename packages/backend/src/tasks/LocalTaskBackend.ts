@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
-import type { TaskBackend } from './TaskBackend';
+import type { TaskBackend, NonMilestoneSourceConfig } from './TaskBackend';
 import type { ResolvedTask } from './types';
 import type { NotionTask } from '../notion/types';
 import { parseTaskId, formatTaskId } from './taskId';
@@ -255,7 +255,18 @@ export class LocalTaskBackend implements TaskBackend {
     return sections.join('\n\n');
   }
 
-  async fetchNonMilestoneReadyTasks(): Promise<ResolvedTask[]> {
-    return [];
+  async fetchNonMilestoneReadyTasks(
+    sourceConfig: NonMilestoneSourceConfig | null,
+    projectId?: string,
+  ): Promise<ResolvedTask[]> {
+    if (!sourceConfig?.milestoneId) return [];
+    const results = await this.fetchReadyTasks(sourceConfig.milestoneId);
+    if (projectId) {
+      upsertTaskCache(
+        `non_milestone:${projectId}`,
+        JSON.stringify(results.map((r) => r.task)),
+      );
+    }
+    return results;
   }
 }

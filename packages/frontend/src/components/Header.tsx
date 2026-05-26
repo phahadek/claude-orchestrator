@@ -212,6 +212,26 @@ export function Header({
       </button>
     ) : null;
 
+  /** Synthetic sentinel value used as boardId when "Non-milestone" is selected. */
+  const NON_MILESTONE_BOARD_ID = '__non_milestone__';
+
+  const milestoneSelectContent = boards.length > 0 ? (
+    <select
+      className={styles.milestoneSelect}
+      value={activeBoardId ?? ''}
+      onChange={(e) => onBoardChange(e.target.value)}
+    >
+      {boards.map((b) => (
+        <option key={b.id} value={b.id}>
+          {b.name}
+        </option>
+      ))}
+      <option key={NON_MILESTONE_BOARD_ID} value={NON_MILESTONE_BOARD_ID}>
+        Non-milestone
+      </option>
+    </select>
+  ) : null;
+
   if (isMobile) {
     return (
       <header className={`${styles.header} ${styles.headerMobile}`}>
@@ -224,19 +244,7 @@ export function Header({
             activeProjectId={activeProjectId}
             onProjectChange={onProjectChange}
           />
-          {boards.length > 1 && (
-            <select
-              className={styles.milestoneSelect}
-              value={activeBoardId ?? ''}
-              onChange={(e) => onBoardChange(e.target.value)}
-            >
-              {boards.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
-          )}
+          {milestoneSelectContent}
           {autoLaunchContent}
           {tasks && tasks.length > 0 && (
             <MilestoneProgress tasks={tasks} compact />
@@ -257,20 +265,10 @@ export function Header({
         activeProjectId={activeProjectId}
         onProjectChange={onProjectChange}
       />
-      {boards.length > 1 && (
+      {milestoneSelectContent && (
         <>
           <div className={styles.divider} />
-          <select
-            className={styles.milestoneSelect}
-            value={activeBoardId ?? ''}
-            onChange={(e) => onBoardChange(e.target.value)}
-          >
-            {boards.map((b) => (
-              <option key={b.id} value={b.id}>
-                {b.name}
-              </option>
-            ))}
-          </select>
+          {milestoneSelectContent}
         </>
       )}
       {showAutoLaunchToggle && (
