@@ -53,6 +53,7 @@ const MIN_RIGHT_PANEL_PX = 300;
 
 const ACTIVE_PROJECT_KEY = 'activeProjectId';
 const ACTIVE_MILESTONE_KEY_PREFIX = 'activeMilestone_';
+const NON_MILESTONE_BOARD_ID = '__non_milestone__';
 
 function getMilestoneKey(projectId: string) {
   return `${ACTIVE_MILESTONE_KEY_PREFIX}${projectId}`;
@@ -64,6 +65,7 @@ function getDefaultBoardId(project: ProjectConfig): string {
 
 function resolveActiveBoardId(project: ProjectConfig): string {
   const stored = localStorage.getItem(getMilestoneKey(project.id));
+  if (stored === NON_MILESTONE_BOARD_ID) return stored;
   const boards = project.boards ?? [];
   if (stored && boards.some((b) => b.id === stored)) {
     return stored;
@@ -152,8 +154,13 @@ export default function App() {
   );
 
   const { send, connectionState } = useWebSocket(handleWsMessage, (sendNow) => {
-    // Called each time the WS (re)connects — fetch tasks if projectId+milestoneId are known
-    if (activeProjectIdRef.current && activeBoardIdRef.current) {
+    // Called each time the WS (re)connects — fetch tasks if projectId+milestoneId are known.
+    // Non-milestone view fetches via REST; skip the WS call to avoid backend errors.
+    if (
+      activeProjectIdRef.current &&
+      activeBoardIdRef.current &&
+      activeBoardIdRef.current !== NON_MILESTONE_BOARD_ID
+    ) {
       sendNow({
         type: 'fetch_tasks',
         projectId: activeProjectIdRef.current,
@@ -271,7 +278,7 @@ export default function App() {
         activeBoardIdRef.current = boardId;
         setActiveProjectId(validProjectId);
         setActiveBoardId(boardId);
-        if (boardId)
+        if (boardId && boardId !== NON_MILESTONE_BOARD_ID)
           send({
             type: 'fetch_tasks',
             projectId: validProjectId,
@@ -292,7 +299,7 @@ export default function App() {
       activeBoardIdRef.current = boardId;
       setActiveProjectId(id);
       setActiveBoardId(boardId);
-      if (boardId)
+      if (boardId && boardId !== NON_MILESTONE_BOARD_ID)
         send({ type: 'fetch_tasks', projectId: id, milestoneId: boardId });
     },
     [send, projects],
@@ -307,11 +314,12 @@ export default function App() {
       );
       activeBoardIdRef.current = boardId;
       setActiveBoardId(boardId);
-      send({
-        type: 'fetch_tasks',
-        projectId: activeProjectIdRef.current,
-        milestoneId: boardId,
-      });
+      if (boardId !== NON_MILESTONE_BOARD_ID)
+        send({
+          type: 'fetch_tasks',
+          projectId: activeProjectIdRef.current,
+          milestoneId: boardId,
+        });
     },
     [send],
   );

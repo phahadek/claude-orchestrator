@@ -215,6 +215,33 @@ describe('App — project reconciliation after /api/config', () => {
     });
   });
 
+  it('retains non-milestone sentinel when stored, does not auto-switch to first board', async () => {
+    const PROJECT_WITH_BOARDS = {
+      id: 'proj-x',
+      name: 'Proj X',
+      projectDir: '/x',
+      contextUrl: '',
+      boardId: 'board-default',
+      boards: [{ id: 'board-default', name: 'Default' }],
+    };
+    vi.stubGlobal(
+      'localStorage',
+      makeLocalStore({
+        activeProjectId: 'proj-x',
+        'activeMilestone_proj-x': '__non_milestone__',
+      }),
+    );
+    vi.stubGlobal('fetch', makeFetch([PROJECT_WITH_BOARDS]));
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('header').getAttribute('data-active-board'),
+      ).toBe('__non_milestone__');
+    });
+  });
+
   it('uses server-default board when stored board ID is absent from project boards', async () => {
     const PROJECT_WITH_BOARDS = {
       id: 'proj-x',
