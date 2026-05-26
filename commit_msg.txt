@@ -1,0 +1,3 @@
+fix: preserve non-milestone sentinel in resolveActiveBoardId to prevent auto-switch
+
+AI-Authored-By: claude-sonnet-4-6 (session: bb0c5d92)
