@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { ProjectsSettingsPanel } from './Settings/ProjectsSettingsPanel';
+import { SettingsDevices } from '../pages/SettingsDevices';
 import styles from './Settings.module.css';
 
 const NOTIFICATIONS_ENABLED_KEY = 'notificationsEnabled';
 
-type Tab = 'general' | 'projects';
+type Tab = 'general' | 'projects' | 'devices';
 
 interface SettingsValues {
   max_concurrent_code_sessions: string;
@@ -170,14 +171,14 @@ export function Settings({ initialTab = 'general' }: Props) {
   return (
     <div className={styles.settings}>
       <div className={styles.tabs}>
-        {(['general', 'projects'] as Tab[]).map((t) => (
+        {(['general', 'projects', 'devices'] as Tab[]).map((t) => (
           <button
             key={t}
             type="button"
             className={`${styles.tab}${activeTab === t ? ` ${styles.tabActive}` : ''}`}
             onClick={() => setActiveTab(t)}
           >
-            {t === 'general' ? 'General' : 'Projects'}
+            {t === 'general' ? 'General' : t === 'projects' ? 'Projects' : 'Devices'}
           </button>
         ))}
       </div>
@@ -402,6 +403,12 @@ export function Settings({ initialTab = 'general' }: Props) {
         {activeTab === 'projects' && (
           <div className={styles.section}>
             <ProjectsSettingsPanel />
+          </div>
+        )}
+
+        {activeTab === 'devices' && (
+          <div className={styles.section}>
+            <SettingsDevices />
           </div>
         )}
       </div>

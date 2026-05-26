@@ -241,6 +241,24 @@ export interface WorktreeEscapeViolation {
 /** Discriminated union of structured violation types stored in session_audits. */
 export type AuditViolation = WorktreeEscapeViolation;
 
+// ─── devices ────────────────────────────────────────────────────────────────
+
+export interface DeviceRow {
+  id: string;
+  name: string;
+  user_agent: string | null;
+  last_ip: string | null;
+  last_seen: number | null;
+  enrolled_at: number;
+  token: string;
+  revoked: number; // 0 | 1 (SQLite boolean)
+}
+
+export type NewDeviceRow = Omit<DeviceRow, 'last_seen' | 'revoked'> & {
+  last_seen?: number | null;
+  revoked?: number;
+};
+
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
 /**

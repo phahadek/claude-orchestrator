@@ -122,6 +122,17 @@ export function runMigrations(): void {
       task_id    TEXT,
       payload    TEXT    NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS devices (
+      id          TEXT    PRIMARY KEY,
+      name        TEXT    NOT NULL,
+      user_agent  TEXT,
+      last_ip     TEXT,
+      last_seen   INTEGER,
+      enrolled_at INTEGER NOT NULL,
+      token       TEXT    NOT NULL UNIQUE,
+      revoked     INTEGER NOT NULL DEFAULT 0
+    );
   `);
 
   // Idempotent column additions for existing databases
