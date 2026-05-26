@@ -128,6 +128,56 @@ export class GitHubClient {
     await this.markPRReadyByNodeId(prRow.node_id);
   }
 
+  /**
+   * Fetch the GitHub-computed review decision for a PR via GraphQL.
+   * Returns 'APPROVED', 'CHANGES_REQUESTED', 'REVIEW_REQUIRED', or null when
+   * the repository has no review requirements configured.
+   */
+  async getReviewState(
+    prNumber: number,
+    repo?: string,
+  ): Promise<PRReviewDecision | null> {
+    const r = repo ?? GITHUB_REPO;
+    const [owner, name] = r.split('/');
+    const query = `query($owner: String!, $name: String!, $number: Int!) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) {
+          reviewDecision
+        }
+      }
+    }`;
+    const res = await fetch('https://api.github.com/graphql', {
+      method: 'POST',
+      headers: {
+        ...this.headers,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query,
+        variables: { owner, name, number: prNumber },
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new GitHubApiError(res.status, text);
+    }
+    const body = (await res.json()) as {
+      errors?: Array<{ message: string }>;
+      data?: {
+        repository?: { pullRequest?: { reviewDecision: string | null } };
+      };
+    };
+    if (body.errors?.length) {
+      throw new GitHubApiError(
+        422,
+        body.errors.map((e) => e.message).join('; '),
+      );
+    }
+    const decision = body.data?.repository?.pullRequest?.reviewDecision;
+    if (!decision) return null;
+    return decision as PRReviewDecision;
+  }
+
   private async markPRReadyByNodeId(nodeId: string): Promise<void> {
     const query = `mutation($pullRequestId: ID!) {
       markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) {
@@ -489,6 +539,11 @@ function parseDiffFiles(diff: string): string[] {
   }
   return files;
 }
+
+export type PRReviewDecision =
+  | 'APPROVED'
+  | 'CHANGES_REQUESTED'
+  | 'REVIEW_REQUIRED';
 
 export interface SizeSignal {
   linesAdded: number;

@@ -14,8 +14,9 @@ import {
   setLocalBranchPauseReason,
   getSession,
 } from '../db/queries';
-import type { GitHubClient } from './GitHubClient';
+import type { GitHubClient, PRReviewDecision } from './GitHubClient';
 import { GitHubApiError } from './types';
+import { getCorporateMode } from '../config/corporateMode';
 import type { PRMergeWatcher } from './PRMergeWatcher';
 import type { PullRequestRow } from '../db/types';
 import type { ServerMessage } from '../ws/types';
@@ -304,9 +305,31 @@ export class AutoMerger {
 
       const category = poll.mergeability.category;
       switch (category) {
-        case 'clean':
+        case 'clean': {
+          const corpMode = getCorporateMode();
+          if (corpMode.gates.requireHumanApproval) {
+            let reviewDecision: PRReviewDecision | null;
+            try {
+              reviewDecision = await this.github.getReviewState(prNumber, repo);
+            } catch (err) {
+              console.warn(
+                `[AutoMerger] PR #${prNumber}: getReviewState failed: ${(err as Error).message}`,
+              );
+              await sleep(intervalMs);
+              continue;
+            }
+            if (reviewDecision === 'CHANGES_REQUESTED') {
+              await this.pauseWithReason(row, 'human_changes_requested');
+              return;
+            }
+            if (reviewDecision !== 'APPROVED') {
+              await this.pauseWithReason(row, 'awaiting_human_approval');
+              return;
+            }
+          }
           await this.attemptMerge(row, ciCheckNames);
           return;
+        }
         case 'ci_failed':
           await this.pauseWithReason(
             row,
@@ -411,7 +434,12 @@ export class AutoMerger {
 
   private async pauseWithReason(
     pr: PullRequestRow,
-    reason: 'ci_failing' | 'auto_merge_failed' | 'pr_closed',
+    reason:
+      | 'ci_failing'
+      | 'auto_merge_failed'
+      | 'pr_closed'
+      | 'awaiting_human_approval'
+      | 'human_changes_requested',
     failingCheckNames?: string[],
   ): Promise<void> {
     setPauseReason(pr.pr_number, pr.repo, reason);

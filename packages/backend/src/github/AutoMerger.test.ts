@@ -62,6 +62,24 @@ vi.mock('../session/orchestrator-config.js', () => ({
   loadOrchestratorConfig: vi.fn(() => ({ verify: [], ci_check_name: [] })),
 }));
 
+vi.mock('../audit/AuditLog.js', () => ({
+  recordEvent: vi.fn(),
+}));
+
+vi.mock('../config/corporateMode.js', () => ({
+  getCorporateMode: vi.fn(() => ({
+    enabled: false,
+    envLocked: false,
+    gates: {
+      dockerMandatory: false,
+      requireHumanApproval: false,
+      requireZDR: false,
+      validatePRBody: false,
+      secretsViaSeam: false,
+    },
+  })),
+}));
+
 import { AutoMerger } from './AutoMerger';
 import {
   getPRByNumber,
@@ -76,7 +94,8 @@ import {
 import { squashMergeLocal } from '../orchestration/localMergeRunner';
 import { detectMergeConflict } from '../orchestration/localBranchHelpers';
 import { getTaskBackend } from '../tasks/TaskBackend';
-import type { GitHubClient } from './GitHubClient';
+import { getCorporateMode } from '../config/corporateMode';
+import type { GitHubClient, PRReviewDecision } from './GitHubClient';
 import type { PRMergeWatcher } from './PRMergeWatcher';
 import type { PullRequestRow, LocalBranchRow, Session } from '../db/types';
 import type { MergeabilityCategory } from './types';
@@ -137,6 +156,7 @@ function makeMockGitHub(
   pollResults: Array<
     Awaited<ReturnType<GitHubClient['fetchPRStatusConditional']>>
   >,
+  reviewDecision?: PRReviewDecision | null,
 ): GitHubClient {
   const fetchSpy = vi.fn();
   for (const r of pollResults) fetchSpy.mockResolvedValueOnce(r);
@@ -148,6 +168,7 @@ function makeMockGitHub(
     categorizeMergeability: vi
       .fn()
       .mockResolvedValue(makeMergeability('clean')),
+    getReviewState: vi.fn().mockResolvedValue(reviewDecision ?? null),
   } as unknown as GitHubClient;
 }
 
@@ -689,5 +710,137 @@ describe('AutoMerger.pollOnce() — local branch dispatch', () => {
     );
     expect(sessions.sendOrResume).toHaveBeenCalled();
     expect(markLocalBranchMerged).not.toHaveBeenCalled();
+  });
+});
+
+// ── Corporate mode — human approval gate ──────────────────────────────────────
+
+function makeCorporateMode(requireHumanApproval: boolean) {
+  return {
+    enabled: requireHumanApproval,
+    envLocked: false,
+    gates: {
+      dockerMandatory: requireHumanApproval,
+      requireHumanApproval,
+      requireZDR: requireHumanApproval,
+      validatePRBody: requireHumanApproval,
+      secretsViaSeam: requireHumanApproval,
+    },
+  };
+}
+
+describe('AutoMerger — corporate mode human approval gate', () => {
+  it('proceeds to merge when corporate mode is ON and review is APPROVED', async () => {
+    vi.mocked(getCorporateMode).mockReturnValue(makeCorporateMode(true));
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+
+    const github = makeMockGitHub(
+      [
+        {
+          status: 'ok',
+          etag: 'W/"a"',
+          state: 'open',
+          mergeability: makeMergeability('clean'),
+          headSha: 'sha-abc',
+        },
+      ],
+      'APPROVED',
+    );
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.getReviewState).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(github.mergePR).toHaveBeenCalledTimes(1);
+    expect(setPauseReason).not.toHaveBeenCalled();
+  });
+
+  it('pauses with awaiting_human_approval when corporate mode is ON and review is REVIEW_REQUIRED', async () => {
+    vi.mocked(getCorporateMode).mockReturnValue(makeCorporateMode(true));
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+
+    const github = makeMockGitHub(
+      [
+        {
+          status: 'ok',
+          etag: 'W/"a"',
+          state: 'open',
+          mergeability: makeMergeability('clean'),
+          headSha: 'sha-abc',
+        },
+      ],
+      'REVIEW_REQUIRED',
+    );
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.mergePR).not.toHaveBeenCalled();
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'awaiting_human_approval',
+    );
+  });
+
+  it('pauses with human_changes_requested when corporate mode is ON and review is CHANGES_REQUESTED', async () => {
+    vi.mocked(getCorporateMode).mockReturnValue(makeCorporateMode(true));
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+
+    const github = makeMockGitHub(
+      [
+        {
+          status: 'ok',
+          etag: 'W/"a"',
+          state: 'open',
+          mergeability: makeMergeability('clean'),
+          headSha: 'sha-abc',
+        },
+      ],
+      'CHANGES_REQUESTED',
+    );
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.mergePR).not.toHaveBeenCalled();
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'human_changes_requested',
+    );
+  });
+
+  it('skips approval check and merges when corporate mode is OFF', async () => {
+    vi.mocked(getCorporateMode).mockReturnValue(makeCorporateMode(false));
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+
+    const github = makeMockGitHub(
+      [
+        {
+          status: 'ok',
+          etag: 'W/"a"',
+          state: 'open',
+          mergeability: makeMergeability('clean'),
+          headSha: 'sha-abc',
+        },
+      ],
+      null,
+    );
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.getReviewState).not.toHaveBeenCalled();
+    expect(github.mergePR).toHaveBeenCalledTimes(1);
+    expect(setPauseReason).not.toHaveBeenCalled();
   });
 });
