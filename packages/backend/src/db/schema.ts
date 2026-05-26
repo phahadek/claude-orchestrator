@@ -120,8 +120,10 @@ export function runMigrations(): void {
       actor_id   TEXT,
       project_id TEXT,
       task_id    TEXT,
-      payload    TEXT    NOT NULL
+      payload    TEXT    NOT NULL DEFAULT '{}'
     );
+    CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_event_type ON audit_log(event_type);
 
     CREATE TABLE IF NOT EXISTS devices (
       id          TEXT    PRIMARY KEY,

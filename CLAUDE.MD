@@ -7,8 +7,8 @@
 
 ## Task Assignment
 
-- **Task**: Extract task-source provider interface; reshape current Notion logic as a provider
-- **Notion task**: https://www.notion.so/Extract-task-source-provider-interface-reshape-current-Notion-logic-as-a-provider-36b22f9152f38143888cdcc46bebea7f
+- **Task**: Implement AI vs human commit/PR attribution + server-side PR body validation
+- **Notion task**: https://www.notion.so/Implement-AI-vs-human-commit-PR-attribution-server-side-PR-body-validation-36b22f9152f381efb07de43b904a7172
 - **Project context**: https://www.notion.so/33222f9152f38188b65fd912e40890a2
 
 ---
@@ -110,7 +110,7 @@ Run in order — all must pass before opening the PR:
 
 ## Git Isolation
 
-> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\a38d1b5f-74f5-4b79-b1da-4baddf724542`.**
+> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\f98ff4ec-5537-45c5-b3b7-d7b8c3886f60`.**
 > This is your `cwd`. All commands run here. Never navigate to or operate on any parent directory.
 
 - All git commands must run inside the worktree directory (your `cwd`)
@@ -150,59 +150,47 @@ Use the Write tool for any file creation. Never use `cat >`, `printf >`, or `ech
 > Do NOT re-fetch this from Notion — use the content below as your source of truth.
 
 ## Summary
-Fix the task-source identity overload, rename Notion-leaking column names, relocate ResolvedTask out of notion/types.ts, and extend the existing TaskBackend interface with the discriminator + source field + non-milestone fetch method. No new abstraction is being designed — the existing TaskBackend is kept and extended.
+Tag every commit and PR opened by a coding session with structured AI attribution (trailer lines, PR labels), and validate PR bodies server-side against the required template. Outputs feed the audit log.
 ## Dependencies
-- Design task-source abstraction (Notion + Jira + non-milestone shape) — see that page for the full design rationale and resolved OQs
+- Introduce milestone-feature-branch + task-branch model
+- Add audit-log scaffolding (append-only event stream with AI/human attribution)
 ## Context
-Scope correction: the original task body framed this as "extract a task-source provider interface." That framing was wrong. The Wave-1 design (Task 3) found that the provider abstraction already exists in code — TaskBackend at packages/backend/src/tasks/TaskBackend.ts:11-34, factory getTaskBackend(projectId) at :55-64. Both NotionTaskBackend and LocalTaskBackend implement it cleanly. This task fixes the tech-debt-by-accident that exists in the current implementation and prepares the seams that Jira (T13) and non-milestone support (T14) will use.
-### What's broken-by-accident today
-Both backends store their IDs in the same notion_task_id column. Works because both are TEXT, but the column name lies about what's in it, and there's no programmatic way to recover the source from the value alone. Same in task_cache, sessions, session_audits.
+Today, sessions are told (via merged CLAUDE.md) to include Co-Authored-By: trailers in commits, and the PR body template is enforced only by prompt — sessions can deviate and the orchestrator doesn't notice. For compliance, both attribution and body validation must be structural.
 ### What changes
-1. Schema migration — rename + backfill. Rename notion_task_id → task_id and notion_task_url → task_url on sessions, task_cache, session_audits. Backfill existing rows with source-prefixes based on each row's owning project's task_source value:
-1. New ID helpers module. packages/backend/src/tasks/taskId.ts:
-1. Relocate ResolvedTask + add source field. Move ResolvedTask from packages/backend/src/notion/types.ts to packages/backend/src/tasks/types.ts. Add a new source: 'notion' | 'yaml' | 'jira' field on it.
-1. Extend TaskBackend interface:
-1. Update existing backends to handle prefixes at their boundaries. NotionTaskBackend strips notion: before calling Notion API; prepends notion: when returning IDs. LocalTaskBackend strips/prepends yaml:. Both implement fetchNonMilestoneReadyTasks returning [] (Notion + YAML non-milestone behaviour ships in T14).
-### Out of scope
-- Jira provider implementation (T13)
-- Non-milestone task behaviour for Notion / YAML (T14 — though the interface method is added here, returning [])
-- New columns for task_source_config (T13) or non_milestone_source_config (T14) — each downstream task owns its own column addition
-### Critical caveat
-No downgrade support. Once this task ships and the column rename runs, rolling back to a pre-M6 build is not supported — old code expects notion_task_id and the column no longer exists. Implementation Notes must call this out at ship time.
+1. Commit attribution. Every commit made by a session must carry a trailer like:
+1. PR body validation. When a PR-created event is detected (AgentSession.handlePRCreatedFromContent at packages/backend/src/session/AgentSession.ts:624-729), parse the body against the required template:
+1. PR label. Apply a GitHub label like ai-authored to every PR opened by a session, server-side after the PR is created. This makes the "AI vs human" distinction visible at the PR-list level without parsing the body.
 ### Files likely to change
-- packages/backend/src/db/schema.ts (update — column renames; backfill SQL)
-- packages/backend/src/tasks/TaskBackend.ts (update — extend type discriminator; add fetchNonMilestoneReadyTasks method signature)
-- packages/backend/src/tasks/taskId.ts (new — parseTaskId, formatTaskId)
-- packages/backend/src/tasks/types.ts (new — relocated ResolvedTask with added source field)
-- packages/backend/src/notion/types.ts (update — remove ResolvedTask)
-- packages/backend/src/tasks/NotionTaskBackend.ts (update — strip/prepend notion: prefix; implement fetchNonMilestoneReadyTasks returning [])
-- packages/backend/src/tasks/LocalTaskBackend.ts (update — strip/prepend yaml: prefix; implement fetchNonMilestoneReadyTasks returning [])
-- All call sites that read notion_task_id from the DB — rename to task_id; values now arrive prefixed
+- packages/backend/src/github/CommitAttributionWatcher.ts (new — verifies trailers on push)
+- packages/backend/src/github/PRBodyValidator.ts (new — parses + validates body)
+- packages/backend/src/github/GitHubClient.ts (update — add label, comment APIs)
+- packages/backend/src/session/orchestrator-claudemd.ts (update — instruct session to include the trailer)
+- packages/backend/src/session/AgentSession.ts (update — hook validator into PR-created handler)
+## Design specifics inherited from Wave-1
+Per the governance design (Task 2):
+- PR body validation policy: block in corporate mode (post PR comment listing missing sections, set pause_reason = pr_body_invalid, audit-log pr_body_invalid); warn-only in non-corporate mode (audit-log pr_body_invalid_warning, auto-merge proceeds).
+- Hook site for body validation: AgentSession.handlePRCreatedFromContent() at packages/backend/src/session/AgentSession.ts:624-729. Insert validation immediately after the pull_requests upsert (~line 700), before broadcasting pr_created over WS.
+- Validator module: packages/backend/src/github/PRBodyValidator.ts (new). Parses body into sections; reports missing sections.
+- Required template: ## Summary, ## Notion Task (or ## Task Source once T13 ships), ## Automated Tests, ## Files Changed.
+- ai-authored PR label: apply server-side after the PR is created. This exposes the isAIReviewer / isAIAuthored predicate that T10 and T11 depend on — export it as a small utility for those tasks to consume.
+- Commit attribution trailer: AI-Authored-By: <model> (session: <session-id>). Session is instructed via CLAUDE.md to include it; backend verifies on push. Missing trailers in corporate mode → audit-log attribution_missing + pause; non-corporate mode → audit-log only.
+- Pause reason pr_body_invalid declared in T6, set here when corporate mode is on + body fails validation.
 ## Acceptance criteria
 ### 🤖 Automated tests
 tsc --noEmit passes for both packages
-Migration renames columns and backfills prefixes on a fresh DB + on a pre-existing DB (test both paths)
-Migration is idempotent — running twice does not double-prefix
-Unit test: parseTaskId('notion:abc') returns { source: 'notion', externalId: 'abc' }
-Unit test: parseTaskId throws on malformed input (no colon, unknown source)
-Unit test: formatTaskId('notion', 'abc') returns 'notion:abc'
-Unit test: NotionTaskBackend.fetchReadyTasks returns ResolvedTask objects with source: 'notion' and id prefixed with notion:
-Unit test: LocalTaskBackend.fetchReadyTasks returns ResolvedTask objects with source: 'yaml' and id prefixed with yaml:
-Unit test: NotionTaskBackend.attachPR('notion:abc', ...) strips the prefix before calling the Notion API (verify via the mock)
-Unit test: LocalTaskBackend.attachPR('yaml:foo', ...) strips the prefix before writing to tasks.yaml
-Unit test: fetchNonMilestoneReadyTasks() returns [] on both backends until T14 lands
-Existing Notion-integration tests continue to pass
+Unit test: validator accepts a body with all four required sections
+Unit test: validator rejects a body missing any required section
+Unit test: commit-attribution-watcher records attribution_missing to the audit log when a trailer is absent
+Unit test: PRs opened by a session get the ai-authored label
+Unit test: in corporate mode, non-conforming PR body produces a pr_body_invalid pause and a PR comment
 ### 👁️ Manual verification
 Covered by the Manual Verification Gate task.
 ## Files / paths affected
-- packages/backend/src/db/schema.ts (update)
-- packages/backend/src/tasks/TaskBackend.ts (update)
-- packages/backend/src/tasks/taskId.ts (new)
-- packages/backend/src/tasks/types.ts (new)
-- packages/backend/src/notion/types.ts (update — remove ResolvedTask)
-- packages/backend/src/tasks/NotionTaskBackend.ts (update)
-- packages/backend/src/tasks/LocalTaskBackend.ts (update)
-- All call sites that previously read notion_task_id (update)
+- packages/backend/src/github/CommitAttributionWatcher.ts (new)
+- packages/backend/src/github/PRBodyValidator.ts (new)
+- packages/backend/src/github/GitHubClient.ts (update)
+- packages/backend/src/session/orchestrator-claudemd.ts (update)
+- packages/backend/src/session/AgentSession.ts (update)
 ## Implementation notes
 > To be filled in during/after implementation.
 
@@ -211,677 +199,697 @@ Covered by the Manual Verification Gate task.
 > These are the current contents of files listed in the task spec.
 > They were pre-read by the orchestrator so you can skip exploration.
 
-### `packages/backend/src/db/schema.ts`
+### `packages/backend/src/github/GitHubClient.ts`
 ```
-import { db } from './db';
-
-export function runMigrations(): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      session_id          TEXT    PRIMARY KEY,
-      notion_task_id      TEXT,
-      notion_task_url     TEXT,
-      project_context_url TEXT,
-      status              TEXT    NOT NULL,
-      started_at          INTEGER NOT NULL,
-      ended_at            INTEGER,
-      pr_url              TEXT,
-      worktree_path       TEXT,
-      favorited           INTEGER NOT NULL DEFAULT 0
-    );
-
-    CREATE TABLE IF NOT EXISTS session_events (
-      id           INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id   TEXT    NOT NULL,
-      event_type   TEXT    NOT NULL,
-      payload      TEXT    NOT NULL,
-      timestamp    INTEGER NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS permission_events (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id      TEXT    NOT NULL,
-      tool_name       TEXT    NOT NULL,
-      proposed_action TEXT,
-      decision        TEXT    NOT NULL,
-      rule_matched    TEXT,
-      decided_at      INTEGER NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS permission_rules (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      order_index INTEGER NOT NULL,
-      pattern     TEXT    NOT NULL,
-      match_type  TEXT    NOT NULL,
-      decision    TEXT    NOT NULL,
-      label       TEXT,
-      enabled     INTEGER NOT NULL DEFAULT 1
-    );
-
-    CREATE TABLE IF NOT EXISTS permission_denials (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id  TEXT    NOT NULL,
-      tool_name   TEXT    NOT NULL,
-      tool_use_id TEXT    NOT NULL,
-      tool_input  TEXT    NOT NULL,
-      timestamp   INTEGER NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS task_cache (
-      notion_task_id TEXT    PRIMARY KEY,
-      fetched_at     INTEGER NOT NULL,
-      raw_json       TEXT    NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS settings (
-      key   TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS session_audits (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id    TEXT NOT NULL,
-      pr_opened     INTEGER NOT NULL DEFAULT 0,
-      pr_targets    TEXT,
-      task_status   TEXT,
-      violations    TEXT NOT NULL DEFAULT '[]',
-      spec_mismatch TEXT,
-      audited_at    TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS projects (
-      id           TEXT    PRIMARY KEY,
-      name         TEXT    NOT NULL,
-      project_dir  TEXT    NOT NULL,
-      context_url  TEXT,
-      github_repo  TEXT,
-      task_source  TEXT    NOT NULL DEFAULT 'notion',
-      created_at   INTEGER NOT NULL,
-      updated_at   INTEGER NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS milestones (
-      id            TEXT    PRIMARY KEY,
-      project_id    TEXT    NOT NULL,
-      name          TEXT    NOT NULL,
-      source_id     TEXT,
-      display_order INTEGER NOT NULL DEFAULT 0,
-      created_at    INTEGER NOT NULL,
-      updated_at    INTEGER NOT NULL,
-      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS local_branches (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id    TEXT NOT NULL,
-      session_id    TEXT NOT NULL,
-      branch_name   TEXT NOT NULL,
-      base_branch   TEXT NOT NULL DEFAULT 'dev',
-      status        TEXT NOT NULL DEFAULT 'open',
-      review_result TEXT,
-      created_at    TEXT NOT NULL,
-      updated_at    TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_local_branches_project_status ON local_branches(project_id, status);
-  `);
-
-  // Idempotent column additions for existing databases
-  try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN worktree_path TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(
-      `ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`,
-    );
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN project_id TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(
-      `ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'standard'`,
-    );
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN note TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN tags TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE session_events ADD COLUMN message_id TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(
-      `ALTER TABLE sessions ADD COLUMN favorited INTEGER NOT NULL DEFAULT 0`,
-    );
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(
-      `ALTER TABLE sessions ADD COLUMN total_input_tokens INTEGER NOT NULL DEFAULT 0`,
-    );
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(
-      `ALTER TABLE sessions ADD COLUMN total_output_tokens INTEGER NOT NULL DEFAULT 0`,
-    );
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN review_session_id TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(
-      `ALTER TABLE pull_requests ADD COLUMN review_iteration INTEGER NOT NULL DEFAULT 0`,
-    );
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN head_sha TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN last_reviewed_sha TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(
-      `ALTER TABLE projects ADD COLUMN auto_launch_enabled INTEGER NOT NULL DEFAULT 0`,
-    );
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE projects ADD COLUMN auto_launch_milestone_id TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN pause_reason TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN failing_checks TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(
-      `ALTER TABLE projects ADD COLUMN auto_merge_enabled INTEGER NOT NULL DEFAULT 0`,
-    );
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN metadata TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(
-      `ALTER TABLE projects ADD COLUMN git_mode TEXT NOT NULL DEFAULT 'github'`,
-    );
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN review_result TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE local_branches ADD COLUMN pause_reason TEXT`);
-  } catch {
-    /* already exists */
-  }
-  try {
-    db.exec(`ALTER TABLE local_branches ADD COLUMN merge_commit_sha TEXT`);
-  } catch {
-    /* already exists */
-  }
-}
-
-```
-
-### `packages/backend/src/tasks/TaskBackend.ts`
-```
-import type { ResolvedTask } from '../notion/types';
-import { ProjectService } from '../projects/ProjectService';
-import { NotionClient } from '../notion/NotionClient';
-import { NotionTaskBackend } from './NotionTaskBackend';
-import { LocalTaskBackend } from './LocalTaskBackend';
-
-/**
- * Project-scoped task tracker. An instance is bound to a single project via the
- * factory `getTaskBackend(projectId)` — callers do not pass projectId to methods.
- */
-export interface TaskBackend {
-  /** Backend identifier; reflects the project's task_source. */
-  readonly type: 'notion' | 'local';
-
-  /**
-   * Fetch tasks that are ready to be dispatched for the given milestone.
-   * For Notion projects, milestoneId is resolved to the milestone row's source_id
-   * (the Notion database ID). For YAML projects, pass null to fetch all tasks
-   * across all milestones, or a milestone id to scope to one.
-   */
-  fetchReadyTasks(
-    milestoneId: string | null,
-    skipCache?: boolean,
-  ): Promise<ResolvedTask[]>;
-
-  /** Mark a task as in-review and attach a PR URL. */
-  attachPR(taskId: string, prUrl: string): Promise<void>;
-
-  /** Update task status (display-format string with emoji prefix). */
-  updateStatus(taskId: string, status: string): Promise<void>;
-
-  /** Fetch the full task page body as markdown (for review/session context). */
-  fetchTaskPage(taskId: string): Promise<string>;
-}
-
-/**
- * Backwards-compatible alias for the previous interface name.
- * Prefer `TaskBackend` in new code.
- */
-export type TaskTrackerBackend = TaskBackend;
-
-// ── Factory ─────────────────────────────────────────────────────────────────
-
-let _notionBackend: NotionTaskBackend | undefined;
-
-function getNotionBackend(): NotionTaskBackend {
-  _notionBackend ??= new NotionTaskBackend(new NotionClient());
-  return _notionBackend;
-}
-
-/**
- * Resolve the task backend for a project, honoring its `task_source` column.
- * Throws if the project is not found.
- */
-export function getTaskBackend(projectId: string): TaskBackend {
-  const project = ProjectService.getById(projectId);
-  if (!project) {
-    throw new Error(`[getTaskBackend] project not found: ${projectId}`);
-  }
-  if (project.taskSource === 'yaml') {
-    return new LocalTaskBackend(project.projectDir);
-  }
-  return getNotionBackend();
-}
-
-/**
- * Test-only: reset the cached Notion backend so subsequent `getTaskBackend()`
- * calls re-instantiate it. Useful for vi.mocked NotionClient.
- */
-export function _resetTaskBackendCacheForTests(): void {
-  _notionBackend = undefined;
-}
-
-```
-
-### `packages/backend/src/notion/types.ts`
-```
-export interface NotionTask {
-  id: string;
-  title: string;
-  status: string;
-  type: string; // '📋 Planning' | '💻 Code' | '🧪 Testing'
-  dependsOn: string[]; // array of Notion page IDs
-  notionUrl: string;
-  prUrl?: string; // value of the "PR" URL property on the Notion page, if present
-  priority?: string; // '🔴 High' | '🟡 Medium' | '🟢 Low'
-}
-
-export interface ResolvedTask {
-  task: NotionTask;
-  blocked: boolean;
-  blockers: NotionTask[]; // direct + transitive blockers still not Done
-  nonCode: boolean; // true if type is Planning or Testing
-  wave: number; // dispatch wave: 1 = immediately launchable, 2+ = blocked by lower waves
-}
-
-export class NotionApiError extends Error {
-  constructor(
-    public readonly statusCode: number,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'NotionApiError';
-  }
-}
-
-```
-
-### `packages/backend/src/tasks/NotionTaskBackend.ts`
-```
-import type { TaskBackend } from './TaskBackend';
-import type { ResolvedTask } from '../notion/types';
-import { NotionClient } from '../notion/NotionClient';
-import { ProjectService } from '../projects/ProjectService';
-
-/**
- * Notion-backed implementation of TaskBackend. Resolves the Notion database ID
- * from the milestone row's `source_id`, then delegates to NotionClient.
- */
-export class NotionTaskBackend implements TaskBackend {
-  readonly type = 'notion' as const;
-
-  constructor(private readonly client: NotionClient) {}
-
-  async fetchReadyTasks(
-    milestoneId: string | null,
-    skipCache?: boolean,
-  ): Promise<ResolvedTask[]> {
-    if (milestoneId === null) {
-      throw new Error(
-        `[NotionTaskBackend] milestoneId is required for Notion projects`,
-      );
-    }
-    const milestone = ProjectService.getMilestone(milestoneId);
-    if (!milestone) {
-      throw new Error(
-        `[NotionTaskBackend] milestone not found: ${milestoneId}`,
-      );
-    }
-    if (!milestone.sourceId) {
-      throw new Error(
-        `[NotionTaskBackend] milestone ${milestoneId} has no source_id — set it to the Notion database ID`,
-      );
-    }
-    return this.client.fetchReadyTasks(milestone.sourceId, skipCache);
-  }
-
-  attachPR(taskId: string, prUrl: string): Promise<void> {
-    return this.client.attachPR(taskId, prUrl);
-  }
-
-  updateStatus(taskId: string, status: string): Promise<void> {
-    return this.client.updateStatus(taskId, status);
-  }
-
-  async fetchTaskPage(taskId: string): Promise<string> {
-    const page = await this.client.fetchTaskPage(taskId);
-    return page.rawMarkdown;
-  }
-}
-
-```
-
-### `packages/backend/src/tasks/LocalTaskBackend.ts`
-```
-import fs from 'fs';
-import path from 'path';
-import yaml from 'js-yaml';
-import type { TaskBackend } from './TaskBackend';
-import type { ResolvedTask, NotionTask } from '../notion/types';
-import { DependencyResolver } from '../notion/DependencyResolver';
-import { upsertTaskCache } from '../db/queries';
-
-// ── tasks.yaml schema ────────────────────────────────────────────────────────
-
-interface LocalTask {
-  id: string;
-  name: string;
-  status: string; // Backlog | Ready | In Progress | In Review | Done
-  priority?: string; // High | Medium | Low
-  type?: string; // Code | Planning | Testing
-  depends_on?: string[];
-  pr_url?: string | null;
-  context?: string;
-  acceptance_criteria?: string;
-  files_affected?: string[];
-  notes?: string;
-}
-
-interface LocalMilestone {
-  id: string;
-  name: string;
-  tasks: LocalTask[];
-}
-
-/** New milestone-keyed schema. */
-interface MilestoneTasksFile {
-  project?: { id: string; name?: string };
-  milestones: LocalMilestone[];
-}
-
-/** Old flat schema, kept only for migration. */
-interface FlatTasksFile {
-  board_id?: string;
-  tasks: LocalTask[];
-}
-
-type AnyTasksFile = MilestoneTasksFile | FlatTasksFile;
-
-// ── Status mapping ───────────────────────────────────────────────────────────
-
-const STATUS_DISPLAY: Record<string, string> = {
-  Backlog: '🔲 Backlog',
-  Ready: '🗂️ Ready',
-  'In Progress': '🔄 In Progress',
-  'In Review': '👀 In Review',
-  Done: '✅ Done',
-};
-
-const TYPE_DISPLAY: Record<string, string> = {
-  Code: '💻 Code',
-  Planning: '📋 Planning',
-  Testing: '🧪 Testing',
-};
-
-function toDisplayStatus(status: string): string {
-  return STATUS_DISPLAY[status] ?? status;
-}
-
-function toDisplayType(type: string): string {
-  return TYPE_DISPLAY[type] ?? type;
-}
-
-function fromDisplayStatus(display: string): string {
-  const entry = Object.entries(STATUS_DISPLAY).find(([, v]) => v === display);
-  return entry ? entry[0] : display;
-}
-
-// ── Schema helpers ───────────────────────────────────────────────────────────
-
-function isMilestoneSchema(
-  parsed: AnyTasksFile | null,
-): parsed is MilestoneTasksFile {
-  return !!parsed && Array.isArray((parsed as MilestoneTasksFile).milestones);
-}
-
-function isFlatSchema(parsed: AnyTasksFile | null): parsed is FlatTasksFile {
-  return !!parsed && Array.isArray((parsed as FlatTasksFile).tasks);
-}
-
-// ── LocalTaskBackend ─────────────────────────────────────────────────────────
-
-const resolver = new DependencyResolver();
-
-/**
- * File-based implementation of TaskBackend. Reads/writes task definitions from
- * `<projectDir>/tasks.yaml` using the milestone-keyed schema. Old flat-schema
- * files are auto-migrated on first read.
- */
-export class LocalTaskBackend implements TaskBackend {
-  readonly type = 'local' as const;
-
-  constructor(private readonly projectDir: string) {}
-
-  private get filePath(): string {
-    return path.join(this.projectDir, 'tasks.yaml');
-  }
-
-  /** Read tasks.yaml, migrating old flat schema to milestone schema if needed. */
-  private readFile(): MilestoneTasksFile {
-    if (!fs.existsSync(this.filePath)) {
-      throw new Error(
-        `[LocalTaskBackend] tasks.yaml not found at ${this.filePath}`,
-      );
-    }
-    const raw = fs.readFileSync(this.filePath, 'utf-8');
-    const parsed = yaml.load(raw) as AnyTasksFile | null;
-
-    if (isMilestoneSchema(parsed)) {
-      return parsed;
-    }
-
-    if (isFlatSchema(parsed)) {
-      const migrated = this.migrateFlatToMilestones(parsed);
-      this.writeFile(migrated);
-      console.log(
-        `[LocalTaskBackend] Migrated ${this.filePath} to milestone schema.`,
-      );
-      return migrated;
-    }
-
-    throw new Error(
-      `[LocalTaskBackend] tasks.yaml at ${this.filePath} is missing both 'milestones' and 'tasks' keys`,
-    );
-  }
-
-  /** Wrap a flat-schema file's tasks under a single milestone. */
-  private migrateFlatToMilestones(flat: FlatTasksFile): MilestoneTasksFile {
-    const id =
-      flat.board_id && flat.board_id !== 'default' ? flat.board_id : 'm1';
-    const name =
-      flat.board_id && flat.board_id !== 'default' ? flat.board_id : 'Default';
-    return {
-      milestones: [{ id, name, tasks: flat.tasks ?? [] }],
+import { GITHUB_TOKEN, GITHUB_REPO } from '../config';
+import {
+  GitHubApiError,
+  PullRequest,
+  PRDiff,
+  MergeResult,
+  FailingCheck,
+  MergeabilityCategory,
+} from './types';
+import { getPRByNumber } from '../db/queries';
+
+/** GitHub check-run conclusions that indicate the check did not pass. */
+const FAILING_CHECK_CONCLUSIONS: ReadonlySet<string> = new Set([
+  'failure',
+  'timed_out',
+  'action_required',
+  'cancelled',
+  'stale',
+  'startup_failure',
+]);
+
+export class GitHubClient {
+  private readonly base = 'https://api.github.com';
+  private readonly headers: HeadersInit;
+
+  constructor() {
+    this.headers = {
+      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
     };
   }
 
-  private writeFile(file: MilestoneTasksFile): void {
-    fs.writeFileSync(
-      this.filePath,
-      yaml.dump(file, { lineWidth: 120 }),
-      'utf-8',
+  async listOpenPRs(repo?: string): Promise<PullRequest[]> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<GitHubRawPR[]>(
+      `/repos/${r}/pulls?state=open&per_page=100`,
     );
+    return data.map((pr) => mapPR(pr));
   }
 
-  private mapToNotionTask(t: LocalTask): NotionTask {
+  async getPRState(
+    prNumber: number,
+    repo?: string,
+  ): Promise<'open' | 'merged' | 'closed'> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<{ state: string; merged: boolean }>(
+      `/repos/${r}/pulls/${prNumber}`,
+    );
+    if (data.merged) return 'merged';
+    if (data.state === 'closed') return 'closed';
+    return 'open';
+  }
+
+  async fetchPR(repo: string, prNumber: number): Promise<PullRequest> {
+    const data = await this.request<GitHubRawPR>(
+      `/repos/${repo}/pulls/${prNumber}`,
+    );
+    return mapPR(data);
+  }
+
+  async getMergeability(
+    prNumber: number,
+    repo?: string,
+  ): Promise<{ mergeable: boolean | null; mergeableState: string | null }> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<GitHubRawPR>(
+      `/repos/${r}/pulls/${prNumber}`,
+    );
     return {
-      id: t.id,
-      title: t.name,
-      status: toDisplayStatus(t.status),
-      type: toDisplayType(t.type ?? 'Code'),
-      dependsOn: t.depends_on ?? [],
-      notionUrl: '',
-      prUrl: t.pr_url ?? undefined,
-      priority: t.priority,
+      mergeable: data.mergeable ?? null,
+      mergeableState: data.mergeable_state ?? null,
     };
   }
 
-  /** Locate the milestone containing a given task id, or undefined. */
-  private findTaskById(
-    file: MilestoneTasksFile,
-    taskId: string,
-  ): { milestone: LocalMilestone; task: LocalTask } | undefined {
-    for (const m of file.milestones) {
-      const task = m.tasks.find((t) => t.id === taskId);
-      if (task) return { milestone: m, task };
+  // Retry getMergeability with exponential backoff (2s, 4s, 8s, 16s, 32s) when
+  // GitHub returns mergeable: null. After all 5 retries, returns the last (still-null) result.
+  async getMergeabilityWithRetry(
+    prNumber: number,
+    repo?: string,
+    sleep: (ms: number) => Promise<void> = (ms) =>
+      new Promise((r) => setTimeout(r, ms)),
+  ): Promise<{ mergeable: boolean | null; mergeableState: string | null }> {
+    const delays = [2000, 4000, 8000, 16000, 32000];
+    let result = await this.getMergeability(prNumber, repo);
+    for (const delay of delays) {
+      if (result.mergeable !== null) return result;
+      await sleep(delay);
+      result = await this.getMergeability(prNumber, repo);
     }
-    return undefined;
+    if (result.mergeable === null) {
+      console.warn(
+        `[GitHubClient] getMergeability still null after retries for PR #${prNumber} in ${repo ?? GITHUB_REPO} — skipping`,
+      );
+    }
+    return result;
   }
 
-  async fetchReadyTasks(
-    milestoneId: string | null,
-    _skipCache?: boolean,
-  ): Promise<ResolvedTask[]> {
-    const file = this.readFile();
-    let allTasks: ReturnType<typeof this.mapToNotionTask>[];
-    if (milestoneId === null) {
-      allTasks = file.milestones.flatMap((m) =>
-        m.tasks.map((t) => this.mapToNotionTask(t)),
+  async fetchDiff(
+    prId: number,
+    repo?: string,
+    branches?: { base: string; head: string },
+  ): Promise<PRDiff> {
+    const r = repo ?? GITHUB_REPO;
+    let diff: string;
+    if (branches) {
+      // Explicit three-dot compare endpoint — guarantees merge-base semantics
+      diff = await this.request<string>(
+        `/repos/${r}/compare/${branches.base}...${branches.head}`,
+        { headers: { ...this.headers, Accept: 'application/vnd.github.diff' } },
       );
     } else {
-      const milestone = file.milestones.find((m) => m.id === milestoneId);
-      if (!milestone) {
-        throw new Error(
-          `[LocalTaskBackend] milestone not found in ${this.filePath}: ${milestoneId}`,
-        );
+      diff = await this.request<string>(`/repos/${r}/pulls/${prId}`, {
+        headers: { ...this.headers, Accept: 'application/vnd.github.diff' },
+      });
+    }
+    const filesChanged = parseDiffFiles(diff);
+    return { prId, diff, filesChanged };
+  }
+
+  async markPRReady(repo: string, prNumber: number): Promise<void> {
+    const prRow = getPRByNumber(prNumber, repo);
+    if (!prRow?.node_id) {
+      const pr = await this.fetchPR(repo, prNumber);
+      await this.markPRReadyByNodeId(pr.nodeId);
+      return;
+    }
+    await this.markPRReadyByNodeId(prRow.node_id);
+  }
+
+  private async markPRReadyByNodeId(nodeId: string): Promise<void> {
+    const query = `mutation($pullRequestId: ID!) {
+      markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) {
+        pullRequest { isDraft }
       }
-      allTasks = milestone.tasks.map((t) => this.mapToNotionTask(t));
-      upsertTaskCache(`board:${milestoneId}`, JSON.stringify(allTasks));
+    }`;
+    const res = await fetch('https://api.github.com/graphql', {
+      method: 'POST',
+      headers: {
+        ...this.headers,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ query, variables: { pullRequestId: nodeId } }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new GitHubApiError(res.status, text);
     }
-    for (const task of allTasks) {
-      upsertTaskCache(task.id, JSON.stringify(task));
-    }
-    return resolver.resolve(allTasks);
-  }
-
-  async attachPR(taskId: string, prUrl: string): Promise<void> {
-    const file = this.readFile();
-    const found = this.findTaskById(file, taskId);
-    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
-    found.task.pr_url = prUrl;
-    this.writeFile(file);
-  }
-
-  async updateStatus(taskId: string, status: string): Promise<void> {
-    const file = this.readFile();
-    const found = this.findTaskById(file, taskId);
-    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
-    found.task.status = fromDisplayStatus(status);
-    this.writeFile(file);
-  }
-
-  async fetchTaskPage(taskId: string): Promise<string> {
-    const file = this.readFile();
-    const found = this.findTaskById(file, taskId);
-    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
-    const task = found.task;
-
-    const sections: string[] = [`# ${task.name}`];
-    if (task.context?.trim()) {
-      sections.push(`## Context\n${task.context.trim()}`);
-    }
-    if (task.acceptance_criteria?.trim()) {
-      sections.push(
-        `## Acceptance Criteria\n${task.acceptance_criteria.trim()}`,
+    const body = (await res.json()) as { errors?: Array<{ message: string }> };
+    if (body.errors?.length) {
+      throw new GitHubApiError(
+        422,
+        body.errors.map((e) => e.message).join('; '),
       );
     }
-    if (task.files_affected && task.files_affected.length > 0) {
-      sections.push(
-        `## Files\n${task.files_affected.map((f) => `- ${f}`).join('\n')}`,
-      );
-    }
-    if (task.notes?.trim()) {
-      sections.push(`## Notes\n${task.notes.trim()}`);
-    }
-    return sections.join('\n\n');
   }
+
+  /**
+   * Fetch failing check-runs for a given commit SHA. Used to distinguish
+   * "blocked by failing CI" from "blocked by branch protection" when a merge
+   * attempt fails with 409/405 or when mergeable_state is `unstable`/`blocked`.
+   */
+  async getFailingChecks(sha: string, repo?: string): Promise<FailingCheck[]> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<{
+      check_runs: Array<{
+        name: string;
+        status: string;
+        conclusion: string | null;
+      }>;
+    }>(`/repos/${r}/commits/${sha}/check-runs?per_page=100`);
+    return data.check_runs
+      .filter(
+        (c) =>
+          c.status === 'completed' &&
+          c.conclusion !== null &&
+          FAILING_CHECK_CONCLUSIONS.has(c.conclusion),
+      )
+      .map((c) => ({ name: c.name, conclusion: c.conclusion as string }));
+  }
+
+  /**
+   * Map GitHub's mergeable_state (plus check-runs when relevant) onto a single
+   * category so the dashboard can tell merge conflicts apart from CI failures
+   * and branch-protection blocks. Returns `clean` when mergeable, otherwise one
+   * of `conflict` / `ci_failed` / `blocked` / `unknown`.
+   *
+   * Called after a 409/405 merge failure to pick the right remediation, and by
+   * PRMergeWatcher polling so the state is reflected before the user clicks Merge.
+   *
+   * @param ciCheckNames When non-empty, only checks in this list are considered
+   *   when categorizing CI failures. Checks not in the list are ignored. A named
+   *   check absent from the PR's check-runs is treated as pending (unknown).
+   *   When empty (default), all checks count — existing behaviour.
+   */
+  async categorizeMergeability(
+    prNumber: number,
+    repo?: string,
+    ciCheckNames: string[] = [],
+  ): Promise<MergeabilityCategory> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<GitHubRawPR>(
+      `/repos/${r}/pulls/${prNumber}`,
+    );
+    return this.categorizeFromRawPR(data, r, ciCheckNames);
+  }
+
+  /**
+   * Conditional PR status fetch with ETag/If-None-Match support. Returns the
+   * categorized mergeability when GitHub returns 200 (with the new ETag), or
+   * `{ status: 'not_modified' }` when GitHub returns 304 (no body, ETag stays
+   * the same). Used by AutoMerger to avoid burning GitHub quota while polling
+   * a slow-to-change PR.
+   */
+  async fetchPRStatusConditional(
+    prNumber: number,
+    repo: string,
+    etag?: string | null,
+    ciCheckNames: string[] = [],
+  ): Promise<
+    | { status: 'not_modified'; etag: string | null }
+    | {
+        status: 'ok';
+        etag: string | null;
+        state: 'open' | 'closed' | 'merged';
+        mergeability: MergeabilityCategory;
+        headSha: string | null;
+      }
+  > {
+    const url = `${this.base}/repos/${repo}/pulls/${prNumber}`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    };
+    if (etag) headers['If-None-Match'] = etag;
+    const res = await fetch(url, { headers });
+    if (res.status === 304) {
+      return { status: 'not_modified',
+[... truncated]
+```
+
+### `packages/backend/src/session/orchestrator-claudemd.ts`
+```
+export interface OrchestratorClaudeMdParams {
+  taskName: string;
+  taskUrl: string;
+  projectContextUrl: string;
+  targetBranch: string;
+  /** Absolute path to the worktree directory. Injected into Git Isolation rules. */
+  worktreePath: string;
+  /**
+   * Verify commands the session runs before opening the PR (typecheck, build, tests).
+   * Format and lint are handled by orchestrator autofix — not included here.
+   * Rendered from the project's `.claude-orchestrator.yml` verify list.
+   * When empty or omitted, the gate shows a "no local verify" fallback.
+   */
+  verify?: string[];
+  /**
+   * Bash rules (Rule 5+). Each item is the full rule text — the first line
+   * becomes the bold heading, subsequent lines become the body paragraph.
+   * Defaults to the `npx` convention when omitted.
+   */
+  bashRules?: string[];
+  /**
+   * Task backend type. When 'local', the lifecycle instructions are adjusted
+   * to skip Notion fetch steps and read tasks.yaml instead.
+   */
+  taskBackend?: 'notion' | 'local';
+  /**
+   * Pre-fetched task spec markdown. When provided, the task content is injected
+   * directly into the CLAUDE.md and the session skips Notion fetching entirely.
+   */
+  taskContent?: string;
+  /**
+   * Optional contents of `.claude/local-context.md` from the project root.
+   * Appended to the merged CLAUDE.md so orchestrator-launched sessions see the
+   * same host-local context (Notion URLs, etc.) as direct Claude Code sessions.
+   * Omitted when the file is absent (e.g. fresh clone).
+   */
+  localContext?: string;
+  /**
+   * Git mode for the project. 'local-only' omits PR-related lifecycle steps
+   * and GitHub instructions; 'github' (default) keeps the full PR flow.
+   */
+  gitMode?: 'github' | 'local-only';
 }
 
+/**
+ * Build the orchestrator CLAUDE.md header content to inject into each session worktree.
+ *
+ * Returns a markdown string with all orchestrator rule sections (sections 1-9).
+ * Section 10 — the separator and "# Project Instructions" heading — is appended by
+ * the caller along with the project's own CLAUDE.md content.
+ *
+ * Section inventory:
+ *  1. Header with override warning
+ *  2. Task assignment (task name, Notion URL, project context URL)
+ *  3. Lifecycle steps
+ *  4. Status ownership
+ *  5. PR format standards
+ *  6. Branch rules
+ *  7. Pre-PR gate
+ *  8. Forbidden actions
+ *  9. Git isolation
+ * 10. Bash rules (permission system)
+ * 11. Separator + "# Project Instructions (from project CLAUDE.md)" (added by caller)
+ */
+export function buildOrchestratorClaudeMd(
+  params: OrchestratorClaudeMdParams,
+): string {
+  const {
+    taskName,
+    taskUrl,
+    projectContextUrl,
+    targetBranch,
+    worktreePath,
+    verify,
+    bashRules,
+    taskBackend = 'notion',
+    taskContent,
+    localContext,
+    gitMode = 'github',
+  } = params;
+
+  const resolvedBashRules = bashRules ?? [
+    'Use `npx` instead of bare tool names.\n`tsc` → `npx tsc`. Bare commands may not be on PATH.',
+  ];
+
+  const bashRulesText = resolvedBashRules
+    .map((rule, i) => {
+      const ruleNum = i + 5;
+      const lines = rule.split('\n');
+      const heading = lines[0];
+      const body = lines.slice(1).join('\n');
+      return `**Rule ${ruleNum} — ${heading}**${body ? '\n' + body : ''}`;
+    })
+    .join('\n\n');
+
+  // Sections 1-9 — returned by this function.
+  // Section 10 (separator + project instructions heading) is written by the caller.
+  return `# Orchestrator Rules (DO NOT OVERRIDE)
+
+> ⚠️ These rules are injected by the dashboard orchestrator and take priority over any
+> project-level instructions below. Do not remove, reorder, or override them.
+
+---
+
+## Task Assignment
+
+- **Task**: ${taskName}
+- **Notion task**: ${taskUrl}
+- **Project context**: ${projectContextUrl}
+
+---
+
+## Lifecycle
+
+Follow these steps in order — every session:
+
+${
+  taskContent
+    ? `> **Task spec is pre-loaded below.** Do NOT fetch Notion pages — the task content has
+> already been injected by the orchestrator. Proceed directly to implementation.
+
+1. Read the **Task Spec** section below — it contains the full task specification.
+2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
+    : taskBackend === 'local'
+      ? `> ⚠️ **YAML task source**: Task context comes from \`tasks.yaml\` in the project root, not Notion.
+> Skip step 1 (Notion fetch) and instead read \`tasks.yaml\` for task context.
+
+1. Read \`tasks.yaml\` in the project root for task context (skip Notion fetch).
+2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
+      : `1. Fetch the Notion task page and project context page.
+2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
+}
+3. Implement the task per the acceptance criteria.
+4. Pass the pre-PR gate (see Pre-PR Gate section below).
+${
+  gitMode === 'local-only'
+    ? `5. Commit your changes on the feature branch. **No GitHub PR is required** — this is a local-only project.
+6. **Stop and wait.** The dashboard will show a "Mark Merged" button once the review passes.
+   Await review feedback as follow-up messages and address findings by pushing additional commits.`
+    : `5. Open a draft PR targeting \`${targetBranch}\` using the required body template.
+6. **Stop and wait.** The dashboard sends review feedback as follow-up messages.
+   Address findings by pushing additional commits, then wait again.`
+}
+
+---
+
+## Status Ownership
+
+**Do NOT update Notion task status.**
+**Do NOT call any Notion API to change task status.**
+The orchestrator backend handles all status transitions (In Progress → In Review → Done).
+
+---
+
+## Efficiency Rules
+
+This session runs in \`--print\` mode with no human watching the output.
+Optimize for speed and token efficiency:
+
+- **Do NOT use TodoWrite.** No one sees the todo list. Track your progress internally.
+- **Do NOT use Agent subagents for exploration.** Use Glob and Grep directly.
+- **Minimize tool calls.** Batch independent reads. Don't re-read files you already read.
+- **Keep commit messages and PR descriptions concise.** One sentence summaries, not essays.
+
+---
+
+${
+  gitMode === 'local-only'
+    ? ``
+    : `## PR Format Standards
+
+- **Title**: \`feat: <task-name>\` — no scope prefix like \`(backend)\`, no milestone tags.
+- **How to create the PR**: Use the \`mcp__github__create_pull_request\` MCP tool.
+  Do NOT use \`gh pr create\` — the \`gh\` CLI is not on PATH.
+  Pass \`draft: true\`, \`base: "${targetBranch}"\`, and the full body as the \`body\` parameter.
+- **Required body sections** (no omissions, no reordering):
+
+\`\`\`
+## Summary
+<1-3 sentences: what changed and why>
+
+## Notion Task
+<link to the Notion task page>
+
+## Automated Tests
+<list tests added/modified, or "No test changes">
+
+## Files Changed
+<bulleted list of files with brief description of each change>
+\`\`\`
+
+---
+`
+}
+## Branch Rules
+
+- Branch name: \`feature/<task-name>\` from \`${targetBranch}\`
+- Never commit directly to \`${targetBranch}\` or \`main\`
+${
+  gitMode === 'local-only'
+    ? `- One task per session — no scope creep`
+    : `- Never merge your own PR
+- One task per session — no scope creep`
+}
+
+---
+
+${(() => {
+  const verifyItems = verify && verify.length > 0 ? verify : null;
+  const verifySteps = verifyItems
+    ? verifyItems
+        .map((cmd, i) => `${i + 4}. \`${cmd}\` — must pass.`)
+        .join('\n')
+    : `4. No local verify step configured — CI is the gate.`;
+  const stageNum = verifyItems ? verifyItems.length + 4 : 5;
+  return `## Pre-PR Gate
+
+Run in order — all must pass before opening the PR:
+
+1. Stash CLAUDE.md before rebasing: \`git stash push CLAUDE.md\`
+2. Rebase onto \`${targetBranch}\` and resolve any conflicts.
+3. Restore CLAUDE.md: \`git stash pop\`
+${verifySteps}
+${stageNum}. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.`;
+})()}
+
+---
+
+## Forbidden Actions
+
+- Never push directly to \`main\`
+- Never force push (\`--force\`)
+- Never delete branches that live outside this worktree
+- Never run \`git reset --hard\` on the main 
+[... truncated]
+```
+
+### `packages/backend/src/session/AgentSession.ts`
+```
+import { EventEmitter } from 'events';
+import { ALLOWED_TOOLS, runtimeSettings } from '../config';
+import {
+  upsertSessionEvent,
+  updateSessionStatus,
+  markSessionDone,
+  getEventsBySession,
+  insertPermissionDenial,
+  upsertPullRequest,
+  incrementTokens,
+  insertSessionAudit,
+  setSessionModel,
+  setSessionMetadata,
+  getPRBySessionId,
+  getPRByNumber,
+  setHeadSha,
+  setPauseReason,
+  getProjectRowById,
+  insertLocalBranch,
+} from '../db/queries';
+import {
+  getCurrentBranch,
+  hasNonEmptyDiff,
+} from '../orchestration/localBranchHelpers';
+import type { ServerMessage, PermissionDenial } from '../ws/types';
+import { emitTaskUpdated } from '../routes/tasks';
+import { getTaskBackend } from '../tasks/TaskBackend';
+import type { TaskBackend } from '../tasks/TaskBackend';
+import type { GitHubClient } from '../github/GitHubClient';
+import { isSystemOnlyUserEvent } from '../utils/eventFilters';
+import { SessionAuditor } from './SessionAuditor';
+import type { ISessionManager } from './SessionAuditor';
+import type { ISessionRunner } from './SessionRunner';
+import { CliSessionRunner } from './CliSessionRunner';
+import {
+  VALID_EVENT_TYPES,
+  SILENT_SKIP_TYPES,
+  toEventType,
+} from './eventTypes';
+
+const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
+
+/**
+ * Returns true if the tool call represents a git push operation.
+ * Exported for unit testing.
+ */
+export function isPushCommand(toolName: string, toolInput: string): boolean {
+  if (toolName === 'mcp__github__push_files') return true;
+  if (
+    toolName === 'Bash' &&
+    /git\s+push/.test(toolInput) &&
+    !toolInput.includes('--dry-run')
+  )
+    return true;
+  return false;
+}
+
+function sessionLog(sessionId: string, ...args: unknown[]) {
+  console.log(`[Session ${sessionId.slice(0, 8)}]`, ...args);
+}
+
+/** Parse the Notion page ID out of a notion.so URL or return the raw value. */
+export function parseNotionPageId(url: string): string {
+  const match = url.match(/([a-f0-9]{32})$/i);
+  if (match) return match[1];
+  const uuidMatch = url.match(/([0-9a-f-]{36})$/i);
+  if (uuidMatch) return uuidMatch[1].replace(/-/g, '');
+  return url;
+}
+
+/**
+ * Merge assistant message content blocks so that text blocks emitted in earlier
+ * streaming events are not lost when later streaming events contain only tool_use
+ * blocks. The Claude CLI can stream multiple `assistant` events for the same message
+ * turn (sharing the same `message.id`) — first text, then tool_use — so we must
+ * accumulate rather than replace.
+ */
+function mergeAssistantContent(
+  existing: Array<Record<string, unknown>>,
+  incoming: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  const existingText = existing.filter((b) => b.type === 'text');
+  const incomingText = incoming.filter((b) => b.type === 'text');
+
+  // Prefer incoming text blocks (they contain the most up-to-date streamed content).
+  // If the incoming event has no text blocks, preserve the existing ones.
+  const textBlocks = incomingText.length > 0 ? incomingText : existingText;
+
+  // Merge tool_use blocks by id so we don't duplicate them across streaming events.
+  const toolUseById = new Map<string, Record<string, unknown>>();
+  for (const b of existing) {
+    if (b.type === 'tool_use' && typeof b.id === 'string')
+      toolUseById.set(b.id, b);
+  }
+  for (const b of incoming) {
+    if (b.type === 'tool_use' && typeof b.id === 'string')
+      toolUseById.set(b.id, b);
+  }
+
+  return [...textBlocks, ...toolUseById.values()];
+}
+
+export class AgentSession extends EventEmitter {
+  private isKilling = false;
+  public prUrl: string | undefined;
+  /** True once a session_ended message has been broadcast. */
+  public hasEnded = false;
+  /** Maps message_id → DB row id for deduplicating streaming assistant events. */
+  private messageIdMap = new Map<string, number>();
+  /** Maps message_id → accumulated content blocks, so text is not lost when
+   *  tool_use arrives in a later streaming event for the same message. */
+  private messageContentMap = new Map<string, Array<Record<string, unknown>>>();
+  /** Maps tool_use_id → tool_name for PR creation tools, for real-time detection. */
+  private pendingGHToolUseIds = new Map<string, string>();
+  /** Maps tool_use_id → Bash command string, for push detection. */
+  private pendingBashCommands = new Map<string, string>();
+  /** Tracks mcp__github__push_files tool_use IDs awaiting a successful tool_result. */
+  private pendingPushFileToolUseIds = new Set<string>();
+  /** True once a PR was detected and inserted during the live session. */
+  private prDetectedLive = false;
+  /** Accumulated token counts for this session (in-memory, synced to SQLite). */
+  private totalInputTokens = 0;
+  private totalOutputTokens = 0;
+  /** Model name extracted from the first assistant event (e.g. 'claude-sonnet-4-6'). */
+  public model: string | null = null;
+  /** Count of consecutive transient-error retries for this session instance. Resets on clean exit. */
+  private retryCount = 0;
+  /** Guard: fires at most once per session to avoid duplicate pause broadcasts. */
+  private inSessionApiErrorFired = false;
+
+  /** The underlying I/O adapter (CLI subprocess or Agent SDK). */
+  private runner: ISessionRunner;
+
+  constructor(
+    public readonly sessionId: string,
+    public readonly taskUrl: string,
+    public readonly projectContextUrl: string,
+    /**
+     * Optional fixed task backend used by tests. In production this is undefined
+     * and the backend is resolved per-call via `getTaskBackend(projectId)`.
+     */
+    private readonly taskBackendOverride: TaskBackend | undefined,
+    private readonly worktreePath: string,
+    public readonly taskId: string,
+    private readonly resumeSessionId?: string,
+    private readonly customPrompt?: string,
+    public readonly sessionType: string = 'standard',
+    private readonly sessionManager?: ISessionManager,
+    private readonly githubClient?: GitHubClient,
+    private readonly extraAllowedTools: string[] = [],
+    /**
+     * System prompt content for API mode.
+     * In CLI mode this is written to CLAUDE.md in the worktree before spawn.
+     * In API mode this is passed directly to the Agent SDK as systemPrompt.
+     */
+    private readonly systemPromptContent?: string,
+    /**
+     * The session runner to use. Defaults to CliSessionRunner.
+     * Pass an ApiSessionRunner instance when SESSION_MODE=api.
+     */
+    runner?: ISessionRunner,
+    /**
+     * Project id used to resolve the task backend at call time when
+     * `taskBackendOverride` is undefined. Appended at the end so legacy
+     * positional callers (tests) need not be touched.
+     */
+    public readonly projectId: string = '',
+  ) {
+    super();
+    this.runner = runner ?? new CliSessionRunner(sessionId);
+  }
+
+  /** Resolve the per-project task backend, preferring the test override when present. */
+  private taskBackend(): TaskBackend {
+    return this.taskBackendOverride ?? getTaskBackend(this.projectId);
+  }
+
+  async run(): Promise<void> {
+    this.broadcast({
+      type: 'session_status',
+      sessionId: this.sessionId,
+      status: 'running',
+    });
+    updateSessionStatus(this.sessionId, 'running');
+
+    const initialPrompt =
+      this.customPrompt ??
+      `
+You are a Claude Code session managed by Claude Code Orchestrator.
+
+## Task
+Task page: ${this.taskUrl}
+
+Read CLAUDE.md in the repo root — it contains the full task spec and all rules.
+Begin implementing the task immediately. Do NOT fetch Notion pages.
+
+## Lifecycle
+1. Read CLAUDE.md for the task spec, orchestrator rules, and project conventions.
+2. Create a feature branch from the project's base branch.
+3. Implement the task per the acceptance criteria in the Task Spec section of CLAUDE.md.
+4. Pass the pre-PR gate as specified in CLAUDE.md.
+5. Open a draft PR as specified in CLAUDE.md.
+6. After the PR is open, WAIT. Do not merge.
+   The dashboard will send review feedback as follow-up messages.
+   Address findings by pushing additional commits, then wait ag
+[... truncated]
 ```
 
 ---

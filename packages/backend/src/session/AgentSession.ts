@@ -1,6 +1,5 @@
 import { EventEmitter } from 'events';
 import { ALLOWED_TOOLS, runtimeSettings } from '../config';
-import { recordEvent } from '../audit/AuditLog';
 import {
   upsertSessionEvent,
   updateSessionStatus,
@@ -28,6 +27,12 @@ import { emitTaskUpdated } from '../routes/tasks';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { GitHubClient } from '../github/GitHubClient';
+import {
+  validatePRBody,
+  buildValidationComment,
+} from '../github/PRBodyValidator';
+import { checkCommitAttribution } from '../github/CommitAttributionWatcher';
+import { recordEvent } from '../audit/AuditLog';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import { SessionAuditor } from './SessionAuditor';
 import type { ISessionManager } from './SessionAuditor';
@@ -723,6 +728,58 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           }
         })();
       }
+
+      // Validate PR body against required template.
+      const bodyValidation = validatePRBody(prShape.body);
+      if (!bodyValidation.valid) {
+        const isCorporate = runtimeSettings.corporate_mode_enabled;
+        recordEvent({
+          event_type: isCorporate
+            ? 'pr_body_invalid'
+            : 'pr_body_invalid_warning',
+          actor_type: 'ai',
+          actor_id: this.sessionId,
+          project_id: this.projectId || null,
+          task_id: this.taskId || null,
+          payload: {
+            pr_number: prNumber,
+            repo,
+            missing_sections: bodyValidation.missingSections,
+          },
+        });
+        if (isCorporate) {
+          setPauseReason(prNumber, repo, 'pr_body_invalid');
+          if (this.githubClient) {
+            const ghClient = this.githubClient;
+            const comment = buildValidationComment(
+              bodyValidation.missingSections,
+            );
+            void ghClient
+              .createIssueComment(repo, prNumber, comment)
+              .catch((e) =>
+                console.warn(`[AgentSession] createIssueComment failed: ${e}`),
+              );
+          }
+        }
+      }
+
+      // Apply ai-authored label server-side after PR creation.
+      if (this.githubClient) {
+        const ghClient = this.githubClient;
+        void (async () => {
+          try {
+            await ghClient.ensureLabelExists(
+              repo,
+              'ai-authored',
+              '0075ca',
+              'Opened by an AI coding session',
+            );
+            await ghClient.addLabelToPR(repo, prNumber, 'ai-authored');
+          } catch (e) {
+            console.warn(`[AgentSession] ai-authored label failed: ${e}`);
+          }
+        })();
+      }
     }
 
     this.broadcast({ type: 'pr_created', sessionId: this.sessionId, prUrl });
@@ -759,6 +816,22 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         prNumber: pr.pr_number,
         repo: pr.repo,
       });
+
+      // Fire-and-forget: verify commit attribution trailers.
+      if (this.githubClient) {
+        const ghClient = this.githubClient;
+        void checkCommitAttribution(
+          ghClient,
+          pr.repo,
+          pr.pr_number,
+          this.sessionId,
+          this.projectId || null,
+          this.taskId || null,
+          runtimeSettings.corporate_mode_enabled,
+        ).catch((e) =>
+          console.warn(`[AgentSession] checkCommitAttribution failed: ${e}`),
+        );
+      }
     }
   }
 

@@ -38,6 +38,10 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Awaiting human approval — approve the PR to proceed with auto-merge.',
   human_changes_requested:
     'Human reviewer requested changes — address the feedback and push.',
+  pr_body_invalid:
+    'PR body missing required sections — update the PR description and resume.',
+  attribution_missing:
+    'Commit attribution trailer missing — add AI-Authored-By to commits and push.',
 };
 
 function verdictLabel(verdict: string): string {

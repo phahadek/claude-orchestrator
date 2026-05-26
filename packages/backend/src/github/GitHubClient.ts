@@ -451,6 +451,65 @@ export class GitHubClient {
     return { failingChecks, hasMissingNamedCheck };
   }
 
+  /** Fetch the list of commits for a pull request. */
+  async getCommitsForPR(
+    repo: string,
+    prNumber: number,
+  ): Promise<Array<{ sha: string; message: string }>> {
+    const data = await this.request<
+      Array<{ sha: string; commit: { message: string } }>
+    >(`/repos/${repo}/pulls/${prNumber}/commits?per_page=100`);
+    return data.map((c) => ({ sha: c.sha, message: c.commit.message }));
+  }
+
+  /**
+   * Ensure a label exists on the repo, creating it if absent.
+   * Silently ignores 422 (already exists) from a race condition.
+   */
+  async ensureLabelExists(
+    repo: string,
+    name: string,
+    color: string,
+    description: string,
+  ): Promise<void> {
+    try {
+      await this.request(`/repos/${repo}/labels`, {
+        method: 'POST',
+        headers: { ...this.headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, color, description }),
+      });
+    } catch (err) {
+      if (err instanceof GitHubApiError && err.status === 422) return;
+      throw err;
+    }
+  }
+
+  /** Apply a label to a pull request (issues endpoint works for PRs too). */
+  async addLabelToPR(
+    repo: string,
+    prNumber: number,
+    label: string,
+  ): Promise<void> {
+    await this.request(`/repos/${repo}/issues/${prNumber}/labels`, {
+      method: 'POST',
+      headers: { ...this.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ labels: [label] }),
+    });
+  }
+
+  /** Post a comment on a pull request. */
+  async createIssueComment(
+    repo: string,
+    prNumber: number,
+    body: string,
+  ): Promise<void> {
+    await this.request(`/repos/${repo}/issues/${prNumber}/comments`, {
+      method: 'POST',
+      headers: { ...this.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body }),
+    });
+  }
+
   async mergePR(
     prId: number,
     commitTitle: string,
