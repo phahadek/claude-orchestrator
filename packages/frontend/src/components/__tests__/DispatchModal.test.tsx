@@ -22,6 +22,7 @@ const makeTask = (
   blockers: [],
   nonCode: false,
   wave: 1,
+  source: 'notion' as const,
   ...overrides,
 });
 

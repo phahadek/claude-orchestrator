@@ -7,8 +7,8 @@ vi.mock('../db/db.js', async () => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       session_id          TEXT    PRIMARY KEY,
-      notion_task_id      TEXT,
-      notion_task_url     TEXT,
+      task_id             TEXT,
+      task_url            TEXT,
       project_context_url TEXT,
       status              TEXT    NOT NULL,
       started_at          INTEGER NOT NULL,
@@ -47,9 +47,9 @@ vi.mock('../db/db.js', async () => {
       match_type TEXT NOT NULL, decision TEXT NOT NULL, label TEXT, enabled INTEGER NOT NULL DEFAULT 1
     );
     CREATE TABLE IF NOT EXISTS task_cache (
-      notion_task_id TEXT    PRIMARY KEY,
-      fetched_at     INTEGER NOT NULL,
-      raw_json       TEXT    NOT NULL
+      task_id    TEXT    PRIMARY KEY,
+      fetched_at INTEGER NOT NULL,
+      raw_json   TEXT    NOT NULL
     );
     CREATE TABLE IF NOT EXISTS pull_requests (
       id                     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,7 +119,7 @@ function insertMilestone(id: string, pId: string, sId: string | null) {
 function insertBoardCache(key: string, taskIds: string[]) {
   (db as import('better-sqlite3').Database)
     .prepare(
-      `INSERT OR REPLACE INTO task_cache (notion_task_id, fetched_at, raw_json) VALUES (?, ?, ?)`,
+      `INSERT OR REPLACE INTO task_cache (task_id, fetched_at, raw_json) VALUES (?, ?, ?)`,
     )
     .run(key, Date.now(), JSON.stringify(taskIds.map((id) => ({ id }))));
 }

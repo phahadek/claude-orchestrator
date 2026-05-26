@@ -166,7 +166,7 @@ export class AutoMerger {
       actor_type: 'system',
       actor_id: null,
       project_id: row.project_id ?? null,
-      task_id: session.notion_task_id ?? null,
+      task_id: session.task_id ?? null,
       payload: {
         branch_name: row.branch_name,
         base_branch: row.base_branch,
@@ -179,12 +179,12 @@ export class AutoMerger {
       this.sessions.endSession(session.session_id);
     }
 
-    if (session.notion_task_id) {
+    if (session.task_id) {
       const project = getProjectById(row.project_id);
       if (project) {
         const backend = getTaskBackend(row.project_id);
         backend
-          .updateStatus(session.notion_task_id, '✅ Done')
+          .updateStatus(session.task_id, '✅ Done')
           .catch((err: unknown) =>
             console.warn(
               `[AutoMerger] local branch #${row.id}: updateStatus failed: ${(err as Error).message}`,

@@ -2,7 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
 import type { TaskBackend } from './TaskBackend';
-import type { ResolvedTask, NotionTask } from '../notion/types';
+import type { ResolvedTask } from './types';
+import type { NotionTask } from '../notion/types';
+import { parseTaskId, formatTaskId } from './taskId';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import { upsertTaskCache } from '../db/queries';
 
@@ -91,6 +93,9 @@ const resolver = new DependencyResolver();
  * File-based implementation of TaskBackend. Reads/writes task definitions from
  * `<projectDir>/tasks.yaml` using the milestone-keyed schema. Old flat-schema
  * files are auto-migrated on first read.
+ *
+ * All public methods accept prefixed task IDs (e.g. 'yaml:my-task') and strip
+ * the prefix before operating on the file.
  */
 export class LocalTaskBackend implements TaskBackend {
   readonly type = 'local' as const;
@@ -161,13 +166,13 @@ export class LocalTaskBackend implements TaskBackend {
     };
   }
 
-  /** Locate the milestone containing a given task id, or undefined. */
+  /** Locate the milestone containing a given raw task id (no prefix), or undefined. */
   private findTaskById(
     file: MilestoneTasksFile,
-    taskId: string,
+    rawTaskId: string,
   ): { milestone: LocalMilestone; task: LocalTask } | undefined {
     for (const m of file.milestones) {
-      const task = m.tasks.find((t) => t.id === taskId);
+      const task = m.tasks.find((t) => t.id === rawTaskId);
       if (task) return { milestone: m, task };
     }
     return undefined;
@@ -178,7 +183,7 @@ export class LocalTaskBackend implements TaskBackend {
     _skipCache?: boolean,
   ): Promise<ResolvedTask[]> {
     const file = this.readFile();
-    let allTasks: ReturnType<typeof this.mapToNotionTask>[];
+    let allTasks: NotionTask[];
     if (milestoneId === null) {
       allTasks = file.milestones.flatMap((m) =>
         m.tasks.map((t) => this.mapToNotionTask(t)),
@@ -193,31 +198,40 @@ export class LocalTaskBackend implements TaskBackend {
       allTasks = milestone.tasks.map((t) => this.mapToNotionTask(t));
       upsertTaskCache(`board:${milestoneId}`, JSON.stringify(allTasks));
     }
+    // Cache each task under its prefixed key
     for (const task of allTasks) {
-      upsertTaskCache(task.id, JSON.stringify(task));
+      upsertTaskCache(formatTaskId('yaml', task.id), JSON.stringify(task));
     }
-    return resolver.resolve(allTasks);
+    const resolved = resolver.resolve(allTasks, 'yaml');
+    // Prepend yaml: prefix to task IDs in returned results
+    return resolved.map((r) => ({
+      ...r,
+      task: { ...r.task, id: formatTaskId('yaml', r.task.id) },
+    }));
   }
 
   async attachPR(taskId: string, prUrl: string): Promise<void> {
+    const { externalId } = parseTaskId(taskId);
     const file = this.readFile();
-    const found = this.findTaskById(file, taskId);
+    const found = this.findTaskById(file, externalId);
     if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
     found.task.pr_url = prUrl;
     this.writeFile(file);
   }
 
   async updateStatus(taskId: string, status: string): Promise<void> {
+    const { externalId } = parseTaskId(taskId);
     const file = this.readFile();
-    const found = this.findTaskById(file, taskId);
+    const found = this.findTaskById(file, externalId);
     if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
     found.task.status = fromDisplayStatus(status);
     this.writeFile(file);
   }
 
   async fetchTaskPage(taskId: string): Promise<string> {
+    const { externalId } = parseTaskId(taskId);
     const file = this.readFile();
-    const found = this.findTaskById(file, taskId);
+    const found = this.findTaskById(file, externalId);
     if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
     const task = found.task;
 
@@ -239,5 +253,9 @@ export class LocalTaskBackend implements TaskBackend {
       sections.push(`## Notes\n${task.notes.trim()}`);
     }
     return sections.join('\n\n');
+  }
+
+  async fetchNonMilestoneReadyTasks(): Promise<ResolvedTask[]> {
+    return [];
   }
 }

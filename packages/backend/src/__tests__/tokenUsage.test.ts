@@ -69,8 +69,8 @@ vi.mock('../db/db.js', async () => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       session_id          TEXT    PRIMARY KEY,
-      notion_task_id      TEXT,
-      notion_task_url     TEXT,
+      task_id             TEXT,
+      task_url            TEXT,
       project_context_url TEXT,
       status              TEXT    NOT NULL,
       started_at          INTEGER NOT NULL,
@@ -126,9 +126,9 @@ vi.mock('../db/db.js', async () => {
       FOREIGN KEY (session_id) REFERENCES sessions(session_id)
     );
     CREATE TABLE IF NOT EXISTS task_cache (
-      notion_task_id TEXT    PRIMARY KEY,
-      fetched_at     INTEGER NOT NULL,
-      raw_json       TEXT    NOT NULL
+      task_id    TEXT    PRIMARY KEY,
+      fetched_at INTEGER NOT NULL,
+      raw_json   TEXT    NOT NULL
     );
     CREATE TABLE IF NOT EXISTS pull_requests (
       id                INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -161,8 +161,8 @@ import { incrementTokens } from '../db/queries.js';
 
 const baseSession = {
   session_id: 'token-test-session',
-  notion_task_id: null,
-  notion_task_url: null,
+  task_id: null,
+  task_url: null,
   project_context_url: null,
   project_id: null,
   status: 'running' as const,

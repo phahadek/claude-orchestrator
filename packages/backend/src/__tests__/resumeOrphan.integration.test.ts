@@ -174,8 +174,8 @@ import { backfillStuckResultSessions } from '../db/queries';
 function makeRunningSession(overrides: Partial<Session> = {}): Session {
   return {
     session_id: 'session-uuid-default',
-    notion_task_id: 'notion-task-id',
-    notion_task_url: 'https://notion.so/task',
+    task_id: 'notion-task-id',
+    task_url: 'https://notion.so/task',
     project_context_url: 'https://notion.so/ctx',
     project_id: 'test-project',
     status: 'running',

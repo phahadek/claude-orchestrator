@@ -462,8 +462,8 @@ function makeLocalBranchRow(
 function makeSessionRow(overrides: Partial<Session> = {}): Session {
   return {
     session_id: 'coding-session-1',
-    notion_task_id: 'task-abc',
-    notion_task_url: 'https://notion.so/task-abc',
+    task_id: 'notion:task-abc',
+    task_url: 'https://notion.so/task-abc',
     project_context_url: null,
     project_id: 'proj-1',
     status: 'running',

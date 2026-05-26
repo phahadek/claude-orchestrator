@@ -1,4 +1,5 @@
-import { NotionTask, ResolvedTask } from './types';
+import type { NotionTask } from './types';
+import type { ResolvedTask } from '../tasks/types';
 
 /** Strip hyphens so both dashed and dashless Notion UUIDs match. */
 function stripHyphens(id: string): string {
@@ -6,7 +7,10 @@ function stripHyphens(id: string): string {
 }
 
 export class DependencyResolver {
-  resolve(tasks: NotionTask[]): ResolvedTask[] {
+  resolve(
+    tasks: NotionTask[],
+    source: ResolvedTask['source'] = 'notion',
+  ): ResolvedTask[] {
     // Key by dashless ID so deps stored without hyphens still match page IDs with hyphens
     const byId = new Map(tasks.map((t) => [stripHyphens(t.id), t]));
     const waveCache = new Map<string, number>();
@@ -16,6 +20,7 @@ export class DependencyResolver {
       const wave = this.computeWave(task, byId, waveCache);
       return {
         task,
+        source,
         blocked: blockers.length > 0,
         blockers,
         nonCode: task.type === '📋 Planning' || task.type === '🧪 Testing',

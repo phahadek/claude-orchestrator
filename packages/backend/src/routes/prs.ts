@@ -92,15 +92,15 @@ export function createPrsRouter(
         (s) => s.session_type === 'review',
       );
 
-      // Build map of notion_task_id -> latest review session result
+      // Build map of task_id -> latest review session result
       const reviewResultByTask = new Map<string, PRReviewResult>();
       for (const rs of reviewSessions) {
-        if (!rs.notion_task_id || !rs.review_result) continue;
-        const existing = reviewResultByTask.get(rs.notion_task_id);
+        if (!rs.task_id || !rs.review_result) continue;
+        const existing = reviewResultByTask.get(rs.task_id);
         if (!existing) {
           try {
             reviewResultByTask.set(
-              rs.notion_task_id,
+              rs.task_id,
               JSON.parse(rs.review_result) as PRReviewResult,
             );
           } catch {
@@ -115,15 +115,13 @@ export function createPrsRouter(
         branchName: `session/${s.session_id}`,
         baseBranch: 'dev',
         status: s.status,
-        reviewResult: s.notion_task_id
-          ? (reviewResultByTask.get(s.notion_task_id) ?? null)
+        reviewResult: s.task_id
+          ? (reviewResultByTask.get(s.task_id) ?? null)
           : null,
         createdAt: new Date(s.started_at).toISOString(),
         autoMergeEnabled,
-        notionTaskId: s.notion_task_id,
-        notionTaskTitle: s.notion_task_id
-          ? getTaskTitleFromCache(s.notion_task_id)
-          : null,
+        notionTaskId: s.task_id,
+        notionTaskTitle: s.task_id ? getTaskTitleFromCache(s.task_id) : null,
       }));
       res.json(localItems);
       return;

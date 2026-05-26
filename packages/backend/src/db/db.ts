@@ -11,8 +11,8 @@ db.pragma('foreign_keys = ON');
 db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
     session_id          TEXT    PRIMARY KEY,
-    notion_task_id      TEXT,
-    notion_task_url     TEXT,
+    task_id             TEXT,
+    task_url            TEXT,
     project_context_url TEXT,
     status              TEXT    NOT NULL,
     started_at          INTEGER NOT NULL,
@@ -62,9 +62,9 @@ db.exec(`
     enabled     INTEGER NOT NULL DEFAULT 1
   );
   CREATE TABLE IF NOT EXISTS task_cache (
-    notion_task_id TEXT    PRIMARY KEY,
-    fetched_at     INTEGER NOT NULL,
-    raw_json       TEXT    NOT NULL
+    task_id    TEXT    PRIMARY KEY,
+    fetched_at INTEGER NOT NULL,
+    raw_json   TEXT    NOT NULL
   );
   CREATE TABLE IF NOT EXISTS pull_requests (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -116,6 +116,28 @@ db.exec(`
     revoked     INTEGER NOT NULL DEFAULT 0
   );
 `);
+
+// ── Column rename migrations (run before queries.ts imports so prepared statements
+//    compile against the new schema on existing databases) ─────────────────────
+
+// sessions: notion_task_id → task_id
+try {
+  db.exec(`ALTER TABLE sessions RENAME COLUMN notion_task_id TO task_id`);
+} catch {
+  /* already renamed or column doesn't exist (fresh DB) */
+}
+// sessions: notion_task_url → task_url
+try {
+  db.exec(`ALTER TABLE sessions RENAME COLUMN notion_task_url TO task_url`);
+} catch {
+  /* already renamed or column doesn't exist */
+}
+// task_cache: notion_task_id → task_id (primary key rename via SQLite RENAME COLUMN)
+try {
+  db.exec(`ALTER TABLE task_cache RENAME COLUMN notion_task_id TO task_id`);
+} catch {
+  /* already renamed or column doesn't exist */
+}
 
 // ── Migrations (idempotent column additions for existing databases) ──────────
 try {

@@ -1,4 +1,4 @@
-import type { ResolvedTask } from '../notion/types';
+import type { ResolvedTask } from './types';
 import { ProjectService } from '../projects/ProjectService';
 import { NotionClient } from '../notion/NotionClient';
 import { NotionTaskBackend } from './NotionTaskBackend';
@@ -10,7 +10,7 @@ import { LocalTaskBackend } from './LocalTaskBackend';
  */
 export interface TaskBackend {
   /** Backend identifier; reflects the project's task_source. */
-  readonly type: 'notion' | 'local';
+  readonly type: 'notion' | 'local' | 'jira';
 
   /**
    * Fetch tasks that are ready to be dispatched for the given milestone.
@@ -31,6 +31,9 @@ export interface TaskBackend {
 
   /** Fetch the full task page body as markdown (for review/session context). */
   fetchTaskPage(taskId: string): Promise<string>;
+
+  /** Fetch tasks ready to launch that are not tied to a milestone. Returns [] until T14 lands. */
+  fetchNonMilestoneReadyTasks(): Promise<ResolvedTask[]>;
 }
 
 /**

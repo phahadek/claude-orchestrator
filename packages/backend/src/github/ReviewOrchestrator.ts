@@ -113,7 +113,7 @@ export class ReviewOrchestrator {
       branchName,
       baseBranch,
       worktreePath: sessionRow.worktree_path,
-      taskId: sessionRow.notion_task_id,
+      taskId: sessionRow.task_id,
       contextUrl,
     });
     void this.drain();

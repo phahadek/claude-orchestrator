@@ -1092,8 +1092,8 @@ const baseLocalBranchRow = {
 
 const baseSessionRow = {
   session_id: 'session-local-1',
-  notion_task_id: 'task-local-abc',
-  notion_task_url: null,
+  task_id: 'yaml:task-local-abc',
+  task_url: null,
   project_context_url: null,
   project_id: 'proj-1',
   status: 'done',
@@ -1235,8 +1235,8 @@ const verifyLocalBranchRow = {
 
 const verifySessionRow = {
   session_id: 'coding-session-local',
-  notion_task_id: 'task-local',
-  notion_task_url: 'https://notion.so/task-local',
+  task_id: 'yaml:task-local',
+  task_url: 'https://notion.so/task-local',
   project_context_url: 'https://notion.so/ctx-local',
   project_id: 'proj-local',
   status: 'done',

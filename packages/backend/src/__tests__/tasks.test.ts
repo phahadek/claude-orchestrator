@@ -49,7 +49,7 @@ function makeAggregate(
     notionUrl: `https://notion.so/${notionTaskId}`,
   };
   return {
-    notion_task_id: notionTaskId,
+    task_id: notionTaskId,
     raw_json: JSON.stringify(task),
     code_session_id: null,
     code_session_status: null,

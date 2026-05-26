@@ -394,8 +394,8 @@ describe('GET /api/prs — local-only project returns local_branch items', () =>
     vi.mocked(queries.getSessionsByProject).mockReturnValue([
       {
         session_id: 'sess-1',
-        notion_task_id: 'task-abc',
-        notion_task_url: null,
+        task_id: 'task-abc',
+        task_url: null,
         project_context_url: null,
         project_id: 'proj-local',
         status: 'done',
@@ -436,8 +436,8 @@ describe('GET /api/prs — local-only project returns local_branch items', () =>
     vi.mocked(queries.getSessionsByProject).mockReturnValue([
       {
         session_id: 'sess-1',
-        notion_task_id: 'task-abc',
-        notion_task_url: null,
+        task_id: 'task-abc',
+        task_url: null,
         project_context_url: null,
         project_id: 'proj-local',
         status: 'done',
@@ -459,8 +459,8 @@ describe('GET /api/prs — local-only project returns local_branch items', () =>
       },
       {
         session_id: 'review-1',
-        notion_task_id: 'task-abc',
-        notion_task_url: null,
+        task_id: 'task-abc',
+        task_url: null,
         project_context_url: null,
         project_id: 'proj-local',
         status: 'done',
@@ -492,8 +492,8 @@ describe('GET /api/prs — local-only project returns local_branch items', () =>
     vi.mocked(queries.getSessionsByProject).mockReturnValue([
       {
         session_id: 'sess-archived',
-        notion_task_id: null,
-        notion_task_url: null,
+        task_id: null,
+        task_url: null,
         project_context_url: null,
         project_id: 'proj-local',
         status: 'done',
@@ -525,8 +525,8 @@ describe('GET /api/prs — local-only project returns local_branch items', () =>
     vi.mocked(queries.getSessionsByProject).mockReturnValue([
       {
         session_id: 'sess-2',
-        notion_task_id: null,
-        notion_task_url: null,
+        task_id: null,
+        task_url: null,
         project_context_url: null,
         project_id: 'proj-local-automerge',
         status: 'done',
