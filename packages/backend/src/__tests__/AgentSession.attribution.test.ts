@@ -173,7 +173,9 @@ describe('AgentSession — ai-authored label', () => {
   beforeEach(() => {
     mockProc = createMockProc();
     vi.clearAllMocks();
-    (runtimeSettings as { corporate_mode_enabled: boolean }).corporate_mode_enabled = false;
+    (
+      runtimeSettings as { corporate_mode_enabled: boolean }
+    ).corporate_mode_enabled = false;
   });
 
   it('applies the ai-authored label to PRs opened by a session', async () => {
@@ -209,7 +211,9 @@ describe('AgentSession — PR body validation', () => {
   beforeEach(() => {
     mockProc = createMockProc();
     vi.clearAllMocks();
-    (runtimeSettings as { corporate_mode_enabled: boolean }).corporate_mode_enabled = false;
+    (
+      runtimeSettings as { corporate_mode_enabled: boolean }
+    ).corporate_mode_enabled = false;
   });
 
   it('does NOT pause or post comment when body is valid (non-corporate)', async () => {
@@ -234,7 +238,9 @@ describe('AgentSession — PR body validation', () => {
   });
 
   it('pauses and posts PR comment in corporate mode when body is invalid', async () => {
-    (runtimeSettings as { corporate_mode_enabled: boolean }).corporate_mode_enabled = true;
+    (
+      runtimeSettings as { corporate_mode_enabled: boolean }
+    ).corporate_mode_enabled = true;
     const ghClient = fakeGitHubClient();
     await runPRCreationFlow(PR_JSON_INVALID_BODY, ghClient);
     await new Promise((r) => setTimeout(r, 50));

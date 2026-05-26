@@ -28,7 +28,10 @@ import { emitTaskUpdated } from '../routes/tasks';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { GitHubClient } from '../github/GitHubClient';
-import { validatePRBody, buildValidationComment } from '../github/PRBodyValidator';
+import {
+  validatePRBody,
+  buildValidationComment,
+} from '../github/PRBodyValidator';
 import { checkCommitAttribution } from '../github/CommitAttributionWatcher';
 import { recordEvent } from '../audit/AuditLog';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
@@ -732,7 +735,9 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       if (!bodyValidation.valid) {
         const isCorporate = runtimeSettings.corporate_mode_enabled;
         recordEvent({
-          event_type: isCorporate ? 'pr_body_invalid' : 'pr_body_invalid_warning',
+          event_type: isCorporate
+            ? 'pr_body_invalid'
+            : 'pr_body_invalid_warning',
           actor_type: 'ai',
           actor_id: this.sessionId,
           project_id: this.projectId || null,
@@ -747,10 +752,14 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           setPauseReason(prNumber, repo, 'pr_body_invalid');
           if (this.githubClient) {
             const ghClient = this.githubClient;
-            const comment = buildValidationComment(bodyValidation.missingSections);
-            void ghClient.createIssueComment(repo, prNumber, comment).catch((e) =>
-              console.warn(`[AgentSession] createIssueComment failed: ${e}`),
+            const comment = buildValidationComment(
+              bodyValidation.missingSections,
             );
+            void ghClient
+              .createIssueComment(repo, prNumber, comment)
+              .catch((e) =>
+                console.warn(`[AgentSession] createIssueComment failed: ${e}`),
+              );
           }
         }
       }

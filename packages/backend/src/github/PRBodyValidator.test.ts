@@ -67,9 +67,10 @@ describe('validatePRBody()', () => {
   });
 
   it('rejects a body missing both task-source variants', () => {
-    const body = VALID_BODY
-      .replace('## Notion Task\n', '')
-      .replace('## Task Source\n', '');
+    const body = VALID_BODY.replace('## Notion Task\n', '').replace(
+      '## Task Source\n',
+      '',
+    );
     const result = validatePRBody(body);
     expect(result.valid).toBe(false);
     expect(result.missingSections).toContain('## Notion Task');

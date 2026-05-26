@@ -9,12 +9,17 @@ vi.mock('../db/queries', () => ({
   setPauseReason: vi.fn(),
 }));
 
-import { checkCommitAttribution, AI_TRAILER_REGEX } from './CommitAttributionWatcher';
+import {
+  checkCommitAttribution,
+  AI_TRAILER_REGEX,
+} from './CommitAttributionWatcher';
 import { recordEvent } from '../audit/AuditLog';
 import { setPauseReason } from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
 
-function makeClient(commits: Array<{ sha: string; message: string }>): GitHubClient {
+function makeClient(
+  commits: Array<{ sha: string; message: string }>,
+): GitHubClient {
   return {
     getCommitsForPR: vi.fn().mockResolvedValue(commits),
   } as unknown as GitHubClient;
@@ -26,20 +31,37 @@ beforeEach(() => {
 
 describe('AI_TRAILER_REGEX', () => {
   it('matches a valid AI-Authored-By trailer', () => {
-    expect(AI_TRAILER_REGEX.test('feat: add thing\n\nAI-Authored-By: claude-sonnet-4-6 (session: abc)')).toBe(true);
+    expect(
+      AI_TRAILER_REGEX.test(
+        'feat: add thing\n\nAI-Authored-By: claude-sonnet-4-6 (session: abc)',
+      ),
+    ).toBe(true);
   });
 
   it('does not match commits without the trailer', () => {
-    expect(AI_TRAILER_REGEX.test('feat: add thing\n\nCo-Authored-By: human')).toBe(false);
+    expect(
+      AI_TRAILER_REGEX.test('feat: add thing\n\nCo-Authored-By: human'),
+    ).toBe(false);
   });
 });
 
 describe('checkCommitAttribution()', () => {
   it('returns missing=0 when all commits have the trailer', async () => {
     const client = makeClient([
-      { sha: 'aaa', message: 'feat: x\n\nAI-Authored-By: claude-sonnet-4-6 (session: s1)' },
+      {
+        sha: 'aaa',
+        message: 'feat: x\n\nAI-Authored-By: claude-sonnet-4-6 (session: s1)',
+      },
     ]);
-    const result = await checkCommitAttribution(client, 'owner/repo', 1, 's1', null, null, false);
+    const result = await checkCommitAttribution(
+      client,
+      'owner/repo',
+      1,
+      's1',
+      null,
+      null,
+      false,
+    );
     expect(result.checked).toBe(1);
     expect(result.missing).toBe(0);
     expect(result.paused).toBe(false);
@@ -50,13 +72,25 @@ describe('checkCommitAttribution()', () => {
     const client = makeClient([
       { sha: 'bbb', message: 'feat: no trailer here' },
     ]);
-    await checkCommitAttribution(client, 'owner/repo', 2, 'session-xyz', 'proj-1', 'task-1', false);
+    await checkCommitAttribution(
+      client,
+      'owner/repo',
+      2,
+      'session-xyz',
+      'proj-1',
+      'task-1',
+      false,
+    );
     expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'attribution_missing',
         actor_type: 'ai',
         actor_id: 'session-xyz',
-        payload: expect.objectContaining({ sha: 'bbb', pr_number: 2, repo: 'owner/repo' }),
+        payload: expect.objectContaining({
+          sha: 'bbb',
+          pr_number: 2,
+          repo: 'owner/repo',
+        }),
       }),
     );
     expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
@@ -66,16 +100,34 @@ describe('checkCommitAttribution()', () => {
     const client = makeClient([
       { sha: 'ccc', message: 'chore: no attribution' },
     ]);
-    const result = await checkCommitAttribution(client, 'owner/repo', 3, 's1', null, null, true);
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(3, 'owner/repo', 'attribution_missing');
+    const result = await checkCommitAttribution(
+      client,
+      'owner/repo',
+      3,
+      's1',
+      null,
+      null,
+      true,
+    );
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      3,
+      'owner/repo',
+      'attribution_missing',
+    );
     expect(result.paused).toBe(true);
   });
 
   it('does NOT pause in non-corporate mode even when trailer is absent', async () => {
-    const client = makeClient([
-      { sha: 'ddd', message: 'fix: oops' },
-    ]);
-    const result = await checkCommitAttribution(client, 'owner/repo', 4, 's1', null, null, false);
+    const client = makeClient([{ sha: 'ddd', message: 'fix: oops' }]);
+    const result = await checkCommitAttribution(
+      client,
+      'owner/repo',
+      4,
+      's1',
+      null,
+      null,
+      false,
+    );
     expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
     expect(result.paused).toBe(false);
     expect(result.missing).toBe(1);
@@ -85,7 +137,15 @@ describe('checkCommitAttribution()', () => {
     const client = {
       getCommitsForPR: vi.fn().mockRejectedValue(new Error('network error')),
     } as unknown as GitHubClient;
-    const result = await checkCommitAttribution(client, 'owner/repo', 5, 's1', null, null, false);
+    const result = await checkCommitAttribution(
+      client,
+      'owner/repo',
+      5,
+      's1',
+      null,
+      null,
+      false,
+    );
     expect(result.checked).toBe(0);
     expect(result.missing).toBe(0);
     expect(vi.mocked(recordEvent)).not.toHaveBeenCalled();
@@ -93,15 +153,29 @@ describe('checkCommitAttribution()', () => {
 
   it('only records missing for commits without the trailer (mixed batch)', async () => {
     const client = makeClient([
-      { sha: 'e1', message: 'feat: good\n\nAI-Authored-By: claude-sonnet-4-6 (session: s1)' },
+      {
+        sha: 'e1',
+        message:
+          'feat: good\n\nAI-Authored-By: claude-sonnet-4-6 (session: s1)',
+      },
       { sha: 'e2', message: 'chore: bad — no trailer' },
     ]);
-    const result = await checkCommitAttribution(client, 'owner/repo', 6, 's1', null, null, false);
+    const result = await checkCommitAttribution(
+      client,
+      'owner/repo',
+      6,
+      's1',
+      null,
+      null,
+      false,
+    );
     expect(result.checked).toBe(2);
     expect(result.missing).toBe(1);
     expect(vi.mocked(recordEvent)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
-      expect.objectContaining({ payload: expect.objectContaining({ sha: 'e2' }) }),
+      expect.objectContaining({
+        payload: expect.objectContaining({ sha: 'e2' }),
+      }),
     );
   });
 });

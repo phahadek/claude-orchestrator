@@ -25,7 +25,10 @@ export function validatePRBody(
   const missingSections: string[] = [];
   for (const section of REQUIRED_SECTIONS) {
     if (section === '## Notion Task') {
-      if (!body.includes('## Notion Task') && !body.includes('## Task Source')) {
+      if (
+        !body.includes('## Notion Task') &&
+        !body.includes('## Task Source')
+      ) {
         missingSections.push(section);
       }
     } else if (!body.includes(section)) {

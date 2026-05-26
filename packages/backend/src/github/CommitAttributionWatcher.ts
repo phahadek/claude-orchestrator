@@ -63,8 +63,16 @@ export async function checkCommitAttribution(
 
   if (isCorporateMode) {
     setPauseReason(prNumber, repo, 'attribution_missing');
-    return { checked: commits.length, missing: missingTrailer.length, paused: true };
+    return {
+      checked: commits.length,
+      missing: missingTrailer.length,
+      paused: true,
+    };
   }
 
-  return { checked: commits.length, missing: missingTrailer.length, paused: false };
+  return {
+    checked: commits.length,
+    missing: missingTrailer.length,
+    paused: false,
+  };
 }
