@@ -147,6 +147,9 @@ describe('Mixed-source projects: fetchReadyTasks routes to the right backend', (
     expect(n.map((t) => t.task.id)).toEqual([
       'notion:notion-task-for-notion-db-source',
     ]);
-    expect(y.map((t) => t.task.id).sort()).toEqual(['yaml:yaml-done', 'yaml:yaml-ready']);
+    expect(y.map((t) => t.task.id).sort()).toEqual([
+      'yaml:yaml-done',
+      'yaml:yaml-ready',
+    ]);
   });
 });

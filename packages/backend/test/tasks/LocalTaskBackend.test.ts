@@ -282,7 +282,10 @@ describe('LocalTaskBackend (milestone schema)', () => {
 
         const flatBackend = new LocalTaskBackend(flatDir);
         const ready = await flatBackend.fetchReadyTasks('m1');
-        expect(ready.map((r) => r.task.id).sort()).toEqual(['yaml:t1', 'yaml:t2']);
+        expect(ready.map((r) => r.task.id).sort()).toEqual([
+          'yaml:t1',
+          'yaml:t2',
+        ]);
 
         // Disk file is now in milestone schema
         const onDisk = readTasksFile(flatDir) as Record<string, unknown>;

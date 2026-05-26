@@ -6,10 +6,7 @@ export interface JiraIssueFields {
   status: { name: string };
   issuetype: { name: string };
   priority: { name: string } | null;
-  description:
-    | string
-    | { content?: unknown[] }
-    | null;
+  description: string | { content?: unknown[] } | null;
 }
 
 export interface JiraIssue {
@@ -84,9 +81,7 @@ export class JiraClient {
 
   /** Build a JQL query string for issues matching given statuses. */
   buildReadyJql(projectKey: string, readyStatuses: string[]): string {
-    const statuses = readyStatuses
-      .map((s) => `"${s}"`)
-      .join(', ');
+    const statuses = readyStatuses.map((s) => `"${s}"`).join(', ');
     return `project = "${projectKey}" AND status in (${statuses}) ORDER BY priority DESC`;
   }
 

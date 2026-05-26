@@ -109,7 +109,10 @@ describe('JiraTaskSourceProvider.fetchReadyTasks', () => {
 
     await customProvider.fetchReadyTasks(null);
 
-    expect(client.buildReadyJql).toHaveBeenCalledWith('PROJ', ['Open', 'Backlog']);
+    expect(client.buildReadyJql).toHaveBeenCalledWith('PROJ', [
+      'Open',
+      'Backlog',
+    ]);
   });
 
   it('prefixes all returned task IDs with jira:', async () => {
@@ -205,7 +208,10 @@ describe('JiraTaskSourceProvider.attachPR', () => {
     client.addComment = vi.fn().mockResolvedValue(undefined);
     const provider = new JiraTaskSourceProvider(client, PROJECT_CONFIG);
 
-    await provider.attachPR('jira:PROJ-7', 'https://github.com/org/repo/pull/42');
+    await provider.attachPR(
+      'jira:PROJ-7',
+      'https://github.com/org/repo/pull/42',
+    );
 
     expect(client.addComment).toHaveBeenCalledWith(
       'PROJ-7',

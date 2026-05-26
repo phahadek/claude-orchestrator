@@ -112,7 +112,9 @@ describe('JiraClient.searchIssues', () => {
 
   it('throws JiraApiError on non-2xx response', async () => {
     const client = new JiraClient('https://example.atlassian.net', 'tok');
-    mockFetch.mockResolvedValueOnce(mockResponse({ message: 'Unauthorized' }, 401));
+    mockFetch.mockResolvedValueOnce(
+      mockResponse({ message: 'Unauthorized' }, 401),
+    );
     await expect(client.searchIssues('project = X')).rejects.toBeInstanceOf(
       JiraApiError,
     );

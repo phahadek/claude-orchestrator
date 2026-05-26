@@ -87,8 +87,7 @@ export class JiraTaskSourceProvider implements TaskBackend {
 
   async updateStatus(taskId: string, status: string): Promise<void> {
     const { externalId } = parseTaskId(taskId);
-    const mapping =
-      this.projectConfig.status_mapping ?? DEFAULT_STATUS_MAPPING;
+    const mapping = this.projectConfig.status_mapping ?? DEFAULT_STATUS_MAPPING;
     const targetJiraStatus = mapping[status];
     if (!targetJiraStatus) {
       throw new Error(

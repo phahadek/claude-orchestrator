@@ -93,7 +93,9 @@ export function getTaskBackend(projectId: string): TaskBackend {
   return getNotionBackend();
 }
 
-function buildJiraBackend(taskSourceConfigJson: string | null): JiraTaskSourceProvider {
+function buildJiraBackend(
+  taskSourceConfigJson: string | null,
+): JiraTaskSourceProvider {
   let projectConfig: JiraProjectConfig;
   try {
     projectConfig = taskSourceConfigJson
