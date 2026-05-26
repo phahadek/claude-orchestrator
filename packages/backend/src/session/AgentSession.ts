@@ -782,7 +782,9 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           // Fallback: live detection didn't fire (e.g. gh pr create via Bash).
           this.taskBackend()
             .attachPR(this.taskId, prUrl)
-            .catch((e) => console.error(`[AgentSession] attachPR failed: ${e}`));
+            .catch((e) =>
+              console.error(`[AgentSession] attachPR failed: ${e}`),
+            );
         }
 
         // Always upsert notion_task_id and session_id onto the PR row when a
