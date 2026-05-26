@@ -306,7 +306,10 @@ export class SessionManager extends EventEmitter {
       } else {
         try {
           // Fetch latest dev so sessions don't start from a stale local ref.
-          execSync('git fetch origin dev', { cwd: projectDir, timeout: 30_000 });
+          execSync('git fetch origin dev', {
+            cwd: projectDir,
+            timeout: 30_000,
+          });
         } catch (err) {
           console.warn(
             `[SessionManager] git fetch origin dev failed (continuing with local ref): ${err}`,
@@ -318,9 +321,7 @@ export class SessionManager extends EventEmitter {
     // For github projects: use origin/dev when starting from dev, or the local
     // milestone branch ref (guaranteed to exist after ensureMilestoneBranch).
     const worktreeBase =
-      isLocalOnly || startingPoint !== 'dev'
-        ? startingPoint
-        : 'origin/dev';
+      isLocalOnly || startingPoint !== 'dev' ? startingPoint : 'origin/dev';
 
     try {
       execSync(`git worktree add --detach "${worktreePath}" ${worktreeBase}`, {
@@ -480,7 +481,13 @@ export class SessionManager extends EventEmitter {
 
       this.pendingStarts.delete(sessionId);
       this.sessions.set(sessionId, session);
-      this.wireSession(sessionId, session, projectDir, worktreePath, mainBranch);
+      this.wireSession(
+        sessionId,
+        session,
+        projectDir,
+        worktreePath,
+        mainBranch,
+      );
     };
 
     // Insert session into SQLite BEFORE launching the subprocess so FK
@@ -1067,8 +1074,10 @@ export class SessionManager extends EventEmitter {
     }
 
     // Resolve the starting point using dev as the base (no milestoneId available for resumed sessions).
-    const { startingPoint: resumeStartingPoint, milestoneSlug: resumeMilestoneSlug } =
-      resolveStartingPoint(project, null);
+    const {
+      startingPoint: resumeStartingPoint,
+      milestoneSlug: resumeMilestoneSlug,
+    } = resolveStartingPoint(project, null);
 
     const isLocalOnlyResume = project.gitMode === 'local-only';
     if (!isLocalOnlyResume) {
@@ -1082,7 +1091,10 @@ export class SessionManager extends EventEmitter {
         }
       } else {
         try {
-          execSync('git fetch origin dev', { cwd: projectDir, timeout: 30_000 });
+          execSync('git fetch origin dev', {
+            cwd: projectDir,
+            timeout: 30_000,
+          });
         } catch (err) {
           console.warn(
             `[SessionManager] sendOrResume: git fetch origin dev failed (continuing with local ref): ${err}`,

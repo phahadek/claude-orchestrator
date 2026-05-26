@@ -7,8 +7,8 @@
 
 ## Task Assignment
 
-- **Task**: AI reviewer ignores manual-verification acceptance items
-- **Notion task**: https://www.notion.so/AI-reviewer-ignores-manual-verification-acceptance-items-36c22f9152f38194aca0c436594ec32e
+- **Task**: Introduce milestone-feature-branch + task-branch model
+- **Notion task**: https://www.notion.so/Introduce-milestone-feature-branch-task-branch-model-36b22f9152f3818e9b5bf64f289295a5
 - **Project context**: https://www.notion.so/33222f9152f38188b65fd912e40890a2
 
 ---
@@ -110,7 +110,7 @@ Run in order — all must pass before opening the PR:
 
 ## Git Isolation
 
-> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\0690f414-e996-4669-a3e3-477d31d269bc`.**
+> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\7e919f05-cc41-417c-90a7-adaee2ef3159`.**
 > This is your `cwd`. All commands run here. Never navigate to or operate on any parent directory.
 
 - All git commands must run inside the worktree directory (your `cwd`)
@@ -150,39 +150,69 @@ Use the Write tool for any file creation. Never use `cat >`, `printf >`, or `ech
 > Do NOT re-fetch this from Notion — use the content below as your source of truth.
 
 ## Summary
-Update the AI review session's prompt and verdict logic so manual-verification acceptance items are excluded from the reviewer's pass/fail evaluation. Manual items are the human reviewer's job at PR-review time — and the orchestrator's Manual Verification Gate task is where they get checked end-to-end. The AI reviewer evaluating them creates a perverse loop that pressures the coding session into faking completion or taking risky autonomous actions.
+Replace the current session/<UUID> backend-managed branch model with the per-project switchable model designed in Wave-1. Each project chooses between two_tier (task-branch → feature/<milestone-slug> → dev) and flat (task-branch → dev). Backend's branching responsibility is reduced to setting the worktree starting point; the session names and creates its own task branch.
 ## Dependencies
-None.
+- Design governance & PR flow (human review gate + branching + non-milestone workflow) — see that page for the full design rationale and resolved OQs
 ## Context
-### The incident that motivated this
-During a coding session on 2026-05-26 (polimarket-analyser project, task: "Fix orchestrator-_instantiate_client"):
-1. Task spec marked manual verification as "REQUIRED — not optional"
-1. Session opened PR with the manual section as Status: PENDING — cannot be executed in this session due to lack of live credentials — the correct behavior
-1. AI reviewer rejected the PR with verdict needs_changes solely because manual verification wasn't done
-1. Session, faced with rejection, attempted manual verification autonomously:
-1. User paused before further damage occurred
-### Why this is structural, not session-specific
-A task acceptance criterion that says "manual verification required" implies a human-in-the-loop step by definition. An AI reviewer enforcing that gate is a category error — it creates pressure for the coding session to:
-- (a) Fake the verification by inventing plausible numbers in the PR body, OR
-- (b) Take risky autonomous actions to satisfy it (the incident above), OR
-- (c) Leave the PR blocked indefinitely with no path forward
-### What changes
-1. AI reviewer prompt — the review-session CLAUDE.md built by packages/backend/src/session/orchestrator-claudemd.ts:buildReviewClaudeMd() (per code exploration) gets explicit instruction: items under ### 👁️ Manual verification in the task's acceptance criteria are not the AI reviewer's responsibility. The reviewer must:
-1. Verdict schema — the existing PRReviewResult interface (in packages/backend/src/github/PRReviewService.ts) has no top-level informational field; tryParseVerdict() discards unknown keys. Add a new top-level manualItemsForHuman: string[] field to PRReviewResult, extend the REVIEW_JSON_SCHEMA_BLOCK, update tryParseVerdict() to extract it, and update the review prompt template in orchestrator-claudemd.ts to instruct the reviewer to populate it.
+The Wave-1 governance design (Task 2) specifies a per-project branching switch with the model and behaviours below. This task implements it.
+### Per-project switch
+New SQLite column on projects:
+```sql
+ALTER TABLE projects ADD COLUMN milestone_branching TEXT NULL;
+-- NULL       → fall back to corporate-mode default
+-- 'two_tier' → explicit two-tier
+-- 'flat'     → explicit flat
+```
+Resolution order at session start:
+1. If project.milestone_branching is non-NULL, use it.
+1. Else, if getCorporateMode().enabled === true, use two_tier.
+1. Else, use flat.
+### What the backend does
+Backend's branching responsibility is reduced to setting the starting point of the worktree's checkout. It does not create task branches.
+
+Worktree creation uses git worktree add --detach <path> <starting-point> — no placeholder branch the session has to rename. The session creates its own task branch as its first git op.
+### Removed code
+SessionManager.ts:268, :671, :1022 (the three hardcoded session/<UUID> sites) are deleted, replaced by starting-point resolution + detached worktree.
+### Milestone branch — lazy creation
+```typescript
+async function ensureMilestoneBranch(milestoneSlug: string): Promise<void> {
+  const ref = `feature/${milestoneSlug}`;
+  if (await git.refExists(ref)) return;
+  await git.fetch('origin', 'dev');
+  await git.branchCreate(ref, 'origin/dev');
+  await git.push('origin', ref);
+}
+```
+Triggered first time a session launches in that milestone, in two_tier mode. No-op on subsequent task launches. No "milestone setup" step required.
+### CLAUDE.md prompt update
+orchestrator-claudemd.ts — remove the "create feature branch from dev" instruction text. The session is told what branch it's on (the starting point); it creates its own task branch from there with its own naming.
 ### Files likely to change
-- packages/backend/src/session/orchestrator-claudemd.ts (update — review-session CLAUDE.md must instruct the reviewer to skip manual items)
-- packages/backend/src/github/PRReviewService.ts or ReviewOrchestrator.ts (update if verdict-schema changes to add a manualItemsForHuman field)
+- packages/backend/src/db/schema.ts (update — add milestone_branching column)
+- packages/backend/src/session/SessionManager.ts:262-312 (update — replace worktree-add + branch-create with starting-point resolution + worktreeAddDetached)
+- packages/backend/src/session/SessionManager.ts:268, :671, :1022 (delete — the three hardcoded session/<sessionId> sites)
+- packages/backend/src/session/SessionManager.ts:895-905 (update — cleanup unchanged for task branch; ensure milestone branch is left intact)
+- packages/backend/src/session/branchModel.ts (new — resolveStartingPoint, ensureMilestoneBranch, slug derivation helpers)
+- packages/backend/src/session/orchestrator-claudemd.ts (update — branching instructions)
+> ⚠️ Pause-reason additions and approval-gate / body-validator wiring live in T10 / T11 / T12, not this task.
 ## Acceptance criteria
 ### 🤖 Automated tests
 tsc --noEmit passes for both packages
-Unit test: a synthetic review-session verdict input where automated items pass but manual items are flagged as unchecked produces verdict approved, not needs_changes
-Unit test: the verdict surfaces manual items in the new manualItemsForHuman field for downstream UI
-The review-session CLAUDE.md template includes explicit instruction about skipping manual items (substring check against the rendered template)
+Migration adds projects.milestone_branching column with NULL default
+Unit test: resolveStartingPoint returns feature/<milestone-slug> for milestone task + two_tier mode
+Unit test: resolveStartingPoint returns dev for milestone task + flat mode
+Unit test: resolveStartingPoint returns dev for non-milestone task regardless of mode
+Unit test: resolution order — explicit project setting wins over corporate-mode default
+Unit test: ensureMilestoneBranch creates feature/<slug> from origin/dev when missing; no-ops when present
+Unit test: starting a session in two_tier mode for the first task in a milestone creates the milestone branch then the worktree (mock git ops or use a temp repo)
+Unit test: cleanup leaves the task branch in place when a PR is open; milestone branch is never touched on cleanup
+Existing session-start tests pass with the new branch model
 ### 👁️ Manual verification
 Covered by the Manual Verification Gate task.
 ## Files / paths affected
-- packages/backend/src/session/orchestrator-claudemd.ts (update)
-- packages/backend/src/github/PRReviewService.ts or ReviewOrchestrator.ts (update if verdict-schema changes)
+- packages/backend/src/db/schema.ts (update)
+- packages/backend/src/session/SessionManager.ts (update — starting-point resolution, cleanup, resume; delete three hardcoded branch sites)
+- packages/backend/src/session/orchestrator-claudemd.ts (update — branching instructions)
+- packages/backend/src/session/branchModel.ts (new)
 ## Implementation notes
 > To be filled in during/after implementation.
 
@@ -190,6 +220,266 @@ Covered by the Manual Verification Gate task.
 
 > These are the current contents of files listed in the task spec.
 > They were pre-read by the orchestrator so you can skip exploration.
+
+### `packages/backend/src/db/schema.ts`
+```
+import { db } from './db';
+
+export function runMigrations(): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      session_id          TEXT    PRIMARY KEY,
+      notion_task_id      TEXT,
+      notion_task_url     TEXT,
+      project_context_url TEXT,
+      status              TEXT    NOT NULL,
+      started_at          INTEGER NOT NULL,
+      ended_at            INTEGER,
+      pr_url              TEXT,
+      worktree_path       TEXT,
+      favorited           INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS session_events (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id   TEXT    NOT NULL,
+      event_type   TEXT    NOT NULL,
+      payload      TEXT    NOT NULL,
+      timestamp    INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS permission_events (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id      TEXT    NOT NULL,
+      tool_name       TEXT    NOT NULL,
+      proposed_action TEXT,
+      decision        TEXT    NOT NULL,
+      rule_matched    TEXT,
+      decided_at      INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS permission_rules (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_index INTEGER NOT NULL,
+      pattern     TEXT    NOT NULL,
+      match_type  TEXT    NOT NULL,
+      decision    TEXT    NOT NULL,
+      label       TEXT,
+      enabled     INTEGER NOT NULL DEFAULT 1
+    );
+
+    CREATE TABLE IF NOT EXISTS permission_denials (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id  TEXT    NOT NULL,
+      tool_name   TEXT    NOT NULL,
+      tool_use_id TEXT    NOT NULL,
+      tool_input  TEXT    NOT NULL,
+      timestamp   INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS task_cache (
+      notion_task_id TEXT    PRIMARY KEY,
+      fetched_at     INTEGER NOT NULL,
+      raw_json       TEXT    NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS session_audits (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id    TEXT NOT NULL,
+      pr_opened     INTEGER NOT NULL DEFAULT 0,
+      pr_targets    TEXT,
+      task_status   TEXT,
+      violations    TEXT NOT NULL DEFAULT '[]',
+      spec_mismatch TEXT,
+      audited_at    TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS projects (
+      id           TEXT    PRIMARY KEY,
+      name         TEXT    NOT NULL,
+      project_dir  TEXT    NOT NULL,
+      context_url  TEXT,
+      github_repo  TEXT,
+      task_source  TEXT    NOT NULL DEFAULT 'notion',
+      created_at   INTEGER NOT NULL,
+      updated_at   INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS milestones (
+      id            TEXT    PRIMARY KEY,
+      project_id    TEXT    NOT NULL,
+      name          TEXT    NOT NULL,
+      source_id     TEXT,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      created_at    INTEGER NOT NULL,
+      updated_at    INTEGER NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS local_branches (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id    TEXT NOT NULL,
+      session_id    TEXT NOT NULL,
+      branch_name   TEXT NOT NULL,
+      base_branch   TEXT NOT NULL DEFAULT 'dev',
+      status        TEXT NOT NULL DEFAULT 'open',
+      review_result TEXT,
+      created_at    TEXT NOT NULL,
+      updated_at    TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_local_branches_project_status ON local_branches(project_id, status);
+  `);
+
+  // Idempotent column additions for existing databases
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN worktree_path TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN project_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'standard'`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN note TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN tags TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE session_events ADD COLUMN message_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN favorited INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN total_input_tokens INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN total_output_tokens INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN review_session_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE pull_requests ADD COLUMN review_iteration INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN head_sha TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN last_reviewed_sha TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE projects ADD COLUMN auto_launch_enabled INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE projects ADD COLUMN auto_launch_milestone_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN pause_reason TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN failing_checks TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE projects ADD COLUMN auto_merge_enabled INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN metadata TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE projects ADD COLUMN git_mode TEXT NOT NULL DEFAULT 'github'`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN review_result TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE local_branches ADD COLUMN pause_reason TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE local_branches ADD COLUMN merge_commit_sha TEXT`);
+  } catch {
+    /* already exists */
+  }
+}
+
+```
 
 ### `packages/backend/src/session/orchestrator-claudemd.ts`
 ```

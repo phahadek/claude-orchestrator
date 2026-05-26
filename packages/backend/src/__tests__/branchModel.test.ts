@@ -91,7 +91,10 @@ describe('resolveStartingPoint', () => {
   });
 
   it('returns feature/<slug> for milestone task + two_tier mode', () => {
-    mockGetMilestone.mockReturnValue({ id: 'ms-1', name: 'M6 — Enterprise Readiness' });
+    mockGetMilestone.mockReturnValue({
+      id: 'ms-1',
+      name: 'M6 — Enterprise Readiness',
+    });
     const result = resolveStartingPoint(
       { milestoneBranching: 'two_tier' },
       'ms-1',
@@ -115,7 +118,10 @@ describe('resolveStartingPoint', () => {
     expect(resultTwoTier.startingPoint).toBe('dev');
     expect(resultTwoTier.milestoneSlug).toBeNull();
 
-    const resultFlat = resolveStartingPoint({ milestoneBranching: 'flat' }, null);
+    const resultFlat = resolveStartingPoint(
+      { milestoneBranching: 'flat' },
+      null,
+    );
     expect(resultFlat.startingPoint).toBe('dev');
   });
 
@@ -168,9 +174,13 @@ describe('ensureMilestoneBranch', () => {
     // 4th call: git branch from origin/dev
     // 5th call: git push
     execSyncMock
-      .mockImplementationOnce(() => { throw new Error('not found'); })
+      .mockImplementationOnce(() => {
+        throw new Error('not found');
+      })
       .mockReturnValueOnce('') // fetch
-      .mockImplementationOnce(() => { throw new Error('not on origin'); })
+      .mockImplementationOnce(() => {
+        throw new Error('not on origin');
+      })
       .mockReturnValueOnce('') // git branch
       .mockReturnValueOnce(''); // git push
 
@@ -192,7 +202,9 @@ describe('ensureMilestoneBranch', () => {
     // 3rd call: origin ref check → ok (exists on origin)
     // 4th call: git branch (local tracking)
     execSyncMock
-      .mockImplementationOnce(() => { throw new Error('not found'); })
+      .mockImplementationOnce(() => {
+        throw new Error('not found');
+      })
       .mockReturnValueOnce('') // fetch
       .mockReturnValueOnce('') // origin ref check succeeds
       .mockReturnValueOnce(''); // git branch
