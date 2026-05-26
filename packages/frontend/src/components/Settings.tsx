@@ -49,6 +49,7 @@ const MODEL_OPTIONS = [
 
 interface Props {
   initialTab?: Tab;
+  onProjectsChanged?: () => void;
 }
 
 async function fetchSettings(): Promise<SettingsValues> {
@@ -66,7 +67,7 @@ async function patchSettings(patch: Partial<SettingsValues>): Promise<void> {
   if (!res.ok) throw new Error(`${res.status}`);
 }
 
-export function Settings({ initialTab = 'general' }: Props) {
+export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
   const [settings, setSettings] = useState<SettingsValues | null>(null);
   const [loading, setLoading] = useState(true);
@@ -406,7 +407,7 @@ export function Settings({ initialTab = 'general' }: Props) {
 
         {activeTab === 'projects' && (
           <div className={styles.section}>
-            <ProjectsSettingsPanel />
+            <ProjectsSettingsPanel onMilestonesChanged={onProjectsChanged} />
           </div>
         )}
 

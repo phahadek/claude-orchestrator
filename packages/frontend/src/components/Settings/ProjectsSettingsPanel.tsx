@@ -66,7 +66,11 @@ function middleEllipsis(str: string, maxLen = 40): string {
   return str.slice(0, half) + '…' + str.slice(str.length - half);
 }
 
-function ProjectsSettingsPanelInner() {
+interface OuterProps {
+  onMilestonesChanged?: () => void;
+}
+
+function ProjectsSettingsPanelInner({ onMilestonesChanged }: OuterProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -163,7 +167,10 @@ function ProjectsSettingsPanelInner() {
       <MilestonesSubPanel
         project={drillIn}
         onBack={() => setDrillIn(null)}
-        onMilestonesChanged={() => void reload()}
+        onMilestonesChanged={() => {
+            void reload();
+            onMilestonesChanged?.();
+          }}
       />
     );
   }
@@ -361,10 +368,10 @@ function ProjectsSettingsPanelInner() {
   );
 }
 
-export function ProjectsSettingsPanel() {
+export function ProjectsSettingsPanel({ onMilestonesChanged }: OuterProps) {
   return (
     <ErrorBoundary name="ProjectsSettingsPanel">
-      <ProjectsSettingsPanelInner />
+      <ProjectsSettingsPanelInner onMilestonesChanged={onMilestonesChanged} />
     </ErrorBoundary>
   );
 }

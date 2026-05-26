@@ -316,6 +316,17 @@ export default function App() {
     [send],
   );
 
+  const handleProjectsChanged = useCallback(() => {
+    fetch('/api/config')
+      .then((r) => r.json())
+      .then((loaded: ProjectConfig[]) => {
+        setProjects(loaded);
+      })
+      .catch(() => {
+        /* non-critical */
+      });
+  }, []);
+
   const handleAutoLaunchToggle = useCallback(
     (patch: {
       autoLaunchEnabled: boolean;
@@ -1137,7 +1148,7 @@ export default function App() {
         {topView === 'settings' && (
           <ErrorBoundary name="SettingsView">
             <div className={styles.settingsView}>
-              <Settings initialTab={settingsInitialTab} />
+              <Settings initialTab={settingsInitialTab} onProjectsChanged={handleProjectsChanged} />
             </div>
           </ErrorBoundary>
         )}
