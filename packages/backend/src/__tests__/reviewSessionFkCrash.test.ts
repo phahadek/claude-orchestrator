@@ -319,9 +319,8 @@ describe('CliSessionRunner — readline handler safety', () => {
 
 describe('upsertSessionEvent — defensive guard (source-level)', () => {
   it('checks for session row existence before inserting', () => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const fs = require('fs');
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+
     const pathLib = require('path');
     const source = fs.readFileSync(
       pathLib.join(__dirname, '..', 'db', 'queries.ts'),
@@ -335,9 +334,8 @@ describe('upsertSessionEvent — defensive guard (source-level)', () => {
   });
 
   it('logs an error and returns -1 when session row is missing', () => {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const fs = require('fs');
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+
     const pathLib = require('path');
     const source = fs.readFileSync(
       pathLib.join(__dirname, '..', 'db', 'queries.ts'),
