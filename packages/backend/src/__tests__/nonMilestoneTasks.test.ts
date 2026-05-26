@@ -51,7 +51,9 @@ import { recordEvent } from '../audit/AuditLog.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-function makeNotionTask(overrides: Partial<ResolvedTask['task']> = {}): ResolvedTask {
+function makeNotionTask(
+  overrides: Partial<ResolvedTask['task']> = {},
+): ResolvedTask {
   return {
     task: {
       id: 'task-1',
