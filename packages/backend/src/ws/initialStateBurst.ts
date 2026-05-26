@@ -1,4 +1,5 @@
 import type { ServerMessage } from './types';
+import { scrubSecrets } from '../security/scrubSecrets';
 import {
   getActiveSessions,
   getEventsBySession,
@@ -74,7 +75,7 @@ export function sendInitialStateBurst(
           | 'tool_result'
           | 'system'
           | 'user_message',
-        content: ev.payload,
+        content: scrubSecrets(ev.payload),
         ...(ev.message_id != null && { messageId: ev.message_id }),
       });
     }
