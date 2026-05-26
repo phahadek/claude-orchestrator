@@ -49,7 +49,9 @@ describe('recordEvent()', () => {
     });
 
     const row = (db as import('better-sqlite3').Database)
-      .prepare(`SELECT * FROM audit_log WHERE event_type='session_launched' LIMIT 1`)
+      .prepare(
+        `SELECT * FROM audit_log WHERE event_type='session_launched' LIMIT 1`,
+      )
       .get() as Record<string, unknown> | undefined;
 
     expect(row).toBeDefined();
@@ -59,7 +61,9 @@ describe('recordEvent()', () => {
     expect(row!.project_id).toBe('proj-1');
     expect(row!.task_id).toBe('task-1');
     expect(typeof row!.ts).toBe('number');
-    expect(JSON.parse(row!.payload as string)).toMatchObject({ session_type: 'standard' });
+    expect(JSON.parse(row!.payload as string)).toMatchObject({
+      session_type: 'standard',
+    });
   });
 
   it('produces a session_launched row with actor_type=ai when a session is launched', async () => {
@@ -97,7 +101,11 @@ describe('audit_log source-level DELETE/UPDATE guard', () => {
         const fullPath = path.join(dir, entry.name);
         if (entry.isDirectory()) {
           scanDir(fullPath);
-        } else if (entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) {
+        } else if (
+          entry.isFile() &&
+          entry.name.endsWith('.ts') &&
+          !entry.name.endsWith('.test.ts')
+        ) {
           const content = fs.readFileSync(fullPath, 'utf-8');
           if (/DELETE\s+FROM\s+audit_log/i.test(content)) {
             findings.push(fullPath);
@@ -119,7 +127,11 @@ describe('audit_log source-level DELETE/UPDATE guard', () => {
         const fullPath = path.join(dir, entry.name);
         if (entry.isDirectory()) {
           scanDir(fullPath);
-        } else if (entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts')) {
+        } else if (
+          entry.isFile() &&
+          entry.name.endsWith('.ts') &&
+          !entry.name.endsWith('.test.ts')
+        ) {
           const content = fs.readFileSync(fullPath, 'utf-8');
           if (/UPDATE\s+audit_log/i.test(content)) {
             findings.push(fullPath);

@@ -360,7 +360,11 @@ export class PRReviewService {
         actor_id: null,
         project_id: projectId || null,
         task_id: prRow.notion_task_id ?? null,
-        payload: { pr_number: prNumber, repo, head_sha: prData.headSha ?? null },
+        payload: {
+          pr_number: prNumber,
+          repo,
+          head_sha: prData.headSha ?? null,
+        },
       });
 
       const aiResult = await verdictPromise;
