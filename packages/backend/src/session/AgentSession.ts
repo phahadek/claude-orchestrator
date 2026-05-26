@@ -1,6 +1,5 @@
 import { EventEmitter } from 'events';
 import { ALLOWED_TOOLS, runtimeSettings } from '../config';
-import { recordEvent } from '../audit/AuditLog';
 import {
   upsertSessionEvent,
   updateSessionStatus,
