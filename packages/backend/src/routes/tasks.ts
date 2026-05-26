@@ -332,6 +332,46 @@ export function createTasksRouter(): Router {
     res.send(output);
   });
 
+  // ── GET /api/tasks/non-milestone?projectId=<id> ─────────────────────────
+  router.get('/tasks/non-milestone', (req: Request, res: Response) => {
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : '';
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId query param is required' });
+      return;
+    }
+
+    const project = getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: `Project '${projectId}' not found` });
+      return;
+    }
+
+    const cacheKey = `non_milestone:${projectId}`;
+    const cacheRow = getTaskCache(cacheKey);
+    if (!cacheRow) {
+      res.json([]);
+      return;
+    }
+
+    let notionTasks: NotionTask[];
+    try {
+      notionTasks = JSON.parse(cacheRow.raw_json) as NotionTask[];
+    } catch {
+      res.json([]);
+      return;
+    }
+
+    const taskIds = notionTasks.map((t) => t.id);
+    const aggregates = getActiveTaskAggregates(taskIds);
+    const cap = getReviewIterationCap();
+    const views: TaskView[] = aggregates
+      .map((row) => buildTaskViewFromRow(row, cap))
+      .filter((v) => !v.notionStatus.includes('Deferred'));
+
+    res.json(views);
+  });
+
   // ── GET /api/tasks/active?projectId=<id>&boardId=<id> ────────────────────
   router.get('/tasks/active', (req: Request, res: Response) => {
     const projectId =

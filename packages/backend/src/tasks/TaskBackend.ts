@@ -5,6 +5,17 @@ import { NotionTaskBackend } from './NotionTaskBackend';
 import { LocalTaskBackend } from './LocalTaskBackend';
 
 /**
+ * Per-project configuration that identifies where non-milestone tasks are sourced from.
+ * Stored as JSON in projects.non_milestone_source_config.
+ */
+export interface NonMilestoneSourceConfig {
+  /** Notion database ID (for notion-backed projects). */
+  notionDatabaseId?: string;
+  /** tasks.yaml milestone id (for yaml-backed projects). */
+  milestoneId?: string;
+}
+
+/**
  * Project-scoped task tracker. An instance is bound to a single project via the
  * factory `getTaskBackend(projectId)` — callers do not pass projectId to methods.
  */
@@ -32,8 +43,15 @@ export interface TaskBackend {
   /** Fetch the full task page body as markdown (for review/session context). */
   fetchTaskPage(taskId: string): Promise<string>;
 
-  /** Fetch tasks ready to launch that are not tied to a milestone. Returns [] until T14 lands. */
-  fetchNonMilestoneReadyTasks(): Promise<ResolvedTask[]>;
+  /**
+   * Fetch tasks ready to launch that are not tied to a milestone.
+   * sourceConfig identifies which source (Notion database or YAML milestone) to query.
+   * Returns [] when sourceConfig is null or the source is not configured.
+   */
+  fetchNonMilestoneReadyTasks(
+    sourceConfig: NonMilestoneSourceConfig | null,
+    projectId?: string,
+  ): Promise<ResolvedTask[]>;
 }
 
 /**

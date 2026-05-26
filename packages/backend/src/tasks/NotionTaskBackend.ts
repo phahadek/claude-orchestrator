@@ -1,4 +1,4 @@
-import type { TaskBackend } from './TaskBackend';
+import type { TaskBackend, NonMilestoneSourceConfig } from './TaskBackend';
 import type { ResolvedTask } from './types';
 import { parseTaskId, formatTaskId } from './taskId';
 import { NotionClient } from '../notion/NotionClient';
@@ -73,7 +73,34 @@ export class NotionTaskBackend implements TaskBackend {
     return page.rawMarkdown;
   }
 
-  async fetchNonMilestoneReadyTasks(): Promise<ResolvedTask[]> {
-    return [];
+  async fetchNonMilestoneReadyTasks(
+    sourceConfig: NonMilestoneSourceConfig | null,
+    projectId?: string,
+  ): Promise<ResolvedTask[]> {
+    if (!sourceConfig?.notionDatabaseId) return [];
+    const tasks = await this.client.fetchReadyTasks(
+      sourceConfig.notionDatabaseId,
+      true,
+    );
+    const resolved = tasks.map((r) => {
+      const prefixedId = formatTaskId('notion', r.task.id);
+      upsertTaskCache(
+        prefixedId,
+        JSON.stringify({ ...r.task, id: prefixedId }),
+      );
+      return {
+        ...r,
+        task: { ...r.task, id: prefixedId },
+        source: 'notion' as const,
+      };
+    });
+    // Cache full task list under the project's non-milestone key so the HTTP endpoint can serve it.
+    if (projectId) {
+      upsertTaskCache(
+        `non_milestone:${projectId}`,
+        JSON.stringify(resolved.map((r) => r.task)),
+      );
+    }
+    return resolved;
   }
 }

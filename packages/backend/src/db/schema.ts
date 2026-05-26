@@ -281,6 +281,11 @@ export function runMigrations(): void {
   } catch {
     /* already exists */
   }
+  try {
+    db.exec(`ALTER TABLE projects ADD COLUMN non_milestone_source_config TEXT`);
+  } catch {
+    /* already exists */
+  }
 
   // ── Source-prefix backfill (idempotent: NOT LIKE '%:%' guard) ──────────────
   // Prefix sessions.task_id with source based on owning project's task_source.
