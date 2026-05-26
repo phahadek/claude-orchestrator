@@ -145,11 +145,9 @@ projectsRouter.patch('/projects/:id', (req: Request, res: Response) => {
         | 'flat'
         | null;
     } else if (body.milestoneBranching !== undefined) {
-      res
-        .status(400)
-        .json({
-          error: `milestoneBranching must be 'two_tier', 'flat', or null`,
-        });
+      res.status(400).json({
+        error: `milestoneBranching must be 'two_tier', 'flat', or null`,
+      });
       return;
     }
   }

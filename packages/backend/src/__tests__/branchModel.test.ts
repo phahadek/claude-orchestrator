@@ -27,7 +27,6 @@ import {
   resolveBranchMode,
   resolveStartingPoint,
   ensureMilestoneBranch,
-  getCorporateMode,
 } from '../session/branchModel.js';
 
 // ── slugify ────────────────────────────────────────────────────────────────────
