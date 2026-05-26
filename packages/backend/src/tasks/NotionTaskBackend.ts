@@ -37,12 +37,18 @@ export class NotionTaskBackend implements TaskBackend {
         `[NotionTaskBackend] milestone ${milestoneId} has no source_id — set it to the Notion database ID`,
       );
     }
-    const tasks = await this.client.fetchReadyTasks(milestone.sourceId, skipCache);
+    const tasks = await this.client.fetchReadyTasks(
+      milestone.sourceId,
+      skipCache,
+    );
     return tasks.map((r) => {
       const prefixedId = formatTaskId('notion', r.task.id);
       // Also cache under the prefixed key so getTaskTitleFromCache works with
       // prefixed session.task_id lookups.
-      upsertTaskCache(prefixedId, JSON.stringify({ ...r.task, id: prefixedId }));
+      upsertTaskCache(
+        prefixedId,
+        JSON.stringify({ ...r.task, id: prefixedId }),
+      );
       return {
         ...r,
         task: { ...r.task, id: prefixedId },

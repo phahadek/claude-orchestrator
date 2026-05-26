@@ -202,10 +202,7 @@ function DenialRow({ row }: { row: PermissionDenialRow }) {
       >
         {relativeTime(row.timestamp)}
       </td>
-      <td
-        className={styles.sessionCell}
-        title={row.task_url ?? row.session_id}
-      >
+      <td className={styles.sessionCell} title={row.task_url ?? row.session_id}>
         {sessionName}
       </td>
       <td className={styles.toolCell}>{row.tool_name}</td>

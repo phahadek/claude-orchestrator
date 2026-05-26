@@ -121,9 +121,7 @@ export function createPrsRouter(
         createdAt: new Date(s.started_at).toISOString(),
         autoMergeEnabled,
         notionTaskId: s.task_id,
-        notionTaskTitle: s.task_id
-          ? getTaskTitleFromCache(s.task_id)
-          : null,
+        notionTaskTitle: s.task_id ? getTaskTitleFromCache(s.task_id) : null,
       }));
       res.json(localItems);
       return;

@@ -108,15 +108,24 @@ import { parseTaskId, formatTaskId } from '../tasks/taskId.js';
 
 describe('parseTaskId', () => {
   it('parses notion: prefix', () => {
-    expect(parseTaskId('notion:abc')).toEqual({ source: 'notion', externalId: 'abc' });
+    expect(parseTaskId('notion:abc')).toEqual({
+      source: 'notion',
+      externalId: 'abc',
+    });
   });
 
   it('parses yaml: prefix', () => {
-    expect(parseTaskId('yaml:my-task')).toEqual({ source: 'yaml', externalId: 'my-task' });
+    expect(parseTaskId('yaml:my-task')).toEqual({
+      source: 'yaml',
+      externalId: 'my-task',
+    });
   });
 
   it('parses jira: prefix', () => {
-    expect(parseTaskId('jira:PROJ-123')).toEqual({ source: 'jira', externalId: 'PROJ-123' });
+    expect(parseTaskId('jira:PROJ-123')).toEqual({
+      source: 'jira',
+      externalId: 'PROJ-123',
+    });
   });
 
   it('preserves colons inside the external ID', () => {
@@ -220,7 +229,10 @@ describe('NotionTaskBackend prefix handling', () => {
   });
 
   it('attachPR strips notion: prefix before calling Notion API', async () => {
-    await backend.attachPR('notion:raw-id-abc', 'https://github.com/owner/repo/pull/1');
+    await backend.attachPR(
+      'notion:raw-id-abc',
+      'https://github.com/owner/repo/pull/1',
+    );
     expect(vi.mocked(client.attachPR)).toHaveBeenCalledWith(
       'raw-id-abc',
       'https://github.com/owner/repo/pull/1',
@@ -229,7 +241,10 @@ describe('NotionTaskBackend prefix handling', () => {
 
   it('updateStatus strips notion: prefix before calling Notion API', async () => {
     await backend.updateStatus('notion:raw-id-abc', '✅ Done');
-    expect(vi.mocked(client.updateStatus)).toHaveBeenCalledWith('raw-id-abc', '✅ Done');
+    expect(vi.mocked(client.updateStatus)).toHaveBeenCalledWith(
+      'raw-id-abc',
+      '✅ Done',
+    );
   });
 
   it('fetchNonMilestoneReadyTasks returns []', async () => {
@@ -279,7 +294,10 @@ describe('LocalTaskBackend prefix handling', () => {
   });
 
   it('attachPR strips yaml: prefix before writing to tasks.yaml', async () => {
-    await backend.attachPR('yaml:task-foo', 'https://github.com/owner/repo/pull/5');
+    await backend.attachPR(
+      'yaml:task-foo',
+      'https://github.com/owner/repo/pull/5',
+    );
     const content = fs.readFileSync(path.join(tmpDir, 'tasks.yaml'), 'utf-8');
     expect(content).toContain('pr_url:');
     expect(content).toContain('github.com/owner/repo/pull/5');
@@ -303,15 +321,21 @@ import { db } from '../db/db.js';
 
 describe('Schema migration — task_id column in sessions and task_cache', () => {
   it('sessions table has task_id column (not notion_task_id)', () => {
-    const cols = (db.prepare("PRAGMA table_info('sessions')").all() as Array<{ name: string }>)
-      .map((c) => c.name);
+    const cols = (
+      db.prepare("PRAGMA table_info('sessions')").all() as Array<{
+        name: string;
+      }>
+    ).map((c) => c.name);
     expect(cols).toContain('task_id');
     expect(cols).not.toContain('notion_task_id');
   });
 
   it('task_cache table has task_id column (not notion_task_id)', () => {
-    const cols = (db.prepare("PRAGMA table_info('task_cache')").all() as Array<{ name: string }>)
-      .map((c) => c.name);
+    const cols = (
+      db.prepare("PRAGMA table_info('task_cache')").all() as Array<{
+        name: string;
+      }>
+    ).map((c) => c.name);
     expect(cols).toContain('task_id');
     expect(cols).not.toContain('notion_task_id');
   });

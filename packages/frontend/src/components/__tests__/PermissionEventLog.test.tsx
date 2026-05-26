@@ -121,8 +121,7 @@ describe('PermissionEventLog', () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse([
         makeDenial({
-          task_url:
-            'https://www.notion.so/Fix-the-login-bug-abc123def456',
+          task_url: 'https://www.notion.so/Fix-the-login-bug-abc123def456',
         }),
       ]),
     );

@@ -1148,9 +1148,7 @@ export function setPauseReason(
  * or null if no PR exists or the PR is not paused. Used by auto-runner
  * components to skip tasks paused by stuck_timeout (or any other reason).
  */
-export function getPausedPrReasonForTask(
-  taskId: string,
-): PauseReason | null {
+export function getPausedPrReasonForTask(taskId: string): PauseReason | null {
   const norm = taskId.replace(/-/g, '');
   const row = db
     .prepare<{ task_id: string }>(
@@ -1162,9 +1160,7 @@ export function getPausedPrReasonForTask(
     LIMIT 1
   `,
     )
-    .get({ task_id: norm }) as
-    | { pause_reason: string | null }
-    | undefined;
+    .get({ task_id: norm }) as { pause_reason: string | null } | undefined;
   return (row?.pause_reason as PauseReason | null) ?? null;
 }
 

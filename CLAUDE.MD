@@ -7,8 +7,8 @@
 
 ## Task Assignment
 
-- **Task**: Add human approval gate to auto-merge (corporate mode)
-- **Notion task**: https://www.notion.so/Add-human-approval-gate-to-auto-merge-corporate-mode-36b22f9152f381e08effd1bbc8ac0198
+- **Task**: Extract task-source provider interface; reshape current Notion logic as a provider
+- **Notion task**: https://www.notion.so/Extract-task-source-provider-interface-reshape-current-Notion-logic-as-a-provider-36b22f9152f38143888cdcc46bebea7f
 - **Project context**: https://www.notion.so/33222f9152f38188b65fd912e40890a2
 
 ---
@@ -110,7 +110,7 @@ Run in order — all must pass before opening the PR:
 
 ## Git Isolation
 
-> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\5c89e9e5-9929-4f3e-8896-a2c7f3487e4c`.**
+> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\a38d1b5f-74f5-4b79-b1da-4baddf724542`.**
 > This is your `cwd`. All commands run here. Never navigate to or operate on any parent directory.
 
 - All git commands must run inside the worktree directory (your `cwd`)
@@ -150,42 +150,59 @@ Use the Write tool for any file creation. Never use `cat >`, `printf >`, or `ech
 > Do NOT re-fetch this from Notion — use the content below as your source of truth.
 
 ## Summary
-When corporate mode is on, the auto-merge path must wait for GitHub's PR review state to be APPROVED by a human reviewer before merging — in addition to existing CI / no-pause-reason gates.
+Fix the task-source identity overload, rename Notion-leaking column names, relocate ResolvedTask out of notion/types.ts, and extend the existing TaskBackend interface with the discriminator + source field + non-milestone fetch method. No new abstraction is being designed — the existing TaskBackend is kept and extended.
 ## Dependencies
-- Introduce milestone-feature-branch + task-branch model
-- Implement corporate-mode config layer
+- Design task-source abstraction (Notion + Jira + non-milestone shape) — see that page for the full design rationale and resolved OQs
 ## Context
-Today, packages/backend/src/github/AutoMerger.ts:run() checks pause_reason (line ~89) and CI status (line ~96-149) before calling GitHub's merge endpoint. There is no approval-state check. In corporate mode, this must become a hard gate.
+Scope correction: the original task body framed this as "extract a task-source provider interface." That framing was wrong. The Wave-1 design (Task 3) found that the provider abstraction already exists in code — TaskBackend at packages/backend/src/tasks/TaskBackend.ts:11-34, factory getTaskBackend(projectId) at :55-64. Both NotionTaskBackend and LocalTaskBackend implement it cleanly. This task fixes the tech-debt-by-accident that exists in the current implementation and prepares the seams that Jira (T13) and non-milestone support (T14) will use.
+### What's broken-by-accident today
+Both backends store their IDs in the same notion_task_id column. Works because both are TEXT, but the column name lies about what's in it, and there's no programmatic way to recover the source from the value alone. Same in task_cache, sessions, session_audits.
 ### What changes
-1. Add a GitHub API call to fetch the PR's current review state. The current GitHubClient.ts already has GraphQL access (used for markPullRequestReadyForReview) — extend with a getReviewState(prNumber) method.
-1. In AutoMerger.run(), after the CI-status check, branch on getCorporateMode().gates.requireHumanApproval:
-1. When approval has not yet been given but everything else is green, the PR stays open with a new pause reason (awaiting_human_approval). The poll loop keeps checking.
-1. If the human leaves a CHANGES_REQUESTED review, route the change request through the reviewer-comment-routing task's logic (next task). For this task: at minimum, pause with human_changes_requested and a notification.
+1. Schema migration — rename + backfill. Rename notion_task_id → task_id and notion_task_url → task_url on sessions, task_cache, session_audits. Backfill existing rows with source-prefixes based on each row's owning project's task_source value:
+1. New ID helpers module. packages/backend/src/tasks/taskId.ts:
+1. Relocate ResolvedTask + add source field. Move ResolvedTask from packages/backend/src/notion/types.ts to packages/backend/src/tasks/types.ts. Add a new source: 'notion' | 'yaml' | 'jira' field on it.
+1. Extend TaskBackend interface:
+1. Update existing backends to handle prefixes at their boundaries. NotionTaskBackend strips notion: before calling Notion API; prepends notion: when returning IDs. LocalTaskBackend strips/prepends yaml:. Both implement fetchNonMilestoneReadyTasks returning [] (Notion + YAML non-milestone behaviour ships in T14).
+### Out of scope
+- Jira provider implementation (T13)
+- Non-milestone task behaviour for Notion / YAML (T14 — though the interface method is added here, returning [])
+- New columns for task_source_config (T13) or non_milestone_source_config (T14) — each downstream task owns its own column addition
+### Critical caveat
+No downgrade support. Once this task ships and the column rename runs, rolling back to a pre-M6 build is not supported — old code expects notion_task_id and the column no longer exists. Implementation Notes must call this out at ship time.
 ### Files likely to change
-- packages/backend/src/github/AutoMerger.ts (update — new gate)
-- packages/backend/src/github/GitHubClient.ts (update — add getReviewState)
-- packages/backend/src/session/types.ts or wherever pause reasons live (update — add new reasons)
-## Design specifics inherited from Wave-1
-Per the governance design (Task 2):
-- Insertion point in AutoMerger.run(): after the existing CI-status check (~line 96-149), before calling GitHubClient.mergePR().
-- New GitHubClient.getReviewState(prNumber) method — extends the existing GraphQL access used by markPullRequestReadyForReview.
-- Pause-reason additions (declared in T6, used here): awaiting_human_approval, human_changes_requested.
-- Observation: poll-based, riding the existing 5s AutoMerger cycle. No webhooks (revisit if M6 expands to shared-instance, currently Future Scope).
-- isAIReviewer predicate dependency: T12 (attribution) provides the canonical predicate. Until T12 lands, fall back to checking the reviewer username against a configured ai_reviewer_usernames set in settings.
-- Non-corporate mode is unchanged — no approval check is performed; existing CI-green + no-pause-reason gate remains.
+- packages/backend/src/db/schema.ts (update — column renames; backfill SQL)
+- packages/backend/src/tasks/TaskBackend.ts (update — extend type discriminator; add fetchNonMilestoneReadyTasks method signature)
+- packages/backend/src/tasks/taskId.ts (new — parseTaskId, formatTaskId)
+- packages/backend/src/tasks/types.ts (new — relocated ResolvedTask with added source field)
+- packages/backend/src/notion/types.ts (update — remove ResolvedTask)
+- packages/backend/src/tasks/NotionTaskBackend.ts (update — strip/prepend notion: prefix; implement fetchNonMilestoneReadyTasks returning [])
+- packages/backend/src/tasks/LocalTaskBackend.ts (update — strip/prepend yaml: prefix; implement fetchNonMilestoneReadyTasks returning [])
+- All call sites that read notion_task_id from the DB — rename to task_id; values now arrive prefixed
 ## Acceptance criteria
 ### 🤖 Automated tests
 tsc --noEmit passes for both packages
-Unit test: in corporate mode with an APPROVED review state, auto-merge proceeds
-Unit test: in corporate mode with no review state (REVIEW_REQUIRED), auto-merge does not call the merge endpoint and pauses with awaiting_human_approval
-Unit test: in corporate mode with CHANGES_REQUESTED, auto-merge pauses with human_changes_requested
-Unit test: in non-corporate mode, existing behaviour is preserved (no approval check)
+Migration renames columns and backfills prefixes on a fresh DB + on a pre-existing DB (test both paths)
+Migration is idempotent — running twice does not double-prefix
+Unit test: parseTaskId('notion:abc') returns { source: 'notion', externalId: 'abc' }
+Unit test: parseTaskId throws on malformed input (no colon, unknown source)
+Unit test: formatTaskId('notion', 'abc') returns 'notion:abc'
+Unit test: NotionTaskBackend.fetchReadyTasks returns ResolvedTask objects with source: 'notion' and id prefixed with notion:
+Unit test: LocalTaskBackend.fetchReadyTasks returns ResolvedTask objects with source: 'yaml' and id prefixed with yaml:
+Unit test: NotionTaskBackend.attachPR('notion:abc', ...) strips the prefix before calling the Notion API (verify via the mock)
+Unit test: LocalTaskBackend.attachPR('yaml:foo', ...) strips the prefix before writing to tasks.yaml
+Unit test: fetchNonMilestoneReadyTasks() returns [] on both backends until T14 lands
+Existing Notion-integration tests continue to pass
 ### 👁️ Manual verification
 Covered by the Manual Verification Gate task.
 ## Files / paths affected
-- packages/backend/src/github/AutoMerger.ts (update)
-- packages/backend/src/github/GitHubClient.ts (update)
-- Pause-reason type definition (update)
+- packages/backend/src/db/schema.ts (update)
+- packages/backend/src/tasks/TaskBackend.ts (update)
+- packages/backend/src/tasks/taskId.ts (new)
+- packages/backend/src/tasks/types.ts (new)
+- packages/backend/src/notion/types.ts (update — remove ResolvedTask)
+- packages/backend/src/tasks/NotionTaskBackend.ts (update)
+- packages/backend/src/tasks/LocalTaskBackend.ts (update)
+- All call sites that previously read notion_task_id (update)
 ## Implementation notes
 > To be filled in during/after implementation.
 
@@ -194,505 +211,677 @@ Covered by the Manual Verification Gate task.
 > These are the current contents of files listed in the task spec.
 > They were pre-read by the orchestrator so you can skip exploration.
 
-### `packages/backend/src/github/AutoMerger.ts`
+### `packages/backend/src/db/schema.ts`
 ```
-import {
-  getProjectByGithubRepo,
-  getProjectById,
-  runtimeSettings,
-} from '../config';
-import {
-  getPRByNumber,
-  setPauseReason,
-  updateMergeState,
-  getApprovedOpenPRs,
-  getApprovedLocalBranches,
-  markLocalBranchMerged,
-  setLocalBranchPauseReason,
-  getSession,
-} from '../db/queries';
-import type { GitHubClient } from './GitHubClient';
-import { GitHubApiError } from './types';
-import type { PRMergeWatcher } from './PRMergeWatcher';
-import type { PullRequestRow } from '../db/types';
-import type { ServerMessage } from '../ws/types';
-import { emitTaskUpdated } from '../routes/tasks';
-import { loadOrchestratorConfig } from '../session/orchestrator-config';
-import type { SessionManager } from '../session/SessionManager';
-import { getTaskBackend } from '../tasks/TaskBackend';
-import { squashMergeLocal } from '../orchestration/localMergeRunner';
-import { detectMergeConflict } from '../orchestration/localBranchHelpers';
-import { formatMergeConflictFeedback } from './reviewUtils';
+import { db } from './db';
 
-const MIN_POLL_INTERVAL_MS = 5_000;
+export function runMigrations(): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      session_id          TEXT    PRIMARY KEY,
+      notion_task_id      TEXT,
+      notion_task_url     TEXT,
+      project_context_url TEXT,
+      status              TEXT    NOT NULL,
+      started_at          INTEGER NOT NULL,
+      ended_at            INTEGER,
+      pr_url              TEXT,
+      worktree_path       TEXT,
+      favorited           INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS session_events (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id   TEXT    NOT NULL,
+      event_type   TEXT    NOT NULL,
+      payload      TEXT    NOT NULL,
+      timestamp    INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS permission_events (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id      TEXT    NOT NULL,
+      tool_name       TEXT    NOT NULL,
+      proposed_action TEXT,
+      decision        TEXT    NOT NULL,
+      rule_matched    TEXT,
+      decided_at      INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS permission_rules (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_index INTEGER NOT NULL,
+      pattern     TEXT    NOT NULL,
+      match_type  TEXT    NOT NULL,
+      decision    TEXT    NOT NULL,
+      label       TEXT,
+      enabled     INTEGER NOT NULL DEFAULT 1
+    );
+
+    CREATE TABLE IF NOT EXISTS permission_denials (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id  TEXT    NOT NULL,
+      tool_name   TEXT    NOT NULL,
+      tool_use_id TEXT    NOT NULL,
+      tool_input  TEXT    NOT NULL,
+      timestamp   INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS task_cache (
+      notion_task_id TEXT    PRIMARY KEY,
+      fetched_at     INTEGER NOT NULL,
+      raw_json       TEXT    NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS session_audits (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id    TEXT NOT NULL,
+      pr_opened     INTEGER NOT NULL DEFAULT 0,
+      pr_targets    TEXT,
+      task_status   TEXT,
+      violations    TEXT NOT NULL DEFAULT '[]',
+      spec_mismatch TEXT,
+      audited_at    TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS projects (
+      id           TEXT    PRIMARY KEY,
+      name         TEXT    NOT NULL,
+      project_dir  TEXT    NOT NULL,
+      context_url  TEXT,
+      github_repo  TEXT,
+      task_source  TEXT    NOT NULL DEFAULT 'notion',
+      created_at   INTEGER NOT NULL,
+      updated_at   INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS milestones (
+      id            TEXT    PRIMARY KEY,
+      project_id    TEXT    NOT NULL,
+      name          TEXT    NOT NULL,
+      source_id     TEXT,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      created_at    INTEGER NOT NULL,
+      updated_at    INTEGER NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS local_branches (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id    TEXT NOT NULL,
+      session_id    TEXT NOT NULL,
+      branch_name   TEXT NOT NULL,
+      base_branch   TEXT NOT NULL DEFAULT 'dev',
+      status        TEXT NOT NULL DEFAULT 'open',
+      review_result TEXT,
+      created_at    TEXT NOT NULL,
+      updated_at    TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_local_branches_project_status ON local_branches(project_id, status);
+  `);
+
+  // Idempotent column additions for existing databases
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN worktree_path TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN project_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'standard'`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN note TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN tags TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE session_events ADD COLUMN message_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN favorited INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN total_input_tokens INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN total_output_tokens INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN review_session_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE pull_requests ADD COLUMN review_iteration INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN head_sha TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN last_reviewed_sha TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE projects ADD COLUMN auto_launch_enabled INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE projects ADD COLUMN auto_launch_milestone_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN pause_reason TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN failing_checks TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE projects ADD COLUMN auto_merge_enabled INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN metadata TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE projects ADD COLUMN git_mode TEXT NOT NULL DEFAULT 'github'`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN review_result TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE local_branches ADD COLUMN pause_reason TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE local_branches ADD COLUMN merge_commit_sha TEXT`);
+  } catch {
+    /* already exists */
+  }
+}
+
+```
+
+### `packages/backend/src/tasks/TaskBackend.ts`
+```
+import type { ResolvedTask } from '../notion/types';
+import { ProjectService } from '../projects/ProjectService';
+import { NotionClient } from '../notion/NotionClient';
+import { NotionTaskBackend } from './NotionTaskBackend';
+import { LocalTaskBackend } from './LocalTaskBackend';
 
 /**
- * Drives the post-approval auto-merge flow. After review reaches an approved
- * verdict and CI turns green, squash-merges the PR to dev and lets
- * PRMergeWatcher complete the lifecycle. On any other outcome the task is
- * paused with a pause_reason so a human picks it up.
- *
- * Per-project — only runs for projects with `autoMergeEnabled === true`.
- * Skips PRs already paused (honors any existing pause_reason).
+ * Project-scoped task tracker. An instance is bound to a single project via the
+ * factory `getTaskBackend(projectId)` — callers do not pass projectId to methods.
  */
-export class AutoMerger {
-  /** In-flight auto-merge loops keyed by `${repo}#${prNumber}` to prevent double-runs. */
-  private active = new Set<string>();
+export interface TaskBackend {
+  /** Backend identifier; reflects the project's task_source. */
+  readonly type: 'notion' | 'local';
 
+  /**
+   * Fetch tasks that are ready to be dispatched for the given milestone.
+   * For Notion projects, milestoneId is resolved to the milestone row's source_id
+   * (the Notion database ID). For YAML projects, pass null to fetch all tasks
+   * across all milestones, or a milestone id to scope to one.
+   */
+  fetchReadyTasks(
+    milestoneId: string | null,
+    skipCache?: boolean,
+  ): Promise<ResolvedTask[]>;
+
+  /** Mark a task as in-review and attach a PR URL. */
+  attachPR(taskId: string, prUrl: string): Promise<void>;
+
+  /** Update task status (display-format string with emoji prefix). */
+  updateStatus(taskId: string, status: string): Promise<void>;
+
+  /** Fetch the full task page body as markdown (for review/session context). */
+  fetchTaskPage(taskId: string): Promise<string>;
+}
+
+/**
+ * Backwards-compatible alias for the previous interface name.
+ * Prefer `TaskBackend` in new code.
+ */
+export type TaskTrackerBackend = TaskBackend;
+
+// ── Factory ─────────────────────────────────────────────────────────────────
+
+let _notionBackend: NotionTaskBackend | undefined;
+
+function getNotionBackend(): NotionTaskBackend {
+  _notionBackend ??= new NotionTaskBackend(new NotionClient());
+  return _notionBackend;
+}
+
+/**
+ * Resolve the task backend for a project, honoring its `task_source` column.
+ * Throws if the project is not found.
+ */
+export function getTaskBackend(projectId: string): TaskBackend {
+  const project = ProjectService.getById(projectId);
+  if (!project) {
+    throw new Error(`[getTaskBackend] project not found: ${projectId}`);
+  }
+  if (project.taskSource === 'yaml') {
+    return new LocalTaskBackend(project.projectDir);
+  }
+  return getNotionBackend();
+}
+
+/**
+ * Test-only: reset the cached Notion backend so subsequent `getTaskBackend()`
+ * calls re-instantiate it. Useful for vi.mocked NotionClient.
+ */
+export function _resetTaskBackendCacheForTests(): void {
+  _notionBackend = undefined;
+}
+
+```
+
+### `packages/backend/src/notion/types.ts`
+```
+export interface NotionTask {
+  id: string;
+  title: string;
+  status: string;
+  type: string; // '📋 Planning' | '💻 Code' | '🧪 Testing'
+  dependsOn: string[]; // array of Notion page IDs
+  notionUrl: string;
+  prUrl?: string; // value of the "PR" URL property on the Notion page, if present
+  priority?: string; // '🔴 High' | '🟡 Medium' | '🟢 Low'
+}
+
+export interface ResolvedTask {
+  task: NotionTask;
+  blocked: boolean;
+  blockers: NotionTask[]; // direct + transitive blockers still not Done
+  nonCode: boolean; // true if type is Planning or Testing
+  wave: number; // dispatch wave: 1 = immediately launchable, 2+ = blocked by lower waves
+}
+
+export class NotionApiError extends Error {
   constructor(
-    private github: GitHubClient,
-    private mergeWatcher: PRMergeWatcher,
-    private broadcast: (msg: ServerMessage) => void,
-    private sessions?: SessionManager,
-  ) {}
-
-  private key(prNumber: number, repo: string): string {
-    return `${repo}#${prNumber}`;
+    public readonly statusCode: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'NotionApiError';
   }
+}
 
-  /**
-   * Poll both pull_requests and local_branches for merge-ready items and
-   * dispatch to the appropriate merge handler. PRs go through the existing
-   * attempt() loop; local branches are squash-merged immediately.
-   */
-  async pollOnce(): Promise<void> {
-    const approvedPRs = getApprovedOpenPRs();
-    for (const pr of approvedPRs) {
-      this.attempt(pr.pr_number, pr.repo);
-    }
-
-    const approvedLocalBranches = getApprovedLocalBranches();
-    for (const row of approvedLocalBranches) {
-      await this.handleLocalBranchMerge(row);
-    }
-  }
-
-  private async handleLocalBranchMerge(
-    row: ReturnType<typeof getApprovedLocalBranches>[number],
-  ): Promise<void> {
-    const session = row.session_id ? getSession(row.session_id) : undefined;
-    if (!session) {
-      console.warn(
-        `[AutoMerger] local branch #${row.id} (${row.branch_name}): session ${row.session_id} not found — skipping`,
-      );
-      return;
-    }
-
-    const worktreePath = session.worktree_path;
-    if (!worktreePath) {
-      console.warn(
-        `[AutoMerger] local branch #${row.id} (${row.branch_name}): no worktree_path on session — skipping`,
-      );
-      return;
-    }
-
-    const hasConflict = await detectMergeConflict(
-      worktreePath,
-      row.base_branch,
-      row.branch_name,
-    ).catch((err: unknown) => {
-      console.warn(
-        `[AutoMerger] local branch #${row.id}: detectMergeConflict failed: ${(err as Error).message}`,
-      );
-      return false;
-    });
-
-    if (hasConflict) {
-      setLocalBranchPauseReason(row.id, 'merge_conflict');
-      if (this.sessions && session.session_id) {
-        this.sessions
-          .sendOrResume(
-            session.session_id,
-            formatMergeConflictFeedback({
-              branchName: row.branch_name,
-              baseBranch: row.base_branch,
-            }),
-          )
-          .catch((err: unknown) =>
-            console.warn(
-              `[AutoMerger] local branch #${row.id}: sendOrResume failed: ${(err as Error).message}`,
-            ),
-          );
-      }
-      return;
-    }
-
-    const taskName = session.task_name ?? row.branch_name;
-
-    const result = await squashMergeLocal({
-      worktreePath,
-      baseBranch: row.base_branch,
-      featureBranch: row.branch_name,
-      taskName,
-    }).catch((err: unknown) => {
-      console.warn(
-        `[AutoMerger] local branch #${row.id}: squashMergeLocal threw: ${(err as Error).message}`,
-      );
-      return { merged: false as const, conflict: false };
-    });
-
-    if (!result.merged) {
-      if (result.conflict) {
-        setLocalBranchPauseReason(row.id, 'merge_conflict');
-        if (this.sessions && session.session_id) {
-          this.sessions
-            .sendOrResume(
-              session.session_id,
-              formatMergeConflictFeedback({
-                branchName: row.branch_name,
-                baseBranch: row.base_branch,
-              }),
-            )
-            .catch((err: unknown) =>
-              console.warn(
-                `[AutoMerger] local branch #${row.id}: sendOrResume failed: ${(err as Error).message}`,
-              ),
-            );
-        }
-      }
-      return;
-    }
-
-    const commitSha = result.commitSha ?? null;
-
-    markLocalBranchMerged(row.id, commitSha);
-
-    if (this.sessions && session.session_id) {
-      this.sessions.endSession(session.session_id);
-    }
-
-    if (session.notion_task_id) {
-      const project = getProjectById(row.project_id);
-      if (project) {
-        const backend = getTaskBackend(row.project_id);
-        backend
-          .updateStatus(session.notion_task_id, '✅ Done')
-          .catch((err: unknown) =>
-            console.warn(
-              `[AutoMerger] local branch #${row.id}: updateStatus failed: ${(err as Error).message}`,
-            ),
-          );
-      }
-    }
-
-    this.broadcast({
-      type: 'local_branch_merged',
-      projectId: row.project_id,
-      sessionId: session.session_id,
-      branchName: row.branch_name,
-      commitSha,
-    });
-
-    console.log(
-      `[AutoMerger] local branch ${row.branch_name} squash-merged into ${row.base_branch} (${commitSha ?? 'no sha'})`,
-    );
-  }
-
-  /**
-   * Try to auto-merge the given PR. Returns immediately (does not await the
-   * polling loop). The loop runs to completion in the background.
-   */
-  attempt(
-    prNumber: number,
-    repo: string,
-    options?: { bypassToggle?: boolean },
-  ): void {
-    const k = this.key(prNumber, repo);
-    if (this.active.has(k)) return;
-    this.active.add(k);
-    void this.run(prNumber, repo, options).finally(() => this.active.delete(k));
-  }
-
-  private async run(
-    prNumber: number,
-    repo: string,
-    options?: { bypassToggle?: boolean },
-  ): Promise<void> {
-    const project = getProjectByGithubRepo(repo);
-    if (!project) {
-      console.log(
-        `[AutoMerger] PR #${prNumber}: no project for repo ${repo} — skipping`,
-      );
-      return;
-    }
-    if (!options?.bypassToggle && !project.autoMergeEnabled) return;
-
-    const initialRow = getPRByNumber(prNumber, repo);
-    if (!initialRow) return;
-    if (initialRow.pause_reason !== null) {
-      console.log(
-        `[AutoMerger] PR #${prNumber}: paused (${initialRow.pause_reason}) — skipping`,
-      );
-      return;
-    }
-    if (initialRow.state !== 'open') return;
-
-    const ciCheckNames = loadOrchestratorConfig(
-      project.projectDir,
-    ).ci_check_name;
-
-    const intervalSec = Math.max(1, runtimeSettings.ci_poll_interval_seconds);
-    const intervalMs = Math.max(intervalSec * 1000, MIN_POLL_INTERVAL_MS);
-    const deadline =
-      Date.now() + Math.max(1, runtimeSettings.ci_poll_max_minutes) * 60_000;
-
-    let etag: string | null = null;
-
-    console.log(
-      `[AutoMerger] starting for PR #${prNumber} in ${repo} (interval=${intervalSec}s, max=${runtimeSettings.ci_poll_max_minutes}m)`,
-    );
-
-    while (Date.now() < deadline) {
-      // Re-read the PR row each iteration so external pause/close updates are honored.
-      const row = getPRByNumber(prNumber, repo);
-      if (!row) return;
-      if (row.pause_reason !== null) {
-       
-[... truncated]
 ```
 
-### `packages/backend/src/github/GitHubClient.ts`
+### `packages/backend/src/tasks/NotionTaskBackend.ts`
 ```
-import { GITHUB_TOKEN, GITHUB_REPO } from '../config';
-import {
-  GitHubApiError,
-  PullRequest,
-  PRDiff,
-  MergeResult,
-  FailingCheck,
-  MergeabilityCategory,
-} from './types';
-import { getPRByNumber } from '../db/queries';
+import type { TaskBackend } from './TaskBackend';
+import type { ResolvedTask } from '../notion/types';
+import { NotionClient } from '../notion/NotionClient';
+import { ProjectService } from '../projects/ProjectService';
 
-/** GitHub check-run conclusions that indicate the check did not pass. */
-const FAILING_CHECK_CONCLUSIONS: ReadonlySet<string> = new Set([
-  'failure',
-  'timed_out',
-  'action_required',
-  'cancelled',
-  'stale',
-  'startup_failure',
-]);
+/**
+ * Notion-backed implementation of TaskBackend. Resolves the Notion database ID
+ * from the milestone row's `source_id`, then delegates to NotionClient.
+ */
+export class NotionTaskBackend implements TaskBackend {
+  readonly type = 'notion' as const;
 
-export class GitHubClient {
-  private readonly base = 'https://api.github.com';
-  private readonly headers: HeadersInit;
+  constructor(private readonly client: NotionClient) {}
 
-  constructor() {
-    this.headers = {
-      Authorization: `Bearer ${GITHUB_TOKEN}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-    };
+  async fetchReadyTasks(
+    milestoneId: string | null,
+    skipCache?: boolean,
+  ): Promise<ResolvedTask[]> {
+    if (milestoneId === null) {
+      throw new Error(
+        `[NotionTaskBackend] milestoneId is required for Notion projects`,
+      );
+    }
+    const milestone = ProjectService.getMilestone(milestoneId);
+    if (!milestone) {
+      throw new Error(
+        `[NotionTaskBackend] milestone not found: ${milestoneId}`,
+      );
+    }
+    if (!milestone.sourceId) {
+      throw new Error(
+        `[NotionTaskBackend] milestone ${milestoneId} has no source_id — set it to the Notion database ID`,
+      );
+    }
+    return this.client.fetchReadyTasks(milestone.sourceId, skipCache);
   }
 
-  async listOpenPRs(repo?: string): Promise<PullRequest[]> {
-    const r = repo ?? GITHUB_REPO;
-    const data = await this.request<GitHubRawPR[]>(
-      `/repos/${r}/pulls?state=open&per_page=100`,
-    );
-    return data.map((pr) => mapPR(pr));
+  attachPR(taskId: string, prUrl: string): Promise<void> {
+    return this.client.attachPR(taskId, prUrl);
   }
 
-  async getPRState(
-    prNumber: number,
-    repo?: string,
-  ): Promise<'open' | 'merged' | 'closed'> {
-    const r = repo ?? GITHUB_REPO;
-    const data = await this.request<{ state: string; merged: boolean }>(
-      `/repos/${r}/pulls/${prNumber}`,
-    );
-    if (data.merged) return 'merged';
-    if (data.state === 'closed') return 'closed';
-    return 'open';
+  updateStatus(taskId: string, status: string): Promise<void> {
+    return this.client.updateStatus(taskId, status);
   }
 
-  async fetchPR(repo: string, prNumber: number): Promise<PullRequest> {
-    const data = await this.request<GitHubRawPR>(
-      `/repos/${repo}/pulls/${prNumber}`,
-    );
-    return mapPR(data);
+  async fetchTaskPage(taskId: string): Promise<string> {
+    const page = await this.client.fetchTaskPage(taskId);
+    return page.rawMarkdown;
+  }
+}
+
+```
+
+### `packages/backend/src/tasks/LocalTaskBackend.ts`
+```
+import fs from 'fs';
+import path from 'path';
+import yaml from 'js-yaml';
+import type { TaskBackend } from './TaskBackend';
+import type { ResolvedTask, NotionTask } from '../notion/types';
+import { DependencyResolver } from '../notion/DependencyResolver';
+import { upsertTaskCache } from '../db/queries';
+
+// ── tasks.yaml schema ────────────────────────────────────────────────────────
+
+interface LocalTask {
+  id: string;
+  name: string;
+  status: string; // Backlog | Ready | In Progress | In Review | Done
+  priority?: string; // High | Medium | Low
+  type?: string; // Code | Planning | Testing
+  depends_on?: string[];
+  pr_url?: string | null;
+  context?: string;
+  acceptance_criteria?: string;
+  files_affected?: string[];
+  notes?: string;
+}
+
+interface LocalMilestone {
+  id: string;
+  name: string;
+  tasks: LocalTask[];
+}
+
+/** New milestone-keyed schema. */
+interface MilestoneTasksFile {
+  project?: { id: string; name?: string };
+  milestones: LocalMilestone[];
+}
+
+/** Old flat schema, kept only for migration. */
+interface FlatTasksFile {
+  board_id?: string;
+  tasks: LocalTask[];
+}
+
+type AnyTasksFile = MilestoneTasksFile | FlatTasksFile;
+
+// ── Status mapping ───────────────────────────────────────────────────────────
+
+const STATUS_DISPLAY: Record<string, string> = {
+  Backlog: '🔲 Backlog',
+  Ready: '🗂️ Ready',
+  'In Progress': '🔄 In Progress',
+  'In Review': '👀 In Review',
+  Done: '✅ Done',
+};
+
+const TYPE_DISPLAY: Record<string, string> = {
+  Code: '💻 Code',
+  Planning: '📋 Planning',
+  Testing: '🧪 Testing',
+};
+
+function toDisplayStatus(status: string): string {
+  return STATUS_DISPLAY[status] ?? status;
+}
+
+function toDisplayType(type: string): string {
+  return TYPE_DISPLAY[type] ?? type;
+}
+
+function fromDisplayStatus(display: string): string {
+  const entry = Object.entries(STATUS_DISPLAY).find(([, v]) => v === display);
+  return entry ? entry[0] : display;
+}
+
+// ── Schema helpers ───────────────────────────────────────────────────────────
+
+function isMilestoneSchema(
+  parsed: AnyTasksFile | null,
+): parsed is MilestoneTasksFile {
+  return !!parsed && Array.isArray((parsed as MilestoneTasksFile).milestones);
+}
+
+function isFlatSchema(parsed: AnyTasksFile | null): parsed is FlatTasksFile {
+  return !!parsed && Array.isArray((parsed as FlatTasksFile).tasks);
+}
+
+// ── LocalTaskBackend ─────────────────────────────────────────────────────────
+
+const resolver = new DependencyResolver();
+
+/**
+ * File-based implementation of TaskBackend. Reads/writes task definitions from
+ * `<projectDir>/tasks.yaml` using the milestone-keyed schema. Old flat-schema
+ * files are auto-migrated on first read.
+ */
+export class LocalTaskBackend implements TaskBackend {
+  readonly type = 'local' as const;
+
+  constructor(private readonly projectDir: string) {}
+
+  private get filePath(): string {
+    return path.join(this.projectDir, 'tasks.yaml');
   }
 
-  async getMergeability(
-    prNumber: number,
-    repo?: string,
-  ): Promise<{ mergeable: boolean | null; mergeableState: string | null }> {
-    const r = repo ?? GITHUB_REPO;
-    const data = await this.request<GitHubRawPR>(
-      `/repos/${r}/pulls/${prNumber}`,
+  /** Read tasks.yaml, migrating old flat schema to milestone schema if needed. */
+  private readFile(): MilestoneTasksFile {
+    if (!fs.existsSync(this.filePath)) {
+      throw new Error(
+        `[LocalTaskBackend] tasks.yaml not found at ${this.filePath}`,
+      );
+    }
+    const raw = fs.readFileSync(this.filePath, 'utf-8');
+    const parsed = yaml.load(raw) as AnyTasksFile | null;
+
+    if (isMilestoneSchema(parsed)) {
+      return parsed;
+    }
+
+    if (isFlatSchema(parsed)) {
+      const migrated = this.migrateFlatToMilestones(parsed);
+      this.writeFile(migrated);
+      console.log(
+        `[LocalTaskBackend] Migrated ${this.filePath} to milestone schema.`,
+      );
+      return migrated;
+    }
+
+    throw new Error(
+      `[LocalTaskBackend] tasks.yaml at ${this.filePath} is missing both 'milestones' and 'tasks' keys`,
     );
+  }
+
+  /** Wrap a flat-schema file's tasks under a single milestone. */
+  private migrateFlatToMilestones(flat: FlatTasksFile): MilestoneTasksFile {
+    const id =
+      flat.board_id && flat.board_id !== 'default' ? flat.board_id : 'm1';
+    const name =
+      flat.board_id && flat.board_id !== 'default' ? flat.board_id : 'Default';
     return {
-      mergeable: data.mergeable ?? null,
-      mergeableState: data.mergeable_state ?? null,
+      milestones: [{ id, name, tasks: flat.tasks ?? [] }],
     };
   }
 
-  // Retry getMergeability with exponential backoff (2s, 4s, 8s, 16s, 32s) when
-  // GitHub returns mergeable: null. After all 5 retries, returns the last (still-null) result.
-  async getMergeabilityWithRetry(
-    prNumber: number,
-    repo?: string,
-    sleep: (ms: number) => Promise<void> = (ms) =>
-      new Promise((r) => setTimeout(r, ms)),
-  ): Promise<{ mergeable: boolean | null; mergeableState: string | null }> {
-    const delays = [2000, 4000, 8000, 16000, 32000];
-    let result = await this.getMergeability(prNumber, repo);
-    for (const delay of delays) {
-      if (result.mergeable !== null) return result;
-      await sleep(delay);
-      result = await this.getMergeability(prNumber, repo);
-    }
-    if (result.mergeable === null) {
-      console.warn(
-        `[GitHubClient] getMergeability still null after retries for PR #${prNumber} in ${repo ?? GITHUB_REPO} — skipping`,
-      );
-    }
-    return result;
+  private writeFile(file: MilestoneTasksFile): void {
+    fs.writeFileSync(
+      this.filePath,
+      yaml.dump(file, { lineWidth: 120 }),
+      'utf-8',
+    );
   }
 
-  async fetchDiff(
-    prId: number,
-    repo?: string,
-    branches?: { base: string; head: string },
-  ): Promise<PRDiff> {
-    const r = repo ?? GITHUB_REPO;
-    let diff: string;
-    if (branches) {
-      // Explicit three-dot compare endpoint — guarantees merge-base semantics
-      diff = await this.request<string>(
-        `/repos/${r}/compare/${branches.base}...${branches.head}`,
-        { headers: { ...this.headers, Accept: 'application/vnd.github.diff' } },
+  private mapToNotionTask(t: LocalTask): NotionTask {
+    return {
+      id: t.id,
+      title: t.name,
+      status: toDisplayStatus(t.status),
+      type: toDisplayType(t.type ?? 'Code'),
+      dependsOn: t.depends_on ?? [],
+      notionUrl: '',
+      prUrl: t.pr_url ?? undefined,
+      priority: t.priority,
+    };
+  }
+
+  /** Locate the milestone containing a given task id, or undefined. */
+  private findTaskById(
+    file: MilestoneTasksFile,
+    taskId: string,
+  ): { milestone: LocalMilestone; task: LocalTask } | undefined {
+    for (const m of file.milestones) {
+      const task = m.tasks.find((t) => t.id === taskId);
+      if (task) return { milestone: m, task };
+    }
+    return undefined;
+  }
+
+  async fetchReadyTasks(
+    milestoneId: string | null,
+    _skipCache?: boolean,
+  ): Promise<ResolvedTask[]> {
+    const file = this.readFile();
+    let allTasks: ReturnType<typeof this.mapToNotionTask>[];
+    if (milestoneId === null) {
+      allTasks = file.milestones.flatMap((m) =>
+        m.tasks.map((t) => this.mapToNotionTask(t)),
       );
     } else {
-      diff = await this.request<string>(`/repos/${r}/pulls/${prId}`, {
-        headers: { ...this.headers, Accept: 'application/vnd.github.diff' },
-      });
-    }
-    const filesChanged = parseDiffFiles(diff);
-    return { prId, diff, filesChanged };
-  }
-
-  async markPRReady(repo: string, prNumber: number): Promise<void> {
-    const prRow = getPRByNumber(prNumber, repo);
-    if (!prRow?.node_id) {
-      const pr = await this.fetchPR(repo, prNumber);
-      await this.markPRReadyByNodeId(pr.nodeId);
-      return;
-    }
-    await this.markPRReadyByNodeId(prRow.node_id);
-  }
-
-  private async markPRReadyByNodeId(nodeId: string): Promise<void> {
-    const query = `mutation($pullRequestId: ID!) {
-      markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) {
-        pullRequest { isDraft }
+      const milestone = file.milestones.find((m) => m.id === milestoneId);
+      if (!milestone) {
+        throw new Error(
+          `[LocalTaskBackend] milestone not found in ${this.filePath}: ${milestoneId}`,
+        );
       }
-    }`;
-    const res = await fetch('https://api.github.com/graphql', {
-      method: 'POST',
-      headers: {
-        ...this.headers,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ query, variables: { pullRequestId: nodeId } }),
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new GitHubApiError(res.status, text);
+      allTasks = milestone.tasks.map((t) => this.mapToNotionTask(t));
+      upsertTaskCache(`board:${milestoneId}`, JSON.stringify(allTasks));
     }
-    const body = (await res.json()) as { errors?: Array<{ message: string }> };
-    if (body.errors?.length) {
-      throw new GitHubApiError(
-        422,
-        body.errors.map((e) => e.message).join('; '),
+    for (const task of allTasks) {
+      upsertTaskCache(task.id, JSON.stringify(task));
+    }
+    return resolver.resolve(allTasks);
+  }
+
+  async attachPR(taskId: string, prUrl: string): Promise<void> {
+    const file = this.readFile();
+    const found = this.findTaskById(file, taskId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    found.task.pr_url = prUrl;
+    this.writeFile(file);
+  }
+
+  async updateStatus(taskId: string, status: string): Promise<void> {
+    const file = this.readFile();
+    const found = this.findTaskById(file, taskId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    found.task.status = fromDisplayStatus(status);
+    this.writeFile(file);
+  }
+
+  async fetchTaskPage(taskId: string): Promise<string> {
+    const file = this.readFile();
+    const found = this.findTaskById(file, taskId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    const task = found.task;
+
+    const sections: string[] = [`# ${task.name}`];
+    if (task.context?.trim()) {
+      sections.push(`## Context\n${task.context.trim()}`);
+    }
+    if (task.acceptance_criteria?.trim()) {
+      sections.push(
+        `## Acceptance Criteria\n${task.acceptance_criteria.trim()}`,
       );
     }
+    if (task.files_affected && task.files_affected.length > 0) {
+      sections.push(
+        `## Files\n${task.files_affected.map((f) => `- ${f}`).join('\n')}`,
+      );
+    }
+    if (task.notes?.trim()) {
+      sections.push(`## Notes\n${task.notes.trim()}`);
+    }
+    return sections.join('\n\n');
   }
+}
 
-  /**
-   * Fetch failing check-runs for a given commit SHA. Used to distinguish
-   * "blocked by failing CI" from "blocked by branch protection" when a merge
-   * attempt fails with 409/405 or when mergeable_state is `unstable`/`blocked`.
-   */
-  async getFailingChecks(sha: string, repo?: string): Promise<FailingCheck[]> {
-    const r = repo ?? GITHUB_REPO;
-    const data = await this.request<{
-      check_runs: Array<{
-        name: string;
-        status: string;
-        conclusion: string | null;
-      }>;
-    }>(`/repos/${r}/commits/${sha}/check-runs?per_page=100`);
-    return data.check_runs
-      .filter(
-        (c) =>
-          c.status === 'completed' &&
-          c.conclusion !== null &&
-          FAILING_CHECK_CONCLUSIONS.has(c.conclusion),
-      )
-      .map((c) => ({ name: c.name, conclusion: c.conclusion as string }));
-  }
-
-  /**
-   * Map GitHub's mergeable_state (plus check-runs when relevant) onto a single
-   * category so the dashboard can tell merge conflicts apart from CI failures
-   * and branch-protection blocks. Returns `clean` when mergeable, otherwise one
-   * of `conflict` / `ci_failed` / `blocked` / `unknown`.
-   *
-   * Called after a 409/405 merge failure to pick the right remediation, and by
-   * PRMergeWatcher polling so the state is reflected before the user clicks Merge.
-   *
-   * @param ciCheckNames When non-empty, only checks in this list are considered
-   *   when categorizing CI failures. Checks not in the list are ignored. A named
-   *   check absent from the PR's check-runs is treated as pending (unknown).
-   *   When empty (default), all checks count — existing behaviour.
-   */
-  async categorizeMergeability(
-    prNumber: number,
-    repo?: string,
-    ciCheckNames: string[] = [],
-  ): Promise<MergeabilityCategory> {
-    const r = repo ?? GITHUB_REPO;
-    const data = await this.request<GitHubRawPR>(
-      `/repos/${r}/pulls/${prNumber}`,
-    );
-    return this.categorizeFromRawPR(data, r, ciCheckNames);
-  }
-
-  /**
-   * Conditional PR status fetch with ETag/If-None-Match support. Returns the
-   * categorized mergeability when GitHub returns 200 (with the new ETag), or
-   * `{ status: 'not_modified' }` when GitHub returns 304 (no body, ETag stays
-   * the same). Used by AutoMerger to avoid burning GitHub quota while polling
-   * a slow-to-change PR.
-   */
-  async fetchPRStatusConditional(
-    prNumber: number,
-    repo: string,
-    etag?: string | null,
-    ciCheckNames: string[] = [],
-  ): Promise<
-    | { status: 'not_modified'; etag: string | null }
-    | {
-        status: 'ok';
-        etag: string | null;
-        state: 'open' | 'closed' | 'merged';
-        mergeability: MergeabilityCategory;
-        headSha: string | null;
-      }
-  > {
-    const url = `${this.base}/repos/${repo}/pulls/${prNumber}`;
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${GITHUB_TOKEN}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-    };
-    if (etag) headers['If-None-Match'] = etag;
-    const res = await fetch(url, { headers });
-    if (res.status === 304) {
-      return { status: 'not_modified',
-[... truncated]
 ```
 
 ---
