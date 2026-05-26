@@ -276,7 +276,9 @@ export type PauseReason =
   | 'pr_closed'
   | 'review_failed'
   | 'api_overloaded'
-  | 'merge_conflict';
+  | 'merge_conflict'
+  | 'awaiting_human_approval'
+  | 'human_changes_requested';
 
 export interface PullRequestRow {
   id: number;
