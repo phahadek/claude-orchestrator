@@ -1,4 +1,5 @@
 import { db } from './db';
+import { parseTaskId } from '../tasks/taskId';
 import type {
   Session,
   NewSession,
@@ -1149,7 +1150,14 @@ export function setPauseReason(
  * components to skip tasks paused by stuck_timeout (or any other reason).
  */
 export function getPausedPrReasonForTask(taskId: string): PauseReason | null {
-  const norm = taskId.replace(/-/g, '');
+  // pull_requests.notion_task_id stores the raw external ID without source prefix
+  let externalId: string;
+  try {
+    externalId = parseTaskId(taskId).externalId;
+  } catch {
+    externalId = taskId;
+  }
+  const norm = externalId.replace(/-/g, '');
   const row = db
     .prepare<{ task_id: string }>(
       `
@@ -1326,7 +1334,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
     )
     LEFT JOIN pull_requests pr ON pr.id = (
       SELECT id FROM pull_requests
-      WHERE REPLACE(notion_task_id, '-', '') = REPLACE(tc.task_id, '-', '')
+      WHERE REPLACE(notion_task_id, '-', '') = REPLACE(SUBSTR(tc.task_id, INSTR(tc.task_id, ':') + 1), '-', '')
       ORDER BY pr_number DESC LIMIT 1
     )
     WHERE tc.task_id IN (${placeholders})
