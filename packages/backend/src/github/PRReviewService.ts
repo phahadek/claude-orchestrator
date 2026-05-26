@@ -23,11 +23,32 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { parseSection, parseExpectedSize } from '../notion/NotionClient';
 import type { SessionManager } from '../session/SessionManager';
+import { GitHubApiError } from './types';
 import type { PullRequest, PRDiff } from './types';
 import type { ServerMessage } from '../ws/types';
 import type { SessionEvent } from '../db/types';
 import type { PRMergeWatcher } from './PRMergeWatcher';
 import type { AutoMerger } from './AutoMerger';
+
+const RETRY_DELAYS = [250, 500, 1000] as const;
+const defaultSleep = (ms: number): Promise<void> =>
+  new Promise((r) => setTimeout(r, ms));
+
+export class FetchRetryExhaustedError extends Error {
+  constructor(public readonly cause: Error) {
+    super(
+      `Diff fetch failed after ${RETRY_DELAYS.length} retries: ${cause.message}`,
+    );
+    this.name = 'FetchRetryExhaustedError';
+  }
+}
+
+function isTransientFetchError(e: unknown): boolean {
+  if (e instanceof TypeError && e.message.includes('fetch failed')) return true;
+  if (e instanceof GitHubApiError && (e.status === 429 || e.status >= 500))
+    return true;
+  return false;
+}
 
 const SIZE_DIMENSION_NAME = 'Size proportionality';
 
@@ -171,6 +192,7 @@ export class PRReviewService {
     diffSource: DiffSource,
     projectId: string = this.defaultProjectId,
     projectContextUrl: string = this.defaultProjectContextUrl,
+    sleep: (ms: number) => Promise<void> = defaultSleep,
   ): Promise<PRReviewResult> {
     if (workItem.type === 'local_branch') {
       return this.reviewLocalBranch(
@@ -187,6 +209,7 @@ export class PRReviewService {
       throw new Error(`PR #${prNumber} in ${repo} not found in database`);
     }
 
+    try {
     const existingReviewSessionId = prRow.review_session_id;
 
     // Case 1: Live review session exists — send follow-up with diff, do not spawn a new session.
@@ -201,8 +224,14 @@ export class PRReviewService {
         prNumber,
         repo,
       );
-      const prData = await this.github.fetchPR(repo, prNumber);
-      const diff = await diffSource.fetchDiff();
+      const prData = await this.withFetchRetry(
+        () => this.github.fetchPR(repo, prNumber),
+        sleep,
+      );
+      const diff = await this.withFetchRetry(
+        () => diffSource.fetchDiff(),
+        sleep,
+      );
       // Recompute size signal against the FULL refreshed diff each iteration.
       const { filesSection, expectedSize } = await this.fetchSizeSignalInputs(
         projectId,
@@ -242,8 +271,14 @@ export class PRReviewService {
       return finalResult;
     }
 
-    const prData = await this.github.fetchPR(repo, prNumber);
-    const diff = await diffSource.fetchDiff();
+    const prData = await this.withFetchRetry(
+      () => this.github.fetchPR(repo, prNumber),
+      sleep,
+    );
+    const diff = await this.withFetchRetry(
+      () => diffSource.fetchDiff(),
+      sleep,
+    );
     const diffData = { prId: prNumber, diff, filesChanged: [] };
 
     if (!prRow.notion_task_id) {
@@ -334,6 +369,17 @@ export class PRReviewService {
       );
     }
     return finalResult;
+    } catch (e: unknown) {
+      if (e instanceof FetchRetryExhaustedError) {
+        this.sessionManager.emit('message', {
+          type: 'review_failed',
+          prNumber,
+          repo,
+          message: e.message,
+        });
+      }
+      throw e;
+    }
   }
 
   private async reviewLocalBranch(
@@ -940,5 +986,26 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       summary: `Failed to parse Claude output as JSON. Raw output: ${combined.slice(0, 500)}`,
       reviewedAt: new Date().toISOString(),
     };
+  }
+
+  private async withFetchRetry<T>(
+    fn: () => Promise<T>,
+    sleep: (ms: number) => Promise<void>,
+  ): Promise<T> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
+      try {
+        return await fn();
+      } catch (e) {
+        if (!isTransientFetchError(e)) throw e;
+        lastError = e;
+        if (attempt < RETRY_DELAYS.length) {
+          await sleep(RETRY_DELAYS[attempt]);
+        }
+      }
+    }
+    throw new FetchRetryExhaustedError(
+      lastError instanceof Error ? lastError : new Error(String(lastError)),
+    );
   }
 }

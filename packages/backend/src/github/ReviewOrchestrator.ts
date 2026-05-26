@@ -14,6 +14,7 @@ import type {
   PRReviewResult,
   WorkItem,
 } from './PRReviewService';
+import { FetchRetryExhaustedError } from './PRReviewService';
 import type { SessionManager } from '../session/SessionManager';
 import type { GitHubClient } from './GitHubClient';
 import type { ReviewJob } from './types';
@@ -367,6 +368,10 @@ export class ReviewOrchestrator {
         ),
       ]);
     } catch (e) {
+      if (e instanceof FetchRetryExhaustedError) {
+        // review_failed was already emitted by PRReviewService; leave review_result null
+        return;
+      }
       const summary =
         e instanceof Error && e.message === 'Review timed out'
           ? 'Review timed out'
