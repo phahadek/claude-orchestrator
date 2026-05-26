@@ -2357,17 +2357,29 @@ describe('PRReviewService.reviewPR() — transient fetch retry', () => {
   const approvedPayload = {
     verdict: 'approved',
     dimensions: [
-      { name: 'Title and description vs task Summary', passed: true, notes: 'ok' },
+      {
+        name: 'Title and description vs task Summary',
+        passed: true,
+        notes: 'ok',
+      },
       { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
       { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
-      { name: 'Changed files vs Files/paths affected list', passed: true, notes: 'ok' },
+      {
+        name: 'Changed files vs Files/paths affected list',
+        passed: true,
+        notes: 'ok',
+      },
       { name: 'Size proportionality', passed: true, notes: 'ok' },
     ],
     summary: 'All good.',
   };
 
-  function makeServiceAndStart(
-    startImpl: (taskUrl: string, ctxUrl: string, opts: { sessionId: string }) => string,
+  function _makeServiceAndStart(
+    startImpl: (
+      taskUrl: string,
+      ctxUrl: string,
+      opts: { sessionId: string },
+    ) => string,
   ) {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
     const mockSM = makeMockSessionManager();
@@ -2402,7 +2414,10 @@ describe('PRReviewService.reviewPR() — transient fetch retry', () => {
         setImmediate(() =>
           mockSM.emit(
             'message',
-            makeSessionEventMessage(opts.sessionId, JSON.stringify(approvedPayload)),
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(approvedPayload),
+            ),
           ),
         );
         return opts.sessionId;
@@ -2496,7 +2511,9 @@ describe('PRReviewService.reviewPR() — transient fetch retry', () => {
 
     const failedMsg = emittedMessages.find(
       (m: any) => m.type === 'review_failed',
-    ) as { type: string; prNumber: number; repo: string; message: string } | undefined;
+    ) as
+      | { type: string; prNumber: number; repo: string; message: string }
+      | undefined;
     expect(failedMsg).toBeDefined();
     expect(failedMsg!.prNumber).toBe(42);
     expect(failedMsg!.repo).toBe('owner/repo');
@@ -2520,7 +2537,10 @@ describe('PRReviewService.reviewPR() — transient fetch retry', () => {
         setImmediate(() =>
           mockSM.emit(
             'message',
-            makeSessionEventMessage(opts.sessionId, JSON.stringify(approvedPayload)),
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(approvedPayload),
+            ),
           ),
         );
         return opts.sessionId;
@@ -2565,7 +2585,10 @@ describe('PRReviewService.reviewPR() — transient fetch retry', () => {
         setImmediate(() =>
           mockSM.emit(
             'message',
-            makeSessionEventMessage(opts.sessionId, JSON.stringify(approvedPayload)),
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(approvedPayload),
+            ),
           ),
         );
         return opts.sessionId;
@@ -2609,7 +2632,10 @@ describe('PRReviewService.reviewPR() — transient fetch retry', () => {
         setImmediate(() =>
           mockSM.emit(
             'message',
-            makeSessionEventMessage(opts.sessionId, JSON.stringify(approvedPayload)),
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(approvedPayload),
+            ),
           ),
         );
         return opts.sessionId;
