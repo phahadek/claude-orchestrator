@@ -129,7 +129,11 @@ describe('recordEvent — data_residency_flag_toggled event type', () => {
       event_type: 'data_residency_flag_toggled',
       actor_type: 'human',
       project_id: 'proj-zdr-test',
-      payload: { projectId: 'proj-zdr-test', previousValue: false, newValue: true },
+      payload: {
+        projectId: 'proj-zdr-test',
+        previousValue: false,
+        newValue: true,
+      },
     });
 
     const row = (db as import('better-sqlite3').Database)
@@ -142,7 +146,10 @@ describe('recordEvent — data_residency_flag_toggled event type', () => {
     expect(row!.event_type).toBe('data_residency_flag_toggled');
     expect(row!.actor_type).toBe('human');
     expect(row!.project_id).toBe('proj-zdr-test');
-    const payload = JSON.parse(row!.payload as string) as Record<string, unknown>;
+    const payload = JSON.parse(row!.payload as string) as Record<
+      string,
+      unknown
+    >;
     expect(payload.previousValue).toBe(false);
     expect(payload.newValue).toBe(true);
     expect(payload.projectId).toBe('proj-zdr-test');
@@ -157,7 +164,10 @@ describe('recordEvent — session_launch_refused_zdr event type', () => {
       event_type: 'session_launch_refused_zdr',
       actor_type: 'system',
       project_id: 'proj-zdr-test',
-      payload: { projectId: 'proj-zdr-test', reason: 'data_residency_confirmed is false' },
+      payload: {
+        projectId: 'proj-zdr-test',
+        reason: 'data_residency_confirmed is false',
+      },
     });
 
     const row = (db as import('better-sqlite3').Database)

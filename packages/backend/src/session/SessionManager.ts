@@ -286,12 +286,13 @@ export class SessionManager extends EventEmitter {
         project_id: projectId,
         payload: {
           projectId,
-          reason: 'data_residency_confirmed is false; corporate mode requireZDR gate blocked session launch',
+          reason:
+            'data_residency_confirmed is false; corporate mode requireZDR gate blocked session launch',
         },
       });
       throw new Error(
         `Session launch refused: project "${project.name}" has not confirmed Zero Data Retention (ZDR). ` +
-        `Enable the Data Residency attestation in project Settings before launching sessions in corporate mode.`,
+          `Enable the Data Residency attestation in project Settings before launching sessions in corporate mode.`,
       );
     }
 

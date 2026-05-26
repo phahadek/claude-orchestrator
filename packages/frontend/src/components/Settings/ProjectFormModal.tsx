@@ -282,14 +282,14 @@ export function ProjectFormModal({
                   update('dataResidencyConfirmed', e.target.checked)
                 }
               />{' '}
-              I confirm Zero Data Retention (ZDR) is enabled for this
-              Anthropic account
+              I confirm Zero Data Retention (ZDR) is enabled for this Anthropic
+              account
             </label>
             <p className={styles.fieldHelp}>
               This is a user attestation — the orchestrator cannot
-              programmatically verify ZDR. In corporate mode, sessions will
-              not launch unless this box is checked. Toggling this setting
-              is recorded in the audit log.
+              programmatically verify ZDR. In corporate mode, sessions will not
+              launch unless this box is checked. Toggling this setting is
+              recorded in the audit log.
             </p>
           </div>
 
