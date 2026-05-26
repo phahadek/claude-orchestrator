@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import { ALLOWED_TOOLS, runtimeSettings } from '../config';
+import { recordEvent } from '../audit/AuditLog';
 import {
   upsertSessionEvent,
   updateSessionStatus,
@@ -731,6 +732,14 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       taskId: this.taskId,
       taskUrl: this.taskUrl,
       contextUrl: this.projectContextUrl,
+    });
+    recordEvent({
+      event_type: 'pr_opened',
+      actor_type: 'ai',
+      actor_id: this.sessionId,
+      project_id: this.projectId || null,
+      task_id: this.taskId || null,
+      payload: { pr_number: prNumber, repo, pr_url: prUrl },
     });
     sessionLog(this.sessionId, `PR detected live: ${prUrl}`);
   }

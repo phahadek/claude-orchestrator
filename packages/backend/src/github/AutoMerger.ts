@@ -3,6 +3,7 @@ import {
   getProjectById,
   runtimeSettings,
 } from '../config';
+import { recordEvent } from '../audit/AuditLog';
 import {
   getPRByNumber,
   setPauseReason,
@@ -158,6 +159,20 @@ export class AutoMerger {
     const commitSha = result.commitSha ?? null;
 
     markLocalBranchMerged(row.id, commitSha);
+
+    recordEvent({
+      event_type: 'pr_merged',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: row.project_id ?? null,
+      task_id: session.notion_task_id ?? null,
+      payload: {
+        branch_name: row.branch_name,
+        base_branch: row.base_branch,
+        merge_sha: commitSha,
+        local_branch_id: row.id,
+      },
+    });
 
     if (this.sessions && session.session_id) {
       this.sessions.endSession(session.session_id);
@@ -338,6 +353,18 @@ export class AutoMerger {
         pr.repo,
       );
       await this.mergeWatcher.handleMerged(pr, result.sha ?? null);
+      recordEvent({
+        event_type: 'pr_merged',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: getProjectByGithubRepo(pr.repo)?.id ?? null,
+        task_id: pr.notion_task_id ?? null,
+        payload: {
+          pr_number: pr.pr_number,
+          repo: pr.repo,
+          merge_sha: result.sha ?? null,
+        },
+      });
       console.log(
         `[AutoMerger] PR #${pr.pr_number}: squash-merged to ${pr.base_branch ?? 'dev'}`,
       );

@@ -9,6 +9,7 @@ import {
   setLocalBranchReviewResult,
   getLocalBranchById,
 } from '../db/queries';
+import { recordEvent } from '../audit/AuditLog';
 import type { GitHubClient } from './GitHubClient';
 import type { DiffSource } from './DiffSource';
 import { GitHubDiffSource } from './DiffSource';
@@ -353,6 +354,14 @@ export class PRReviewService {
       // the review sees headSha === last_reviewed_sha and is correctly skipped.
       setReviewSessionId(prNumber, repo, sessionId);
       setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
+      recordEvent({
+        event_type: 'pr_opened',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: projectId || null,
+        task_id: prRow.notion_task_id ?? null,
+        payload: { pr_number: prNumber, repo, head_sha: prData.headSha ?? null },
+      });
 
       const aiResult = await verdictPromise;
       const finalResult = this.appendSizeProportionalityDimension(
