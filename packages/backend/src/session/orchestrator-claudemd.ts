@@ -59,8 +59,9 @@ export interface OrchestratorClaudeMdParams {
  *  7. Pre-PR gate
  *  8. Forbidden actions
  *  9. Git isolation
- * 10. Bash rules (permission system)
- * 11. Separator + "# Project Instructions (from project CLAUDE.md)" (added by caller)
+ * 10. Filesystem isolation (personal mode)
+ * 11. Bash rules (permission system)
+ * 12. Separator + "# Project Instructions (from project CLAUDE.md)" (added by caller)
  */
 export function buildOrchestratorClaudeMd(
   params: OrchestratorClaudeMdParams,
@@ -247,6 +248,24 @@ ${stageNum}. Stage only your implementation files for commit — never stage \`C
 - Never use \`--work-tree\` or \`--git-dir\` flags pointing outside this worktree
 - Never run \`git checkout\` or \`git switch\` targeting a branch in the main repo directory
 - The backend records the main repo branch before each session and will warn if it drifts
+
+---
+
+## Filesystem Isolation (Personal Mode)
+
+> ⚠️ **Personal mode has no structural sandbox** — there is no docker, chroot, or
+> namespace to prevent writes outside the worktree. All isolation is prompt-level.
+> Violating these rules can corrupt the developer's live environment.
+
+All file writes **must stay inside the worktree directory** (\`${worktreePath}\`).
+
+- **Never write to the project root or any path above the worktree.**
+  Scripts, tools, and generated outputs must target paths under the worktree, not the parent repo.
+- **Dev state (SQLite databases, log files, generated artifacts) must use worktree-relative paths.**
+  Do not reference absolute paths to project-root databases or output files.
+  Use paths like \`<worktree>/.dev-state/<file>\` or resolve paths relative to \`cwd\`.
+- **Before running any script that writes files or opens a database, verify the target path is inside the worktree.**
+  If a script hardcodes an absolute project-root path, patch it to accept an env var or relative path before executing.
 
 ---
 

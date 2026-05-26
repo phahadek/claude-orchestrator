@@ -12,6 +12,7 @@ This guide covers:
 1. The per-project config file (`orchestrator.json`).
 2. The bootstrap script contract.
 3. Updates to the project's own `CLAUDE.md`.
+4. Structuring dev state as worktree-relative paths (personal-mode isolation).
 
 ---
 
@@ -288,6 +289,94 @@ The orchestrator already:
 A session that re-fetches all of this just burns tokens for no gain. The
 orchestrator's injected rules explicitly tell the session: "Task spec is
 pre-loaded below. Do NOT fetch Notion pages."
+
+---
+
+## 4. Worktree-relative dev state (personal-mode isolation)
+
+In personal mode, each session runs in a git worktree under
+`.claude/worktrees/<session-id>/`. There is no structural sandbox (no docker,
+no chroot), so a session can write to any path it has filesystem access to —
+including the project root. The orchestrator's only lever is prompt-level
+guidance (the Filesystem Isolation section injected into every session's
+`CLAUDE.md`).
+
+To minimise the risk of a session corrupting your live environment, **structure
+project dev state as worktree-relative paths rather than project-root paths**.
+Each session then gets its own isolated state and cannot accidentally overwrite
+the developer's checkout.
+
+### What counts as "dev state"
+
+- SQLite databases used for local development or manual verification
+- Log files and debug output
+- Generated artifacts (seed data, migration outputs, exported files)
+- Any writable runtime state the session needs to satisfy acceptance criteria
+
+### Recommended pattern
+
+Give each piece of dev state a configurable path and default it to a
+worktree-relative location. The session already knows its worktree path via the
+`cwd` it was spawned in.
+
+**Python example — SQLite dev database:**
+
+```python
+import os, pathlib
+
+# Resolve DB path from env var, defaulting to worktree-local .dev-state/
+_worktree = pathlib.Path(os.environ.get("WORKTREE_DIR", pathlib.Path.cwd()))
+DB_PATH = pathlib.Path(os.environ.get("DEV_DB", _worktree / ".dev-state" / "dev.db"))
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+```
+
+**Node.js / TypeScript example:**
+
+```typescript
+import path from 'path';
+
+const worktree = process.env.WORKTREE_DIR ?? process.cwd();
+const dbPath =
+  process.env.DEV_DB ?? path.join(worktree, '.dev-state', 'dev.db');
+```
+
+**Shell script example (bootstrap or verify script):**
+
+```bash
+WORKTREE="${WORKTREE_DIR:-$(pwd)}"
+DEV_DB="${DEV_DB:-$WORKTREE/.dev-state/dev.db}"
+mkdir -p "$(dirname "$DEV_DB")"
+```
+
+### Why not just use `process.cwd()` everywhere?
+
+When a session runs inside the worktree, `cwd` is already the worktree root —
+so relative paths like `./dev.db` or `.dev-state/dev.db` are naturally
+worktree-scoped. The problem arises when code constructs **absolute** paths
+from compile-time constants (`__dirname`, `import.meta.url`, project-root
+references baked in at build time) or receives an absolute path from a config
+file that points at the main repo. Use an env var override so the path can be
+redirected to the worktree at runtime without editing source files.
+
+### `.gitignore` recommendation
+
+Add `.dev-state/` to your project's `.gitignore` so session databases and
+generated files are never accidentally committed:
+
+```
+# Session-local dev state (worktree-scoped)
+.dev-state/
+```
+
+### What this does NOT solve
+
+- **Real-time blocking**: the orchestrator cannot intercept a write mid-flight
+  in personal mode. The prompt-level rule reduces the likelihood; it does not
+  make it impossible.
+- **Existing project configurations**: this recommendation applies going
+  forward. Backfilling is out of scope (see the post-hoc audit task).
+- **Docker / corporate mode**: docker sessions have structural isolation.
+  This section only applies when personal mode is in use.
 
 ---
 
