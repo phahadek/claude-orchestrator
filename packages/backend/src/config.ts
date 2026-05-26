@@ -1,3 +1,5 @@
+import { getSecret } from './security/secrets';
+
 export interface Board {
   /** Milestone row id — used as the milestoneId for WS fetch_tasks. */
   id: string;
@@ -51,7 +53,7 @@ export function normalizePath(p: string): string {
 }
 
 export const config = {
-  notionApiKey: process.env.NOTION_API_KEY ?? '',
+  notionApiKey: getSecret('NOTION_API_KEY') ?? '',
   sqlitePath: process.env.DB_PATH ?? './dashboard.db',
   port: Number(process.env.PORT ?? 3000),
   projectDir: normalizePath(process.env.PROJECT_DIR ?? process.cwd()),
@@ -59,10 +61,10 @@ export const config = {
   maxConcurrentCodeSessions: Number(
     process.env.MAX_CONCURRENT_CODE_SESSIONS ?? 20,
   ),
-  anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? '',
+  anthropicApiKey: getSecret('ANTHROPIC_API_KEY') ?? '',
 };
 
-export const GITHUB_TOKEN = process.env.GITHUB_TOKEN ?? '';
+export const GITHUB_TOKEN = getSecret('GITHUB_TOKEN') ?? '';
 export const GITHUB_REPO = process.env.GITHUB_REPO ?? ''; // "owner/repo"
 
 export const AUTO_REVIEW_ENABLED = process.env.AUTO_REVIEW !== 'false';

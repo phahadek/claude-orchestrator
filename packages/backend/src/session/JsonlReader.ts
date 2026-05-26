@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { scrubSecrets } from '../security/scrubSecrets';
 import {
   getAllSessionIds,
   insertSessionOrIgnore,
@@ -140,7 +141,7 @@ export class JsonlReader {
 
       events.push({
         type: toEventType(obj.type),
-        content: obj.content ?? obj.message ?? obj,
+        content: scrubSecrets(obj.content ?? obj.message ?? obj),
         timestamp:
           typeof obj.timestamp === 'number' ? obj.timestamp : undefined,
       });

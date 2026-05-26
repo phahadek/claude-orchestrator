@@ -3,6 +3,7 @@ import fs from 'fs';
 import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
 import { recordEvent } from '../audit/AuditLog';
+import { scrubSecrets } from '../security/scrubSecrets';
 import { AgentSession, parseNotionPageId } from './AgentSession';
 import { buildSessionContext } from './ContextBuilder';
 import { buildReviewClaudeMd } from './orchestrator-claudemd';
@@ -147,11 +148,21 @@ export class SessionManager extends EventEmitter {
    * calls so the task_updated broadcast itself never triggers another one.
    */
   override emit(event: string | symbol, ...args: unknown[]): boolean {
-    const result = super.emit(event, ...args);
+    let emitArgs = args;
+    if (event === 'message') {
+      const msg = args[0] as ServerMessage;
+      if (msg.type === 'session_event' && typeof msg.content === 'string') {
+        const scrubbed = scrubSecrets(msg.content);
+        if (scrubbed !== msg.content) {
+          emitArgs = [{ ...msg, content: scrubbed }, ...args.slice(1)];
+        }
+      }
+    }
+    const result = super.emit(event, ...emitArgs);
     if (event === 'message' && !this._inTaskUpdate) {
       this._inTaskUpdate = true;
       try {
-        this._handleTaskUpdated(args[0] as ServerMessage);
+        this._handleTaskUpdated(emitArgs[0] as ServerMessage);
       } catch (err) {
         console.error('[SessionManager] task_updated handler error:', err);
       } finally {

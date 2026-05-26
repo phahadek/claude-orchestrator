@@ -3,6 +3,7 @@ import type {
   RawSessionEvent,
   SessionRunnerOptions,
 } from './SessionRunner';
+import { getSecret } from '../security/secrets';
 
 /**
  * A push-based async iterable used to stream follow-up messages into the Agent SDK's
@@ -73,7 +74,7 @@ export class ApiSessionRunner implements ISessionRunner {
     options: SessionRunnerOptions,
     onEvent: (event: RawSessionEvent) => void,
   ): Promise<number | null> {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
+    const apiKey = getSecret('ANTHROPIC_API_KEY');
     if (!apiKey) {
       this._hasSpawnError = true;
       throw new Error('ANTHROPIC_API_KEY is required for API session mode');
