@@ -51,6 +51,7 @@ const msg = {
         blockers: [],
         nonCode: false,
         wave: 1,
+        source: 'notion' as const,
       },
     ],
   }),
@@ -151,6 +152,7 @@ describe('useSessionStore', () => {
           blockers: [],
           nonCode: false,
           wave: 1,
+          source: 'notion' as const,
         },
         {
           task: {
@@ -165,6 +167,7 @@ describe('useSessionStore', () => {
           blockers: [],
           nonCode: false,
           wave: 1,
+          source: 'notion' as const,
         },
         {
           task: {
@@ -179,6 +182,7 @@ describe('useSessionStore', () => {
           blockers: [],
           nonCode: false,
           wave: 1,
+          source: 'notion' as const,
         },
       ],
     };
@@ -204,6 +208,7 @@ describe('useSessionStore', () => {
           blockers: [],
           nonCode: false,
           wave: 1,
+          source: 'notion' as const,
         },
         {
           task: {
@@ -218,6 +223,7 @@ describe('useSessionStore', () => {
           blockers: [],
           nonCode: false,
           wave: 1,
+          source: 'notion' as const,
         },
         {
           task: {
@@ -232,6 +238,7 @@ describe('useSessionStore', () => {
           blockers: [],
           nonCode: false,
           wave: 1,
+          source: 'notion' as const,
         },
       ],
     };
@@ -451,6 +458,7 @@ describe('useSessionStore', () => {
             blockers: [],
             nonCode: false,
             wave: 1,
+            source: 'notion' as const,
           },
         ],
       };
@@ -482,6 +490,7 @@ describe('useSessionStore', () => {
             blockers: [],
             nonCode: false,
             wave: 1,
+            source: 'notion' as const,
           },
         ],
       };
@@ -513,6 +522,7 @@ describe('useSessionStore', () => {
             blockers: [],
             nonCode: false,
             wave: 1,
+            source: 'notion' as const,
           },
           {
             task: {
@@ -527,6 +537,7 @@ describe('useSessionStore', () => {
             blockers: [],
             nonCode: false,
             wave: 1,
+            source: 'notion' as const,
           },
         ],
       };

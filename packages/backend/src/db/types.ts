@@ -10,8 +10,8 @@ export type SessionStatus =
 
 export interface Session {
   session_id: string;
-  notion_task_id: string | null;
-  notion_task_url: string | null;
+  task_id: string | null;
+  task_url: string | null;
   project_context_url: string | null;
   project_id: string | null;
   status: SessionStatus;
@@ -140,7 +140,7 @@ export type NewPermissionDenialRow = Omit<PermissionDenialRow, 'id'>;
 // ─── task_cache ────────────────────────────────────────────────────────────
 
 export interface TaskCache {
-  notion_task_id: string;
+  task_id: string;
   fetched_at: number;
   raw_json: string;
 }

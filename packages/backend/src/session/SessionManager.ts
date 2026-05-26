@@ -224,7 +224,7 @@ export class SessionManager extends EventEmitter {
       case 'pr_created': {
         const sessionId = (msg as { sessionId: string }).sessionId;
         const row = getSession(sessionId);
-        return row?.notion_task_id ?? null;
+        return row?.task_id ?? null;
       }
       case 'pr_review_complete':
       case 'review_verdict': {
@@ -515,8 +515,8 @@ export class SessionManager extends EventEmitter {
     const startedAt = Date.now();
     insertSession({
       session_id: sessionId,
-      notion_task_id: notionTaskId,
-      notion_task_url: taskUrl,
+      task_id: notionTaskId,
+      task_url: taskUrl,
       project_context_url: projectContextUrl,
       project_id: projectId,
       status: 'starting',
@@ -728,11 +728,11 @@ export class SessionManager extends EventEmitter {
 
     const session = new AgentSession(
       row.session_id, // keep original ID — same card, same transcript
-      row.notion_task_url ?? '',
+      row.task_url ?? '',
       row.project_context_url ?? '',
       undefined, // taskBackendOverride — production resolves via getTaskBackend
       worktreePath,
-      row.notion_task_id ?? '',
+      row.task_id ?? '',
       row.session_id, // resumeSessionId — passes --resume to CLI / SDK
       undefined,
       row.session_type ?? 'standard',
@@ -1155,9 +1155,9 @@ export class SessionManager extends EventEmitter {
           : ''),
     );
 
-    const taskUrl = row.notion_task_url ?? '';
+    const taskUrl = row.task_url ?? '';
     const projectContextUrl = row.project_context_url ?? '';
-    const taskId = row.notion_task_id ?? '';
+    const taskId = row.task_id ?? '';
 
     // Load per-project orchestrator config so resumed sessions get the same
     // extra allowed tools (e.g. Bash(dotnet:*)) as freshly spawned ones.
@@ -1196,8 +1196,8 @@ export class SessionManager extends EventEmitter {
     const startedAt = Date.now();
     insertSession({
       session_id: newSessionId,
-      notion_task_id: taskId,
-      notion_task_url: taskUrl,
+      task_id: taskId,
+      task_url: taskUrl,
       project_context_url: projectContextUrl,
       project_id: row.project_id,
       status: 'starting',

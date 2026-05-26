@@ -27,10 +27,10 @@ import type {
 
 const stmtInsertSession = db.prepare<NewSession>(`
   INSERT INTO sessions
-    (session_id, notion_task_id, notion_task_url, project_context_url,
+    (session_id, task_id, task_url, project_context_url,
      project_id, status, started_at, ended_at, pr_url, worktree_path, session_type, task_name)
   VALUES
-    (@session_id, @notion_task_id, @notion_task_url, @project_context_url,
+    (@session_id, @task_id, @task_url, @project_context_url,
      @project_id, @status, @started_at, @ended_at, @pr_url, @worktree_path, @session_type, @task_name)
 `);
 
@@ -66,10 +66,10 @@ const stmtDeleteSession = db.prepare<{ session_id: string }>(`
 
 const stmtInsertSessionOrIgnore = db.prepare<NewSession>(`
   INSERT OR IGNORE INTO sessions
-    (session_id, notion_task_id, notion_task_url, project_context_url,
+    (session_id, task_id, task_url, project_context_url,
      project_id, status, started_at, ended_at, pr_url, worktree_path, session_type, task_name)
   VALUES
-    (@session_id, @notion_task_id, @notion_task_url, @project_context_url,
+    (@session_id, @task_id, @task_url, @project_context_url,
      @project_id, @status, @started_at, @ended_at, @pr_url, @worktree_path, @session_type, @task_name)
 `);
 
@@ -225,23 +225,24 @@ export function getSessionsByStatus(statuses: string[]): Session[] {
 
 /**
  * Returns true when a standard (non-review) session is currently active for the
- * given Notion task id. "Active" means not in a terminal status (done, error,
- * killed). Used by AutoLauncher to avoid re-launching a task whose status hasn't
- * yet propagated back from Notion.
+ * given task id. "Active" means not in a terminal status (done, error, killed).
+ * Used by AutoLauncher to avoid re-launching a task whose status hasn't yet
+ * propagated back from the task backend.
+ * Strips hyphens from both sides to normalize UUID format differences.
  */
-export function hasActiveSessionForTask(notionTaskId: string): boolean {
-  const norm = notionTaskId.replace(/-/g, '');
+export function hasActiveSessionForTask(taskId: string): boolean {
+  const norm = taskId.replace(/-/g, '');
   const row = db
-    .prepare<{ notion_task_id: string }>(
+    .prepare<{ task_id: string }>(
       `
     SELECT 1 FROM sessions
-    WHERE REPLACE(COALESCE(notion_task_id, ''), '-', '') = @notion_task_id
+    WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
       AND status NOT IN ('done', 'error', 'killed')
       AND (session_type = 'standard' OR session_type IS NULL)
     LIMIT 1
   `,
     )
-    .get({ notion_task_id: norm });
+    .get({ task_id: norm });
   return !!row;
 }
 
@@ -252,7 +253,7 @@ export function getActiveSessions(): Session[] {
     .prepare(
       `
     SELECT
-      s.session_id, s.notion_task_id, s.notion_task_url, s.project_context_url,
+      s.session_id, s.task_id, s.task_url, s.project_context_url,
       s.project_id, s.status, s.started_at, s.ended_at, s.worktree_path,
       s.archived, s.favorited, s.session_type, s.note, s.tags,
       s.total_input_tokens, s.total_output_tokens, s.model, s.task_name,
@@ -467,14 +468,14 @@ export function insertPermissionEvent(e: NewPermissionEvent): void {
 
 export function getRecentPermissionEvents(
   limit: number,
-): Array<PermissionEvent & { notion_task_url: string | null }> {
+): Array<PermissionEvent & { task_url: string | null }> {
   return db
     .prepare(
-      `SELECT pe.*, s.notion_task_url FROM permission_events pe
+      `SELECT pe.*, s.task_url FROM permission_events pe
        LEFT JOIN sessions s ON pe.session_id = s.session_id
        ORDER BY pe.decided_at DESC LIMIT ?`,
     )
-    .all(limit) as Array<PermissionEvent & { notion_task_url: string | null }>;
+    .all(limit) as Array<PermissionEvent & { task_url: string | null }>;
 }
 
 const stmtClearPermissionEvents = db.prepare(`DELETE FROM permission_events`);
@@ -603,42 +604,40 @@ export function deleteDenialsBySession(sessionId: string): void {
 
 export function getRecentPermissionDenials(
   limit: number,
-): Array<PermissionDenialRow & { notion_task_url: string | null }> {
+): Array<PermissionDenialRow & { task_url: string | null }> {
   return db
     .prepare(
-      `SELECT d.*, s.notion_task_url FROM permission_denials d
+      `SELECT d.*, s.task_url FROM permission_denials d
        LEFT JOIN sessions s ON d.session_id = s.session_id
        ORDER BY d.id DESC LIMIT ?`,
     )
-    .all(limit) as Array<
-    PermissionDenialRow & { notion_task_url: string | null }
-  >;
+    .all(limit) as Array<PermissionDenialRow & { task_url: string | null }>;
 }
 
 // ─── task_cache ────────────────────────────────────────────────────────────
 
 const stmtUpsertTaskCache = db.prepare<{
-  notion_task_id: string;
+  task_id: string;
   fetched_at: number;
   raw_json: string;
 }>(`
-  INSERT INTO task_cache (notion_task_id, fetched_at, raw_json)
-  VALUES (@notion_task_id, @fetched_at, @raw_json)
-  ON CONFLICT(notion_task_id) DO UPDATE SET
+  INSERT INTO task_cache (task_id, fetched_at, raw_json)
+  VALUES (@task_id, @fetched_at, @raw_json)
+  ON CONFLICT(task_id) DO UPDATE SET
     fetched_at = excluded.fetched_at,
     raw_json   = excluded.raw_json
 `);
 
-const stmtGetTaskCache = db.prepare<{ notion_task_id: string }>(`
-  SELECT * FROM task_cache WHERE notion_task_id = @notion_task_id
+const stmtGetTaskCache = db.prepare<{ task_id: string }>(`
+  SELECT * FROM task_cache WHERE task_id = @task_id
 `);
 
-const stmtDeleteTaskCache = db.prepare<{ notion_task_id: string }>(`
-  DELETE FROM task_cache WHERE notion_task_id = @notion_task_id
+const stmtDeleteTaskCache = db.prepare<{ task_id: string }>(`
+  DELETE FROM task_cache WHERE task_id = @task_id
 `);
 
 export function deleteTaskCache(taskId: string): void {
-  stmtDeleteTaskCache.run({ notion_task_id: taskId });
+  stmtDeleteTaskCache.run({ task_id: taskId });
 }
 
 export function updateTaskCacheStatus(taskId: string, status: string): void {
@@ -653,7 +652,7 @@ export function updateTaskCacheStatus(taskId: string, status: string): void {
       parsed.properties.Status.select.name = status;
     }
     stmtUpsertTaskCache.run({
-      notion_task_id: row.notion_task_id,
+      task_id: row.task_id,
       fetched_at: row.fetched_at,
       raw_json: JSON.stringify(parsed),
     });
@@ -664,14 +663,14 @@ export function updateTaskCacheStatus(taskId: string, status: string): void {
 
 export function upsertTaskCache(taskId: string, rawJson: string): void {
   stmtUpsertTaskCache.run({
-    notion_task_id: taskId,
+    task_id: taskId,
     fetched_at: Date.now(),
     raw_json: rawJson,
   });
 }
 
 export function getTaskCache(taskId: string): TaskCache | undefined {
-  const row = stmtGetTaskCache.get({ notion_task_id: taskId }) as
+  const row = stmtGetTaskCache.get({ task_id: taskId }) as
     | TaskCache
     | undefined;
   if (row) return row;
@@ -680,7 +679,7 @@ export function getTaskCache(taskId: string): TaskCache | undefined {
     ? taskId.replace(/-/g, '')
     : taskId.replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5');
   if (alt === taskId) return undefined;
-  return stmtGetTaskCache.get({ notion_task_id: alt }) as TaskCache | undefined;
+  return stmtGetTaskCache.get({ task_id: alt }) as TaskCache | undefined;
 }
 
 export function getCacheAge(taskId: string): number {
@@ -1145,25 +1144,25 @@ export function setPauseReason(
 }
 
 /**
- * Returns the pause_reason of the most recent PR for the given Notion task id,
+ * Returns the pause_reason of the most recent PR for the given task id,
  * or null if no PR exists or the PR is not paused. Used by auto-runner
  * components to skip tasks paused by stuck_timeout (or any other reason).
  */
 export function getPausedPrReasonForTask(
-  notionTaskId: string,
+  taskId: string,
 ): PauseReason | null {
-  const norm = notionTaskId.replace(/-/g, '');
+  const norm = taskId.replace(/-/g, '');
   const row = db
-    .prepare<{ notion_task_id: string }>(
+    .prepare<{ task_id: string }>(
       `
     SELECT pause_reason FROM pull_requests
-    WHERE REPLACE(COALESCE(notion_task_id, ''), '-', '') = @notion_task_id
+    WHERE REPLACE(COALESCE(notion_task_id, ''), '-', '') = @task_id
       AND pause_reason IS NOT NULL
     ORDER BY pr_number DESC
     LIMIT 1
   `,
     )
-    .get({ notion_task_id: norm }) as
+    .get({ task_id: norm }) as
     | { pause_reason: string | null }
     | undefined;
   return (row?.pause_reason as PauseReason | null) ?? null;
@@ -1224,9 +1223,9 @@ export function getMergeReadyPRs(
 
   const boardCache = db
     .prepare<{
-      notion_task_id: string;
-    }>(`SELECT raw_json FROM task_cache WHERE notion_task_id = @notion_task_id`)
-    .get({ notion_task_id: cacheKey }) as { raw_json: string } | undefined;
+      task_id: string;
+    }>(`SELECT raw_json FROM task_cache WHERE task_id = @task_id`)
+    .get({ task_id: cacheKey }) as { raw_json: string } | undefined;
 
   if (!boardCache) return [];
 
@@ -1258,7 +1257,7 @@ export function getMergeReadyPRs(
 // ─── task aggregation ─────────────────────────────────────────────────────────
 
 export interface TaskAggregateRow {
-  notion_task_id: string;
+  task_id: string;
   raw_json: string;
   // code session (session_type = 'standard')
   code_session_id: string | null;
@@ -1294,7 +1293,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
     .prepare(
       `
     SELECT
-      tc.notion_task_id,
+      tc.task_id,
       tc.raw_json,
       cs.session_id          AS code_session_id,
       cs.status              AS code_session_status,
@@ -1321,20 +1320,20 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
     FROM task_cache tc
     LEFT JOIN sessions cs ON cs.session_id = (
       SELECT session_id FROM sessions
-      WHERE REPLACE(notion_task_id, '-', '') = REPLACE(tc.notion_task_id, '-', '') AND session_type = 'standard'
+      WHERE REPLACE(task_id, '-', '') = REPLACE(tc.task_id, '-', '') AND session_type = 'standard'
       ORDER BY started_at DESC LIMIT 1
     )
     LEFT JOIN sessions rs ON rs.session_id = (
       SELECT session_id FROM sessions
-      WHERE REPLACE(notion_task_id, '-', '') = REPLACE(tc.notion_task_id, '-', '') AND session_type = 'review'
+      WHERE REPLACE(task_id, '-', '') = REPLACE(tc.task_id, '-', '') AND session_type = 'review'
       ORDER BY started_at DESC LIMIT 1
     )
     LEFT JOIN pull_requests pr ON pr.id = (
       SELECT id FROM pull_requests
-      WHERE REPLACE(notion_task_id, '-', '') = REPLACE(tc.notion_task_id, '-', '')
+      WHERE REPLACE(notion_task_id, '-', '') = REPLACE(tc.task_id, '-', '')
       ORDER BY pr_number DESC LIMIT 1
     )
-    WHERE tc.notion_task_id IN (${placeholders})
+    WHERE tc.task_id IN (${placeholders})
     ORDER BY tc.fetched_at DESC
   `,
     )
@@ -1367,20 +1366,20 @@ export function setSessionReviewResult(
   ).run({ session_id: sessionId, review_result: result });
 }
 
-/** Returns the most recent standard (non-review) session for a given Notion task ID. */
+/** Returns the most recent standard (non-review) session for a given task ID. */
 export function getLatestCodeSessionByNotionTaskId(
-  notionTaskId: string,
+  taskId: string,
 ): Session | undefined {
   return db
-    .prepare<{ notion_task_id: string }>(
+    .prepare<{ task_id: string }>(
       `
     SELECT * FROM sessions
-    WHERE notion_task_id = @notion_task_id AND (session_type = 'standard' OR session_type IS NULL)
+    WHERE task_id = @task_id AND (session_type = 'standard' OR session_type IS NULL)
     ORDER BY started_at DESC
     LIMIT 1
   `,
     )
-    .get({ notion_task_id: notionTaskId }) as Session | undefined;
+    .get({ task_id: taskId }) as Session | undefined;
 }
 
 // ─── projects ──────────────────────────────────────────────────────────────

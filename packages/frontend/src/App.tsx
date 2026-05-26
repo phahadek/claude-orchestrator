@@ -574,8 +574,8 @@ export default function App() {
         dispatch({
           type: 'session_started',
           sessionId: session.session_id,
-          taskName: session.notion_task_url ?? session.session_id.slice(0, 8),
-          notionTaskUrl: session.notion_task_url ?? '',
+          taskName: session.task_url ?? session.session_id.slice(0, 8),
+          notionTaskUrl: session.task_url ?? '',
           started_at: session.started_at,
           ended_at: session.ended_at,
           archived: session.archived === 1,
@@ -630,8 +630,8 @@ export default function App() {
           dispatch({
             type: 'session_started',
             sessionId: session.session_id,
-            taskName: session.notion_task_url ?? session.session_id.slice(0, 8),
-            notionTaskUrl: session.notion_task_url ?? '',
+            taskName: session.task_url ?? session.session_id.slice(0, 8),
+            notionTaskUrl: session.task_url ?? '',
             started_at: session.started_at,
             ended_at: session.ended_at,
             archived: session.archived === 1,

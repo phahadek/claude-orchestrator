@@ -4,8 +4,8 @@ export function runMigrations(): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       session_id          TEXT    PRIMARY KEY,
-      notion_task_id      TEXT,
-      notion_task_url     TEXT,
+      task_id             TEXT,
+      task_url            TEXT,
       project_context_url TEXT,
       status              TEXT    NOT NULL,
       started_at          INTEGER NOT NULL,
@@ -56,9 +56,9 @@ export function runMigrations(): void {
     );
 
     CREATE TABLE IF NOT EXISTS task_cache (
-      notion_task_id TEXT    PRIMARY KEY,
-      fetched_at     INTEGER NOT NULL,
-      raw_json       TEXT    NOT NULL
+      task_id    TEXT    PRIMARY KEY,
+      fetched_at INTEGER NOT NULL,
+      raw_json   TEXT    NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS settings (
@@ -279,4 +279,24 @@ export function runMigrations(): void {
   } catch {
     /* already exists */
   }
+
+  // ── Source-prefix backfill (idempotent: NOT LIKE '%:%' guard) ──────────────
+  // Prefix sessions.task_id with source based on owning project's task_source.
+  // Rows with no project_id default to 'notion:' (all pre-M6 sessions were Notion).
+  db.exec(`
+    UPDATE sessions
+    SET task_id = 'notion:' || task_id
+    WHERE task_id IS NOT NULL AND task_id NOT LIKE '%:%'
+    AND (project_id IS NULL
+         OR project_id IN (SELECT id FROM projects WHERE task_source = 'notion'));
+
+    UPDATE sessions
+    SET task_id = 'yaml:' || task_id
+    WHERE task_id IS NOT NULL AND task_id NOT LIKE '%:%'
+    AND project_id IN (SELECT id FROM projects WHERE task_source = 'yaml');
+
+    UPDATE task_cache
+    SET task_id = 'notion:' || task_id
+    WHERE task_id NOT LIKE '%:%';
+  `);
 }

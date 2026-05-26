@@ -305,8 +305,8 @@ describe('POST /api/sessions/:id/mark-merged', () => {
     } as ReturnType<typeof TaskBackend.getTaskBackend>);
     vi.mocked(queries.getSession).mockReturnValue({
       session_id: 'sess-1',
-      notion_task_id: 'task-abc',
-      notion_task_url: 'https://notion.so/task-abc',
+      task_id: 'task-abc',
+      task_url: 'https://notion.so/task-abc',
       project_context_url: null,
       project_id: 'proj-local',
       status: 'done',
@@ -336,8 +336,8 @@ describe('POST /api/sessions/:id/mark-merged', () => {
   it('rejects mark-merged for github project', async () => {
     vi.mocked(queries.getSession).mockReturnValue({
       session_id: 'sess-2',
-      notion_task_id: 'task-xyz',
-      notion_task_url: 'https://notion.so/task-xyz',
+      task_id: 'task-xyz',
+      task_url: 'https://notion.so/task-xyz',
       project_context_url: null,
       project_id: 'proj-github',
       status: 'done',

@@ -28,7 +28,7 @@ function makeDenial(overrides: Record<string, unknown> = {}) {
     tool_use_id: 'tu-1',
     tool_input: JSON.stringify({ command: 'ls -la' }),
     timestamp: Date.now() - 5000,
-    notion_task_url: null,
+    task_url: null,
     ...overrides,
   };
 }
@@ -117,11 +117,11 @@ describe('PermissionEventLog', () => {
     });
   });
 
-  it('uses notion task name as session label when notion_task_url is set', async () => {
+  it('uses notion task name as session label when task_url is set', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse([
         makeDenial({
-          notion_task_url:
+          task_url:
             'https://www.notion.so/Fix-the-login-bug-abc123def456',
         }),
       ]),

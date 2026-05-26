@@ -9,7 +9,7 @@ interface PermissionDenialRow {
   tool_use_id: string;
   tool_input: string; // JSON string
   timestamp: number;
-  notion_task_url: string | null;
+  task_url: string | null;
 }
 
 function relativeTime(timestamp: number): string {
@@ -29,8 +29,8 @@ function formatRowsForClipboard(rows: PermissionDenialRow[]): string {
   const lines = rows.map((row) => {
     const tool = row.tool_name;
     const input = row.tool_input;
-    const session = row.notion_task_url
-      ? taskNameFromNotionUrl(row.notion_task_url)
+    const session = row.task_url
+      ? taskNameFromNotionUrl(row.task_url)
       : row.session_id.slice(0, 8);
     return `[denied] ${tool} | ${input} | session: ${session}`;
   });
@@ -190,8 +190,8 @@ function DenialRow({ row }: { row: PermissionDenialRow }) {
   })();
   const truncated = inputText.length > 80 && !expanded;
   const displayInput = truncated ? inputText.slice(0, 80) + '…' : inputText;
-  const sessionName = row.notion_task_url
-    ? taskNameFromNotionUrl(row.notion_task_url)
+  const sessionName = row.task_url
+    ? taskNameFromNotionUrl(row.task_url)
     : row.session_id.slice(0, 8);
 
   return (
@@ -204,7 +204,7 @@ function DenialRow({ row }: { row: PermissionDenialRow }) {
       </td>
       <td
         className={styles.sessionCell}
-        title={row.notion_task_url ?? row.session_id}
+        title={row.task_url ?? row.session_id}
       >
         {sessionName}
       </td>

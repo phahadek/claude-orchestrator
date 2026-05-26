@@ -64,8 +64,8 @@ export class JsonlReader {
 
       const session: NewSession = {
         session_id: sessionId,
-        notion_task_id: null,
-        notion_task_url: null,
+        task_id: null,
+        task_url: null,
         project_context_url: null,
         status: 'done',
         started_at: startedAt,

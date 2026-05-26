@@ -7,8 +7,8 @@ vi.mock('../db/db.js', async () => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       session_id          TEXT    PRIMARY KEY,
-      notion_task_id      TEXT,
-      notion_task_url     TEXT,
+      task_id             TEXT,
+      task_url            TEXT,
       project_context_url TEXT,
       status              TEXT    NOT NULL,
       started_at          INTEGER NOT NULL,
@@ -26,9 +26,9 @@ vi.mock('../db/db.js', async () => {
       total_output_tokens INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS task_cache (
-      notion_task_id TEXT    PRIMARY KEY,
-      fetched_at     INTEGER NOT NULL,
-      raw_json       TEXT    NOT NULL
+      task_id    TEXT    PRIMARY KEY,
+      fetched_at INTEGER NOT NULL,
+      raw_json   TEXT    NOT NULL
     );
     CREATE TABLE IF NOT EXISTS pull_requests (
       id                     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -129,8 +129,8 @@ function makeSession(overrides: {
 }) {
   return {
     session_id: overrides.session_id,
-    notion_task_id: overrides.notion_task_id,
-    notion_task_url: `https://www.notion.so/${overrides.notion_task_id}`,
+    task_id: overrides.notion_task_id,
+    task_url: `https://www.notion.so/${overrides.notion_task_id}`,
     project_context_url: 'https://www.notion.so/context',
     project_id: 'proj-1',
     status: 'completed',

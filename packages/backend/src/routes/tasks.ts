@@ -154,8 +154,8 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
   };
 
   return {
-    taskId: row.notion_task_id,
-    taskName: notionTask?.title ?? row.notion_task_id,
+    taskId: row.task_id,
+    taskName: notionTask?.title ?? row.task_id,
     notionStatus,
     displayStatus,
     pauseReason,

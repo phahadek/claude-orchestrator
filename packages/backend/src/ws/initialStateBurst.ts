@@ -29,16 +29,16 @@ export function sendInitialStateBurst(
         })()
       : undefined;
     const reviewPr =
-      s.session_type === 'review' && s.notion_task_id
-        ? (getPRByNotionTaskId(s.notion_task_id) ?? undefined)
+      s.session_type === 'review' && s.task_id
+        ? (getPRByNotionTaskId(s.task_id) ?? undefined)
         : undefined;
     const prNumber = reviewPr?.pr_number;
     const codeSessionId = reviewPr?.session_id ?? undefined;
     send({
       type: 'session_started',
       sessionId: s.session_id,
-      taskName: s.task_name ?? s.notion_task_url ?? s.session_id.slice(0, 8),
-      notionTaskUrl: s.notion_task_url ?? '',
+      taskName: s.task_name ?? s.task_url ?? s.session_id.slice(0, 8),
+      notionTaskUrl: s.task_url ?? '',
       ...(s.started_at != null && { started_at: s.started_at }),
       ...(s.ended_at != null && { ended_at: s.ended_at }),
       archived: s.archived === 1,

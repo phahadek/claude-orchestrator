@@ -206,7 +206,7 @@ sessionsRouter.post('/:id/mark-merged', async (req: Request, res: Response) => {
     return;
   }
 
-  const notionTaskId = session.notion_task_id;
+  const notionTaskId = session.task_id;
   if (!notionTaskId) {
     res.status(400).json({ error: 'Session has no associated task' });
     return;
