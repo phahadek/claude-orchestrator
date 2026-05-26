@@ -2357,31 +2357,22 @@ describe('PRReviewService.reviewPR() — transient fetch retry', () => {
   const approvedPayload = {
     verdict: 'approved',
     dimensions: [
-      { name: 'Title and description vs task Summary', passed: true, notes: 'ok' },
+      {
+        name: 'Title and description vs task Summary',
+        passed: true,
+        notes: 'ok',
+      },
       { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
       { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
-      { name: 'Changed files vs Files/paths affected list', passed: true, notes: 'ok' },
+      {
+        name: 'Changed files vs Files/paths affected list',
+        passed: true,
+        notes: 'ok',
+      },
       { name: 'Size proportionality', passed: true, notes: 'ok' },
     ],
     summary: 'All good.',
   };
-
-  function makeServiceAndStart(
-    startImpl: (taskUrl: string, ctxUrl: string, opts: { sessionId: string }) => string,
-  ) {
-    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
-    const mockSM = makeMockSessionManager();
-    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementation(startImpl);
-    const mockGH = makeMockGitHub();
-    const service = new PRReviewService(
-      mockGH,
-      makeMockNotion(),
-      mockSM as any,
-      'proj-1',
-      'https://notion.so/ctx',
-    );
-    return { service, mockSM, mockGH };
-  }
 
   it('retries up to 3 times when diff-fetch throws TypeError: fetch failed', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
@@ -2402,7 +2393,10 @@ describe('PRReviewService.reviewPR() — transient fetch retry', () => {
         setImmediate(() =>
           mockSM.emit(
             'message',
-            makeSessionEventMessage(opts.sessionId, JSON.stringify(approvedPayload)),
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(approvedPayload),
+            ),
           ),
         );
         return opts.sessionId;
@@ -2496,7 +2490,9 @@ describe('PRReviewService.reviewPR() — transient fetch retry', () => {
 
     const failedMsg = emittedMessages.find(
       (m: any) => m.type === 'review_failed',
-    ) as { type: string; prNumber: number; repo: string; message: string } | undefined;
+    ) as
+      | { type: string; prNumber: number; repo: string; message: string }
+      | undefined;
     expect(failedMsg).toBeDefined();
     expect(failedMsg!.prNumber).toBe(42);
     expect(failedMsg!.repo).toBe('owner/repo');
@@ -2520,7 +2516,10 @@ describe('PRReviewService.reviewPR() — transient fetch retry', () => {
         setImmediate(() =>
           mockSM.emit(
             'message',
-            makeSessionEventMessage(opts.sessionId, JSON.stringify(approvedPayload)),
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(approvedPayload),
+            ),
           ),
         );
         return opts.sessionId;
@@ -2565,7 +2564,10 @@ describe('PRReviewService.reviewPR() — transient fetch retry', () => {
         setImmediate(() =>
           mockSM.emit(
             'message',
-            makeSessionEventMessage(opts.sessionId, JSON.stringify(approvedPayload)),
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(approvedPayload),
+            ),
           ),
         );
         return opts.sessionId;
@@ -2609,7 +2611,10 @@ describe('PRReviewService.reviewPR() — transient fetch retry', () => {
         setImmediate(() =>
           mockSM.emit(
             'message',
-            makeSessionEventMessage(opts.sessionId, JSON.stringify(approvedPayload)),
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(approvedPayload),
+            ),
           ),
         );
         return opts.sessionId;

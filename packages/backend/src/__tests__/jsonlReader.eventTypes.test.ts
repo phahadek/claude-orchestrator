@@ -353,7 +353,9 @@ describe('JsonlReader — importAll with new event types', () => {
     const events = getEventRows(sessionId);
     const rlEvent = events.find((e) => e.event_type === 'rate_limit');
     expect(rlEvent).toBeDefined();
-    const payload = JSON.parse(rlEvent!.payload) as { rate_limit_info: unknown };
+    const payload = JSON.parse(rlEvent!.payload) as {
+      rate_limit_info: unknown;
+    };
     expect(payload.rate_limit_info).toEqual(rateLimitInfo);
 
     warnSpy.mockRestore();

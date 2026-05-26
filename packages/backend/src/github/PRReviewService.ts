@@ -210,20 +210,67 @@ export class PRReviewService {
     }
 
     try {
-    const existingReviewSessionId = prRow.review_session_id;
+      const existingReviewSessionId = prRow.review_session_id;
 
-    // Case 1: Live review session exists — send follow-up with diff, do not spawn a new session.
-    // review_session_id is intentionally NOT updated in this path.
-    if (
-      existingReviewSessionId &&
-      this.sessionManager.isAlive(existingReviewSessionId)
-    ) {
-      // Register listener BEFORE sending to avoid missing a fast verdict.
-      const verdictPromise = this.waitForVerdict(
-        existingReviewSessionId,
-        prNumber,
-        repo,
-      );
+      // Case 1: Live review session exists — send follow-up with diff, do not spawn a new session.
+      // review_session_id is intentionally NOT updated in this path.
+      if (
+        existingReviewSessionId &&
+        this.sessionManager.isAlive(existingReviewSessionId)
+      ) {
+        // Register listener BEFORE sending to avoid missing a fast verdict.
+        const verdictPromise = this.waitForVerdict(
+          existingReviewSessionId,
+          prNumber,
+          repo,
+        );
+        const prData = await this.withFetchRetry(
+          () => this.github.fetchPR(repo, prNumber),
+          sleep,
+        );
+        const diff = await this.withFetchRetry(
+          () => diffSource.fetchDiff(),
+          sleep,
+        );
+        // Recompute size signal against the FULL refreshed diff each iteration.
+        const { filesSection, expectedSize } = await this.fetchSizeSignalInputs(
+          projectId,
+          prRow.notion_task_id,
+        );
+        const sizeSignal = computeSizeSignal(diff, filesSection, expectedSize);
+        const followUp = [
+          `The code session has pushed new commits to PR #${prNumber}.`,
+          `Please re-review the updated diff against the same task spec.`,
+          ``,
+          `### Updated PR Metadata`,
+          `Title: ${prData.title}`,
+          `Description: ${prData.body ?? '(none)'}`,
+          ``,
+          `### Updated Diff`,
+          '```',
+          diff,
+          '```',
+          this.renderSizeSignalForFollowUp(sizeSignal),
+          REVIEW_JSON_SCHEMA_BLOCK,
+        ].join('\n');
+        this.sessionManager.send(existingReviewSessionId, followUp);
+        const aiResult = await verdictPromise;
+        const finalResult = this.appendSizeProportionalityDimension(
+          aiResult,
+          sizeSignal,
+        );
+        setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
+        if (finalResult.verdict === 'approved') {
+          await this.handleApprovedVerdict(
+            prNumber,
+            repo,
+            prRow.notion_task_id,
+            projectId,
+          );
+        }
+        return finalResult;
+      }
+
       const prData = await this.withFetchRetry(
         () => this.github.fetchPR(repo, prNumber),
         sleep,
@@ -232,28 +279,81 @@ export class PRReviewService {
         () => diffSource.fetchDiff(),
         sleep,
       );
-      // Recompute size signal against the FULL refreshed diff each iteration.
-      const { filesSection, expectedSize } = await this.fetchSizeSignalInputs(
-        projectId,
+      const diffData = { prId: prNumber, diff, filesChanged: [] };
+
+      if (!prRow.notion_task_id) {
+        throw new Error(`PR #${prNumber} has no linked Notion task`);
+      }
+
+      const taskBody = await this.resolveBackend(projectId).fetchTaskPage(
         prRow.notion_task_id,
       );
-      const sizeSignal = computeSizeSignal(diff, filesSection, expectedSize);
-      const followUp = [
-        `The code session has pushed new commits to PR #${prNumber}.`,
-        `Please re-review the updated diff against the same task spec.`,
-        ``,
-        `### Updated PR Metadata`,
-        `Title: ${prData.title}`,
-        `Description: ${prData.body ?? '(none)'}`,
-        ``,
-        `### Updated Diff`,
-        '```',
+      const taskUrl = `https://www.notion.so/${prRow.notion_task_id}`;
+      const prompt = this.buildPrompt(prData, diffData, taskBody);
+      const sizeSignal = computeSizeSignal(
         diff,
-        '```',
-        this.renderSizeSignalForFollowUp(sizeSignal),
-        REVIEW_JSON_SCHEMA_BLOCK,
-      ].join('\n');
-      this.sessionManager.send(existingReviewSessionId, followUp);
+        parseSection(taskBody, 'files'),
+        parseExpectedSize(taskBody),
+      );
+
+      // Case 2: Dead existing review session — resume via sendOrResume with the
+      // original session ID (do NOT generate a new one here). The returned value
+      // is the actual session ID used (may be a new resumed session ID).
+      if (existingReviewSessionId) {
+        const resumedSessionId = await this.sessionManager.sendOrResume(
+          existingReviewSessionId,
+          prompt,
+        );
+        setReviewSessionId(prNumber, repo, resumedSessionId);
+        const aiResult = await this.waitForVerdict(
+          resumedSessionId,
+          prNumber,
+          repo,
+        );
+        const finalResult = this.appendSizeProportionalityDimension(
+          aiResult,
+          sizeSignal,
+        );
+        setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
+        if (finalResult.verdict === 'approved') {
+          await this.handleApprovedVerdict(
+            prNumber,
+            repo,
+            prRow.notion_task_id,
+            projectId,
+          );
+        }
+        return finalResult;
+      }
+
+      // Case 3: No prior review session — spawn a fresh session.
+      // Generate the session ID before starting so the verdict listener can be
+      // subscribed before any events are emitted. Without this, fast reviews
+      // (verdict emitted within seconds, before waitForVerdict subscribes) are
+      // silently missed and fall through to the timeout.
+      const sessionId = crypto.randomUUID();
+
+      // 1. Attach listener BEFORE start() — ensures no events are missed.
+      const verdictPromise = this.waitForVerdict(sessionId, prNumber, repo);
+
+      // 2. Start session with the pre-generated ID.
+      this.sessionManager.start(taskUrl, projectContextUrl, {
+        sessionId,
+        sessionType: 'review',
+        customPrompt: prompt,
+        projectId,
+        taskName: `#${prData.id} ${prData.title}`,
+      });
+
+      // 3. Persist the review session pairing and record the SHA under review.
+      // Setting last_reviewed_sha here (before await verdictPromise) closes a race
+      // window: AgentSession fires push_detected on every result event once
+      // review_session_id is set, and shouldAutoReview returns true when
+      // last_reviewed_sha is null. By recording it now, any push_detected during
+      // the review sees headSha === last_reviewed_sha and is correctly skipped.
+      setReviewSessionId(prNumber, repo, sessionId);
+      setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
+
       const aiResult = await verdictPromise;
       const finalResult = this.appendSizeProportionalityDimension(
         aiResult,
@@ -269,106 +369,6 @@ export class PRReviewService {
         );
       }
       return finalResult;
-    }
-
-    const prData = await this.withFetchRetry(
-      () => this.github.fetchPR(repo, prNumber),
-      sleep,
-    );
-    const diff = await this.withFetchRetry(
-      () => diffSource.fetchDiff(),
-      sleep,
-    );
-    const diffData = { prId: prNumber, diff, filesChanged: [] };
-
-    if (!prRow.notion_task_id) {
-      throw new Error(`PR #${prNumber} has no linked Notion task`);
-    }
-
-    const taskBody = await this.resolveBackend(projectId).fetchTaskPage(
-      prRow.notion_task_id,
-    );
-    const taskUrl = `https://www.notion.so/${prRow.notion_task_id}`;
-    const prompt = this.buildPrompt(prData, diffData, taskBody);
-    const sizeSignal = computeSizeSignal(
-      diff,
-      parseSection(taskBody, 'files'),
-      parseExpectedSize(taskBody),
-    );
-
-    // Case 2: Dead existing review session — resume via sendOrResume with the
-    // original session ID (do NOT generate a new one here). The returned value
-    // is the actual session ID used (may be a new resumed session ID).
-    if (existingReviewSessionId) {
-      const resumedSessionId = await this.sessionManager.sendOrResume(
-        existingReviewSessionId,
-        prompt,
-      );
-      setReviewSessionId(prNumber, repo, resumedSessionId);
-      const aiResult = await this.waitForVerdict(
-        resumedSessionId,
-        prNumber,
-        repo,
-      );
-      const finalResult = this.appendSizeProportionalityDimension(
-        aiResult,
-        sizeSignal,
-      );
-      setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
-      if (finalResult.verdict === 'approved') {
-        await this.handleApprovedVerdict(
-          prNumber,
-          repo,
-          prRow.notion_task_id,
-          projectId,
-        );
-      }
-      return finalResult;
-    }
-
-    // Case 3: No prior review session — spawn a fresh session.
-    // Generate the session ID before starting so the verdict listener can be
-    // subscribed before any events are emitted. Without this, fast reviews
-    // (verdict emitted within seconds, before waitForVerdict subscribes) are
-    // silently missed and fall through to the timeout.
-    const sessionId = crypto.randomUUID();
-
-    // 1. Attach listener BEFORE start() — ensures no events are missed.
-    const verdictPromise = this.waitForVerdict(sessionId, prNumber, repo);
-
-    // 2. Start session with the pre-generated ID.
-    this.sessionManager.start(taskUrl, projectContextUrl, {
-      sessionId,
-      sessionType: 'review',
-      customPrompt: prompt,
-      projectId,
-      taskName: `#${prData.id} ${prData.title}`,
-    });
-
-    // 3. Persist the review session pairing and record the SHA under review.
-    // Setting last_reviewed_sha here (before await verdictPromise) closes a race
-    // window: AgentSession fires push_detected on every result event once
-    // review_session_id is set, and shouldAutoReview returns true when
-    // last_reviewed_sha is null. By recording it now, any push_detected during
-    // the review sees headSha === last_reviewed_sha and is correctly skipped.
-    setReviewSessionId(prNumber, repo, sessionId);
-    setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
-
-    const aiResult = await verdictPromise;
-    const finalResult = this.appendSizeProportionalityDimension(
-      aiResult,
-      sizeSignal,
-    );
-    setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
-    if (finalResult.verdict === 'approved') {
-      await this.handleApprovedVerdict(
-        prNumber,
-        repo,
-        prRow.notion_task_id,
-        projectId,
-      );
-    }
-    return finalResult;
     } catch (e: unknown) {
       if (e instanceof FetchRetryExhaustedError) {
         this.sessionManager.emit('message', {
