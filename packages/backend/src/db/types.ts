@@ -147,7 +147,7 @@ export interface TaskCache {
 
 // ─── projects ──────────────────────────────────────────────────────────────
 
-export type TaskSource = 'notion' | 'yaml';
+export type TaskSource = 'notion' | 'yaml' | 'jira';
 export type GitMode = 'github' | 'local-only';
 
 export interface ProjectRow {
@@ -163,6 +163,8 @@ export interface ProjectRow {
   auto_merge_enabled: number; // 0 | 1 (SQLite boolean)
   milestone_branching: 'two_tier' | 'flat' | null;
   non_milestone_source_config: string | null;
+  /** JSON blob: { host, project_key, default_jql, status_mapping, ... } */
+  task_source_config: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -177,6 +179,7 @@ export type NewProjectRow = Omit<
   | 'git_mode'
   | 'milestone_branching'
   | 'non_milestone_source_config'
+  | 'task_source_config'
 > & {
   auto_launch_enabled?: number;
   auto_launch_milestone_id?: string | null;
@@ -184,6 +187,7 @@ export type NewProjectRow = Omit<
   git_mode?: GitMode;
   milestone_branching?: 'two_tier' | 'flat' | null;
   non_milestone_source_config?: string | null;
+  task_source_config?: string | null;
   created_at?: number;
   updated_at?: number;
 };

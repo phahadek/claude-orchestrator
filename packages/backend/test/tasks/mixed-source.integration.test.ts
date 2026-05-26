@@ -129,14 +129,14 @@ describe('Mixed-source projects: fetchReadyTasks routes to the right backend', (
   it('fetch_tasks for the Notion project hits NotionTaskBackend (and uses milestone.source_id)', async () => {
     const tasks = await getTaskBackend('p-notion').fetchReadyTasks('m-notion');
     expect(tasks).toHaveLength(1);
-    expect(tasks[0].task.id).toBe('notion-task-for-notion-db-source');
+    expect(tasks[0].task.id).toBe('notion:notion-task-for-notion-db-source');
   });
 
   it('fetch_tasks for the YAML project hits LocalTaskBackend and reads from <projectDir>/tasks.yaml', async () => {
     const tasks = await getTaskBackend('p-yaml').fetchReadyTasks('m-yaml');
     const ids = tasks.map((t) => t.task.id);
-    expect(ids).toContain('yaml-ready');
-    expect(ids).toContain('yaml-done');
+    expect(ids).toContain('yaml:yaml-ready');
+    expect(ids).toContain('yaml:yaml-done');
   });
 
   it('the two backends do not bleed into each other', async () => {
@@ -145,8 +145,8 @@ describe('Mixed-source projects: fetchReadyTasks routes to the right backend', (
       getTaskBackend('p-yaml').fetchReadyTasks('m-yaml'),
     ]);
     expect(n.map((t) => t.task.id)).toEqual([
-      'notion-task-for-notion-db-source',
+      'notion:notion-task-for-notion-db-source',
     ]);
-    expect(y.map((t) => t.task.id).sort()).toEqual(['yaml-done', 'yaml-ready']);
+    expect(y.map((t) => t.task.id).sort()).toEqual(['yaml:yaml-done', 'yaml:yaml-ready']);
   });
 });

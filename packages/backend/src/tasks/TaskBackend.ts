@@ -3,6 +3,12 @@ import { ProjectService } from '../projects/ProjectService';
 import { NotionClient } from '../notion/NotionClient';
 import { NotionTaskBackend } from './NotionTaskBackend';
 import { LocalTaskBackend } from './LocalTaskBackend';
+import { JiraClient } from './JiraClient';
+import {
+  JiraTaskSourceProvider,
+  type JiraProjectConfig,
+} from './JiraTaskSourceProvider';
+import { JIRA_HOST, JIRA_TOKEN, JIRA_EMAIL } from '../config';
 
 /**
  * Per-project configuration that identifies where non-milestone tasks are sourced from.
@@ -81,7 +87,26 @@ export function getTaskBackend(projectId: string): TaskBackend {
   if (project.taskSource === 'yaml') {
     return new LocalTaskBackend(project.projectDir);
   }
+  if (project.taskSource === 'jira') {
+    return buildJiraBackend(project.taskSourceConfig);
+  }
   return getNotionBackend();
+}
+
+function buildJiraBackend(taskSourceConfigJson: string | null): JiraTaskSourceProvider {
+  let projectConfig: JiraProjectConfig;
+  try {
+    projectConfig = taskSourceConfigJson
+      ? (JSON.parse(taskSourceConfigJson) as JiraProjectConfig)
+      : { host: JIRA_HOST, project_key: '' };
+  } catch {
+    projectConfig = { host: JIRA_HOST, project_key: '' };
+  }
+  const host = projectConfig.host || JIRA_HOST;
+  const token = JIRA_TOKEN;
+  const email = JIRA_EMAIL || undefined;
+  const client = new JiraClient(host, token, email);
+  return new JiraTaskSourceProvider(client, { ...projectConfig, host });
 }
 
 /**
