@@ -22,6 +22,8 @@ export const VALID_EVENT_TYPES: ReadonlySet<string> = new Set([
   'queue-operation',
   'last-prompt',
   'attachment',
+  // Claude CLI rate limit events
+  'rate_limit_event',
 ]);
 
 /**
@@ -51,6 +53,8 @@ export function toEventType(raw: string): EventType {
       return 'system';
     case 'error':
       return 'error';
+    case 'rate_limit_event':
+      return 'rate_limit';
     default:
       return 'system';
   }

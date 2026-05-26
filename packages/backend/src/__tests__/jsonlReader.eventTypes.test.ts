@@ -175,6 +175,36 @@ describe('JsonlReader — parseFile new event types', () => {
     expect(metadata).toEqual({});
   });
 
+  it('rate_limit_event: stored as rate_limit event with full payload, no warning', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const rateLimitPayload = {
+      type: 'rate_limit_event',
+      rate_limit_info: {
+        status: 'allowed',
+        resetsAt: 1779757800,
+        rateLimitType: 'five_hour',
+        overageStatus: 'allowed',
+        overageResetsAt: 1779747000,
+        isUsingOverage: false,
+      },
+      uuid: 'rl-uuid-1',
+      session_id: 'sess-1',
+    };
+    const filePath = writeJsonl('rate-limit-test.jsonl', [rateLimitPayload]);
+
+    const reader = new JsonlReader(tmpDir);
+    const { events, metadata } = reader.parseFile(filePath);
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(metadata).toEqual({});
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('rate_limit');
+    const content = events[0].content as typeof rateLimitPayload;
+    expect(content.rate_limit_info).toEqual(rateLimitPayload.rate_limit_info);
+
+    warnSpy.mockRestore();
+  });
+
   it('unknown type: emits warning with truncated payload', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const longPayload = 'x'.repeat(600);
@@ -289,6 +319,44 @@ describe('JsonlReader — importAll with new event types', () => {
     // Only the 'user' event should be stored (as 'system')
     expect(events).toHaveLength(1);
     expect(events[0].event_type).toBe('system');
+  });
+
+  it('rate_limit_event stored with event_type rate_limit and full rate_limit_info payload', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sessionId = 'import-rate-limit-01';
+    const rateLimitInfo = {
+      status: 'allowed',
+      resetsAt: 1779757800,
+      rateLimitType: 'five_hour',
+      overageStatus: 'allowed',
+      overageResetsAt: 1779747000,
+      isUsingOverage: false,
+    };
+    writeJsonl(`${sessionId}.jsonl`, [
+      {
+        type: 'rate_limit_event',
+        rate_limit_info: rateLimitInfo,
+        uuid: 'rl-uuid-2',
+        session_id: sessionId,
+      },
+      { type: 'user', message: { role: 'user', content: 'hi' }, uuid: 'u1' },
+    ]);
+
+    const reader = new JsonlReader(tmpDir);
+    await reader.importAll();
+
+    const unknownWarnings = warnSpy.mock.calls.filter(([msg]) =>
+      String(msg).includes('unknown event type'),
+    );
+    expect(unknownWarnings).toHaveLength(0);
+
+    const events = getEventRows(sessionId);
+    const rlEvent = events.find((e) => e.event_type === 'rate_limit');
+    expect(rlEvent).toBeDefined();
+    const payload = JSON.parse(rlEvent!.payload) as { rate_limit_info: unknown };
+    expect(payload.rate_limit_info).toEqual(rateLimitInfo);
+
+    warnSpy.mockRestore();
   });
 
   it('no unknown event type warnings for the four new types', async () => {
