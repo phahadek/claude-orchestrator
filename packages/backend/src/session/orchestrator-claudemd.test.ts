@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { buildOrchestratorClaudeMd } from './orchestrator-claudemd';
+import { buildOrchestratorClaudeMd, buildReviewClaudeMd } from './orchestrator-claudemd';
 import { buildSessionContext, stripOrchestratorHeader } from './ContextBuilder';
 import { loadOrchestratorConfig } from './orchestrator-config';
 
@@ -480,5 +480,36 @@ describe('loadOrchestratorConfig', () => {
     const config = loadOrchestratorConfig(tmpDir);
     expect(config.verify).toEqual([]);
     expect(config.allowed_tools).toEqual([]);
+  });
+});
+
+describe('buildReviewClaudeMd', () => {
+  it('includes explicit instruction to skip manual verification items', () => {
+    const result = buildReviewClaudeMd('Fix the login bug');
+
+    expect(result).toContain('Manual verification items');
+    expect(result).toContain('Do NOT evaluate them');
+    expect(result).toContain('Do NOT fail the PR');
+    expect(result).toContain('manualItemsForHuman');
+  });
+
+  it('instructs reviewer not to pressure coding session over manual items', () => {
+    const result = buildReviewClaudeMd('Add feature X');
+
+    expect(result).toContain('Do NOT pressure the coding session');
+  });
+
+  it('contains task name in the output', () => {
+    const result = buildReviewClaudeMd('My special task');
+
+    expect(result).toContain('My special task');
+  });
+
+  it('retains the core reviewer identity and no-implementation rules', () => {
+    const result = buildReviewClaudeMd('Some task');
+
+    expect(result).toContain('PR review session');
+    expect(result).toContain('Do NOT implement code');
+    expect(result).toContain('Do NOT fetch Notion pages');
   });
 });

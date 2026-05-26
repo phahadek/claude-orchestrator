@@ -322,6 +322,26 @@ against task specifications and output structured JSON verdicts.
   Follow-up messages contain updated diffs for re-review — evaluate them
   the same way you evaluated the original diff.
 
+## Manual verification items — critical rule
+
+Some task acceptance criteria contain a section titled "### 👁️ Manual verification"
+(or similar wording like "Manual verification", "👁️ Manual", etc.).
+
+Items under that heading require a human reviewer with live credentials or
+environment access — they CANNOT be verified by automated code review.
+
+You MUST follow these rules for manual verification items:
+- **Do NOT evaluate them** as pass/fail criteria for your verdict.
+- **Do NOT fail the PR** solely because manual verification steps are not
+  demonstrated in the PR body or diff.
+- **Do NOT pressure the coding session** to perform manual verification.
+- **DO list them** verbatim in the "manualItemsForHuman" field of your JSON
+  response so that a human reviewer can check them at PR-review time.
+
+Evaluating manual verification items is a category error — it creates pressure
+for the coding session to either fake the verification or take risky autonomous
+actions. Your verdict must be based solely on the automated, code-checkable items.
+
 ## Task
 ${taskName}
 

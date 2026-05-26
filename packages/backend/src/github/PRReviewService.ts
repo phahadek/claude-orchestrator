@@ -65,6 +65,8 @@ export interface PRReviewResult {
   dimensions?: ReviewDimension[];
   summary: string;
   reviewedAt: string;
+  /** Manual-verification items extracted from the task spec — for human review, not AI evaluation. */
+  manualItemsForHuman?: string[];
 }
 
 export type WorkItem =
@@ -85,6 +87,15 @@ export type WorkItem =
  */
 const REVIEW_JSON_SCHEMA_BLOCK = `Respond ONLY with a JSON object — no preamble, no markdown fences.
 
+## Manual verification items — DO NOT evaluate
+
+The task spec may contain a section titled "### 👁️ Manual verification" (or similar).
+Items under that heading require a human reviewer — they CANNOT be verified by automated
+code review. You MUST:
+- Exclude them entirely from your pass/fail evaluation of the "Diff vs Acceptance Criteria" dimension.
+- Never fail the verdict solely because manual verification items are not demonstrated in the PR.
+- List them verbatim in the "manualItemsForHuman" array so downstream tooling can surface them to a human.
+
 Evaluate the PR across exactly these 5 dimensions and respond with this JSON schema:
 {
   "verdict": "approved" | "needs_changes" | "incomplete",
@@ -95,7 +106,8 @@ Evaluate the PR across exactly these 5 dimensions and respond with this JSON sch
     { "name": "Changed files vs Files/paths affected list",   "passed": bool, "notes": "..." },
     { "name": "${SIZE_DIMENSION_NAME}",                          "passed": bool, "notes": "..." }
   ],
-  "summary": "2–4 sentence overall assessment"
+  "summary": "2–4 sentence overall assessment",
+  "manualItemsForHuman": ["verbatim item text", ...]
 }
 verdict rules: "approved" = all 5 passed. "needs_changes" = 1–4 passed. "incomplete" = 0 passed.
 
@@ -727,6 +739,9 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
               dimensions: parsed.dimensions,
               summary: parsed.summary,
               reviewedAt: new Date().toISOString(),
+              ...(parsed.manualItemsForHuman
+                ? { manualItemsForHuman: parsed.manualItemsForHuman }
+                : {}),
             };
           }
         }
@@ -742,6 +757,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     verdict: PRReviewResult['verdict'];
     dimensions: ReviewDimension[];
     summary: string;
+    manualItemsForHuman?: string[];
   } | null {
     const candidate = this.extractJsonCandidate(text.trim());
     if (!candidate) {
@@ -754,10 +770,18 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         Array.isArray(parsed.dimensions) &&
         typeof parsed.summary === 'string'
       ) {
+        const manualItems = Array.isArray(parsed.manualItemsForHuman)
+          ? (parsed.manualItemsForHuman as string[]).filter(
+              (item) => typeof item === 'string',
+            )
+          : undefined;
         return {
           verdict: parsed.verdict as PRReviewResult['verdict'],
           dimensions: parsed.dimensions as ReviewDimension[],
           summary: parsed.summary,
+          ...(manualItems && manualItems.length > 0
+            ? { manualItemsForHuman: manualItems }
+            : {}),
         };
       }
     } catch {
@@ -975,6 +999,9 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         dimensions: parsed.dimensions,
         summary: parsed.summary,
         reviewedAt: new Date().toISOString(),
+        ...(parsed.manualItemsForHuman
+          ? { manualItemsForHuman: parsed.manualItemsForHuman }
+          : {}),
       };
     }
 
