@@ -150,7 +150,9 @@ describe('JsonlReader.parseFile — secret scrubbing', () => {
         content: {
           id: 'tu_2',
           name: 'Bash',
-          input: { command: 'curl -H "Authorization: Bearer ntn_notiontoken12345"' },
+          input: {
+            command: 'curl -H "Authorization: Bearer ntn_notiontoken12345"',
+          },
         },
       },
     ]);

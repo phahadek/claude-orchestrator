@@ -1,9 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import {
-  getSecret,
-  setSecretProvider,
-  resetSecretProvider,
-} from './secrets';
+import { getSecret, setSecretProvider, resetSecretProvider } from './secrets';
 
 afterEach(() => {
   resetSecretProvider();
@@ -32,7 +28,9 @@ describe('getSecret', () => {
   });
 
   it('uses a custom provider when one is installed', () => {
-    setSecretProvider((name) => (name === 'MY_SECRET' ? 'vault-value' : undefined));
+    setSecretProvider((name) =>
+      name === 'MY_SECRET' ? 'vault-value' : undefined,
+    );
     expect(getSecret('MY_SECRET')).toBe('vault-value');
     expect(getSecret('OTHER')).toBeUndefined();
   });

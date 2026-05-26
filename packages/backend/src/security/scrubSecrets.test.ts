@@ -38,15 +38,15 @@ describe('scrubSecrets', () => {
     };
     const result = scrubSecrets(input);
     expect((result.level1 as { key: string }).key).toBe('[REDACTED]');
-    expect(
-      (result.level1.level2 as { arr: string[] }).arr[0],
-    ).toBe('[REDACTED]');
-    expect(
-      (result.level1.level2 as { arr: string[] }).arr[1],
-    ).toBe('safe-value');
-    expect(
-      (result.level1.level2.nested as { token: string }).token,
-    ).toBe('[REDACTED]');
+    expect((result.level1.level2 as { arr: string[] }).arr[0]).toBe(
+      '[REDACTED]',
+    );
+    expect((result.level1.level2 as { arr: string[] }).arr[1]).toBe(
+      'safe-value',
+    );
+    expect((result.level1.level2.nested as { token: string }).token).toBe(
+      '[REDACTED]',
+    );
   });
 
   it('leaves non-secret strings unchanged', () => {
@@ -67,8 +67,7 @@ describe('scrubSecrets', () => {
   });
 
   it('redacts multiple secrets in a single string', () => {
-    const s =
-      'a=sk-ant-api03-first1234567890 b=ghp_second1234567890';
+    const s = 'a=sk-ant-api03-first1234567890 b=ghp_second1234567890';
     expect(scrubSecrets(s)).toBe('a=[REDACTED] b=[REDACTED]');
   });
 });
