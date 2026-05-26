@@ -373,9 +373,7 @@ function normalizePath(p: string): string {
   // Git-Bash /c/foo → C:\foo
   const gitBashMatch = /^\/([a-zA-Z])\//i.exec(p);
   if (gitBashMatch) {
-    return path.normalize(
-      `${gitBashMatch[1].toUpperCase()}:\\${p.slice(3)}`,
-    );
+    return path.normalize(`${gitBashMatch[1].toUpperCase()}:\\${p.slice(3)}`);
   }
   return path.normalize(p);
 }

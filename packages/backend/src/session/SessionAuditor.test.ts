@@ -28,10 +28,7 @@ function makeSession(
   };
 }
 
-function makeToolUseEvent(
-  toolName: string,
-  input: Record<string, unknown>,
-) {
+function makeToolUseEvent(toolName: string, input: Record<string, unknown>) {
   return {
     id: 1,
     session_id: 'test-session-id',
@@ -326,7 +323,8 @@ describe('SessionAuditor', () => {
 // ── auditWorktreeEscape ────────────────────────────────────────────────────────
 
 describe('auditWorktreeEscape', () => {
-  const WORKTREE = 'C:\\Users\\phadek\\IdeaProjects\\project\\.claude\\worktrees\\abc';
+  const WORKTREE =
+    'C:\\Users\\phadek\\IdeaProjects\\project\\.claude\\worktrees\\abc';
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -341,8 +339,15 @@ describe('auditWorktreeEscape', () => {
         content: '',
       }),
     ]);
-    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
-    const violations = await auditor.auditWorktreeEscape('test-session-id', WORKTREE);
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
+    const violations = await auditor.auditWorktreeEscape(
+      'test-session-id',
+      WORKTREE,
+    );
     expect(violations).toHaveLength(0);
   });
 
@@ -351,8 +356,15 @@ describe('auditWorktreeEscape', () => {
     vi.mocked(queries.getEventsBySession).mockReturnValue([
       makeToolUseEvent('Write', { file_path: outsidePath, content: '' }),
     ]);
-    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
-    const violations = await auditor.auditWorktreeEscape('test-session-id', WORKTREE);
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
+    const violations = await auditor.auditWorktreeEscape(
+      'test-session-id',
+      WORKTREE,
+    );
     expect(violations).toHaveLength(1);
     const v = violations[0] as WorktreeEscapeViolation;
     expect(v.type).toBe('worktree_escape');
@@ -366,8 +378,15 @@ describe('auditWorktreeEscape', () => {
     vi.mocked(queries.getEventsBySession).mockReturnValue([
       makeToolUseEvent('Bash', { command: `uv run script.py ${outsidePath}` }),
     ]);
-    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
-    const violations = await auditor.auditWorktreeEscape('test-session-id', WORKTREE);
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
+    const violations = await auditor.auditWorktreeEscape(
+      'test-session-id',
+      WORKTREE,
+    );
     expect(violations).toHaveLength(1);
     expect(violations[0].type).toBe('worktree_escape');
     expect(violations[0].tool).toBe('Bash');
@@ -377,8 +396,15 @@ describe('auditWorktreeEscape', () => {
     vi.mocked(queries.getEventsBySession).mockReturnValue([
       makeToolUseEvent('Bash', { command: 'npx tsc --noEmit' }),
     ]);
-    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
-    const violations = await auditor.auditWorktreeEscape('test-session-id', WORKTREE);
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
+    const violations = await auditor.auditWorktreeEscape(
+      'test-session-id',
+      WORKTREE,
+    );
     expect(violations).toHaveLength(0);
   });
 
@@ -390,8 +416,15 @@ describe('auditWorktreeEscape', () => {
         content: '',
       }),
     ]);
-    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
-    const violations = await auditor.auditWorktreeEscape('test-session-id', WORKTREE);
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
+    const violations = await auditor.auditWorktreeEscape(
+      'test-session-id',
+      WORKTREE,
+    );
     expect(violations).toHaveLength(1);
     expect(violations[0].type).toBe('worktree_escape');
     // escapedTo should be the Windows-normalized form
@@ -405,8 +438,15 @@ describe('auditWorktreeEscape', () => {
         content: '',
       }),
     ]);
-    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
-    const violations = await auditor.auditWorktreeEscape('test-session-id', WORKTREE);
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
+    const violations = await auditor.auditWorktreeEscape(
+      'test-session-id',
+      WORKTREE,
+    );
     expect(violations).toHaveLength(0);
   });
 
@@ -415,7 +455,11 @@ describe('auditWorktreeEscape', () => {
     vi.mocked(queries.getEventsBySession).mockReturnValue([
       makeToolUseEvent('Write', { file_path: outsidePath, content: '' }),
     ]);
-    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
     const session = makeSession({
       prUrl: undefined,
       worktreePath: WORKTREE,
@@ -452,8 +496,15 @@ describe('auditWorktreeEscape', () => {
         message_id: null,
       },
     ]);
-    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
-    const violations = await auditor.auditWorktreeEscape('test-session-id', WORKTREE);
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
+    const violations = await auditor.auditWorktreeEscape(
+      'test-session-id',
+      WORKTREE,
+    );
     expect(violations).toHaveLength(1);
     expect(violations[0].type).toBe('worktree_escape');
   });
