@@ -19,6 +19,8 @@ import type {
   NewMilestoneRow,
   LocalBranchRow,
   NewLocalBranchRow,
+  DeviceRow,
+  NewDeviceRow,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -1692,4 +1694,84 @@ export function markLocalBranchMerged(
   db.prepare(
     `UPDATE local_branches SET status = 'merged', merge_commit_sha = ?, updated_at = ? WHERE id = ?`,
   ).run(commitSha ?? null, now, id);
+}
+
+// ─── devices ────────────────────────────────────────────────────────────────
+
+const stmtInsertDevice = db.prepare<NewDeviceRow>(`
+  INSERT INTO devices (id, name, user_agent, last_ip, last_seen, enrolled_at, token, revoked)
+  VALUES (@id, @name, @user_agent, @last_ip, @last_seen, @enrolled_at, @token, @revoked)
+`);
+
+const stmtGetDeviceByToken = db.prepare<{ token: string }>(`
+  SELECT * FROM devices WHERE token = @token AND revoked = 0
+`);
+
+const stmtGetDeviceById = db.prepare<{ id: string }>(`
+  SELECT * FROM devices WHERE id = @id
+`);
+
+const stmtListDevices = db.prepare(`
+  SELECT * FROM devices ORDER BY enrolled_at DESC
+`);
+
+const stmtUpdateDeviceName = db.prepare<{ id: string; name: string }>(`
+  UPDATE devices SET name = @name WHERE id = @id
+`);
+
+const stmtRevokeDevice = db.prepare<{ id: string }>(`
+  UPDATE devices SET revoked = 1 WHERE id = @id
+`);
+
+const stmtUpdateDeviceLastSeen = db.prepare<{
+  id: string;
+  last_ip: string | null;
+  last_seen: number;
+}>(`
+  UPDATE devices SET last_ip = @last_ip, last_seen = @last_seen WHERE id = @id
+`);
+
+const stmtCountActiveDevices = db.prepare(`
+  SELECT COUNT(*) as count FROM devices WHERE revoked = 0
+`);
+
+export function insertDevice(device: NewDeviceRow): void {
+  stmtInsertDevice.run({
+    last_seen: null,
+    revoked: 0,
+    ...device,
+  });
+}
+
+export function getDeviceByToken(token: string): DeviceRow | null {
+  return (stmtGetDeviceByToken.get({ token }) as DeviceRow | undefined) ?? null;
+}
+
+export function getDeviceById(id: string): DeviceRow | null {
+  return (stmtGetDeviceById.get({ id }) as DeviceRow | undefined) ?? null;
+}
+
+export function listDevices(): DeviceRow[] {
+  return stmtListDevices.all() as DeviceRow[];
+}
+
+export function updateDeviceName(id: string, name: string): void {
+  stmtUpdateDeviceName.run({ id, name });
+}
+
+export function revokeDevice(id: string): void {
+  stmtRevokeDevice.run({ id });
+}
+
+export function updateDeviceLastSeen(
+  id: string,
+  lastIp: string | null,
+  lastSeen: number,
+): void {
+  stmtUpdateDeviceLastSeen.run({ id, last_ip: lastIp, last_seen: lastSeen });
+}
+
+export function getActiveDeviceCount(): number {
+  const row = stmtCountActiveDevices.get() as { count: number };
+  return row.count;
 }

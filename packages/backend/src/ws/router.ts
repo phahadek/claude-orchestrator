@@ -3,6 +3,7 @@ import { ClientMessage } from './types';
 import { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { getProjectById } from '../config';
+import { approveEnrollment } from '../auth/Enrollment';
 
 export function handleMessage(
   ws: WebSocket,
@@ -125,6 +126,26 @@ export function handleMessage(
         .catch((e) =>
           ws.send(JSON.stringify({ type: 'error', message: String(e) })),
         );
+      break;
+    }
+    case 'enrollment_approve': {
+      const result = approveEnrollment(msg.code);
+      if (!result) {
+        ws.send(
+          JSON.stringify({
+            type: 'error',
+            message: 'invalid or expired enrollment code',
+          }),
+        );
+        break;
+      }
+      ws.send(
+        JSON.stringify({
+          type: 'enrollment_approved',
+          code: msg.code,
+          deviceId: result.deviceId,
+        }),
+      );
       break;
     }
     default: {

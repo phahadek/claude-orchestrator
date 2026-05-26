@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { EnrollmentFlow } from './auth/EnrollmentFlow';
 import type { ConnectionState } from './hooks/useWebSocket';
 import { useSessionStore } from './hooks/useSessionStore';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -71,6 +72,14 @@ function resolveActiveBoardId(project: ProjectConfig): string {
 }
 
 export default function App() {
+  const [needsEnrollment, setNeedsEnrollment] = useState(false);
+
+  useEffect(() => {
+    const handler = () => setNeedsEnrollment(true);
+    window.addEventListener('device-unauthorized', handler);
+    return () => window.removeEventListener('device-unauthorized', handler);
+  }, []);
+
   const {
     sessions,
     tasks,
@@ -1163,6 +1172,15 @@ export default function App() {
         >
           Reconnected
         </div>
+      )}
+
+      {needsEnrollment && (
+        <EnrollmentFlow
+          onEnrolled={() => {
+            setNeedsEnrollment(false);
+            window.location.reload();
+          }}
+        />
       )}
     </div>
   );

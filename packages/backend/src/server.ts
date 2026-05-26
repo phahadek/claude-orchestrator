@@ -22,6 +22,12 @@ import { createPrsRouter, setPRBroadcast } from './routes/prs';
 import { createTasksRouter, setTaskBroadcast } from './routes/tasks';
 import { analyticsRouter } from './routes/analytics';
 import { projectsRouter, setAutoMerger } from './routes/projects';
+import { requireDeviceAuth, validateWsToken } from './auth/DeviceAuth';
+import {
+  createEnrollmentRouter,
+  setEnrollmentBroadcast,
+} from './auth/Enrollment';
+import { getActiveDeviceCount } from './db/queries';
 import { importProjectsFromEnv } from './projects/projectImport';
 import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
@@ -94,6 +100,9 @@ const PORT = parseInt(process.env.PORT ?? '3000');
 
 const app = express();
 app.use(express.json());
+// Enrollment endpoints are public — mount before the device auth middleware
+app.use('/api/enrollment', createEnrollmentRouter());
+app.use(requireDeviceAuth);
 app.use('/api/permission-events', permissionEventsRouter);
 app.use('/api/permission-denials', permissionDenialsRouter);
 app.use('/api/settings', settingsRouter);
@@ -154,6 +163,8 @@ setBroadcast(broadcast);
 setPRBroadcast(broadcast);
 // Wire broadcast into the tasks route (for task_updated WS messages)
 setTaskBroadcast(broadcast);
+// Wire broadcast into enrollment (for enrollment_request events)
+setEnrollmentBroadcast(broadcast);
 
 // Broadcast all session events to every connected WS client
 sessionManager.on('message', broadcast);
@@ -374,7 +385,21 @@ sessionManager.on(
   },
 );
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+  const urlStr = req.url ?? '/ws';
+  const url = new URL(urlStr, `http://${req.headers.host ?? 'localhost'}`);
+  const token = url.searchParams.get('token');
+  const device = validateWsToken(token);
+
+  if (!device) {
+    // Bootstrap: allow connection when no devices are enrolled yet
+    const deviceCount = getActiveDeviceCount();
+    if (deviceCount > 0) {
+      ws.close(4001, 'Unauthorized');
+      return;
+    }
+  }
+
   console.log('[WS] client connected');
 
   // Send existing active (non-archived) sessions to the new client so the UI populates on load.
@@ -425,7 +450,7 @@ jsonlReader
 
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`[server] listening on port ${PORT}`);
-      console.log('[server] LAN access enabled — no authentication');
+      console.log('[server] LAN access enabled — device auth required');
     });
   })
   .catch((err: unknown) => {
