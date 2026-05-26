@@ -1,8 +1,4 @@
-import type {
-  GitHubClient,
-  PRReviewSummary,
-  PRCommentSummary,
-} from './GitHubClient';
+import type { GitHubClient } from './GitHubClient';
 import type { SessionManager } from '../session/SessionManager';
 import {
   getAllOpenPRs,
