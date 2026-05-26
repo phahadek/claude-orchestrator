@@ -184,7 +184,8 @@ export interface RuntimeSettings {
   ci_poll_max_minutes: number;
   /** Max review iterations before escalating to manual. */
   max_review_iterations: number;
-  /** When true, projects with no explicit milestone_branching default to two_tier mode. */
+  /** When true, projects with no explicit milestone_branching default to two_tier mode.
+   *  Also blocks non-conforming PRs rather than warning. */
   corporate_mode_enabled: boolean;
 }
 

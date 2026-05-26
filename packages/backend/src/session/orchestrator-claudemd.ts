@@ -206,6 +206,20 @@ ${
 
 ---
 
+## Commit Attribution
+
+Every commit **must** include the following trailer (replace \`<model>\` and \`<session-id>\` with your actual model ID and session ID):
+
+\`\`\`
+AI-Authored-By: <model> (session: <session-id>)
+\`\`\`
+
+Example: \`AI-Authored-By: claude-sonnet-4-6 (session: f98ff4ec)\`
+
+The backend verifies this trailer server-side. In corporate mode, missing trailers pause the task.
+
+---
+
 ${(() => {
   const verifyItems = verify && verify.length > 0 ? verify : null;
   const verifySteps = verifyItems

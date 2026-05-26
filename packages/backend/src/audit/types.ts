@@ -3,7 +3,10 @@ export type EventType =
   | 'commit'
   | 'pr_opened'
   | 'pr_merged'
-  | 'status_updated';
+  | 'status_updated'
+  | 'pr_body_invalid'
+  | 'pr_body_invalid_warning'
+  | 'attribution_missing';
 
 export type ActorType = 'ai' | 'human' | 'system';
 

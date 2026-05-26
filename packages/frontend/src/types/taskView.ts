@@ -17,7 +17,9 @@ export type PauseReason =
   | 'api_overloaded'
   | 'merge_conflict'
   | 'awaiting_human_approval'
-  | 'human_changes_requested';
+  | 'human_changes_requested'
+  | 'pr_body_invalid'
+  | 'attribution_missing';
 
 export interface TaskView {
   taskId: string;
