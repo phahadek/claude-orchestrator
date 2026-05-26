@@ -2,6 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
+import { recordEvent } from '../audit/AuditLog';
 import { AgentSession, parseNotionPageId } from './AgentSession';
 import { buildSessionContext } from './ContextBuilder';
 import { buildReviewClaudeMd } from './orchestrator-claudemd';
@@ -487,6 +488,15 @@ export class SessionManager extends EventEmitter {
       worktree_path: worktreePath,
       session_type: sessionType,
       task_name: taskName ?? null,
+    });
+
+    recordEvent({
+      event_type: 'session_launched',
+      actor_type: 'ai',
+      actor_id: sessionId,
+      project_id: projectId || null,
+      task_id: notionTaskId || null,
+      payload: { session_type: sessionType, task_url: taskUrl },
     });
 
     // Launch async — session card is already visible to the frontend via the broadcast below.

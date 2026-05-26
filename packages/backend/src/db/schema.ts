@@ -111,6 +111,17 @@ export function runMigrations(): void {
       updated_at    TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_local_branches_project_status ON local_branches(project_id, status);
+
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts         INTEGER NOT NULL,
+      event_type TEXT    NOT NULL,
+      actor_type TEXT    NOT NULL,
+      actor_id   TEXT,
+      project_id TEXT,
+      task_id    TEXT,
+      payload    TEXT    NOT NULL
+    );
   `);
 
   // Idempotent column additions for existing databases
