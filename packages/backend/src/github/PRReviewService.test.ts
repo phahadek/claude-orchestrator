@@ -2725,3 +2725,114 @@ describe('PRReviewService.reviewPR() — transient fetch retry', () => {
     expect(noopSleep).not.toHaveBeenCalled();
   });
 });
+
+// ── Manual verification items ─────────────────────────────────────────────────
+
+describe('PRReviewService — manual verification items excluded from verdict', () => {
+  function makeService() {
+    return new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+  }
+
+  it('automated items passing + manual items unfulfilled → verdict approved, not needs_changes', () => {
+    const service = makeService();
+
+    // Simulates a reviewer that correctly sets all automated dims to passed:true
+    // and surfaces manual items in manualItemsForHuman rather than failing the verdict.
+    const payload = {
+      verdict: 'approved',
+      dimensions: [
+        {
+          name: 'Title and description vs task Summary',
+          passed: true,
+          notes: 'ok',
+        },
+        { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
+        {
+          name: 'Diff vs Acceptance Criteria',
+          passed: true,
+          notes: 'Automated criteria met. Manual verification items excluded.',
+        },
+        {
+          name: 'Changed files vs Files/paths affected list',
+          passed: true,
+          notes: 'ok',
+        },
+        { name: 'Size proportionality', passed: true, notes: 'ok' },
+      ],
+      summary:
+        'All automated criteria pass. Manual items deferred to human reviewer.',
+      manualItemsForHuman: [
+        'Verify live credentials work end-to-end',
+        'Check dashboard renders correctly in production',
+      ],
+    };
+
+    const events = [makeAssistantEvent(JSON.stringify(payload))];
+    const result = service.parseReviewResult(events, 42, 'owner/repo');
+
+    expect(result.verdict).toBe('approved');
+    expect(result.manualItemsForHuman).toEqual([
+      'Verify live credentials work end-to-end',
+      'Check dashboard renders correctly in production',
+    ]);
+  });
+
+  it('surfaces manualItemsForHuman field for downstream UI consumption', () => {
+    const service = makeService();
+
+    const payload = {
+      verdict: 'needs_changes',
+      dimensions: [
+        {
+          name: 'Diff vs Acceptance Criteria',
+          passed: false,
+          notes: 'Missing unit test.',
+        },
+      ],
+      summary: 'Code changes needed.',
+      manualItemsForHuman: ['Run integration test suite against staging'],
+    };
+
+    const events = [makeAssistantEvent(JSON.stringify(payload))];
+    const result = service.parseReviewResult(events, 42, 'owner/repo');
+
+    expect(result.manualItemsForHuman).toEqual([
+      'Run integration test suite against staging',
+    ]);
+  });
+
+  it('manualItemsForHuman is omitted when the reviewer does not include it', () => {
+    const service = makeService();
+
+    const payload = {
+      verdict: 'approved',
+      dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+      summary: 'All good.',
+    };
+
+    const events = [makeAssistantEvent(JSON.stringify(payload))];
+    const result = service.parseReviewResult(events, 42, 'owner/repo');
+
+    expect(result.manualItemsForHuman).toBeUndefined();
+  });
+
+  it('REVIEW_JSON_SCHEMA_BLOCK prompt instructs reviewer to skip manual verification items', () => {
+    const service = makeService();
+    const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
+
+    expect(prompt).toContain('Manual verification items');
+    expect(prompt).toContain(
+      'Exclude them entirely from your pass/fail evaluation',
+    );
+    expect(prompt).toContain(
+      'Never fail the verdict solely because manual verification',
+    );
+    expect(prompt).toContain('manualItemsForHuman');
+  });
+});
