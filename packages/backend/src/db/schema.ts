@@ -328,4 +328,11 @@ export function runMigrations(): void {
     SET task_id = 'notion:' || task_id
     WHERE task_id NOT LIKE '%:%';
   `);
+  try {
+    db.exec(
+      `ALTER TABLE projects ADD COLUMN data_residency_confirmed INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
 }

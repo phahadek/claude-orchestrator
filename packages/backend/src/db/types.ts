@@ -165,6 +165,7 @@ export interface ProjectRow {
   non_milestone_source_config: string | null;
   /** JSON blob: { host, project_key, default_jql, status_mapping, ... } */
   task_source_config: string | null;
+  data_residency_confirmed: number; // 0 | 1 (SQLite boolean)
   created_at: number;
   updated_at: number;
 }
@@ -176,6 +177,7 @@ export type NewProjectRow = Omit<
   | 'auto_launch_enabled'
   | 'auto_launch_milestone_id'
   | 'auto_merge_enabled'
+  | 'data_residency_confirmed'
   | 'git_mode'
   | 'milestone_branching'
   | 'non_milestone_source_config'
@@ -184,6 +186,7 @@ export type NewProjectRow = Omit<
   auto_launch_enabled?: number;
   auto_launch_milestone_id?: string | null;
   auto_merge_enabled?: number;
+  data_residency_confirmed?: number;
   git_mode?: GitMode;
   milestone_branching?: 'two_tier' | 'flat' | null;
   non_milestone_source_config?: string | null;

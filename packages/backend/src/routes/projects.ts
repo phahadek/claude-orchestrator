@@ -158,6 +158,27 @@ projectsRouter.patch('/projects/:id', (req: Request, res: Response) => {
     return;
   }
 
+  // dataResidencyConfirmed triggers audit logging via the dedicated service method.
+  if ('dataResidencyConfirmed' in body) {
+    const updated = ProjectService.setDataResidencyConfirmed(
+      id,
+      body.dataResidencyConfirmed === true,
+    );
+    if (!updated) {
+      res.status(404).json({ error: `Project '${id}' not found` });
+      return;
+    }
+    // Apply any remaining patch fields on top.
+    delete (patch as Record<string, unknown>).data_residency_confirmed;
+    if (Object.keys(patch).length === 0) {
+      res.json(updated);
+      return;
+    }
+    const final = ProjectService.update(id, patch);
+    res.json(final ?? updated);
+    return;
+  }
+
   const updated = ProjectService.update(id, patch);
   if (!updated) {
     res.status(404).json({ error: `Project '${id}' not found` });

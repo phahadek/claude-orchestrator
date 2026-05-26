@@ -52,6 +52,7 @@ export interface Project {
   autoLaunchEnabled: boolean;
   autoLaunchMilestoneId: string | null;
   autoMergeEnabled: boolean;
+  dataResidencyConfirmed: boolean;
   createdAt: number;
   updatedAt: number;
   milestones: ProjectMilestone[];
@@ -80,6 +81,7 @@ export interface UpdateProjectInput {
   autoLaunchEnabled?: boolean;
   autoLaunchMilestoneId?: string | null;
   autoMergeEnabled?: boolean;
+  dataResidencyConfirmed?: boolean;
 }
 
 export interface CreateMilestoneInput {
