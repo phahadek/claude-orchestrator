@@ -141,7 +141,7 @@ export class AgentSession extends EventEmitter {
      * and the backend is resolved per-call via `getTaskBackend(projectId)`.
      */
     private readonly taskBackendOverride: TaskBackend | undefined,
-    private readonly worktreePath: string,
+    public readonly worktreePath: string,
     public readonly taskId: string,
     private readonly resumeSessionId?: string,
     private readonly customPrompt?: string,

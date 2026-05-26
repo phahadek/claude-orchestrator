@@ -1,8 +1,10 @@
+import path from 'path';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { parseSection } from '../notion/NotionClient';
 import type { GitHubClient } from '../github/GitHubClient';
-import { getPRByNotionTaskId } from '../db/queries';
+import { getPRByNotionTaskId, getEventsBySession } from '../db/queries';
+import type { WorktreeEscapeViolation, SessionEvent } from '../db/types';
 
 // ── Public interfaces ────────────────────────────────────────────────────────
 
@@ -11,7 +13,7 @@ export interface SessionAudit {
   prOpened: boolean;
   prTargetsBranch: string | null;
   taskStatusAfter: string | null;
-  violations: string[];
+  violations: (string | WorktreeEscapeViolation)[];
   specMismatch: string | null;
   auditedAt: string;
 }
@@ -27,6 +29,7 @@ export interface AuditableSession {
   taskId: string;
   prUrl: string | undefined;
   sessionType: string;
+  worktreePath: string | null;
 }
 
 // ── SessionAuditor ───────────────────────────────────────────────────────────
@@ -59,7 +62,7 @@ export class SessionAuditor {
     session: AuditableSession,
     exitCode: number | null,
   ): Promise<SessionAudit> {
-    const violations: string[] = [];
+    const violations: (string | WorktreeEscapeViolation)[] = [];
     let prTargetsBranch: string | null = null;
     let specMismatch: string | null = null;
 
@@ -130,6 +133,18 @@ export class SessionAuditor {
       }
     }
 
+    if (session.worktreePath) {
+      try {
+        const escapes = await this.auditWorktreeEscape(
+          session.sessionId,
+          session.worktreePath,
+        );
+        violations.push(...escapes);
+      } catch (err) {
+        console.warn(`[SessionAuditor] auditWorktreeEscape failed: ${err}`);
+      }
+    }
+
     const audit: SessionAudit = {
       sessionId: session.sessionId,
       prOpened,
@@ -145,6 +160,45 @@ export class SessionAuditor {
     }
 
     return audit;
+  }
+
+  /**
+   * Scan session_events for tool calls that wrote to paths outside the worktree.
+   * Checks Write/Edit tool file_path inputs and Bash command absolute paths.
+   */
+  async auditWorktreeEscape(
+    sessionId: string,
+    worktreePath: string,
+  ): Promise<WorktreeEscapeViolation[]> {
+    const events = getEventsBySession(sessionId);
+    const violations: WorktreeEscapeViolation[] = [];
+    const normalizedWorktree = normalizePath(worktreePath);
+    const worktreePrefix = normalizedWorktree.endsWith(path.sep)
+      ? normalizedWorktree
+      : normalizedWorktree + path.sep;
+
+    for (const event of events) {
+      const blocks = extractToolUseBlocks(event);
+      for (const block of blocks) {
+        const paths = extractPathsFromBlock(block);
+        for (const p of paths) {
+          const resolved = normalizePath(p);
+          if (
+            resolved !== normalizedWorktree &&
+            !resolved.startsWith(worktreePrefix)
+          ) {
+            violations.push({
+              type: 'worktree_escape',
+              tool: block.name,
+              path: p,
+              escapedTo: resolved,
+            });
+          }
+        }
+      }
+    }
+
+    return violations;
   }
 
   /**
@@ -218,13 +272,18 @@ export class SessionAuditor {
 
   private routeFailuresToSession(
     sessionId: string,
-    violations: string[],
+    violations: (string | WorktreeEscapeViolation)[],
   ): void {
     if (!this.sessionManager) return;
+    const lines = violations.map((v) =>
+      typeof v === 'string'
+        ? `❌ ${v}`
+        : `❌ worktree_escape: ${v.tool} wrote to ${v.path}`,
+    );
     const message = [
       'Audit findings for your PR:',
       '',
-      ...violations.map((v) => `❌ ${v}`),
+      ...lines,
       '',
       'Please address these issues and push a fix.',
     ].join('\n');
@@ -235,4 +294,86 @@ export class SessionAuditor {
       // Session may have already exited — violations still stored in SQLite
     }
   }
+}
+
+// ── Private helpers ──────────────────────────────────────────────────────────
+
+interface ToolUseBlock {
+  name: string;
+  input: Record<string, unknown>;
+}
+
+/** Extract all tool_use blocks from a session event payload. */
+function extractToolUseBlocks(event: SessionEvent): ToolUseBlock[] {
+  const blocks: ToolUseBlock[] = [];
+  let payload: Record<string, unknown>;
+  try {
+    payload = JSON.parse(event.payload) as Record<string, unknown>;
+  } catch {
+    return blocks;
+  }
+
+  if (event.event_type === 'tool_use') {
+    const name = payload.name as string | undefined;
+    const input = (payload.input ?? {}) as Record<string, unknown>;
+    if (name) blocks.push({ name, input });
+  } else if (event.event_type === 'text') {
+    const message = payload.message as Record<string, unknown> | undefined;
+    const content = message?.content as
+      | Array<Record<string, unknown>>
+      | undefined;
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block.type === 'tool_use' && typeof block.name === 'string') {
+          blocks.push({
+            name: block.name,
+            input: (block.input ?? {}) as Record<string, unknown>,
+          });
+        }
+      }
+    }
+  }
+
+  return blocks;
+}
+
+/** Extract absolute file paths that should be checked for worktree escape. */
+function extractPathsFromBlock(block: ToolUseBlock): string[] {
+  const { name, input } = block;
+  if (name === 'Write' || name === 'Edit') {
+    const filePath = input.file_path as string | undefined;
+    return filePath ? [filePath] : [];
+  }
+  if (name === 'Bash') {
+    const command = input.command as string | undefined;
+    return command ? extractAbsolutePathsFromCommand(command) : [];
+  }
+  return [];
+}
+
+/** Extract absolute paths embedded in a shell command string. */
+function extractAbsolutePathsFromCommand(command: string): string[] {
+  const paths: string[] = [];
+  // Windows absolute: C:\... or C:/...
+  for (const match of command.matchAll(/[A-Za-z]:[/\\][^\s"'`;\n]*/g)) {
+    paths.push(match[0]);
+  }
+  // Git-Bash absolute: /c/... (single lowercase letter drive)
+  for (const match of command.matchAll(/\/[a-zA-Z]\/[^\s"'`;\n]*/g)) {
+    paths.push(match[0]);
+  }
+  return paths;
+}
+
+/**
+ * Normalize a path to a canonical absolute form for comparison.
+ * Converts Git-Bash /c/... paths to Windows C:\... on Windows hosts.
+ */
+function normalizePath(p: string): string {
+  // Git-Bash /c/foo → C:\foo
+  const gitBashMatch = /^\/([a-zA-Z])\//i.exec(p);
+  if (gitBashMatch) {
+    return path.normalize(`${gitBashMatch[1].toUpperCase()}:\\${p.slice(3)}`);
+  }
+  return path.normalize(p);
 }

@@ -210,7 +210,7 @@ export type ServerMessage =
       sessionId: string;
       prOpened: boolean;
       prTargetsBranch: string | null;
-      violations: string[];
+      violations: (string | import('../db/types').WorktreeEscapeViolation)[];
       specMismatch: string | null;
       auditedAt: string;
     }

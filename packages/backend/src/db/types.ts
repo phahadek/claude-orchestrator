@@ -229,6 +229,18 @@ export type NewLocalBranchRow = Omit<
   merge_commit_sha?: string | null;
 };
 
+// ─── session_audits violations ───────────────────────────────────────────────
+
+export interface WorktreeEscapeViolation {
+  type: 'worktree_escape';
+  tool: string;
+  path: string;
+  escapedTo: string;
+}
+
+/** Discriminated union of structured violation types stored in session_audits. */
+export type AuditViolation = WorktreeEscapeViolation;
+
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
 /**
