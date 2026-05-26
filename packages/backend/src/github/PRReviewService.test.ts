@@ -2765,7 +2765,8 @@ describe('PRReviewService — manual verification items excluded from verdict', 
         },
         { name: 'Size proportionality', passed: true, notes: 'ok' },
       ],
-      summary: 'All automated criteria pass. Manual items deferred to human reviewer.',
+      summary:
+        'All automated criteria pass. Manual items deferred to human reviewer.',
       manualItemsForHuman: [
         'Verify live credentials work end-to-end',
         'Check dashboard renders correctly in production',
@@ -2811,9 +2812,7 @@ describe('PRReviewService — manual verification items excluded from verdict', 
 
     const payload = {
       verdict: 'approved',
-      dimensions: [
-        { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
-      ],
+      dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
       summary: 'All good.',
     };
 
@@ -2828,8 +2827,12 @@ describe('PRReviewService — manual verification items excluded from verdict', 
     const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
 
     expect(prompt).toContain('Manual verification items');
-    expect(prompt).toContain('Exclude them entirely from your pass/fail evaluation');
-    expect(prompt).toContain('Never fail the verdict solely because manual verification');
+    expect(prompt).toContain(
+      'Exclude them entirely from your pass/fail evaluation',
+    );
+    expect(prompt).toContain(
+      'Never fail the verdict solely because manual verification',
+    );
     expect(prompt).toContain('manualItemsForHuman');
   });
 });

@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { buildOrchestratorClaudeMd, buildReviewClaudeMd } from './orchestrator-claudemd';
+import {
+  buildOrchestratorClaudeMd,
+  buildReviewClaudeMd,
+} from './orchestrator-claudemd';
 import { buildSessionContext, stripOrchestratorHeader } from './ContextBuilder';
 import { loadOrchestratorConfig } from './orchestrator-config';
 
