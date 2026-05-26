@@ -104,10 +104,9 @@ export class DockerSessionRunner implements ISessionRunner {
         { stdio: 'pipe' },
       );
       // Also connect proxy to the default bridge so it can reach the internet
-      execSync(
-        `docker network connect bridge ${this.proxyContainerName}`,
-        { stdio: 'pipe' },
-      );
+      execSync(`docker network connect bridge ${this.proxyContainerName}`, {
+        stdio: 'pipe',
+      });
 
       // 3. Start the session container on the internal network only (no internet)
       log(this.sessionId, `starting session container ${this.containerName}`);
@@ -161,10 +160,7 @@ export class DockerSessionRunner implements ISessionRunner {
       ...allowedTools,
     ];
 
-    log(
-      this.sessionId,
-      `exec claude in container: ${claudeArgs.join(' ')}`,
-    );
+    log(this.sessionId, `exec claude in container: ${claudeArgs.join(' ')}`);
 
     // 4. Exec claude inside the container with stdio piped
     this.execProc = spawn(
@@ -338,7 +334,10 @@ export function reapOrphanContainers(liveSessionIds: Set<string>): void {
       ).trim();
       if (!output) continue;
 
-      for (const name of output.split('\n').map((n) => n.trim()).filter(Boolean)) {
+      for (const name of output
+        .split('\n')
+        .map((n) => n.trim())
+        .filter(Boolean)) {
         const sessionId = name.replace(prefix, '');
         if (!liveSessionIds.has(sessionId)) {
           log(sessionId, `reaping orphan container: ${name}`);
@@ -361,7 +360,10 @@ export function reapOrphanContainers(liveSessionIds: Set<string>): void {
     ).trim();
     if (!output) return;
 
-    for (const name of output.split('\n').map((n) => n.trim()).filter(Boolean)) {
+    for (const name of output
+      .split('\n')
+      .map((n) => n.trim())
+      .filter(Boolean)) {
       const sessionId = name.replace(NETWORK_PREFIX, '');
       if (!liveSessionIds.has(sessionId)) {
         log(sessionId, `reaping orphan network: ${name}`);

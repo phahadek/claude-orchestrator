@@ -9,7 +9,10 @@ import { buildReviewClaudeMd } from './orchestrator-claudemd';
 import { loadOrchestratorConfig } from './orchestrator-config';
 import { CliSessionRunner } from './CliSessionRunner';
 import { ApiSessionRunner } from './ApiSessionRunner';
-import { DockerSessionRunner, reapOrphanContainers } from './DockerSessionRunner';
+import {
+  DockerSessionRunner,
+  reapOrphanContainers,
+} from './DockerSessionRunner';
 import { getCorporateMode } from '../config/corporateMode';
 import {
   config,

@@ -53,12 +53,12 @@ socket is used automatically — no extra configuration needed.
 The proxy (squid) permits outbound HTTPS only to the following destinations by
 default:
 
-| Host | Purpose |
-|------|---------|
-| `api.anthropic.com` | Claude API |
-| `api.github.com` | GitHub API |
-| `github.com` | Git operations |
-| `api.notion.com` | Notion task backend |
+| Host                | Purpose             |
+| ------------------- | ------------------- |
+| `api.anthropic.com` | Claude API          |
+| `api.github.com`    | GitHub API          |
+| `github.com`        | Git operations      |
+| `api.notion.com`    | Notion task backend |
 
 Add per-project hosts via `DOCKER_EGRESS_EXTRA_HOSTS` (comma-separated). For
 Jira-backed projects, add the Jira instance hostname.
@@ -79,11 +79,11 @@ bootstrap:
 
 Each session creates three ephemeral resources (all named with the session ID):
 
-| Resource | Name pattern | Removed |
-|----------|-------------|---------|
-| Session container | `claude-session-<id>` | On session end |
-| Proxy container | `claude-session-proxy-<id>` | On session end |
-| Internal network | `claude-session-net-<id>` | On session end |
+| Resource          | Name pattern                | Removed        |
+| ----------------- | --------------------------- | -------------- |
+| Session container | `claude-session-<id>`       | On session end |
+| Proxy container   | `claude-session-proxy-<id>` | On session end |
+| Internal network  | `claude-session-net-<id>`   | On session end |
 
 On backend restart, orphaned resources (containers/networks with no matching
 active session in the database) are automatically removed.

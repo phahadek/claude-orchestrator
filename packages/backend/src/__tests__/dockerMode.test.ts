@@ -94,9 +94,8 @@ describe('reapOrphanContainers', () => {
       execFile: vi.fn(),
     }));
 
-    const { reapOrphanContainers } = await import(
-      '../session/DockerSessionRunner.js'
-    );
+    const { reapOrphanContainers } =
+      await import('../session/DockerSessionRunner.js');
 
     const liveIds = new Set([LIVE_SESSION]);
     reapOrphanContainers(liveIds);
@@ -133,9 +132,8 @@ describe('reapOrphanContainers', () => {
       execFile: vi.fn(),
     }));
 
-    const { reapOrphanContainers } = await import(
-      '../session/DockerSessionRunner.js'
-    );
+    const { reapOrphanContainers } =
+      await import('../session/DockerSessionRunner.js');
 
     const liveIds = new Set([LIVE_SESSION]);
     reapOrphanContainers(liveIds);
@@ -155,9 +153,8 @@ describe('reapOrphanContainers', () => {
       execFile: vi.fn(),
     }));
 
-    const { reapOrphanContainers } = await import(
-      '../session/DockerSessionRunner.js'
-    );
+    const { reapOrphanContainers } =
+      await import('../session/DockerSessionRunner.js');
 
     // Must not throw even if docker commands fail
     expect(() => reapOrphanContainers(new Set())).not.toThrow();
@@ -177,7 +174,6 @@ describe('SessionManager.resumeOrphanSessions — orphan reap integration', () =
     // The call must be inside the resumeOrphanSessions function body
     const fnStart = source.indexOf('async resumeOrphanSessions()');
     const reapIdx = source.indexOf('reapOrphanContainers', fnStart);
-    const nextFnIdx = source.indexOf('\n  ', fnStart + 1);
     expect(reapIdx).toBeGreaterThan(fnStart);
     // reap call appears before the next function (i.e., within resumeOrphanSessions)
     const nextFn = source.indexOf('\n  async ', fnStart + 1);
