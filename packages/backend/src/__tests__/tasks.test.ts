@@ -9,7 +9,6 @@ import type { TaskAggregateRow } from '../db/queries.js';
 vi.mock('../db/queries.js', () => ({
   getTaskCache: vi.fn(),
   getActiveTaskAggregates: vi.fn(),
-  getLatestNonSystemEventPayload: vi.fn().mockReturnValue(null),
   getSetting: vi.fn().mockReturnValue(null),
   getMilestoneById: vi.fn().mockReturnValue(null),
 }));
@@ -57,6 +56,7 @@ function makeAggregate(
     code_session_ended_at: null,
     code_session_input_tokens: null,
     code_session_output_tokens: null,
+    code_session_last_event_payload: null,
     review_session_id: null,
     review_session_status: null,
     review_session_input_tokens: null,

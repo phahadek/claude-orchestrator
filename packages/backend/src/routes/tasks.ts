@@ -5,7 +5,6 @@ import { ProjectService } from '../projects/ProjectService';
 import {
   getTaskCache,
   getActiveTaskAggregates,
-  getLatestNonSystemEventPayload,
   getSetting,
 } from '../db/queries';
 import type { TaskAggregateRow } from '../db/queries';
@@ -77,9 +76,9 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
 
   let codeSession: TaskView['codeSession'] = null;
   if (row.code_session_id) {
-    let lastMessage = '';
-    const eventPayload = getLatestNonSystemEventPayload(row.code_session_id);
-    if (eventPayload) lastMessage = summarizeEvent(eventPayload);
+    const lastMessage = row.code_session_last_event_payload
+      ? summarizeEvent(row.code_session_last_event_payload)
+      : '';
     codeSession = {
       sessionId: row.code_session_id,
       status: row.code_session_status ?? '',
