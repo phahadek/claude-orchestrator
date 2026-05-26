@@ -510,6 +510,76 @@ export class GitHubClient {
     });
   }
 
+  async listPRReviews(
+    prNumber: number,
+    repo?: string,
+  ): Promise<PRReviewSummary[]> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<
+      Array<{
+        id: number;
+        state: string;
+        user: { login: string };
+        body: string | null;
+        submitted_at: string;
+      }>
+    >(`/repos/${r}/pulls/${prNumber}/reviews?per_page=100`);
+    return data.map((review) => ({
+      id: review.id,
+      state: review.state as PRReviewSummary['state'],
+      author: review.user.login,
+      body: review.body,
+      submittedAt: review.submitted_at,
+    }));
+  }
+
+  async listPRReviewComments(
+    prNumber: number,
+    repo?: string,
+  ): Promise<PRCommentSummary[]> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<
+      Array<{
+        id: number;
+        user: { login: string };
+        body: string;
+        created_at: string;
+        path: string;
+        line: number | null;
+        original_line: number | null;
+      }>
+    >(`/repos/${r}/pulls/${prNumber}/comments?per_page=100`);
+    return data.map((c) => ({
+      id: c.id,
+      author: c.user.login,
+      body: c.body,
+      createdAt: c.created_at,
+      path: c.path,
+      line: c.line ?? c.original_line ?? null,
+    }));
+  }
+
+  async listPRIssueComments(
+    prNumber: number,
+    repo?: string,
+  ): Promise<PRCommentSummary[]> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<
+      Array<{
+        id: number;
+        user: { login: string };
+        body: string;
+        created_at: string;
+      }>
+    >(`/repos/${r}/issues/${prNumber}/comments?per_page=100`);
+    return data.map((c) => ({
+      id: c.id,
+      author: c.user.login,
+      body: c.body,
+      createdAt: c.created_at,
+    }));
+  }
+
   async mergePR(
     prId: number,
     commitTitle: string,
@@ -603,6 +673,23 @@ export type PRReviewDecision =
   | 'APPROVED'
   | 'CHANGES_REQUESTED'
   | 'REVIEW_REQUIRED';
+
+export interface PRReviewSummary {
+  id: number;
+  state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED';
+  author: string;
+  body: string | null;
+  submittedAt: string;
+}
+
+export interface PRCommentSummary {
+  id: number;
+  author: string;
+  body: string;
+  createdAt: string;
+  path?: string | null;
+  line?: number | null;
+}
 
 export interface SizeSignal {
   linesAdded: number;

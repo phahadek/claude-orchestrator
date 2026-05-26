@@ -34,6 +34,7 @@ import { PRReviewService } from './github/PRReviewService';
 import { ReviewOrchestrator } from './github/ReviewOrchestrator';
 import { PRMergeWatcher } from './github/PRMergeWatcher';
 import { AutoMerger } from './github/AutoMerger';
+import { ReviewerCommentsWatcher } from './github/ReviewerCommentsWatcher';
 import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
 import { getCorporateMode } from './config/corporateMode';
 import { AutoLauncher } from './orchestration/AutoLauncher';
@@ -127,6 +128,10 @@ const autoMerger = new AutoMerger(
 prMergeWatcher.setAutoMerger(autoMerger);
 prReviewService.setAutoMerger(autoMerger);
 setAutoMerger(autoMerger);
+const reviewerCommentsWatcher = new ReviewerCommentsWatcher(
+  githubClient,
+  sessionManager,
+);
 app.use(
   '/api',
   createPrsRouter(
@@ -206,6 +211,17 @@ sessionManager.on(
       );
       return;
     }
+    if (prRow.pause_reason === 'human_changes_requested') {
+      // Session addressed human review feedback and pushed — clear the pause so
+      // AutoMerger can re-check the review state (re-approve or request more changes).
+      setPauseReason(prRow.pr_number, prRow.repo, null);
+      autoMerger.attempt(prRow.pr_number, prRow.repo);
+      console.log(
+        `[server] push_detected: human_changes_requested cleared for PR #${prRow.pr_number} — AutoMerger restarted`,
+      );
+      return;
+    }
+
     if (!prRow.review_session_id) {
       // Initial review hasn't started yet — queue the push so it triggers
       // re-review after the initial review session is established.
@@ -438,6 +454,7 @@ jsonlReader
       );
 
     prMergeWatcher.start();
+    reviewerCommentsWatcher.start();
 
     await autoLauncher
       .start()
@@ -462,6 +479,7 @@ async function gracefulShutdown(signal: string) {
   console.log(`[server] ${signal} received — shutting down`);
   autoLauncher.stop();
   stuckSessionMonitor.stop();
+  reviewerCommentsWatcher.stop();
   wss.close();
   await sessionManager.shutdownAll();
   server.close();

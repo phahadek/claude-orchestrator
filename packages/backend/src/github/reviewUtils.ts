@@ -138,6 +138,52 @@ export function formatReviewFeedback(
   );
 }
 
+export interface HumanComment {
+  id: string;
+  author: string;
+  body: string;
+  path?: string | null;
+  line?: number | null;
+}
+
+/**
+ * Format human reviewer comments into a message for the coding session.
+ * Mirrors the structure of formatReviewFeedback() so the session doesn't
+ * care whether feedback originated from AI or human review.
+ */
+export function formatHumanReviewFeedback(
+  prNumber: number,
+  comments: HumanComment[],
+  hasChangesRequested: boolean,
+): string {
+  const header = hasChangesRequested
+    ? `## Human Reviewer — Changes Requested on PR #${prNumber}`
+    : `## Human Reviewer Comments — PR #${prNumber}`;
+
+  const verdict = hasChangesRequested
+    ? `**The reviewer has requested changes. Please address all feedback below and push your changes.**`
+    : `**The reviewer has left comments. Please review and address them as appropriate, then push your changes.**`;
+
+  const commentBlocks = comments.map((c) => {
+    const location =
+      c.path != null
+        ? ` (\`${c.path}${c.line != null ? `:${c.line}` : ''}\`)`
+        : '';
+    return `### @${c.author}${location}\n${c.body.trim()}`;
+  });
+
+  return (
+    `${header}\n\n` +
+    `${verdict}\n\n` +
+    commentBlocks.join('\n\n') +
+    `\n\nThe orchestrator will automatically resume the merge process once you push.\n\n` +
+    `**Important:** Do NOT rebase onto dev or merge dev into your branch. ` +
+    `Just commit your fixes and push directly to your feature branch. ` +
+    `Rebasing or merging would pull in unrelated changes from other merged PRs ` +
+    `and pollute the PR diff.`
+  );
+}
+
 /**
  * Format a merge conflict notification for a local branch coding session.
  * Asks the session to rebase onto the base branch and resolve conflicts.
