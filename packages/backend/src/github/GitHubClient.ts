@@ -451,7 +451,6 @@ export class GitHubClient {
     return { failingChecks, hasMissingNamedCheck };
   }
 
-<<<<<<< HEAD
   /** Fetch the list of commits for a pull request. */
   async getCommitsForPR(
     repo: string,
