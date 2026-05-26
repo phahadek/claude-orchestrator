@@ -101,6 +101,10 @@ export class AutoLauncher {
     const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
     const backend = resolveBackend(project.id);
 
+    if (backend.type === 'local') {
+      return;
+    }
+
     let milestoneId: string | null = null;
     if (backend.type === 'notion') {
       milestoneId = this.resolveMilestoneId(project);

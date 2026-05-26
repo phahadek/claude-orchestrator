@@ -17,7 +17,7 @@ export interface ProjectConfig {
   boardId: string; // default/active board (backwards compat — first milestone)
   boards?: Board[]; // multi-milestone support — derived from milestones table
   githubRepo?: string; // "owner/repo" — optional; enables PR features
-  taskSource: 'notion' | 'yaml'; // honored by getTaskBackend(projectId)
+  taskSource: 'notion' | 'yaml' | 'jira'; // honored by getTaskBackend(projectId)
   gitMode: 'github' | 'local-only'; // 'github' (default) or 'local-only' (no GitHub remote)
   autoLaunchEnabled: boolean; // per-project toggle for the AutoLauncher
   autoLaunchMilestoneId: string | null; // milestone the AutoLauncher polls; null = first milestone
@@ -70,6 +70,11 @@ export const config = {
 export const GITHUB_TOKEN = getSecret('GITHUB_TOKEN') ?? '';
 export const GITHUB_REPO = process.env.GITHUB_REPO ?? ''; // "owner/repo"
 
+// ── Jira integration ─────────────────────────────────────────────────────────
+export const JIRA_HOST = process.env.JIRA_HOST ?? ''; // e.g. https://mycompany.atlassian.net
+export const JIRA_TOKEN = getSecret('JIRA_TOKEN') ?? ''; // API token or PAT
+export const JIRA_EMAIL = process.env.JIRA_EMAIL ?? ''; // email for basic auth (optional)
+
 export const AUTO_REVIEW_ENABLED = process.env.AUTO_REVIEW !== 'false';
 export const AUTO_REVIEW_CONCURRENCY = Number(
   process.env.AUTO_REVIEW_CONCURRENCY ?? 1,
@@ -107,7 +112,7 @@ function hydrateProject(p: {
   projectDir: string;
   contextUrl: string | null;
   githubRepo: string | null;
-  taskSource: 'notion' | 'yaml';
+  taskSource: 'notion' | 'yaml' | 'jira';
   gitMode: 'github' | 'local-only';
   autoLaunchEnabled: boolean;
   autoLaunchMilestoneId: string | null;

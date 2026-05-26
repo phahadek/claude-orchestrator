@@ -44,6 +44,7 @@ export interface Project {
   autoMergeEnabled: boolean;
   milestoneBranching: 'two_tier' | 'flat' | null;
   nonMilestoneSourceConfig: NonMilestoneSourceConfig | null;
+  taskSourceConfig: string | null;
   createdAt: number;
   updatedAt: number;
   milestones: ProjectMilestone[];
@@ -106,6 +107,7 @@ function rowToProject(row: ProjectRow, milestones: MilestoneRow[]): Project {
     autoMergeEnabled: row.auto_merge_enabled === 1,
     milestoneBranching: row.milestone_branching ?? null,
     nonMilestoneSourceConfig,
+    taskSourceConfig: row.task_source_config ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     milestones: milestones.map(rowToMilestone),

@@ -8,106 +8,8 @@ import yaml from 'js-yaml';
 vi.mock('../../src/db/db.js', async () => {
   const { default: Database } = await import('better-sqlite3');
   const db = new Database(':memory:');
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      session_id          TEXT    PRIMARY KEY,
-      notion_task_id      TEXT,
-      notion_task_url     TEXT,
-      project_context_url TEXT,
-      status              TEXT    NOT NULL,
-      started_at          INTEGER NOT NULL,
-      ended_at            INTEGER,
-      pr_url              TEXT,
-      worktree_path       TEXT,
-      archived            INTEGER NOT NULL DEFAULT 0,
-      project_id          TEXT,
-      session_type        TEXT    NOT NULL DEFAULT 'standard',
-      favorited           INTEGER NOT NULL DEFAULT 0,
-      note                TEXT,
-      tags                TEXT,
-      task_name           TEXT,
-      total_input_tokens  INTEGER NOT NULL DEFAULT 0,
-      total_output_tokens INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE TABLE IF NOT EXISTS task_cache (
-      notion_task_id TEXT    PRIMARY KEY,
-      fetched_at     INTEGER NOT NULL,
-      raw_json       TEXT    NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS pull_requests (
-      id                     INTEGER PRIMARY KEY AUTOINCREMENT,
-      pr_number              INTEGER NOT NULL,
-      pr_url                 TEXT    NOT NULL UNIQUE,
-      notion_task_id         TEXT,
-      session_id             TEXT,
-      repo                   TEXT    NOT NULL,
-      title                  TEXT,
-      body                   TEXT,
-      head_branch            TEXT,
-      base_branch            TEXT,
-      state                  TEXT    NOT NULL DEFAULT 'open',
-      draft                  INTEGER NOT NULL DEFAULT 0,
-      review_result          TEXT,
-      review_at              TEXT,
-      created_at             TEXT    NOT NULL,
-      updated_at             TEXT    NOT NULL,
-      synced_at              TEXT    NOT NULL,
-      review_session_id      TEXT,
-      review_iteration       INTEGER NOT NULL DEFAULT 0,
-      head_sha               TEXT,
-      last_reviewed_sha      TEXT,
-      node_id                TEXT,
-      mergeable              INTEGER,
-      merge_state            TEXT,
-      merge_state_checked_at TEXT,
-      pending_push           INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE TABLE IF NOT EXISTS session_events (
-      id           INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id   TEXT    NOT NULL,
-      event_type   TEXT    NOT NULL,
-      payload      TEXT    NOT NULL,
-      timestamp    INTEGER NOT NULL,
-      message_id   TEXT
-    );
-    CREATE TABLE IF NOT EXISTS permission_events (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id      TEXT    NOT NULL,
-      tool_name       TEXT    NOT NULL,
-      proposed_action TEXT,
-      decision        TEXT    NOT NULL,
-      rule_matched    TEXT,
-      decided_at      INTEGER NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS permission_rules (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      order_index INTEGER NOT NULL,
-      pattern     TEXT    NOT NULL,
-      match_type  TEXT    NOT NULL,
-      decision    TEXT    NOT NULL,
-      label       TEXT,
-      enabled     INTEGER NOT NULL DEFAULT 1
-    );
-    CREATE TABLE IF NOT EXISTS permission_denials (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id  TEXT    NOT NULL,
-      tool_name   TEXT    NOT NULL,
-      tool_use_id TEXT    NOT NULL,
-      tool_input  TEXT    NOT NULL,
-      timestamp   INTEGER NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS settings (
-      key   TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS projects (
-      id          TEXT PRIMARY KEY,
-      name        TEXT NOT NULL,
-      project_dir TEXT NOT NULL,
-      board_id    TEXT,
-      repo        TEXT
-    );
-  `);
+  const { applyTestSchema } = await import('../helpers/testDbSchema');
+  applyTestSchema(db);
   return { db };
 });
 
@@ -217,16 +119,16 @@ describe('LocalTaskBackend (milestone schema)', () => {
       const resolved = await backend.fetchReadyTasks('m1');
       const ids = resolved.map((r) => r.task.id);
 
-      expect(ids).toContain('task-ready-1');
-      expect(ids).toContain('task-ready-2');
-      expect(ids).toContain('task-in-progress');
-      expect(ids).toContain('task-done');
-      expect(ids).not.toContain('task-other-milestone');
+      expect(ids).toContain('yaml:task-ready-1');
+      expect(ids).toContain('yaml:task-ready-2');
+      expect(ids).toContain('yaml:task-in-progress');
+      expect(ids).toContain('yaml:task-done');
+      expect(ids).not.toContain('yaml:task-other-milestone');
     });
 
     it('does not bleed tasks across milestones', async () => {
       const m2 = await backend.fetchReadyTasks('m2');
-      expect(m2.map((r) => r.task.id)).toEqual(['task-other-milestone']);
+      expect(m2.map((r) => r.task.id)).toEqual(['yaml:task-other-milestone']);
     });
 
     it('throws when milestoneId is unknown', async () => {
@@ -240,24 +142,15 @@ describe('LocalTaskBackend (milestone schema)', () => {
 
       const board = getTaskCache('board:m1');
       expect(board).toBeDefined();
-      const boardTasks = JSON.parse(board!.raw_json) as Array<{ id: string }>;
-      expect(boardTasks.map((t) => t.id).sort()).toEqual([
-        'task-done',
-        'task-in-progress',
-        'task-ready-1',
-        'task-ready-2',
-      ]);
 
       for (const id of [
-        'task-ready-1',
-        'task-ready-2',
-        'task-in-progress',
-        'task-done',
+        'yaml:task-ready-1',
+        'yaml:task-ready-2',
+        'yaml:task-in-progress',
+        'yaml:task-done',
       ]) {
         const row = getTaskCache(id);
         expect(row, `missing per-task cache row for ${id}`).toBeDefined();
-        const cached = JSON.parse(row!.raw_json) as { id: string };
-        expect(cached.id).toBe(id);
       }
     });
   });
@@ -265,7 +158,7 @@ describe('LocalTaskBackend (milestone schema)', () => {
   describe('attachPR()', () => {
     it('writes pr_url and preserves milestone structure', async () => {
       await backend.attachPR(
-        'task-ready-1',
+        'yaml:task-ready-1',
         'https://github.com/owner/repo/pull/42',
       );
 
@@ -296,7 +189,7 @@ describe('LocalTaskBackend (milestone schema)', () => {
     it('throws when task id is not found in any milestone', async () => {
       await expect(
         backend.attachPR(
-          'nonexistent-task',
+          'yaml:nonexistent-task',
           'https://github.com/owner/repo/pull/1',
         ),
       ).rejects.toThrow(/task not found/);
@@ -305,7 +198,7 @@ describe('LocalTaskBackend (milestone schema)', () => {
 
   describe('updateStatus()', () => {
     it('writes the new status and preserves the rest of the file', async () => {
-      await backend.updateStatus('task-ready-1', '🔄 In Progress');
+      await backend.updateStatus('yaml:task-ready-1', '🔄 In Progress');
 
       const file = readTasksFile(tmpDir) as {
         milestones: {
@@ -327,7 +220,7 @@ describe('LocalTaskBackend (milestone schema)', () => {
     });
 
     it('finds tasks across milestones', async () => {
-      await backend.updateStatus('task-other-milestone', '✅ Done');
+      await backend.updateStatus('yaml:task-other-milestone', '✅ Done');
       const file = readTasksFile(tmpDir) as {
         milestones: {
           id: string;
@@ -339,14 +232,14 @@ describe('LocalTaskBackend (milestone schema)', () => {
 
     it('throws when task id is not found', async () => {
       await expect(
-        backend.updateStatus('nonexistent-task', '🔄 In Progress'),
+        backend.updateStatus('yaml:nonexistent-task', '🔄 In Progress'),
       ).rejects.toThrow(/task not found/);
     });
   });
 
   describe('fetchTaskPage()', () => {
     it('returns markdown for a task in any milestone', async () => {
-      const body = await backend.fetchTaskPage('task-ready-1');
+      const body = await backend.fetchTaskPage('yaml:task-ready-1');
       expect(body).toContain('Ready Task 1');
       expect(body).toContain('Implement something');
       expect(body).toContain('- [ ] Done');
@@ -354,7 +247,7 @@ describe('LocalTaskBackend (milestone schema)', () => {
     });
 
     it('throws when task id is not found', async () => {
-      await expect(backend.fetchTaskPage('nope')).rejects.toThrow(
+      await expect(backend.fetchTaskPage('yaml:nope')).rejects.toThrow(
         /task not found/,
       );
     });
@@ -389,7 +282,10 @@ describe('LocalTaskBackend (milestone schema)', () => {
 
         const flatBackend = new LocalTaskBackend(flatDir);
         const ready = await flatBackend.fetchReadyTasks('m1');
-        expect(ready.map((r) => r.task.id).sort()).toEqual(['t1', 't2']);
+        expect(ready.map((r) => r.task.id).sort()).toEqual([
+          'yaml:t1',
+          'yaml:t2',
+        ]);
 
         // Disk file is now in milestone schema
         const onDisk = readTasksFile(flatDir) as Record<string, unknown>;

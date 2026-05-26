@@ -1437,12 +1437,13 @@ export interface ProjectPatch {
   project_dir?: string;
   context_url?: string | null;
   github_repo?: string | null;
-  task_source?: 'notion' | 'yaml';
+  task_source?: 'notion' | 'yaml' | 'jira';
   git_mode?: 'github' | 'local-only';
   auto_launch_enabled?: number;
   auto_launch_milestone_id?: string | null;
   auto_merge_enabled?: number;
   milestone_branching?: 'two_tier' | 'flat' | null;
+  task_source_config?: string | null;
 }
 
 export function updateProject(
@@ -1464,6 +1465,7 @@ export function updateProject(
     auto_launch_milestone_id: string | null;
     auto_merge_enabled: number;
     milestone_branching: string | null;
+    task_source_config: string | null;
     updated_at: number;
   }>(
     `
@@ -1478,6 +1480,7 @@ export function updateProject(
         auto_launch_milestone_id = @auto_launch_milestone_id,
         auto_merge_enabled = @auto_merge_enabled,
         milestone_branching = @milestone_branching,
+        task_source_config = @task_source_config,
         updated_at = @updated_at
     WHERE id = @id
   `,
@@ -1511,6 +1514,10 @@ export function updateProject(
       'milestone_branching' in patch
         ? (patch.milestone_branching ?? null)
         : (existing.milestone_branching ?? null),
+    task_source_config:
+      'task_source_config' in patch
+        ? (patch.task_source_config ?? null)
+        : (existing.task_source_config ?? null),
     updated_at: now,
   });
   return getProjectRowById(id);

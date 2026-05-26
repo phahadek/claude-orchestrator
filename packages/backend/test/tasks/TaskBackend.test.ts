@@ -17,6 +17,7 @@ import {
 } from '../../src/tasks/TaskBackend';
 import { LocalTaskBackend } from '../../src/tasks/LocalTaskBackend';
 import { NotionTaskBackend } from '../../src/tasks/NotionTaskBackend';
+import { JiraTaskSourceProvider } from '../../src/tasks/JiraTaskSourceProvider';
 
 beforeEach(() => {
   db.prepare('DELETE FROM milestones').run();
@@ -47,6 +48,18 @@ describe('getTaskBackend(projectId)', () => {
     const backend = getTaskBackend('p-yaml');
     expect(backend).toBeInstanceOf(LocalTaskBackend);
     expect(backend.type).toBe('local');
+  });
+
+  it('returns a JiraTaskSourceProvider when project.task_source === "jira"', () => {
+    db.prepare(
+      `INSERT INTO projects (id, name, project_dir, task_source, task_source_config, created_at, updated_at)
+       VALUES ('p-jira', 'Jira P', '/tmp/j', 'jira',
+         '{"host":"https://test.atlassian.net","project_key":"TEST"}',
+         1, 1)`,
+    ).run();
+    const backend = getTaskBackend('p-jira');
+    expect(backend).toBeInstanceOf(JiraTaskSourceProvider);
+    expect(backend.type).toBe('jira');
   });
 
   it('throws when the project does not exist', () => {
