@@ -1708,11 +1708,15 @@ export function markLocalBranchMerged(
 
 // ─── pr_review_comments_routed ────────────────────────────────────────────────
 
-export function getRoutedCommentIds(prNumber: number, repo: string): Set<string> {
+export function getRoutedCommentIds(
+  prNumber: number,
+  repo: string,
+): Set<string> {
   const rows = db
-    .prepare<{ pr_number: number; repo: string }>(
-      `SELECT comment_id FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo`,
-    )
+    .prepare<{
+      pr_number: number;
+      repo: string;
+    }>(`SELECT comment_id FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo`)
     .all({ pr_number: prNumber, repo }) as { comment_id: string }[];
   return new Set(rows.map((r) => r.comment_id));
 }

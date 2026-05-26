@@ -1,4 +1,8 @@
-import type { GitHubClient, PRReviewSummary, PRCommentSummary } from './GitHubClient';
+import type {
+  GitHubClient,
+  PRReviewSummary,
+  PRCommentSummary,
+} from './GitHubClient';
 import type { SessionManager } from '../session/SessionManager';
 import {
   getAllOpenPRs,
@@ -70,8 +74,7 @@ export class ReviewerCommentsWatcher {
     const openPRs = getAllOpenPRs();
     const watchable = openPRs.filter(
       (pr) =>
-        pr.session_id !== null &&
-        WATCHABLE_PAUSE_REASONS.has(pr.pause_reason),
+        pr.session_id !== null && WATCHABLE_PAUSE_REASONS.has(pr.pause_reason),
     );
     for (const pr of watchable) {
       try {
@@ -95,9 +98,7 @@ export class ReviewerCommentsWatcher {
       this.github.listPRIssueComments(pr.pr_number, pr.repo),
     ]);
 
-    const humanReviews = reviews.filter(
-      (r) => !aiUsernames.has(r.author),
-    );
+    const humanReviews = reviews.filter((r) => !aiUsernames.has(r.author));
 
     const hasChangesRequested = humanReviews.some(
       (r) => r.state === 'CHANGES_REQUESTED',
@@ -117,7 +118,13 @@ export class ReviewerCommentsWatcher {
       if (aiUsernames.has(c.author)) continue;
       const id = `rc_${c.id}`;
       if (!routedIds.has(id)) {
-        newComments.push({ id, author: c.author, body: c.body, path: c.path, line: c.line });
+        newComments.push({
+          id,
+          author: c.author,
+          body: c.body,
+          path: c.path,
+          line: c.line,
+        });
       }
     }
 

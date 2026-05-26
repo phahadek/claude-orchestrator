@@ -58,19 +58,45 @@ function makePR(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
   };
 }
 
-function makeGitHub(overrides: {
-  reviews?: Awaited<ReturnType<InstanceType<typeof import('../github/GitHubClient.js').GitHubClient>['listPRReviews']>>;
-  reviewComments?: Awaited<ReturnType<InstanceType<typeof import('../github/GitHubClient.js').GitHubClient>['listPRReviewComments']>>;
-  issueComments?: Awaited<ReturnType<InstanceType<typeof import('../github/GitHubClient.js').GitHubClient>['listPRIssueComments']>>;
-} = {}) {
+function makeGitHub(
+  overrides: {
+    reviews?: Awaited<
+      ReturnType<
+        InstanceType<
+          typeof import('../github/GitHubClient.js').GitHubClient
+        >['listPRReviews']
+      >
+    >;
+    reviewComments?: Awaited<
+      ReturnType<
+        InstanceType<
+          typeof import('../github/GitHubClient.js').GitHubClient
+        >['listPRReviewComments']
+      >
+    >;
+    issueComments?: Awaited<
+      ReturnType<
+        InstanceType<
+          typeof import('../github/GitHubClient.js').GitHubClient
+        >['listPRIssueComments']
+      >
+    >;
+  } = {},
+) {
   return {
     listPRReviews: vi.fn().mockResolvedValue(overrides.reviews ?? []),
-    listPRReviewComments: vi.fn().mockResolvedValue(overrides.reviewComments ?? []),
-    listPRIssueComments: vi.fn().mockResolvedValue(overrides.issueComments ?? []),
+    listPRReviewComments: vi
+      .fn()
+      .mockResolvedValue(overrides.reviewComments ?? []),
+    listPRIssueComments: vi
+      .fn()
+      .mockResolvedValue(overrides.issueComments ?? []),
   };
 }
 
-function makeSessionManager(overrides: { send?: ReturnType<typeof vi.fn> } = {}) {
+function makeSessionManager(
+  overrides: { send?: ReturnType<typeof vi.fn> } = {},
+) {
   return { send: overrides.send ?? vi.fn() };
 }
 
@@ -93,13 +119,31 @@ describe('ReviewerCommentsWatcher', () => {
 
       const github = makeGitHub({
         reviews: [
-          { id: 1, state: 'COMMENTED', author: 'alice', body: 'Looks good overall', submittedAt: '' },
+          {
+            id: 1,
+            state: 'COMMENTED',
+            author: 'alice',
+            body: 'Looks good overall',
+            submittedAt: '',
+          },
         ],
         reviewComments: [
-          { id: 10, author: 'alice', body: 'Fix this line', createdAt: '', path: 'src/foo.ts', line: 5 },
+          {
+            id: 10,
+            author: 'alice',
+            body: 'Fix this line',
+            createdAt: '',
+            path: 'src/foo.ts',
+            line: 5,
+          },
         ],
         issueComments: [
-          { id: 20, author: 'bob', body: 'Please update the README', createdAt: '' },
+          {
+            id: 20,
+            author: 'bob',
+            body: 'Please update the README',
+            createdAt: '',
+          },
         ],
       });
       const sessions = makeSessionManager();
@@ -111,7 +155,10 @@ describe('ReviewerCommentsWatcher', () => {
       await watcher.pollAll();
 
       expect(sessions.send).toHaveBeenCalledOnce();
-      const [sessionId, message] = sessions.send.mock.calls[0] as [string, string];
+      const [sessionId, message] = sessions.send.mock.calls[0] as [
+        string,
+        string,
+      ];
       expect(sessionId).toBe('session-abc');
       expect(message).toContain('PR #42');
       expect(message).toContain('alice');
@@ -125,40 +172,86 @@ describe('ReviewerCommentsWatcher', () => {
       vi.mocked(getAllOpenPRs).mockReturnValue([makePR({ session_id: null })]);
       const github = makeGitHub();
       const sessions = makeSessionManager();
-      await new ReviewerCommentsWatcher(github as never, sessions as never).pollAll();
+      await new ReviewerCommentsWatcher(
+        github as never,
+        sessions as never,
+      ).pollAll();
       expect(sessions.send).not.toHaveBeenCalled();
     });
 
     it('skips PRs paused for non-watchable reasons', async () => {
-      vi.mocked(getAllOpenPRs).mockReturnValue([makePR({ pause_reason: 'ci_failing' })]);
+      vi.mocked(getAllOpenPRs).mockReturnValue([
+        makePR({ pause_reason: 'ci_failing' }),
+      ]);
       const github = makeGitHub({
-        reviewComments: [{ id: 1, author: 'alice', body: 'hello', createdAt: '', path: null, line: null }],
+        reviewComments: [
+          {
+            id: 1,
+            author: 'alice',
+            body: 'hello',
+            createdAt: '',
+            path: null,
+            line: null,
+          },
+        ],
       });
       const sessions = makeSessionManager();
-      await new ReviewerCommentsWatcher(github as never, sessions as never).pollAll();
+      await new ReviewerCommentsWatcher(
+        github as never,
+        sessions as never,
+      ).pollAll();
       expect(sessions.send).not.toHaveBeenCalled();
     });
   });
 
   describe('AI-authored comments are filtered out', () => {
     it('does not route comments authored by ai_reviewer_usernames', async () => {
-      vi.mocked(getSetting).mockReturnValue(JSON.stringify(['ai-reviewer-bot']));
+      vi.mocked(getSetting).mockReturnValue(
+        JSON.stringify(['ai-reviewer-bot']),
+      );
       vi.mocked(getAllOpenPRs).mockReturnValue([makePR()]);
 
       const github = makeGitHub({
         reviews: [
-          { id: 1, state: 'COMMENTED', author: 'ai-reviewer-bot', body: 'AI comment', submittedAt: '' },
-          { id: 2, state: 'COMMENTED', author: 'human-dev', body: 'Human comment', submittedAt: '' },
+          {
+            id: 1,
+            state: 'COMMENTED',
+            author: 'ai-reviewer-bot',
+            body: 'AI comment',
+            submittedAt: '',
+          },
+          {
+            id: 2,
+            state: 'COMMENTED',
+            author: 'human-dev',
+            body: 'Human comment',
+            submittedAt: '',
+          },
         ],
         reviewComments: [
-          { id: 10, author: 'ai-reviewer-bot', body: 'AI inline', createdAt: '', path: 'x.ts', line: 1 },
+          {
+            id: 10,
+            author: 'ai-reviewer-bot',
+            body: 'AI inline',
+            createdAt: '',
+            path: 'x.ts',
+            line: 1,
+          },
         ],
         issueComments: [
-          { id: 20, author: 'ai-reviewer-bot', body: 'AI issue comment', createdAt: '' },
+          {
+            id: 20,
+            author: 'ai-reviewer-bot',
+            body: 'AI issue comment',
+            createdAt: '',
+          },
         ],
       });
       const sessions = makeSessionManager();
-      await new ReviewerCommentsWatcher(github as never, sessions as never).pollAll();
+      await new ReviewerCommentsWatcher(
+        github as never,
+        sessions as never,
+      ).pollAll();
 
       expect(sessions.send).toHaveBeenCalledOnce();
       const [, message] = sessions.send.mock.calls[0] as [string, string];
@@ -172,10 +265,21 @@ describe('ReviewerCommentsWatcher', () => {
       vi.mocked(getSetting).mockReturnValue(JSON.stringify(['bot']));
       vi.mocked(getAllOpenPRs).mockReturnValue([makePR()]);
       const github = makeGitHub({
-        reviews: [{ id: 1, state: 'COMMENTED', author: 'bot', body: 'AI says hi', submittedAt: '' }],
+        reviews: [
+          {
+            id: 1,
+            state: 'COMMENTED',
+            author: 'bot',
+            body: 'AI says hi',
+            submittedAt: '',
+          },
+        ],
       });
       const sessions = makeSessionManager();
-      await new ReviewerCommentsWatcher(github as never, sessions as never).pollAll();
+      await new ReviewerCommentsWatcher(
+        github as never,
+        sessions as never,
+      ).pollAll();
       expect(sessions.send).not.toHaveBeenCalled();
     });
   });
@@ -183,15 +287,44 @@ describe('ReviewerCommentsWatcher', () => {
   describe('already-routed comments are not re-sent', () => {
     it('skips comment IDs present in getRoutedCommentIds()', async () => {
       vi.mocked(getAllOpenPRs).mockReturnValue([makePR()]);
-      vi.mocked(getRoutedCommentIds).mockReturnValue(new Set(['rv_1', 'rc_10', 'ic_20']));
+      vi.mocked(getRoutedCommentIds).mockReturnValue(
+        new Set(['rv_1', 'rc_10', 'ic_20']),
+      );
 
       const github = makeGitHub({
-        reviews: [{ id: 1, state: 'COMMENTED', author: 'alice', body: 'Already sent review', submittedAt: '' }],
-        reviewComments: [{ id: 10, author: 'alice', body: 'Already sent inline', createdAt: '', path: 'x.ts', line: 1 }],
-        issueComments: [{ id: 20, author: 'alice', body: 'Already sent issue', createdAt: '' }],
+        reviews: [
+          {
+            id: 1,
+            state: 'COMMENTED',
+            author: 'alice',
+            body: 'Already sent review',
+            submittedAt: '',
+          },
+        ],
+        reviewComments: [
+          {
+            id: 10,
+            author: 'alice',
+            body: 'Already sent inline',
+            createdAt: '',
+            path: 'x.ts',
+            line: 1,
+          },
+        ],
+        issueComments: [
+          {
+            id: 20,
+            author: 'alice',
+            body: 'Already sent issue',
+            createdAt: '',
+          },
+        ],
       });
       const sessions = makeSessionManager();
-      await new ReviewerCommentsWatcher(github as never, sessions as never).pollAll();
+      await new ReviewerCommentsWatcher(
+        github as never,
+        sessions as never,
+      ).pollAll();
       expect(sessions.send).not.toHaveBeenCalled();
       expect(markCommentsRouted).not.toHaveBeenCalled();
     });
@@ -202,18 +335,35 @@ describe('ReviewerCommentsWatcher', () => {
 
       const github = makeGitHub({
         reviews: [
-          { id: 1, state: 'COMMENTED', author: 'alice', body: 'Old review body', submittedAt: '' },
-          { id: 2, state: 'COMMENTED', author: 'alice', body: 'New review body', submittedAt: '' },
+          {
+            id: 1,
+            state: 'COMMENTED',
+            author: 'alice',
+            body: 'Old review body',
+            submittedAt: '',
+          },
+          {
+            id: 2,
+            state: 'COMMENTED',
+            author: 'alice',
+            body: 'New review body',
+            submittedAt: '',
+          },
         ],
       });
       const sessions = makeSessionManager();
-      await new ReviewerCommentsWatcher(github as never, sessions as never).pollAll();
+      await new ReviewerCommentsWatcher(
+        github as never,
+        sessions as never,
+      ).pollAll();
 
       expect(sessions.send).toHaveBeenCalledOnce();
       const [, message] = sessions.send.mock.calls[0] as [string, string];
       expect(message).toContain('New review body');
       expect(message).not.toContain('Old review body');
-      expect(markCommentsRouted).toHaveBeenCalledWith(42, 'owner/repo', ['rv_2']);
+      expect(markCommentsRouted).toHaveBeenCalledWith(42, 'owner/repo', [
+        'rv_2',
+      ]);
     });
   });
 
@@ -224,13 +374,26 @@ describe('ReviewerCommentsWatcher', () => {
 
       const github = makeGitHub({
         reviews: [
-          { id: 1, state: 'CHANGES_REQUESTED', author: 'alice', body: 'Please fix tests', submittedAt: '' },
+          {
+            id: 1,
+            state: 'CHANGES_REQUESTED',
+            author: 'alice',
+            body: 'Please fix tests',
+            submittedAt: '',
+          },
         ],
       });
       const sessions = makeSessionManager();
-      await new ReviewerCommentsWatcher(github as never, sessions as never).pollAll();
+      await new ReviewerCommentsWatcher(
+        github as never,
+        sessions as never,
+      ).pollAll();
 
-      expect(setPauseReason).toHaveBeenCalledWith(42, 'owner/repo', 'human_changes_requested');
+      expect(setPauseReason).toHaveBeenCalledWith(
+        42,
+        'owner/repo',
+        'human_changes_requested',
+      );
     });
 
     it('does NOT transition when review state is COMMENTED (not CHANGES_REQUESTED)', async () => {
@@ -238,10 +401,21 @@ describe('ReviewerCommentsWatcher', () => {
       vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
 
       const github = makeGitHub({
-        reviews: [{ id: 1, state: 'COMMENTED', author: 'alice', body: 'LGTM mostly', submittedAt: '' }],
+        reviews: [
+          {
+            id: 1,
+            state: 'COMMENTED',
+            author: 'alice',
+            body: 'LGTM mostly',
+            submittedAt: '',
+          },
+        ],
       });
       const sessions = makeSessionManager();
-      await new ReviewerCommentsWatcher(github as never, sessions as never).pollAll();
+      await new ReviewerCommentsWatcher(
+        github as never,
+        sessions as never,
+      ).pollAll();
 
       expect(setPauseReason).not.toHaveBeenCalled();
     });
@@ -252,10 +426,21 @@ describe('ReviewerCommentsWatcher', () => {
       vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
 
       const github = makeGitHub({
-        reviews: [{ id: 1, state: 'CHANGES_REQUESTED', author: 'ai-bot', body: 'AI says fix it', submittedAt: '' }],
+        reviews: [
+          {
+            id: 1,
+            state: 'CHANGES_REQUESTED',
+            author: 'ai-bot',
+            body: 'AI says fix it',
+            submittedAt: '',
+          },
+        ],
       });
       const sessions = makeSessionManager();
-      await new ReviewerCommentsWatcher(github as never, sessions as never).pollAll();
+      await new ReviewerCommentsWatcher(
+        github as never,
+        sessions as never,
+      ).pollAll();
 
       expect(setPauseReason).not.toHaveBeenCalled();
     });
@@ -264,12 +449,27 @@ describe('ReviewerCommentsWatcher', () => {
   describe('dead session handling', () => {
     it('skips routing when session is done', async () => {
       vi.mocked(getAllOpenPRs).mockReturnValue([makePR()]);
-      vi.mocked(getSession).mockReturnValue({ session_id: 'session-abc', status: 'done' } as never);
+      vi.mocked(getSession).mockReturnValue({
+        session_id: 'session-abc',
+        status: 'done',
+      } as never);
       const github = makeGitHub({
-        reviewComments: [{ id: 1, author: 'alice', body: 'hi', createdAt: '', path: null, line: null }],
+        reviewComments: [
+          {
+            id: 1,
+            author: 'alice',
+            body: 'hi',
+            createdAt: '',
+            path: null,
+            line: null,
+          },
+        ],
       });
       const sessions = makeSessionManager();
-      await new ReviewerCommentsWatcher(github as never, sessions as never).pollAll();
+      await new ReviewerCommentsWatcher(
+        github as never,
+        sessions as never,
+      ).pollAll();
       expect(sessions.send).not.toHaveBeenCalled();
       expect(markCommentsRouted).not.toHaveBeenCalled();
     });
