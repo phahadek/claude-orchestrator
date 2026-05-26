@@ -1,0 +1,103 @@
+import { execSync } from 'child_process';
+import { runtimeSettings } from '../config';
+import { ProjectService } from '../projects/ProjectService';
+
+export type BranchMode = 'two_tier' | 'flat';
+
+/** Returns the corporate-mode setting from runtimeSettings. */
+export function getCorporateMode(): { enabled: boolean } {
+  return { enabled: runtimeSettings.corporate_mode_enabled };
+}
+
+/**
+ * Converts a milestone name to a URL-friendly git branch slug.
+ * Example: "M6 — Enterprise Adoption Readiness" → "m6-enterprise-adoption-readiness"
+ */
+export function slugify(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+/**
+ * Resolves the branching mode for a given project's milestone_branching setting:
+ * 1. Explicit 'two_tier' or 'flat' wins.
+ * 2. Falls back to two_tier when corporate mode is enabled.
+ * 3. Otherwise flat.
+ */
+export function resolveBranchMode(
+  milestoneBranching: 'two_tier' | 'flat' | null | undefined,
+): BranchMode {
+  if (milestoneBranching === 'two_tier') return 'two_tier';
+  if (milestoneBranching === 'flat') return 'flat';
+  return getCorporateMode().enabled ? 'two_tier' : 'flat';
+}
+
+/**
+ * Resolves the git starting point (the ref the detached worktree will point at).
+ *
+ * Returns:
+ *   - `feature/<milestone-slug>` for two_tier mode with a known milestone
+ *   - `dev` for flat mode or when no milestoneId is provided
+ */
+export function resolveStartingPoint(
+  project: { milestoneBranching?: 'two_tier' | 'flat' | null },
+  milestoneId: string | null,
+): { startingPoint: string; milestoneSlug: string | null } {
+  const mode = resolveBranchMode(project.milestoneBranching);
+  if (mode === 'two_tier' && milestoneId) {
+    const milestone = ProjectService.getMilestone(milestoneId);
+    if (milestone) {
+      const slug = slugify(milestone.name);
+      return { startingPoint: `feature/${slug}`, milestoneSlug: slug };
+    }
+  }
+  return { startingPoint: 'dev', milestoneSlug: null };
+}
+
+/**
+ * Ensures `feature/<milestoneSlug>` exists locally and on origin.
+ * Creates it from origin/dev when missing; no-ops when it already exists.
+ * Only called in two_tier mode.
+ */
+export function ensureMilestoneBranch(
+  milestoneSlug: string,
+  projectDir: string,
+): void {
+  const ref = `feature/${milestoneSlug}`;
+
+  // Check if branch already exists locally.
+  try {
+    execSync(`git rev-parse --verify ${ref}`, {
+      cwd: projectDir,
+      stdio: 'pipe',
+    });
+    return; // already exists locally
+  } catch {
+    // not found locally — fall through
+  }
+
+  // Fetch origin to pick up any remote branch and latest dev.
+  try {
+    execSync('git fetch origin dev', { cwd: projectDir, timeout: 30_000 });
+  } catch {
+    // non-fatal — proceed with local refs
+  }
+
+  // Check if branch exists on origin after fetch.
+  try {
+    execSync(`git rev-parse --verify origin/${ref}`, {
+      cwd: projectDir,
+      stdio: 'pipe',
+    });
+    // Exists on origin — create local tracking branch.
+    execSync(`git branch ${ref} origin/${ref}`, { cwd: projectDir });
+    return;
+  } catch {
+    // not on origin — create it from origin/dev
+  }
+
+  execSync(`git branch ${ref} origin/dev`, { cwd: projectDir });
+  execSync(`git push origin ${ref}`, { cwd: projectDir });
+}

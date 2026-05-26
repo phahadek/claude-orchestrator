@@ -125,7 +125,7 @@ export class AutoLauncher {
         // tasks in this cycle are silently deferred to the next poll.
         return;
       }
-      this.launchTask(project, candidate);
+      this.launchTask(project, candidate, milestoneId);
     }
   }
 
@@ -180,7 +180,11 @@ export class AutoLauncher {
     return this.sessionManager.getLiveCodeSessionCount();
   }
 
-  private launchTask(project: ProjectConfig, resolved: ResolvedTask): void {
+  private launchTask(
+    project: ProjectConfig,
+    resolved: ResolvedTask,
+    milestoneId: string | null = null,
+  ): void {
     const task = resolved.task;
     const taskUrl =
       task.notionUrl || `https://www.notion.so/${task.id.replace(/-/g, '')}`;
@@ -196,6 +200,7 @@ export class AutoLauncher {
       const sessionId = this.sessionManager.start(taskUrl, project.contextUrl, {
         projectId: project.id,
         taskName: task.title || taskUrl,
+        milestoneId,
       });
       console.log(
         `[AutoLauncher] launched session ${sessionId.slice(0, 8)} for task ${task.title || task.id} in project ${project.id}`,

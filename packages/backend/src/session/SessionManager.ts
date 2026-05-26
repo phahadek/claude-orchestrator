@@ -7,6 +7,7 @@ import { scrubSecrets } from '../security/scrubSecrets';
 import { AgentSession, parseNotionPageId } from './AgentSession';
 import { buildSessionContext } from './ContextBuilder';
 import { buildReviewClaudeMd } from './orchestrator-claudemd';
+import { resolveStartingPoint, ensureMilestoneBranch } from './branchModel';
 import { loadOrchestratorConfig } from './orchestrator-config';
 import { CliSessionRunner } from './CliSessionRunner';
 import { ApiSessionRunner } from './ApiSessionRunner';
@@ -112,6 +113,8 @@ export interface StartOptions {
   taskName?: string;
   /** Pre-generated session ID. If omitted, a new UUID is generated internally. */
   sessionId?: string;
+  /** Milestone row id used for starting-point resolution in two_tier branch mode. */
+  milestoneId?: string | null;
 }
 
 /** How long to suppress lastMessage-only task_updated broadcasts per task (ms). */
@@ -247,6 +250,7 @@ export class SessionManager extends EventEmitter {
       projectId = '',
       taskName,
       sessionId: providedSessionId,
+      milestoneId = null,
     } = options ?? {};
 
     if (sessionType !== 'review') {
@@ -278,7 +282,6 @@ export class SessionManager extends EventEmitter {
       'worktrees',
       sessionId,
     );
-    const branchName = `session/${sessionId}`;
 
     // Record the main repo's current branch before creating the worktree so we
     // can detect and restore it if the session accidentally changes it.
@@ -295,28 +298,46 @@ export class SessionManager extends EventEmitter {
 
     const isLocalOnly = project.gitMode === 'local-only';
 
+    // Resolve the starting point for the detached worktree.
+    const { startingPoint, milestoneSlug } = resolveStartingPoint(
+      project,
+      milestoneId,
+    );
+
     if (!isLocalOnly) {
-      try {
-        // Fetch latest dev so sessions don't branch from a stale local ref.
-        // Uses `git fetch origin dev` (not dev:dev) because dev:dev fails when
-        // the local dev branch is checked out in the main repo or any worktree.
-        // The worktree is then based on origin/dev which is always up-to-date.
-        execSync('git fetch origin dev', { cwd: projectDir, timeout: 30_000 });
-      } catch (err) {
-        console.warn(
-          `[SessionManager] git fetch origin dev failed (continuing with local ref): ${err}`,
-        );
+      if (milestoneSlug) {
+        // ensureMilestoneBranch fetches origin/dev internally when needed.
+        try {
+          ensureMilestoneBranch(milestoneSlug, projectDir);
+        } catch (err) {
+          console.warn(
+            `[SessionManager] ensureMilestoneBranch failed (continuing): ${err}`,
+          );
+        }
+      } else {
+        try {
+          // Fetch latest dev so sessions don't start from a stale local ref.
+          execSync('git fetch origin dev', {
+            cwd: projectDir,
+            timeout: 30_000,
+          });
+        } catch (err) {
+          console.warn(
+            `[SessionManager] git fetch origin dev failed (continuing with local ref): ${err}`,
+          );
+        }
       }
     }
 
-    const worktreeBase = isLocalOnly ? 'dev' : 'origin/dev';
+    // For github projects: use origin/dev when starting from dev, or the local
+    // milestone branch ref (guaranteed to exist after ensureMilestoneBranch).
+    const worktreeBase =
+      isLocalOnly || startingPoint !== 'dev' ? startingPoint : 'origin/dev';
+
     try {
-      execSync(
-        `git worktree add "${worktreePath}" -b "${branchName}" ${worktreeBase}`,
-        {
-          cwd: projectDir,
-        },
-      );
+      execSync(`git worktree add --detach "${worktreePath}" ${worktreeBase}`, {
+        cwd: projectDir,
+      });
     } catch (err) {
       console.error(
         `[SessionManager] failed to create worktree for ${sessionId}: ${err}`,
@@ -327,7 +348,7 @@ export class SessionManager extends EventEmitter {
     const isUnixStylePath =
       worktreePath.startsWith('/c/') || worktreePath.startsWith('/C/');
     console.log(
-      `[SessionManager] worktree created: path=${worktreePath} branch=${branchName}` +
+      `[SessionManager] worktree created: path=${worktreePath} startingPoint=${startingPoint}` +
         (isUnixStylePath
           ? ' [WARNING: Unix-style path detected — may not resolve correctly on Windows]'
           : ''),
@@ -409,7 +430,7 @@ export class SessionManager extends EventEmitter {
             taskName: taskName ?? taskUrl,
             taskUrl,
             projectContextUrl,
-            targetBranch: 'dev',
+            targetBranch: startingPoint,
             projectDir,
             worktreePath,
             verify:
@@ -475,7 +496,6 @@ export class SessionManager extends EventEmitter {
         sessionId,
         session,
         projectDir,
-        branchName,
         worktreePath,
         mainBranch,
       );
@@ -601,7 +621,6 @@ export class SessionManager extends EventEmitter {
     sessionId: string,
     session: AgentSession,
     projectDir: string,
-    branchName: string,
     worktreePath: string,
     mainBranch?: string,
   ): void {
@@ -621,7 +640,6 @@ export class SessionManager extends EventEmitter {
         this.cleanupWorktree(
           sessionId,
           worktreePath,
-          branchName,
           session.prUrl,
           projectDir,
           mainBranch,
@@ -642,7 +660,6 @@ export class SessionManager extends EventEmitter {
         return this.cleanupWorktree(
           sessionId,
           worktreePath,
-          branchName,
           undefined,
           projectDir,
           mainBranch,
@@ -686,18 +703,8 @@ export class SessionManager extends EventEmitter {
       return;
     }
 
-    // Derive the branch from the worktree's HEAD so cleanupWorktree can delete it.
-    let branchName: string;
-    try {
-      branchName = execSync('git rev-parse --abbrev-ref HEAD', {
-        cwd: worktreePath,
-        encoding: 'utf8',
-      }).trim();
-    } catch {
-      branchName = `session/${row.session_id}`;
-    }
     console.log(
-      `[SessionManager] resumeSession ${row.session_id}: re-using worktree ${worktreePath} (branch=${branchName})`,
+      `[SessionManager] resumeSession ${row.session_id}: re-using worktree ${worktreePath}`,
     );
 
     // Load per-project orchestrator config so resumed sessions get the same
@@ -792,13 +799,7 @@ export class SessionManager extends EventEmitter {
       clearTimeout(errorTimer);
     });
 
-    this.wireSession(
-      row.session_id,
-      session,
-      projectDir,
-      branchName,
-      worktreePath,
-    );
+    this.wireSession(row.session_id, session, projectDir, worktreePath);
 
     // Send the nudge after a short delay so the CLI process is ready to receive
     // stdin before we write to it. Review sessions should not receive the
@@ -866,12 +867,24 @@ export class SessionManager extends EventEmitter {
   private cleanupWorktree(
     sessionId: string,
     worktreePath: string,
-    branchName: string,
     prUrl: string | undefined,
     projectDir: string,
     mainBranch?: string,
   ): void {
     this.sessions.delete(sessionId);
+
+    // Derive the task branch the session created from the worktree's HEAD.
+    let branchName: string | undefined;
+    try {
+      const head = execSync('git rev-parse --abbrev-ref HEAD', {
+        cwd: worktreePath,
+        encoding: 'utf8',
+      }).trim();
+      // Only treat it as a task branch if it's not a detached HEAD.
+      if (head !== 'HEAD') branchName = head;
+    } catch {
+      // worktree may already be gone — skip branch deletion
+    }
 
     // Check if the main repo has unexpected modifications after session ends.
     // This catches worktree-escape bugs where a session edited the main repo
@@ -927,7 +940,7 @@ export class SessionManager extends EventEmitter {
       );
     }
 
-    if (!prUrl) {
+    if (!prUrl && branchName) {
       try {
         execSync(`git branch -D "${branchName}"`, {
           cwd: projectDir,
@@ -1054,7 +1067,6 @@ export class SessionManager extends EventEmitter {
       'worktrees',
       newSessionId,
     );
-    const branchName = `session/${newSessionId}`;
 
     // Record the main repo's current branch before creating the worktree.
     let mainBranchResume: string | undefined;
@@ -1072,20 +1084,45 @@ export class SessionManager extends EventEmitter {
       );
     }
 
-    try {
-      execSync('git fetch origin dev', { cwd: projectDir, timeout: 30_000 });
-    } catch (err) {
-      console.warn(
-        `[SessionManager] sendOrResume: git fetch origin dev failed (continuing with local ref): ${err}`,
-      );
+    // Resolve the starting point using dev as the base (no milestoneId available for resumed sessions).
+    const {
+      startingPoint: resumeStartingPoint,
+      milestoneSlug: resumeMilestoneSlug,
+    } = resolveStartingPoint(project, null);
+
+    const isLocalOnlyResume = project.gitMode === 'local-only';
+    if (!isLocalOnlyResume) {
+      if (resumeMilestoneSlug) {
+        try {
+          ensureMilestoneBranch(resumeMilestoneSlug, projectDir);
+        } catch (err) {
+          console.warn(
+            `[SessionManager] sendOrResume: ensureMilestoneBranch failed (continuing): ${err}`,
+          );
+        }
+      } else {
+        try {
+          execSync('git fetch origin dev', {
+            cwd: projectDir,
+            timeout: 30_000,
+          });
+        } catch (err) {
+          console.warn(
+            `[SessionManager] sendOrResume: git fetch origin dev failed (continuing with local ref): ${err}`,
+          );
+        }
+      }
     }
+
+    const resumeWorktreeBase =
+      isLocalOnlyResume || resumeStartingPoint !== 'dev'
+        ? resumeStartingPoint
+        : 'origin/dev';
 
     try {
       execSync(
-        `git worktree add "${worktreePath}" -b "${branchName}" origin/dev`,
-        {
-          cwd: projectDir,
-        },
+        `git worktree add --detach "${worktreePath}" ${resumeWorktreeBase}`,
+        { cwd: projectDir },
       );
     } catch (err) {
       console.error(
@@ -1097,7 +1134,7 @@ export class SessionManager extends EventEmitter {
     const isUnixStylePathResume =
       worktreePath.startsWith('/c/') || worktreePath.startsWith('/C/');
     console.log(
-      `[SessionManager] sendOrResume worktree created: path=${worktreePath} branch=${branchName}` +
+      `[SessionManager] sendOrResume worktree created: path=${worktreePath} startingPoint=${resumeStartingPoint}` +
         (isUnixStylePathResume
           ? ' [WARNING: Unix-style path detected — may not resolve correctly on Windows]'
           : ''),
@@ -1180,7 +1217,6 @@ export class SessionManager extends EventEmitter {
         this.cleanupWorktree(
           newSessionId,
           worktreePath,
-          branchName,
           session.prUrl,
           projectDir,
           mainBranchResume,
@@ -1201,7 +1237,6 @@ export class SessionManager extends EventEmitter {
         return this.cleanupWorktree(
           newSessionId,
           worktreePath,
-          branchName,
           undefined,
           projectDir,
           mainBranchResume,

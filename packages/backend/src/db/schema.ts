@@ -274,4 +274,9 @@ export function runMigrations(): void {
   } catch {
     /* already exists */
   }
+  try {
+    db.exec(`ALTER TABLE projects ADD COLUMN milestone_branching TEXT`);
+  } catch {
+    /* already exists */
+  }
 }

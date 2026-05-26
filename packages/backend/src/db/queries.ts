@@ -1439,6 +1439,7 @@ export interface ProjectPatch {
   auto_launch_enabled?: number;
   auto_launch_milestone_id?: string | null;
   auto_merge_enabled?: number;
+  milestone_branching?: 'two_tier' | 'flat' | null;
 }
 
 export function updateProject(
@@ -1459,6 +1460,7 @@ export function updateProject(
     auto_launch_enabled: number;
     auto_launch_milestone_id: string | null;
     auto_merge_enabled: number;
+    milestone_branching: string | null;
     updated_at: number;
   }>(
     `
@@ -1472,6 +1474,7 @@ export function updateProject(
         auto_launch_enabled = @auto_launch_enabled,
         auto_launch_milestone_id = @auto_launch_milestone_id,
         auto_merge_enabled = @auto_merge_enabled,
+        milestone_branching = @milestone_branching,
         updated_at = @updated_at
     WHERE id = @id
   `,
@@ -1501,6 +1504,10 @@ export function updateProject(
       patch.auto_merge_enabled !== undefined
         ? patch.auto_merge_enabled
         : existing.auto_merge_enabled,
+    milestone_branching:
+      'milestone_branching' in patch
+        ? (patch.milestone_branching ?? null)
+        : (existing.milestone_branching ?? null),
     updated_at: now,
   });
   return getProjectRowById(id);

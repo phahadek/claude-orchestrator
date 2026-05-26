@@ -121,15 +121,15 @@ ${
 > already been injected by the orchestrator. Proceed directly to implementation.
 
 1. Read the **Task Spec** section below — it contains the full task specification.
-2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
+2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
     : taskBackend === 'local'
       ? `> ⚠️ **YAML task source**: Task context comes from \`tasks.yaml\` in the project root, not Notion.
 > Skip step 1 (Notion fetch) and instead read \`tasks.yaml\` for task context.
 
 1. Read \`tasks.yaml\` in the project root for task context (skip Notion fetch).
-2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
+2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
       : `1. Fetch the Notion task page and project context page.
-2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
+2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
 }
 3. Implement the task per the acceptance criteria.
 4. Pass the pre-PR gate (see Pre-PR Gate section below).
@@ -195,7 +195,7 @@ ${
 }
 ## Branch Rules
 
-- Branch name: \`feature/<task-name>\` from \`${targetBranch}\`
+- Branch name: \`feature/<task-name>\` — created from the worktree's current HEAD
 - Never commit directly to \`${targetBranch}\` or \`main\`
 ${
   gitMode === 'local-only'

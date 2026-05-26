@@ -161,6 +161,7 @@ export interface ProjectRow {
   auto_launch_enabled: number; // 0 | 1 (SQLite boolean)
   auto_launch_milestone_id: string | null;
   auto_merge_enabled: number; // 0 | 1 (SQLite boolean)
+  milestone_branching: 'two_tier' | 'flat' | null;
   created_at: number;
   updated_at: number;
 }
@@ -173,11 +174,13 @@ export type NewProjectRow = Omit<
   | 'auto_launch_milestone_id'
   | 'auto_merge_enabled'
   | 'git_mode'
+  | 'milestone_branching'
 > & {
   auto_launch_enabled?: number;
   auto_launch_milestone_id?: string | null;
   auto_merge_enabled?: number;
   git_mode?: GitMode;
+  milestone_branching?: 'two_tier' | 'flat' | null;
   created_at?: number;
   updated_at?: number;
 };

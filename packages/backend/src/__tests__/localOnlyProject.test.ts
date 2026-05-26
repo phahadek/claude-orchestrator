@@ -396,10 +396,8 @@ describe('SessionManager source — local-only skips git fetch', () => {
     // Must check gitMode and branch on it
     expect(source).toContain('isLocalOnly');
     expect(source).toContain("gitMode === 'local-only'");
-    // Must use local dev branch when local-only
-    expect(source).toContain(
-      "worktreeBase = isLocalOnly ? 'dev' : 'origin/dev'",
-    );
+    // Must use local dev branch when local-only (isLocalOnly causes worktreeBase = startingPoint, not origin/dev)
+    expect(source).toContain('isLocalOnly || startingPoint !== ');
     // Must skip fetch for local-only
     expect(source).toContain('if (!isLocalOnly)');
   });
