@@ -210,7 +210,9 @@ const EXPECTED_INDEXES = [
 function indexNames(): string[] {
   return (
     typedDb
-      .prepare(`SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'`)
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'`,
+      )
       .all() as { name: string }[]
   ).map((r) => r.name);
 }
@@ -287,7 +289,10 @@ describe('getActiveTaskAggregates — single statement execution', () => {
     for (let i = 0; i < 20; i++) {
       const tid = `task-${i.toString().padStart(3, '0')}`;
       taskIds.push(tid);
-      upsertTaskCache(tid, JSON.stringify({ id: tid, title: `Task ${i}`, status: '🗂️ Ready' }));
+      upsertTaskCache(
+        tid,
+        JSON.stringify({ id: tid, title: `Task ${i}`, status: '🗂️ Ready' }),
+      );
     }
 
     const prepareSpy = vi.spyOn(typedDb, 'prepare');
@@ -297,7 +302,10 @@ describe('getActiveTaskAggregates — single statement execution', () => {
   });
 
   it('calls db.prepare exactly once with 1 task', () => {
-    upsertTaskCache('t1', JSON.stringify({ id: 't1', title: 'T1', status: '🗂️ Ready' }));
+    upsertTaskCache(
+      't1',
+      JSON.stringify({ id: 't1', title: 'T1', status: '🗂️ Ready' }),
+    );
     const prepareSpy = vi.spyOn(typedDb, 'prepare');
     getActiveTaskAggregates(['t1']);
     expect(prepareSpy).toHaveBeenCalledTimes(1);
@@ -316,7 +324,10 @@ describe('getActiveTaskAggregates — output shape regression guard', () => {
     for (let i = 0; i < 20; i++) {
       const tid = `shape-task-${i}`;
       taskIds.push(tid);
-      upsertTaskCache(tid, JSON.stringify({ id: tid, title: `Task ${i}`, status: '🗂️ Ready' }));
+      upsertTaskCache(
+        tid,
+        JSON.stringify({ id: tid, title: `Task ${i}`, status: '🗂️ Ready' }),
+      );
 
       insertSession({
         ...SESSION_DEFAULTS,
@@ -374,10 +385,28 @@ describe('getActiveTaskAggregates — output shape regression guard', () => {
 
   it('returns code_session_last_event_payload from session_events', () => {
     const tid = 'payload-task';
-    upsertTaskCache(tid, JSON.stringify({ id: tid, title: 'P', status: '🔄 In Progress' }));
-    insertSession({ ...SESSION_DEFAULTS, session_id: 'sess-payload', task_id: tid, started_at: 1000 });
-    insertEvent({ session_id: 'sess-payload', event_type: 'system', payload: '{"sys":true}', timestamp: 1 });
-    insertEvent({ session_id: 'sess-payload', event_type: 'assistant', payload: '{"text":"hello"}', timestamp: 2 });
+    upsertTaskCache(
+      tid,
+      JSON.stringify({ id: tid, title: 'P', status: '🔄 In Progress' }),
+    );
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'sess-payload',
+      task_id: tid,
+      started_at: 1000,
+    });
+    insertEvent({
+      session_id: 'sess-payload',
+      event_type: 'system',
+      payload: '{"sys":true}',
+      timestamp: 1,
+    });
+    insertEvent({
+      session_id: 'sess-payload',
+      event_type: 'assistant',
+      payload: '{"text":"hello"}',
+      timestamp: 2,
+    });
 
     const rows = getActiveTaskAggregates([tid]);
     expect(rows).toHaveLength(1);
@@ -386,10 +415,28 @@ describe('getActiveTaskAggregates — output shape regression guard', () => {
 
   it('returns null code_session_last_event_payload when session has only system/user events', () => {
     const tid = 'sys-only-task';
-    upsertTaskCache(tid, JSON.stringify({ id: tid, title: 'S', status: '🔄 In Progress' }));
-    insertSession({ ...SESSION_DEFAULTS, session_id: 'sess-sys', task_id: tid, started_at: 1000 });
-    insertEvent({ session_id: 'sess-sys', event_type: 'system', payload: '{}', timestamp: 1 });
-    insertEvent({ session_id: 'sess-sys', event_type: 'user_message', payload: '{}', timestamp: 2 });
+    upsertTaskCache(
+      tid,
+      JSON.stringify({ id: tid, title: 'S', status: '🔄 In Progress' }),
+    );
+    insertSession({
+      ...SESSION_DEFAULTS,
+      session_id: 'sess-sys',
+      task_id: tid,
+      started_at: 1000,
+    });
+    insertEvent({
+      session_id: 'sess-sys',
+      event_type: 'system',
+      payload: '{}',
+      timestamp: 1,
+    });
+    insertEvent({
+      session_id: 'sess-sys',
+      event_type: 'user_message',
+      payload: '{}',
+      timestamp: 2,
+    });
 
     const rows = getActiveTaskAggregates([tid]);
     expect(rows[0].code_session_last_event_payload).toBeNull();
@@ -411,7 +458,10 @@ describe('bench: getActiveTaskAggregates', () => {
     for (let i = 0; i < TASK_COUNT; i++) {
       const tid = `bench-task-${i}`;
       taskIds.push(tid);
-      upsertTaskCache(tid, JSON.stringify({ id: tid, title: `BT${i}`, status: '🔄 In Progress' }));
+      upsertTaskCache(
+        tid,
+        JSON.stringify({ id: tid, title: `BT${i}`, status: '🔄 In Progress' }),
+      );
     }
 
     const sessionIds: string[] = [];
@@ -452,7 +502,10 @@ describe('bench: getActiveTaskAggregates', () => {
     const elapsed = performance.now() - start;
 
     expect(rows).toHaveLength(TASK_COUNT);
-    expect(elapsed, `getActiveTaskAggregates took ${elapsed.toFixed(1)}ms, expected <100ms`).toBeLessThan(100);
+    expect(
+      elapsed,
+      `getActiveTaskAggregates took ${elapsed.toFixed(1)}ms, expected <100ms`,
+    ).toBeLessThan(100);
   });
 });
 
@@ -466,6 +519,9 @@ describe('bench: getActiveSessions (sessions route query)', () => {
     const elapsed = performance.now() - start;
 
     expect(sessions.length).toBeGreaterThan(0);
-    expect(elapsed, `getActiveSessions took ${elapsed.toFixed(1)}ms, expected <300ms`).toBeLessThan(300);
+    expect(
+      elapsed,
+      `getActiveSessions took ${elapsed.toFixed(1)}ms, expected <300ms`,
+    ).toBeLessThan(300);
   });
 });
