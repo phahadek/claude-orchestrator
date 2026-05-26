@@ -134,6 +134,18 @@ projectsRouter.patch('/projects/:id', (req: Request, res: Response) => {
   if ('autoMergeEnabled' in body) {
     patch.auto_merge_enabled = body.autoMergeEnabled === true ? 1 : 0;
   }
+  if ('milestoneBranching' in body) {
+    if (
+      body.milestoneBranching === 'two_tier' ||
+      body.milestoneBranching === 'flat' ||
+      body.milestoneBranching === null
+    ) {
+      patch.milestone_branching = body.milestoneBranching as 'two_tier' | 'flat' | null;
+    } else if (body.milestoneBranching !== undefined) {
+      res.status(400).json({ error: `milestoneBranching must be 'two_tier', 'flat', or null` });
+      return;
+    }
+  }
   if (body.gitMode === 'github' || body.gitMode === 'local-only') {
     patch.git_mode = body.gitMode;
   } else if ('gitMode' in body && body.gitMode !== undefined) {

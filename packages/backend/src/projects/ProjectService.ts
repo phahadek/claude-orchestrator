@@ -41,6 +41,7 @@ export interface Project {
   autoLaunchEnabled: boolean;
   autoLaunchMilestoneId: string | null;
   autoMergeEnabled: boolean;
+  milestoneBranching: 'two_tier' | 'flat' | null;
   createdAt: number;
   updatedAt: number;
   milestones: ProjectMilestone[];
@@ -91,6 +92,7 @@ function rowToProject(row: ProjectRow, milestones: MilestoneRow[]): Project {
     autoLaunchEnabled: row.auto_launch_enabled === 1,
     autoLaunchMilestoneId: row.auto_launch_milestone_id,
     autoMergeEnabled: row.auto_merge_enabled === 1,
+    milestoneBranching: row.milestone_branching ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     milestones: milestones.map(rowToMilestone),

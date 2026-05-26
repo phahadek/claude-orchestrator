@@ -19,6 +19,7 @@ export interface ProjectConfig {
   autoLaunchEnabled: boolean; // per-project toggle for the AutoLauncher
   autoLaunchMilestoneId: string | null; // milestone the AutoLauncher polls; null = first milestone
   autoMergeEnabled: boolean; // per-project toggle for the AutoMerger
+  milestoneBranching?: 'two_tier' | 'flat' | null; // NULL/undefined = fall back to corporate-mode default
 }
 
 function resolveClaudePath(): string {
@@ -107,6 +108,7 @@ function hydrateProject(p: {
   autoLaunchEnabled: boolean;
   autoLaunchMilestoneId: string | null;
   autoMergeEnabled: boolean;
+  milestoneBranching: 'two_tier' | 'flat' | null;
   milestones: { id: string; sourceId: string | null; name: string }[];
 }): ProjectConfig {
   // boards[].id is now the milestone row id (used as milestoneId for fetch_tasks).
@@ -128,6 +130,7 @@ function hydrateProject(p: {
     autoLaunchEnabled: p.autoLaunchEnabled,
     autoLaunchMilestoneId: p.autoLaunchMilestoneId,
     autoMergeEnabled: p.autoMergeEnabled,
+    milestoneBranching: p.milestoneBranching,
   };
   if (boards.length > 0) config.boards = boards;
   if (p.githubRepo) config.githubRepo = p.githubRepo;
@@ -179,6 +182,8 @@ export interface RuntimeSettings {
   ci_poll_max_minutes: number;
   /** Max review iterations before escalating to manual. */
   max_review_iterations: number;
+  /** When true, projects with no explicit milestone_branching default to two_tier mode. */
+  corporate_mode_enabled: boolean;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -208,4 +213,5 @@ export const runtimeSettings: RuntimeSettings = {
   ci_poll_interval_seconds: Number(process.env.CI_POLL_INTERVAL_SECONDS ?? 30),
   ci_poll_max_minutes: Number(process.env.CI_POLL_MAX_MINUTES ?? 30),
   max_review_iterations: 3,
+  corporate_mode_enabled: process.env.CORPORATE_MODE === 'true',
 };
