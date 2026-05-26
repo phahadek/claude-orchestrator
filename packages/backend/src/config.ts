@@ -76,7 +76,6 @@ export const ALLOWED_TOOLS = [
   'Bash(npx:*)',
   'Bash(node:*)',
   'Bash(tsc:*)',
-  'Bash(gh:*)',
   'Bash(cd:*)',
   'Bash(which:*)',
   'Bash(where:*)',
@@ -95,8 +94,6 @@ export const ALLOWED_TOOLS = [
   'Bash(pwd:*)',
   'mcp__claude_ai_Notion__*',
   'mcp__github__*',
-  'mcp__claude_ai_Asana__*',
-  'mcp__claude_ai_Google_Calendar__*',
 ];
 
 function hydrateProject(p: {

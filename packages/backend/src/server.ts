@@ -29,6 +29,7 @@ import { ReviewOrchestrator } from './github/ReviewOrchestrator';
 import { PRMergeWatcher } from './github/PRMergeWatcher';
 import { AutoMerger } from './github/AutoMerger';
 import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
+import { getCorporateMode } from './config/corporateMode';
 import { AutoLauncher } from './orchestration/AutoLauncher';
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
 import {
@@ -47,6 +48,11 @@ import type { PRReviewResult } from './github/PRReviewService';
 runMigrations();
 loadRuntimeSettingsFromDb();
 importProjectsFromEnv(process.env.PROJECTS);
+
+const _cm = getCorporateMode();
+console.log(
+  `[corporateMode] mode=${_cm.enabled ? 'corporate' : 'personal'} envLocked=${_cm.envLocked} gates=${JSON.stringify(_cm.gates)}`,
+);
 
 const ghostsRemoved = deleteGhostSessions();
 if (ghostsRemoved > 0) {
