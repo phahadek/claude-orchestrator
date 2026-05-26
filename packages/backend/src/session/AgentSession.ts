@@ -3,6 +3,7 @@ import { ALLOWED_TOOLS, runtimeSettings } from '../config';
 import {
   upsertSessionEvent,
   updateSessionStatus,
+  markSessionDone,
   getEventsBySession,
   insertPermissionDenial,
   upsertPullRequest,
@@ -753,6 +754,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
   }
 
   private async handleCleanExit(): Promise<void> {
+    const endedAt = Date.now();
     const events = getEventsBySession(this.sessionId);
     const last20 = events.slice(-20);
     let prUrl: string | undefined;
@@ -766,151 +768,168 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     }
 
     this.prUrl = prUrl;
-    updateSessionStatus(this.sessionId, 'done', Date.now());
+
+    // Atomically persist done + pr_url before any network or review-pipeline
+    // calls. This ensures the session is terminal in the DB even if the
+    // downstream review pipeline throws or the process dies mid-handleCleanExit.
+    markSessionDone(this.sessionId, endedAt, prUrl ?? null);
 
     if (this.sessionType === 'standard') {
-      if (prUrl && !this.prDetectedLive) {
-        // Fallback: live detection didn't fire (e.g. gh pr create via Bash).
-        this.taskBackend()
-          .attachPR(this.taskId, prUrl)
-          .catch((e) => console.error(`[AgentSession] attachPR failed: ${e}`));
-      }
-
-      // Always upsert notion_task_id and session_id onto the PR row when a
-      // PR URL is known at session end. This ensures the link is set even if
-      // PRSyncJob ran before handleCleanExit and created the row with null values.
-      // Capture existing PR state BEFORE the upsert overwrites it so the
-      // status-update step below can tell when the PR has already been merged.
-      let existingPrState: string | undefined;
-      if (prUrl) {
-        const prMatch = prUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
-        if (prMatch) {
-          const repo = prMatch[1];
-          const prNumber = parseInt(prMatch[2], 10);
-          existingPrState = getPRByNumber(prNumber, repo)?.state;
-          const now = new Date().toISOString();
-          let headSha: string | null = null;
-          if (this.githubClient) {
-            try {
-              const freshPR = await this.githubClient.fetchPR(repo, prNumber);
-              headSha = freshPR.headSha ?? null;
-            } catch (e) {
-              console.warn(
-                `[AgentSession] handleCleanExit: failed to fetch PR #${prNumber} from GitHub for head_sha:`,
-                e,
-              );
-            }
-          }
-          if (existingPrState !== 'merged' && existingPrState !== 'closed') {
-            upsertPullRequest({
-              pr_number: prNumber,
-              pr_url: prUrl,
-              notion_task_id: this.taskId || null,
-              session_id: this.sessionId,
-              repo,
-              title: null,
-              body: null,
-              head_branch: null,
-              base_branch: null,
-              state: 'open',
-              draft: 0,
-              review_result: null,
-              review_at: null,
-              created_at: now,
-              updated_at: now,
-              synced_at: now,
-              node_id: null,
-              head_sha: headSha,
-            });
-            if (!this.prDetectedLive) {
-              this.emit('pr_opened', {
-                prNumber,
-                repo,
-                taskId: this.taskId,
-                taskUrl: this.taskUrl,
-                contextUrl: this.projectContextUrl,
-              });
-            }
-          }
+      // Wrap in try-catch so review-pipeline errors (e.g. fetch failures) can
+      // never abort handleCleanExit and leave the session stuck at 'running'.
+      try {
+        if (prUrl && !this.prDetectedLive) {
+          // Fallback: live detection didn't fire (e.g. gh pr create via Bash).
+          this.taskBackend()
+            .attachPR(this.taskId, prUrl)
+            .catch((e) =>
+              console.error(`[AgentSession] attachPR failed: ${e}`),
+            );
         }
-      }
 
-      // Skip the "In Review" write when the PR is already merged or closed.
-      // The merge flow ends the session and sets the Notion task to "Done";
-      // without this guard handleCleanExit would race and regress the status.
-      if (
-        prUrl &&
-        existingPrState !== 'merged' &&
-        existingPrState !== 'closed'
-      ) {
-        this.taskBackend()
-          .updateStatus(this.taskId, '👀 In Review')
-          .then(() => {
-            this.broadcast({
-              type: 'task_status_changed',
-              notionTaskId: this.taskId,
-              newStatus: '👀 In Review',
-            });
-            emitTaskUpdated(this.taskId);
-          })
-          .catch((e) =>
-            console.error(`[AgentSession] updateStatus failed: ${e}`),
+        // Always upsert notion_task_id and session_id onto the PR row when a
+        // PR URL is known at session end. This ensures the link is set even if
+        // PRSyncJob ran before handleCleanExit and created the row with null values.
+        // Capture existing PR state BEFORE the upsert overwrites it so the
+        // status-update step below can tell when the PR has already been merged.
+        let existingPrState: string | undefined;
+        if (prUrl) {
+          const prMatch = prUrl.match(
+            /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/,
           );
-      }
-
-      // Local-only project: detect a non-empty diff and emit submission event.
-      if (this.projectId) {
-        const project = getProjectRowById(this.projectId);
-        if (project?.git_mode === 'local-only') {
-          try {
-            const branchName = await getCurrentBranch(this.worktreePath);
-            const baseBranch = 'dev';
-            if (branchName && branchName !== baseBranch) {
-              const hasDiff = await hasNonEmptyDiff(
-                this.worktreePath,
-                baseBranch,
-                branchName,
-              );
-              if (hasDiff) {
-                const now = new Date().toISOString();
-                insertLocalBranch({
-                  project_id: this.projectId,
-                  session_id: this.sessionId,
-                  branch_name: branchName,
-                  base_branch: baseBranch,
-                  status: 'open',
-                  review_result: null,
-                  created_at: now,
-                  updated_at: now,
-                });
-                this.broadcast({
-                  type: 'local_branch_submitted',
-                  projectId: this.projectId,
-                  sessionId: this.sessionId,
-                  branchName,
-                  baseBranch,
-                });
-                this.taskBackend()
-                  .updateStatus(this.taskId, '👀 In Review')
-                  .then(() => {
-                    this.broadcast({
-                      type: 'task_status_changed',
-                      notionTaskId: this.taskId,
-                      newStatus: '👀 In Review',
-                    });
-                    emitTaskUpdated(this.taskId);
-                  })
-                  .catch((e) =>
-                    console.error(`[AgentSession] updateStatus failed: ${e}`),
-                  );
+          if (prMatch) {
+            const repo = prMatch[1];
+            const prNumber = parseInt(prMatch[2], 10);
+            existingPrState = getPRByNumber(prNumber, repo)?.state;
+            const now = new Date().toISOString();
+            let headSha: string | null = null;
+            if (this.githubClient) {
+              try {
+                const freshPR = await this.githubClient.fetchPR(repo, prNumber);
+                headSha = freshPR.headSha ?? null;
+              } catch (e) {
+                console.warn(
+                  `[AgentSession] handleCleanExit: failed to fetch PR #${prNumber} from GitHub for head_sha:`,
+                  e,
+                );
               }
             }
-          } catch (e) {
-            console.error(
-              `[AgentSession] local-only submission check failed: ${e}`,
-            );
+            if (existingPrState !== 'merged' && existingPrState !== 'closed') {
+              upsertPullRequest({
+                pr_number: prNumber,
+                pr_url: prUrl,
+                notion_task_id: this.taskId || null,
+                session_id: this.sessionId,
+                repo,
+                title: null,
+                body: null,
+                head_branch: null,
+                base_branch: null,
+                state: 'open',
+                draft: 0,
+                review_result: null,
+                review_at: null,
+                created_at: now,
+                updated_at: now,
+                synced_at: now,
+                node_id: null,
+                head_sha: headSha,
+              });
+              if (!this.prDetectedLive) {
+                this.emit('pr_opened', {
+                  prNumber,
+                  repo,
+                  taskId: this.taskId,
+                  taskUrl: this.taskUrl,
+                  contextUrl: this.projectContextUrl,
+                });
+              }
+            }
           }
         }
+
+        // Skip the "In Review" write when the PR is already merged or closed.
+        // The merge flow ends the session and sets the Notion task to "Done";
+        // without this guard handleCleanExit would race and regress the status.
+        if (
+          prUrl &&
+          existingPrState !== 'merged' &&
+          existingPrState !== 'closed'
+        ) {
+          this.taskBackend()
+            .updateStatus(this.taskId, '👀 In Review')
+            .then(() => {
+              this.broadcast({
+                type: 'task_status_changed',
+                notionTaskId: this.taskId,
+                newStatus: '👀 In Review',
+              });
+              emitTaskUpdated(this.taskId);
+            })
+            .catch((e) =>
+              console.error(`[AgentSession] updateStatus failed: ${e}`),
+            );
+        }
+
+        // Local-only project: detect a non-empty diff and emit submission event.
+        if (this.projectId) {
+          const project = getProjectRowById(this.projectId);
+          if (project?.git_mode === 'local-only') {
+            try {
+              const branchName = await getCurrentBranch(this.worktreePath);
+              const baseBranch = 'dev';
+              if (branchName && branchName !== baseBranch) {
+                const hasDiff = await hasNonEmptyDiff(
+                  this.worktreePath,
+                  baseBranch,
+                  branchName,
+                );
+                if (hasDiff) {
+                  const now = new Date().toISOString();
+                  insertLocalBranch({
+                    project_id: this.projectId,
+                    session_id: this.sessionId,
+                    branch_name: branchName,
+                    base_branch: baseBranch,
+                    status: 'open',
+                    review_result: null,
+                    created_at: now,
+                    updated_at: now,
+                  });
+                  this.broadcast({
+                    type: 'local_branch_submitted',
+                    projectId: this.projectId,
+                    sessionId: this.sessionId,
+                    branchName,
+                    baseBranch,
+                  });
+                  this.taskBackend()
+                    .updateStatus(this.taskId, '👀 In Review')
+                    .then(() => {
+                      this.broadcast({
+                        type: 'task_status_changed',
+                        notionTaskId: this.taskId,
+                        newStatus: '👀 In Review',
+                      });
+                      emitTaskUpdated(this.taskId);
+                    })
+                    .catch((e) =>
+                      console.error(`[AgentSession] updateStatus failed: ${e}`),
+                    );
+                }
+              }
+            } catch (e) {
+              console.error(
+                `[AgentSession] local-only submission check failed: ${e}`,
+              );
+            }
+          }
+        }
+      } catch (e) {
+        console.error(
+          `[AgentSession] handleCleanExit post-done error for ${this.sessionId}:`,
+          e,
+        );
       }
     }
 

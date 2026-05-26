@@ -30,6 +30,7 @@ let mockProc: ReturnType<typeof createMockProc>;
 
 vi.mock('child_process', () => ({
   spawn: vi.fn(() => mockProc.proc),
+  execFile: vi.fn(),
 }));
 
 // Mock DB queries — these would hit a real SQLite db otherwise
@@ -37,6 +38,7 @@ vi.mock('../db/queries', () => ({
   upsertSessionEvent: vi.fn(() => 1),
   insertPermissionEvent: vi.fn(),
   updateSessionStatus: vi.fn(),
+  markSessionDone: vi.fn(),
   getEventsBySession: vi.fn(() => []),
   getRules: vi.fn(() => []),
   insertPermissionDenial: vi.fn(),
@@ -59,6 +61,7 @@ import {
   getRules,
   getEventsBySession,
   upsertSessionEvent,
+  markSessionDone,
   getPRBySessionId,
   getPRByNumber,
   setPauseReason,
@@ -1395,6 +1398,155 @@ describe('AgentSession', () => {
     await new Promise((r) => setTimeout(r, 0));
     mockProc.proc.emit('exit', 0);
     await runPromise;
+  });
+
+  // ── AC: clean-exit with PR — markSessionDone sets status+pr_url atomically ─
+  it('calls markSessionDone with prUrl when a PR URL is found at clean exit', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getEventsBySession).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'done-pr-session',
+        event_type: 'text',
+        payload: JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'text',
+                text: 'PR opened: https://github.com/owner/repo/pull/99',
+              },
+            ],
+          },
+        }),
+        timestamp: Date.now(),
+        message_id: null,
+      },
+    ]);
+
+    const session = new AgentSession(
+      'done-pr-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const messages: ServerMessage[] = [];
+    session.on('message', (msg: ServerMessage) => messages.push(msg));
+
+    const runPromise = session.run();
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    expect(vi.mocked(markSessionDone)).toHaveBeenCalledWith(
+      'done-pr-session',
+      expect.any(Number),
+      'https://github.com/owner/repo/pull/99',
+    );
+
+    const ended = messages.find((m) => m.type === 'session_ended');
+    expect(ended).toBeDefined();
+    expect((ended as { status: string }).status).toBe('done');
+  });
+
+  // ── AC: clean-exit without PR — markSessionDone still called ─────────────
+  it('calls markSessionDone with null prUrl when no PR URL found at clean exit', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getEventsBySession).mockReturnValue([]);
+
+    const session = new AgentSession(
+      'done-no-pr-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const messages: ServerMessage[] = [];
+    session.on('message', (msg: ServerMessage) => messages.push(msg));
+
+    const runPromise = session.run();
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    expect(vi.mocked(markSessionDone)).toHaveBeenCalledWith(
+      'done-no-pr-session',
+      expect.any(Number),
+      null,
+    );
+
+    const ended = messages.find((m) => m.type === 'session_ended');
+    expect(ended).toBeDefined();
+    expect((ended as { status: string }).status).toBe('done');
+  });
+
+  // ── AC: review pipeline error cannot abort handleCleanExit ────────────────
+  // When pr_opened emits and a synchronous listener throws, markSessionDone
+  // has already been called and session_ended is still broadcast.
+  it('broadcasts session_ended and calls markSessionDone even when pr_opened listener throws', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getEventsBySession).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'review-error-session',
+        event_type: 'text',
+        payload: JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'text',
+                text: 'PR: https://github.com/owner/repo/pull/88',
+              },
+            ],
+          },
+        }),
+        timestamp: Date.now(),
+        message_id: null,
+      },
+    ]);
+
+    const session = new AgentSession(
+      'review-error-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    // Simulate a synchronous throw from the review pipeline on pr_opened
+    session.on('pr_opened', () => {
+      throw new Error('TypeError: fetch failed (review pipeline crash)');
+    });
+
+    const messages: ServerMessage[] = [];
+    session.on('message', (msg: ServerMessage) => messages.push(msg));
+
+    const runPromise = session.run();
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    // markSessionDone must have been called before the throw
+    expect(vi.mocked(markSessionDone)).toHaveBeenCalledWith(
+      'review-error-session',
+      expect.any(Number),
+      'https://github.com/owner/repo/pull/88',
+    );
+
+    // session_ended must still be broadcast despite the review pipeline error
+    const ended = messages.find((m) => m.type === 'session_ended');
+    expect(ended).toBeDefined();
+    expect((ended as { status: string }).status).toBe('done');
   });
 
   it('fires handleInSessionApiError at most once even when multiple error events arrive', async () => {

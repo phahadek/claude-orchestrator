@@ -45,6 +45,7 @@ let mockProc: ReturnType<typeof createMockProc>;
 vi.mock('child_process', () => ({
   spawn: vi.fn(() => mockProc.proc),
   execSync: vi.fn(() => ''),
+  execFile: vi.fn(),
 }));
 
 // fs is mocked so existsSync can be controlled per-test; readFileSync /
@@ -144,6 +145,8 @@ vi.mock('../db/queries', () => ({
   getPRByNotionTaskId: vi.fn(() => null),
   getPRByNumber: vi.fn(() => null),
   updateSessionStatus: vi.fn(),
+  markSessionDone: vi.fn(),
+  backfillStuckResultSessions: vi.fn(() => 0),
   insertSession: vi.fn(),
   insertEvent: vi.fn(),
   upsertSessionEvent: vi.fn(() => 1),
@@ -166,6 +169,7 @@ import {
 import * as queries from '../db/queries';
 import type { ServerMessage } from '../ws/types';
 import type { Session } from '../db/types';
+import { backfillStuckResultSessions } from '../db/queries';
 
 function makeRunningSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -333,7 +337,61 @@ describe('resumeOrphanSessions() — healthy-worktree resume (integration)', () 
   });
 });
 
-// ── Test 3: pr_url carry-forward ─────────────────────────────────────────
+// ── Test 3: startup backfill for stuck sessions ───────────────────────────
+describe('resumeOrphanSessions() — stuck session backfill', () => {
+  it('calls backfillStuckResultSessions before resuming orphans', async () => {
+    vi.mocked(queries.getSessionsByStatus).mockReturnValue([]);
+    vi.mocked(backfillStuckResultSessions).mockReturnValue(0);
+
+    const sm = new SessionManager();
+    await sm.resumeOrphanSessions();
+
+    expect(backfillStuckResultSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs a message when backfill finds stuck sessions', async () => {
+    vi.mocked(queries.getSessionsByStatus).mockReturnValue([]);
+    vi.mocked(backfillStuckResultSessions).mockReturnValue(2);
+
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const sm = new SessionManager();
+    await sm.resumeOrphanSessions();
+
+    expect(
+      consoleSpy.mock.calls.some((args) =>
+        args.some(
+          (a) =>
+            typeof a === 'string' &&
+            a.includes('backfilled') &&
+            a.includes('2'),
+        ),
+      ),
+    ).toBe(true);
+
+    consoleSpy.mockRestore();
+  });
+
+  it('backfill runs before getSessionsByStatus so already-done sessions are not resumed', async () => {
+    const callOrder: string[] = [];
+    vi.mocked(backfillStuckResultSessions).mockImplementation(() => {
+      callOrder.push('backfill');
+      return 1;
+    });
+    vi.mocked(queries.getSessionsByStatus).mockImplementation(() => {
+      callOrder.push('getSessionsByStatus');
+      return [];
+    });
+
+    const sm = new SessionManager();
+    await sm.resumeOrphanSessions();
+
+    expect(callOrder[0]).toBe('backfill');
+    expect(callOrder[1]).toBe('getSessionsByStatus');
+  });
+});
+
+// ── Test 4: pr_url carry-forward ─────────────────────────────────────────
 describe('resumeOrphanSessions() — pr_url carry-forward (integration)', () => {
   it('copies row.pr_url onto AgentSession.prUrl so cleanupWorktree does NOT delete the branch on clean exit', async () => {
     const prUrl = 'https://github.com/owner/repo/pull/42';
