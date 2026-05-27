@@ -7,8 +7,8 @@
 
 ## Task Assignment
 
-- **Task**: Fix Windows path normalization false-positive in worktree-escape audit
-- **Notion task**: https://www.notion.so/Fix-Windows-path-normalization-false-positive-in-worktree-escape-audit-36d22f9152f381ce8982d885133aed68
+- **Task**: Surface CI failure badges on task cards (parity with PR cards)
+- **Notion task**: https://www.notion.so/Surface-CI-failure-badges-on-task-cards-parity-with-PR-cards-36d22f9152f3818b80b5ef04282a82c0
 - **Project context**: https://www.notion.so/33222f9152f38188b65fd912e40890a2
 
 ---
@@ -124,7 +124,7 @@ Run in order — all must pass before opening the PR:
 
 ## Git Isolation
 
-> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\a35bd5f2-e296-415f-9c2d-fc1209dffd1f`.**
+> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\a7190731-86a9-4d8b-b895-02c96be3e7e0`.**
 > This is your `cwd`. All commands run here. Never navigate to or operate on any parent directory.
 
 - All git commands must run inside the worktree directory (your `cwd`)
@@ -141,7 +141,7 @@ Run in order — all must pass before opening the PR:
 > namespace to prevent writes outside the worktree. All isolation is prompt-level.
 > Violating these rules can corrupt the developer's live environment.
 
-All file writes **must stay inside the worktree directory** (`C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\a35bd5f2-e296-415f-9c2d-fc1209dffd1f`).
+All file writes **must stay inside the worktree directory** (`C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\a7190731-86a9-4d8b-b895-02c96be3e7e0`).
 
 - **Never write to the project root or any path above the worktree.**
   Scripts, tools, and generated outputs must target paths under the worktree, not the parent repo.
@@ -182,81 +182,56 @@ Use the Write tool for any file creation. Never use `cat >`, `printf >`, or `ech
 > Do NOT re-fetch this from Notion — use the content below as your source of truth.
 
 ## Summary
-The post-hoc auditWorktreeEscape in SessionAuditor.ts produces false-positive worktree_escape violations on every Windows session, because the Claude CLI reports tool-call file paths in Unix-style drive-rootless form (/Users/phadek/...) while the session's worktree_path is stored Windows-native (C:\Users\phadek\...). The audit's normalizePath falls back to path.normalize(), which does not add a drive letter on Windows, so the prefix comparison fails. Switch to path.resolve(baseDir, p) so drive-rootless absolute paths inherit the base directory's drive.
+When a task's linked PR has CI failures, the PR card surfaces ❌ CI failing / ⚠ CI unstable badges but the task card does not. The orchestrator has all the data needed on the task aggregate — just render the same badges using the same predicates the PR card already uses.
 ## Dependencies
-None. Localized fix in SessionAuditor.ts and its tests.
+None. Frontend-only change; backend already returns the relevant fields.
 ## Context
-### Root cause (confirmed against PR #399's session)
-PR #399 session 632536ef-9992-4a07-b2cc-54960f744e6f ran on a Windows host. Every Edit/Write tool call recorded a file_path in Unix-style form — e.g.:
-```javascript
-/Users/phadek/IdeaProjects/claude-orchestrator/.claude/worktrees/632536ef-.../packages/backend/src/db/types.ts
-```
-But the session row's worktree_path (stored when the worktree was created) is Windows-native:
-```javascript
-C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\632536ef-...
-```
-SessionAuditor.ts:372-379 normalizePath handles only Git-Bash /c/foo style (single-letter drive after the leading slash):
-```typescript
-function normalizePath(p: string): string {
-  const gitBashMatch = /^\/([a-zA-Z])\//i.exec(p);
-  if (gitBashMatch) {
-    return path.normalize(`${gitBashMatch[1].toUpperCase()}:\\${p.slice(3)}`);
-  }
-  return path.normalize(p);
-}
-```
-/Users/phadek/... does not match the Git-Bash pattern (the segment after the first / is Users, not a single letter). It falls through to path.normalize(p), which on Windows returns \Users\phadek\... (no drive letter). The prefix comparison in auditWorktreeEscape:
-```typescript
-resolved !== normalizedWorktree && !resolved.startsWith(worktreePrefix)
-```
-fails because \Users\phadek\... does not start with C:\Users\phadek\.... Every file the session edits inside its own worktree is reported as a worktree_escape violation, and the formatted feedback is routed back to the session at end-of-session.
-### Why path.resolve(baseDir, p) is the right primitive
-Verified empirically:
-```javascript
-path.normalize('/Users/phadek/...')                    → \Users\phadek\...           (no drive)
-path.resolve('/Users/phadek/...')                      → C:\Users\phadek\...        (cwd's drive)
-path.resolve(worktree, '/Users/phadek/...')            → C:\Users\phadek\...        (worktree's drive)
-path.resolve(worktree, 'C:\\Users\\phadek\\X')          → C:\Users\phadek\X           (absolute wins)
-path.resolve(worktree, 'C:\\Other\\X')                  → C:\Other\X                  (different absolute path stays)
-```
-Passing the session's worktree_path as the base makes the normalization robust even when the backend's process.cwd() is on a different drive from the session worktree.
-The Git-Bash conversion must still happen before path.resolve — otherwise path.resolve(worktree, '/c/Users/...') would produce C:\c\Users\... (literal \c\ segment, wrong).
+### Observed parity gap
+PR view for #404 (feat: autofix-on-ci-failure) renders three pill badges:
+- ✅ Approved
+- ❌ CI failing
+- ⚠ CI unstable
+The corresponding task card (Run orchestrator autofix on CI failure before forwarding to the session) renders only:
+- running (session status)
+- ✅ Approved
+The CI failure state is invisible from the task-board view, so a viewer scanning the task board can't tell that the PR is blocked on CI without opening the PR side panel.
+### Where the badges already exist
+packages/frontend/src/components/WorkItemCard.tsx (the PR card) renders the badges from these PR fields:
+- pr.mergeState === 'ci_failed' → ❌ CI failing (line 354)
+- pr.mergeState === 'unstable' → ⚠ CI unstable (line 371)
+- pr.pauseReason === 'ci_failing' → same ❌ CI failing badge (line 239)
+The getActiveTaskAggregates query (packages/backend/src/db/queries.ts:1294) already returns pr_merge_state and pr_pause_reason on TaskAggregateRow, and the WS serialization carries them through to the frontend (see packages/frontend/src/types/taskView.ts).
 ### What changes
-packages/backend/src/session/SessionAuditor.ts:372-379 — update normalizePath to take an optional baseDir and resolve against it:
-```typescript
-function normalizePath(p: string, baseDir?: string): string {
-  // Git-Bash /c/foo → C:\foo. Must precede path.resolve, which would otherwise
-  // mangle the single-letter drive segment.
-  const gitBashMatch = /^\/([a-zA-Z])\//i.exec(p);
-  if (gitBashMatch) {
-    p = `${gitBashMatch[1].toUpperCase()}:\\${p.slice(3)}`;
-  }
-  return baseDir ? path.resolve(baseDir, p) : path.normalize(p);
-}
-```
-SessionAuditor.ts:175,185 — pass worktreePath to both normalizePath calls in auditWorktreeEscape:
-```typescript
-const normalizedWorktree = normalizePath(worktreePath);  // unchanged — baseDir not needed here
-// ...
-const resolved = normalizePath(p, worktreePath);          // new — supply the base
-```
-The worktree path is itself canonical (absolute, drive-prefixed), so passing or omitting baseDir for the first call is equivalent.
+1. Extract the CI badge logic from WorkItemCard.tsx into a small shared component (e.g. packages/frontend/src/components/CIBadges.tsx) that takes { mergeState, pauseReason } and renders the relevant pills. Single source of truth.
+1. Render <CIBadges /> on TaskCard.tsx next to the existing status/verdict badges, using the same fields surfaced via the task aggregate.
+1. Keep visual styling identical to the PR card (reuse WorkItemCard.module.css rules or factor them into the shared component's own stylesheet).
+### Coverage of states (matches PR card)
+
+If the PR is merged or closed, suppress the badges (state is no longer actionable).
 ### Out of scope
-- The session's own routed feedback now correctly excludes these false positives, but past session_audits rows are not retroactively cleaned (purely informational).
-- The extractAbsolutePathsFromCommand Bash regexes (SessionAuditor.ts:355-365) are unchanged — they already capture C:\foo, C:/foo, and /c/foo correctly; the bug is purely in normalization.
+- Adding new CI states beyond what the PR card surfaces today.
+- Surfacing CI failure badges on the milestone-level board summary.
+- Tooltip / click-to-expand on the badges — keep them informational, same as the PR card.
 ## Acceptance criteria
 ### 🤖 Automated tests
-- Unit test: Edit tool with file_path = '/Users/phadek/IdeaProjects/X/.claude/worktrees/<id>/file.ts' and worktree 'C:\\Users\\phadek\\IdeaProjects\\X\\.claude\\worktrees\\<id>' produces no violation
-- Unit test: Edit tool with file_path = '/Users/phadek/Documents/elsewhere.txt' and the same worktree produces a violation (the path really is outside the worktree)
-- Unit test: Write tool with Git-Bash file_path = '/c/Users/phadek/IdeaProjects/X/.claude/worktrees/<id>/file.ts' continues to pass (no regression on the existing Git-Bash case)
-- Unit test: Bash command containing C:\\Users\\phadek\\IdeaProjects\\X\\.claude\\worktrees\\<id>\\file.ts continues to pass (no regression on Windows-native case)
-- Unit test: Bash command containing an absolute path outside the worktree still produces a violation
-- Unit test: relative file_path (e.g. 'packages/backend/src/db/types.ts') is resolved against the worktree base and produces no violation when the resolved path is inside the worktree
 - tsc --noEmit passes for both packages
-- Existing SessionAuditor.test.ts cases continue to pass
+- Component test: <CIBadges> with mergeState='ci_failed' renders the ❌ CI failing pill
+- Component test: <CIBadges> with mergeState='unstable' renders the ⚠ CI unstable pill
+- Component test: <CIBadges> with pauseReason='ci_failing' renders the ❌ CI failing pill (independent of mergeState)
+- Component test: <CIBadges> with mergeState='clean' and pauseReason=null renders nothing
+- Component test: <CIBadges> with the PR merged renders nothing (suppressed)
+- TaskCard test: a task aggregate with prMergeState='ci_failed' renders ❌ CI failing on the task card
+- TaskCard test: a task aggregate with prMergeState='unstable' renders ⚠ CI unstable on the task card
+- TaskCard test: a task aggregate with no PR renders no CI badges
+- WorkItemCard continues to render identical badges via the shared component (regression coverage)
 ## Files / paths affected
-- packages/backend/src/session/SessionAuditor.ts (update — normalizePath signature + the two callers in auditWorktreeEscape)
-- packages/backend/src/session/SessionAuditor.test.ts (update — add the cases above)
+- packages/frontend/src/components/CIBadges.tsx (new — shared component)
+- packages/frontend/src/components/CIBadges.module.css (new — styling, or reused from WorkItemCard.module.css)
+- packages/frontend/src/components/WorkItemCard.tsx (update — replace inline badge JSX with <CIBadges>)
+- packages/frontend/src/components/TaskCard.tsx (update — render <CIBadges>)
+- packages/frontend/src/components/__tests__/CIBadges.test.tsx (new)
+- packages/frontend/src/components/__tests__/TaskCard.test.tsx (update — add cases)
+- packages/frontend/src/components/__tests__/PRCard.test.tsx (update if needed for the regression case)
 ## Implementation notes
 > To be filled in during/after implementation.
 
@@ -265,488 +240,1005 @@ The worktree path is itself canonical (absolute, drive-prefixed), so passing or 
 > These are the current contents of files listed in the task spec.
 > They were pre-read by the orchestrator so you can skip exploration.
 
-### `packages/backend/src/session/SessionAuditor.ts`
+### `packages/frontend/src/components/WorkItemCard.tsx`
 ```
-import path from 'path';
-import { getTaskBackend } from '../tasks/TaskBackend';
-import type { TaskBackend } from '../tasks/TaskBackend';
-import { parseSection } from '../notion/NotionClient';
-import type { GitHubClient } from '../github/GitHubClient';
-import { getPRByNotionTaskId, getEventsBySession } from '../db/queries';
-import type { WorktreeEscapeViolation, SessionEvent } from '../db/types';
+import { useState } from 'react';
+import styles from './WorkItemCard.module.css';
 
-// ── Public interfaces ────────────────────────────────────────────────────────
+export interface PRReviewDimension {
+  name: string;
+  passed: boolean;
+  notes: string;
+}
 
-export interface SessionAudit {
+export interface PRReviewResult {
+  verdict: 'approved' | 'needs_changes' | 'incomplete' | 'error';
+  dimensions?: PRReviewDimension[];
+  summary: string;
+}
+
+// ── PR work item (GitHub pull request) ────────────────────────────
+
+export interface PRWorkItem {
+  type: 'pr';
+  prNumber: number;
+  prUrl: string;
+  title: string;
+  headBranch: string;
+  branchName: string;
+  baseBranch: string;
+  state: string;
+  notionTaskId: string | null;
+  notionTaskTitle: string | null;
+  sessionId: string | null;
+  reviewSessionId: string | null;
+  repo: string;
+  reviewResult: PRReviewResult | null;
+  reviewedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  reviewIteration?: number;
+  mergeState: string | null;
+  failingChecks?: string[] | null;
+  pauseReason?: string | null;
+  autoMergeEnabled: boolean;
+}
+
+// ── Local branch work item (local-only project session) ────────────
+
+export interface LocalBranchWorkItem {
+  type: 'local_branch';
   sessionId: string;
-  prOpened: boolean;
-  prTargetsBranch: string | null;
-  taskStatusAfter: string | null;
-  violations: (string | WorktreeEscapeViolation)[];
-  specMismatch: string | null;
-  auditedAt: string;
+  branchName: string;
+  baseBranch: string;
+  status: string;
+  reviewResult: PRReviewResult | null;
+  createdAt: string;
+  autoMergeEnabled: boolean;
+  notionTaskId: string | null;
+  notionTaskTitle: string | null;
 }
 
-/** Minimal interface used to route audit failures back to a live session. */
-export interface ISessionManager {
-  send(sessionId: string, message: string): void;
+export type WorkItemListItem = PRWorkItem | LocalBranchWorkItem;
+
+// ── Backward-compat alias used by existing tests and PRPanel ──────
+
+/** @deprecated Use PRWorkItem or WorkItemListItem instead */
+export type PRListItem = PRWorkItem;
+
+export interface WorkItemCardProps {
+  item: WorkItemListItem;
+  onReview: (prNumber: number) => void;
+  onMerge: (prNumber: number) => void;
+  onRemove: (prNumber: number) => void;
+  onViewSession?: (sessionId: string) => void;
+  onReReview: (prNumber: number) => void;
+  onFixConflicts: (prNumber: number) => void;
+  onApprove: (prNumber: number) => void;
+  reviewInFlight: boolean;
+  mergeInFlight: boolean;
+  checkingMergeability?: boolean;
+  removeInFlight: boolean;
+  reReviewInFlight: boolean;
+  fixConflictsInFlight: boolean;
+  approveInFlight: boolean;
+  reviewElapsed: number;
+  error: string | null;
 }
 
-/** Minimal session shape needed by the auditor — avoids a circular import. */
-export interface AuditableSession {
-  sessionId: string;
-  taskId: string;
-  prUrl: string | undefined;
-  sessionType: string;
-  worktreePath: string | null;
+const VERDICT_LABELS: Record<string, string> = {
+  approved: '✅ Approved',
+  needs_changes: '⚠️ Needs Changes',
+  incomplete: '❌ Incomplete',
+  error: '⚠️ Review Error',
+};
+
+// ── Local branch card ──────────────────────────────────────────────
+
+function LocalBranchCard({
+  item,
+  onViewSession,
+}: {
+  item: LocalBranchWorkItem;
+  onViewSession?: (sessionId: string) => void;
+}) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const verdict = item.reviewResult?.verdict ?? null;
+
+  const verdictClass = verdict
+    ? styles[`verdict-${verdict.replace('_', '-')}`]
+    : styles['verdict-none'];
+  const verdictLabel = verdict ? VERDICT_LABELS[verdict] : '— Not reviewed';
+
+  return (
+    <div className={styles.card}>
+      <div className={styles.cardHeader}>
+        <div className={styles.titleRow}>
+          <span className={styles.localBadge}>Local</span>
+          <span className={styles.title}>{item.branchName}</span>
+        </div>
+        <span className={styles.branch}>
+          {item.branchName} → {item.baseBranch}
+        </span>
+        {(item.notionTaskTitle || item.sessionId) && (
+          <div className={styles.metaRow}>
+            {item.notionTaskTitle && (
+              <div className={styles.notionRow}>
+                <span className={styles.notionLabel}>Task:</span>
+                {item.notionTaskId ? (
+                  <a
+                    href={`https://notion.so/${item.notionTaskId.replace(/-/g, '')}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={styles.notionLink}
+                  >
+                    {item.notionTaskTitle} ↗
+                  </a>
+                ) : (
+                  <span className={styles.notionTitle}>
+                    {item.notionTaskTitle}
+                  </span>
+                )}
+              </div>
+            )}
+            {item.sessionId && onViewSession && (
+              <button
+                type="button"
+                className={styles.sessionLink}
+                onClick={() => onViewSession(item.sessionId)}
+              >
+                Session ⇗
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className={styles.cardActions}>
+        <span className={`${styles.verdictBadge} ${verdictClass}`}>
+          {verdictLabel}
+        </span>
+      </div>
+
+      {item.reviewResult && (
+        <div className={styles.reviewDetails}>
+          <button
+            type="button"
+            className={styles.detailsToggle}
+            onClick={() => setDetailsOpen((o) => !o)}
+          >
+            {detailsOpen ? '▼' : '▶'} Review details
+          </button>
+          {detailsOpen && (
+            <div className={styles.detailsBody}>
+              {item.reviewResult.verdict === 'error' ? (
+                <div className={styles.reviewError}>
+                  Review failed: {item.reviewResult.summary}
+                </div>
+              ) : (
+                <>
+                  {(item.reviewResult.dimensions ?? []).map((dim) => (
+                    <div key={dim.name} className={styles.dimension}>
+                      <span className={styles.dimIcon}>
+                        {dim.passed ? '✅' : '⚠️'}
+                      </span>
+                      <span className={styles.dimName}>{dim.name}</span>
+                      <span className={styles.dimNotes}>{dim.notes}</span>
+                    </div>
+                  ))}
+                  <div className={styles.reviewSummary}>
+                    {item.reviewResult.summary}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
-// ── SessionAuditor ───────────────────────────────────────────────────────────
+// ── PR card (GitHub pull request) ─────────────────────────────────
 
-export class SessionAuditor {
-  /**
-   * The first parameter accepts either a TaskBackend (legacy injection — used by
-   * tests) or a project id (string). When it is a project id, the backend is
-   * resolved per-call via `getTaskBackend(projectId)`. This dual shape preserves
-   * the test pattern that pre-existed the per-project routing refactor.
-   */
-  constructor(
-    private notionClientOrProjectId: TaskBackend | string,
-    private githubClient?: GitHubClient,
-    private sessionManager?: ISessionManager,
-  ) {}
+function PRWorkItemCard({
+  item: pr,
+  onReview,
+  onMerge,
+  onRemove,
+  onViewSession,
+  onReReview,
+  onFixConflicts,
+  onApprove,
+  reviewInFlight,
+  mergeInFlight,
+  checkingMergeability = false,
+  removeInFlight,
+  reReviewInFlight,
+  fixConflictsInFlight,
+  approveInFlight,
+  reviewElapsed,
+  error,
+}: Omit<WorkItemCardProps, 'item'> & { item: PRWorkItem }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
-  private resolveBackend(): TaskBackend {
-    if (typeof this.notionClientOrProjectId === 'string') {
-      return getTaskBackend(this.notionClientOrProjectId);
-    }
-    return this.notionClientOrProjectId;
-  }
+  const isFinished = pr.state === 'merged' || pr.state === 'closed';
+  const verdict = pr.reviewResult?.verdict ?? null;
+  const hasConflicts = !isFinished && pr.mergeState === 'dirty';
+  const hasCiFailures = !isFinished && pr.mergeState === 'ci_failed';
+  const isBlocked = !isFinished && pr.mergeState === 'blocked';
+  const isUnstable = !isFinished && pr.mergeState === 'unstable';
+  const isUnknownMergeState = !isFinished && pr.mergeState === 'unknown';
+  const mergeBlocked =
+    hasConflicts ||
+    hasCiFailures ||
+    isBlocked ||
+    isUnstable ||
+    isUnknownMergeState;
+  const canMerge =
+    pr.state === 'open' && verdict === 'approved' && !mergeBlocked;
+  const failingChecks = pr.failingChecks ?? [];
+  const showCiBadge =
+    !isFinished &&
+    (pr.mergeState === 'ci_failed' || pr.pauseReason === 'ci_failing');
+  const ciChecksUrl = `https://github.com/${pr.repo}/pull/${pr.prNumber}/checks`;
+  const sessionAlive = pr.sessionId !== null;
+  const reviewAction: 'run-review' | 're-review' | 'fix-conflicts' | null =
+    isFinished
+      ? null
+      : hasConflicts
+        ? 'fix-conflicts'
+        : verdict === 'approved'
+          ? null
+          : (verdict === 'needs_changes' || verdict === 'incomplete') &&
+              sessionAlive
+            ? 're-review'
+            : 'run-review';
+  const showApproveButton =
+    !isFinished && verdict !== 'approved' && !hasConflicts;
 
-  /**
-   * Run all post-session checks and return a SessionAudit record.
-   * Non-blocking: GitHub/Notion failures are caught and skipped, not thrown.
-   */
-  async audit(
-    session: AuditableSession,
-    exitCode: number | null,
-  ): Promise<SessionAudit> {
-    const violations: (string | WorktreeEscapeViolation)[] = [];
-    let prTargetsBranch: string | null = null;
-    let specMismatch: string | null = null;
-
-    // 1. PR opened on clean exit?
-    const prOpened =
-      session.prUrl != null ||
-      (!!session.taskId && getPRByNotionTaskId(session.taskId) != null);
-    if (exitCode === 0 && !prOpened) {
-      violations.push('Clean exit but no PR opened');
-    }
-
-    if (session.prUrl && this.githubClient) {
-      const prMatch = session.prUrl.match(
-        /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/,
-      );
-      if (prMatch) {
-        const repo = prMatch[1];
-        const prNumber = parseInt(prMatch[2], 10);
-
-        let pr: import('../github/types').PullRequest | null = null;
-        try {
-          pr = await this.githubClient.fetchPR(repo, prNumber);
-        } catch (err) {
-          console.warn(
-            `[SessionAuditor] GitHub fetchPR failed — skipping PR checks: ${err}`,
-          );
-        }
-
-        if (pr) {
-          // 2. PR targets correct branch (dev)?
-          prTargetsBranch = pr.baseBranch;
-          if (pr.baseBranch !== 'dev') {
-            violations.push(`PR targets ${pr.baseBranch} instead of dev`);
-          }
-
-          // 3. PR title format: must start with "feat: "
-          if (!pr.title.startsWith('feat: ')) {
-            violations.push('PR title does not match format');
-          }
-
-          // 4. PR body readable (no escaped newlines)?
-          if (pr.body && pr.body.includes('\\n')) {
-            violations.push('PR body contains escaped newlines');
-          }
-
-          // 5. PR body has required sections?
-          const body = pr.body ?? '';
-          if (!body.includes('## Summary')) {
-            violations.push('PR body missing required section: ## Summary');
-          }
-          if (
-            !body.includes('## Test plan') &&
-            !body.includes('## Automated Tests')
-          ) {
-            violations.push('PR body missing required section: ## Test plan');
-          }
-
-          // 6. PR content matches task spec?
-          specMismatch = await this.compareToSpec(
-            repo,
-            prNumber,
-            session.taskId,
-          );
-          if (specMismatch) {
-            violations.push(specMismatch);
-          }
-        }
-      }
-    }
-
-    if (session.worktreePath) {
-      try {
-        const escapes = await this.auditWorktreeEscape(
-          session.sessionId,
-          session.worktreePath,
-        );
-        violations.push(...escapes);
-      } catch (err) {
-        console.warn(`[SessionAuditor] auditWorktreeEscape failed: ${err}`);
-      }
-    }
-
-    const audit: SessionAudit = {
-      sessionId: session.sessionId,
-      prOpened,
-      prTargetsBranch,
-      taskStatusAfter: null,
-      violations,
-      specMismatch,
-      auditedAt: new Date().toISOString(),
-    };
-
-    if (violations.length > 0) {
-      this.routeFailuresToSession(session.sessionId, violations);
-    }
-
-    return audit;
-  }
-
-  /**
-   * Scan session_events for tool calls that wrote to paths outside the worktree.
-   * Checks Write/Edit tool file_path inputs and Bash command absolute paths.
-   */
-  async auditWorktreeEscape(
-    sessionId: string,
-    worktreePath: string,
-  ): Promise<WorktreeEscapeViolation[]> {
-    const events = getEventsBySession(sessionId);
-    const violations: WorktreeEscapeViolation[] = [];
-    const normalizedWorktree = normalizePath(worktreePath);
-    const worktreePrefix = normalizedWorktree.endsWith(path.sep)
-      ? normalizedWorktree
-      : normalizedWorktree + path.sep;
-
-    for (const event of events) {
-      const blocks = extractToolUseBlocks(event);
-      for (const block of blocks) {
-        const paths = extractPathsFromBlock(block);
-        for (const p of paths) {
-          const resolved = normalizePath(p);
-          if (
-            resolved !== normalizedWorktree &&
-            !resolved.startsWith(worktreePrefix)
-          ) {
-            violations.push({
-              type: 'worktree_escape',
-              tool: block.name,
-              path: p,
-              escapedTo: resolved,
-            });
-          }
-        }
-      }
-    }
-
-    return violations;
-  }
-
-  /**
-   * Compare the files changed in a PR against the "Files / paths affected"
-   * section of the Notion task spec. Returns a summary string if there is a
-   * mismatch, or null if everything looks consistent (or if the check cannot
-   * be performed).
-   */
-  private async compareToSpec(
-    repo: string,
-    prNumber: number,
-    taskId: string,
-  ): Promise<string | null> {
-    if (!this.githubClient || !taskId) return null;
-
-    let diffFiles: string[] = [];
-    try {
-      const prDiff = await this.githubClient.fetchDiff(prNumber, repo);
-      diffFiles = prDiff.filesChanged;
-    } catch (err) {
-      console.warn(
-        `[SessionAuditor] fetchDiff failed — skipping spec comparison: ${err}`,
-      );
-      return null;
-    }
-
-    let taskMarkdown: string | null;
-    try {
-      taskMarkdown = await this.resolveBackend().fetchTaskPage(taskId);
-    } catch (err) {
-      console.warn(
-        `[SessionAuditor] fetchTaskPage failed — skipping spec comparison: ${err}`,
-      );
-      return null;
-    }
-
-    const filesSection = taskMarkdown
-      ? parseSection(taskMarkdown, 'files')
-      : '';
-    if (!filesSection.trim()) return null;
-
-    // Extract file paths from the filesSection (lines containing slashes or dots)
-    const specFiles = filesSection
-      .split('\n')
-      .map((line) => line.replace(/^[-*\s]+/, '').trim())
-      .filter((line) => line.includes('/') || line.includes('.'));
-
-    if (specFiles.length === 0) return null;
-
-    // Files in PR but not in spec
-    const unexpected = diffFiles.filter(
-      (f) => !specFiles.some((s) => f.includ
+  const verdictClass = isFinished
+    ? styles[`state-${pr.state}`]
+    : verdict
+      ? styles[`verdict-${verdict.replace('_', '-')}`]
+      : styles['verdict-none
 [... truncated]
 ```
 
-### `packages/backend/src/session/SessionAuditor.test.ts`
+### `packages/frontend/src/components/TaskCard.tsx`
 ```
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import fs from 'fs';
-import path from 'path';
-import { SessionAuditor } from './SessionAuditor';
-import type { AuditableSession, ISessionManager } from './SessionAuditor';
-import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
-import type { GitHubClient } from '../github/GitHubClient';
-import type { PullRequest } from '../github/types';
-import type { WorktreeEscapeViolation } from '../db/types';
+import type { TaskView, DisplayStatus, PauseReason } from '../types/taskView';
+import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
+import { useDispatch } from '../hooks/useDispatch';
+import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
+import styles from './TaskCard.module.css';
 
-vi.mock('../db/queries', () => ({
-  getPRByNotionTaskId: vi.fn(() => null),
-  getEventsBySession: vi.fn(() => []),
-}));
+interface Props {
+  task: TaskView;
+  selected: boolean;
+  onClick: () => void;
+  send: (msg: ClientMessage) => void;
+  project: ProjectConfig | null;
+}
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+const STATUS_LABELS: Record<DisplayStatus, string> = {
+  needs_attention: '⚠️ Needs Attention',
+  ready_to_merge: '✅ Ready to Merge',
+  in_progress: '🔄 In Progress',
+  in_review: '👀 In Review',
+  ready: '🗂️ Ready',
+  done: '✔️ Done',
+  backlog: '🗂️ Backlog',
+};
 
-function makeSession(
-  overrides: Partial<AuditableSession> = {},
-): AuditableSession {
+const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
+  max_reviews: 'Max review iterations reached — re-review or close the PR.',
+  stuck_timeout: 'Session stuck — no progress within the timeout window.',
+  ci_failing: 'CI is failing — fix the failing checks and push.',
+  auto_merge_failed: 'Auto-merge failed — merge manually or investigate.',
+  pr_closed: 'PR was closed during auto-merge — reopen or create a new PR.',
+  review_failed: 'Re-review failed unexpectedly — check the backend logs.',
+  api_overloaded:
+    'API overloaded (529) — session paused. Resume when the API recovers.',
+  merge_conflict:
+    'Merge conflict detected — rebase onto the base branch and resolve conflicts.',
+  awaiting_human_approval:
+    'Awaiting human approval — approve the PR to proceed with auto-merge.',
+  human_changes_requested:
+    'Human reviewer requested changes — address the feedback and push.',
+  pr_body_invalid:
+    'PR body missing required sections — update the PR description and resume.',
+  attribution_missing:
+    'Commit attribution trailer missing — add AI-Authored-By to commits and push.',
+};
+
+function verdictLabel(verdict: string): string {
+  if (verdict === 'approved') return '✅ Approved';
+  if (verdict === 'needs_changes') return '🔁 Needs changes';
+  if (verdict === 'incomplete') return '❌ Incomplete';
+  return verdict;
+}
+
+function launchTooltip(task: TaskView): string {
+  if (task.notionStatus !== '🗂️ Ready') return 'Task is not Ready';
+  if (!task.taskType.includes('💻')) return 'Non-code task';
+  if (task.blocked) return `Blocked by ${task.blockerNames.join(', ')}`;
+  return '';
+}
+
+export function TaskCard({ task, selected, onClick, send, project }: Props) {
+  const { codeSession, pr, review } = task;
+  const statusKey = task.displayStatus.replace(/_/g, '-') as string;
+  const dispatchTask = useDispatch(send, project);
+  const isNonCode = !task.taskType.includes('💻');
+
+  // Only Ready code tasks that aren't blocked can be launched.
+  // In Progress and In Review tasks already have an active session — launching
+  // another would create a duplicate.
+  const isLaunchable =
+    task.notionStatus === '🗂️ Ready' && !isNonCode && !task.blocked;
+
+  const tooltip = isLaunchable ? '' : launchTooltip(task);
+
+  const handleLaunch = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!isLaunchable) return;
+    dispatchTask([{ taskId: task.taskId, taskType: task.taskType }]);
+  };
+
+  return (
+    <div
+      className={`${styles.card} ${selected ? styles.selected : ''} ${isNonCode ? styles.nonCode : ''}`}
+      onClick={onClick}
+      data-status={task.displayStatus}
+    >
+      <div className={styles.header}>
+        <span className={styles.taskName}>{task.taskName}</span>
+        <span
+          className={`${styles.statusBadge} ${styles[`status-${statusKey}`] ?? ''}`}
+          title={
+            task.pauseReason ? PAUSE_REASON_LABELS[task.pauseReason] : undefined
+          }
+        >
+          {STATUS_LABELS[task.displayStatus]}
+        </span>
+      </div>
+
+      {task.priority && <div className={styles.priority}>{task.priority}</div>}
+
+      {!isNonCode && (
+        <>
+          {codeSession && (
+            <div className={styles.sessionRow}>
+              <span
+                className={`${styles.sessionStatus} ${styles[`session-${codeSession.status}`] ?? ''}`}
+              >
+                {codeSession.status}
+              </span>
+              {codeSession.lastMessage && (
+                <span className={styles.lastMessage}>
+                  {codeSession.lastMessage}
+                </span>
+              )}
+            </div>
+          )}
+
+          {!codeSession && <span className={styles.placeholder}>—</span>}
+
+          {pr ? (
+            <div className={styles.prRow}>
+              <a
+                href={pr.prUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={styles.prLink}
+                onClick={(e) => e.stopPropagation()}
+              >
+                #{pr.prNumber}
+              </a>
+              <span className={styles.prState}>
+                {pr.draft ? 'draft' : pr.state}
+              </span>
+              {pr.mergeState === 'dirty' && (
+                <span
+                  className={styles.conflictBadge}
+                  title="PR has merge conflicts"
+                >
+                  ⚠ Conflict
+                </span>
+              )}
+              {review?.verdict && (
+                <span
+                  className={`${styles.verdict} ${styles[`verdict-${review.verdict.replace(/_/g, '-')}`] ?? ''}`}
+                >
+                  {verdictLabel(review.verdict)}
+                </span>
+              )}
+            </div>
+          ) : (
+            <span className={styles.placeholder}>—</span>
+          )}
+        </>
+      )}
+
+      <div className={styles.cardFooter}>
+        {task.notionUrl && (
+          <a
+            href={task.notionUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={styles.notionLink}
+            onClick={(e) => e.stopPropagation()}
+          >
+            Notion ↗
+          </a>
+        )}
+        {task.totalTokens.input + task.totalTokens.output > 0 && (
+          <span className={styles.tokenBadge}>
+            {formatTokenCount(task.totalTokens.input + task.totalTokens.output)}{' '}
+            tokens
+          </span>
+        )}
+        {isNonCode ? (
+          <span className={styles.taskTypeLabel}>{task.taskType}</span>
+        ) : (
+          <button
+            className={styles.launchButton}
+            disabled={!isLaunchable}
+            onClick={handleLaunch}
+            title={tooltip || 'Launch session'}
+            aria-label={
+              isLaunchable ? `Launch session for ${task.taskName}` : tooltip
+            }
+          >
+            🚀
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+```
+
+### `packages/frontend/src/components/__tests__/TaskCard.test.tsx`
+```
+import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { TaskCard } from '../TaskCard';
+import type { TaskView, DisplayStatus } from '../../types/taskView';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
+
+function makeTask(overrides?: Partial<TaskView>): TaskView {
   return {
-    sessionId: 'test-session-id',
-    taskId: 'task-abc123',
-    prUrl: 'https://github.com/owner/repo/pull/42',
-    sessionType: 'standard',
-    worktreePath: null,
+    taskId: 'task-1',
+    taskName: 'Implement Feature',
+    notionStatus: '🗂️ Ready',
+    displayStatus: 'ready',
+    pauseReason: null,
+    priority: '',
+    notionUrl: 'https://notion.so/task-1',
+    taskType: '💻 Code',
+    blocked: false,
+    blockerNames: [],
+    wave: 1,
+    codeSession: null,
+    pr: null,
+    review: null,
+    totalTokens: { input: 0, output: 0 },
     ...overrides,
   };
 }
 
-function makeToolUseEvent(toolName: string, input: Record<string, unknown>) {
+function makeCodeSession(
+  overrides?: Partial<NonNullable<TaskView['codeSession']>>,
+): NonNullable<TaskView['codeSession']> {
   return {
-    id: 1,
-    session_id: 'test-session-id',
-    event_type: 'tool_use' as const,
-    payload: JSON.stringify({ name: toolName, input }),
-    timestamp: Date.now(),
-    message_id: null,
+    sessionId: 'sess-1',
+    status: 'running',
+    startedAt: Date.now() - 60_000,
+    endedAt: null,
+    lastMessage: 'Writing tests...',
+    inputTokens: 100,
+    outputTokens: 50,
+    ...overrides,
   };
 }
 
-function makeNotionClient(filesSection = ''): TaskTrackerBackend {
-  const body = [
-    '# Add post-session audit hook',
-    '## Summary\nSummary text',
-    '## Context\nContext text',
-    '## Acceptance Criteria\nAC text',
-    filesSection ? `## Files\n${filesSection}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n\n');
+function makePr(
+  overrides?: Partial<NonNullable<TaskView['pr']>>,
+): NonNullable<TaskView['pr']> {
   return {
-    type: 'notion' as const,
-    fetchTaskPage: vi.fn(async () => body),
-    fetchReadyTasks: vi.fn(async () => []),
-    updateStatus: vi.fn(async () => {}),
-    attachPR: vi.fn(async () => {}),
-  } as unknown as TaskTrackerBackend;
-}
-
-function makeGitHubClient(
-  prOverrides: Partial<PullRequest> = {},
-): GitHubClient {
-  const defaultPR: PullRequest = {
-    id: 42,
-    title: 'feat: add audit hook',
-    body: '## Summary\nDid things.\n\n## Test plan\n- tested',
-    url: 'https://github.com/owner/repo/pull/42',
-    apiUrl: 'https://api.github.com/repos/owner/repo/pulls/42',
-    headBranch: 'feature/audit',
+    prNumber: 42,
+    prUrl: 'https://github.com/owner/repo/pull/42',
+    title: 'feat: implement feature',
+    headBranch: 'feature/implement-feature',
     baseBranch: 'dev',
     state: 'open',
-    createdAt: '2026-04-01T00:00:00Z',
-    updatedAt: '2026-04-01T00:00:00Z',
-    mergeableState: 'clean',
     draft: false,
+    mergeState: null,
+    ...overrides,
   };
+}
+
+function makeReview(
+  overrides?: Partial<NonNullable<TaskView['review']>>,
+): NonNullable<TaskView['review']> {
   return {
-    fetchPR: vi.fn(async () => ({ ...defaultPR, ...prOverrides })),
-    fetchDiff: vi.fn(async () => ({
-      prId: 42,
-      diff: '',
-      filesChanged: ['packages/backend/src/session/SessionAuditor.ts'],
-    })),
-  } as unknown as GitHubClient;
+    sessionId: 'review-1',
+    status: 'done',
+    verdict: 'approved',
+    summary: 'Looks good',
+    iterationCount: 1,
+    inputTokens: 0,
+    outputTokens: 0,
+    ...overrides,
+  };
 }
 
-function makeSessionManager(): ISessionManager {
-  return { send: vi.fn() };
+function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
+  return {
+    id: 'proj-1',
+    name: 'Test Project',
+    path: '/repos/test',
+    contextUrl: 'https://notion.so/context',
+    boardId: 'board-1',
+    ...overrides,
+  } as ProjectConfig;
 }
 
-// ── Import mocked module for DB fallback / event tests ───────────────────────
-import * as queries from '../db/queries';
+const noop = vi.fn();
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
-describe('SessionAuditor', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(queries.getPRByNotionTaskId).mockReturnValue(null);
-  });
-
-  // ── AC: Clean exit without PR ─────────────────────────────────────────────
-  it('returns "Clean exit but no PR opened" when exitCode is 0 and prUrl is null', async () => {
-    const auditor = new SessionAuditor(
-      makeNotionClient(),
-      undefined,
-      undefined,
+describe('TaskCard', () => {
+  it('renders task name', () => {
+    render(
+      <TaskCard
+        task={makeTask()}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
     );
-    const session = makeSession({ prUrl: undefined });
-    const audit = await auditor.audit(session, 0);
-
-    expect(audit.prOpened).toBe(false);
-    expect(audit.violations).toContain('Clean exit but no PR opened');
+    expect(screen.getByText('Implement Feature')).toBeDefined();
   });
 
-  it('does NOT flag "Clean exit but no PR opened" when exitCode is non-zero', async () => {
-    const auditor = new SessionAuditor(
-      makeNotionClient(),
-      undefined,
-      undefined,
+  it('renders priority badge when priority is set', () => {
+    render(
+      <TaskCard
+        task={makeTask({ priority: '🔴 High' })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
     );
-    const session = makeSession({ prUrl: undefined });
-    const audit = await auditor.audit(session, 1);
-
-    expect(audit.violations).not.toContain('Clean exit but no PR opened');
+    expect(screen.getByText('🔴 High')).toBeDefined();
   });
 
-  // ── AC: PR targets wrong branch ───────────────────────────────────────────
-  it('returns "PR targets main instead of dev" when baseBranch is main', async () => {
-    const github = makeGitHubClient({ baseBranch: 'main' });
-    const auditor = new SessionAuditor(makeNotionClient(), github, undefined);
-    const session = makeSession();
-    const audit = await auditor.audit(session, 0);
-
-    expect(audit.prTargetsBranch).toBe('main');
-    expect(audit.violations).toContain('PR targets main instead of dev');
-  });
-
-  it('does NOT flag branch violation when baseBranch is dev', async () => {
-    const github = makeGitHubClient({ baseBranch: 'dev' });
-    const auditor = new SessionAuditor(makeNotionClient(), github, undefined);
-    const session = makeSession();
-    const audit = await auditor.audit(session, 0);
-
-    expect(audit.violations).not.toContain('PR targets dev instead of dev');
-    const branchViolation = audit.violations.find((v) =>
-      v.startsWith('PR targets'),
+  it('does not render priority badge when priority is empty', () => {
+    render(
+      <TaskCard
+        task={makeTask({ priority: '' })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
     );
-    expect(branchViolation).toBeUndefined();
+    expect(screen.queryByText(/High|Low|Medium/)).toBeNull();
   });
 
-  // ── AC: Spec mismatch — files in diff not in spec ────────────────────────
-  it('flags files in the diff that are not listed in the task spec', async () => {
-    const notion = makeNotionClient(
-      'packages/backend/src/session/SessionAuditor.ts',
+  it('renders code session status when codeSession is present', () => {
+    const session = makeCodeSession({ status: 'running' });
+    render(
+      <TaskCard
+        task={makeTask({ codeSession: session })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
     );
-    const github = makeGitHubClient();
-    vi.mocked(github.fetchDiff).mockResolvedValue({
-      prId: 42,
-      diff: '',
-      filesChanged: [
-        'packages/backend/src/session/SessionAuditor.ts',
-        'packages/frontend/src/SomeUnexpected.tsx',
-      ],
+    expect(screen.getByText('running')).toBeDefined();
+  });
+
+  it('renders lastMessage in session line when present', () => {
+    const session = makeCodeSession({ lastMessage: 'Writing tests...' });
+    render(
+      <TaskCard
+        task={makeTask({ codeSession: session })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('Writing tests...')).toBeDefined();
+  });
+
+  it('renders — placeholder when codeSession is null', () => {
+    render(
+      <TaskCard
+        task={makeTask({ codeSession: null })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    const placeholders = screen.getAllByText('—');
+    expect(placeholders.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('renders — placeholder in meta line when pr is null', () => {
+    render(
+      <TaskCard
+        task={makeTask({ pr: null })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    const placeholders = screen.getAllByText('—');
+    expect(placeholders.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('renders PR number and state when pr is present', () => {
+    render(
+      <TaskCard
+        task={makeTask({
+          pr: makePr({ prNumber: 42, state: 'open', draft: false }),
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('#42')).toBeDefined();
+    expect(screen.getByText('open')).toBeDefined();
+  });
+
+  it('renders "draft" as PR state when pr.draft is true', () => {
+    render(
+      <TaskCard
+        task={makeTask({ pr: makePr({ draft: true, state: 'open' }) })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('draft')).toBeDefined();
+  });
+
+  it('renders review verdict badge when review.verdict is present', () => {
+    // Verdict badge is rendered alongside the PR section, so a PR must exist
+    render(
+      <TaskCard
+        task={makeTask({
+          pr: makePr(),
+          review: makeReview({ verdict: 'approved' }),
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('✅ Approved')).toBeDefined();
+  });
+
+  it('renders needs_changes verdict label', () => {
+    render(
+      <TaskCard
+        task={makeTask({
+          pr: makePr(),
+          review: makeReview({ verdict: 'needs_changes' }),
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('🔁 Needs changes')).toBeDefined();
+  });
+
+  it('does not render verdict badge when review.verdict is null', () => {
+    render(
+      <TaskCard
+        task={makeTask({ review: makeReview({ verdict: null }) })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.queryByText(/Approved|Needs changes|Incomplete/)).toBeNull();
+  });
+
+  it('renders conflict badge when pr.mergeState is "dirty"', () => {
+    render(
+      <TaskCard
+        task={makeTask({ pr: makePr({ mergeState: 'dirty' }) })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('⚠ Conflict')).toBeDefined();
+  });
+
+  it('does not render conflict badge when pr.mergeState is null', () => {
+    render(
+      <TaskCard
+        task={makeTask({ pr: makePr({ mergeState: null }) })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.queryByText('⚠ Conflict')).toBeNull();
+  });
+
+  it('renders Notion link when notionUrl is set', () => {
+    render(
+      <TaskCard
+        task={makeTask({ notionUrl: 'https://notion.so/task-1' })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('Notion ↗')).toBeDefined();
+  });
+
+  it('calls onClick when card is clicked', () => {
+    const onClick = vi.fn();
+    render(
+      <TaskCard
+        task={makeTask()}
+        selected={false}
+        onClick={onClick}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    fireEvent.click(screen.getByText('Implement Feature'));
+    expect(onClick).
+[... truncated]
+```
+
+### `packages/frontend/src/components/__tests__/PRCard.test.tsx`
+```
+import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { PRCard } from '../PRCard';
+import type { PRListItem } from '../PRCard';
+
+function makePR(overrides: Partial<PRListItem> = {}): PRListItem {
+  return {
+    prNumber: 42,
+    prUrl: 'https://github.com/owner/repo/pull/42',
+    title: 'Test PR',
+    headBranch: 'feature/test',
+    baseBranch: 'dev',
+    state: 'open',
+    notionTaskId: null,
+    notionTaskTitle: null,
+    sessionId: null,
+    reviewSessionId: null,
+    repo: 'owner/repo',
+    reviewResult: null,
+    reviewedAt: null,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    mergeState: null,
+    ...overrides,
+  };
+}
+
+const defaultProps = {
+  onReview: vi.fn(),
+  onMerge: vi.fn(),
+  onRemove: vi.fn(),
+  onReReview: vi.fn(),
+  onFixConflicts: vi.fn(),
+  onApprove: vi.fn(),
+  reviewInFlight: false,
+  mergeInFlight: false,
+  removeInFlight: false,
+  reReviewInFlight: false,
+  fixConflictsInFlight: false,
+  approveInFlight: false,
+  reviewElapsed: 0,
+  error: null,
+};
+
+describe('PRCard', () => {
+  it('shows "Not reviewed" badge when reviewResult is null', () => {
+    render(<PRCard pr={makePR()} {...defaultProps} />);
+    expect(screen.getByText('— Not reviewed')).toBeDefined();
+  });
+
+  it('shows approved badge when verdict is approved', () => {
+    const pr = makePR({
+      reviewResult: {
+        verdict: 'approved',
+        dimensions: [],
+        summary: 'Looks good',
+      },
     });
-
-    const auditor = new SessionAuditor(notion, github, undefined);
-    const session = makeSession();
-    const audit = await auditor.audit(session, 0);
-
-    const unexpectedViolation = audit.violations.find((v) =>
-      v.includes('PR modifies files not listed in task spec'),
-    );
-    expect(unexpectedViolation).toBeDefined();
-    expect(unexpectedViolation).toContain('SomeUnexpected.tsx');
+    render(<PRCard pr={pr} {...defaultProps} />);
+    expect(screen.getByText('✅ Approved')).toBeDefined();
   });
 
-  // ── AC: routeFailuresToSession sends violations as follow-up message ─────
-  it('routeFailuresToSession sends violations as a follow-up message to the session', async () => {
-    const github = makeGitHubClient({ baseBranch: 'main' }); // will produce a violation
-    const sm = makeSessionManager();
-    const auditor = new SessionAuditor(makeNotionClient(), github, sm);
-    const session = makeSession();
-    await auditor.audit(session, 0);
-
-    expect(sm.send).toHaveBeenCalledOnce();
-    const [calledSessionId, message] = vi.mocked(sm.send).mock.calls[0];
-    expect(calledSessionId).toBe('test-session-id');
-    expect(message).toContain('❌');
-    expect(message).toContain('Audit findings for your PR:');
+  it('disables Merge button when verdict is not approved', () => {
+    render(<PRCard pr={makePR()} {...defaultProps} />);
+    const mergeBtn = screen.getByRole('button', { name: /merge/i });
+    expect(mergeBtn.hasAttribute('disabled')).toBe(true);
   });
 
-  it('does NOT call send when there are no violations', async () => {
-    const github = makeGitHubClient(); // baseBranch: dev, good title, good body
-    const sm = makeSessionManager();
-    // No files section — spec comparison returns null
-    const auditor = new SessionAuditor(makeNotionClient(''), github, sm);
-    const session = makeSession();
-    await auditor.audit(session, 0);
-
-    expect(sm.send).not.toHaveBeenCalled();
-  });
-
-  // ── AC: routeFailuresToSession does not throw if session has exited ───────
-  it('routeFailuresToSession does not throw when send() throws', async () => {
-    const github = makeGitHubClient({ baseBranch: 'main' }); // produces a violation
-    const sm = makeSessionManager();
-    vi.mocked(sm.send).mockImplementation(() => {
-      throw new Error('Session exited');
+  it('disables Merge button when verdict is needs_changes', () => {
+    const pr = makePR({
+      reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' },
     });
-
-    const auditor = new SessionAuditor(makeNotionClient(), github, sm);
-    const session = makeSession();
-    // Should not throw
-    await expect(auditor.audit(session, 0)).resolves.toBeDefined();
+    render(<PRCard pr={pr} {...defaultProps} />);
+    const mergeBtn = screen.getByRole('button', { name: /merge/i });
+    expect(mergeBtn.hasAttribute('disabled')).toBe(true);
   });
 
-  // ── AC: Audit skips review sessions ──────────────────────────────────────
-  // (This is enforced in AgentSession, but the auditor itself has no restriction.
-  //  We verify the AgentSession-level guard by testing that review sessions are
-  //  explicitly excluded in the in
+  it('enables Merge button when verdict is approved and state is open', () => {
+    const pr = makePR({
+      reviewResult: { verdict: 'approved', dimensions: [], summary: '' },
+    });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    const mergeBtn = screen.getByRole('button', { name: /merge/i });
+    expect(mergeBtn.hasAttribute('disabled')).toBe(false);
+  });
+
+  it('shows "Run Review" button when no prior review exists', () => {
+    render(<PRCard pr={makePR()} {...defaultProps} />);
+    expect(screen.getByRole('button', { name: /run review/i })).toBeDefined();
+  });
+
+  it('shows "Re-review" button when verdict is needs_changes and coding session is alive', () => {
+    const pr = makePR({
+      sessionId: 'session-123',
+      reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' },
+    });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    expect(screen.getByRole('button', { name: /re-review/i })).toBeDefined();
+  });
+
+  it('shows "Re-review" button when verdict is incomplete and coding session is alive', () => {
+    const pr = makePR({
+      sessionId: 'session-123',
+      reviewResult: { verdict: 'incomplete', dimensions: [], summary: '' },
+    });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    expect(screen.getByRole('button', { name: /re-review/i })).toBeDefined();
+  });
+
+  it('hides the review button when verdict is approved', () => {
+    const pr = makePR({
+      reviewResult: { verdict: 'approved', dimensions: [], summary: '' },
+    });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    expect(screen.queryByRole('button', { name: /run review/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /re-review/i })).toBeNull();
+  });
+
+  it('shows "Run Review" (not "Re-review") when verdict is needs_changes but coding session is dead', () => {
+    const pr = makePR({
+      sessionId: null,
+      reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' },
+    });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    expect(screen.getByRole('button', { name: /run review/i })).toBeDefined();
+    expect(screen.queryByRole('button', { name: /re-review/i })).toBeNull();
+  });
+
+  it('calls onReReview when "Re-review" button is clicked', () => {
+    const onReReview = vi.fn();
+    const pr = makePR({
+      prNumber: 7,
+      sessionId: 'session-abc',
+      reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' },
+    });
+    render(<PRCard pr={pr} {...defaultProps} onReReview={onReReview} />);
+    fireEvent.click(screen.getByRole('button', { name: /re-review/i }));
+    expect(onReReview).toHaveBeenCalledWith(7);
+  });
+
+  it('disables "Re-review" button when reReviewInFlight is true', () => {
+    const pr = makePR({
+      sessionId: 'session-123',
+      reviewResult: { verdict: 'needs_changes', dimensions: [], summary: '' },
+    });
+    render(<PRCard pr={pr} {...defaultProps} reReviewInFlight={true} />);
+    const btn = screen.getByRole('button', { name: /reviewing/i });
+    expect(btn.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('disables Run Review button when reviewInFlight is true', () => {
+    render(<PRCard pr={makePR()} {...defaultProps} reviewInFlight={true} />);
+    const btn = screen.getByRole('button', { name: /reviewing/i });
+    expect(btn.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('shows inline error when error prop is set', () => {
+    render(
+      <PRCard pr={makePR()} {...defaultProps} error="Review failed: timeout" />,
+    );
+    expect(screen.getByText('Review failed: timeout')).toBeDefined();
+  });
+
+  it('shows "Merged" badge when state is merged, regardless of reviewResult', () => {
+    const pr = makePR({ state: 'merged' });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    expect(screen.getByText('✓ Merged')).toBeDefined();
+  });
+
+  it('shows "Merged" badge when state is merged even if reviewResult is set', () => {
+    const pr = makePR({
+      state: 'merged',
+      reviewResult: { verdict: 'approved', dimensions: [], summary: '' },
+    });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    expect(screen.getByText('✓ Merged')).toBeDefined();
+    expect(screen.queryByText('✅ Approved')).toBeNull();
+  });
+
+  it('shows "Closed" badge when state is closed', () => {
+    const pr = makePR({ state: 'closed' });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    expect(screen.getByText('✕ Closed')).toBeDefined();
+  });
+
+  it('hides Run Review button when state is merged', () => {
+    const pr = makePR({ state: 'merged' });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    expect(screen.queryByRole('button', { name: /run review/i })).toBeNull();
+  });
+
+  it('disables Merge button when state is merged', () => {
+    const pr = makePR({
+      state: 'merged',
+      reviewResult: { verdict: 'approved', dimensions: [], summary: '' },
+    });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    const mergeBtn = screen.getByRole('button', { name: /merge/i });
+    expect(mergeBtn.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('renders without crash when reviewResult has no dimensions property', () => {
+    const pr = makePR({
+      reviewResult: { verdict: 'needs_changes', summary: 'Review timed out' },
+    });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    fireEvent.click(screen.getByText(/review details/i));
+    expect(screen.getByText('Review timed out')).toBeDefined();
+  });
+
+  it('renders without crash when reviewResult.dimensions is an empty array', () => {
+    const pr = makePR({
+      reviewResult: {
+        verdict: 'needs_changes',
+        dimensions: [],
+        summary: 'All good',
+      },
+    });
+    render(<PRCard pr={pr} {...defaultProps} />);
+    fireEvent.click(screen.getByText(/review details/i));
+    
 [... truncated]
 ```
 

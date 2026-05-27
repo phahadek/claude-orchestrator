@@ -1,0 +1,28 @@
+.ciBadge {
+  font-size: 0.78rem;
+  padding: 2px 10px;
+  border-radius: 12px;
+  white-space: nowrap;
+  font-weight: 500;
+  background: rgba(243, 139, 168, 0.15);
+  color: #f38ba8;
+  border: 1px solid rgba(243, 139, 168, 0.4);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.ciBadge:hover {
+  background: rgba(243, 139, 168, 0.25);
+  text-decoration: none;
+}
+
+.unstableBadge {
+  font-size: 0.78rem;
+  padding: 2px 10px;
+  border-radius: 12px;
+  white-space: nowrap;
+  font-weight: 500;
+  background: rgba(243, 139, 168, 0.15);
+  color: #f38ba8;
+  border: 1px solid rgba(243, 139, 168, 0.4);
+}
