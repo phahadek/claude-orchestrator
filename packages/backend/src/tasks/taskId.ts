@@ -26,3 +26,7 @@ export function parseTaskId(taskId: string): ParsedTaskId {
 export function formatTaskId(source: TaskSource, externalId: string): string {
   return `${source}:${externalId}`;
 }
+
+export function toExternalId(taskId: string): string {
+  return parseTaskId(taskId).externalId;
+}

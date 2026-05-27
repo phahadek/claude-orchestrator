@@ -1,6 +1,6 @@
 import type { TaskBackend, NonMilestoneSourceConfig } from './TaskBackend';
 import type { ResolvedTask } from './types';
-import { parseTaskId, formatTaskId } from './taskId';
+import { formatTaskId } from './taskId';
 import { NotionClient } from '../notion/NotionClient';
 import { ProjectService } from '../projects/ProjectService';
 import { upsertTaskCache } from '../db/queries';
@@ -58,18 +58,15 @@ export class NotionTaskBackend implements TaskBackend {
   }
 
   async attachPR(taskId: string, prUrl: string): Promise<void> {
-    const { externalId } = parseTaskId(taskId);
-    return this.client.attachPR(externalId, prUrl);
+    return this.client.attachPR(taskId, prUrl);
   }
 
   async updateStatus(taskId: string, status: string): Promise<void> {
-    const { externalId } = parseTaskId(taskId);
-    return this.client.updateStatus(externalId, status);
+    return this.client.updateStatus(taskId, status);
   }
 
   async fetchTaskPage(taskId: string): Promise<string> {
-    const { externalId } = parseTaskId(taskId);
-    const page = await this.client.fetchTaskPage(externalId);
+    const page = await this.client.fetchTaskPage(taskId);
     return page.rawMarkdown;
   }
 

@@ -4,7 +4,7 @@ import yaml from 'js-yaml';
 import type { TaskBackend, NonMilestoneSourceConfig } from './TaskBackend';
 import type { ResolvedTask } from './types';
 import type { NotionTask } from '../notion/types';
-import { parseTaskId, formatTaskId } from './taskId';
+import { toExternalId, formatTaskId } from './taskId';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import { upsertTaskCache } from '../db/queries';
 
@@ -211,7 +211,7 @@ export class LocalTaskBackend implements TaskBackend {
   }
 
   async attachPR(taskId: string, prUrl: string): Promise<void> {
-    const { externalId } = parseTaskId(taskId);
+    const externalId = toExternalId(taskId);
     const file = this.readFile();
     const found = this.findTaskById(file, externalId);
     if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
@@ -220,7 +220,7 @@ export class LocalTaskBackend implements TaskBackend {
   }
 
   async updateStatus(taskId: string, status: string): Promise<void> {
-    const { externalId } = parseTaskId(taskId);
+    const externalId = toExternalId(taskId);
     const file = this.readFile();
     const found = this.findTaskById(file, externalId);
     if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
@@ -229,7 +229,7 @@ export class LocalTaskBackend implements TaskBackend {
   }
 
   async fetchTaskPage(taskId: string): Promise<string> {
-    const { externalId } = parseTaskId(taskId);
+    const externalId = toExternalId(taskId);
     const file = this.readFile();
     const found = this.findTaskById(file, externalId);
     if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);

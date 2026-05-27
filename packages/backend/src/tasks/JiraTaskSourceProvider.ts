@@ -1,7 +1,7 @@
 import type { TaskBackend } from './TaskBackend';
 import type { ResolvedTask } from './types';
 import type { NotionTask } from '../notion/types';
-import { formatTaskId, parseTaskId } from './taskId';
+import { formatTaskId, toExternalId } from './taskId';
 import { JiraClient } from './JiraClient';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import { upsertTaskCache } from '../db/queries';
@@ -81,12 +81,12 @@ export class JiraTaskSourceProvider implements TaskBackend {
   }
 
   async attachPR(taskId: string, prUrl: string): Promise<void> {
-    const { externalId } = parseTaskId(taskId);
+    const externalId = toExternalId(taskId);
     await this.client.addComment(externalId, `PR: ${prUrl}`);
   }
 
   async updateStatus(taskId: string, status: string): Promise<void> {
-    const { externalId } = parseTaskId(taskId);
+    const externalId = toExternalId(taskId);
     const mapping = this.projectConfig.status_mapping ?? DEFAULT_STATUS_MAPPING;
     const targetJiraStatus = mapping[status];
     if (!targetJiraStatus) {
@@ -107,7 +107,7 @@ export class JiraTaskSourceProvider implements TaskBackend {
   }
 
   async fetchTaskPage(taskId: string): Promise<string> {
-    const { externalId } = parseTaskId(taskId);
+    const externalId = toExternalId(taskId);
     const issue = await this.client.getIssue(externalId);
     const lines: string[] = [`# ${issue.fields.summary}`];
     lines.push(`**Status:** ${issue.fields.status.name}`);

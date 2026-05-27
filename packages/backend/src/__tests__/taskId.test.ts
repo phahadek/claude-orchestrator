@@ -98,11 +98,28 @@ vi.mock('../db/db.js', async () => {
       id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, tool_name TEXT NOT NULL,
       tool_use_id TEXT NOT NULL, tool_input TEXT NOT NULL, timestamp INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS session_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, event_type TEXT NOT NULL,
+      payload TEXT NOT NULL, timestamp INTEGER NOT NULL, message_id TEXT
+    );
+    CREATE TABLE IF NOT EXISTS local_branches (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, branch_name TEXT NOT NULL, base_branch TEXT NOT NULL,
+      project_id TEXT NOT NULL, session_id TEXT, task_id TEXT, state TEXT NOT NULL DEFAULT 'open',
+      review_result TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, event_type TEXT NOT NULL, actor_type TEXT NOT NULL,
+      actor_id TEXT, project_id TEXT, task_id TEXT, payload TEXT, timestamp INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS devices (
+      id TEXT PRIMARY KEY, name TEXT, user_agent TEXT, last_ip TEXT, last_seen INTEGER,
+      enrolled_at INTEGER NOT NULL, token TEXT NOT NULL UNIQUE, revoked INTEGER NOT NULL DEFAULT 0
+    );
   `);
   return { db };
 });
 
-import { parseTaskId, formatTaskId } from '../tasks/taskId.js';
+import { parseTaskId, formatTaskId, toExternalId } from '../tasks/taskId.js';
 
 // ── parseTaskId ───────────────────────────────────────────────────────────────
 
@@ -170,6 +187,22 @@ describe('formatTaskId', () => {
   });
 });
 
+// ── toExternalId ──────────────────────────────────────────────────────────────
+
+describe('toExternalId', () => {
+  it('returns externalId for notion: prefix', () => {
+    expect(toExternalId('notion:abc')).toBe('abc');
+  });
+
+  it('returns externalId for jira: prefix', () => {
+    expect(toExternalId('jira:PROJ-123')).toBe('PROJ-123');
+  });
+
+  it('throws on input with no valid prefix', () => {
+    expect(() => toExternalId('not-a-task-id')).toThrow();
+  });
+});
+
 // ── NotionTaskBackend prefix handling ─────────────────────────────────────────
 
 vi.mock('../notion/NotionClient.js', () => ({
@@ -228,21 +261,21 @@ describe('NotionTaskBackend prefix handling', () => {
     expect(tasks[0].task.id).toBe('notion:raw-id-abc');
   });
 
-  it('attachPR strips notion: prefix before calling Notion API', async () => {
+  it('attachPR passes full prefixed ID to NotionClient', async () => {
     await backend.attachPR(
       'notion:raw-id-abc',
       'https://github.com/owner/repo/pull/1',
     );
     expect(vi.mocked(client.attachPR)).toHaveBeenCalledWith(
-      'raw-id-abc',
+      'notion:raw-id-abc',
       'https://github.com/owner/repo/pull/1',
     );
   });
 
-  it('updateStatus strips notion: prefix before calling Notion API', async () => {
+  it('updateStatus passes full prefixed ID to NotionClient', async () => {
     await backend.updateStatus('notion:raw-id-abc', '✅ Done');
     expect(vi.mocked(client.updateStatus)).toHaveBeenCalledWith(
-      'raw-id-abc',
+      'notion:raw-id-abc',
       '✅ Done',
     );
   });
@@ -543,5 +576,54 @@ describe('pull_requests backfill migration', () => {
     for (const row of nonNullRows) {
       expect(row.task_id).toMatch(/^[^:]+:.+/);
     }
+  });
+});
+
+// ── JiraTaskSourceProvider regression guard ───────────────────────────────────
+
+vi.mock('../tasks/JiraClient.js', () => ({
+  JiraClient: vi.fn().mockImplementation(() => ({
+    searchIssues: vi.fn().mockResolvedValue([]),
+    getTransitions: vi.fn().mockResolvedValue([
+      { id: 'tr-1', to: { name: 'In Progress' } },
+    ]),
+    transitionIssue: vi.fn().mockResolvedValue(undefined),
+    addComment: vi.fn().mockResolvedValue(undefined),
+    buildReadyJql: vi.fn().mockReturnValue('project = TEST AND status in ("To Do")'),
+    getIssue: vi.fn().mockResolvedValue({
+      fields: {
+        summary: 'Test Issue',
+        status: { name: 'To Do' },
+        issuetype: { name: 'Task' },
+        priority: null,
+        description: null,
+      },
+    }),
+  })),
+}));
+
+import { JiraTaskSourceProvider } from '../tasks/JiraTaskSourceProvider.js';
+import { JiraClient } from '../tasks/JiraClient.js';
+
+describe('JiraTaskSourceProvider — toExternalId regression guard', () => {
+  let jiraClient: InstanceType<typeof JiraClient>;
+  let provider: JiraTaskSourceProvider;
+
+  beforeEach(() => {
+    jiraClient = new JiraClient('https://jira.example.com', 'token');
+    provider = new JiraTaskSourceProvider(jiraClient, {
+      host: 'https://jira.example.com',
+      project_key: 'TEST',
+    });
+  });
+
+  it('updateStatus calls getTransitions with PROJ-123 (not jira:PROJ-123)', async () => {
+    await provider.updateStatus('jira:PROJ-123', '🔄 In Progress');
+    expect(vi.mocked(jiraClient.getTransitions)).toHaveBeenCalledWith('PROJ-123');
+  });
+
+  it('updateStatus calls transitionIssue with PROJ-123 (not jira:PROJ-123)', async () => {
+    await provider.updateStatus('jira:PROJ-123', '🔄 In Progress');
+    expect(vi.mocked(jiraClient.transitionIssue)).toHaveBeenCalledWith('PROJ-123', 'tr-1');
   });
 });
