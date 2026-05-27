@@ -1,11 +1,45 @@
 import { describe, it, expect } from 'vitest';
-import { validatePRFiles, HARD_BANNED_FILES } from './PRFileValidator';
+import {
+  validatePRFiles,
+  HARD_BANNED_FILES,
+  HARD_BANNED_PATTERNS,
+} from './PRFileValidator';
 
 describe('HARD_BANNED_FILES', () => {
   it('contains CLAUDE.md, .commit-msg, .commit_msg', () => {
     expect(HARD_BANNED_FILES).toContain('CLAUDE.md');
     expect(HARD_BANNED_FILES).toContain('.commit-msg');
     expect(HARD_BANNED_FILES).toContain('.commit_msg');
+  });
+});
+
+describe('HARD_BANNED_PATTERNS', () => {
+  it('matches commit-msg.txt', () => {
+    expect(HARD_BANNED_PATTERNS.some((p) => p.test('commit-msg.txt'))).toBe(
+      true,
+    );
+  });
+
+  it('matches commit_msg.txt', () => {
+    expect(HARD_BANNED_PATTERNS.some((p) => p.test('commit_msg.txt'))).toBe(
+      true,
+    );
+  });
+
+  it('matches commit-msg.draft', () => {
+    expect(HARD_BANNED_PATTERNS.some((p) => p.test('commit-msg.draft'))).toBe(
+      true,
+    );
+  });
+
+  it('matches commit_msg.md', () => {
+    expect(HARD_BANNED_PATTERNS.some((p) => p.test('commit_msg.md'))).toBe(
+      true,
+    );
+  });
+
+  it('does not match README.txt', () => {
+    expect(HARD_BANNED_PATTERNS.some((p) => p.test('README.txt'))).toBe(false);
   });
 });
 
@@ -49,6 +83,56 @@ describe('validatePRFiles()', () => {
     const result = validatePRFiles(['.commit_msg'], []);
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('.commit_msg');
+  });
+
+  it('rejects commit-msg.txt', () => {
+    const result = validatePRFiles(['commit-msg.txt'], []);
+    expect(result.valid).toBe(false);
+    expect(result.bannedFiles).toContain('commit-msg.txt');
+    expect(result.reason).toBe('hard_banned');
+  });
+
+  it('rejects commit_msg.txt', () => {
+    const result = validatePRFiles(['commit_msg.txt'], []);
+    expect(result.valid).toBe(false);
+    expect(result.bannedFiles).toContain('commit_msg.txt');
+    expect(result.reason).toBe('hard_banned');
+  });
+
+  it('rejects case-insensitive Commit-Msg.TXT', () => {
+    const result = validatePRFiles(['Commit-Msg.TXT'], []);
+    expect(result.valid).toBe(false);
+    expect(result.bannedFiles).toContain('Commit-Msg.TXT');
+  });
+
+  it('rejects case-insensitive COMMIT_MSG.txt', () => {
+    const result = validatePRFiles(['COMMIT_MSG.txt'], []);
+    expect(result.valid).toBe(false);
+    expect(result.bannedFiles).toContain('COMMIT_MSG.txt');
+  });
+
+  it('rejects commit-msg.draft (pattern match)', () => {
+    const result = validatePRFiles(['commit-msg.draft'], []);
+    expect(result.valid).toBe(false);
+    expect(result.bannedFiles).toContain('commit-msg.draft');
+  });
+
+  it('rejects commit_msg.md (pattern match)', () => {
+    const result = validatePRFiles(['commit_msg.md'], []);
+    expect(result.valid).toBe(false);
+    expect(result.bannedFiles).toContain('commit_msg.md');
+  });
+
+  it('accepts non-scratch .txt files', () => {
+    const result = validatePRFiles(['README.txt', 'docs/notes.txt'], []);
+    expect(result.valid).toBe(true);
+    expect(result.bannedFiles).toHaveLength(0);
+  });
+
+  it('rejects commit-msg.txt nested in a subdirectory', () => {
+    const result = validatePRFiles(['some/nested/commit-msg.txt'], []);
+    expect(result.valid).toBe(false);
+    expect(result.bannedFiles).toContain('some/nested/commit-msg.txt');
   });
 
   it('rejects .env via gitignore pattern', () => {
