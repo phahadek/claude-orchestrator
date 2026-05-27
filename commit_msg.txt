@@ -1,7 +1,0 @@
-feat: audit-external-api-call-sites-add-to-external-id-helper
-
-Add toExternalId() helper; refactor NotionClient to strip prefix internally;
-fix three silent-breakage sites (PRMergeWatcher, prs.ts, PRReviewService URL);
-consistency renames in Jira/LocalTaskBackend; update tests.
-
-AI-Authored-By: claude-sonnet-4-6 (session: 6aefea4b)
