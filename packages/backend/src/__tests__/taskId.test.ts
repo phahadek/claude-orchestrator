@@ -449,7 +449,9 @@ const backfillUpdateSql = `
 describe('pull_requests backfill migration', () => {
   beforeEach(() => {
     // Clean up rows inserted by previous tests in this block
-    db.exec(`DELETE FROM pull_requests WHERE pr_number >= 8000 AND pr_number < 9000`);
+    db.exec(
+      `DELETE FROM pull_requests WHERE pr_number >= 8000 AND pr_number < 9000`,
+    );
   });
 
   it('backfill prefixes all unprefixed task_id rows with notion:', () => {
@@ -464,7 +466,9 @@ describe('pull_requests backfill migration', () => {
     db.exec(backfillUpdateSql);
 
     const rows = db
-      .prepare(`SELECT task_id FROM pull_requests WHERE pr_number IN (8001, 8002, 8003)`)
+      .prepare(
+        `SELECT task_id FROM pull_requests WHERE pr_number IN (8001, 8002, 8003)`,
+      )
       .all() as Array<{ task_id: string | null }>;
 
     for (const row of rows) {
@@ -508,13 +512,17 @@ describe('pull_requests backfill migration', () => {
     }).not.toThrow();
 
     const rows = db
-      .prepare(`SELECT pr_number, task_id FROM pull_requests WHERE pr_number IN (8020, 8021)`)
+      .prepare(
+        `SELECT pr_number, task_id FROM pull_requests WHERE pr_number IN (8020, 8021)`,
+      )
       .all() as Array<{ pr_number: number; task_id: string }>;
 
     // Raw row 8020 should have been deleted, prefixed twin 8021 survives
     expect(rows.map((r) => r.pr_number)).not.toContain(8020);
     expect(rows.map((r) => r.pr_number)).toContain(8021);
-    expect(rows.find((r) => r.pr_number === 8021)?.task_id).toBe('notion:collision-abc');
+    expect(rows.find((r) => r.pr_number === 8021)?.task_id).toBe(
+      'notion:collision-abc',
+    );
   });
 
   it('after backfill, every non-null pull_requests.task_id matches LIKE "%:%"', () => {
