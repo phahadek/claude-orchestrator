@@ -211,7 +211,8 @@ describe('NotionTaskBackend.fetchReadyTasks — task_cache write shape', () => {
     expect(keys).toContain(`notion:${TASK_3}`);
 
     // No raw UUID keys (dashed or dashless)
-    const rawDashedRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const rawDashedRe =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const rawDashlessRe = /^[0-9a-f]{32}$/i;
     expect(keys.filter((k) => rawDashedRe.test(k))).toHaveLength(0);
     expect(keys.filter((k) => rawDashlessRe.test(k))).toHaveLength(0);
@@ -226,14 +227,19 @@ describe('NotionClient.fetchTaskPage — cache key shape', () => {
 
     vi.stubGlobal(
       'fetch',
-      vi.fn()
+      vi
+        .fn()
         .mockResolvedValueOnce({
           ok: true,
           json: async () => makeNotionPageResponse(taskId),
         })
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => ({ results: [], has_more: false, next_cursor: null }),
+          json: async () => ({
+            results: [],
+            has_more: false,
+            next_cursor: null,
+          }),
         }),
     );
 
