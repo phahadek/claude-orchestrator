@@ -346,6 +346,17 @@ export default function App() {
     [],
   );
 
+  const handleProjectsChanged = useCallback(() => {
+    fetch('/api/config')
+      .then((r) => r.json())
+      .then((loaded: ProjectConfig[]) => {
+        setProjects(loaded);
+      })
+      .catch(() => {
+        /* non-critical */
+      });
+  }, []);
+
   // Fetch TaskView list whenever tasks are ready, project/board changes, or a review session starts
   useEffect(() => {
     if (!activeProjectId) return;
@@ -1137,7 +1148,10 @@ export default function App() {
         {topView === 'settings' && (
           <ErrorBoundary name="SettingsView">
             <div className={styles.settingsView}>
-              <Settings initialTab={settingsInitialTab} />
+              <Settings
+                initialTab={settingsInitialTab}
+                onProjectsChanged={handleProjectsChanged}
+              />
             </div>
           </ErrorBoundary>
         )}

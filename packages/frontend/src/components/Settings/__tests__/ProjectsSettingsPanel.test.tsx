@@ -9,6 +9,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ProjectsSettingsPanel } from '../ProjectsSettingsPanel';
 import type { Project } from '../../../api/projects';
 
+vi.mock('../../../auth/deviceToken', () => ({
+  getDeviceToken: () => null,
+}));
+
 const fetchMock = vi.fn();
 
 beforeEach(() => {
@@ -249,6 +253,64 @@ describe('ProjectsSettingsPanel', () => {
     expect(allText).toContain('…');
     // And the full path should not appear verbatim (it was truncated)
     expect(allText).not.toContain(longDir);
+  });
+
+  it('calls onProjectsChanged after adding a milestone via the milestones sub-panel', async () => {
+    const onProjectsChanged = vi.fn();
+    const project = makeProject({ id: 'p1', name: 'Alpha', milestones: [] });
+
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse([project])) // initial project list
+      .mockResolvedValueOnce(jsonResponse([])) // milestones list on drill-in
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            id: 'm-new',
+            projectId: 'p1',
+            name: 'New One',
+            sourceId: null,
+            displayOrder: 0,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+          201,
+        ),
+      ) // POST milestone
+      .mockResolvedValueOnce(
+        jsonResponse([
+          {
+            id: 'm-new',
+            projectId: 'p1',
+            name: 'New One',
+            sourceId: null,
+            displayOrder: 0,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ]),
+      ) // reload milestones in MilestonesSubPanel
+      .mockResolvedValueOnce(jsonResponse([project])); // reload projects in ProjectsSettingsPanel
+
+    render(<ProjectsSettingsPanel onProjectsChanged={onProjectsChanged} />);
+    await waitFor(() => expect(screen.getByText('Alpha')).toBeTruthy());
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open milestones for Alpha' }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByText(/No milestones yet for this project/),
+      ).toBeTruthy(),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '+ Add milestone' }));
+    fireEvent.change(screen.getByLabelText('Name'), {
+      target: { value: 'New One' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(screen.getByText('New One')).toBeTruthy());
+    expect(onProjectsChanged).toHaveBeenCalled();
   });
 
   it('Edit and Delete buttons invoke the correct handlers when rendered in card layout', async () => {

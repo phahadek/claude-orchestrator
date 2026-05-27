@@ -66,7 +66,13 @@ function middleEllipsis(str: string, maxLen = 40): string {
   return str.slice(0, half) + '…' + str.slice(str.length - half);
 }
 
-function ProjectsSettingsPanelInner() {
+interface ProjectsSettingsPanelProps {
+  onProjectsChanged?: () => void;
+}
+
+function ProjectsSettingsPanelInner({
+  onProjectsChanged,
+}: ProjectsSettingsPanelProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -92,12 +98,13 @@ function ProjectsSettingsPanelInner() {
         if (!current) return current;
         return data.find((p) => p.id === current.id) ?? null;
       });
+      onProjectsChanged?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load projects');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [onProjectsChanged]);
 
   useEffect(() => {
     void reload();
@@ -361,10 +368,10 @@ function ProjectsSettingsPanelInner() {
   );
 }
 
-export function ProjectsSettingsPanel() {
+export function ProjectsSettingsPanel(props: ProjectsSettingsPanelProps) {
   return (
     <ErrorBoundary name="ProjectsSettingsPanel">
-      <ProjectsSettingsPanelInner />
+      <ProjectsSettingsPanelInner {...props} />
     </ErrorBoundary>
   );
 }
