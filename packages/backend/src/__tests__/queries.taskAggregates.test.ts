@@ -368,6 +368,82 @@ describe('getActiveTaskAggregates — notion_task_id format matching', () => {
   });
 });
 
+describe('getActiveTaskAggregates — prefix-tolerance (bridge band-aid)', () => {
+  const RAW_ID = DASHED_UUID;
+  const PREFIXED_ID = `notion:${DASHED_UUID}`;
+
+  it('raw tc.task_id + notion:-prefixed session → session matched as code_session_id', () => {
+    // task_cache row uses raw id (written by NotionClient.writeBoardCache)
+    upsertTaskCache(
+      RAW_ID,
+      JSON.stringify({ id: RAW_ID, title: 'T', status: 'In Progress' }),
+    );
+    // session uses notion:-prefixed id (written after PR #393)
+    insertSession(
+      makeSession({
+        session_id: 'prefix-sess-1',
+        notion_task_id: PREFIXED_ID,
+        session_type: 'standard',
+      }),
+    );
+
+    const rows = getActiveTaskAggregates([RAW_ID]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].code_session_id).toBe('prefix-sess-1');
+  });
+
+  it('notion:-prefixed tc.task_id + raw session → session matched (backwards-compat)', () => {
+    // task_cache row uses prefixed id
+    upsertTaskCache(
+      PREFIXED_ID,
+      JSON.stringify({ id: PREFIXED_ID, title: 'T', status: 'In Progress' }),
+    );
+    // session uses raw id (old format)
+    insertSession(
+      makeSession({
+        session_id: 'raw-sess-1',
+        notion_task_id: RAW_ID,
+        session_type: 'standard',
+      }),
+    );
+
+    const rows = getActiveTaskAggregates([PREFIXED_ID]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].code_session_id).toBe('raw-sess-1');
+  });
+
+  it('raw tc.task_id + notion:-prefixed PR notion_task_id → PR fields populated', () => {
+    upsertTaskCache(
+      RAW_ID,
+      JSON.stringify({ id: RAW_ID, title: 'T', status: 'In Progress' }),
+    );
+    upsertPullRequest(makePR({ pr_number: 99, notion_task_id: PREFIXED_ID }));
+
+    const rows = getActiveTaskAggregates([RAW_ID]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].pr_number).toBe(99);
+    expect(rows[0].pr_url).toBe('https://github.com/owner/repo/pull/99');
+  });
+
+  it('raw tc.task_id + notion:-prefixed review session → review_session_id matched', () => {
+    upsertTaskCache(
+      RAW_ID,
+      JSON.stringify({ id: RAW_ID, title: 'T', status: 'In Review' }),
+    );
+    insertSession(
+      makeSession({
+        session_id: 'review-prefix-1',
+        notion_task_id: PREFIXED_ID,
+        session_type: 'review',
+      }),
+    );
+
+    const rows = getActiveTaskAggregates([RAW_ID]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].review_session_id).toBe('review-prefix-1');
+  });
+});
+
 describe('getActiveTaskAggregates — review session token fields', () => {
   it('returns review_session_input_tokens and review_session_output_tokens for a review session', async () => {
     const { db } = await import('../db/db.js');

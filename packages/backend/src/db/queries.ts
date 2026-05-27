@@ -1298,6 +1298,10 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
   // review session, and PR per task — avoids N×3 correlated subqueries.
   // The inline event-payload subquery runs once per matched code session and is
   // O(1) with idx_session_events_session_id_id covering (session_id, id DESC).
+  // TODO: revert to direct column comparison once the unified-task-id work lands
+  // (see Planning task: https://www.notion.so/36d22f9152f381d4b070d12c34142ca6).
+  // The SUBSTR-after-colon wrappers are a prefix-tolerance band-aid; they prevent
+  // index usage on idx_sessions_notion_task_id_session_type and friends.
   return db
     .prepare(
       `
@@ -1305,7 +1309,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       ranked_code AS (
         SELECT *,
           ROW_NUMBER() OVER (
-            PARTITION BY REPLACE(COALESCE(task_id, ''), '-', '')
+            PARTITION BY REPLACE(SUBSTR(COALESCE(task_id, ''), INSTR(COALESCE(task_id, ''), ':') + 1), '-', '')
             ORDER BY started_at DESC
           ) AS rn
         FROM sessions
@@ -1314,7 +1318,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       ranked_review AS (
         SELECT *,
           ROW_NUMBER() OVER (
-            PARTITION BY REPLACE(COALESCE(task_id, ''), '-', '')
+            PARTITION BY REPLACE(SUBSTR(COALESCE(task_id, ''), INSTR(COALESCE(task_id, ''), ':') + 1), '-', '')
             ORDER BY started_at DESC
           ) AS rn
         FROM sessions
@@ -1323,7 +1327,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       ranked_pr AS (
         SELECT *,
           ROW_NUMBER() OVER (
-            PARTITION BY REPLACE(COALESCE(notion_task_id, ''), '-', '')
+            PARTITION BY REPLACE(SUBSTR(COALESCE(notion_task_id, ''), INSTR(COALESCE(notion_task_id, ''), ':') + 1), '-', '')
             ORDER BY pr_number DESC
           ) AS rn
         FROM pull_requests
@@ -1361,13 +1365,13 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       pr.pause_reason        AS pr_pause_reason
     FROM task_cache tc
     LEFT JOIN ranked_code cs
-      ON REPLACE(cs.task_id, '-', '') = REPLACE(tc.task_id, '-', '')
+      ON REPLACE(SUBSTR(COALESCE(cs.task_id, ''), INSTR(COALESCE(cs.task_id, ''), ':') + 1), '-', '') = REPLACE(SUBSTR(COALESCE(tc.task_id, ''), INSTR(COALESCE(tc.task_id, ''), ':') + 1), '-', '')
       AND cs.rn = 1
     LEFT JOIN ranked_review rs
-      ON REPLACE(rs.task_id, '-', '') = REPLACE(tc.task_id, '-', '')
+      ON REPLACE(SUBSTR(COALESCE(rs.task_id, ''), INSTR(COALESCE(rs.task_id, ''), ':') + 1), '-', '') = REPLACE(SUBSTR(COALESCE(tc.task_id, ''), INSTR(COALESCE(tc.task_id, ''), ':') + 1), '-', '')
       AND rs.rn = 1
     LEFT JOIN ranked_pr pr
-      ON REPLACE(pr.notion_task_id, '-', '') = REPLACE(SUBSTR(tc.task_id, INSTR(tc.task_id, ':') + 1), '-', '')
+      ON REPLACE(SUBSTR(COALESCE(pr.notion_task_id, ''), INSTR(COALESCE(pr.notion_task_id, ''), ':') + 1), '-', '') = REPLACE(SUBSTR(COALESCE(tc.task_id, ''), INSTR(COALESCE(tc.task_id, ''), ':') + 1), '-', '')
       AND pr.rn = 1
     WHERE tc.task_id IN (${placeholders})
     ORDER BY tc.fetched_at DESC

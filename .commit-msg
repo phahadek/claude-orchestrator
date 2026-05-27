@@ -1,0 +1,7 @@
+feat: bridge-fix-task-id-convention-transition
+
+Prevent backend boot crash from task_cache UNIQUE constraint violation
+when raw and notion:-prefixed twins coexist, and restore dashboard UI
+session/PR matching via prefix-tolerant joins in getActiveTaskAggregates.
+
+AI-Authored-By: claude-sonnet-4-6 (session: 9e5f914e)
