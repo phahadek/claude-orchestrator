@@ -1,0 +1,6 @@
+feat: surface CI failure badges on task cards (parity with PR cards)
+
+Extract CI badge logic from WorkItemCard into shared CIBadges component;
+render on TaskCard using task.pr.mergeState and task.pauseReason.
+
+AI-Authored-By: claude-sonnet-4-6 (session: a7190731)

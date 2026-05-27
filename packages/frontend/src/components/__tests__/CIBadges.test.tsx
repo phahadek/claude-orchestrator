@@ -19,7 +19,9 @@ describe('CIBadges', () => {
   });
 
   it('renders nothing when mergeState is clean and pauseReason is null', () => {
-    const { container } = render(<CIBadges mergeState="clean" pauseReason={null} />);
+    const { container } = render(
+      <CIBadges mergeState="clean" pauseReason={null} />,
+    );
     expect(container.firstChild).toBeNull();
   });
 
@@ -62,10 +64,7 @@ describe('CIBadges', () => {
 
   it('includes failing check names in CI failing text when failingChecks provided', () => {
     render(
-      <CIBadges
-        mergeState="ci_failed"
-        failingChecks={['lint', 'test']}
-      />,
+      <CIBadges mergeState="ci_failed" failingChecks={['lint', 'test']} />,
     );
     expect(screen.getByText('❌ CI failing: lint, test')).toBeDefined();
   });
