@@ -101,6 +101,7 @@ export class JiraClient {
       all.push(...resp.issues);
       if (all.length >= resp.total) break;
       startAt += resp.issues.length;
+      // eslint-disable-next-line no-constant-condition
     } while (true);
 
     return all;
