@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -9,15 +9,18 @@ vi.mock('../config', () => ({
 }));
 vi.mock('../db/queries', () => ({
   upsertTaskCache: vi.fn(),
-  getCacheAge: vi.fn(() => null),
+  getCacheAge: vi.fn(() => Infinity),
   getTaskCache: vi.fn(() => null),
+  updateTaskCacheStatus: vi.fn(),
 }));
 
 import {
   parseSection,
   parseDependsOn,
   parseExpectedSize,
+  NotionClient,
 } from './NotionClient';
+import { updateTaskCacheStatus } from '../db/queries';
 
 const source = fs.readFileSync(
   path.join(__dirname, 'NotionClient.ts'),
@@ -173,5 +176,76 @@ describe('parseExpectedSize()', () => {
       parseExpectedSize(`## Expected size\n\n## Summary\nx`),
     ).toBeUndefined();
     expect(parseExpectedSize(`## Expected size\nlarge\n`)).toBeUndefined();
+  });
+});
+
+// ─── NotionClient prefix-stripping tests ─────────────────────────────────────
+
+describe('NotionClient — prefix stripping in public methods', () => {
+  let client: NotionClient;
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.mocked(updateTaskCacheStatus).mockReset();
+    fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    client = new NotionClient();
+  });
+
+  it('updateStatus calls Notion API at /pages/abc (not /pages/notion:abc)', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({}),
+    });
+
+    await client.updateStatus('notion:abc', '✅ Done');
+
+    const [url] = fetchSpy.mock.calls[0] as [string, unknown];
+    expect(url).toContain('/pages/abc');
+    expect(url).not.toContain('notion:abc');
+  });
+
+  it('updateStatus updates task_cache keyed notion:abc (not abc)', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({}),
+    });
+
+    await client.updateStatus('notion:abc', '✅ Done');
+
+    expect(vi.mocked(updateTaskCacheStatus)).toHaveBeenCalledWith(
+      'notion:abc',
+      '✅ Done',
+    );
+    expect(vi.mocked(updateTaskCacheStatus)).not.toHaveBeenCalledWith(
+      'abc',
+      expect.anything(),
+    );
+  });
+
+  it('fetchTaskPage calls Notion API at /pages/abc (not /pages/notion:abc)', async () => {
+    const mockPage = {
+      id: 'abc',
+      url: 'https://notion.so/abc',
+      properties: {
+        'Task Name': { type: 'title', title: [{ text: { content: 'Test' } }] },
+        Status: { type: 'select', select: null },
+        Type: { type: 'select', select: null },
+        'Depends On': { type: 'rich_text', rich_text: [] },
+        Notes: { type: 'rich_text', rich_text: [] },
+      },
+    };
+    fetchSpy
+      .mockResolvedValueOnce({ ok: true, json: async () => mockPage })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ results: [], has_more: false, next_cursor: null }),
+      });
+
+    await client.fetchTaskPage('notion:abc');
+
+    const firstUrl = fetchSpy.mock.calls[0][0] as string;
+    expect(firstUrl).toContain('/pages/abc');
+    expect(firstUrl).not.toContain('notion:abc');
   });
 });

@@ -7,8 +7,8 @@
 
 ## Task Assignment
 
-- **Task**: Unify task_cache write conventions
-- **Notion task**: https://www.notion.so/Unify-task_cache-write-conventions-36d22f9152f38149946ed3408951c1c5
+- **Task**: Audit external-API call sites; add toExternalId() helper
+- **Notion task**: https://www.notion.so/Audit-external-API-call-sites-add-toExternalId-helper-36d22f9152f381d0b6e4de5269dec8eb
 - **Project context**: https://www.notion.so/33222f9152f38188b65fd912e40890a2
 
 ---
@@ -124,7 +124,7 @@ Run in order — all must pass before opening the PR:
 
 ## Git Isolation
 
-> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\fc765fa2-05f5-4a10-a5fd-4b5dcecfc5c1`.**
+> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\6aefea4b-92b2-44d5-97a2-9ff6fe54534a`.**
 > This is your `cwd`. All commands run here. Never navigate to or operate on any parent directory.
 
 - All git commands must run inside the worktree directory (your `cwd`)
@@ -141,7 +141,7 @@ Run in order — all must pass before opening the PR:
 > namespace to prevent writes outside the worktree. All isolation is prompt-level.
 > Violating these rules can corrupt the developer's live environment.
 
-All file writes **must stay inside the worktree directory** (`C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\fc765fa2-05f5-4a10-a5fd-4b5dcecfc5c1`).
+All file writes **must stay inside the worktree directory** (`C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\6aefea4b-92b2-44d5-97a2-9ff6fe54534a`).
 
 - **Never write to the project root or any path above the worktree.**
   Scripts, tools, and generated outputs must target paths under the worktree, not the parent repo.
@@ -182,39 +182,45 @@ Use the Write tool for any file creation. Never use `cat >`, `printf >`, or `ech
 > Do NOT re-fetch this from Notion — use the content below as your source of truth.
 
 ## Summary
-Stop the duplicate-shape writes to task_cache that today produce overlapping key formats. After this lands, every row in task_cache follows one of three explicit shapes: <source>:<external-id> (per-task body), task:<source>:<external-id> (per-task full page body), or board:<boardId> (board sentinel).
+Refactor NotionClient public methods to accept canonical prefixed task IDs (e.g. notion:abc) and strip internally for external API calls via a new toExternalId(taskId) helper. Fixes three silent-breakage call sites where prefixed IDs were being passed directly to Notion APIs. Notion gets no special treatment — Jira and YAML go through the same plumbing.
 ## Dependencies
-- Rename pull_requests.notion_task_id → task_id; backfill prefixes (D1) — sequencing safety; D3 doesn't touch pull_requests but the unified-write convention reads from the same call paths.
+- Rename pull_requests.notion_task_id → task_id; backfill prefixes (D1) — must land first so pr.task_id is the canonical prefixed shape this task expects.
 ## Context
-Audit & unify task_id storage conventions confirmed that task_cache.task_id today holds six overlapping shapes:
-- notion:<id> from NotionTaskBackend.fetchReadyTasks:48,87 (correct, canonical)
-- Raw <id> from NotionClient.writeBoardCache:144 per-task fan-out (collides with the above)
-- task:<id> from NotionClient.taskPageCacheKey:336
-- board:<id> from NotionClient.boardCacheKey:122
-- yaml:<id> from LocalTaskBackend.ts:203
-- jira:<id> from JiraTaskSourceProvider.ts:73
-The collision between raw <id> and notion:<id> is the root cause of the Bridge fix's piece-1 boot-crash migration (PR #398). Once writes are unified, that defensive migration becomes a no-op for new data; D4 can then revert the Bridge fix's join band-aid.
+After PR #393 made sessions.task_id write notion:<id> and D1 makes pull_requests.task_id prefixed too, three external-API call sites silently 404 because they pass the prefixed string directly to a Notion REST API or into a Notion URL:
+- packages/backend/src/github/PRMergeWatcher.ts:306 — notionClient.updateStatus(pr.task_id, '✅ Done')
+- packages/backend/src/routes/prs.ts:658 — same updateStatus call from the "Mark in Review" endpoint
+- packages/backend/src/github/PRReviewService.ts:304 — https://www.notion.so/${prRow.task_id}
+The Notion REST API /pages/{id} and the public notion.so/{id} URL both expect a raw page ID without source prefix.
+Additionally, NotionClient.updateStatus today calls updateTaskCacheStatus(taskId, status) after the API call. Today's NotionTaskBackend.updateStatus strips the prefix before delegating, which makes the API call succeed but the cache update miss (cache key is notion:abc, lookup passes abc). The fix requires NotionClient to do both jobs correctly internally: strip for the API call, preserve prefix for the cache call.
 ### What changes
-1. Delete the raw-key per-task fan-out in packages/backend/src/notion/NotionClient.ts:140-145:
-1. Promote taskPageCacheKey to include source in packages/backend/src/notion/NotionClient.ts:335-337:
-1. Drop the dashless/dashed UUID fallback in packages/backend/src/db/queries.ts:678-684:
-1. Verify upstream callers pass prefixed IDs to getTaskCache:
+1. New helper in packages/backend/src/tasks/taskId.ts:
+1. Refactor NotionClient public methods (packages/backend/src/notion/NotionClient.ts):
+1. Update NotionTaskBackend (packages/backend/src/tasks/NotionTaskBackend.ts:60-73):
+1. Consistency renames in JiraTaskSourceProvider (packages/backend/src/tasks/JiraTaskSourceProvider.ts:84,89,110): replace parseTaskId(taskId).externalId with toExternalId(taskId). No behaviour change.
+1. Consistency renames in LocalTaskBackend (packages/backend/src/tasks/LocalTaskBackend.ts:214,223,232): same replacement.
+1. Fix the three silent-breakage sites:
 ### Out of scope
-- External-API call site audit (D2)
+- task_cache write convention changes (D3)
 - Bridge band-aid revert (D4)
-- Changing the board:<boardId> cache key shape — boards do not belong to a task source, keep as-is
 ## Acceptance criteria
 ### 🤖 Automated tests
 tsc --noEmit passes for both packages
-Unit test: after NotionTaskBackend.fetchReadyTasks runs on a fixture with 3 Notion tasks, task_cache contains exactly 4 rows (3 per-task with notion:<id> keys + 1 board sentinel board:<id>), with no raw-key duplicates
-Unit test: NotionClient.fetchTaskPage('abc') (called via NotionTaskBackend) writes a cache row keyed task:notion:abc
-Unit test: getTaskCache('notion:abc') returns the row written with task_id = 'notion:abc'
-Unit test: getTaskCache('abc') (no prefix) returns undefined when the only row is notion:abc (no dashless/dashed fallback)
-Existing tests in queries.taskAggregates.test.ts, mergeReady.queries.test.ts, prQueries.test.ts pass after the cache-shape changes
-Grep regression: no upsertTaskCache( call site writes a key matching ^[a-f0-9-]+$ (raw UUID) — every write key has a known prefix
+Unit test: toExternalId('notion:abc') returns 'abc'
+Unit test: toExternalId('jira:PROJ-123') returns 'PROJ-123'
+Unit test: toExternalId('not-a-task-id') throws
+Unit test: NotionClient.updateStatus('notion:abc', '✅ Done') calls the Notion API at /pages/abc (not /pages/notion:abc)
+Unit test: NotionClient.updateStatus('notion:abc', ...) updates the task_cache row keyed notion:abc (not abc)
+Unit test: NotionClient.fetchTaskPage('notion:abc') calls the Notion API at /pages/abc
+Unit test: PRReviewService constructs https://www.notion.so/abc from pr.task_id = 'notion:abc'
+Unit test: JiraTaskSourceProvider.updateStatus('jira:PROJ-123', ...) calls the Jira transition API for PROJ-123 (regression guard)
+Unit test: NotionTaskBackend.updateStatus('notion:abc', ...) passes 'notion:abc' (not 'abc') into NotionClient.updateStatus (verify with mock)
 ## Files / paths affected
-- packages/backend/src/notion/NotionClient.ts (update — delete fan-out, source-prefix taskPageCacheKey, update callers)
-- packages/backend/src/db/queries.ts (update — remove dashless/dashed fallback in getTaskCache)
+- packages/backend/src/tasks/taskId.ts (update — add toExternalId)
+- packages/backend/src/notion/NotionClient.ts (update — strip internally in updateStatus, fetchTaskPage, attachPR)
+- packages/backend/src/tasks/NotionTaskBackend.ts (update — stop calling parseTaskId at the dispatch layer)
+- packages/backend/src/tasks/JiraTaskSourceProvider.ts (update — parseTaskId(x).externalId → toExternalId(x))
+- packages/backend/src/tasks/LocalTaskBackend.ts (update — same)
+- packages/backend/src/github/PRReviewService.ts (update — Notion URL construction with toExternalId)
 ## Implementation notes
 > To be filled in during/after implementation.
 
@@ -222,6 +228,39 @@ Grep regression: no upsertTaskCache( call site writes a key matching ^[a-f0-9-]+
 
 > These are the current contents of files listed in the task spec.
 > They were pre-read by the orchestrator so you can skip exploration.
+
+### `packages/backend/src/tasks/taskId.ts`
+```
+export type TaskSource = 'notion' | 'yaml' | 'jira';
+
+export interface ParsedTaskId {
+  source: TaskSource;
+  externalId: string;
+}
+
+const VALID_SOURCES = new Set<string>(['notion', 'yaml', 'jira']);
+
+export function parseTaskId(taskId: string): ParsedTaskId {
+  const colonIndex = taskId.indexOf(':');
+  if (colonIndex < 0) {
+    throw new Error(`Invalid task ID (no colon): ${taskId}`);
+  }
+  const source = taskId.substring(0, colonIndex);
+  if (!VALID_SOURCES.has(source)) {
+    throw new Error(`Unknown task source "${source}" in task ID: ${taskId}`);
+  }
+  const externalId = taskId.substring(colonIndex + 1);
+  if (!externalId) {
+    throw new Error(`Invalid task ID (empty external ID): ${taskId}`);
+  }
+  return { source: source as TaskSource, externalId };
+}
+
+export function formatTaskId(source: TaskSource, externalId: string): string {
+  return `${source}:${externalId}`;
+}
+
+```
 
 ### `packages/backend/src/notion/NotionClient.ts`
 ```
@@ -518,283 +557,711 @@ export const TOP_LEVEL_SECTIONS = [
 [... truncated]
 ```
 
-### `packages/backend/src/db/queries.ts`
+### `packages/backend/src/tasks/NotionTaskBackend.ts`
 ```
-import { db } from './db';
-import { parseTaskId } from '../tasks/taskId';
-import type {
-  Session,
-  NewSession,
-  SessionEvent,
-  NewSessionEvent,
-  PermissionEvent,
-  NewPermissionEvent,
-  PermissionRule,
-  NewPermissionRule,
-  PermissionDenialRow,
-  NewPermissionDenialRow,
-  TaskCache,
-  PullRequestRow,
-  PauseReason,
-  ProjectRow,
-  NewProjectRow,
-  MilestoneRow,
-  NewMilestoneRow,
-  LocalBranchRow,
-  NewLocalBranchRow,
-  DeviceRow,
-  NewDeviceRow,
-} from './types';
-
-// ─── sessions ──────────────────────────────────────────────────────────────
-
-const stmtInsertSession = db.prepare<NewSession>(`
-  INSERT INTO sessions
-    (session_id, task_id, task_url, project_context_url,
-     project_id, status, started_at, ended_at, pr_url, worktree_path, session_type, task_name)
-  VALUES
-    (@session_id, @task_id, @task_url, @project_context_url,
-     @project_id, @status, @started_at, @ended_at, @pr_url, @worktree_path, @session_type, @task_name)
-`);
-
-const stmtUpdateSessionStatus = db.prepare<{
-  session_id: string;
-  status: string;
-  ended_at: number | null;
-}>(`
-  UPDATE sessions
-  SET status = @status, ended_at = @ended_at
-  WHERE session_id = @session_id
-`);
-
-const stmtGetSession = db.prepare<{ session_id: string }>(`
-  SELECT * FROM sessions WHERE session_id = @session_id
-`);
-
-const stmtGetAllSessions = db.prepare(`
-  SELECT * FROM sessions ORDER BY started_at DESC
-`);
-
-const stmtGetAllSessionIds = db.prepare(`
-  SELECT session_id FROM sessions
-`);
-
-const stmtDeleteSessionEvents = db.prepare<{ session_id: string }>(`
-  DELETE FROM session_events WHERE session_id = @session_id
-`);
-
-const stmtDeleteSession = db.prepare<{ session_id: string }>(`
-  DELETE FROM sessions WHERE session_id = @session_id
-`);
-
-const stmtInsertSessionOrIgnore = db.prepare<NewSession>(`
-  INSERT OR IGNORE INTO sessions
-    (session_id, task_id, task_url, project_context_url,
-     project_id, status, started_at, ended_at, pr_url, worktree_path, session_type, task_name)
-  VALUES
-    (@session_id, @task_id, @task_url, @project_context_url,
-     @project_id, @status, @started_at, @ended_at, @pr_url, @worktree_path, @session_type, @task_name)
-`);
-
-export function insertSession(s: NewSession): void {
-  stmtInsertSession.run({
-    ended_at: null,
-    pr_url: null,
-    worktree_path: null,
-    project_id: null,
-    session_type: 'standard',
-    ...s,
-    task_name: s.task_name ?? null,
-  });
-}
-
-export function updateSessionStatus(
-  sessionId: string,
-  status: string,
-  endedAt?: number,
-): void {
-  stmtUpdateSessionStatus.run({
-    session_id: sessionId,
-    status,
-    ended_at: endedAt ?? null,
-  });
-}
-
-const stmtMarkSessionDone = db.prepare<{
-  session_id: string;
-  ended_at: number;
-  pr_url: string | null;
-}>(`
-  UPDATE sessions
-  SET status = 'done', ended_at = @ended_at, pr_url = COALESCE(@pr_url, pr_url)
-  WHERE session_id = @session_id
-`);
+import type { TaskBackend, NonMilestoneSourceConfig } from './TaskBackend';
+import type { ResolvedTask } from './types';
+import { parseTaskId, formatTaskId } from './taskId';
+import { NotionClient } from '../notion/NotionClient';
+import { ProjectService } from '../projects/ProjectService';
+import { upsertTaskCache } from '../db/queries';
 
 /**
- * Atomically mark a session as done, setting ended_at and pr_url in a single
- * write. Preferred over updateSessionStatus for clean-exit paths because it
- * also persists pr_url without a second round-trip.
- * pr_url is only overwritten when non-null — existing value is preserved otherwise.
+ * Notion-backed implementation of TaskBackend. Resolves the Notion database ID
+ * from the milestone row's `source_id`, then delegates to NotionClient.
+ *
+ * All public methods accept prefixed task IDs (e.g. 'notion:abc123') and strip
+ * the prefix before calling the Notion API.
  */
-export function markSessionDone(
-  sessionId: string,
-  endedAt: number,
-  prUrl?: string | null,
-): void {
-  stmtMarkSessionDone.run({
-    session_id: sessionId,
-    ended_at: endedAt,
-    pr_url: prUrl ?? null,
-  });
+export class NotionTaskBackend implements TaskBackend {
+  readonly type = 'notion' as const;
+
+  constructor(private readonly client: NotionClient) {}
+
+  async fetchReadyTasks(
+    milestoneId: string | null,
+    skipCache?: boolean,
+  ): Promise<ResolvedTask[]> {
+    if (milestoneId === null) {
+      throw new Error(
+        `[NotionTaskBackend] milestoneId is required for Notion projects`,
+      );
+    }
+    const milestone = ProjectService.getMilestone(milestoneId);
+    if (!milestone) {
+      throw new Error(
+        `[NotionTaskBackend] milestone not found: ${milestoneId}`,
+      );
+    }
+    if (!milestone.sourceId) {
+      throw new Error(
+        `[NotionTaskBackend] milestone ${milestoneId} has no source_id — set it to the Notion database ID`,
+      );
+    }
+    const tasks = await this.client.fetchReadyTasks(
+      milestone.sourceId,
+      skipCache,
+    );
+    return tasks.map((r) => {
+      const prefixedId = formatTaskId('notion', r.task.id);
+      // Also cache under the prefixed key so getTaskTitleFromCache works with
+      // prefixed session.task_id lookups.
+      upsertTaskCache(
+        prefixedId,
+        JSON.stringify({ ...r.task, id: prefixedId }),
+      );
+      return {
+        ...r,
+        task: { ...r.task, id: prefixedId },
+        source: 'notion' as const,
+      };
+    });
+  }
+
+  async attachPR(taskId: string, prUrl: string): Promise<void> {
+    const { externalId } = parseTaskId(taskId);
+    return this.client.attachPR(externalId, prUrl);
+  }
+
+  async updateStatus(taskId: string, status: string): Promise<void> {
+    const { externalId } = parseTaskId(taskId);
+    return this.client.updateStatus(externalId, status);
+  }
+
+  async fetchTaskPage(taskId: string): Promise<string> {
+    const { externalId } = parseTaskId(taskId);
+    const page = await this.client.fetchTaskPage(externalId);
+    return page.rawMarkdown;
+  }
+
+  async fetchNonMilestoneReadyTasks(
+    sourceConfig: NonMilestoneSourceConfig | null,
+    projectId?: string,
+  ): Promise<ResolvedTask[]> {
+    if (!sourceConfig?.notionDatabaseId) return [];
+    const tasks = await this.client.fetchReadyTasks(
+      sourceConfig.notionDatabaseId,
+      true,
+    );
+    const resolved = tasks.map((r) => {
+      const prefixedId = formatTaskId('notion', r.task.id);
+      upsertTaskCache(
+        prefixedId,
+        JSON.stringify({ ...r.task, id: prefixedId }),
+      );
+      return {
+        ...r,
+        task: { ...r.task, id: prefixedId },
+        source: 'notion' as const,
+      };
+    });
+    // Cache full task list under the project's non-milestone key so the HTTP endpoint can serve it.
+    if (projectId) {
+      upsertTaskCache(
+        `non_milestone:${projectId}`,
+        JSON.stringify(resolved.map((r) => r.task)),
+      );
+    }
+    return resolved;
+  }
 }
 
-/**
- * Backfill sessions that are stuck at status='running' but whose last recorded
- * event is a 'result' event (the CLI's clean-exit signal). These sessions
- * completed normally but the done transition was missed — most likely because
- * the downstream review pipeline threw before handleCleanExit could persist it.
- * Returns the number of sessions updated.
- */
-export function backfillStuckResultSessions(): number {
-  const stuckRows = db
-    .prepare(
-      `
-    SELECT s.session_id, e.timestamp AS last_ts
-    FROM sessions s
-    JOIN session_events e ON e.session_id = s.session_id
-    WHERE s.status = 'running'
-      AND e.id = (
-        SELECT MAX(id) FROM session_events WHERE session_id = s.session_id
-      )
-      AND e.event_type = 'result'
-  `,
-    )
-    .all() as Array<{ session_id: string; last_ts: number }>;
+```
 
-  if (stuckRows.length === 0) return 0;
+### `packages/backend/src/tasks/JiraTaskSourceProvider.ts`
+```
+import type { TaskBackend } from './TaskBackend';
+import type { ResolvedTask } from './types';
+import type { NotionTask } from '../notion/types';
+import { formatTaskId, parseTaskId } from './taskId';
+import { JiraClient } from './JiraClient';
+import { DependencyResolver } from '../notion/DependencyResolver';
+import { upsertTaskCache } from '../db/queries';
 
-  const updateStmt = db.prepare(
-    `UPDATE sessions SET status = 'done', ended_at = ? WHERE session_id = ? AND status = 'running'`,
-  );
+export interface JiraProjectConfig {
+  host: string;
+  project_key: string;
+  /** Full JQL override. When set, ready_statuses is ignored for fetchReadyTasks. */
+  default_jql?: string;
+  /** Jira status names that map to "ready to launch". Defaults to DEFAULT_READY_STATUSES. */
+  ready_statuses?: string[];
+  /**
+   * Maps orchestrator display statuses (emoji-prefixed) to Jira status names.
+   * Defaults to DEFAULT_STATUS_MAPPING.
+   */
+  status_mapping?: Record<string, string>;
+}
 
-  for (const row of stuckRows) {
-    updateStmt.run(row.last_ts, row.session_id);
-    console.log(
-      `[backfill] session ${row.session_id.slice(0, 8)} running→done (last_event=result at ${new Date(row.last_ts).toISOString()})`,
+const DEFAULT_READY_STATUSES = ['To Do', 'Ready'];
+
+const DEFAULT_STATUS_MAPPING: Record<string, string> = {
+  '🔲 Backlog': 'Backlog',
+  '🗂️ Ready': 'To Do',
+  '🔄 In Progress': 'In Progress',
+  '👀 In Review': 'In Review',
+  '✅ Done': 'Done',
+};
+
+const TYPE_MAP: Record<string, string> = {
+  Bug: '🧪 Testing',
+  Task: '💻 Code',
+  Story: '💻 Code',
+  Epic: '📋 Planning',
+};
+
+function mapIssueType(issuetype: string): string {
+  return TYPE_MAP[issuetype] ?? '💻 Code';
+}
+
+const resolver = new DependencyResolver();
+
+export class JiraTaskSourceProvider implements TaskBackend {
+  readonly type = 'jira' as const;
+
+  constructor(
+    private readonly client: JiraClient,
+    private readonly projectConfig: JiraProjectConfig,
+  ) {}
+
+  async fetchReadyTasks(
+    _milestoneId: string | null,
+    _skipCache?: boolean,
+  ): Promise<ResolvedTask[]> {
+    const jql = this.buildReadyJql();
+    const issues = await this.client.searchIssues(jql);
+
+    const tasks: NotionTask[] = issues.map((issue) => ({
+      id: issue.key,
+      title: issue.fields.summary,
+      status: issue.fields.status.name,
+      type: mapIssueType(issue.fields.issuetype.name),
+      dependsOn: [],
+      notionUrl: '',
+      priority: issue.fields.priority?.name,
+    }));
+
+    for (const task of tasks) {
+      const prefixedId = formatTaskId('jira', task.id);
+      upsertTaskCache(prefixedId, JSON.stringify({ ...task, id: prefixedId }));
+    }
+
+    const resolved = resolver.resolve(tasks, 'jira');
+    return resolved.map((r) => ({
+      ...r,
+      task: { ...r.task, id: formatTaskId('jira', r.task.id) },
+    }));
+  }
+
+  async attachPR(taskId: string, prUrl: string): Promise<void> {
+    const { externalId } = parseTaskId(taskId);
+    await this.client.addComment(externalId, `PR: ${prUrl}`);
+  }
+
+  async updateStatus(taskId: string, status: string): Promise<void> {
+    const { externalId } = parseTaskId(taskId);
+    const mapping = this.projectConfig.status_mapping ?? DEFAULT_STATUS_MAPPING;
+    const targetJiraStatus = mapping[status];
+    if (!targetJiraStatus) {
+      throw new Error(
+        `[JiraTaskSourceProvider] no Jira status mapping for: "${status}"`,
+      );
+    }
+    const transitions = await this.client.getTransitions(externalId);
+    const transition = transitions.find(
+      (t) => t.to.name.toLowerCase() === targetJiraStatus.toLowerCase(),
+    );
+    if (!transition) {
+      throw new Error(
+        `[JiraTaskSourceProvider] no transition to "${targetJiraStatus}" for issue ${externalId}`,
+      );
+    }
+    await this.client.transitionIssue(externalId, transition.id);
+  }
+
+  async fetchTaskPage(taskId: string): Promise<string> {
+    const { externalId } = parseTaskId(taskId);
+    const issue = await this.client.getIssue(externalId);
+    const lines: string[] = [`# ${issue.fields.summary}`];
+    lines.push(`**Status:** ${issue.fields.status.name}`);
+    lines.push(`**Type:** ${issue.fields.issuetype.name}`);
+    if (issue.fields.priority) {
+      lines.push(`**Priority:** ${issue.fields.priority.name}`);
+    }
+    const desc = issue.fields.description;
+    if (desc && typeof desc === 'string' && desc.trim()) {
+      lines.push('', '## Description', desc.trim());
+    }
+    return lines.join('\n');
+  }
+
+  async fetchNonMilestoneReadyTasks(): Promise<ResolvedTask[]> {
+    return [];
+  }
+
+  private buildReadyJql(): string {
+    if (this.projectConfig.default_jql) {
+      return this.projectConfig.default_jql;
+    }
+    const readyStatuses =
+      this.projectConfig.ready_statuses ?? DEFAULT_READY_STATUSES;
+    return this.client.buildReadyJql(
+      this.projectConfig.project_key,
+      readyStatuses,
     );
   }
-  return stuckRows.length;
 }
 
-export function getSession(sessionId: string): Session | undefined {
-  return stmtGetSession.get({ session_id: sessionId }) as Session | undefined;
+```
+
+### `packages/backend/src/tasks/LocalTaskBackend.ts`
+```
+import fs from 'fs';
+import path from 'path';
+import yaml from 'js-yaml';
+import type { TaskBackend, NonMilestoneSourceConfig } from './TaskBackend';
+import type { ResolvedTask } from './types';
+import type { NotionTask } from '../notion/types';
+import { parseTaskId, formatTaskId } from './taskId';
+import { DependencyResolver } from '../notion/DependencyResolver';
+import { upsertTaskCache } from '../db/queries';
+
+// ── tasks.yaml schema ────────────────────────────────────────────────────────
+
+interface LocalTask {
+  id: string;
+  name: string;
+  status: string; // Backlog | Ready | In Progress | In Review | Done
+  priority?: string; // High | Medium | Low
+  type?: string; // Code | Planning | Testing
+  depends_on?: string[];
+  pr_url?: string | null;
+  context?: string;
+  acceptance_criteria?: string;
+  files_affected?: string[];
+  notes?: string;
 }
 
-export function getAllSessions(): Session[] {
-  return stmtGetAllSessions.all() as Session[];
+interface LocalMilestone {
+  id: string;
+  name: string;
+  tasks: LocalTask[];
 }
 
-export function getAllSessionIds(): string[] {
-  return (stmtGetAllSessionIds.all() as { session_id: string }[]).map(
-    (r) => r.session_id,
-  );
+/** New milestone-keyed schema. */
+interface MilestoneTasksFile {
+  project?: { id: string; name?: string };
+  milestones: LocalMilestone[];
 }
 
-export function insertSessionOrIgnore(s: NewSession): void {
-  stmtInsertSessionOrIgnore.run({
-    ended_at: null,
-    pr_url: null,
-    worktree_path: null,
-    project_id: null,
-    session_type: 'standard',
-    ...s,
-    task_name: s.task_name ?? null,
-  });
+/** Old flat schema, kept only for migration. */
+interface FlatTasksFile {
+  board_id?: string;
+  tasks: LocalTask[];
 }
 
-export function deleteSession(sessionId: string): boolean {
-  stmtDeleteSessionEvents.run({ session_id: sessionId });
-  const result = stmtDeleteSession.run({ session_id: sessionId });
-  return result.changes > 0;
+type AnyTasksFile = MilestoneTasksFile | FlatTasksFile;
+
+// ── Status mapping ───────────────────────────────────────────────────────────
+
+const STATUS_DISPLAY: Record<string, string> = {
+  Backlog: '🔲 Backlog',
+  Ready: '🗂️ Ready',
+  'In Progress': '🔄 In Progress',
+  'In Review': '👀 In Review',
+  Done: '✅ Done',
+};
+
+const TYPE_DISPLAY: Record<string, string> = {
+  Code: '💻 Code',
+  Planning: '📋 Planning',
+  Testing: '🧪 Testing',
+};
+
+function toDisplayStatus(status: string): string {
+  return STATUS_DISPLAY[status] ?? status;
 }
+
+function toDisplayType(type: string): string {
+  return TYPE_DISPLAY[type] ?? type;
+}
+
+function fromDisplayStatus(display: string): string {
+  const entry = Object.entries(STATUS_DISPLAY).find(([, v]) => v === display);
+  return entry ? entry[0] : display;
+}
+
+// ── Schema helpers ───────────────────────────────────────────────────────────
+
+function isMilestoneSchema(
+  parsed: AnyTasksFile | null,
+): parsed is MilestoneTasksFile {
+  return !!parsed && Array.isArray((parsed as MilestoneTasksFile).milestones);
+}
+
+function isFlatSchema(parsed: AnyTasksFile | null): parsed is FlatTasksFile {
+  return !!parsed && Array.isArray((parsed as FlatTasksFile).tasks);
+}
+
+// ── LocalTaskBackend ─────────────────────────────────────────────────────────
+
+const resolver = new DependencyResolver();
 
 /**
- * Delete sessions that have no events — these are "ghost sessions" created by
- * either empty JSONL imports or session starts that never ran the subprocess.
- * Returns the number of sessions deleted.
+ * File-based implementation of TaskBackend. Reads/writes task definitions from
+ * `<projectDir>/tasks.yaml` using the milestone-keyed schema. Old flat-schema
+ * files are auto-migrated on first read.
+ *
+ * All public methods accept prefixed task IDs (e.g. 'yaml:my-task') and strip
+ * the prefix before operating on the file.
  */
-export function deleteGhostSessions(): number {
-  const result = db
-    .prepare(
-      `
-    DELETE FROM sessions
-    WHERE session_id NOT IN (SELECT DISTINCT session_id FROM session_events)
-  `,
-    )
-    .run();
-  return result.changes;
+export class LocalTaskBackend implements TaskBackend {
+  readonly type = 'local' as const;
+
+  constructor(private readonly projectDir: string) {}
+
+  private get filePath(): string {
+    return path.join(this.projectDir, 'tasks.yaml');
+  }
+
+  /** Read tasks.yaml, migrating old flat schema to milestone schema if needed. */
+  private readFile(): MilestoneTasksFile {
+    if (!fs.existsSync(this.filePath)) {
+      throw new Error(
+        `[LocalTaskBackend] tasks.yaml not found at ${this.filePath}`,
+      );
+    }
+    const raw = fs.readFileSync(this.filePath, 'utf-8');
+    const parsed = yaml.load(raw) as AnyTasksFile | null;
+
+    if (isMilestoneSchema(parsed)) {
+      return parsed;
+    }
+
+    if (isFlatSchema(parsed)) {
+      const migrated = this.migrateFlatToMilestones(parsed);
+      this.writeFile(migrated);
+      console.log(
+        `[LocalTaskBackend] Migrated ${this.filePath} to milestone schema.`,
+      );
+      return migrated;
+    }
+
+    throw new Error(
+      `[LocalTaskBackend] tasks.yaml at ${this.filePath} is missing both 'milestones' and 'tasks' keys`,
+    );
+  }
+
+  /** Wrap a flat-schema file's tasks under a single milestone. */
+  private migrateFlatToMilestones(flat: FlatTasksFile): MilestoneTasksFile {
+    const id =
+      flat.board_id && flat.board_id !== 'default' ? flat.board_id : 'm1';
+    const name =
+      flat.board_id && flat.board_id !== 'default' ? flat.board_id : 'Default';
+    return {
+      milestones: [{ id, name, tasks: flat.tasks ?? [] }],
+    };
+  }
+
+  private writeFile(file: MilestoneTasksFile): void {
+    fs.writeFileSync(
+      this.filePath,
+      yaml.dump(file, { lineWidth: 120 }),
+      'utf-8',
+    );
+  }
+
+  private mapToNotionTask(t: LocalTask): NotionTask {
+    return {
+      id: t.id,
+      title: t.name,
+      status: toDisplayStatus(t.status),
+      type: toDisplayType(t.type ?? 'Code'),
+      dependsOn: t.depends_on ?? [],
+      notionUrl: '',
+      prUrl: t.pr_url ?? undefined,
+      priority: t.priority,
+    };
+  }
+
+  /** Locate the milestone containing a given raw task id (no prefix), or undefined. */
+  private findTaskById(
+    file: MilestoneTasksFile,
+    rawTaskId: string,
+  ): { milestone: LocalMilestone; task: LocalTask } | undefined {
+    for (const m of file.milestones) {
+      const task = m.tasks.find((t) => t.id === rawTaskId);
+      if (task) return { milestone: m, task };
+    }
+    return undefined;
+  }
+
+  async fetchReadyTasks(
+    milestoneId: string | null,
+    _skipCache?: boolean,
+  ): Promise<ResolvedTask[]> {
+    const file = this.readFile();
+    let allTasks: NotionTask[];
+    if (milestoneId === null) {
+      allTasks = file.milestones.flatMap((m) =>
+        m.tasks.map((t) => this.mapToNotionTask(t)),
+      );
+    } else {
+      const milestone = file.milestones.find((m) => m.id === milestoneId);
+      if (!milestone) {
+        throw new Error(
+          `[LocalTaskBackend] milestone not found in ${this.filePath}: ${milestoneId}`,
+        );
+      }
+      allTasks = milestone.tasks.map((t) => this.mapToNotionTask(t));
+      upsertTaskCache(`board:${milestoneId}`, JSON.stringify(allTasks));
+    }
+    // Cache each task under its prefixed key
+    for (const task of allTasks) {
+      upsertTaskCache(formatTaskId('yaml', task.id), JSON.stringify(task));
+    }
+    const resolved = resolver.resolve(allTasks, 'yaml');
+    // Prepend yaml: prefix to task IDs in returned results
+    return resolved.map((r) => ({
+      ...r,
+      task: { ...r.task, id: formatTaskId('yaml', r.task.id) },
+    }));
+  }
+
+  async attachPR(taskId: string, prUrl: string): Promise<void> {
+    const { externalId } = parseTaskId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    found.task.pr_url = prUrl;
+    this.writeFile(file);
+  }
+
+  async updateStatus(taskId: string, status: string): Promise<void> {
+    const { externalId } = parseTaskId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    found.task.status = fromDisplayStatus(status);
+    this.writeFile(file);
+  }
+
+  async fetchTaskPage(taskId: string): Promise<string> {
+    const { externalId } = parseTaskId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    const task = found.task;
+
+    const sections: string[] = [`# ${task.name}`];
+    if (task.context?.trim()) {
+      sections.push(`## Context\n${task.context.trim()}`);
+    }
+    if (task.acceptance_criteria?.trim()) {
+      sections.push(
+        `## Acceptance Criteria\n${task.acceptance_criteria.trim()}`,
+      );
+    }
+    if (task.files_affected && task.files_affected.length > 0) {
+      sections.push(
+        `## Files\n${task.files_affected.map((f) => `- ${f}`).join('\n')}`,
+      );
+    }
+    if (task.notes?.trim()) {
+      sections.push(`## Notes\n${task.notes.trim()}`);
+    }
+   
+[... truncated]
+```
+
+### `packages/backend/src/github/PRReviewService.ts`
+```
+import {
+  getEventsBySession,
+  setPRReviewResult,
+  getPRByNumber,
+  setReviewSessionId,
+  updatePRDraftStatus,
+  incrementReviewIteration,
+  setLastReviewedSha,
+  setLocalBranchReviewResult,
+  getLocalBranchById,
+} from '../db/queries';
+import { recordEvent } from '../audit/AuditLog';
+import type { GitHubClient } from './GitHubClient';
+import type { DiffSource } from './DiffSource';
+import { GitHubDiffSource } from './DiffSource';
+import {
+  computeSizeSignal,
+  isOversized,
+  SIZE_ABSOLUTE_FLOOR,
+  SIZE_FILE_RATIO_LIMIT,
+  type SizeSignal,
+} from './GitHubClient';
+import { getTaskBackend } from '../tasks/TaskBackend';
+import type { TaskBackend } from '../tasks/TaskBackend';
+import { parseSection, parseExpectedSize } from '../notion/NotionClient';
+import type { SessionManager } from '../session/SessionManager';
+import { GitHubApiError } from './types';
+import type { PullRequest, PRDiff } from './types';
+import type { ServerMessage } from '../ws/types';
+import type { SessionEvent } from '../db/types';
+import type { PRMergeWatcher } from './PRMergeWatcher';
+import type { AutoMerger } from './AutoMerger';
+
+const RETRY_DELAYS = [250, 500, 1000] as const;
+const defaultSleep = (ms: number): Promise<void> =>
+  new Promise((r) => setTimeout(r, ms));
+
+export class FetchRetryExhaustedError extends Error {
+  constructor(public readonly cause: Error) {
+    super(
+      `Diff fetch failed after ${RETRY_DELAYS.length} retries: ${cause.message}`,
+    );
+    this.name = 'FetchRetryExhaustedError';
+  }
 }
 
-export function getSessionsByStatus(statuses: string[]): Session[] {
-  const placeholders = statuses.map(() => '?').join(', ');
-  return db
-    .prepare(
-      `
-    SELECT * FROM sessions WHERE status IN (${placeholders}) ORDER BY started_at DESC
-  `,
-    )
-    .all(...statuses) as Session[];
+function isTransientFetchError(e: unknown): boolean {
+  if (e instanceof TypeError && e.message.includes('fetch failed')) return true;
+  if (e instanceof GitHubApiError && (e.status === 429 || e.status >= 500))
+    return true;
+  return false;
 }
+
+const SIZE_DIMENSION_NAME = 'Size proportionality';
+
+export interface ReviewDimension {
+  name: string;
+  passed: boolean;
+  notes: string;
+}
+
+export interface PRReviewResult {
+  prNumber: number;
+  repo: string;
+  verdict: 'approved' | 'needs_changes' | 'incomplete' | 'error';
+  dimensions?: ReviewDimension[];
+  summary: string;
+  reviewedAt: string;
+  /** Manual-verification items extracted from the task spec — for human review, not AI evaluation. */
+  manualItemsForHuman?: string[];
+}
+
+export type WorkItem =
+  | { type: 'pr'; prNumber: number; repo: string }
+  | {
+      type: 'local_branch';
+      localBranchId: number;
+      branchName: string;
+      baseBranch: string;
+      sessionId: string;
+      taskId?: string | null;
+    };
 
 /**
- * Returns true when a standard (non-review) session is currently active for the
- * given task id. "Active" means not in a terminal status (done, error, killed).
- * Used by AutoLauncher to avoid re-launching a task whose status hasn't yet
- * propagated back from the task backend.
- * Strips hyphens from both sides to normalize UUID format differences.
+ * Shared review-instructions block: the JSON schema, verdict rules, and the
+ * per-dimension guidance. Used by both the initial prompt and the re-review
+ * follow-ups so the two stay in sync.
  */
-export function hasActiveSessionForTask(taskId: string): boolean {
-  const norm = taskId.replace(/-/g, '');
-  const row = db
-    .prepare<{ task_id: string }>(
-      `
-    SELECT 1 FROM sessions
-    WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
-      AND status NOT IN ('done', 'error', 'killed')
-      AND (session_type = 'standard' OR session_type IS NULL)
-    LIMIT 1
-  `,
-    )
-    .get({ task_id: norm });
-  return !!row;
-}
+const REVIEW_JSON_SCHEMA_BLOCK = `Respond ONLY with a JSON object — no preamble, no markdown fences.
 
-export function getActiveSessions(): Session[] {
-  // LEFT JOIN pull_requests so that prUrl is populated even when sessions.pr_url
-  // is NULL (e.g. sessions started before their PR was linked back to the row).
-  return db
-    .prepare(
-      `
-    SELECT
-      s.session_id, s.task_id, s.task_url, s.project_context_url,
-      s.project_id, s.status, s.started_at, s.ended_at, s.worktree_path,
-      s.archived, s.favorited, s.session_type, s.note, s.tags,
-      s.total_input_tokens, s.total_output_tokens, s.model, s.task_name,
-      COALESCE(s.pr_url, (
-        SELECT p.pr_url FROM pull_requests p WHERE p.session_id = s.session_id LIMIT 1
-      )) AS pr_url
-    FROM sessions s
-    WHERE s.archived = 0
-    ORDER BY s.started_at DESC
-  `,
-    )
-    .all() as Session[];
-}
+## Manual verification items — DO NOT evaluate
 
-export function getArchivedSessions(): Session[] {
-  return db
-    .prepare(
-      'SELECT * FROM sessions WH
+The task spec may contain a section titled "### 👁️ Manual verification" (or similar).
+Items under that heading require a human reviewer — they CANNOT be verified by automated
+code review. You MUST:
+- Exclude them entirely from your pass/fail evaluation of the "Diff vs Acceptance Criteria" dimension.
+- Never fail the verdict solely because manual verification items are not demonstrated in the PR.
+- List them verbatim in the "manualItemsForHuman" array so downstream tooling can surface them to a human.
+
+Evaluate the PR across exactly these 5 dimensions and respond with this JSON schema:
+{
+  "verdict": "approved" | "needs_changes" | "incomplete",
+  "dimensions": [
+    { "name": "Title and description vs task Summary",        "passed": bool, "notes": "..." },
+    { "name": "Diff vs Context spec",                         "passed": bool, "notes": "..." },
+    { "name": "Diff vs Acceptance Criteria",                  "passed": bool, "notes": "..." },
+    { "name": "Changed files vs Files/paths affected list",   "passed": bool, "notes": "..." },
+    { "name": "${SIZE_DIMENSION_NAME}",                          "passed": bool, "notes": "..." }
+  ],
+  "summary": "2–4 sentence overall assessment",
+  "manualItemsForHuman": ["verbatim item text", ...]
+}
+verdict rules: "approved" = all 5 passed. "needs_changes" = 1–4 passed. "incomplete" = 0 passed.
+
+For the "Changed files vs Files/paths affected list" dimension: Pass if all changed files are either listed in the task OR are necessary downstream updates caused by the listed changes (e.g., updating call sites after a type change, adjusting tests for modified behavior, fixing imports). Fail only if the PR touches files unrelated to the task's intent.
+
+For the "${SIZE_DIMENSION_NAME}" dimension: Pass when the PR is within the size budget signaled above OR when any overflow is necessary corollary work — for example, deleting dead code or types that the listed changes leave unused, refactoring call sites the listed changes force to update, or test/fixture adjustments that follow from modified behavior. Fail only when the diff is materially larger than what the task scope (Summary + Acceptance Criteria + Files affected) demands, i.e. scope creep, unrelated cleanup, or speculative refactors. Note your reasoning in the "notes" field so a re-reviewer can audit the call.`;
+
+export class PRReviewService {
+  constructor(
+    private github: GitHubClient,
+    /**
+     * Optional fixed task backend. When provided (typically by tests), all task
+     * fetches/status updates go through it. In production this is undefined and
+     * the backend is resolved per-call via getTaskBackend(projectId).
+     */
+    private taskBackendOverride: TaskBackend | undefined,
+    private sessionManager: SessionManager,
+    private readonly defaultProjectId: string = '',
+    private readonly defaultProjectContextUrl: string = '',
+  ) {}
+
+  // Optional reference to PRMergeWatcher used to trigger an immediate mergeability
+  // check after an approved verdict (so we don't wait for the next 5-min poll).
+  // Set via setMergeWatcher() after both services are constructed (server.ts).
+  private mergeWatcher?: PRMergeWatcher;
+
+  setMergeWatcher(watcher: PRMergeWatcher): void {
+    this.mergeWatcher = watcher;
+  }
+
+  // Optional reference to AutoMerger used to kick off the auto-merge polling
+  // loop after an approved verdict on projects with autoMergeEnabled.
+  private autoMerger?: AutoMerger;
+
+  setAutoMerger(merger: AutoMerger): void {
+    this.autoMerger = merger;
+  }
+
+  private resolveBackend(projectId: string): TaskBackend {
+    return this.taskBackendOverride ?? getTaskBackend(projectId);
+  }
+
+  /**
+   * Resolve the task spec inputs needed for size-signal computation: the
+   * "Files / paths affected" section and the optional "Expected size" override.
+   * Returns empty/undefined when the task lookup fails so the signal still computes.
+   */
+  private async fetchSizeSignalInputs(
+    projectId: string,
+    taskId: string | null,
+  ): Promise<{ filesSection: string; expectedSize?: number }> {
+    if (!taskId) return { filesSection: '' };
+    try {
+      const body = await this.resolveBackend(projectId).fetchTaskPage(taskId);
+      return {
+        filesSection: parseSection(body, 'files'),
+        expectedSize: parseExpectedSize(body),
+      };
+    } catch (e) {
+      console.warn(
+        `[PRReviewService] fetchTaskPage for size signal failed (task ${taskId}):`,
+        e,
+      );
+      return { filesSection: '' };
+    }
+  }
+
+  /** Render the size signal block shown in re-review follow-up messages. */
+  private renderSizeSignalForFollowUp(signal: SizeSignal): string {
+    const budgetLine =
+      signal.expectedSize !== undefined
+        ? `- Expected size override (task budget ${signal.expectedSize}): ${signal.linesAdded + signal.linesDeleted > signal.expectedSize ? 'EXCEEDED' : 'within budget'}`
+        : `- Absolute LOC floor (>${SIZE_ABSOLUTE_FLOOR}): ${signal.exceededAbsoluteFloor ? 'EXCEEDED' : 'within budget'}`;
+    const ratioLine =
+      signal.expectedSize !== undefined
+        ? `- filesTouched / specFileCount: ${signal.specFile
 [... truncated]
 ```
 

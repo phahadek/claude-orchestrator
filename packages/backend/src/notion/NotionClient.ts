@@ -7,6 +7,7 @@ import {
 } from '../db/queries';
 import { NotionTask, NotionApiError, ResolvedTask } from './types';
 import { DependencyResolver } from './DependencyResolver';
+import { toExternalId } from '../tasks/taskId';
 
 // ─── Board validation types ─────────────────────────────────────────────────
 
@@ -447,12 +448,13 @@ export class NotionClient {
 
   /** Update the Status select property on a Notion task page. */
   async updateStatus(taskId: string, status: string): Promise<void> {
-    await notionRequest('PATCH', `/pages/${taskId}`, {
+    const externalId = toExternalId(taskId);
+    await notionRequest('PATCH', `/pages/${externalId}`, {
       properties: {
         Status: { select: { name: status } },
       },
     });
-    // Update the cache row in-place so emitTaskUpdated() can still find the row
+    // Use the canonical prefixed taskId for the cache so the key matches
     updateTaskCacheStatus(taskId, status);
   }
 
@@ -461,6 +463,7 @@ export class NotionClient {
    * cache the result for 10 minutes using key `task:{taskId}`.
    */
   async fetchTaskPage(taskId: string): Promise<NotionTaskPage> {
+    const externalId = toExternalId(taskId);
     const cacheKey = taskPageCacheKey(taskId);
     if (getCacheAge(cacheKey) < TASK_PAGE_CACHE_TTL_MS) {
       const row = getTaskCache(cacheKey);
@@ -474,7 +477,7 @@ export class NotionClient {
     }
 
     // Fetch page metadata for the name
-    const page = await notionRequest<NotionPage>('GET', `/pages/${taskId}`);
+    const page = await notionRequest<NotionPage>('GET', `/pages/${externalId}`);
     const titleItems = page.properties['Task Name']?.title ?? [];
     const name = titleItems.map((t) => t.text.content).join('');
     const expectedSizeProp = page.properties['Expected size'];
@@ -487,7 +490,7 @@ export class NotionClient {
     const lines: string[] = [];
     let startCursor: string | undefined;
     do {
-      const path = `/blocks/${taskId}/children?page_size=100${startCursor ? `&start_cursor=${startCursor}` : ''}`;
+      const path = `/blocks/${externalId}/children?page_size=100${startCursor ? `&start_cursor=${startCursor}` : ''}`;
       const resp = await notionRequest<NotionBlocksResponse>('GET', path);
       for (const block of resp.results) {
         const line = blockToLine(block);
@@ -525,11 +528,12 @@ export class NotionClient {
    * Fetches the current Notes content first so existing text is preserved.
    */
   async attachPR(taskId: string, prUrl: string): Promise<void> {
-    const page = await notionRequest<NotionPage>('GET', `/pages/${taskId}`);
+    const externalId = toExternalId(taskId);
+    const page = await notionRequest<NotionPage>('GET', `/pages/${externalId}`);
     const existing = page.properties.Notes?.rich_text?.[0]?.text?.content ?? '';
     const updated = existing ? `${existing}\n${prUrl}` : prUrl;
 
-    await notionRequest('PATCH', `/pages/${taskId}`, {
+    await notionRequest('PATCH', `/pages/${externalId}`, {
       properties: {
         Notes: {
           rich_text: [{ text: { content: updated } }],

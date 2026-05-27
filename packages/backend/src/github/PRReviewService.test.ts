@@ -16,6 +16,10 @@ vi.mock('../db/queries.js', () => ({
   getLocalBranchById: vi.fn(),
 }));
 
+vi.mock('../audit/AuditLog.js', () => ({
+  recordEvent: vi.fn(),
+}));
+
 import { PRReviewService, FetchRetryExhaustedError } from './PRReviewService';
 import {
   getPRByNumber,
@@ -1114,7 +1118,7 @@ describe('PRReviewService.reviewPR() — approved verdict calls handleApprovedVe
     );
 
     expect(vi.mocked(mockNotion.updateStatus)).toHaveBeenCalledWith(
-      'task-abc123',
+      'notion:task-abc123',
       '👀 In Review',
     );
   });
@@ -1159,11 +1163,11 @@ describe('PRReviewService.reviewPR() — approved verdict calls handleApprovedVe
     expect(handleSpy).toHaveBeenCalledWith(
       42,
       'owner/repo',
-      'task-abc123',
+      'notion:task-abc123',
       'specific-project-id',
     );
     expect(vi.mocked(mockNotion.updateStatus)).toHaveBeenCalledWith(
-      'task-abc123',
+      'notion:task-abc123',
       '👀 In Review',
     );
   });
@@ -1590,7 +1594,7 @@ describe('PRReviewService.reReviewPR()', () => {
     expect(handleSpy).toHaveBeenCalledWith(
       42,
       'owner/repo',
-      'task-abc123',
+      'notion:task-abc123',
       'proj-re-review',
     );
   });
@@ -2834,5 +2838,68 @@ describe('PRReviewService — manual verification items excluded from verdict', 
       'Never fail the verdict solely because manual verification',
     );
     expect(prompt).toContain('manualItemsForHuman');
+  });
+});
+
+// ── PRReviewService — toExternalId URL construction ──────────────────────────
+
+describe('PRReviewService — taskUrl strips notion: prefix', () => {
+  const approvedPayload = {
+    verdict: 'approved',
+    dimensions: [
+      {
+        name: 'Title and description vs task Summary',
+        passed: true,
+        notes: '',
+      },
+      { name: 'Diff vs Context spec', passed: true, notes: '' },
+      { name: 'Diff vs Acceptance Criteria', passed: true, notes: '' },
+      {
+        name: 'Changed files vs Files/paths affected list',
+        passed: true,
+        notes: '',
+      },
+      { name: 'Size proportionality', passed: true, notes: '' },
+    ],
+    summary: 'All good.',
+    manualItemsForHuman: [],
+  };
+
+  it('passes https://www.notion.so/task-abc123 (not notion:task-abc123) to sessionManager.start', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any); // task_id: 'notion:task-abc123'
+
+    const mockSM = makeMockSessionManager();
+    let capturedTaskUrl = '';
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        capturedTaskUrl = taskUrl;
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(approvedPayload),
+            ),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(capturedTaskUrl).toBe('https://www.notion.so/task-abc123');
+    expect(capturedTaskUrl).not.toContain('notion:task-abc123');
   });
 });

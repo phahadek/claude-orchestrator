@@ -23,6 +23,7 @@ import {
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { parseSection, parseExpectedSize } from '../notion/NotionClient';
+import { toExternalId } from '../tasks/taskId';
 import type { SessionManager } from '../session/SessionManager';
 import { GitHubApiError } from './types';
 import type { PullRequest, PRDiff } from './types';
@@ -301,7 +302,7 @@ export class PRReviewService {
       const taskBody = await this.resolveBackend(projectId).fetchTaskPage(
         prRow.task_id,
       );
-      const taskUrl = `https://www.notion.so/${prRow.task_id}`;
+      const taskUrl = `https://www.notion.so/${toExternalId(prRow.task_id)}`;
       const prompt = this.buildPrompt(prData, diffData, taskBody);
       const sizeSignal = computeSizeSignal(
         diff,
@@ -459,7 +460,7 @@ export class PRReviewService {
     );
 
     const taskUrl = taskId
-      ? `https://www.notion.so/${taskId}`
+      ? `https://www.notion.so/${toExternalId(taskId)}`
       : projectContextUrl;
     this.sessionManager.start(taskUrl, projectContextUrl, {
       sessionId,
