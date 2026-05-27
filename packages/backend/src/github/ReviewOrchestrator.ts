@@ -403,6 +403,14 @@ export class ReviewOrchestrator {
               `${job.prNumber}:${job.repo}`,
               result.commitSha,
             );
+            // Populate _revertLock for files touched by autofix so the
+            // orchestrator context writer does not re-dirty them on next injection.
+            if (prRow?.session_id && result.touchedFiles?.length) {
+              this.sessionManager.addToRevertLock(
+                prRow.session_id,
+                result.touchedFiles,
+              );
+            }
           }
         } catch (err) {
           autofixSuccess = false;

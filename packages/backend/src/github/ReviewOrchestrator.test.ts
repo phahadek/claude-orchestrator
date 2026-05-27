@@ -130,6 +130,7 @@ function makeMockSessionManager() {
   const emitter = new EventEmitter();
   return Object.assign(emitter, {
     send: vi.fn(),
+    addToRevertLock: vi.fn(),
   });
 }
 
@@ -958,6 +959,53 @@ describe('ReviewOrchestrator — autofix WS messages', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     expect(vi.mocked(runAutofix)).toHaveBeenCalledTimes(2);
+  });
+
+  it('calls sessionManager.addToRevertLock with touchedFiles after a successful autofix commit', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      commitSha: 'abc123',
+      touchedFiles: ['src/foo.ts', 'CLAUDE.md'],
+      summary: 'autofix committed abc123',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(sm.addToRevertLock)).toHaveBeenCalledWith(
+      basePRRow.session_id,
+      ['src/foo.ts', 'CLAUDE.md'],
+    );
+  });
+
+  it('does NOT call sessionManager.addToRevertLock when autofix produces no commit', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      summary: 'autofix commands produced no diff',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(sm.addToRevertLock)).not.toHaveBeenCalled();
   });
 });
 

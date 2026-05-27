@@ -91,7 +91,15 @@ import os from 'os';
 import { AgentSession } from './AgentSession';
 import { recordEvent } from '../audit/AuditLog';
 
-function makeSession(worktreePath: string): AgentSession {
+interface MockSessionManager {
+  send: ReturnType<typeof vi.fn>;
+  registerRevertSync?: ReturnType<typeof vi.fn>;
+}
+
+function makeSession(
+  worktreePath: string,
+  sessionManager?: MockSessionManager,
+): AgentSession {
   return new AgentSession(
     'test-session-id',
     'https://notion.so/task',
@@ -102,7 +110,7 @@ function makeSession(worktreePath: string): AgentSession {
     undefined,
     undefined,
     'standard',
-    undefined,
+    sessionManager as unknown as import('./SessionAuditor').ISessionManager | undefined,
     undefined,
     [],
     undefined,
@@ -214,5 +222,39 @@ describe('AgentSession.injectContextFile() — per-session revert lock', () => {
     expect(set).toBeDefined();
     expect(typeof set.has).toBe('function');
     expect(set.size).toBe(0);
+  });
+
+  it('regression: sessionManager.send() is NOT called when injectContextFile is blocked by the lock', () => {
+    const mockSessionManager: MockSessionManager = { send: vi.fn() };
+    const session = makeSession(tmpDir, mockSessionManager);
+
+    session.injectContextFile('CLAUDE.md', 'initial\n');
+
+    // Simulate auto-revert adding to the lock
+    revertLock(session).add('CLAUDE.md');
+
+    // Blocked injection — must NOT call sessionManager.send()
+    session.injectContextFile('CLAUDE.md', 'blocked\n');
+
+    expect(mockSessionManager.send).not.toHaveBeenCalled();
+  });
+
+  it('lockFileForNextInjection populates the lock from outside (autofix path)', () => {
+    const session = makeSession(tmpDir);
+    expect(session.revertedFiles.has('CLAUDE.md')).toBe(false);
+
+    session.lockFileForNextInjection('CLAUDE.md');
+
+    expect(session.revertedFiles.has('CLAUDE.md')).toBe(true);
+
+    // The lock entry is consumed on the next injectContextFile call
+    session.injectContextFile('CLAUDE.md', 'should be blocked\n');
+    expect(session.revertedFiles.has('CLAUDE.md')).toBe(false);
+
+    // The NEXT injection succeeds
+    session.injectContextFile('CLAUDE.md', 'now allowed\n');
+    expect(fs.readFileSync(path.join(tmpDir, 'CLAUDE.md'), 'utf8')).toBe(
+      'now allowed\n',
+    );
   });
 });

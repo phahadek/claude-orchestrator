@@ -978,13 +978,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           commit_sha: commitSha,
         },
       });
-
-      const comment = `🤖 Orchestrator auto-reverted banned files: ${reverted.map((f) => `\`${f}\``).join(', ')} (commit ${commitSha.slice(0, 7)})`;
-      await ghClient
-        .createIssueComment(repo, prNumber, comment)
-        .catch((e) =>
-          console.warn(`[AgentSession] revert comment failed: ${e}`),
-        );
+      // No session-facing send() — the _revertLock silently prevents re-injection.
     } catch (e) {
       console.warn(`[AgentSession] runFilePollutionCheck failed: ${e}`);
     }
@@ -1225,6 +1219,11 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
   /** Files reverted during this session that the injector must not overwrite (one cycle). */
   get revertedFiles(): ReadonlySet<string> {
     return this._revertLock;
+  }
+
+  /** Add a file to the one-cycle injection skip lock (called by the autofix path). */
+  lockFileForNextInjection(filename: string): void {
+    this._revertLock.add(filename);
   }
 
   /**

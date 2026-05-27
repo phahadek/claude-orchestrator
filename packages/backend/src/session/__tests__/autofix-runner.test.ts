@@ -383,6 +383,40 @@ describe('runAutofix — syncedTo after fetch + reset', () => {
     expect(result.commitSha).toBeUndefined();
   });
 
+  it('returns touchedFiles as the list of files committed by autofix', async () => {
+    let revParseCount = 0;
+
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
+      if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'fetch') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'reset') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'diff') {
+        // diff --name-only HEAD~1 HEAD
+        return makeProc(0, 'src/foo.ts\nCLAUDE.md\n');
+      }
+      if (cmd === 'git' && a[0] === 'rev-parse') {
+        revParseCount++;
+        if (a[1] === '--abbrev-ref') return makeProc(0, 'feature/test\n');
+        if (revParseCount === 1) return makeProc(0, 'commit-sha\n');
+        return makeProc(0, 'synced-sha\n');
+      }
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['echo hi'],
+      () => {},
+    );
+
+    expect(result.touchedFiles).toEqual(['src/foo.ts', 'CLAUDE.md']);
+  });
+
   it('omits syncedTo when fetch fails (does not throw)', async () => {
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];

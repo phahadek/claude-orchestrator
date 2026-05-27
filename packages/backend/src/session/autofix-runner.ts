@@ -12,6 +12,8 @@ export interface AutofixResult {
   commitSha?: string;
   /** HEAD SHA after the local branch was synced to origin via fetch + reset --hard. */
   syncedTo?: string;
+  /** Files included in the autofix commit (from git diff --name-only HEAD~1 HEAD). */
+  touchedFiles?: string[];
   summary: string;
 }
 
@@ -142,6 +144,19 @@ export async function runAutofix(
   const sha = await getHeadSha(worktreePath);
   log(`[autofix] committed ${sha}\n`);
 
+  // Collect the files included in the commit so callers can populate _revertLock
+  let touchedFiles: string[] | undefined;
+  try {
+    const diffResult = await spawnCmd(
+      'git',
+      ['diff', '--name-only', 'HEAD~1', 'HEAD'],
+      { cwd: worktreePath },
+    );
+    touchedFiles = diffResult.stdout.split('\n').filter(Boolean);
+  } catch {
+    // best-effort
+  }
+
   // Capture current branch before pushing so we can sync to it afterward
   const { stdout: branchRaw } = await spawnCmd(
     'git',
@@ -200,5 +215,5 @@ export async function runAutofix(
     ? `autofix committed ${sha}`
     : `autofix committed ${sha} with failures: ${failures.join('; ')}`;
 
-  return { success, commitSha: sha, syncedTo, summary };
+  return { success, commitSha: sha, syncedTo, touchedFiles, summary };
 }

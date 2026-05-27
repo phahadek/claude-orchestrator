@@ -1047,6 +1047,20 @@ export class SessionManager extends EventEmitter {
     this.emit('revert_sync_registered', { prNumber, repo, syncPromise });
   }
 
+  /**
+   * Add files to the per-session one-cycle injection skip lock.
+   * Called by the autofix path so that files committed by autofix are not
+   * immediately re-injected by the orchestrator context writer.
+   */
+  addToRevertLock(sessionId: string, files: string[]): void {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      for (const f of files) {
+        session.lockFileForNextInjection(f);
+      }
+    }
+  }
+
   /** Send a follow-up user message to a running session via stdin. */
   send(sessionId: string, message: string): void {
     const session = this.sessions.get(sessionId);
