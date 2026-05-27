@@ -150,6 +150,7 @@ import {
 
 const DASHED_UUID = '33722f91-52f3-816b-967f-c7f230b215ca';
 const DASHLESS_UUID = '33722f9152f3816b967fc7f230b215ca';
+const PREFIXED_ID = `notion:${DASHED_UUID}`;
 
 function makeSession(overrides: {
   session_id: string;
@@ -214,26 +215,24 @@ beforeEach(async () => {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('getActiveTaskAggregates — pull_requests.task_id format matching', () => {
-  it('returns non-null code_session_id when session uses dashless UUID and task_cache uses dashed UUID', () => {
-    // task_cache stores dashed UUID (as returned by Notion API)
+  it('returns non-null code_session_id when session and task_cache use same prefixed format', () => {
     upsertTaskCache(
-      DASHED_UUID,
+      PREFIXED_ID,
       JSON.stringify({
-        id: DASHED_UUID,
+        id: PREFIXED_ID,
         title: 'Test Task',
         status: '🔄 In Progress',
       }),
     );
-    // session stores dashless UUID (as produced by parseNotionPageId)
     insertSession(
       makeSession({
         session_id: 'sess-001',
-        task_id: DASHLESS_UUID,
+        task_id: PREFIXED_ID,
         session_type: 'standard',
       }),
     );
 
-    const rows = getActiveTaskAggregates([DASHED_UUID]);
+    const rows = getActiveTaskAggregates([PREFIXED_ID]);
     expect(rows).toHaveLength(1);
     expect(rows[0].code_session_id).toBe('sess-001');
   });
@@ -260,40 +259,39 @@ describe('getActiveTaskAggregates — pull_requests.task_id format matching', ()
     expect(rows[0].code_session_id).toBe('sess-002');
   });
 
-  it('returns non-null pr_number when PR uses dashless UUID and task_cache uses dashed UUID', () => {
+  it('returns non-null pr_number when PR and task_cache use same prefixed format', () => {
     upsertTaskCache(
-      DASHED_UUID,
+      PREFIXED_ID,
       JSON.stringify({
-        id: DASHED_UUID,
+        id: PREFIXED_ID,
         title: 'Test Task',
         status: '🔄 In Progress',
       }),
     );
-    upsertPullRequest(makePR({ pr_number: 42, task_id: DASHLESS_UUID }));
+    upsertPullRequest(makePR({ pr_number: 42, task_id: PREFIXED_ID }));
 
-    const rows = getActiveTaskAggregates([DASHED_UUID]);
+    const rows = getActiveTaskAggregates([PREFIXED_ID]);
     expect(rows).toHaveLength(1);
     expect(rows[0].pr_number).toBe(42);
   });
 
-  it('returns non-null pr_url when PR uses dashless UUID and task_cache uses dashed UUID', () => {
+  it('returns non-null pr_url when PR and task_cache use same prefixed format', () => {
     upsertTaskCache(
-      DASHED_UUID,
+      PREFIXED_ID,
       JSON.stringify({
-        id: DASHED_UUID,
+        id: PREFIXED_ID,
         title: 'Test Task',
         status: '🔄 In Progress',
       }),
     );
-    upsertPullRequest(makePR({ pr_number: 43, task_id: DASHLESS_UUID }));
+    upsertPullRequest(makePR({ pr_number: 43, task_id: PREFIXED_ID }));
 
-    const rows = getActiveTaskAggregates([DASHED_UUID]);
+    const rows = getActiveTaskAggregates([PREFIXED_ID]);
     expect(rows).toHaveLength(1);
     expect(rows[0].pr_url).toBe('https://github.com/owner/repo/pull/43');
   });
 
-  it('handles dashed UUID normalization — both dashed in task_cache and sessions', () => {
-    // If both happen to use dashed format, it still works
+  it('handles direct equality — both dashed UUID in task_cache and sessions', () => {
     upsertTaskCache(
       DASHED_UUID,
       JSON.stringify({
@@ -317,15 +315,15 @@ describe('getActiveTaskAggregates — pull_requests.task_id format matching', ()
 
   it('returns null code_session_id when no session exists for the task', () => {
     upsertTaskCache(
-      DASHED_UUID,
+      PREFIXED_ID,
       JSON.stringify({
-        id: DASHED_UUID,
+        id: PREFIXED_ID,
         title: 'Test Task',
         status: '🗂️ Ready',
       }),
     );
 
-    const rows = getActiveTaskAggregates([DASHED_UUID]);
+    const rows = getActiveTaskAggregates([PREFIXED_ID]);
     expect(rows).toHaveLength(1);
     expect(rows[0].code_session_id).toBeNull();
     expect(rows[0].pr_number).toBeNull();
@@ -333,9 +331,9 @@ describe('getActiveTaskAggregates — pull_requests.task_id format matching', ()
 
   it('picks the most recent session when multiple exist for the same task', () => {
     upsertTaskCache(
-      DASHED_UUID,
+      PREFIXED_ID,
       JSON.stringify({
-        id: DASHED_UUID,
+        id: PREFIXED_ID,
         title: 'Test Task',
         status: '🔄 In Progress',
       }),
@@ -343,7 +341,7 @@ describe('getActiveTaskAggregates — pull_requests.task_id format matching', ()
     insertSession(
       makeSession({
         session_id: 'sess-old',
-        task_id: DASHLESS_UUID,
+        task_id: PREFIXED_ID,
         session_type: 'standard',
         started_at: 1000,
       }),
@@ -351,13 +349,13 @@ describe('getActiveTaskAggregates — pull_requests.task_id format matching', ()
     insertSession(
       makeSession({
         session_id: 'sess-new',
-        task_id: DASHLESS_UUID,
+        task_id: PREFIXED_ID,
         session_type: 'standard',
         started_at: 2000,
       }),
     );
 
-    const rows = getActiveTaskAggregates([DASHED_UUID]);
+    const rows = getActiveTaskAggregates([PREFIXED_ID]);
     expect(rows).toHaveLength(1);
     expect(rows[0].code_session_id).toBe('sess-new');
   });
@@ -368,17 +366,12 @@ describe('getActiveTaskAggregates — pull_requests.task_id format matching', ()
   });
 });
 
-describe('getActiveTaskAggregates — prefix-tolerance (bridge band-aid)', () => {
-  const RAW_ID = DASHED_UUID;
-  const PREFIXED_ID = `notion:${DASHED_UUID}`;
-
-  it('raw tc.task_id + notion:-prefixed session → session matched as code_session_id', () => {
-    // task_cache row uses raw id (written by NotionClient.writeBoardCache)
+describe('getActiveTaskAggregates — direct comparison with uniform prefixed format', () => {
+  it('prefixed tc.task_id + prefixed session → session matched as code_session_id', () => {
     upsertTaskCache(
-      RAW_ID,
-      JSON.stringify({ id: RAW_ID, title: 'T', status: 'In Progress' }),
+      PREFIXED_ID,
+      JSON.stringify({ id: PREFIXED_ID, title: 'T', status: 'In Progress' }),
     );
-    // session uses notion:-prefixed id (written after PR #393)
     insertSession(
       makeSession({
         session_id: 'prefix-sess-1',
@@ -387,48 +380,28 @@ describe('getActiveTaskAggregates — prefix-tolerance (bridge band-aid)', () =>
       }),
     );
 
-    const rows = getActiveTaskAggregates([RAW_ID]);
+    const rows = getActiveTaskAggregates([PREFIXED_ID]);
     expect(rows).toHaveLength(1);
     expect(rows[0].code_session_id).toBe('prefix-sess-1');
   });
 
-  it('notion:-prefixed tc.task_id + raw session → session matched (backwards-compat)', () => {
-    // task_cache row uses prefixed id
+  it('prefixed tc.task_id + prefixed PR task_id → PR fields populated', () => {
     upsertTaskCache(
       PREFIXED_ID,
       JSON.stringify({ id: PREFIXED_ID, title: 'T', status: 'In Progress' }),
     );
-    // session uses raw id (old format)
-    insertSession(
-      makeSession({
-        session_id: 'raw-sess-1',
-        task_id: RAW_ID,
-        session_type: 'standard',
-      }),
-    );
-
-    const rows = getActiveTaskAggregates([PREFIXED_ID]);
-    expect(rows).toHaveLength(1);
-    expect(rows[0].code_session_id).toBe('raw-sess-1');
-  });
-
-  it('raw tc.task_id + notion:-prefixed PR task_id → PR fields populated (prefix-tolerance)', () => {
-    upsertTaskCache(
-      RAW_ID,
-      JSON.stringify({ id: RAW_ID, title: 'T', status: 'In Progress' }),
-    );
     upsertPullRequest(makePR({ pr_number: 99, task_id: PREFIXED_ID }));
 
-    const rows = getActiveTaskAggregates([RAW_ID]);
+    const rows = getActiveTaskAggregates([PREFIXED_ID]);
     expect(rows).toHaveLength(1);
     expect(rows[0].pr_number).toBe(99);
     expect(rows[0].pr_url).toBe('https://github.com/owner/repo/pull/99');
   });
 
-  it('raw tc.task_id + notion:-prefixed review session → review_session_id matched', () => {
+  it('prefixed tc.task_id + prefixed review session → review_session_id matched', () => {
     upsertTaskCache(
-      RAW_ID,
-      JSON.stringify({ id: RAW_ID, title: 'T', status: 'In Review' }),
+      PREFIXED_ID,
+      JSON.stringify({ id: PREFIXED_ID, title: 'T', status: 'In Review' }),
     );
     insertSession(
       makeSession({
@@ -438,7 +411,7 @@ describe('getActiveTaskAggregates — prefix-tolerance (bridge band-aid)', () =>
       }),
     );
 
-    const rows = getActiveTaskAggregates([RAW_ID]);
+    const rows = getActiveTaskAggregates([PREFIXED_ID]);
     expect(rows).toHaveLength(1);
     expect(rows[0].review_session_id).toBe('review-prefix-1');
   });
@@ -448,9 +421,9 @@ describe('getActiveTaskAggregates — review session token fields', () => {
   it('returns review_session_input_tokens and review_session_output_tokens for a review session', async () => {
     const { db } = await import('../db/db.js');
     upsertTaskCache(
-      DASHED_UUID,
+      PREFIXED_ID,
       JSON.stringify({
-        id: DASHED_UUID,
+        id: PREFIXED_ID,
         title: 'Token Task',
         status: '🔍 In Review',
       }),
@@ -458,14 +431,14 @@ describe('getActiveTaskAggregates — review session token fields', () => {
     insertSession(
       makeSession({
         session_id: 'code-sess',
-        task_id: DASHLESS_UUID,
+        task_id: PREFIXED_ID,
         session_type: 'standard',
       }),
     );
     insertSession(
       makeSession({
         session_id: 'review-sess',
-        task_id: DASHLESS_UUID,
+        task_id: PREFIXED_ID,
         session_type: 'review',
       }),
     );
@@ -473,7 +446,7 @@ describe('getActiveTaskAggregates — review session token fields', () => {
       'UPDATE sessions SET total_input_tokens = 200, total_output_tokens = 100 WHERE session_id = ?',
     ).run('review-sess');
 
-    const rows = getActiveTaskAggregates([DASHED_UUID]);
+    const rows = getActiveTaskAggregates([PREFIXED_ID]);
     expect(rows).toHaveLength(1);
     expect(rows[0].review_session_id).toBe('review-sess');
     expect(rows[0].review_session_input_tokens).toBe(200);
@@ -482,9 +455,9 @@ describe('getActiveTaskAggregates — review session token fields', () => {
 
   it('returns null review token fields when no review session exists', () => {
     upsertTaskCache(
-      DASHED_UUID,
+      PREFIXED_ID,
       JSON.stringify({
-        id: DASHED_UUID,
+        id: PREFIXED_ID,
         title: 'Token Task',
         status: '🗂️ Ready',
       }),
@@ -492,12 +465,12 @@ describe('getActiveTaskAggregates — review session token fields', () => {
     insertSession(
       makeSession({
         session_id: 'code-only',
-        task_id: DASHLESS_UUID,
+        task_id: PREFIXED_ID,
         session_type: 'standard',
       }),
     );
 
-    const rows = getActiveTaskAggregates([DASHED_UUID]);
+    const rows = getActiveTaskAggregates([PREFIXED_ID]);
     expect(rows).toHaveLength(1);
     expect(rows[0].review_session_id).toBeNull();
     expect(rows[0].review_session_input_tokens).toBeNull();
@@ -507,9 +480,9 @@ describe('getActiveTaskAggregates — review session token fields', () => {
   it('returns both code and review session tokens independently', async () => {
     const { db } = await import('../db/db.js');
     upsertTaskCache(
-      DASHED_UUID,
+      PREFIXED_ID,
       JSON.stringify({
-        id: DASHED_UUID,
+        id: PREFIXED_ID,
         title: 'Token Task',
         status: '🔍 In Review',
       }),
@@ -517,14 +490,14 @@ describe('getActiveTaskAggregates — review session token fields', () => {
     insertSession(
       makeSession({
         session_id: 'code-sess-2',
-        task_id: DASHLESS_UUID,
+        task_id: PREFIXED_ID,
         session_type: 'standard',
       }),
     );
     insertSession(
       makeSession({
         session_id: 'review-sess-2',
-        task_id: DASHLESS_UUID,
+        task_id: PREFIXED_ID,
         session_type: 'review',
       }),
     );
@@ -535,7 +508,7 @@ describe('getActiveTaskAggregates — review session token fields', () => {
       'UPDATE sessions SET total_input_tokens = 150, total_output_tokens = 75 WHERE session_id = ?',
     ).run('review-sess-2');
 
-    const rows = getActiveTaskAggregates([DASHED_UUID]);
+    const rows = getActiveTaskAggregates([PREFIXED_ID]);
     expect(rows).toHaveLength(1);
     expect(rows[0].code_session_input_tokens).toBe(500);
     expect(rows[0].code_session_output_tokens).toBe(300);

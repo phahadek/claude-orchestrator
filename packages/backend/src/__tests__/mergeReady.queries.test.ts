@@ -193,30 +193,30 @@ describe('getMergeReadyPRs', () => {
   });
 
   it('returns eligible PRs satisfying all filters', () => {
-    insertPR(10, 'task-aaa');
+    insertPR(10, 'notion:task-aaa');
     const result = getMergeReadyPRs(projectId, milestoneId);
     expect(result).toHaveLength(1);
     expect(result[0].pr_number).toBe(10);
   });
 
   it('excludes PRs with pause_reason set', () => {
-    insertPR(10, 'task-aaa', { pause_reason: 'stuck_timeout' });
+    insertPR(10, 'notion:task-aaa', { pause_reason: 'stuck_timeout' });
     expect(getMergeReadyPRs(projectId, milestoneId)).toHaveLength(0);
   });
 
   it('excludes PRs with mergeable !== 1', () => {
-    insertPR(10, 'task-aaa', { mergeable: 0 });
-    insertPR(11, 'task-bbb', { mergeable: null });
+    insertPR(10, 'notion:task-aaa', { mergeable: 0 });
+    insertPR(11, 'notion:task-bbb', { mergeable: null });
     expect(getMergeReadyPRs(projectId, milestoneId)).toHaveLength(0);
   });
 
   it('excludes PRs with state !== open', () => {
-    insertPR(10, 'task-aaa', { state: 'closed' });
+    insertPR(10, 'notion:task-aaa', { state: 'closed' });
     expect(getMergeReadyPRs(projectId, milestoneId)).toHaveLength(0);
   });
 
   it('excludes PRs with non-approved verdict', () => {
-    insertPR(10, 'task-aaa', {
+    insertPR(10, 'notion:task-aaa', {
       review_result: JSON.stringify({
         verdict: 'changes_requested',
         summary: '',
@@ -226,12 +226,12 @@ describe('getMergeReadyPRs', () => {
   });
 
   it('excludes PRs belonging to a different milestone', () => {
-    insertPR(10, 'task-zzz');
+    insertPR(10, 'notion:task-zzz');
     expect(getMergeReadyPRs(projectId, milestoneId)).toHaveLength(0);
   });
 
   it('includes draft PRs (no draft filter)', () => {
-    insertPR(10, 'task-aaa', { draft: 1 });
+    insertPR(10, 'notion:task-aaa', { draft: 1 });
     const result = getMergeReadyPRs(projectId, milestoneId);
     expect(result).toHaveLength(1);
     expect(result[0].draft).toBe(1);
@@ -245,23 +245,23 @@ describe('getMergeReadyPRs', () => {
     cleanDb();
     insertMilestone(milestoneId, projectId, sourceId);
     // no board cache entry
-    insertPR(10, 'task-aaa');
+    insertPR(10, 'notion:task-aaa');
     expect(getMergeReadyPRs(projectId, milestoneId)).toHaveLength(0);
   });
 
-  it('matches task_id with or without hyphens', () => {
+  it('matches prefixed task_id when board cache has hyphenated raw id', () => {
     cleanDb();
     insertMilestone(milestoneId, projectId, sourceId);
     insertBoardCache(`board:${sourceId}`, [
       'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
     ]);
-    insertPR(10, 'aaaaaaaabbbbccccddddeeeeeeeeeeee');
+    insertPR(10, 'notion:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
     expect(getMergeReadyPRs(projectId, milestoneId)).toHaveLength(1);
   });
 
   it('returns multiple eligible PRs', () => {
-    insertPR(10, 'task-aaa');
-    insertPR(11, 'task-bbb');
+    insertPR(10, 'notion:task-aaa');
+    insertPR(11, 'notion:task-bbb');
     expect(getMergeReadyPRs(projectId, milestoneId)).toHaveLength(2);
   });
 });

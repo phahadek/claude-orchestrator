@@ -509,6 +509,73 @@ describe('bench: getActiveTaskAggregates', () => {
   });
 });
 
+// ── Query-plan regression: getActiveTaskAggregates uses expected indexes ───────
+
+describe('query-plan regression: getActiveTaskAggregates', () => {
+  it('planner uses idx_sessions_notion_task_id_session_type and idx_pull_requests_task_id_pr_number', () => {
+    runMigrations();
+    // Direct SQL matching the body of getActiveTaskAggregates with one placeholder.
+    // If SUBSTR/INSTR wrappers are re-introduced, these indexes become unusable and
+    // the planner falls back to full-table scans — causing this assertion to fail.
+    const sql = `
+      WITH
+        ranked_code AS (
+          SELECT *,
+            ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY started_at DESC) AS rn
+          FROM sessions
+          WHERE session_type = 'standard' OR session_type IS NULL
+        ),
+        ranked_review AS (
+          SELECT *,
+            ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY started_at DESC) AS rn
+          FROM sessions
+          WHERE session_type = 'review'
+        ),
+        ranked_pr AS (
+          SELECT *,
+            ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY pr_number DESC) AS rn
+          FROM pull_requests
+        )
+      SELECT
+        tc.task_id, tc.raw_json,
+        cs.session_id AS code_session_id, cs.status AS code_session_status,
+        cs.started_at AS code_session_started_at, cs.ended_at AS code_session_ended_at,
+        cs.total_input_tokens AS code_session_input_tokens,
+        cs.total_output_tokens AS code_session_output_tokens,
+        (SELECT payload FROM session_events
+         WHERE session_id = cs.session_id
+           AND event_type NOT IN ('system', 'user_message')
+         ORDER BY id DESC LIMIT 1) AS code_session_last_event_payload,
+        rs.session_id AS review_session_id, rs.status AS review_session_status,
+        rs.total_input_tokens AS review_session_input_tokens,
+        rs.total_output_tokens AS review_session_output_tokens,
+        rs.review_result AS review_session_result,
+        pr.pr_number, pr.pr_url, pr.title AS pr_title,
+        pr.head_branch AS pr_head_branch, pr.base_branch AS pr_base_branch,
+        pr.state AS pr_state, pr.draft AS pr_draft,
+        pr.review_result AS pr_review_result, pr.review_iteration AS pr_review_iteration,
+        pr.merge_state AS pr_merge_state, pr.pause_reason AS pr_pause_reason
+      FROM task_cache tc
+      LEFT JOIN ranked_code cs ON cs.task_id = tc.task_id AND cs.rn = 1
+      LEFT JOIN ranked_review rs ON rs.task_id = tc.task_id AND rs.rn = 1
+      LEFT JOIN ranked_pr pr ON pr.task_id = tc.task_id AND pr.rn = 1
+      WHERE tc.task_id IN (?)
+      ORDER BY tc.fetched_at DESC
+    `;
+    const plan = typedDb
+      .prepare(`EXPLAIN QUERY PLAN ${sql}`)
+      .all('notion:test-1') as {
+      id: number;
+      parent: number;
+      notused: number;
+      detail: string;
+    }[];
+    const details = plan.map((r) => r.detail).join('\n');
+    expect(details).toContain('idx_sessions_notion_task_id_session_type');
+    expect(details).toContain('idx_pull_requests_task_id_pr_number');
+  });
+});
+
 // ── Bench: getActiveSessions ──────────────────────────────────────────────────
 
 describe('bench: getActiveSessions (sessions route query)', () => {

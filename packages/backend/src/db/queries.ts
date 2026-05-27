@@ -1,5 +1,4 @@
 import { db } from './db';
-import { parseTaskId } from '../tasks/taskId';
 import type {
   Session,
   NewSession,
@@ -1142,24 +1141,17 @@ export function setPauseReason(
  * components to skip tasks paused by stuck_timeout (or any other reason).
  */
 export function getPausedPrReasonForTask(taskId: string): PauseReason | null {
-  let externalId: string;
-  try {
-    externalId = parseTaskId(taskId).externalId;
-  } catch {
-    externalId = taskId;
-  }
-  const norm = externalId.replace(/-/g, '');
   const row = db
     .prepare<{ task_id: string }>(
       `
     SELECT pause_reason FROM pull_requests
-    WHERE REPLACE(SUBSTR(COALESCE(task_id, ''), INSTR(COALESCE(task_id, ''), ':') + 1), '-', '') = @task_id
+    WHERE task_id = @task_id
       AND pause_reason IS NOT NULL
     ORDER BY pr_number DESC
     LIMIT 1
   `,
     )
-    .get({ task_id: norm }) as { pause_reason: string | null } | undefined;
+    .get({ task_id: taskId }) as { pause_reason: string | null } | undefined;
   return (row?.pause_reason as PauseReason | null) ?? null;
 }
 
@@ -1227,7 +1219,7 @@ export function getMergeReadyPRs(
   let taskIds: string[];
   try {
     const tasks = JSON.parse(boardCache.raw_json) as { id: string }[];
-    taskIds = tasks.map((t) => t.id.replace(/-/g, ''));
+    taskIds = tasks.map((t) => `notion:${t.id}`);
   } catch {
     return [];
   }
@@ -1243,7 +1235,7 @@ export function getMergeReadyPRs(
       AND pause_reason IS NULL
       AND mergeable = 1
       AND JSON_EXTRACT(review_result, '$.verdict') = 'approved'
-      AND REPLACE(SUBSTR(COALESCE(task_id, ''), INSTR(COALESCE(task_id, ''), ':') + 1), '-', '') IN (${placeholders})
+      AND task_id IN (${placeholders})
   `,
     )
     .all(...taskIds) as PullRequestRow[];
@@ -1289,9 +1281,8 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
   // review session, and PR per task — avoids N×3 correlated subqueries.
   // The inline event-payload subquery runs once per matched code session and is
   // O(1) with idx_session_events_session_id_id covering (session_id, id DESC).
-  // The SUBSTR-after-colon wrappers normalize prefixed IDs for matching against
-  // task_cache entries (which use the full prefixed form).
-  // TODO(D4): replace with direct column comparison once all rows are uniformly prefixed.
+  // Direct task_id comparison allows idx_sessions_notion_task_id_session_type and
+  // idx_pull_requests_task_id_pr_number to be used by the query planner.
   return db
     .prepare(
       `
@@ -1299,7 +1290,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       ranked_code AS (
         SELECT *,
           ROW_NUMBER() OVER (
-            PARTITION BY REPLACE(SUBSTR(COALESCE(task_id, ''), INSTR(COALESCE(task_id, ''), ':') + 1), '-', '')
+            PARTITION BY task_id
             ORDER BY started_at DESC
           ) AS rn
         FROM sessions
@@ -1308,7 +1299,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       ranked_review AS (
         SELECT *,
           ROW_NUMBER() OVER (
-            PARTITION BY REPLACE(SUBSTR(COALESCE(task_id, ''), INSTR(COALESCE(task_id, ''), ':') + 1), '-', '')
+            PARTITION BY task_id
             ORDER BY started_at DESC
           ) AS rn
         FROM sessions
@@ -1317,7 +1308,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       ranked_pr AS (
         SELECT *,
           ROW_NUMBER() OVER (
-            PARTITION BY REPLACE(SUBSTR(COALESCE(task_id, ''), INSTR(COALESCE(task_id, ''), ':') + 1), '-', '')
+            PARTITION BY task_id
             ORDER BY pr_number DESC
           ) AS rn
         FROM pull_requests
@@ -1354,15 +1345,9 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       pr.merge_state         AS pr_merge_state,
       pr.pause_reason        AS pr_pause_reason
     FROM task_cache tc
-    LEFT JOIN ranked_code cs
-      ON REPLACE(SUBSTR(COALESCE(cs.task_id, ''), INSTR(COALESCE(cs.task_id, ''), ':') + 1), '-', '') = REPLACE(SUBSTR(COALESCE(tc.task_id, ''), INSTR(COALESCE(tc.task_id, ''), ':') + 1), '-', '')
-      AND cs.rn = 1
-    LEFT JOIN ranked_review rs
-      ON REPLACE(SUBSTR(COALESCE(rs.task_id, ''), INSTR(COALESCE(rs.task_id, ''), ':') + 1), '-', '') = REPLACE(SUBSTR(COALESCE(tc.task_id, ''), INSTR(COALESCE(tc.task_id, ''), ':') + 1), '-', '')
-      AND rs.rn = 1
-    LEFT JOIN ranked_pr pr
-      ON REPLACE(SUBSTR(COALESCE(pr.task_id, ''), INSTR(COALESCE(pr.task_id, ''), ':') + 1), '-', '') = REPLACE(SUBSTR(COALESCE(tc.task_id, ''), INSTR(COALESCE(tc.task_id, ''), ':') + 1), '-', '')
-      AND pr.rn = 1
+    LEFT JOIN ranked_code cs ON cs.task_id = tc.task_id AND cs.rn = 1
+    LEFT JOIN ranked_review rs ON rs.task_id = tc.task_id AND rs.rn = 1
+    LEFT JOIN ranked_pr pr ON pr.task_id = tc.task_id AND pr.rn = 1
     WHERE tc.task_id IN (${placeholders})
     ORDER BY tc.fetched_at DESC
   `,
