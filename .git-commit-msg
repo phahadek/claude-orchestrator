@@ -1,6 +1,0 @@
-feat: extend HARD_BANNED list to catch commit-msg scratch file variants
-
-Adds HARD_BANNED_PATTERNS regex to match commit-msg.txt, commit_msg.txt,
-and any commit[-_]msg.* variants; updates .gitignore to mirror.
-
-AI-Authored-By: claude-sonnet-4-6 (session: d7e5d70b)
