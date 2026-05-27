@@ -1,5 +1,6 @@
 import { recordEvent } from '../audit/AuditLog';
 import { setPauseReason } from '../db/queries';
+import { ORCHESTRATOR_BOT_EMAIL } from '../session/autofix-runner';
 import type { GitHubClient } from './GitHubClient';
 
 /** Matches the AI-Authored-By trailer in a commit message. */
@@ -8,6 +9,7 @@ export const AI_TRAILER_REGEX = /^AI-Authored-By:/m;
 export interface CommitInfo {
   sha: string;
   message: string;
+  author?: { email?: string };
 }
 
 export interface AttributionCheckResult {
@@ -43,7 +45,9 @@ export async function checkCommitAttribution(
   }
 
   const missingTrailer = commits.filter(
-    (c) => !AI_TRAILER_REGEX.test(c.message),
+    (c) =>
+      !AI_TRAILER_REGEX.test(c.message) &&
+      c.author?.email !== ORCHESTRATOR_BOT_EMAIL,
   );
 
   if (missingTrailer.length === 0) {

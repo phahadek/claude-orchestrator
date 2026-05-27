@@ -13,11 +13,13 @@ export interface AutofixResult {
   summary: string;
 }
 
+export const ORCHESTRATOR_BOT_EMAIL = 'bot@claude-code.internal';
+
 const BOT_GIT_ENV = {
   GIT_AUTHOR_NAME: 'claude-orchestrator',
-  GIT_AUTHOR_EMAIL: 'bot@claude-code.internal',
+  GIT_AUTHOR_EMAIL: ORCHESTRATOR_BOT_EMAIL,
   GIT_COMMITTER_NAME: 'claude-orchestrator',
-  GIT_COMMITTER_EMAIL: 'bot@claude-code.internal',
+  GIT_COMMITTER_EMAIL: ORCHESTRATOR_BOT_EMAIL,
 };
 
 export function loadAutofixCommands(projectDir: string): string[] {

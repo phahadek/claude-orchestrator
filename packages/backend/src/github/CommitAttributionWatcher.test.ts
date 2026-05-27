@@ -13,12 +13,13 @@ import {
   checkCommitAttribution,
   AI_TRAILER_REGEX,
 } from './CommitAttributionWatcher';
+import { ORCHESTRATOR_BOT_EMAIL } from '../session/autofix-runner';
 import { recordEvent } from '../audit/AuditLog';
 import { setPauseReason } from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
 
 function makeClient(
-  commits: Array<{ sha: string; message: string }>,
+  commits: Array<{ sha: string; message: string; author?: { email?: string } }>,
 ): GitHubClient {
   return {
     getCommitsForPR: vi.fn().mockResolvedValue(commits),
@@ -177,5 +178,96 @@ describe('checkCommitAttribution()', () => {
         payload: expect.objectContaining({ sha: 'e2' }),
       }),
     );
+  });
+
+  it('does NOT record attribution_missing for bot-authored commit without trailer', async () => {
+    const client = makeClient([
+      {
+        sha: 'f1',
+        message: 'chore: apply autofix [orchestrator]',
+        author: { email: ORCHESTRATOR_BOT_EMAIL },
+      },
+    ]);
+    const result = await checkCommitAttribution(
+      client,
+      'owner/repo',
+      7,
+      's1',
+      null,
+      null,
+      false,
+    );
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
+    expect(result.missing).toBe(0);
+  });
+
+  it('does NOT record attribution_missing for bot-authored commit even with trailer present', async () => {
+    const client = makeClient([
+      {
+        sha: 'f2',
+        message:
+          'chore: apply autofix [orchestrator]\n\nAI-Authored-By: claude-sonnet-4-6 (session: s1)',
+        author: { email: ORCHESTRATOR_BOT_EMAIL },
+      },
+    ]);
+    const result = await checkCommitAttribution(
+      client,
+      'owner/repo',
+      8,
+      's1',
+      null,
+      null,
+      false,
+    );
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalled();
+    expect(result.missing).toBe(0);
+  });
+
+  it('still records attribution_missing for session commit without trailer (regression)', async () => {
+    const client = makeClient([
+      {
+        sha: 'g1',
+        message: 'feat: session commit no trailer',
+        author: { email: 'session@example.com' },
+      },
+    ]);
+    await checkCommitAttribution(
+      client,
+      'owner/repo',
+      9,
+      'session-abc',
+      null,
+      null,
+      false,
+    );
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'attribution_missing',
+        payload: expect.objectContaining({ sha: 'g1' }),
+      }),
+    );
+  });
+
+  it('does NOT record attribution_missing for session commit with trailer (regression)', async () => {
+    const client = makeClient([
+      {
+        sha: 'g2',
+        message:
+          'feat: session commit with trailer\n\nAI-Authored-By: claude-sonnet-4-6 (session: s1)',
+        author: { email: 'session@example.com' },
+      },
+    ]);
+    const result = await checkCommitAttribution(
+      client,
+      'owner/repo',
+      10,
+      's1',
+      null,
+      null,
+      false,
+    );
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalled();
+    expect(result.missing).toBe(0);
   });
 });
