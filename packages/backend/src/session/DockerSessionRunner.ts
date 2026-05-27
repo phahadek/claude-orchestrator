@@ -146,7 +146,9 @@ export class DockerSessionRunner implements ISessionRunner {
 
     // Build claude command arguments (same as CliSessionRunner)
     const claudeArgs = [
-      ...(resumeSessionId ? ['--resume', resumeSessionId] : []),
+      ...(resumeSessionId
+        ? ['--resume', resumeSessionId]
+        : ['--session-id', this.sessionId]),
       '--print',
       '--output-format',
       'stream-json',
