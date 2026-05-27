@@ -70,7 +70,9 @@ interface ProjectsSettingsPanelProps {
   onProjectsChanged?: () => void;
 }
 
-function ProjectsSettingsPanelInner({ onProjectsChanged }: ProjectsSettingsPanelProps) {
+function ProjectsSettingsPanelInner({
+  onProjectsChanged,
+}: ProjectsSettingsPanelProps) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

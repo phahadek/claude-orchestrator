@@ -264,23 +264,49 @@ describe('ProjectsSettingsPanel', () => {
       .mockResolvedValueOnce(jsonResponse([])) // milestones list on drill-in
       .mockResolvedValueOnce(
         jsonResponse(
-          { id: 'm-new', projectId: 'p1', name: 'New One', sourceId: null, displayOrder: 0, createdAt: 1, updatedAt: 1 },
+          {
+            id: 'm-new',
+            projectId: 'p1',
+            name: 'New One',
+            sourceId: null,
+            displayOrder: 0,
+            createdAt: 1,
+            updatedAt: 1,
+          },
           201,
         ),
       ) // POST milestone
       .mockResolvedValueOnce(
-        jsonResponse([{ id: 'm-new', projectId: 'p1', name: 'New One', sourceId: null, displayOrder: 0, createdAt: 1, updatedAt: 1 }]),
+        jsonResponse([
+          {
+            id: 'm-new',
+            projectId: 'p1',
+            name: 'New One',
+            sourceId: null,
+            displayOrder: 0,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        ]),
       ) // reload milestones in MilestonesSubPanel
       .mockResolvedValueOnce(jsonResponse([project])); // reload projects in ProjectsSettingsPanel
 
     render(<ProjectsSettingsPanel onProjectsChanged={onProjectsChanged} />);
     await waitFor(() => expect(screen.getByText('Alpha')).toBeTruthy());
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open milestones for Alpha' }));
-    await waitFor(() => expect(screen.getByText(/No milestones yet for this project/)).toBeTruthy());
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Open milestones for Alpha' }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByText(/No milestones yet for this project/),
+      ).toBeTruthy(),
+    );
 
     fireEvent.click(screen.getByRole('button', { name: '+ Add milestone' }));
-    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New One' } });
+    fireEvent.change(screen.getByLabelText('Name'), {
+      target: { value: 'New One' },
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
 
     await waitFor(() => expect(screen.getByText('New One')).toBeTruthy());
