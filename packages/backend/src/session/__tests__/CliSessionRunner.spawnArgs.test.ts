@@ -12,7 +12,11 @@ let capturedSpawnArgs: string[] = [];
 function makeMockProc() {
   const stdout = new Readable({ read() {} });
   const stderr = new Readable({ read() {} });
-  const stdin = new Writable({ write(_c, _e, cb) { cb(); } });
+  const stdin = new Writable({
+    write(_c, _e, cb) {
+      cb();
+    },
+  });
   const proc = Object.assign(new EventEmitter(), {
     stdout,
     stderr,
@@ -39,7 +43,7 @@ vi.mock('child_process', () => ({
 import { CliSessionRunner } from '../CliSessionRunner';
 
 const SESSION_ID = 'aaaabbbb-cccc-dddd-eeee-ffffffffffff';
-const RESUME_ID  = 'bbbbcccc-dddd-eeee-ffff-aaaaaaaaaaaa';
+const RESUME_ID = 'bbbbcccc-dddd-eeee-ffff-aaaaaaaaaaaa';
 
 const defaultOptions = {
   worktreePath: '/fake/worktree',
