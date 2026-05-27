@@ -5,6 +5,7 @@ import { EventEmitter } from 'events';
 import { recordEvent } from '../audit/AuditLog';
 import { scrubSecrets } from '../security/scrubSecrets';
 import { AgentSession, parseNotionPageId } from './AgentSession';
+import { formatTaskId } from '../tasks/taskId';
 import { buildSessionContext } from './ContextBuilder';
 import { buildReviewClaudeMd } from './orchestrator-claudemd';
 import { resolveStartingPoint, ensureMilestoneBranch } from './branchModel';
@@ -403,7 +404,12 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    const notionTaskId = parseNotionPageId(taskUrl);
+    // SessionManager.start() must store prefixed task IDs in sessions.task_id so
+    // downstream parseTaskId() callers (NotionTaskBackend.updateStatus, attachPR,
+    // etc.) succeed. parseNotionPageId returns the raw page ID; wrap with
+    // formatTaskId to add the 'notion:' prefix that the post-task-source-extraction
+    // code expects.
+    const notionTaskId = formatTaskId('notion', parseNotionPageId(taskUrl));
     const sessionMode = runtimeSettings.session_mode;
     const runner =
       sessionMode === 'api'
