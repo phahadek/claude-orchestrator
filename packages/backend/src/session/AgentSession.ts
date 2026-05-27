@@ -171,6 +171,10 @@ export class AgentSession extends EventEmitter {
   private retryCount = 0;
   /** Guard: fires at most once per session to avoid duplicate pause broadcasts. */
   private inSessionApiErrorFired = false;
+  /** Maps `${repo}/${prNumber}` to the commit SHA of the last orchestrator-issued
+   *  auto-revert, so that the push of our own revert commit does not re-trigger
+   *  the validator (loop guard). */
+  private lastRevertShaPerPR = new Map<string, string>();
 
   /** The underlying I/O adapter (CLI subprocess or Agent SDK). */
   private runner: ISessionRunner;
@@ -900,10 +904,44 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
   ): Promise<void> {
     if (!this.githubClient) return;
     const ghClient = this.githubClient;
+
+    // Fetch the current head SHA for the loop guard check.
+    let headSha: string | null = null;
+    try {
+      const pr = await ghClient.fetchPR(repo, prNumber);
+      headSha = pr.headSha ?? null;
+    } catch (e) {
+      console.warn(
+        `[AgentSession] runFilePollutionCheck: could not fetch head SHA for PR #${prNumber}: ${e}`,
+      );
+    }
+
+    const prKey = `${repo}/${prNumber}`;
+    // Loop guard: skip validation when the triggering push is our own revert commit.
+    if (headSha !== null && this.lastRevertShaPerPR.get(prKey) === headSha) {
+      return;
+    }
+
     try {
       const changedFiles = await ghClient.getPRFiles(repo, prNumber);
       const gitignoreSources = collectGitignoreSources(this.worktreePath);
       const validation = validatePRFiles(changedFiles, gitignoreSources);
+
+      // Record that the validator ran — observable even when no violations found.
+      recordEvent({
+        event_type: 'file_pollution_checked',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: this.projectId || null,
+        task_id: this.taskId || null,
+        payload: {
+          pr_number: prNumber,
+          repo,
+          head_sha: headSha,
+          banned_files_found: validation.bannedFiles.length,
+        },
+      });
+
       if (validation.valid) return;
 
       const { commitSha, reverted } = await revertBannedFiles({
@@ -915,6 +953,9 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       });
 
       if (commitSha === null || reverted.length === 0) return;
+
+      // Update loop guard so we don't re-process our own revert push.
+      this.lastRevertShaPerPR.set(prKey, commitSha);
 
       recordEvent({
         event_type: 'file_pollution_reverted',

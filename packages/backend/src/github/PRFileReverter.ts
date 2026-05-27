@@ -39,6 +39,23 @@ export async function revertBannedFiles(opts: {
   // Fetch base branch from origin so we have origin/<baseBranch> available
   await git(['fetch', 'origin', baseBranch], worktreePath).catch(() => {});
 
+  // Sync local HEAD with the remote feature branch so that commits pushed by
+  // the session agent via GitHub API (which don't update the local git state)
+  // are included in the diff. Without this, git diff --cached against the
+  // previous revert commit shows no changes even when new violations exist.
+  const currentBranch = (
+    await git(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath).catch(
+      () => ({ stdout: '' }),
+    )
+  ).stdout.trim();
+  if (currentBranch) {
+    await git(['fetch', 'origin', currentBranch], worktreePath).catch(() => {});
+    await git(
+      ['reset', '--hard', `origin/${currentBranch}`],
+      worktreePath,
+    ).catch(() => {});
+  }
+
   const reverted: string[] = [];
 
   for (const f of bannedFiles) {
@@ -102,10 +119,7 @@ export async function revertBannedFiles(opts: {
   const commitSha = sha.trim();
 
   // Push the revert commit
-  const branch = (
-    await git(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath)
-  ).stdout.trim();
-  await git(['push', 'origin', `HEAD:${branch}`], worktreePath);
+  await git(['push', 'origin', `HEAD:${currentBranch}`], worktreePath);
 
   // Restore the worktree files (e.g. CLAUDE.md with orchestrator injection)
   restoreWorktree(worktreePath, saved);
