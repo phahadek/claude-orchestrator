@@ -137,12 +137,12 @@ describe('AgentSession — file pollution E2E integration', () => {
       'https://notion.so/task-e2e',
       'https://notion.so/ctx-e2e',
       fakeBackend(),
-      '/tmp',         // worktreePath — just needs to exist for collectGitignoreSources
+      '/tmp', // worktreePath — just needs to exist for collectGitignoreSources
       'task-e2e-id',
-      undefined,      // resumeSessionId
-      undefined,      // customPrompt
-      'standard',     // sessionType
-      undefined,      // sessionManager
+      undefined, // resumeSessionId
+      undefined, // customPrompt
+      'standard', // sessionType
+      undefined, // sessionManager
       mockGitHubClient,
     );
 
@@ -193,7 +193,10 @@ describe('AgentSession — file pollution E2E integration', () => {
     await new Promise((r) => setTimeout(r, 300));
 
     // Verify getPRFiles was called on the GitHub client
-    expect(mockGitHubClient.getPRFiles).toHaveBeenCalledWith('myorg/myrepo', 77);
+    expect(mockGitHubClient.getPRFiles).toHaveBeenCalledWith(
+      'myorg/myrepo',
+      77,
+    );
 
     // Verify validatePRFiles was called with the returned file list
     expect(validatePRFiles).toHaveBeenCalledWith(
