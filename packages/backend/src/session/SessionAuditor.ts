@@ -182,7 +182,7 @@ export class SessionAuditor {
       for (const block of blocks) {
         const paths = extractPathsFromBlock(block);
         for (const p of paths) {
-          const resolved = normalizePath(p);
+          const resolved = normalizePath(p, worktreePath);
           if (
             resolved !== normalizedWorktree &&
             !resolved.startsWith(worktreePrefix)
@@ -368,12 +368,16 @@ function extractAbsolutePathsFromCommand(command: string): string[] {
 /**
  * Normalize a path to a canonical absolute form for comparison.
  * Converts Git-Bash /c/... paths to Windows C:\... on Windows hosts.
+ * When baseDir is provided, drive-rootless absolute paths (e.g. /Users/foo)
+ * inherit the drive letter from baseDir via path.resolve, preventing false-positive
+ * worktree_escape violations when the Claude CLI reports Unix-style paths on Windows.
  */
-function normalizePath(p: string): string {
-  // Git-Bash /c/foo → C:\foo
+function normalizePath(p: string, baseDir?: string): string {
+  // Git-Bash /c/foo → C:\foo. Must precede path.resolve, which would otherwise
+  // mangle the single-letter drive segment into a literal \c\ component.
   const gitBashMatch = /^\/([a-zA-Z])\//i.exec(p);
   if (gitBashMatch) {
-    return path.normalize(`${gitBashMatch[1].toUpperCase()}:\\${p.slice(3)}`);
+    p = `${gitBashMatch[1].toUpperCase()}:\\${p.slice(3)}`;
   }
-  return path.normalize(p);
+  return baseDir ? path.resolve(baseDir, p) : path.normalize(p);
 }
