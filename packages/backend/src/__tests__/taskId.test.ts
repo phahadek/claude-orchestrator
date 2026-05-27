@@ -429,3 +429,111 @@ describe('Schema migration — task_id column in pull_requests', () => {
     expect(reason).toBe('max_reviews');
   });
 });
+
+// ── pull_requests backfill migration ─────────────────────────────────────────
+
+const backfillDeleteSql = `
+  DELETE FROM pull_requests
+  WHERE task_id IS NOT NULL AND task_id NOT LIKE '%:%'
+    AND EXISTS (
+      SELECT 1 FROM pull_requests pr2
+      WHERE pr2.task_id = 'notion:' || pull_requests.task_id
+        AND pr2.pr_url != pull_requests.pr_url
+    )
+`;
+const backfillUpdateSql = `
+  UPDATE pull_requests SET task_id = 'notion:' || task_id
+  WHERE task_id IS NOT NULL AND task_id NOT LIKE '%:%'
+`;
+
+describe('pull_requests backfill migration', () => {
+  beforeEach(() => {
+    // Clean up rows inserted by previous tests in this block
+    db.exec(`DELETE FROM pull_requests WHERE pr_number >= 8000 AND pr_number < 9000`);
+  });
+
+  it('backfill prefixes all unprefixed task_id rows with notion:', () => {
+    db.exec(`
+      INSERT INTO pull_requests (pr_number, pr_url, task_id, repo, state, created_at, updated_at, synced_at)
+      VALUES
+        (8001, 'https://github.com/o/r/pull/8001', 'raw-uuid-aaa', 'o/r', 'open', '2024-01-01', '2024-01-01', '2024-01-01'),
+        (8002, 'https://github.com/o/r/pull/8002', 'raw-uuid-bbb', 'o/r', 'open', '2024-01-01', '2024-01-01', '2024-01-01'),
+        (8003, 'https://github.com/o/r/pull/8003', NULL,           'o/r', 'open', '2024-01-01', '2024-01-01', '2024-01-01')
+    `);
+    db.exec(backfillDeleteSql);
+    db.exec(backfillUpdateSql);
+
+    const rows = db
+      .prepare(`SELECT task_id FROM pull_requests WHERE pr_number IN (8001, 8002, 8003)`)
+      .all() as Array<{ task_id: string | null }>;
+
+    for (const row of rows) {
+      if (row.task_id !== null) {
+        expect(row.task_id).toMatch(/^.+:.+/);
+      }
+    }
+    const prefixed = rows.filter((r) => r.task_id !== null);
+    expect(prefixed).toHaveLength(2);
+    expect(prefixed.map((r) => r.task_id)).toContain('notion:raw-uuid-aaa');
+    expect(prefixed.map((r) => r.task_id)).toContain('notion:raw-uuid-bbb');
+  });
+
+  it('backfill is idempotent — running twice does not double-prefix', () => {
+    db.exec(`
+      INSERT INTO pull_requests (pr_number, pr_url, task_id, repo, state, created_at, updated_at, synced_at)
+      VALUES (8010, 'https://github.com/o/r/pull/8010', 'raw-idem-123', 'o/r', 'open', '2024-01-01', '2024-01-01', '2024-01-01')
+    `);
+    db.exec(backfillDeleteSql);
+    db.exec(backfillUpdateSql);
+    db.exec(backfillDeleteSql);
+    db.exec(backfillUpdateSql);
+
+    const row = db
+      .prepare(`SELECT task_id FROM pull_requests WHERE pr_number = 8010`)
+      .get() as { task_id: string };
+    expect(row.task_id).toBe('notion:raw-idem-123');
+  });
+
+  it('collision-safe: raw row deleted when prefixed twin already exists', () => {
+    db.exec(`
+      INSERT INTO pull_requests (pr_number, pr_url, task_id, repo, state, created_at, updated_at, synced_at)
+      VALUES
+        (8020, 'https://github.com/o/r/pull/8020', 'collision-abc', 'o/r', 'open', '2024-01-01', '2024-01-01', '2024-01-01'),
+        (8021, 'https://github.com/o/r/pull/8021', 'notion:collision-abc', 'o/r', 'open', '2024-01-01', '2024-01-01', '2024-01-01')
+    `);
+    // Should not throw a UNIQUE constraint violation
+    expect(() => {
+      db.exec(backfillDeleteSql);
+      db.exec(backfillUpdateSql);
+    }).not.toThrow();
+
+    const rows = db
+      .prepare(`SELECT pr_number, task_id FROM pull_requests WHERE pr_number IN (8020, 8021)`)
+      .all() as Array<{ pr_number: number; task_id: string }>;
+
+    // Raw row 8020 should have been deleted, prefixed twin 8021 survives
+    expect(rows.map((r) => r.pr_number)).not.toContain(8020);
+    expect(rows.map((r) => r.pr_number)).toContain(8021);
+    expect(rows.find((r) => r.pr_number === 8021)?.task_id).toBe('notion:collision-abc');
+  });
+
+  it('after backfill, every non-null pull_requests.task_id matches LIKE "%:%"', () => {
+    db.exec(`
+      INSERT INTO pull_requests (pr_number, pr_url, task_id, repo, state, created_at, updated_at, synced_at)
+      VALUES
+        (8030, 'https://github.com/o/r/pull/8030', 'no-prefix-here', 'o/r', 'open', '2024-01-01', '2024-01-01', '2024-01-01'),
+        (8031, 'https://github.com/o/r/pull/8031', 'notion:already-fine', 'o/r', 'open', '2024-01-01', '2024-01-01', '2024-01-01'),
+        (8032, 'https://github.com/o/r/pull/8032', NULL, 'o/r', 'open', '2024-01-01', '2024-01-01', '2024-01-01')
+    `);
+    db.exec(backfillDeleteSql);
+    db.exec(backfillUpdateSql);
+
+    const nonNullRows = db
+      .prepare(`SELECT task_id FROM pull_requests WHERE task_id IS NOT NULL`)
+      .all() as Array<{ task_id: string }>;
+
+    for (const row of nonNullRows) {
+      expect(row.task_id).toMatch(/^[^:]+:.+/);
+    }
+  });
+});
