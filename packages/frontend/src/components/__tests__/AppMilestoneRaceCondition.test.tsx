@@ -14,7 +14,7 @@ vi.mock('../../hooks/useWebSocket', () => ({
     const [cs, setCs] = useState<ConnectionState>('connected');
     useEffect(() => {
       setWsConnectionState = setCs;
-    });
+    }, []);
     return { send: mockSend, connectionState: cs };
   },
 }));
@@ -160,7 +160,10 @@ describe('App — milestone switch race condition', () => {
     // Wait for config to load and the initial fetch_tasks for board-1
     await waitFor(() => {
       expect(mockSend).toHaveBeenCalledWith(
-        expect.objectContaining({ type: 'fetch_tasks', milestoneId: 'board-1' }),
+        expect.objectContaining({
+          type: 'fetch_tasks',
+          milestoneId: 'board-1',
+        }),
       );
     });
 
@@ -175,7 +178,10 @@ describe('App — milestone switch race condition', () => {
     // After effects flush, the final committed board ID must appear in fetch_tasks
     await waitFor(() => {
       expect(mockSend).toHaveBeenCalledWith(
-        expect.objectContaining({ type: 'fetch_tasks', milestoneId: 'board-3' }),
+        expect.objectContaining({
+          type: 'fetch_tasks',
+          milestoneId: 'board-3',
+        }),
       );
     });
 
@@ -195,7 +201,10 @@ describe('App — milestone switch race condition', () => {
     // Wait for initial fetch_tasks with board-1
     await waitFor(() => {
       expect(mockSend).toHaveBeenCalledWith(
-        expect.objectContaining({ type: 'fetch_tasks', milestoneId: 'board-1' }),
+        expect.objectContaining({
+          type: 'fetch_tasks',
+          milestoneId: 'board-1',
+        }),
       );
     });
 
@@ -206,7 +215,10 @@ describe('App — milestone switch race condition', () => {
 
     await waitFor(() => {
       expect(mockSend).toHaveBeenCalledWith(
-        expect.objectContaining({ type: 'fetch_tasks', milestoneId: 'board-2' }),
+        expect.objectContaining({
+          type: 'fetch_tasks',
+          milestoneId: 'board-2',
+        }),
       );
     });
 
@@ -223,7 +235,10 @@ describe('App — milestone switch race condition', () => {
     // Must re-fetch with board-2 (the currently selected milestone), not a stale board-1
     await waitFor(() => {
       expect(mockSend).toHaveBeenCalledWith(
-        expect.objectContaining({ type: 'fetch_tasks', milestoneId: 'board-2' }),
+        expect.objectContaining({
+          type: 'fetch_tasks',
+          milestoneId: 'board-2',
+        }),
       );
     });
 

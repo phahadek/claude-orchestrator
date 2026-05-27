@@ -181,8 +181,13 @@ export default function App() {
 
   // Send fetch_tasks after React commits state — covers user switches and WS reconnects
   useEffect(() => {
-    if (connectionState !== 'connected' || !activeProjectId || !activeBoardId) return;
-    send({ type: 'fetch_tasks', projectId: activeProjectId, milestoneId: activeBoardId });
+    if (connectionState !== 'connected' || !activeProjectId || !activeBoardId)
+      return;
+    send({
+      type: 'fetch_tasks',
+      projectId: activeProjectId,
+      milestoneId: activeBoardId,
+    });
   }, [connectionState, activeProjectId, activeBoardId, send]);
 
   useEffect(() => {
@@ -280,17 +285,11 @@ export default function App() {
     [projects],
   );
 
-  const handleBoardChange = useCallback(
-    (boardId: string) => {
-      if (!activeProjectIdRef.current) return;
-      localStorage.setItem(
-        getMilestoneKey(activeProjectIdRef.current),
-        boardId,
-      );
-      setActiveBoardId(boardId);
-    },
-    [],
-  );
+  const handleBoardChange = useCallback((boardId: string) => {
+    if (!activeProjectIdRef.current) return;
+    localStorage.setItem(getMilestoneKey(activeProjectIdRef.current), boardId);
+    setActiveBoardId(boardId);
+  }, []);
 
   const handleAutoLaunchToggle = useCallback(
     (patch: {
