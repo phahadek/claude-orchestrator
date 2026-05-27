@@ -110,7 +110,9 @@ describe('task_cache migration — DELETE-then-UPDATE prefix backfill', () => {
   });
 
   it('yaml:-prefixed twin — raw row dropped, yaml: prefixed row kept, no constraint violation', () => {
-    db.prepare("INSERT INTO task_cache VALUES ('abc123', 1, '{\"old\":true}')").run();
+    db.prepare(
+      "INSERT INTO task_cache VALUES ('abc123', 1, '{\"old\":true}')",
+    ).run();
     db.prepare(
       "INSERT INTO task_cache VALUES ('yaml:abc123', 2, '{\"new\":true}')",
     ).run();
