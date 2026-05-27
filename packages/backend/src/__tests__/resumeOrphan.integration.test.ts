@@ -134,6 +134,12 @@ vi.mock('../routes/tasks', () => ({
   emitTaskUpdated: vi.fn(),
 }));
 
+// recordEvent() is called unconditionally in SessionManager.start(); mock it
+// so the test doesn't try to hit a real SQLite DB.
+vi.mock('../audit/AuditLog', () => ({
+  recordEvent: vi.fn(),
+}));
+
 vi.mock('../tasks/TaskStatusEngine', () => ({
   deriveDisplayStatusFromDb: vi.fn(() => 'Running'),
 }));
@@ -477,18 +483,30 @@ describe('resumeOrphanSessions() — spawn arg contract: --resume <session_id>',
     expect(spawnArgs).not.toContain('--session-id');
   });
 
-  it('initial spawn (via CliSessionRunner) includes --session-id <sessionId> and not --resume', () => {
-    // Covered at the unit level in session/__tests__/CliSessionRunner.spawnArgs.test.ts.
-    // This assertion is a structural guard: verify CliSessionRunner.ts uses
-    // '--session-id' when no resumeSessionId is provided.
-    const source = require('fs').readFileSync(
-      require('path').join(__dirname, '..', 'session', 'CliSessionRunner.ts'),
-      'utf-8',
-    ) as string;
+  it('initial spawn includes --session-id <sessionId> not --resume', async () => {
+    const SESSION_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
 
-    // The spawn args branch must use '--session-id' for fresh sessions and
-    // '--resume' for resumed ones — never both, never swapped.
-    expect(source).toMatch(/'--session-id',\s*this\.sessionId/);
-    expect(source).toMatch(/'--resume',\s*resumeSessionId/);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(execSync).mockReturnValue('');
+
+    const sm = new SessionManager();
+    sm.start('https://notion.so/task', 'https://notion.so/ctx', {
+      projectId: 'test-project',
+      sessionId: SESSION_UUID,
+    });
+
+    // launchSession() is async — it awaits fetchTaskPage() before calling
+    // wireSession(). A single setImmediate drains all pending microtasks so
+    // the spawn happens before we assert.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    const spawnArgs = vi.mocked(spawn).mock.calls[0][1] as string[];
+
+    // Initial spawn must use '--session-id' followed by the exact UUID, never '--resume'.
+    const sessionIdIdx = spawnArgs.indexOf('--session-id');
+    expect(sessionIdIdx).toBeGreaterThan(-1);
+    expect(spawnArgs[sessionIdIdx + 1]).toBe(SESSION_UUID);
+    expect(spawnArgs).not.toContain('--resume');
   });
 });
