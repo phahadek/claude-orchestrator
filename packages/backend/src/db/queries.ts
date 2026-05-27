@@ -759,12 +759,12 @@ export function upsertPullRequest(
   db.prepare(
     `
     INSERT INTO pull_requests
-      (pr_number, pr_url, notion_task_id, session_id, repo, title, body,
+      (pr_number, pr_url, task_id, session_id, repo, title, body,
        head_branch, base_branch, state, draft, review_result, review_at,
        created_at, updated_at, synced_at, node_id, head_sha,
        mergeable, merge_state, merge_state_checked_at)
     VALUES
-      (@pr_number, @pr_url, @notion_task_id, @session_id, @repo, @title, @body,
+      (@pr_number, @pr_url, @task_id, @session_id, @repo, @title, @body,
        @head_branch, @base_branch, @state, @draft, @review_result, @review_at,
        @created_at, @updated_at, @synced_at, @node_id, @head_sha,
        @mergeable, @merge_state, @merge_state_checked_at)
@@ -776,7 +776,7 @@ export function upsertPullRequest(
       body                   = COALESCE(excluded.body, body),
       head_branch            = COALESCE(excluded.head_branch, head_branch),
       base_branch            = COALESCE(excluded.base_branch, base_branch),
-      notion_task_id         = COALESCE(excluded.notion_task_id, notion_task_id),
+      task_id                = COALESCE(excluded.task_id, task_id),
       session_id             = COALESCE(excluded.session_id, session_id),
       updated_at             = excluded.updated_at,
       node_id                = COALESCE(excluded.node_id, node_id),
@@ -891,17 +891,18 @@ export function getPRBySessionId(sessionId: string): PullRequestRow | null {
     .get({ session_id: sessionId }) as PullRequestRow | null;
 }
 
-export function getPRByNotionTaskId(
-  notionTaskId: string,
-): PullRequestRow | null {
+export function getPRByTaskId(taskId: string): PullRequestRow | null {
   return db
-    .prepare<{ notion_task_id: string }>(
+    .prepare<{ task_id: string }>(
       `
-    SELECT * FROM pull_requests WHERE notion_task_id = @notion_task_id ORDER BY pr_number DESC LIMIT 1
+    SELECT * FROM pull_requests WHERE task_id = @task_id ORDER BY pr_number DESC LIMIT 1
   `,
     )
-    .get({ notion_task_id: notionTaskId }) as PullRequestRow | null;
+    .get({ task_id: taskId }) as PullRequestRow | null;
 }
+
+/** @deprecated Use getPRByTaskId instead */
+export const getPRByNotionTaskId = getPRByTaskId;
 
 export function getOpenPRs(repo: string): PullRequestRow[] {
   return db
@@ -1150,7 +1151,6 @@ export function setPauseReason(
  * components to skip tasks paused by stuck_timeout (or any other reason).
  */
 export function getPausedPrReasonForTask(taskId: string): PauseReason | null {
-  // pull_requests.notion_task_id stores the raw external ID without source prefix
   let externalId: string;
   try {
     externalId = parseTaskId(taskId).externalId;
@@ -1162,7 +1162,7 @@ export function getPausedPrReasonForTask(taskId: string): PauseReason | null {
     .prepare<{ task_id: string }>(
       `
     SELECT pause_reason FROM pull_requests
-    WHERE REPLACE(COALESCE(notion_task_id, ''), '-', '') = @task_id
+    WHERE REPLACE(SUBSTR(COALESCE(task_id, ''), INSTR(COALESCE(task_id, ''), ':') + 1), '-', '') = @task_id
       AND pause_reason IS NOT NULL
     ORDER BY pr_number DESC
     LIMIT 1
@@ -1252,7 +1252,7 @@ export function getMergeReadyPRs(
       AND pause_reason IS NULL
       AND mergeable = 1
       AND JSON_EXTRACT(review_result, '$.verdict') = 'approved'
-      AND REPLACE(COALESCE(notion_task_id, ''), '-', '') IN (${placeholders})
+      AND REPLACE(SUBSTR(COALESCE(task_id, ''), INSTR(COALESCE(task_id, ''), ':') + 1), '-', '') IN (${placeholders})
   `,
     )
     .all(...taskIds) as PullRequestRow[];
@@ -1298,10 +1298,9 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
   // review session, and PR per task — avoids N×3 correlated subqueries.
   // The inline event-payload subquery runs once per matched code session and is
   // O(1) with idx_session_events_session_id_id covering (session_id, id DESC).
-  // TODO: revert to direct column comparison once the unified-task-id work lands
-  // (see Planning task: https://www.notion.so/36d22f9152f381d4b070d12c34142ca6).
-  // The SUBSTR-after-colon wrappers are a prefix-tolerance band-aid; they prevent
-  // index usage on idx_sessions_notion_task_id_session_type and friends.
+  // The SUBSTR-after-colon wrappers normalize prefixed IDs for matching against
+  // task_cache entries (which use the full prefixed form).
+  // TODO(D4): replace with direct column comparison once all rows are uniformly prefixed.
   return db
     .prepare(
       `
@@ -1327,7 +1326,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       ranked_pr AS (
         SELECT *,
           ROW_NUMBER() OVER (
-            PARTITION BY REPLACE(SUBSTR(COALESCE(notion_task_id, ''), INSTR(COALESCE(notion_task_id, ''), ':') + 1), '-', '')
+            PARTITION BY REPLACE(SUBSTR(COALESCE(task_id, ''), INSTR(COALESCE(task_id, ''), ':') + 1), '-', '')
             ORDER BY pr_number DESC
           ) AS rn
         FROM pull_requests
@@ -1371,7 +1370,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       ON REPLACE(SUBSTR(COALESCE(rs.task_id, ''), INSTR(COALESCE(rs.task_id, ''), ':') + 1), '-', '') = REPLACE(SUBSTR(COALESCE(tc.task_id, ''), INSTR(COALESCE(tc.task_id, ''), ':') + 1), '-', '')
       AND rs.rn = 1
     LEFT JOIN ranked_pr pr
-      ON REPLACE(SUBSTR(COALESCE(pr.notion_task_id, ''), INSTR(COALESCE(pr.notion_task_id, ''), ':') + 1), '-', '') = REPLACE(SUBSTR(COALESCE(tc.task_id, ''), INSTR(COALESCE(tc.task_id, ''), ':') + 1), '-', '')
+      ON REPLACE(SUBSTR(COALESCE(pr.task_id, ''), INSTR(COALESCE(pr.task_id, ''), ':') + 1), '-', '') = REPLACE(SUBSTR(COALESCE(tc.task_id, ''), INSTR(COALESCE(tc.task_id, ''), ':') + 1), '-', '')
       AND pr.rn = 1
     WHERE tc.task_id IN (${placeholders})
     ORDER BY tc.fetched_at DESC

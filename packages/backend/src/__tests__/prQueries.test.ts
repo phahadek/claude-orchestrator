@@ -73,7 +73,7 @@ vi.mock('../db/db.js', async () => {
       id                     INTEGER PRIMARY KEY AUTOINCREMENT,
       pr_number              INTEGER NOT NULL,
       pr_url                 TEXT    NOT NULL UNIQUE,
-      notion_task_id         TEXT,
+      task_id                TEXT,
       session_id             TEXT,
       repo                   TEXT    NOT NULL,
       title                  TEXT,
@@ -126,7 +126,7 @@ function makePR(
   return {
     pr_number,
     pr_url: overrides.pr_url ?? `https://github.com/${repo}/pull/${pr_number}`,
-    notion_task_id: null,
+    task_id: null,
     session_id: null,
     repo,
     title: `PR ${pr_number}`,

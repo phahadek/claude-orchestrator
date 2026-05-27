@@ -204,8 +204,8 @@ export class PRMergeWatcher {
       mergeState: category.mergeState,
       failingChecks: failingNamesOrNull,
     });
-    if (pr.notion_task_id) {
-      emitTaskUpdated(pr.notion_task_id);
+    if (pr.task_id) {
+      emitTaskUpdated(pr.task_id);
     }
 
     this.tryCIFailingRecovery(pr, category.mergeState);
@@ -299,18 +299,18 @@ export class PRMergeWatcher {
     }
 
     // Update task to Done via the project-scoped task backend
-    if (pr.notion_task_id) {
+    if (pr.task_id) {
       const backend = this.resolveBackendForRepo(pr.repo);
       if (backend) {
         await backend
-          .updateStatus(pr.notion_task_id, '✅ Done')
+          .updateStatus(pr.task_id, '✅ Done')
           .then(() => {
             this.broadcast({
               type: 'task_status_changed',
-              notionTaskId: pr.notion_task_id!,
+              notionTaskId: pr.task_id!,
               newStatus: '✅ Done',
             });
-            emitTaskUpdated(pr.notion_task_id!);
+            emitTaskUpdated(pr.task_id!);
           })
           .catch((err: unknown) =>
             console.warn(

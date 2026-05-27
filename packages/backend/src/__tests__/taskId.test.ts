@@ -37,7 +37,7 @@ vi.mock('../db/db.js', async () => {
       id                INTEGER PRIMARY KEY AUTOINCREMENT,
       pr_number         INTEGER NOT NULL,
       pr_url            TEXT    NOT NULL UNIQUE,
-      notion_task_id    TEXT,
+      task_id           TEXT,
       session_id        TEXT,
       repo              TEXT    NOT NULL,
       title             TEXT,
@@ -359,5 +359,73 @@ describe('Schema migration — task_id column in sessions and task_cache', () =>
       .prepare("SELECT task_id FROM sessions WHERE session_id = 'idem-sess-1'")
       .get() as { task_id: string };
     expect(row.task_id).toBe('notion:already-prefixed');
+  });
+});
+
+// ── pull_requests migration acceptance criteria ───────────────────────────────
+
+import {
+  upsertPullRequest,
+  getPRByNumber,
+  getPRByTaskId,
+  getPausedPrReasonForTask,
+  setPauseReason,
+} from '../db/queries.js';
+
+describe('Schema migration — task_id column in pull_requests', () => {
+  const TEST_PR_URL = 'https://github.com/owner/repo/pull/9001';
+  const TEST_REPO = 'owner/repo';
+  const TEST_PR_NUMBER = 9001;
+  const TEST_TASK_ID = 'notion:test-task-abc';
+
+  beforeEach(() => {
+    upsertPullRequest({
+      pr_number: TEST_PR_NUMBER,
+      pr_url: TEST_PR_URL,
+      task_id: TEST_TASK_ID,
+      session_id: null,
+      repo: TEST_REPO,
+      title: 'Test PR',
+      body: null,
+      head_branch: 'feature/test',
+      base_branch: 'dev',
+      state: 'open',
+      draft: 0,
+      review_result: null,
+      review_at: null,
+      created_at: '2024-01-01T00:00:00Z',
+      updated_at: '2024-01-01T00:00:00Z',
+      synced_at: '2024-01-01T00:00:00Z',
+      head_sha: null,
+    });
+  });
+
+  it('pull_requests table has task_id column (not notion_task_id)', () => {
+    const cols = (
+      db.prepare("PRAGMA table_info('pull_requests')").all() as Array<{
+        name: string;
+      }>
+    ).map((c) => c.name);
+    expect(cols).toContain('task_id');
+    expect(cols).not.toContain('notion_task_id');
+  });
+
+  it('upsertPullRequest round-trips task_id through getPRByNumber', () => {
+    const row = getPRByNumber(TEST_PR_NUMBER, TEST_REPO);
+    expect(row).not.toBeNull();
+    expect(row?.task_id).toBe(TEST_TASK_ID);
+  });
+
+  it('getPRByTaskId returns the row written with task_id = "notion:test-task-abc"', () => {
+    const row = getPRByTaskId(TEST_TASK_ID);
+    expect(row).not.toBeNull();
+    expect(row?.pr_number).toBe(TEST_PR_NUMBER);
+    expect(row?.task_id).toBe(TEST_TASK_ID);
+  });
+
+  it('getPausedPrReasonForTask returns the pause reason of the matching PR', () => {
+    setPauseReason(TEST_PR_NUMBER, TEST_REPO, 'max_reviews');
+    const reason = getPausedPrReasonForTask(TEST_TASK_ID);
+    expect(reason).toBe('max_reviews');
   });
 });

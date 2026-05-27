@@ -22,7 +22,7 @@ const NOW = '2024-01-01T00:00:00Z';
 
 function insertPR(opts: {
   pr_number: number;
-  notion_task_id?: string | null;
+  task_id?: string | null;
   state?: string;
   review_result?: string | null;
   pause_reason?: string | null;
@@ -30,16 +30,16 @@ function insertPR(opts: {
   db.prepare(
     `
     INSERT INTO pull_requests
-      (pr_number, pr_url, notion_task_id, session_id, repo, state,
+      (pr_number, pr_url, task_id, session_id, repo, state,
        review_result, created_at, updated_at, synced_at, pause_reason)
     VALUES
-      (@pr_number, @pr_url, @notion_task_id, NULL, 'owner/repo', @state,
+      (@pr_number, @pr_url, @task_id, NULL, 'owner/repo', @state,
        @review_result, @created_at, @updated_at, @synced_at, @pause_reason)
   `,
   ).run({
     pr_number: opts.pr_number,
     pr_url: `https://github.com/owner/repo/pull/${opts.pr_number}`,
-    notion_task_id: opts.notion_task_id ?? null,
+    task_id: opts.task_id ?? null,
     state: opts.state ?? 'open',
     review_result: opts.review_result ?? null,
     created_at: NOW,
@@ -124,35 +124,35 @@ describe('resetReviewIteration() — resume-mechanism contract', () => {
   it('after reset, the PR is no longer skipped by AutoLauncher / Auto-merger queries', () => {
     insertPR({
       pr_number: 21,
-      notion_task_id: 'task-abc',
+      task_id: 'notion:task-abc',
       review_result: JSON.stringify({ verdict: 'approved' }),
       pause_reason: 'stuck_timeout',
     });
 
     // Pre-reset: blocked
     expect(getApprovedOpenPRs()).toHaveLength(0);
-    expect(getPausedPrReasonForTask('task-abc')).toBe('stuck_timeout');
+    expect(getPausedPrReasonForTask('notion:task-abc')).toBe('stuck_timeout');
 
     // Reset (mirrors the re-review endpoint)
     resetReviewIteration(21, 'owner/repo');
 
     // Post-reset: unblocked
     expect(getApprovedOpenPRs()).toHaveLength(1);
-    expect(getPausedPrReasonForTask('task-abc')).toBeNull();
+    expect(getPausedPrReasonForTask('notion:task-abc')).toBeNull();
   });
 });
 
 describe('setPauseReason() round-trip', () => {
   it('a stuck_timeout pause set by the monitor flows through getPausedPrReasonForTask', () => {
-    insertPR({ pr_number: 30, notion_task_id: 'task-xyz' });
+    insertPR({ pr_number: 30, task_id: 'notion:task-xyz' });
     setPauseReason(30, 'owner/repo', 'stuck_timeout');
-    expect(getPausedPrReasonForTask('task-xyz')).toBe('stuck_timeout');
+    expect(getPausedPrReasonForTask('notion:task-xyz')).toBe('stuck_timeout');
   });
 
   it('a review_failed pause set by the catch site flows through getPausedPrReasonForTask', () => {
-    insertPR({ pr_number: 31, notion_task_id: 'task-review-failed' });
+    insertPR({ pr_number: 31, task_id: 'notion:task-review-failed' });
     setPauseReason(31, 'owner/repo', 'review_failed');
-    expect(getPausedPrReasonForTask('task-review-failed')).toBe(
+    expect(getPausedPrReasonForTask('notion:task-review-failed')).toBe(
       'review_failed',
     );
   });
@@ -209,14 +209,14 @@ describe('resetReviewIteration() — review_failed reset coverage', () => {
   it('after reset, a review_failed-paused PR is unblocked in AutoLauncher / Auto-merger queries', () => {
     insertPR({
       pr_number: 41,
-      notion_task_id: 'task-review-failed-2',
+      task_id: 'notion:task-review-failed-2',
       review_result: JSON.stringify({ verdict: 'approved' }),
       pause_reason: 'review_failed',
     });
 
     // Pre-reset: blocked
     expect(getApprovedOpenPRs()).toHaveLength(0);
-    expect(getPausedPrReasonForTask('task-review-failed-2')).toBe(
+    expect(getPausedPrReasonForTask('notion:task-review-failed-2')).toBe(
       'review_failed',
     );
 

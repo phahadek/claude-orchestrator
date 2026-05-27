@@ -67,7 +67,7 @@ const mockPRRow = {
   id: 1,
   pr_number: 42,
   pr_url: 'https://github.com/owner/repo/pull/42',
-  notion_task_id: 'task-abc123',
+  task_id: 'notion:task-abc123',
   session_id: 'session-xyz',
   repo: 'owner/repo',
   title: 'feat: add something cool',
@@ -1079,8 +1079,8 @@ describe('PRReviewService.reviewPR() — approved verdict calls handleApprovedVe
     expect(vi.mocked(updatePRDraftStatus)).not.toHaveBeenCalled();
   });
 
-  it('updates Notion to In Review when approved verdict and PR has notion_task_id', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any); // notion_task_id: 'task-abc123'
+  it('updates Notion to In Review when approved verdict and PR has task_id', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any); // task_id: 'notion:task-abc123'
 
     const mockGH = makeMockGitHub();
     const mockNotion = makeMockNotion();
@@ -1553,11 +1553,11 @@ describe('PRReviewService.reReviewPR()', () => {
     );
   });
 
-  it('calls handleApprovedVerdict with (prNumber, repo, notion_task_id, projectId) when verdict is approved', async () => {
+  it('calls handleApprovedVerdict with (prNumber, repo, task_id, projectId) when verdict is approved', async () => {
     const prRowWithSession = {
       ...mockPRRow,
       review_session_id: 'review-session-approved',
-      notion_task_id: 'task-abc123',
+      task_id: 'notion:task-abc123',
     };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
 

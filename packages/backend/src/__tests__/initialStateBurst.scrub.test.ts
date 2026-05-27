@@ -23,8 +23,8 @@ import * as queries from '../db/queries';
 function makeSession(id: string): Session {
   return {
     session_id: id,
-    notion_task_id: null,
-    notion_task_url: `https://notion.so/${id}`,
+    task_id: null,
+    task_url: `https://notion.so/${id}`,
     project_context_url: null,
     project_id: 'proj-1',
     status: 'done',

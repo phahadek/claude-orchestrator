@@ -74,7 +74,7 @@ vi.mock('../db/db.js', async () => {
       id                     INTEGER PRIMARY KEY AUTOINCREMENT,
       pr_number              INTEGER NOT NULL,
       pr_url                 TEXT    NOT NULL UNIQUE,
-      notion_task_id         TEXT,
+      task_id                TEXT,
       session_id             TEXT,
       repo                   TEXT    NOT NULL,
       title                  TEXT,
@@ -113,7 +113,7 @@ describe('upsertPullRequest + getPRByNumber', () => {
   const baseRow = {
     pr_number: 10,
     pr_url: 'https://github.com/owner/repo/pull/10',
-    notion_task_id: null,
+    task_id: null,
     session_id: null,
     repo: 'owner/repo',
     title: 'feat: initial',
@@ -148,46 +148,46 @@ describe('upsertPullRequest + getPRByNumber', () => {
     expect(row!.pr_number).toBe(10);
     expect(row!.repo).toBe('owner/repo');
     expect(row!.title).toBe('feat: initial');
-    expect(row!.notion_task_id).toBeNull();
+    expect(row!.task_id).toBeNull();
   });
 
-  it('preserves existing notion_task_id when upserted with null', () => {
-    // First upsert sets notion_task_id
+  it('preserves existing task_id when upserted with null', () => {
+    // First upsert sets task_id
     upsertPullRequest({
       ...baseRow,
       pr_url: 'https://github.com/owner/repo/pull/11',
       pr_number: 11,
-      notion_task_id: 'task-abc',
+      task_id: 'notion:task-abc',
     });
     // Second upsert (e.g. from PRSyncJob) passes null — should not overwrite
     upsertPullRequest({
       ...baseRow,
       pr_url: 'https://github.com/owner/repo/pull/11',
       pr_number: 11,
-      notion_task_id: null,
+      task_id: null,
     });
     const row = getPRByNumber(11, 'owner/repo');
-    expect(row!.notion_task_id).toBe('task-abc');
+    expect(row!.task_id).toBe('notion:task-abc');
   });
 
-  it('updates notion_task_id when upserted with a non-null value', () => {
-    // Row created by PRSyncJob without notion_task_id
+  it('updates task_id when upserted with a non-null value', () => {
+    // Row created by PRSyncJob without task_id
     upsertPullRequest({
       ...baseRow,
       pr_url: 'https://github.com/owner/repo/pull/12',
       pr_number: 12,
     });
-    expect(getPRByNumber(12, 'owner/repo')!.notion_task_id).toBeNull();
+    expect(getPRByNumber(12, 'owner/repo')!.task_id).toBeNull();
     // Session ends and links the task
     upsertPullRequest({
       ...baseRow,
       pr_url: 'https://github.com/owner/repo/pull/12',
       pr_number: 12,
-      notion_task_id: 'task-xyz',
+      task_id: 'notion:task-xyz',
       session_id: 'sess-1',
     });
     const row = getPRByNumber(12, 'owner/repo');
-    expect(row!.notion_task_id).toBe('task-xyz');
+    expect(row!.task_id).toBe('notion:task-xyz');
     expect(row!.session_id).toBe('sess-1');
   });
 

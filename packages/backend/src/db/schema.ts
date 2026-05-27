@@ -151,7 +151,7 @@ export function runMigrations(): void {
     CREATE INDEX IF NOT EXISTS idx_session_events_timestamp ON session_events(timestamp DESC);
     CREATE INDEX IF NOT EXISTS idx_sessions_archived_started_at ON sessions(archived, started_at DESC);
     CREATE INDEX IF NOT EXISTS idx_sessions_notion_task_id_session_type ON sessions(task_id, session_type, started_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_pull_requests_notion_task_id_pr_number ON pull_requests(notion_task_id, pr_number DESC);
+    CREATE INDEX IF NOT EXISTS idx_pull_requests_task_id_pr_number ON pull_requests(task_id, pr_number DESC);
   `);
 
   // Idempotent column additions for existing databases
@@ -342,5 +342,36 @@ export function runMigrations(): void {
     );
   } catch {
     /* already exists */
+  }
+
+  // ── pull_requests: notion_task_id → task_id ──────────────────────────────────
+  try {
+    db.exec(`ALTER TABLE pull_requests RENAME COLUMN notion_task_id TO task_id`);
+  } catch {
+    /* already renamed or column doesn't exist (fresh DB uses task_id already) */
+  }
+  // Backfill: add 'notion:' prefix for legacy unprefixed rows.
+  // Delete raw duplicate first to avoid UNIQUE constraint violations.
+  db.exec(`
+    DELETE FROM pull_requests
+    WHERE task_id IS NOT NULL
+      AND task_id NOT LIKE '%:%'
+      AND EXISTS (
+        SELECT 1 FROM pull_requests pr2
+        WHERE pr2.task_id = 'notion:' || pull_requests.task_id
+          AND pr2.pr_url != pull_requests.pr_url
+      );
+
+    UPDATE pull_requests
+    SET task_id = 'notion:' || task_id
+    WHERE task_id IS NOT NULL
+      AND task_id NOT LIKE '%:%';
+  `);
+
+  // Drop old index on notion_task_id (may still exist on pre-D1 databases).
+  try {
+    db.exec(`DROP INDEX IF EXISTS idx_pull_requests_notion_task_id_pr_number`);
+  } catch {
+    /* ignore */
   }
 }

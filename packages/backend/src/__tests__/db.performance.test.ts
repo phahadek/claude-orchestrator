@@ -88,7 +88,7 @@ vi.mock('../db/db.js', async () => {
       id                     INTEGER PRIMARY KEY AUTOINCREMENT,
       pr_number              INTEGER NOT NULL,
       pr_url                 TEXT    NOT NULL UNIQUE,
-      notion_task_id         TEXT,
+      task_id                TEXT,
       session_id             TEXT,
       repo                   TEXT    NOT NULL,
       title                  TEXT,
@@ -204,7 +204,7 @@ const EXPECTED_INDEXES = [
   'idx_session_events_timestamp',
   'idx_sessions_archived_started_at',
   'idx_sessions_notion_task_id_session_type',
-  'idx_pull_requests_notion_task_id_pr_number',
+  'idx_pull_requests_task_id_pr_number',
 ];
 
 function indexNames(): string[] {
@@ -340,7 +340,7 @@ describe('getActiveTaskAggregates — output shape regression guard', () => {
         ...PR_DEFAULTS,
         pr_number: 100 + i,
         pr_url: `https://github.com/o/r/pull/${100 + i}`,
-        notion_task_id: tid,
+        task_id: tid,
         session_id: `shape-sess-${i}`,
       });
     }
@@ -480,7 +480,7 @@ describe('bench: getActiveTaskAggregates', () => {
         ...PR_DEFAULTS,
         pr_number: 200 + i,
         pr_url: `https://github.com/o/r/pull/${200 + i}`,
-        notion_task_id: tid,
+        task_id: tid,
         session_id: sid,
       });
     }

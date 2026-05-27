@@ -233,13 +233,13 @@ export class SessionManager extends EventEmitter {
       case 'review_verdict': {
         const { prNumber, repo } = msg as { prNumber: number; repo: string };
         const prRow = getPRByNumber(prNumber, repo);
-        return prRow?.notion_task_id ?? null;
+        return prRow?.task_id ?? null;
       }
       case 'pr_merged':
       case 'pr_closed': {
         const { prNumber, repo } = msg as { prNumber: number; repo: string };
         const prRow = getPRByNumber(prNumber, repo);
-        return prRow?.notion_task_id ?? null;
+        return prRow?.task_id ?? null;
       }
       default:
         return null;

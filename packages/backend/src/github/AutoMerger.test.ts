@@ -107,7 +107,7 @@ function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
     id: 1,
     pr_number: 42,
     pr_url: 'https://github.com/owner/repo/pull/42',
-    notion_task_id: 'task-abc',
+    task_id: 'notion:task-abc',
     session_id: 'coding-session',
     repo: 'owner/repo',
     title: 'feat: test',

@@ -29,7 +29,7 @@ function makePR(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
     id: 1,
     pr_number: 42,
     pr_url: 'https://github.com/owner/repo/pull/42',
-    notion_task_id: null,
+    task_id: null,
     session_id: 'session-abc',
     repo: 'owner/repo',
     title: 'Test PR',

@@ -79,7 +79,7 @@ function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
     id: 1,
     pr_number: 42,
     pr_url: 'https://github.com/owner/repo/pull/42',
-    notion_task_id: 'task-abc',
+    task_id: 'notion:task-abc',
     session_id: 'coding-session',
     repo: 'owner/repo',
     title: 'feat: test',
@@ -642,7 +642,7 @@ describe('PRMergeWatcher.handleMerged()', () => {
   });
 
   it('broadcasts pr_merged with sha', async () => {
-    const pr = makePRRow({ notion_task_id: null });
+    const pr = makePRRow({ task_id: null });
     const messages: ServerMessage[] = [];
     const watcher = new PRMergeWatcher(
       makeMockGitHub(),
@@ -662,7 +662,7 @@ describe('PRMergeWatcher.handleMerged()', () => {
   });
 
   it('calls NotionClient.updateStatus with Done', async () => {
-    const pr = makePRRow({ notion_task_id: 'task-xyz' });
+    const pr = makePRRow({ task_id: 'notion:task-xyz' });
     const notion = makeMockNotion();
     const watcher = new PRMergeWatcher(
       makeMockGitHub(),
@@ -679,7 +679,7 @@ describe('PRMergeWatcher.handleMerged()', () => {
   });
 
   it('suppresses pr_merged broadcast when called with silent: true', async () => {
-    const pr = makePRRow({ notion_task_id: null });
+    const pr = makePRRow({ task_id: null });
     const messages: ServerMessage[] = [];
     const watcher = new PRMergeWatcher(
       makeMockGitHub(),
@@ -703,7 +703,7 @@ describe('PRMergeWatcher.handleMerged()', () => {
 
 describe('PRMergeWatcher first-poll-after-boot suppression', () => {
   it('does NOT broadcast pr_merged on the first poll for PRs that GitHub reports as merged', async () => {
-    const pr = makePRRow({ notion_task_id: null });
+    const pr = makePRRow({ task_id: null });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeMockGitHub();
     vi.mocked(github.getPRState).mockResolvedValue('merged');
@@ -728,7 +728,7 @@ describe('PRMergeWatcher first-poll-after-boot suppression', () => {
   });
 
   it('DOES broadcast pr_merged on the second poll when a merge is freshly observed', async () => {
-    const pr = makePRRow({ notion_task_id: null });
+    const pr = makePRRow({ task_id: null });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeMockGitHub();
     // First poll: PR still open. Second poll: now merged.
