@@ -1243,7 +1243,11 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       return;
     }
     try {
-      fs.writeFileSync(path.join(this.worktreePath, filename), content, 'utf-8');
+      fs.writeFileSync(
+        path.join(this.worktreePath, filename),
+        content,
+        'utf-8',
+      );
     } catch (err) {
       console.error(
         `[AgentSession] injectContextFile: failed to write ${filename}: ${err}`,

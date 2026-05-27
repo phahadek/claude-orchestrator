@@ -14,7 +14,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('../audit/AuditLog', () => ({ recordEvent: vi.fn() }));
 vi.mock('../config', () => ({
   ALLOWED_TOOLS: [],
-  runtimeSettings: { session_mode: 'cli', code_session_model: null, review_session_model: null, corporate_mode_enabled: false },
+  runtimeSettings: {
+    session_mode: 'cli',
+    code_session_model: null,
+    review_session_model: null,
+    corporate_mode_enabled: false,
+  },
   config: { maxConcurrentCodeSessions: 5 },
   getProjectById: vi.fn(),
   normalizePath: (p: string) => p,
@@ -50,12 +55,31 @@ vi.mock('../github/PRBodyValidator', () => ({
 }));
 vi.mock('../github/PRFileValidator', () => ({ validatePRFiles: vi.fn() }));
 vi.mock('../github/PRFileReverter', () => ({ revertBannedFiles: vi.fn() }));
-vi.mock('../github/CommitAttributionWatcher', () => ({ checkCommitAttribution: vi.fn() }));
-vi.mock('../utils/eventFilters', () => ({ isSystemOnlyUserEvent: vi.fn(() => false) }));
+vi.mock('../github/CommitAttributionWatcher', () => ({
+  checkCommitAttribution: vi.fn(),
+}));
+vi.mock('../utils/eventFilters', () => ({
+  isSystemOnlyUserEvent: vi.fn(() => false),
+}));
 vi.mock('./SessionAuditor', () => ({ SessionAuditor: vi.fn() }));
-vi.mock('./CliSessionRunner', () => ({ CliSessionRunner: vi.fn(() => ({ run: vi.fn(), sendMessage: vi.fn(), endSession: vi.fn(), kill: vi.fn(), hasSpawnError: false })) }));
+vi.mock('./CliSessionRunner', () => ({
+  CliSessionRunner: vi.fn(() => ({
+    run: vi.fn(),
+    sendMessage: vi.fn(),
+    endSession: vi.fn(),
+    kill: vi.fn(),
+    hasSpawnError: false,
+  })),
+}));
 vi.mock('./eventTypes', () => ({
-  VALID_EVENT_TYPES: new Set(['assistant', 'user', 'tool_result', 'result', 'system', 'error']),
+  VALID_EVENT_TYPES: new Set([
+    'assistant',
+    'user',
+    'tool_result',
+    'result',
+    'system',
+    'error',
+  ]),
   SILENT_SKIP_TYPES: new Set<string>(),
   toEventType: (t: string) => t,
 }));
@@ -114,7 +138,9 @@ describe('AgentSession.injectContextFile() — per-session revert lock', () => {
     session.injectContextFile('CLAUDE.md', 'initial content\n');
 
     // Simulate runFilePollutionCheck adding CLAUDE.md to the reverted set
-    (session as unknown as { _revertedFiles: Set<string> })._revertedFiles.add('CLAUDE.md');
+    (session as unknown as { _revertedFiles: Set<string> })._revertedFiles.add(
+      'CLAUDE.md',
+    );
     expect(session.revertedFiles.has('CLAUDE.md')).toBe(true);
 
     // Second injection attempt is blocked
@@ -130,7 +156,9 @@ describe('AgentSession.injectContextFile() — per-session revert lock', () => {
     const session = makeSession(tmpDir);
     session.injectContextFile('CLAUDE.md', 'initial\n');
 
-    (session as unknown as { _revertedFiles: Set<string> })._revertedFiles.add('CLAUDE.md');
+    (session as unknown as { _revertedFiles: Set<string> })._revertedFiles.add(
+      'CLAUDE.md',
+    );
 
     session.injectContextFile('CLAUDE.md', 'blocked attempt\n');
 
@@ -144,7 +172,9 @@ describe('AgentSession.injectContextFile() — per-session revert lock', () => {
 
   it('lock is per-session — a new AgentSession for the same worktree starts with an empty lock', () => {
     const sessionA = makeSession(tmpDir);
-    (sessionA as unknown as { _revertedFiles: Set<string> })._revertedFiles.add('CLAUDE.md');
+    (sessionA as unknown as { _revertedFiles: Set<string> })._revertedFiles.add(
+      'CLAUDE.md',
+    );
     expect(sessionA.revertedFiles.has('CLAUDE.md')).toBe(true);
 
     // Session A ends; a new session B picks up the same worktree
