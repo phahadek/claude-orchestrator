@@ -7,8 +7,8 @@
 
 ## Task Assignment
 
-- **Task**: Exempt orchestrator bot commits from attribution_missing audit
-- **Notion task**: https://www.notion.so/Exempt-orchestrator-bot-commits-from-attribution_missing-audit-36d22f9152f381878eaafe3b67049cc1
+- **Task**: Fix: task panel empty for all milestones — board cache JSON still carries raw task IDs after D3
+- **Notion task**: https://www.notion.so/Fix-task-panel-empty-for-all-milestones-board-cache-JSON-still-carries-raw-task-IDs-after-D3-36d22f9152f381219dced6993942354b
 - **Project context**: https://www.notion.so/33222f9152f38188b65fd912e40890a2
 
 ---
@@ -124,7 +124,7 @@ Run in order — all must pass before opening the PR:
 
 ## Git Isolation
 
-> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\49d5534b-cc2c-4bdb-a190-7ef0fd8f3e04`.**
+> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\340c6ddf-449c-442d-b57e-1119b4b455a8`.**
 > This is your `cwd`. All commands run here. Never navigate to or operate on any parent directory.
 
 - All git commands must run inside the worktree directory (your `cwd`)
@@ -141,7 +141,7 @@ Run in order — all must pass before opening the PR:
 > namespace to prevent writes outside the worktree. All isolation is prompt-level.
 > Violating these rules can corrupt the developer's live environment.
 
-All file writes **must stay inside the worktree directory** (`C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\49d5534b-cc2c-4bdb-a190-7ef0fd8f3e04`).
+All file writes **must stay inside the worktree directory** (`C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\340c6ddf-449c-442d-b57e-1119b4b455a8`).
 
 - **Never write to the project root or any path above the worktree.**
   Scripts, tools, and generated outputs must target paths under the worktree, not the parent repo.
@@ -182,47 +182,46 @@ Use the Write tool for any file creation. Never use `cat >`, `printf >`, or `ech
 > Do NOT re-fetch this from Notion — use the content below as your source of truth.
 
 ## Summary
-CommitAttributionWatcher fires attribution_missing on commits that have no AI-Authored-By: trailer. The orchestrator's own autofix bot intentionally commits without the trailer (it's tooling, not LLM work). Skip the violation when the commit author matches the bot identity.
+After D3 (Unify task_cache write conventions) shipped, the per-task cache rows are now keyed notion:<id> (prefixed) but the board sentinel cache row's raw_json still contains tasks with the raw Notion UUID in their id field. The /api/tasks/active route reads task IDs from the board JSON and queries getActiveTaskAggregates(taskIds) with raw IDs — zero matches against the prefixed per-task rows. The Tasks panel renders "No active tasks found" for every milestone, not just M6. Fix is write-side: have each TaskBackend.fetchReadyTasks re-write the board cache row with task IDs already prefixed, keeping the cache's internal invariants consistent.
 ## Dependencies
-None. Single-file fix.
+None. Surgical write-side fix; no schema change.
 ## Context
-### Verified false-positive (2026-05-27)
-From the M6 gate sweep audit-log inspection:
+### How the bug manifests
+User observed M6 Tasks panel showing No active tasks found with the Sync button as the only affordance. Other panels (Sessions, PRs) work normally. Probing the DB on 2026-05-27 confirmed the pattern is universal across milestones:
 ```javascript
-2026-05-27T16:00:53.088Z | attribution_missing | {"sha":"32434059e4bcdbf4aefbced8eff619645e80ed74","pr_number":400,"repo":"phahadek/claude-orchestrator"}
+M5 | total in board cache: 47 | matched via raw IDs: 0  | matched via 'notion:' IDs: 47
+M6 | total in board cache: 43 | matched via raw IDs: 0  | matched via 'notion:' IDs: 43
 ```
-SHA 32434059... is in .git-blame-ignore-revs with the marker # chore: apply autofix [orchestrator] — i.e., it's a claude-orchestrator bot commit produced by runAutofix in packages/backend/src/session/autofix-runner.ts:124-128. That commit intentionally has no AI-Authored-By: trailer because the orchestrator-bot identity is system, not ai.
-Three audit entries were written for SHA 32434059... on PR #400 alone. Roughly half of the 11 historical attribution_missing entries trace to bot commits, not session commits.
+### Why dispatch still works but the panel doesn't
+- Dispatch (AutoLauncher / fetch_tasks) uses the in-memory return of TaskBackend.fetchReadyTasks — already prefixed by the existing tasks.map(r => ({...r, task: {...r.task, id: prefixedId}})) block. Unaffected.
+- Tasks panel (/api/tasks/active) re-reads the board cache row and harvests tasks.map(t => t.id) from its JSON. The JSON content was written by NotionClient.writeBoardCache with raw IDs, and NotionTaskBackend.fetchReadyTasks never overwrote it. Result: raw IDs land in getActiveTaskAggregates, which queries WHERE tc.task_id IN (?, ?, ...) against prefixed rows — 0 matches.
+### What D3 fixed and what it left behind
+D3 (PR 7fa5d1d) deleted the per-task raw-fan-out write at NotionClient.writeBoardCache:144 (the for (const task of tasks) upsertTaskCache(task.id, JSON.stringify(task)); loop) so that per-task rows are written only by NotionTaskBackend.fetchReadyTasks (with prefixed keys). The board sentinel write upsertTaskCache(boardCacheKey(boardId), JSON.stringify(tasks)) at line 141 still serializes the original task array — the array whose elements still carry raw IDs. D3 didn't touch that line, so the JSON content drifted from the per-task cache convention.
 ### What changes
-CommitAttributionWatcher.ts: before classifying a commit as attribution_missing, check whether the commit's author.email matches the orchestrator-bot identity (bot@claude-code.internal, set by autofix-runner.ts:16-21). If so, skip the audit emit entirely — the bot's commits are neither AI-authored nor human-authored; they're tooling.
-Concrete change:
-```typescript
-const ORCHESTRATOR_BOT_EMAIL = 'bot@claude-code.internal';
-
-// Inside the existing per-commit loop, before the recordEvent({event_type: 'attribution_missing', ...}) call:
-if (commit.author?.email === ORCHESTRATOR_BOT_EMAIL) {
-  continue;  // tooling, not authored work
-}
-```
-Export ORCHESTRATOR_BOT_EMAIL from autofix-runner.ts so the constant is single-sourced. If the bot email changes later, both call sites move together.
-### Coordination with the audit-event-types task
-If the companion task ("Add missing audit_log event types: commit and status_updated") ships first or in parallel, it will introduce a commit event emitted for every inspected commit. Bot commits should be emitted with actor_type: 'system' (not 'ai' or 'human') regardless of trailer presence. This task only governs the attribution_missing audit; the per-commit commit event still fires for bot commits with actor_type='system'.
+1. NotionTaskBackend.fetchReadyTasks (packages/backend/src/tasks/NotionTaskBackend.ts around line 40-58): after the existing tasks.map(...) that builds prefixed: ResolvedTask[] with prefixed task IDs, overwrite the board cache row so its JSON contains prefixed IDs:
+1. LocalTaskBackend.fetchReadyTasks — same pattern with yaml: prefix and the local board key shape used today.
+1. JiraTaskSourceProvider.fetchReadyTasks — same pattern with jira: prefix.
+1. /api/tasks/active route (packages/backend/src/routes/tasks.ts): no change needed at the read side once the board cache is consistent. The route already does taskIds = tasks.map(t => t.id) and feeds them into getActiveTaskAggregates; once t.id is the prefixed form, the join hits the per-task rows.
+1. In-flight existing rows: a board cache TTL (5 min) will naturally heal stale rows on next fetchReadyTasks call. No migration needed — once a user clicks Sync or AutoLauncher fires, the row gets rewritten with prefixed IDs. Document this in the PR description.
 ### Out of scope
-- Retroactively cleaning up historical false-positive attribution_missing entries.
-- Recognizing other bot identities (GitHub Actions, dependabot, etc.) — only the orchestrator-bot identity is special-cased here.
-- Changing the trailer policy itself.
+- The dependency-resolver block in /api/tasks/active (~line 416) that re-parses boardCacheRow.raw_json and runs DependencyResolver — the dependency edges reference task IDs as strings, but they were emitted by NotionClient.parseDependsOn with raw IDs. After this fix, the resolver maps consume prefixed IDs both as keys and edges. Verify the resolver doesn't lose edges by string-shape drift. If dependsOn arrays inside the board cache JSON still contain raw IDs after this fix, that's a separate sub-bug to address — file as follow-up rather than expanding scope here.
+- Any retroactive cache cleanup beyond the TTL.
+- The route-side query simplification — keep getActiveTaskAggregates shape stable.
 ## Acceptance criteria
 ### 🤖 Automated tests
 - tsc --noEmit passes for both packages
-- Unit test: CommitAttributionWatcher inspecting a commit authored by bot@claude-code.internal with no AI-Authored-By: trailer does NOT write an attribution_missing audit entry
-- Unit test: same watcher inspecting a commit authored by bot@claude-code.internal with the trailer present (hypothetical) also does not write an attribution_missing audit entry (consistent skip)
-- Unit test: a session-authored commit (any email ≠ the bot's) without the trailer still writes attribution_missing (regression coverage)
-- Unit test: a session-authored commit with the trailer still writes no attribution_missing (regression coverage)
-- ORCHESTRATOR_BOT_EMAIL is exported from autofix-runner.ts and imported — not duplicated — in CommitAttributionWatcher.ts
+- Unit test: after NotionTaskBackend.fetchReadyTasks(milestoneId) runs, the board cache row keyed board:<sourceId> contains tasks whose id field is the prefixed form (notion:<uuid>), not raw
+- Unit test: LocalTaskBackend.fetchReadyTasks writes prefixed IDs (yaml:<id>) into the board cache JSON
+- Unit test: JiraTaskSourceProvider.fetchReadyTasks writes prefixed IDs (jira:<key>) into the board cache JSON
+- Unit test: getActiveTaskAggregates returns non-empty results when the input task IDs match the board cache JSON's task IDs (regression — today this returns empty)
+- Integration test: /api/tasks/active?projectId=<p>&boardId=<milestoneId> returns a non-empty array when the board cache has tasks with corresponding task_cache rows
+- Regression: dependency-resolver pass at the end of /api/tasks/active produces blocked and blockerNames populated correctly when dependsOn arrays contain prefixed IDs (verify against a fixture with at least one inter-task dependency)
 ## Files / paths affected
-- packages/backend/src/github/CommitAttributionWatcher.ts (update — add bot-author exemption)
-- packages/backend/src/session/autofix-runner.ts (update — export ORCHESTRATOR_BOT_EMAIL)
-- packages/backend/src/github/CommitAttributionWatcher.test.ts (update — add the bot-exemption test cases)
+- packages/backend/src/tasks/NotionTaskBackend.ts (update — re-write board cache with prefixed task IDs after the per-task upsert)
+- packages/backend/src/tasks/LocalTaskBackend.ts (update — same)
+- packages/backend/src/tasks/JiraTaskSourceProvider.ts (update — same)
+- packages/backend/src/tasks/NotionTaskBackend.test.ts (or equivalent) (update — assert board cache JSON shape)
+- packages/backend/src/__tests__/tasks.test.ts (update — add the integration assertion against /api/tasks/active)
 ## Implementation notes
 > To be filled in during/after implementation.
 
@@ -231,447 +230,779 @@ If the companion task ("Add missing audit_log event types: commit and status_upd
 > These are the current contents of files listed in the task spec.
 > They were pre-read by the orchestrator so you can skip exploration.
 
-### `packages/backend/src/github/CommitAttributionWatcher.ts`
+### `packages/backend/src/tasks/NotionTaskBackend.ts`
 ```
-import { recordEvent } from '../audit/AuditLog';
-import { setPauseReason } from '../db/queries';
-import type { GitHubClient } from './GitHubClient';
-
-/** Matches the AI-Authored-By trailer in a commit message. */
-export const AI_TRAILER_REGEX = /^AI-Authored-By:/m;
-
-export interface CommitInfo {
-  sha: string;
-  message: string;
-}
-
-export interface AttributionCheckResult {
-  checked: number;
-  missing: number;
-  paused: boolean;
-}
+import type { TaskBackend, NonMilestoneSourceConfig } from './TaskBackend';
+import type { ResolvedTask } from './types';
+import { formatTaskId } from './taskId';
+import { NotionClient } from '../notion/NotionClient';
+import { ProjectService } from '../projects/ProjectService';
+import { upsertTaskCache } from '../db/queries';
 
 /**
- * Check that all commits in a PR carry the AI-Authored-By trailer.
- * In corporate mode, missing trailers pause the PR and are audit-logged.
- * In non-corporate mode, only audit-logs (no pause).
+ * Notion-backed implementation of TaskBackend. Resolves the Notion database ID
+ * from the milestone row's `source_id`, then delegates to NotionClient.
  *
- * Returns a summary of what was found.
+ * All public methods accept prefixed task IDs (e.g. 'notion:abc123') and strip
+ * the prefix before calling the Notion API.
  */
-export async function checkCommitAttribution(
-  client: GitHubClient,
-  repo: string,
-  prNumber: number,
-  sessionId: string,
-  projectId: string | null,
-  taskId: string | null,
-  isCorporateMode: boolean,
-): Promise<AttributionCheckResult> {
-  let commits: CommitInfo[];
-  try {
-    commits = await client.getCommitsForPR(repo, prNumber);
-  } catch (err) {
-    console.warn(
-      `[CommitAttributionWatcher] failed to fetch commits for PR #${prNumber} in ${repo}: ${(err as Error).message}`,
+export class NotionTaskBackend implements TaskBackend {
+  readonly type = 'notion' as const;
+
+  constructor(private readonly client: NotionClient) {}
+
+  async fetchReadyTasks(
+    milestoneId: string | null,
+    skipCache?: boolean,
+  ): Promise<ResolvedTask[]> {
+    if (milestoneId === null) {
+      throw new Error(
+        `[NotionTaskBackend] milestoneId is required for Notion projects`,
+      );
+    }
+    const milestone = ProjectService.getMilestone(milestoneId);
+    if (!milestone) {
+      throw new Error(
+        `[NotionTaskBackend] milestone not found: ${milestoneId}`,
+      );
+    }
+    if (!milestone.sourceId) {
+      throw new Error(
+        `[NotionTaskBackend] milestone ${milestoneId} has no source_id — set it to the Notion database ID`,
+      );
+    }
+    const tasks = await this.client.fetchReadyTasks(
+      milestone.sourceId,
+      skipCache,
     );
-    return { checked: 0, missing: 0, paused: false };
-  }
-
-  const missingTrailer = commits.filter(
-    (c) => !AI_TRAILER_REGEX.test(c.message),
-  );
-
-  if (missingTrailer.length === 0) {
-    return { checked: commits.length, missing: 0, paused: false };
-  }
-
-  for (const commit of missingTrailer) {
-    recordEvent({
-      event_type: 'attribution_missing',
-      actor_type: 'ai',
-      actor_id: sessionId,
-      project_id: projectId,
-      task_id: taskId,
-      payload: { sha: commit.sha, pr_number: prNumber, repo },
+    return tasks.map((r) => {
+      const prefixedId = formatTaskId('notion', r.task.id);
+      // Also cache under the prefixed key so getTaskTitleFromCache works with
+      // prefixed session.task_id lookups.
+      upsertTaskCache(
+        prefixedId,
+        JSON.stringify({ ...r.task, id: prefixedId }),
+      );
+      return {
+        ...r,
+        task: { ...r.task, id: prefixedId },
+        source: 'notion' as const,
+      };
     });
   }
 
-  if (isCorporateMode) {
-    setPauseReason(prNumber, repo, 'attribution_missing');
-    return {
-      checked: commits.length,
-      missing: missingTrailer.length,
-      paused: true,
-    };
+  async attachPR(taskId: string, prUrl: string): Promise<void> {
+    return this.client.attachPR(taskId, prUrl);
   }
 
-  return {
-    checked: commits.length,
-    missing: missingTrailer.length,
-    paused: false,
-  };
+  async updateStatus(taskId: string, status: string): Promise<void> {
+    return this.client.updateStatus(taskId, status);
+  }
+
+  async fetchTaskPage(taskId: string): Promise<string> {
+    const page = await this.client.fetchTaskPage(taskId);
+    return page.rawMarkdown;
+  }
+
+  async fetchNonMilestoneReadyTasks(
+    sourceConfig: NonMilestoneSourceConfig | null,
+    projectId?: string,
+  ): Promise<ResolvedTask[]> {
+    if (!sourceConfig?.notionDatabaseId) return [];
+    const tasks = await this.client.fetchReadyTasks(
+      sourceConfig.notionDatabaseId,
+      true,
+    );
+    const resolved = tasks.map((r) => {
+      const prefixedId = formatTaskId('notion', r.task.id);
+      upsertTaskCache(
+        prefixedId,
+        JSON.stringify({ ...r.task, id: prefixedId }),
+      );
+      return {
+        ...r,
+        task: { ...r.task, id: prefixedId },
+        source: 'notion' as const,
+      };
+    });
+    // Cache full task list under the project's non-milestone key so the HTTP endpoint can serve it.
+    if (projectId) {
+      upsertTaskCache(
+        `non_milestone:${projectId}`,
+        JSON.stringify(resolved.map((r) => r.task)),
+      );
+    }
+    return resolved;
+  }
 }
 
 ```
 
-### `packages/backend/src/session/autofix-runner.ts`
+### `packages/backend/src/tasks/LocalTaskBackend.ts`
 ```
 import fs from 'fs';
 import path from 'path';
-import { spawn } from 'child_process';
 import yaml from 'js-yaml';
+import type { TaskBackend, NonMilestoneSourceConfig } from './TaskBackend';
+import type { ResolvedTask } from './types';
+import type { NotionTask } from '../notion/types';
+import { toExternalId, formatTaskId } from './taskId';
+import { DependencyResolver } from '../notion/DependencyResolver';
+import { upsertTaskCache } from '../db/queries';
 
-interface OrchestratorYml {
-  autofix?: string[];
+// ── tasks.yaml schema ────────────────────────────────────────────────────────
+
+interface LocalTask {
+  id: string;
+  name: string;
+  status: string; // Backlog | Ready | In Progress | In Review | Done
+  priority?: string; // High | Medium | Low
+  type?: string; // Code | Planning | Testing
+  depends_on?: string[];
+  pr_url?: string | null;
+  context?: string;
+  acceptance_criteria?: string;
+  files_affected?: string[];
+  notes?: string;
 }
 
-export interface AutofixResult {
-  success: boolean;
-  commitSha?: string;
-  summary: string;
+interface LocalMilestone {
+  id: string;
+  name: string;
+  tasks: LocalTask[];
 }
 
-const BOT_GIT_ENV = {
-  GIT_AUTHOR_NAME: 'claude-orchestrator',
-  GIT_AUTHOR_EMAIL: 'bot@claude-code.internal',
-  GIT_COMMITTER_NAME: 'claude-orchestrator',
-  GIT_COMMITTER_EMAIL: 'bot@claude-code.internal',
+/** New milestone-keyed schema. */
+interface MilestoneTasksFile {
+  project?: { id: string; name?: string };
+  milestones: LocalMilestone[];
+}
+
+/** Old flat schema, kept only for migration. */
+interface FlatTasksFile {
+  board_id?: string;
+  tasks: LocalTask[];
+}
+
+type AnyTasksFile = MilestoneTasksFile | FlatTasksFile;
+
+// ── Status mapping ───────────────────────────────────────────────────────────
+
+const STATUS_DISPLAY: Record<string, string> = {
+  Backlog: '🔲 Backlog',
+  Ready: '🗂️ Ready',
+  'In Progress': '🔄 In Progress',
+  'In Review': '👀 In Review',
+  Done: '✅ Done',
 };
 
-export function loadAutofixCommands(projectDir: string): string[] {
-  const ymlPath = path.join(projectDir, '.claude-orchestrator.yml');
-  if (!fs.existsSync(ymlPath)) return [];
-  try {
-    const raw = fs.readFileSync(ymlPath, 'utf-8');
-    const parsed = yaml.load(raw) as OrchestratorYml | null;
-    if (!parsed || !Array.isArray(parsed.autofix)) return [];
-    return parsed.autofix.filter(
-      (cmd): cmd is string => typeof cmd === 'string',
-    );
-  } catch (err) {
-    console.warn(`[autofix-runner] failed to parse ${ymlPath}: ${err}`);
-    return [];
-  }
+const TYPE_DISPLAY: Record<string, string> = {
+  Code: '💻 Code',
+  Planning: '📋 Planning',
+  Testing: '🧪 Testing',
+};
+
+function toDisplayStatus(status: string): string {
+  return STATUS_DISPLAY[status] ?? status;
 }
 
-function spawnCmd(
-  cmd: string,
-  args: string[],
-  opts: { cwd: string; env?: NodeJS.ProcessEnv },
-): Promise<{ exitCode: number; stdout: string }> {
-  return new Promise((resolve) => {
-    const proc = spawn(cmd, args, { cwd: opts.cwd, env: opts.env });
-    let out = '';
-    proc.stdout?.on('data', (d: Buffer) => {
-      out += d.toString();
-    });
-    proc.stderr?.on('data', (d: Buffer) => {
-      out += d.toString();
-    });
-    proc.on('close', (code) => resolve({ exitCode: code ?? 1, stdout: out }));
-  });
+function toDisplayType(type: string): string {
+  return TYPE_DISPLAY[type] ?? type;
 }
 
-function spawnShell(
-  cmd: string,
-  opts: { cwd: string; env?: NodeJS.ProcessEnv },
-  log: (msg: string) => void,
-): Promise<{ exitCode: number }> {
-  return new Promise((resolve) => {
-    const proc = spawn(cmd, { shell: true, cwd: opts.cwd, env: opts.env });
-    proc.stdout?.on('data', (d: Buffer) => log(d.toString()));
-    proc.stderr?.on('data', (d: Buffer) => log(d.toString()));
-    proc.on('close', (code) => resolve({ exitCode: code ?? 1 }));
-  });
+function fromDisplayStatus(display: string): string {
+  const entry = Object.entries(STATUS_DISPLAY).find(([, v]) => v === display);
+  return entry ? entry[0] : display;
 }
 
-async function isWorktreeDirty(cwd: string): Promise<boolean> {
-  const { stdout } = await spawnCmd('git', ['status', '--porcelain'], { cwd });
-  return stdout.trim().length > 0;
+// ── Schema helpers ───────────────────────────────────────────────────────────
+
+function isMilestoneSchema(
+  parsed: AnyTasksFile | null,
+): parsed is MilestoneTasksFile {
+  return !!parsed && Array.isArray((parsed as MilestoneTasksFile).milestones);
 }
 
-async function getHeadSha(cwd: string): Promise<string> {
-  const { stdout } = await spawnCmd('git', ['rev-parse', 'HEAD'], { cwd });
-  return stdout.trim();
+function isFlatSchema(parsed: AnyTasksFile | null): parsed is FlatTasksFile {
+  return !!parsed && Array.isArray((parsed as FlatTasksFile).tasks);
 }
 
-export async function runAutofix(
-  worktreePath: string,
-  projectDir: string,
-  commands: string[],
-  log: (msg: string) => void,
-): Promise<AutofixResult> {
-  if (commands.length === 0) {
-    return { success: true, summary: 'no autofix commands configured' };
+// ── LocalTaskBackend ─────────────────────────────────────────────────────────
+
+const resolver = new DependencyResolver();
+
+/**
+ * File-based implementation of TaskBackend. Reads/writes task definitions from
+ * `<projectDir>/tasks.yaml` using the milestone-keyed schema. Old flat-schema
+ * files are auto-migrated on first read.
+ *
+ * All public methods accept prefixed task IDs (e.g. 'yaml:my-task') and strip
+ * the prefix before operating on the file.
+ */
+export class LocalTaskBackend implements TaskBackend {
+  readonly type = 'local' as const;
+
+  constructor(private readonly projectDir: string) {}
+
+  private get filePath(): string {
+    return path.join(this.projectDir, 'tasks.yaml');
   }
 
-  const failures: string[] = [];
-
-  for (const cmd of commands) {
-    log(`[autofix] running: ${cmd}\n`);
-    const { exitCode } = await spawnShell(cmd, { cwd: worktreePath }, log);
-    if (exitCode !== 0) {
-      const msg = `command exited with code ${exitCode}: ${cmd}`;
-      log(`[autofix] WARN: ${msg}\n`);
-      failures.push(msg);
+  /** Read tasks.yaml, migrating old flat schema to milestone schema if needed. */
+  private readFile(): MilestoneTasksFile {
+    if (!fs.existsSync(this.filePath)) {
+      throw new Error(
+        `[LocalTaskBackend] tasks.yaml not found at ${this.filePath}`,
+      );
     }
+    const raw = fs.readFileSync(this.filePath, 'utf-8');
+    const parsed = yaml.load(raw) as AnyTasksFile | null;
+
+    if (isMilestoneSchema(parsed)) {
+      return parsed;
+    }
+
+    if (isFlatSchema(parsed)) {
+      const migrated = this.migrateFlatToMilestones(parsed);
+      this.writeFile(migrated);
+      console.log(
+        `[LocalTaskBackend] Migrated ${this.filePath} to milestone schema.`,
+      );
+      return migrated;
+    }
+
+    throw new Error(
+      `[LocalTaskBackend] tasks.yaml at ${this.filePath} is missing both 'milestones' and 'tasks' keys`,
+    );
   }
 
-  const dirty = await isWorktreeDirty(worktreePath);
-  if (!dirty) {
-    const summary =
-      failures.length > 0
-        ? `autofix commands ran but produced no diff (failures: ${failures.join('; ')})`
-        : 'autofix commands produced no diff';
-    return { success: failures.length === 0, summary };
-  }
-
-  // Commit the diff with bot identity
-  const env = { ...process.env, ...BOT_GIT_ENV };
-
-  const addResult = await spawnCmd('git', ['add', '-A'], {
-    cwd: worktreePath,
-    env,
-  });
-  if (addResult.exitCode !== 0) {
-    const msg = `git add -A failed (exit ${addResult.exitCode})`;
-    log(`[autofix] ERROR: ${msg}\n`);
-    failures.push(msg);
-  }
-
-  const commitResult = await spawnCmd(
-    'git',
-    ['commit', '-m', 'chore: apply autofix [orchestrator]'],
-    { cwd: worktreePath, env },
-  );
-  if (commitResult.exitCode !== 0) {
-    const msg = `git commit failed (exit ${commitResult.exitCode})`;
-    log(`[autofix] ERROR: ${msg}\n`);
+  /** Wrap a flat-schema file's tasks under a single milestone. */
+  private migrateFlatToMilestones(flat: FlatTasksFile): MilestoneTasksFile {
+    const id =
+      flat.board_id && flat.board_id !== 'default' ? flat.board_id : 'm1';
+    const name =
+      flat.board_id && flat.board_id !== 'default' ? flat.board_id : 'Default';
     return {
-      success: false,
-      summary: [...failures, msg].join('; '),
+      milestones: [{ id, name, tasks: flat.tasks ?? [] }],
     };
   }
 
-  const sha = await getHeadSha(worktreePath);
-  log(`[autofix] committed ${sha}\n`);
-
-  const pushResult = await spawnCmd('git', ['push', 'origin', 'HEAD'], {
-    cwd: worktreePath,
-    env,
-  });
-  if (pushResult.exitCode !== 0) {
-    const msg = `git push failed (exit ${pushResult.exitCode})`;
-    log(`[autofix] ERROR: ${msg}\n`);
-    failures.push(msg);
-  }
-
-  // Append SHA to .git-blame-ignore-revs at project root
-  try {
-    const blameIgnorePath = path.join(projectDir, '.git-blame-ignore-revs');
-    fs.appendFileSync(
-      blameIgnorePath,
-      `${sha} # chore: apply autofix [orchestrator]\n`,
+  private writeFile(file: MilestoneTasksFile): void {
+    fs.writeFileSync(
+      this.filePath,
+      yaml.dump(file, { lineWidth: 120 }),
+      'utf-8',
     );
-    log(`[autofix] appended ${sha} to .git-blame-ignore-revs\n`);
-  } catch (err) {
-    log(`[autofix] WARN: failed to append to .git-blame-ignore-revs: ${err}\n`);
   }
 
-  const success = failures.length === 0;
-  const summary = success
-    ? `autofix committed ${sha}`
-    : `autofix committed ${sha} with failures: ${failures.join('; ')}`;
+  private mapToNotionTask(t: LocalTask): NotionTask {
+    return {
+      id: t.id,
+      title: t.name,
+      status: toDisplayStatus(t.status),
+      type: toDisplayType(t.type ?? 'Code'),
+      dependsOn: t.depends_on ?? [],
+      notionUrl: '',
+      prUrl: t.pr_url ?? undefined,
+      priority: t.priority,
+    };
+  }
 
-  return { success, commitSha: sha, summary };
+  /** Locate the milestone containing a given raw task id (no prefix), or undefined. */
+  private findTaskById(
+    file: MilestoneTasksFile,
+    rawTaskId: string,
+  ): { milestone: LocalMilestone; task: LocalTask } | undefined {
+    for (const m of file.milestones) {
+      const task = m.tasks.find((t) => t.id === rawTaskId);
+      if (task) return { milestone: m, task };
+    }
+    return undefined;
+  }
+
+  async fetchReadyTasks(
+    milestoneId: string | null,
+    _skipCache?: boolean,
+  ): Promise<ResolvedTask[]> {
+    const file = this.readFile();
+    let allTasks: NotionTask[];
+    if (milestoneId === null) {
+      allTasks = file.milestones.flatMap((m) =>
+        m.tasks.map((t) => this.mapToNotionTask(t)),
+      );
+    } else {
+      const milestone = file.milestones.find((m) => m.id === milestoneId);
+      if (!milestone) {
+        throw new Error(
+          `[LocalTaskBackend] milestone not found in ${this.filePath}: ${milestoneId}`,
+        );
+      }
+      allTasks = milestone.tasks.map((t) => this.mapToNotionTask(t));
+      upsertTaskCache(`board:${milestoneId}`, JSON.stringify(allTasks));
+    }
+    // Cache each task under its prefixed key
+    for (const task of allTasks) {
+      upsertTaskCache(formatTaskId('yaml', task.id), JSON.stringify(task));
+    }
+    const resolved = resolver.resolve(allTasks, 'yaml');
+    // Prepend yaml: prefix to task IDs in returned results
+    return resolved.map((r) => ({
+      ...r,
+      task: { ...r.task, id: formatTaskId('yaml', r.task.id) },
+    }));
+  }
+
+  async attachPR(taskId: string, prUrl: string): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    found.task.pr_url = prUrl;
+    this.writeFile(file);
+  }
+
+  async updateStatus(taskId: string, status: string): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    found.task.status = fromDisplayStatus(status);
+    this.writeFile(file);
+  }
+
+  async fetchTaskPage(taskId: string): Promise<string> {
+    const externalId = toExternalId(taskId);
+    const file = this.readFile();
+    const found = this.findTaskById(file, externalId);
+    if (!found) throw new Error(`[LocalTaskBackend] task not found: ${taskId}`);
+    const task = found.task;
+
+    const sections: string[] = [`# ${task.name}`];
+    if (task.context?.trim()) {
+      sections.push(`## Context\n${task.context.trim()}`);
+    }
+    if (task.acceptance_criteria?.trim()) {
+      sections.push(
+        `## Acceptance Criteria\n${task.acceptance_criteria.trim()}`,
+      );
+    }
+    if (task.files_affected && task.files_affected.length > 0) {
+      sections.push(
+        `## Files\n${task.files_affected.map((f) => `- ${f}`).join('\n')}`,
+      );
+    }
+    if (task.notes?.trim()) {
+      sections.push(`## Notes\n${task.notes.trim()}`);
+    }
+    return 
+[... truncated]
+```
+
+### `packages/backend/src/tasks/JiraTaskSourceProvider.ts`
+```
+import type { TaskBackend } from './TaskBackend';
+import type { ResolvedTask } from './types';
+import type { NotionTask } from '../notion/types';
+import { formatTaskId, toExternalId } from './taskId';
+import { JiraClient } from './JiraClient';
+import { DependencyResolver } from '../notion/DependencyResolver';
+import { upsertTaskCache } from '../db/queries';
+
+export interface JiraProjectConfig {
+  host: string;
+  project_key: string;
+  /** Full JQL override. When set, ready_statuses is ignored for fetchReadyTasks. */
+  default_jql?: string;
+  /** Jira status names that map to "ready to launch". Defaults to DEFAULT_READY_STATUSES. */
+  ready_statuses?: string[];
+  /**
+   * Maps orchestrator display statuses (emoji-prefixed) to Jira status names.
+   * Defaults to DEFAULT_STATUS_MAPPING.
+   */
+  status_mapping?: Record<string, string>;
+}
+
+const DEFAULT_READY_STATUSES = ['To Do', 'Ready'];
+
+const DEFAULT_STATUS_MAPPING: Record<string, string> = {
+  '🔲 Backlog': 'Backlog',
+  '🗂️ Ready': 'To Do',
+  '🔄 In Progress': 'In Progress',
+  '👀 In Review': 'In Review',
+  '✅ Done': 'Done',
+};
+
+const TYPE_MAP: Record<string, string> = {
+  Bug: '🧪 Testing',
+  Task: '💻 Code',
+  Story: '💻 Code',
+  Epic: '📋 Planning',
+};
+
+function mapIssueType(issuetype: string): string {
+  return TYPE_MAP[issuetype] ?? '💻 Code';
+}
+
+const resolver = new DependencyResolver();
+
+export class JiraTaskSourceProvider implements TaskBackend {
+  readonly type = 'jira' as const;
+
+  constructor(
+    private readonly client: JiraClient,
+    private readonly projectConfig: JiraProjectConfig,
+  ) {}
+
+  async fetchReadyTasks(
+    _milestoneId: string | null,
+    _skipCache?: boolean,
+  ): Promise<ResolvedTask[]> {
+    const jql = this.buildReadyJql();
+    const issues = await this.client.searchIssues(jql);
+
+    const tasks: NotionTask[] = issues.map((issue) => ({
+      id: issue.key,
+      title: issue.fields.summary,
+      status: issue.fields.status.name,
+      type: mapIssueType(issue.fields.issuetype.name),
+      dependsOn: [],
+      notionUrl: '',
+      priority: issue.fields.priority?.name,
+    }));
+
+    for (const task of tasks) {
+      const prefixedId = formatTaskId('jira', task.id);
+      upsertTaskCache(prefixedId, JSON.stringify({ ...task, id: prefixedId }));
+    }
+
+    const resolved = resolver.resolve(tasks, 'jira');
+    return resolved.map((r) => ({
+      ...r,
+      task: { ...r.task, id: formatTaskId('jira', r.task.id) },
+    }));
+  }
+
+  async attachPR(taskId: string, prUrl: string): Promise<void> {
+    const externalId = toExternalId(taskId);
+    await this.client.addComment(externalId, `PR: ${prUrl}`);
+  }
+
+  async updateStatus(taskId: string, status: string): Promise<void> {
+    const externalId = toExternalId(taskId);
+    const mapping = this.projectConfig.status_mapping ?? DEFAULT_STATUS_MAPPING;
+    const targetJiraStatus = mapping[status];
+    if (!targetJiraStatus) {
+      throw new Error(
+        `[JiraTaskSourceProvider] no Jira status mapping for: "${status}"`,
+      );
+    }
+    const transitions = await this.client.getTransitions(externalId);
+    const transition = transitions.find(
+      (t) => t.to.name.toLowerCase() === targetJiraStatus.toLowerCase(),
+    );
+    if (!transition) {
+      throw new Error(
+        `[JiraTaskSourceProvider] no transition to "${targetJiraStatus}" for issue ${externalId}`,
+      );
+    }
+    await this.client.transitionIssue(externalId, transition.id);
+  }
+
+  async fetchTaskPage(taskId: string): Promise<string> {
+    const externalId = toExternalId(taskId);
+    const issue = await this.client.getIssue(externalId);
+    const lines: string[] = [`# ${issue.fields.summary}`];
+    lines.push(`**Status:** ${issue.fields.status.name}`);
+    lines.push(`**Type:** ${issue.fields.issuetype.name}`);
+    if (issue.fields.priority) {
+      lines.push(`**Priority:** ${issue.fields.priority.name}`);
+    }
+    const desc = issue.fields.description;
+    if (desc && typeof desc === 'string' && desc.trim()) {
+      lines.push('', '## Description', desc.trim());
+    }
+    return lines.join('\n');
+  }
+
+  async fetchNonMilestoneReadyTasks(): Promise<ResolvedTask[]> {
+    return [];
+  }
+
+  private buildReadyJql(): string {
+    if (this.projectConfig.default_jql) {
+      return this.projectConfig.default_jql;
+    }
+    const readyStatuses =
+      this.projectConfig.ready_statuses ?? DEFAULT_READY_STATUSES;
+    return this.client.buildReadyJql(
+      this.projectConfig.project_key,
+      readyStatuses,
+    );
+  }
 }
 
 ```
 
-### `packages/backend/src/github/CommitAttributionWatcher.test.ts`
+### `packages/backend/src/__tests__/tasks.test.ts`
 ```
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import express from 'express';
+import supertest from 'supertest';
+import yaml from 'js-yaml';
+import type { TaskAggregateRow } from '../db/queries.js';
 
-// Mock AuditLog before importing the watcher
-vi.mock('../audit/AuditLog', () => ({
-  recordEvent: vi.fn(),
+// ── Mocks ────────────────────────────────────────────────────────────────────
+
+vi.mock('../db/queries.js', () => ({
+  getTaskCache: vi.fn(),
+  getActiveTaskAggregates: vi.fn(),
+  getSetting: vi.fn().mockReturnValue(null),
+  getMilestoneById: vi.fn().mockReturnValue(null),
 }));
 
-vi.mock('../db/queries', () => ({
-  setPauseReason: vi.fn(),
+vi.mock('../config.js', () => ({
+  getProjectById: vi.fn((id: string) => {
+    if (id === 'proj-1') {
+      return {
+        id: 'proj-1',
+        name: 'Test Project',
+        projectDir: '/test',
+        contextUrl: 'https://notion.so/ctx',
+        boardId: 'board-1',
+      };
+    }
+    return undefined;
+  }),
 }));
 
-import {
-  checkCommitAttribution,
-  AI_TRAILER_REGEX,
-} from './CommitAttributionWatcher';
-import { recordEvent } from '../audit/AuditLog';
-import { setPauseReason } from '../db/queries';
-import type { GitHubClient } from './GitHubClient';
+import { createTasksRouter, summarizeEvent } from '../routes/tasks.js';
+import * as queries from '../db/queries.js';
+import type { NotionTask } from '../notion/types.js';
 
-function makeClient(
-  commits: Array<{ sha: string; message: string }>,
-): GitHubClient {
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function makeAggregate(
+  notionTaskId: string,
+  notionStatus: string,
+  overrides: Partial<TaskAggregateRow> = {},
+): TaskAggregateRow {
+  const task: NotionTask = {
+    id: notionTaskId,
+    title: `Task ${notionTaskId}`,
+    status: notionStatus,
+    type: '💻 Code',
+    dependsOn: [],
+    notionUrl: `https://notion.so/${notionTaskId}`,
+  };
   return {
-    getCommitsForPR: vi.fn().mockResolvedValue(commits),
-  } as unknown as GitHubClient;
+    task_id: notionTaskId,
+    raw_json: JSON.stringify(task),
+    code_session_id: null,
+    code_session_status: null,
+    code_session_started_at: null,
+    code_session_ended_at: null,
+    code_session_input_tokens: null,
+    code_session_output_tokens: null,
+    code_session_last_event_payload: null,
+    review_session_id: null,
+    review_session_status: null,
+    review_session_input_tokens: null,
+    review_session_output_tokens: null,
+    pr_number: null,
+    pr_url: null,
+    pr_title: null,
+    pr_head_branch: null,
+    pr_base_branch: null,
+    pr_state: null,
+    pr_draft: null,
+    pr_review_result: null,
+    pr_review_iteration: null,
+    pr_merge_state: null,
+    pr_pause_reason: null,
+    review_session_result: null,
+    ...overrides,
+  };
+}
+
+function buildApp() {
+  const app = express();
+  app.use(express.json());
+  app.use('/api', createTasksRouter());
+  return app;
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: board cache returns three task IDs
+  vi.mocked(queries.getTaskCache).mockReturnValue({
+    cache_key: 'board:board-1',
+    raw_json: JSON.stringify([
+      { id: 'task-ready' },
+      { id: 'task-done' },
+      { id: 'task-deferred' },
+      { id: 'task-backlog' },
+      { id: 'task-in-progress' },
+    ]),
+    fetched_at: Date.now(),
+  } as never);
 });
 
-describe('AI_TRAILER_REGEX', () => {
-  it('matches a valid AI-Authored-By trailer', () => {
-    expect(
-      AI_TRAILER_REGEX.test(
-        'feat: add thing\n\nAI-Authored-By: claude-sonnet-4-6 (session: abc)',
-      ),
-    ).toBe(true);
+// ── GET /api/tasks/active filtering ──────────────────────────────────────────
+
+describe('GET /api/tasks/active', () => {
+  // Done tasks are excluded at the SQL layer (getActiveTaskAggregates) so they
+  // never reach the route. Backlog tasks are intentionally surfaced in the
+  // Tasks panel. Only Deferred is filtered at the route level.
+
+  it('does not include tasks with Deferred Notion status', async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-ready', '🗂️ Ready'),
+      makeAggregate('task-deferred', '⏸️ Deferred'),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    const ids = res.body.map((t: { taskId: string }) => t.taskId);
+    expect(ids).not.toContain('task-deferred');
+    expect(ids).toContain('task-ready');
   });
 
-  it('does not match commits without the trailer', () => {
-    expect(
-      AI_TRAILER_REGEX.test('feat: add thing\n\nCo-Authored-By: human'),
-    ).toBe(false);
+  it('returns Ready, In Progress, and Backlog tasks while excluding Deferred', async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-ready', '🗂️ Ready'),
+      makeAggregate('task-deferred', '⏸️ Deferred'),
+      makeAggregate('task-backlog', '🔲 Backlog'),
+      makeAggregate('task-in-progress', '🔄 In Progress'),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    const ids = res.body.map((t: { taskId: string }) => t.taskId);
+    expect(ids).toContain('task-ready');
+    expect(ids).toContain('task-in-progress');
+    expect(ids).toContain('task-backlog');
+    expect(ids).not.toContain('task-deferred');
+  });
+
+  it('returns 400 when projectId is missing', async () => {
+    const res = await supertest(buildApp()).get('/api/tasks/active');
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 404 when project is not found', async () => {
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=unknown',
+    );
+    expect(res.status).toBe(404);
   });
 });
 
-describe('checkCommitAttribution()', () => {
-  it('returns missing=0 when all commits have the trailer', async () => {
-    const client = makeClient([
-      {
-        sha: 'aaa',
-        message: 'feat: x\n\nAI-Authored-By: claude-sonnet-4-6 (session: s1)',
-      },
-    ]);
-    const result = await checkCommitAttribution(
-      client,
-      'owner/repo',
-      1,
-      's1',
-      null,
-      null,
-      false,
-    );
-    expect(result.checked).toBe(1);
-    expect(result.missing).toBe(0);
-    expect(result.paused).toBe(false);
-    expect(vi.mocked(recordEvent)).not.toHaveBeenCalled();
-  });
+// ── totalTokens aggregation ────────────────────────────────────────────────────
 
-  it('records attribution_missing to the audit log when a trailer is absent', async () => {
-    const client = makeClient([
-      { sha: 'bbb', message: 'feat: no trailer here' },
-    ]);
-    await checkCommitAttribution(
-      client,
-      'owner/repo',
-      2,
-      'session-xyz',
-      'proj-1',
-      'task-1',
-      false,
-    );
-    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event_type: 'attribution_missing',
-        actor_type: 'ai',
-        actor_id: 'session-xyz',
-        payload: expect.objectContaining({
-          sha: 'bbb',
-          pr_number: 2,
-          repo: 'owner/repo',
-        }),
+describe('buildTaskViewFromRow — totalTokens', () => {
+  it('sums code and review session tokens into totalTokens', async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-tokens', '🔄 In Progress', {
+        code_session_id: 'cs-1',
+        code_session_status: 'done',
+        code_session_started_at: 1000,
+        code_session_input_tokens: 400,
+        code_session_output_tokens: 200,
+        review_session_id: 'rs-1',
+        review_session_status: 'done',
+        review_session_input_tokens: 100,
+        review_session_output_tokens: 50,
       }),
-    );
-    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
-  });
-
-  it('pauses in corporate mode when a trailer is absent', async () => {
-    const client = makeClient([
-      { sha: 'ccc', message: 'chore: no attribution' },
     ]);
-    const result = await checkCommitAttribution(
-      client,
-      'owner/repo',
-      3,
-      's1',
-      null,
-      null,
-      true,
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
     );
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
-      3,
-      'owner/repo',
-      'attribution_missing',
+    expect(res.status).toBe(200);
+    const task = res.body.find(
+      (t: { taskId: string }) => t.taskId === 'task-tokens',
     );
-    expect(result.paused).toBe(true);
+    expect(task.totalTokens.input).toBe(500);
+    expect(task.totalTokens.output).toBe(250);
   });
 
-  it('does NOT pause in non-corporate mode even when trailer is absent', async () => {
-    const client = makeClient([{ sha: 'ddd', message: 'fix: oops' }]);
-    const result = await checkCommitAttribution(
-      client,
-      'owner/repo',
-      4,
-      's1',
-      null,
-      null,
-      false,
-    );
-    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalled();
-    expect(result.paused).toBe(false);
-    expect(result.missing).toBe(1);
-  });
-
-  it('handles fetch errors gracefully', async () => {
-    const client = {
-      getCommitsForPR: vi.fn().mockRejectedValue(new Error('network error')),
-    } as unknown as GitHubClient;
-    const result = await checkCommitAttribution(
-      client,
-      'owner/repo',
-      5,
-      's1',
-      null,
-      null,
-      false,
-    );
-    expect(result.checked).toBe(0);
-    expect(result.missing).toBe(0);
-    expect(vi.mocked(recordEvent)).not.toHaveBeenCalled();
-  });
-
-  it('only records missing for commits without the trailer (mixed batch)', async () => {
-    const client = makeClient([
-      {
-        sha: 'e1',
-        message:
-          'feat: good\n\nAI-Authored-By: claude-sonnet-4-6 (session: s1)',
-      },
-      { sha: 'e2', message: 'chore: bad — no trailer' },
-    ]);
-    const result = await checkCommitAttribution(
-      client,
-      'owner/repo',
-      6,
-      's1',
-      null,
-      null,
-      false,
-    );
-    expect(result.checked).toBe(2);
-    expect(result.missing).toBe(1);
-    expect(vi.mocked(recordEvent)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: expect.objectContaining({ sha: 'e2' }),
+  it('totalTokens counts only code session when review is absent', async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-code-only', '🔄 In Progress', {
+        code_session_id: 'cs-2',
+        code_session_status: 'done',
+        code_session_started_at: 1000,
+        code_session_input_tokens: 300,
+        code_session_output_tokens: 150,
+        review_session_id: null,
+        review_session_input_tokens: null,
+        review_session_output_tokens: null,
       }),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
     );
+    expect(res.status).toBe(200);
+    const task = res.body.find(
+      (t: { taskId: string }) => t.taskId === 'task-code-only',
+    );
+    expect(task.totalTokens.input).toBe(300);
+    expect(task.totalTokens.output).toBe(150);
+  });
+
+  it('review.inputTokens and review.outputTokens are populated from row', async () => {
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('task-review-tokens', '🔍 In Review', {
+        review_session_id: 'rs-2',
+        review_session_status: 'done',
+        review_session_input_tokens: 80,
+        review_session_output_tokens: 40,
+      }),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    const task = res.body.find(
+      (t: { taskId: string }) => t.taskId === 'task-review-tokens',
+    );
+    expect(task.review.inputTokens).toBe(80);
+    expect(task.review.outputTokens).toBe(40);
   });
 });
 
+// ── GET /api/tasks/export?format=yaml ─────────────────────────────────────────
+
+describe('GET /api/tasks/export?format=yaml', () => {
+  const boardTasks = [
+    {
+      id: 'task-a',
+      title: 'Task A',
+      status: '🗂️ Ready',
+      type: '💻 Code',
+      priority: '🔴 High',
+      dependsOn: [],
+      notionUrl: 'https://notion.so/task-a',
+    },
+    {
+      id: 'task-b',
+      title: 'Task B',
+      status: '⏭️ Deferred',
+      type: '💻 Code',
+      priority: '🟡 Medium',
+      dependsOn: [],
+      notionUrl: 'https://notion.so/task-b',
+    },
+  ];
+
+  beforeEach(() =>
+[... truncated]
 ```
 
 ---

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ── In-memory SQLite (tables required by module-level db.prepare() in queries.ts) ──
 vi.mock('../db/db.js', async () => {
@@ -91,9 +91,15 @@ vi.mock('../projects/ProjectService.js', () => ({
   },
 }));
 
+import os from 'os';
+import fs from 'fs';
+import path from 'path';
 import { getTaskCache, upsertTaskCache } from '../db/queries.js';
 import { NotionClient } from '../notion/NotionClient.js';
 import { NotionTaskBackend } from '../tasks/NotionTaskBackend.js';
+import { LocalTaskBackend } from '../tasks/LocalTaskBackend.js';
+import { JiraTaskSourceProvider } from '../tasks/JiraTaskSourceProvider.js';
+import type { JiraClient } from '../tasks/JiraClient.js';
 import { ProjectService } from '../projects/ProjectService.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -216,6 +222,128 @@ describe('NotionTaskBackend.fetchReadyTasks — task_cache write shape', () => {
     const rawDashlessRe = /^[0-9a-f]{32}$/i;
     expect(keys.filter((k) => rawDashedRe.test(k))).toHaveLength(0);
     expect(keys.filter((k) => rawDashlessRe.test(k))).toHaveLength(0);
+  });
+});
+
+// ─── NotionTaskBackend.fetchReadyTasks: board cache JSON has prefixed IDs ────────
+
+describe('NotionTaskBackend.fetchReadyTasks — board cache JSON content', () => {
+  it('board cache JSON contains prefixed notion:<uuid> IDs, not raw UUIDs', async () => {
+    vi.mocked(ProjectService.getMilestone).mockReturnValue({
+      id: 'milestone-1',
+      projectId: 'proj-1',
+      name: 'M1',
+      sourceId: BOARD_ID,
+      displayOrder: 0,
+      createdAt: 0,
+      updatedAt: 0,
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => makeNotionQueryResponse([TASK_1, TASK_2, TASK_3]),
+      }),
+    );
+
+    const backend = new NotionTaskBackend(new NotionClient());
+    await backend.fetchReadyTasks('milestone-1');
+
+    const boardRow = getTaskCache(`board:${BOARD_ID}`);
+    expect(boardRow).toBeDefined();
+    const tasks = JSON.parse(boardRow!.raw_json) as { id: string }[];
+    expect(tasks).toHaveLength(3);
+    expect(tasks.every((t) => t.id.startsWith('notion:'))).toBe(true);
+    expect(tasks.map((t) => t.id)).toContain(`notion:${TASK_1}`);
+    expect(tasks.map((t) => t.id)).toContain(`notion:${TASK_2}`);
+    expect(tasks.map((t) => t.id)).toContain(`notion:${TASK_3}`);
+  });
+});
+
+// ─── LocalTaskBackend.fetchReadyTasks: board cache JSON has prefixed IDs ─────────
+
+describe('LocalTaskBackend.fetchReadyTasks — board cache JSON content', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'local-task-test-'));
+    fs.writeFileSync(
+      path.join(tmpDir, 'tasks.yaml'),
+      [
+        'milestones:',
+        '  - id: m1',
+        '    name: M1',
+        '    tasks:',
+        '      - id: task-alpha',
+        '        name: Task Alpha',
+        '        status: Ready',
+        '      - id: task-beta',
+        '        name: Task Beta',
+        '        status: Ready',
+      ].join('\n'),
+    );
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('board cache JSON contains prefixed yaml:<id> IDs, not raw IDs', async () => {
+    const backend = new LocalTaskBackend(tmpDir);
+    await backend.fetchReadyTasks('m1');
+
+    const boardRow = getTaskCache('board:m1');
+    expect(boardRow).toBeDefined();
+    const tasks = JSON.parse(boardRow!.raw_json) as { id: string }[];
+    expect(tasks.every((t) => t.id.startsWith('yaml:'))).toBe(true);
+    expect(tasks.map((t) => t.id)).toContain('yaml:task-alpha');
+    expect(tasks.map((t) => t.id)).toContain('yaml:task-beta');
+  });
+});
+
+// ─── JiraTaskSourceProvider.fetchReadyTasks: board cache JSON has prefixed IDs ───
+
+describe('JiraTaskSourceProvider.fetchReadyTasks — board cache JSON content', () => {
+  it('board cache JSON contains prefixed jira:<key> IDs, not raw keys', async () => {
+    const mockClient = {
+      searchIssues: vi.fn().mockResolvedValue([
+        {
+          key: 'PROJ-1',
+          fields: {
+            summary: 'Task 1',
+            status: { name: 'To Do' },
+            issuetype: { name: 'Task' },
+            priority: null,
+          },
+        },
+        {
+          key: 'PROJ-2',
+          fields: {
+            summary: 'Task 2',
+            status: { name: 'To Do' },
+            issuetype: { name: 'Task' },
+            priority: null,
+          },
+        },
+      ]),
+      buildReadyJql: vi
+        .fn()
+        .mockReturnValue('project = PROJ AND status in ("To Do")'),
+    } as unknown as JiraClient;
+
+    const provider = new JiraTaskSourceProvider(mockClient, {
+      host: 'https://jira.example.com',
+      project_key: 'PROJ',
+    });
+    await provider.fetchReadyTasks('m1');
+
+    const boardRow = getTaskCache('board:m1');
+    expect(boardRow).toBeDefined();
+    const tasks = JSON.parse(boardRow!.raw_json) as { id: string }[];
+    expect(tasks.every((t) => t.id.startsWith('jira:'))).toBe(true);
+    expect(tasks.map((t) => t.id)).toContain('jira:PROJ-1');
+    expect(tasks.map((t) => t.id)).toContain('jira:PROJ-2');
   });
 });
 

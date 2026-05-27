@@ -196,7 +196,6 @@ export class LocalTaskBackend implements TaskBackend {
         );
       }
       allTasks = milestone.tasks.map((t) => this.mapToNotionTask(t));
-      upsertTaskCache(`board:${milestoneId}`, JSON.stringify(allTasks));
     }
     // Cache each task under its prefixed key
     for (const task of allTasks) {
@@ -204,10 +203,18 @@ export class LocalTaskBackend implements TaskBackend {
     }
     const resolved = resolver.resolve(allTasks, 'yaml');
     // Prepend yaml: prefix to task IDs in returned results
-    return resolved.map((r) => ({
+    const prefixed = resolved.map((r) => ({
       ...r,
       task: { ...r.task, id: formatTaskId('yaml', r.task.id) },
     }));
+    // Overwrite board cache with prefixed IDs so /api/tasks/active joins correctly.
+    if (milestoneId !== null) {
+      upsertTaskCache(
+        `board:${milestoneId}`,
+        JSON.stringify(prefixed.map((r) => r.task)),
+      );
+    }
+    return prefixed;
   }
 
   async attachPR(taskId: string, prUrl: string): Promise<void> {
