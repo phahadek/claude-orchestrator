@@ -22,7 +22,10 @@ const REDACTED = '[REDACTED]';
 export function scrubSecrets<T>(value: T): T {
   if (typeof value === 'string') {
     return value
-      .replace(BEARER_PATTERN, (match) => `${match.split(/\s+/)[0]} ${REDACTED}`)
+      .replace(
+        BEARER_PATTERN,
+        (match) => `${match.split(/\s+/)[0]} ${REDACTED}`,
+      )
       .replace(SECRET_PATTERN, REDACTED) as T;
   }
   if (Array.isArray(value)) {
