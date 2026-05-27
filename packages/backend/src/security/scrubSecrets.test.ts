@@ -73,51 +73,71 @@ describe('scrubSecrets', () => {
 
   // GitHub OAuth variants
   it('redacts gho_* (GitHub OAuth token)', () => {
-    expect(scrubSecrets('token=gho_abcdefghijklmnopqrst')).toBe('token=[REDACTED]');
+    expect(scrubSecrets('token=gho_abcdefghijklmnopqrst')).toBe(
+      'token=[REDACTED]',
+    );
   });
 
   it('redacts ghu_* (GitHub user-to-server token)', () => {
-    expect(scrubSecrets('token=ghu_abcdefghijklmnopqrst')).toBe('token=[REDACTED]');
+    expect(scrubSecrets('token=ghu_abcdefghijklmnopqrst')).toBe(
+      'token=[REDACTED]',
+    );
   });
 
   it('redacts ghr_* (GitHub refresh token)', () => {
-    expect(scrubSecrets('token=ghr_abcdefghijklmnopqrst')).toBe('token=[REDACTED]');
+    expect(scrubSecrets('token=ghr_abcdefghijklmnopqrst')).toBe(
+      'token=[REDACTED]',
+    );
   });
 
   it('redacts ghs_* (GitHub server-to-server token)', () => {
-    expect(scrubSecrets('token=ghs_abcdefghijklmnopqrst')).toBe('token=[REDACTED]');
+    expect(scrubSecrets('token=ghs_abcdefghijklmnopqrst')).toBe(
+      'token=[REDACTED]',
+    );
   });
 
   it('redacts ghi_* (GitHub installation token)', () => {
-    expect(scrubSecrets('token=ghi_abcdefghijklmnopqrst')).toBe('token=[REDACTED]');
+    expect(scrubSecrets('token=ghi_abcdefghijklmnopqrst')).toBe(
+      'token=[REDACTED]',
+    );
   });
 
   // Slack variants (tokens are fake/test-only, not real credentials)
   it('redacts xoxb-* (Slack bot token)', () => {
-    expect(scrubSecrets('xoxb-FAKEWORKSPACE-FAKEUSER-FAKETOKEN')).toBe('[REDACTED]');
+    expect(scrubSecrets('xoxb-FAKEWORKSPACE-FAKEUSER-FAKETOKEN')).toBe(
+      '[REDACTED]',
+    );
   });
 
   it('redacts xoxp-* (Slack user token)', () => {
-    expect(scrubSecrets('xoxp-FAKEWORKSPACE-FAKEUSER-FAKETOKEN')).toBe('[REDACTED]');
+    expect(scrubSecrets('xoxp-FAKEWORKSPACE-FAKEUSER-FAKETOKEN')).toBe(
+      '[REDACTED]',
+    );
   });
 
   it('redacts xoxa-* (Slack app token)', () => {
-    expect(scrubSecrets('xoxa-FAKEWORKSPACE-FAKEUSER-FAKETOKEN')).toBe('[REDACTED]');
+    expect(scrubSecrets('xoxa-FAKEWORKSPACE-FAKEUSER-FAKETOKEN')).toBe(
+      '[REDACTED]',
+    );
   });
 
   it('redacts xoxr-* (Slack refresh token)', () => {
-    expect(scrubSecrets('xoxr-FAKEWORKSPACE-FAKEUSER-FAKETOKEN')).toBe('[REDACTED]');
+    expect(scrubSecrets('xoxr-FAKEWORKSPACE-FAKEUSER-FAKETOKEN')).toBe(
+      '[REDACTED]',
+    );
   });
 
   it('redacts xoxs-* (Slack legacy token)', () => {
-    expect(scrubSecrets('xoxs-FAKEWORKSPACE-FAKEUSER-FAKETOKEN')).toBe('[REDACTED]');
+    expect(scrubSecrets('xoxs-FAKEWORKSPACE-FAKEUSER-FAKETOKEN')).toBe(
+      '[REDACTED]',
+    );
   });
 
   // Bearer context rule
   it('redacts Bearer token (opaque JWT)', () => {
-    expect(scrubSecrets('Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc.def')).toBe(
-      'Authorization: Bearer [REDACTED]',
-    );
+    expect(
+      scrubSecrets('Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc.def'),
+    ).toBe('Authorization: Bearer [REDACTED]');
   });
 
   it('redacts Bearer token case-insensitively', () => {

@@ -7,8 +7,8 @@
 
 ## Task Assignment
 
-- **Task**: Fix Windows path normalization false-positive in worktree-escape audit
-- **Notion task**: https://www.notion.so/Fix-Windows-path-normalization-false-positive-in-worktree-escape-audit-36d22f9152f381ce8982d885133aed68
+- **Task**: Extend scrubSecrets regex to T16 spec: GitHub OAuth variants, Slack, Bearer context
+- **Notion task**: https://www.notion.so/Extend-scrubSecrets-regex-to-T16-spec-GitHub-OAuth-variants-Slack-Bearer-context-36d22f9152f3816d9dc1c7d3301be0db
 - **Project context**: https://www.notion.so/33222f9152f38188b65fd912e40890a2
 
 ---
@@ -124,7 +124,7 @@ Run in order — all must pass before opening the PR:
 
 ## Git Isolation
 
-> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\a35bd5f2-e296-415f-9c2d-fc1209dffd1f`.**
+> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\8faf23d7-7df4-477e-9982-0a4b2bd47783`.**
 > This is your `cwd`. All commands run here. Never navigate to or operate on any parent directory.
 
 - All git commands must run inside the worktree directory (your `cwd`)
@@ -141,7 +141,7 @@ Run in order — all must pass before opening the PR:
 > namespace to prevent writes outside the worktree. All isolation is prompt-level.
 > Violating these rules can corrupt the developer's live environment.
 
-All file writes **must stay inside the worktree directory** (`C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\a35bd5f2-e296-415f-9c2d-fc1209dffd1f`).
+All file writes **must stay inside the worktree directory** (`C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\8faf23d7-7df4-477e-9982-0a4b2bd47783`).
 
 - **Never write to the project root or any path above the worktree.**
   Scripts, tools, and generated outputs must target paths under the worktree, not the parent repo.
@@ -182,81 +182,50 @@ Use the Write tool for any file creation. Never use `cat >`, `printf >`, or `ech
 > Do NOT re-fetch this from Notion — use the content below as your source of truth.
 
 ## Summary
-The post-hoc auditWorktreeEscape in SessionAuditor.ts produces false-positive worktree_escape violations on every Windows session, because the Claude CLI reports tool-call file paths in Unix-style drive-rootless form (/Users/phadek/...) while the session's worktree_path is stored Windows-native (C:\Users\phadek\...). The audit's normalizePath falls back to path.normalize(), which does not add a drive letter on Windows, so the prefix comparison fails. Switch to path.resolve(baseDir, p) so drive-rootless absolute paths inherit the base directory's drive.
+The shipped scrubSecrets regex covers sk-ant-*, ghp_*, ntn_*, secret_* but is narrower than the T16 task spec called for. Extend it to cover all GitHub token variants (gho_, ghu_, ghr_, ghs_, ghi_), Slack tokens (xox[bpars]-), and add the Bearer-token context rule.
 ## Dependencies
-None. Localized fix in SessionAuditor.ts and its tests.
+None. Single-file regex extension + tests.
 ## Context
-### Root cause (confirmed against PR #399's session)
-PR #399 session 632536ef-9992-4a07-b2cc-54960f744e6f ran on a Windows host. Every Edit/Write tool call recorded a file_path in Unix-style form — e.g.:
-```javascript
-/Users/phadek/IdeaProjects/claude-orchestrator/.claude/worktrees/632536ef-.../packages/backend/src/db/types.ts
-```
-But the session row's worktree_path (stored when the worktree was created) is Windows-native:
-```javascript
-C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\632536ef-...
-```
-SessionAuditor.ts:372-379 normalizePath handles only Git-Bash /c/foo style (single-letter drive after the leading slash):
+### What's missing today
+packages/backend/src/security/scrubSecrets.ts:6 currently has:
 ```typescript
-function normalizePath(p: string): string {
-  const gitBashMatch = /^\/([a-zA-Z])\//i.exec(p);
-  if (gitBashMatch) {
-    return path.normalize(`${gitBashMatch[1].toUpperCase()}:\\${p.slice(3)}`);
-  }
-  return path.normalize(p);
-}
+const SECRET_PATTERN = /\b(sk-ant-[A-Za-z0-9_-]{10,}|ghp_[A-Za-z0-9]{10,}|secret_[A-Za-z0-9_-]{10,}|ntn_[A-Za-z0-9_-]{10,})\b/g;
 ```
-/Users/phadek/... does not match the Git-Bash pattern (the segment after the first / is Users, not a single letter). It falls through to path.normalize(p), which on Windows returns \Users\phadek\... (no drive letter). The prefix comparison in auditWorktreeEscape:
-```typescript
-resolved !== normalizedWorktree && !resolved.startsWith(worktreePrefix)
-```
-fails because \Users\phadek\... does not start with C:\Users\phadek\.... Every file the session edits inside its own worktree is reported as a worktree_escape violation, and the formatted feedback is routed back to the session at end-of-session.
-### Why path.resolve(baseDir, p) is the right primitive
-Verified empirically:
-```javascript
-path.normalize('/Users/phadek/...')                    → \Users\phadek\...           (no drive)
-path.resolve('/Users/phadek/...')                      → C:\Users\phadek\...        (cwd's drive)
-path.resolve(worktree, '/Users/phadek/...')            → C:\Users\phadek\...        (worktree's drive)
-path.resolve(worktree, 'C:\\Users\\phadek\\X')          → C:\Users\phadek\X           (absolute wins)
-path.resolve(worktree, 'C:\\Other\\X')                  → C:\Other\X                  (different absolute path stays)
-```
-Passing the session's worktree_path as the base makes the normalization robust even when the backend's process.cwd() is on a different drive from the session worktree.
-The Git-Bash conversion must still happen before path.resolve — otherwise path.resolve(worktree, '/c/Users/...') would produce C:\c\Users\... (literal \c\ segment, wrong).
+T16 Secrets hardening called for:
+- sk-ant-[A-Za-z0-9_-]+ (Anthropic) — ✅ shipped
+- ntn_[A-Za-z0-9_-]+ (Notion external integrations) — ✅ shipped
+- secret_[A-Za-z0-9_-]+ (Notion internal integrations) — ✅ shipped
+- gh[poursi]_[A-Za-z0-9_-]+ (GitHub PATs: ghp_, gho_, ghu_, ghr_, ghs_, ghi_) — ⚠️ only ghp_ shipped
+- xox[bpars]-[A-Za-z0-9-]+ (Slack — future-proof) — ❌ not shipped
+- Bearer-token context rule: after literal Authorization: Bearer  (case-insensitive), scrub the next whitespace-delimited token regardless of shape — ❌ not shipped
+### Verified gaps during the M6 gate sweep (2026-05-27)
+Inline tests against the live regex:
+- Bearer gho_abcdefghijklmnopqrst → NOT redacted (should be)
+- Bearer ghu_abcdefghijklmnopqrst → NOT redacted (should be)
+- ghp_* works as expected
 ### What changes
-packages/backend/src/session/SessionAuditor.ts:372-379 — update normalizePath to take an optional baseDir and resolve against it:
-```typescript
-function normalizePath(p: string, baseDir?: string): string {
-  // Git-Bash /c/foo → C:\foo. Must precede path.resolve, which would otherwise
-  // mangle the single-letter drive segment.
-  const gitBashMatch = /^\/([a-zA-Z])\//i.exec(p);
-  if (gitBashMatch) {
-    p = `${gitBashMatch[1].toUpperCase()}:\\${p.slice(3)}`;
-  }
-  return baseDir ? path.resolve(baseDir, p) : path.normalize(p);
-}
-```
-SessionAuditor.ts:175,185 — pass worktreePath to both normalizePath calls in auditWorktreeEscape:
-```typescript
-const normalizedWorktree = normalizePath(worktreePath);  // unchanged — baseDir not needed here
-// ...
-const resolved = normalizePath(p, worktreePath);          // new — supply the base
-```
-The worktree path is itself canonical (absolute, drive-prefixed), so passing or omitting baseDir for the first call is equivalent.
+1. Extend the pattern alternation in scrubSecrets.ts:6:
+1. Add Bearer-token context rule as a separate pre-step. The token shape is unknown; the context Authorization: Bearer  is what signals secrecy. Run this before the prefix-pattern replace so a Bearer-wrapped opaque token is redacted regardless of shape.
+1. Expand tests in scrubSecrets.test.ts to cover the new patterns.
+Order matters: Bearer first, then prefix patterns. A Bearer-wrapped prefixed token (e.g. Authorization: Bearer ghp_xxx) is redacted by the Bearer rule first; any plain-text mention of the same token elsewhere is still caught by the prefix rule.
 ### Out of scope
-- The session's own routed feedback now correctly excludes these false positives, but past session_audits rows are not retroactively cleaned (purely informational).
-- The extractAbsolutePathsFromCommand Bash regexes (SessionAuditor.ts:355-365) are unchanged — they already capture C:\foo, C:/foo, and /c/foo correctly; the bug is purely in normalization.
+- Generic high-entropy detection — explicitly rejected in T16 design due to false positives on structured data (UUIDs, hashes, base64 chunks, etc.).
+- AWS keys (AKIA[0-9A-Z]{16}) — referenced in some test fixtures but not in T16 spec; can be added later if needed.
+- Rewriting historical session_events rows — forward-only; the M6 gate sweep already identified and deleted the one real historical leak (session_events.id = 24263).
 ## Acceptance criteria
 ### 🤖 Automated tests
-- Unit test: Edit tool with file_path = '/Users/phadek/IdeaProjects/X/.claude/worktrees/<id>/file.ts' and worktree 'C:\\Users\\phadek\\IdeaProjects\\X\\.claude\\worktrees\\<id>' produces no violation
-- Unit test: Edit tool with file_path = '/Users/phadek/Documents/elsewhere.txt' and the same worktree produces a violation (the path really is outside the worktree)
-- Unit test: Write tool with Git-Bash file_path = '/c/Users/phadek/IdeaProjects/X/.claude/worktrees/<id>/file.ts' continues to pass (no regression on the existing Git-Bash case)
-- Unit test: Bash command containing C:\\Users\\phadek\\IdeaProjects\\X\\.claude\\worktrees\\<id>\\file.ts continues to pass (no regression on Windows-native case)
-- Unit test: Bash command containing an absolute path outside the worktree still produces a violation
-- Unit test: relative file_path (e.g. 'packages/backend/src/db/types.ts') is resolved against the worktree base and produces no violation when the resolved path is inside the worktree
 - tsc --noEmit passes for both packages
-- Existing SessionAuditor.test.ts cases continue to pass
+- All six GitHub variants redact: scrubSecrets('token=ghp_abcdefghijklmnopqrst'), 'gho_...', 'ghu_...', 'ghr_...', 'ghs_...', 'ghi_...' each return 'token=[REDACTED]'
+- All five Slack variants redact: 'xoxb-...', 'xoxp-...', 'xoxa-...', 'xoxr-...', 'xoxs-...'
+- Bearer context rule: scrubSecrets('Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abc.def') returns 'Authorization: Bearer [REDACTED]'
+- Bearer context rule case-insensitive: 'authorization: bearer xyz123abc' redacts
+- Bearer context rule has no length minimum: 'Authorization: Bearer short' redacts to 'Authorization: Bearer [REDACTED]'
+- Bearer + prefixed combo: 'Authorization: Bearer ghp_abcdefghijklmnopqrst' redacts to 'Authorization: Bearer [REDACTED]' (single redaction, not double)
+- Existing tests (sk-ant, ntn_, secret_, ghp_, plain text, short partials) continue to pass
+- New tests for nested object scrubbing call both rules
 ## Files / paths affected
-- packages/backend/src/session/SessionAuditor.ts (update — normalizePath signature + the two callers in auditWorktreeEscape)
-- packages/backend/src/session/SessionAuditor.test.ts (update — add the cases above)
+- packages/backend/src/security/scrubSecrets.ts (update — extend SECRET_PATTERN, add BEARER_PATTERN)
+- packages/backend/src/security/scrubSecrets.test.ts (update — add the cases above)
 ## Implementation notes
 > To be filled in during/after implementation.
 
@@ -265,489 +234,117 @@ The worktree path is itself canonical (absolute, drive-prefixed), so passing or 
 > These are the current contents of files listed in the task spec.
 > They were pre-read by the orchestrator so you can skip exploration.
 
-### `packages/backend/src/session/SessionAuditor.ts`
+### `packages/backend/src/security/scrubSecrets.ts`
 ```
-import path from 'path';
-import { getTaskBackend } from '../tasks/TaskBackend';
-import type { TaskBackend } from '../tasks/TaskBackend';
-import { parseSection } from '../notion/NotionClient';
-import type { GitHubClient } from '../github/GitHubClient';
-import { getPRByNotionTaskId, getEventsBySession } from '../db/queries';
-import type { WorktreeEscapeViolation, SessionEvent } from '../db/types';
+/**
+ * Secret patterns to redact. Pattern-only matching — no entropy heuristic.
+ * Patterns: sk-ant-* (Anthropic), ghp_* (GitHub PAT), secret_* (generic), ntn_* (Notion).
+ */
+const SECRET_PATTERN =
+  /\b(sk-ant-[A-Za-z0-9_-]{10,}|ghp_[A-Za-z0-9]{10,}|secret_[A-Za-z0-9_-]{10,}|ntn_[A-Za-z0-9_-]{10,})\b/g;
 
-// ── Public interfaces ────────────────────────────────────────────────────────
+const REDACTED = '[REDACTED]';
 
-export interface SessionAudit {
-  sessionId: string;
-  prOpened: boolean;
-  prTargetsBranch: string | null;
-  taskStatusAfter: string | null;
-  violations: (string | WorktreeEscapeViolation)[];
-  specMismatch: string | null;
-  auditedAt: string;
-}
-
-/** Minimal interface used to route audit failures back to a live session. */
-export interface ISessionManager {
-  send(sessionId: string, message: string): void;
-}
-
-/** Minimal session shape needed by the auditor — avoids a circular import. */
-export interface AuditableSession {
-  sessionId: string;
-  taskId: string;
-  prUrl: string | undefined;
-  sessionType: string;
-  worktreePath: string | null;
-}
-
-// ── SessionAuditor ───────────────────────────────────────────────────────────
-
-export class SessionAuditor {
-  /**
-   * The first parameter accepts either a TaskBackend (legacy injection — used by
-   * tests) or a project id (string). When it is a project id, the backend is
-   * resolved per-call via `getTaskBackend(projectId)`. This dual shape preserves
-   * the test pattern that pre-existed the per-project routing refactor.
-   */
-  constructor(
-    private notionClientOrProjectId: TaskBackend | string,
-    private githubClient?: GitHubClient,
-    private sessionManager?: ISessionManager,
-  ) {}
-
-  private resolveBackend(): TaskBackend {
-    if (typeof this.notionClientOrProjectId === 'string') {
-      return getTaskBackend(this.notionClientOrProjectId);
-    }
-    return this.notionClientOrProjectId;
+/**
+ * Recursively traverse any JSON-serializable value and return a copy with
+ * known secret patterns replaced. Primitives other than strings are returned
+ * as-is. Cycles are not handled — callers must not pass circular references.
+ */
+export function scrubSecrets<T>(value: T): T {
+  if (typeof value === 'string') {
+    return value.replace(SECRET_PATTERN, REDACTED) as T;
   }
-
-  /**
-   * Run all post-session checks and return a SessionAudit record.
-   * Non-blocking: GitHub/Notion failures are caught and skipped, not thrown.
-   */
-  async audit(
-    session: AuditableSession,
-    exitCode: number | null,
-  ): Promise<SessionAudit> {
-    const violations: (string | WorktreeEscapeViolation)[] = [];
-    let prTargetsBranch: string | null = null;
-    let specMismatch: string | null = null;
-
-    // 1. PR opened on clean exit?
-    const prOpened =
-      session.prUrl != null ||
-      (!!session.taskId && getPRByNotionTaskId(session.taskId) != null);
-    if (exitCode === 0 && !prOpened) {
-      violations.push('Clean exit but no PR opened');
+  if (Array.isArray(value)) {
+    return value.map(scrubSecrets) as unknown as T;
+  }
+  if (value !== null && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      result[k] = scrubSecrets(v);
     }
+    return result as T;
+  }
+  return value;
+}
 
-    if (session.prUrl && this.githubClient) {
-      const prMatch = session.prUrl.match(
-        /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/,
-      );
-      if (prMatch) {
-        const repo = prMatch[1];
-        const prNumber = parseInt(prMatch[2], 10);
+```
 
-        let pr: import('../github/types').PullRequest | null = null;
-        try {
-          pr = await this.githubClient.fetchPR(repo, prNumber);
-        } catch (err) {
-          console.warn(
-            `[SessionAuditor] GitHub fetchPR failed — skipping PR checks: ${err}`,
-          );
-        }
+### `packages/backend/src/security/scrubSecrets.test.ts`
+```
+import { describe, it, expect } from 'vitest';
+import { scrubSecrets } from './scrubSecrets';
 
-        if (pr) {
-          // 2. PR targets correct branch (dev)?
-          prTargetsBranch = pr.baseBranch;
-          if (pr.baseBranch !== 'dev') {
-            violations.push(`PR targets ${pr.baseBranch} instead of dev`);
-          }
+describe('scrubSecrets', () => {
+  it('redacts sk-ant-* pattern in a flat string', () => {
+    expect(scrubSecrets('key is sk-ant-api03-abc1234567890xyz')).toBe(
+      'key is [REDACTED]',
+    );
+  });
 
-          // 3. PR title format: must start with "feat: "
-          if (!pr.title.startsWith('feat: ')) {
-            violations.push('PR title does not match format');
-          }
+  it('redacts ghp_* pattern in a flat string', () => {
+    expect(scrubSecrets('token ghp_abcdefghijklmnopqrst')).toBe(
+      'token [REDACTED]',
+    );
+  });
 
-          // 4. PR body readable (no escaped newlines)?
-          if (pr.body && pr.body.includes('\\n')) {
-            violations.push('PR body contains escaped newlines');
-          }
+  it('redacts ntn_* pattern in a flat string', () => {
+    expect(scrubSecrets('notion ntn_abcdefghijklmnopqrst')).toBe(
+      'notion [REDACTED]',
+    );
+  });
 
-          // 5. PR body has required sections?
-          const body = pr.body ?? '';
-          if (!body.includes('## Summary')) {
-            violations.push('PR body missing required section: ## Summary');
-          }
-          if (
-            !body.includes('## Test plan') &&
-            !body.includes('## Automated Tests')
-          ) {
-            violations.push('PR body missing required section: ## Test plan');
-          }
+  it('redacts secret_* pattern in a flat string', () => {
+    expect(scrubSecrets('value secret_abcdefghijklmnopqrst')).toBe(
+      'value [REDACTED]',
+    );
+  });
 
-          // 6. PR content matches task spec?
-          specMismatch = await this.compareToSpec(
-            repo,
-            prNumber,
-            session.taskId,
-          );
-          if (specMismatch) {
-            violations.push(specMismatch);
-          }
-        }
-      }
-    }
-
-    if (session.worktreePath) {
-      try {
-        const escapes = await this.auditWorktreeEscape(
-          session.sessionId,
-          session.worktreePath,
-        );
-        violations.push(...escapes);
-      } catch (err) {
-        console.warn(`[SessionAuditor] auditWorktreeEscape failed: ${err}`);
-      }
-    }
-
-    const audit: SessionAudit = {
-      sessionId: session.sessionId,
-      prOpened,
-      prTargetsBranch,
-      taskStatusAfter: null,
-      violations,
-      specMismatch,
-      auditedAt: new Date().toISOString(),
+  it('redacts secrets at any depth in a nested object', () => {
+    const input = {
+      level1: {
+        key: 'sk-ant-api03-supersecretkey01234',
+        level2: {
+          arr: ['ghp_sometoken1234567890', 'safe-value'],
+          nested: { token: 'ntn_notiontoken1234567890' },
+        },
+      },
     };
-
-    if (violations.length > 0) {
-      this.routeFailuresToSession(session.sessionId, violations);
-    }
-
-    return audit;
-  }
-
-  /**
-   * Scan session_events for tool calls that wrote to paths outside the worktree.
-   * Checks Write/Edit tool file_path inputs and Bash command absolute paths.
-   */
-  async auditWorktreeEscape(
-    sessionId: string,
-    worktreePath: string,
-  ): Promise<WorktreeEscapeViolation[]> {
-    const events = getEventsBySession(sessionId);
-    const violations: WorktreeEscapeViolation[] = [];
-    const normalizedWorktree = normalizePath(worktreePath);
-    const worktreePrefix = normalizedWorktree.endsWith(path.sep)
-      ? normalizedWorktree
-      : normalizedWorktree + path.sep;
-
-    for (const event of events) {
-      const blocks = extractToolUseBlocks(event);
-      for (const block of blocks) {
-        const paths = extractPathsFromBlock(block);
-        for (const p of paths) {
-          const resolved = normalizePath(p);
-          if (
-            resolved !== normalizedWorktree &&
-            !resolved.startsWith(worktreePrefix)
-          ) {
-            violations.push({
-              type: 'worktree_escape',
-              tool: block.name,
-              path: p,
-              escapedTo: resolved,
-            });
-          }
-        }
-      }
-    }
-
-    return violations;
-  }
-
-  /**
-   * Compare the files changed in a PR against the "Files / paths affected"
-   * section of the Notion task spec. Returns a summary string if there is a
-   * mismatch, or null if everything looks consistent (or if the check cannot
-   * be performed).
-   */
-  private async compareToSpec(
-    repo: string,
-    prNumber: number,
-    taskId: string,
-  ): Promise<string | null> {
-    if (!this.githubClient || !taskId) return null;
-
-    let diffFiles: string[] = [];
-    try {
-      const prDiff = await this.githubClient.fetchDiff(prNumber, repo);
-      diffFiles = prDiff.filesChanged;
-    } catch (err) {
-      console.warn(
-        `[SessionAuditor] fetchDiff failed — skipping spec comparison: ${err}`,
-      );
-      return null;
-    }
-
-    let taskMarkdown: string | null;
-    try {
-      taskMarkdown = await this.resolveBackend().fetchTaskPage(taskId);
-    } catch (err) {
-      console.warn(
-        `[SessionAuditor] fetchTaskPage failed — skipping spec comparison: ${err}`,
-      );
-      return null;
-    }
-
-    const filesSection = taskMarkdown
-      ? parseSection(taskMarkdown, 'files')
-      : '';
-    if (!filesSection.trim()) return null;
-
-    // Extract file paths from the filesSection (lines containing slashes or dots)
-    const specFiles = filesSection
-      .split('\n')
-      .map((line) => line.replace(/^[-*\s]+/, '').trim())
-      .filter((line) => line.includes('/') || line.includes('.'));
-
-    if (specFiles.length === 0) return null;
-
-    // Files in PR but not in spec
-    const unexpected = diffFiles.filter(
-      (f) => !specFiles.some((s) => f.includ
-[... truncated]
-```
-
-### `packages/backend/src/session/SessionAuditor.test.ts`
-```
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import fs from 'fs';
-import path from 'path';
-import { SessionAuditor } from './SessionAuditor';
-import type { AuditableSession, ISessionManager } from './SessionAuditor';
-import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
-import type { GitHubClient } from '../github/GitHubClient';
-import type { PullRequest } from '../github/types';
-import type { WorktreeEscapeViolation } from '../db/types';
-
-vi.mock('../db/queries', () => ({
-  getPRByNotionTaskId: vi.fn(() => null),
-  getEventsBySession: vi.fn(() => []),
-}));
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function makeSession(
-  overrides: Partial<AuditableSession> = {},
-): AuditableSession {
-  return {
-    sessionId: 'test-session-id',
-    taskId: 'task-abc123',
-    prUrl: 'https://github.com/owner/repo/pull/42',
-    sessionType: 'standard',
-    worktreePath: null,
-    ...overrides,
-  };
-}
-
-function makeToolUseEvent(toolName: string, input: Record<string, unknown>) {
-  return {
-    id: 1,
-    session_id: 'test-session-id',
-    event_type: 'tool_use' as const,
-    payload: JSON.stringify({ name: toolName, input }),
-    timestamp: Date.now(),
-    message_id: null,
-  };
-}
-
-function makeNotionClient(filesSection = ''): TaskTrackerBackend {
-  const body = [
-    '# Add post-session audit hook',
-    '## Summary\nSummary text',
-    '## Context\nContext text',
-    '## Acceptance Criteria\nAC text',
-    filesSection ? `## Files\n${filesSection}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n\n');
-  return {
-    type: 'notion' as const,
-    fetchTaskPage: vi.fn(async () => body),
-    fetchReadyTasks: vi.fn(async () => []),
-    updateStatus: vi.fn(async () => {}),
-    attachPR: vi.fn(async () => {}),
-  } as unknown as TaskTrackerBackend;
-}
-
-function makeGitHubClient(
-  prOverrides: Partial<PullRequest> = {},
-): GitHubClient {
-  const defaultPR: PullRequest = {
-    id: 42,
-    title: 'feat: add audit hook',
-    body: '## Summary\nDid things.\n\n## Test plan\n- tested',
-    url: 'https://github.com/owner/repo/pull/42',
-    apiUrl: 'https://api.github.com/repos/owner/repo/pulls/42',
-    headBranch: 'feature/audit',
-    baseBranch: 'dev',
-    state: 'open',
-    createdAt: '2026-04-01T00:00:00Z',
-    updatedAt: '2026-04-01T00:00:00Z',
-    mergeableState: 'clean',
-    draft: false,
-  };
-  return {
-    fetchPR: vi.fn(async () => ({ ...defaultPR, ...prOverrides })),
-    fetchDiff: vi.fn(async () => ({
-      prId: 42,
-      diff: '',
-      filesChanged: ['packages/backend/src/session/SessionAuditor.ts'],
-    })),
-  } as unknown as GitHubClient;
-}
-
-function makeSessionManager(): ISessionManager {
-  return { send: vi.fn() };
-}
-
-// ── Import mocked module for DB fallback / event tests ───────────────────────
-import * as queries from '../db/queries';
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
-describe('SessionAuditor', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(queries.getPRByNotionTaskId).mockReturnValue(null);
-  });
-
-  // ── AC: Clean exit without PR ─────────────────────────────────────────────
-  it('returns "Clean exit but no PR opened" when exitCode is 0 and prUrl is null', async () => {
-    const auditor = new SessionAuditor(
-      makeNotionClient(),
-      undefined,
-      undefined,
+    const result = scrubSecrets(input);
+    expect((result.level1 as { key: string }).key).toBe('[REDACTED]');
+    expect((result.level1.level2 as { arr: string[] }).arr[0]).toBe(
+      '[REDACTED]',
     );
-    const session = makeSession({ prUrl: undefined });
-    const audit = await auditor.audit(session, 0);
-
-    expect(audit.prOpened).toBe(false);
-    expect(audit.violations).toContain('Clean exit but no PR opened');
-  });
-
-  it('does NOT flag "Clean exit but no PR opened" when exitCode is non-zero', async () => {
-    const auditor = new SessionAuditor(
-      makeNotionClient(),
-      undefined,
-      undefined,
+    expect((result.level1.level2 as { arr: string[] }).arr[1]).toBe(
+      'safe-value',
     );
-    const session = makeSession({ prUrl: undefined });
-    const audit = await auditor.audit(session, 1);
-
-    expect(audit.violations).not.toContain('Clean exit but no PR opened');
-  });
-
-  // ── AC: PR targets wrong branch ───────────────────────────────────────────
-  it('returns "PR targets main instead of dev" when baseBranch is main', async () => {
-    const github = makeGitHubClient({ baseBranch: 'main' });
-    const auditor = new SessionAuditor(makeNotionClient(), github, undefined);
-    const session = makeSession();
-    const audit = await auditor.audit(session, 0);
-
-    expect(audit.prTargetsBranch).toBe('main');
-    expect(audit.violations).toContain('PR targets main instead of dev');
-  });
-
-  it('does NOT flag branch violation when baseBranch is dev', async () => {
-    const github = makeGitHubClient({ baseBranch: 'dev' });
-    const auditor = new SessionAuditor(makeNotionClient(), github, undefined);
-    const session = makeSession();
-    const audit = await auditor.audit(session, 0);
-
-    expect(audit.violations).not.toContain('PR targets dev instead of dev');
-    const branchViolation = audit.violations.find((v) =>
-      v.startsWith('PR targets'),
+    expect((result.level1.level2.nested as { token: string }).token).toBe(
+      '[REDACTED]',
     );
-    expect(branchViolation).toBeUndefined();
   });
 
-  // ── AC: Spec mismatch — files in diff not in spec ────────────────────────
-  it('flags files in the diff that are not listed in the task spec', async () => {
-    const notion = makeNotionClient(
-      'packages/backend/src/session/SessionAuditor.ts',
-    );
-    const github = makeGitHubClient();
-    vi.mocked(github.fetchDiff).mockResolvedValue({
-      prId: 42,
-      diff: '',
-      filesChanged: [
-        'packages/backend/src/session/SessionAuditor.ts',
-        'packages/frontend/src/SomeUnexpected.tsx',
-      ],
-    });
-
-    const auditor = new SessionAuditor(notion, github, undefined);
-    const session = makeSession();
-    const audit = await auditor.audit(session, 0);
-
-    const unexpectedViolation = audit.violations.find((v) =>
-      v.includes('PR modifies files not listed in task spec'),
-    );
-    expect(unexpectedViolation).toBeDefined();
-    expect(unexpectedViolation).toContain('SomeUnexpected.tsx');
+  it('leaves non-secret strings unchanged', () => {
+    expect(scrubSecrets('hello world')).toBe('hello world');
+    expect(scrubSecrets('sk-ant-short')).toBe('sk-ant-short'); // too short
   });
 
-  // ── AC: routeFailuresToSession sends violations as follow-up message ─────
-  it('routeFailuresToSession sends violations as a follow-up message to the session', async () => {
-    const github = makeGitHubClient({ baseBranch: 'main' }); // will produce a violation
-    const sm = makeSessionManager();
-    const auditor = new SessionAuditor(makeNotionClient(), github, sm);
-    const session = makeSession();
-    await auditor.audit(session, 0);
-
-    expect(sm.send).toHaveBeenCalledOnce();
-    const [calledSessionId, message] = vi.mocked(sm.send).mock.calls[0];
-    expect(calledSessionId).toBe('test-session-id');
-    expect(message).toContain('❌');
-    expect(message).toContain('Audit findings for your PR:');
+  it('passes through numbers, booleans, and null unchanged', () => {
+    expect(scrubSecrets(42)).toBe(42);
+    expect(scrubSecrets(true)).toBe(true);
+    expect(scrubSecrets(null)).toBe(null);
   });
 
-  it('does NOT call send when there are no violations', async () => {
-    const github = makeGitHubClient(); // baseBranch: dev, good title, good body
-    const sm = makeSessionManager();
-    // No files section — spec comparison returns null
-    const auditor = new SessionAuditor(makeNotionClient(''), github, sm);
-    const session = makeSession();
-    await auditor.audit(session, 0);
-
-    expect(sm.send).not.toHaveBeenCalled();
+  it('does not mutate the input object', () => {
+    const input = { secret: 'sk-ant-api03-mutationcheck1234' };
+    scrubSecrets(input);
+    expect(input.secret).toBe('sk-ant-api03-mutationcheck1234');
   });
 
-  // ── AC: routeFailuresToSession does not throw if session has exited ───────
-  it('routeFailuresToSession does not throw when send() throws', async () => {
-    const github = makeGitHubClient({ baseBranch: 'main' }); // produces a violation
-    const sm = makeSessionManager();
-    vi.mocked(sm.send).mockImplementation(() => {
-      throw new Error('Session exited');
-    });
-
-    const auditor = new SessionAuditor(makeNotionClient(), github, sm);
-    const session = makeSession();
-    // Should not throw
-    await expect(auditor.audit(session, 0)).resolves.toBeDefined();
+  it('redacts multiple secrets in a single string', () => {
+    const s = 'a=sk-ant-api03-first1234567890 b=ghp_second1234567890';
+    expect(scrubSecrets(s)).toBe('a=[REDACTED] b=[REDACTED]');
   });
+});
 
-  // ── AC: Audit skips review sessions ──────────────────────────────────────
-  // (This is enforced in AgentSession, but the auditor itself has no restriction.
-  //  We verify the AgentSession-level guard by testing that review sessions are
-  //  explicitly excluded in the in
-[... truncated]
 ```
 
 ---
