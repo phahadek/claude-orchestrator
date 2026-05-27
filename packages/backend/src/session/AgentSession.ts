@@ -1,4 +1,6 @@
 import { EventEmitter } from 'events';
+import fs from 'fs';
+import path from 'path';
 import { ALLOWED_TOOLS, runtimeSettings } from '../config';
 import {
   upsertSessionEvent,
@@ -31,6 +33,8 @@ import {
   validatePRBody,
   buildValidationComment,
 } from '../github/PRBodyValidator';
+import { validatePRFiles } from '../github/PRFileValidator';
+import { revertBannedFiles } from '../github/PRFileReverter';
 import { checkCommitAttribution } from '../github/CommitAttributionWatcher';
 import { recordEvent } from '../audit/AuditLog';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
@@ -45,6 +49,40 @@ import {
 } from './eventTypes';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
+
+/** Walk a directory tree collecting all .gitignore files, root-first. */
+function collectGitignoreSources(
+  rootDir: string,
+): Array<{ dir: string; content: string }> {
+  const results: Array<{ dir: string; content: string }> = [];
+  function walk(dir: string): void {
+    const rel = path.relative(rootDir, dir).replace(/\\/g, '/');
+    const gitignorePath = path.join(dir, '.gitignore');
+    if (fs.existsSync(gitignorePath)) {
+      try {
+        results.push({
+          dir: rel,
+          content: fs.readFileSync(gitignorePath, 'utf8'),
+        });
+      } catch {
+        // ignore unreadable
+      }
+    }
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.isDirectory() && e.name !== 'node_modules' && e.name !== '.git') {
+        walk(path.join(dir, e.name));
+      }
+    }
+  }
+  walk(rootDir);
+  return results;
+}
 
 /**
  * Returns true if the tool call represents a git push operation.
@@ -458,17 +496,17 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         const content = event.content as
           | Array<Record<string, unknown>>
           | undefined;
-        this.handlePRCreatedFromContent(content ?? []);
+        void this.handlePRCreatedFromContent(content ?? []);
       }
       if (toolUseId && this.pendingPushFileToolUseIds.has(toolUseId)) {
         this.pendingPushFileToolUseIds.delete(toolUseId);
-        this.handlePushDetected();
+        void this.handlePushDetected();
       }
       if (toolUseId && this.pendingBashCommands.has(toolUseId)) {
         const cmd = this.pendingBashCommands.get(toolUseId)!;
         this.pendingBashCommands.delete(toolUseId);
         if (isPushCommand('Bash', cmd)) {
-          this.handlePushDetected();
+          void this.handlePushDetected();
         }
       }
     }
@@ -488,7 +526,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               const innerContent = block.content as
                 | Array<Record<string, unknown>>
                 | undefined;
-              this.handlePRCreatedFromContent(innerContent ?? []);
+              void this.handlePRCreatedFromContent(innerContent ?? []);
             }
           }
         }
@@ -504,7 +542,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           this.sessionId,
           `turn complete — PR #${pr.pr_number} has review session, signalling push_detected`,
         );
-        this.handlePushDetected();
+        void this.handlePushDetected();
       }
 
       const denials = event.permission_denials as
@@ -634,9 +672,9 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
    * Parse PR data from the content blocks of a mcp__github__create_pull_request tool_result,
    * upsert the PR to SQLite with full metadata, and broadcast pr_created.
    */
-  private handlePRCreatedFromContent(
+  private async handlePRCreatedFromContent(
     contentBlocks: Array<Record<string, unknown>>,
-  ): void {
+  ): Promise<void> {
     if (this.prDetectedLive) return;
 
     // Extract text from content blocks
@@ -763,6 +801,16 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         }
       }
 
+      // File pollution check + auto-revert runs inline so AutoMerger never
+      // sees a contaminated diff (must complete before pr_created WS broadcast).
+      if (this.githubClient) {
+        await this.runFilePollutionCheck(
+          repo,
+          prNumber,
+          prShape.base?.ref ?? 'dev',
+        );
+      }
+
       // Apply ai-authored label server-side after PR creation.
       if (this.githubClient) {
         const ghClient = this.githubClient;
@@ -806,7 +854,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
    * if a PR row exists for this session, also broadcast the WS push_detected message
    * with prNumber and repo included.
    */
-  private handlePushDetected(): void {
+  private async handlePushDetected(): Promise<void> {
     this.emit('push_detected', { sessionId: this.sessionId });
     const pr = getPRBySessionId(this.sessionId);
     if (pr) {
@@ -816,6 +864,15 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         prNumber: pr.pr_number,
         repo: pr.repo,
       });
+
+      // File pollution check + auto-revert runs inline on every push.
+      if (this.githubClient) {
+        await this.runFilePollutionCheck(
+          pr.repo,
+          pr.pr_number,
+          pr.base_branch ?? 'dev',
+        );
+      }
 
       // Fire-and-forget: verify commit attribution trailers.
       if (this.githubClient) {
@@ -832,6 +889,54 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           console.warn(`[AgentSession] checkCommitAttribution failed: ${e}`),
         );
       }
+    }
+  }
+
+  /** Fetch the PR's changed files, validate for banned/gitignored paths, and revert if needed. */
+  private async runFilePollutionCheck(
+    repo: string,
+    prNumber: number,
+    baseBranch: string,
+  ): Promise<void> {
+    if (!this.githubClient) return;
+    const ghClient = this.githubClient;
+    try {
+      const changedFiles = await ghClient.getPRFiles(repo, prNumber);
+      const gitignoreSources = collectGitignoreSources(this.worktreePath);
+      const validation = validatePRFiles(changedFiles, gitignoreSources);
+      if (validation.valid) return;
+
+      const { commitSha, reverted } = await revertBannedFiles({
+        worktreePath: this.worktreePath,
+        baseBranch,
+        bannedFiles: validation.bannedFiles,
+        prNumber,
+        repo,
+      });
+
+      if (commitSha === null || reverted.length === 0) return;
+
+      recordEvent({
+        event_type: 'file_pollution_reverted',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: this.projectId || null,
+        task_id: this.taskId || null,
+        payload: {
+          files: reverted,
+          pr_number: prNumber,
+          commit_sha: commitSha,
+        },
+      });
+
+      const comment = `🤖 Orchestrator auto-reverted banned files: ${reverted.map((f) => `\`${f}\``).join(', ')} (commit ${commitSha.slice(0, 7)})`;
+      await ghClient
+        .createIssueComment(repo, prNumber, comment)
+        .catch((e) =>
+          console.warn(`[AgentSession] revert comment failed: ${e}`),
+        );
+    } catch (e) {
+      console.warn(`[AgentSession] runFilePollutionCheck failed: ${e}`);
     }
   }
 

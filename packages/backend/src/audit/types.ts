@@ -8,7 +8,8 @@ export type EventType =
   | 'pr_body_invalid_warning'
   | 'attribution_missing'
   | 'session_launch_refused_zdr'
-  | 'data_residency_flag_toggled';
+  | 'data_residency_flag_toggled'
+  | 'file_pollution_reverted';
 
 export type ActorType = 'ai' | 'human' | 'system';
 
