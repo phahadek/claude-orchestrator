@@ -21,6 +21,10 @@ vi.mock('../session/autofix-runner.js', () => ({
   runAutofix: vi.fn().mockResolvedValue({ success: true, summary: 'no diff' }),
 }));
 
+vi.mock('../audit/AuditLog.js', () => ({
+  recordEvent: vi.fn(),
+}));
+
 const projectFixture = {
   id: 'proj-1',
   name: 'Project 1',
@@ -78,6 +82,7 @@ import {
   setLocalBranchPauseReason,
 } from '../db/queries';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
+import { recordEvent } from '../audit/AuditLog';
 import { runVerifyAsGate } from '../orchestration/verifyRunner';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import type { PRReviewService } from './PRReviewService';
@@ -1438,5 +1443,194 @@ describe('ReviewOrchestrator — verify-as-gate: verify runs AFTER autofix (orde
       '/repos/local/worktree-42',
       expect.any(Array),
     );
+  });
+});
+
+// ── verify-gate autofix-first path ───────────────────────────────────────────
+
+describe('ReviewOrchestrator — verify-gate autofix-first', () => {
+  const autofixVerifyLocalBranchRow = {
+    id: 20,
+    project_id: 'proj-local',
+    session_id: 'coding-session-local',
+    branch_name: 'feature/my-task',
+    base_branch: 'dev',
+    status: 'open',
+    review_result: null,
+    pause_reason: null,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  };
+
+  const autofixVerifySessionRow = {
+    session_id: 'coding-session-local',
+    task_id: 'yaml:task-local',
+    task_url: null,
+    project_context_url: null,
+    project_id: 'proj-local',
+    status: 'done',
+    started_at: 1000,
+    ended_at: null,
+    pr_url: null,
+    worktree_path: '/repos/local/worktree',
+    archived: 0,
+    favorited: 0,
+    session_type: 'standard',
+    note: null,
+    tags: null,
+    total_input_tokens: 0,
+    total_output_tokens: 0,
+    task_name: null,
+    metadata: null,
+    review_result: null,
+  };
+
+  function emitLocalBranch(sm: ReturnType<typeof makeMockSessionManager>) {
+    sm.emit('message', {
+      type: 'local_branch_submitted',
+      projectId: 'proj-local',
+      sessionId: 'coding-session-local',
+      branchName: 'feature/my-task',
+      baseBranch: 'dev',
+    });
+  }
+
+  it('proceeds to AI review when autofix produces a commit and re-verify passes', async () => {
+    vi.mocked(getSession).mockReturnValue(autofixVerifySessionRow as any);
+    vi.mocked(getLocalBranchBySession).mockReturnValue(
+      autofixVerifyLocalBranchRow as any,
+    );
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      verify: ['npm run lint'],
+      autofix: ['npm run format:write'],
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run format:write']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      commitSha: 'fix-sha-1',
+      summary: 'formatted',
+    });
+    // First call: verify fails; second call (after autofix): passes
+    vi.mocked(runVerifyAsGate)
+      .mockResolvedValueOnce({
+        passed: false,
+        failedCommand: 'npm run lint',
+        truncatedOutput: 'lint error',
+      })
+      .mockResolvedValueOnce({ passed: true });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    emitLocalBranch(sm);
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Must NOT send CI failure feedback
+    expect(vi.mocked(sm.send)).not.toHaveBeenCalled();
+    expect(vi.mocked(setLocalBranchPauseReason)).not.toHaveBeenCalled();
+    // Must proceed to review
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+    // Must write audit entry
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'autofix_for_ci_failure',
+        actor_type: 'system',
+        payload: expect.objectContaining({
+          commit_sha: 'fix-sha-1',
+          source: 'verify',
+        }),
+      }),
+    );
+  });
+
+  it('sends original verify-failure feedback when autofix commits but re-verify still fails', async () => {
+    vi.mocked(getSession).mockReturnValue(autofixVerifySessionRow as any);
+    vi.mocked(getLocalBranchBySession).mockReturnValue(
+      autofixVerifyLocalBranchRow as any,
+    );
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      verify: ['npm run lint'],
+      autofix: ['npm run format:write'],
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run format:write']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      commitSha: 'fix-sha-2',
+      summary: 'formatted',
+    });
+    // Both verify calls fail
+    vi.mocked(runVerifyAsGate).mockResolvedValue({
+      passed: false,
+      failedCommand: 'npm run lint',
+      truncatedOutput: 'still failing',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    emitLocalBranch(sm);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setLocalBranchPauseReason)).toHaveBeenCalledWith(
+      20,
+      'ci_failing',
+    );
+    expect(vi.mocked(sm.send)).toHaveBeenCalledOnce();
+    const [sessionId, message] = vi.mocked(sm.send).mock.calls[0];
+    expect(sessionId).toBe('coding-session-local');
+    expect(message).toContain('npm run lint');
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it('sends original verify-failure feedback when autofix produces no diff', async () => {
+    vi.mocked(getSession).mockReturnValue(autofixVerifySessionRow as any);
+    vi.mocked(getLocalBranchBySession).mockReturnValue(
+      autofixVerifyLocalBranchRow as any,
+    );
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      verify: ['npm run lint'],
+      autofix: ['npm run format:write'],
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    });
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run format:write']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      summary: 'no diff',
+    });
+    vi.mocked(runVerifyAsGate).mockResolvedValue({
+      passed: false,
+      failedCommand: 'npm run lint',
+      truncatedOutput: 'lint error',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    emitLocalBranch(sm);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setLocalBranchPauseReason)).toHaveBeenCalledWith(
+      20,
+      'ci_failing',
+    );
+    expect(vi.mocked(sm.send)).toHaveBeenCalledOnce();
+    const [, message] = vi.mocked(sm.send).mock.calls[0];
+    expect(message).toContain('npm run lint');
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalled();
   });
 });
