@@ -2,10 +2,11 @@
  * Unit tests for the per-session revert lock mechanism on AgentSession.
  *
  * After PRFileReverter.revertBannedFiles() reverts a file, AgentSession records
- * it in _revertedFiles. Subsequent calls to injectContextFile() for that file
- * are suppressed and a file_pollution_re_injected_blocked audit event is emitted.
- * The lock is per-session instance (not persisted), so a new AgentSession for
- * the same worktree starts with an empty lock.
+ * it in _revertLock. The next call to injectContextFile() for that file is
+ * suppressed (consumed-on-consult) and a file_pollution_re_injected_blocked
+ * audit event is emitted. After the lock entry is consumed, subsequent injections
+ * are allowed again. The lock is per-session instance (not persisted), so a new
+ * AgentSession for the same worktree starts with an empty lock.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -110,6 +111,11 @@ function makeSession(worktreePath: string): AgentSession {
   );
 }
 
+/** Cast to access private _revertLock for test setup. */
+function revertLock(session: AgentSession): Set<string> {
+  return (session as unknown as { _revertLock: Set<string> })._revertLock;
+}
+
 describe('AgentSession.injectContextFile() — per-session revert lock', () => {
   let tmpDir = '';
 
@@ -131,16 +137,14 @@ describe('AgentSession.injectContextFile() — per-session revert lock', () => {
     expect(vi.mocked(recordEvent)).not.toHaveBeenCalled();
   });
 
-  it('blocks re-injection when the file is in revertedFiles', () => {
+  it('blocks re-injection when the file is in revertLock', () => {
     const session = makeSession(tmpDir);
 
     // Initial write succeeds
     session.injectContextFile('CLAUDE.md', 'initial content\n');
 
-    // Simulate runFilePollutionCheck adding CLAUDE.md to the reverted set
-    (session as unknown as { _revertedFiles: Set<string> })._revertedFiles.add(
-      'CLAUDE.md',
-    );
+    // Simulate runFilePollutionCheck adding CLAUDE.md to the revert lock
+    revertLock(session).add('CLAUDE.md');
     expect(session.revertedFiles.has('CLAUDE.md')).toBe(true);
 
     // Second injection attempt is blocked
@@ -156,9 +160,7 @@ describe('AgentSession.injectContextFile() — per-session revert lock', () => {
     const session = makeSession(tmpDir);
     session.injectContextFile('CLAUDE.md', 'initial\n');
 
-    (session as unknown as { _revertedFiles: Set<string> })._revertedFiles.add(
-      'CLAUDE.md',
-    );
+    revertLock(session).add('CLAUDE.md');
 
     session.injectContextFile('CLAUDE.md', 'blocked attempt\n');
 
@@ -170,11 +172,29 @@ describe('AgentSession.injectContextFile() — per-session revert lock', () => {
     );
   });
 
+  it('lock is consumed on consult — third injection succeeds after the block', () => {
+    const session = makeSession(tmpDir);
+
+    session.injectContextFile('CLAUDE.md', 'first\n');
+
+    // Add to lock — next injection will be blocked and the lock entry consumed
+    revertLock(session).add('CLAUDE.md');
+
+    // Blocked injection
+    session.injectContextFile('CLAUDE.md', 'blocked\n');
+    expect(fs.readFileSync(path.join(tmpDir, 'CLAUDE.md'), 'utf8')).toBe('first\n');
+
+    // Lock entry must have been consumed (deleted)
+    expect(session.revertedFiles.has('CLAUDE.md')).toBe(false);
+
+    // Third injection must succeed
+    session.injectContextFile('CLAUDE.md', 'third\n');
+    expect(fs.readFileSync(path.join(tmpDir, 'CLAUDE.md'), 'utf8')).toBe('third\n');
+  });
+
   it('lock is per-session — a new AgentSession for the same worktree starts with an empty lock', () => {
     const sessionA = makeSession(tmpDir);
-    (sessionA as unknown as { _revertedFiles: Set<string> })._revertedFiles.add(
-      'CLAUDE.md',
-    );
+    revertLock(sessionA).add('CLAUDE.md');
     expect(sessionA.revertedFiles.has('CLAUDE.md')).toBe(true);
 
     // Session A ends; a new session B picks up the same worktree
@@ -188,11 +208,9 @@ describe('AgentSession.injectContextFile() — per-session revert lock', () => {
     );
   });
 
-  it('revertedFiles is read-only from outside', () => {
+  it('revertedFiles getter exposes the lock as a ReadonlySet', () => {
     const session = makeSession(tmpDir);
     const set = session.revertedFiles;
-    // ReadonlySet does not expose add/delete — TypeScript enforces this at compile time,
-    // but we also verify at runtime that the getter returns the internal set correctly
     expect(set).toBeDefined();
     expect(typeof set.has).toBe('function');
     expect(set.size).toBe(0);

@@ -322,3 +322,91 @@ describe('runAutofix — fail open on non-zero exit', () => {
     expect(result.success).toBe(false);
   });
 });
+
+// ── runAutofix — syncedTo (fetch + reset after push) ─────────────────────────
+
+describe('runAutofix — syncedTo after fetch + reset', () => {
+  it('returns syncedTo as the HEAD SHA after fetch + hard reset succeeds', async () => {
+    // rev-parse is called multiple times: commitSha, --abbrev-ref (branch), syncedTo
+    let revParseCount = 0;
+
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
+      if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'fetch') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'reset') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'rev-parse') {
+        revParseCount++;
+        // First call: HEAD (commitSha); second: --abbrev-ref (branch name);
+        // third: HEAD again after reset (syncedTo)
+        if (a[1] === '--abbrev-ref') return makeProc(0, 'feature/test\n');
+        if (revParseCount === 1) return makeProc(0, 'commit-sha-12345678\n');
+        return makeProc(0, 'synced-sha-87654321\n');
+      }
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['echo hi'],
+      () => {},
+    );
+
+    expect(result.commitSha).toBe('commit-sha-12345678');
+    expect(result.syncedTo).toBe('synced-sha-87654321');
+    expect(result.success).toBe(true);
+  });
+
+  it('returns syncedTo: undefined when bannedFiles is empty (no commit)', async () => {
+    const result = await runAutofix('/worktree', '/project', [], () => {});
+    expect(result.syncedTo).toBeUndefined();
+  });
+
+  it('returns syncedTo: undefined when autofix produces no diff', async () => {
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, '');
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['echo hi'],
+      () => {},
+    );
+    expect(result.syncedTo).toBeUndefined();
+    expect(result.commitSha).toBeUndefined();
+  });
+
+  it('omits syncedTo when fetch fails (does not throw)', async () => {
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
+      if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'fetch') return makeProc(1, '', 'network error');
+      if (cmd === 'git' && a[0] === 'rev-parse') {
+        if (a[1] === '--abbrev-ref') return makeProc(0, 'feature/test\n');
+        return makeProc(0, 'sha-abc\n');
+      }
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['echo hi'],
+      () => {},
+    );
+
+    expect(result.commitSha).toBe('sha-abc');
+    // fetch failed so syncedTo must not be set
+    expect(result.syncedTo).toBeUndefined();
+  });
+});

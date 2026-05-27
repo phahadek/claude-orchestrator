@@ -16,11 +16,11 @@ export async function revertBannedFiles(opts: {
   bannedFiles: string[];
   prNumber: number;
   repo: string;
-}): Promise<{ commitSha: string | null; reverted: string[] }> {
+}): Promise<{ commitSha: string | null; reverted: string[]; syncedTo: string | null }> {
   const { worktreePath, baseBranch, bannedFiles } = opts;
 
   if (bannedFiles.length === 0) {
-    return { commitSha: null, reverted: [] };
+    return { commitSha: null, reverted: [], syncedTo: null };
   }
 
   // Fetch base branch from origin so we have origin/<baseBranch> available
@@ -65,7 +65,7 @@ export async function revertBannedFiles(opts: {
   }
 
   if (reverted.length === 0) {
-    return { commitSha: null, reverted: [] };
+    return { commitSha: null, reverted: [], syncedTo: null };
   }
 
   // Stage the reverted files
@@ -81,7 +81,7 @@ export async function revertBannedFiles(opts: {
   }
 
   if (!hasStagedChanges) {
-    return { commitSha: null, reverted: [] };
+    return { commitSha: null, reverted: [], syncedTo: null };
   }
 
   const fileList = reverted.join(', ');
@@ -111,5 +111,25 @@ export async function revertBannedFiles(opts: {
   // causing the repeated contamination loop observed in PR #410.
   // The base-branch content stays on disk so subsequent git add cycles are clean.
 
-  return { commitSha, reverted };
+  // Sync the local branch pointer to match origin after the push so the session's
+  // subsequent git operations see a consistent state (no divergence between local
+  // and origin/<branch>).
+  const syncedTo = await syncToOrigin(worktreePath, branch);
+
+  return { commitSha, reverted, syncedTo };
+}
+
+/**
+ * Fetch the named branch from origin and hard-reset the local HEAD to match it.
+ * Returns the resulting HEAD SHA, or null if either step fails.
+ */
+async function syncToOrigin(worktreePath: string, branch: string): Promise<string | null> {
+  try {
+    await git(['fetch', 'origin', branch], worktreePath);
+    await git(['reset', '--hard', `origin/${branch}`], worktreePath);
+    const { stdout } = await git(['rev-parse', 'HEAD'], worktreePath);
+    return stdout.trim();
+  } catch {
+    return null;
+  }
 }

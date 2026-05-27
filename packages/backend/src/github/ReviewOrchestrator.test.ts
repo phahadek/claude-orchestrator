@@ -1634,3 +1634,133 @@ describe('ReviewOrchestrator — verify-gate autofix-first', () => {
     expect(vi.mocked(recordEvent)).not.toHaveBeenCalled();
   });
 });
+
+// ── registerRevertSync / pendingSyncs mutex ───────────────────────────────────
+
+describe('ReviewOrchestrator — registerRevertSync pendingSyncs mutex', () => {
+  it('executeReview awaits a pending sync before calling reviewService.reviewPR', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: 0,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const callOrder: string[] = [];
+
+    let resolveSyncPromise!: () => void;
+    const syncPromise = new Promise<void>((r) => {
+      resolveSyncPromise = r;
+    });
+
+    const rs: PRReviewService = {
+      reviewPR: vi.fn().mockImplementation(async () => {
+        callOrder.push('reviewPR');
+        return {
+          prNumber: 1,
+          repo: 'owner/repo',
+          verdict: 'approved',
+          dimensions: [],
+          summary: 'ok',
+          reviewedAt: new Date().toISOString(),
+        };
+      }),
+    } as unknown as PRReviewService;
+
+    const orch = new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    // Register a slow sync for this PR before opening the review
+    orch.registerRevertSync(1, 'owner/repo', syncPromise);
+    callOrder.push('syncRegistered');
+
+    // Open the review — executeReview should block on the sync
+    sm.emit('pr_opened', baseJob);
+
+    // Give drain() time to start executeReview (but syncPromise is not resolved)
+    await new Promise((r) => setTimeout(r, 30));
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+
+    // Now resolve the sync
+    callOrder.push('syncResolved');
+    resolveSyncPromise();
+
+    // Give executeReview time to proceed past the await
+    await new Promise((r) => setTimeout(r, 30));
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+
+    expect(callOrder.indexOf('syncResolved')).toBeLessThan(
+      callOrder.indexOf('reviewPR'),
+    );
+  });
+
+  it('listens for revert_sync_registered event from SessionManager and stores the sync', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: 0,
+    } as any);
+
+    const sm = makeMockSessionManager();
+
+    let syncResolved = false;
+    let resolveSyncPromise!: () => void;
+    const syncPromise = new Promise<void>((r) => {
+      resolveSyncPromise = r;
+    }).then(() => {
+      syncResolved = true;
+    });
+
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    // Simulate what SessionManager.registerRevertSync emits
+    sm.emit('revert_sync_registered', {
+      prNumber: 1,
+      repo: 'owner/repo',
+      syncPromise,
+    });
+
+    // Open the review
+    sm.emit('pr_opened', baseJob);
+
+    // Sync not yet resolved — review should not have started
+    await new Promise((r) => setTimeout(r, 30));
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+    expect(syncResolved).toBe(false);
+
+    // Resolve the sync
+    resolveSyncPromise();
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(syncResolved).toBe(true);
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+  });
+
+  it('does not block a second review after the sync has been consumed', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: 0,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    // Register a sync that is already resolved
+    orch.registerRevertSync(1, 'owner/repo', Promise.resolve());
+
+    // First review — consumes the sync
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledTimes(1);
+
+    vi.mocked(rs.reviewPR as ReturnType<typeof vi.fn>).mockClear();
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_iteration: 0,
+    } as any);
+
+    // Second review — no pending sync; should proceed immediately
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledTimes(1);
+  });
+});

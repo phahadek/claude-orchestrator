@@ -278,4 +278,77 @@ describe('revertBannedFiles()', () => {
     const diffLines = diffOutput.split('\n').filter(Boolean);
     expect(diffLines).not.toContain('CLAUDE.md');
   });
+
+  it('returns syncedTo as a valid SHA after a successful revert', async () => {
+    // Add CLAUDE.md to origin/dev
+    await git(['checkout', 'dev'], worktreeDir);
+    fs.writeFileSync(path.join(worktreeDir, 'CLAUDE.md'), 'base\n');
+    await git(['add', 'CLAUDE.md'], worktreeDir);
+    await git([...GIT_AUTHOR, 'commit', '-m', 'base CLAUDE.md'], worktreeDir);
+    await git(['push', 'origin', 'dev'], worktreeDir);
+
+    // Feature branch: inject CLAUDE.md
+    await git(['checkout', 'feature/test'], worktreeDir);
+    await git(['merge', 'dev', '--no-edit'], worktreeDir);
+    fs.writeFileSync(path.join(worktreeDir, 'CLAUDE.md'), 'injected\n');
+    await git(['add', 'CLAUDE.md'], worktreeDir);
+    await git([...GIT_AUTHOR, 'commit', '-m', 'inject'], worktreeDir);
+    await git(['push', 'origin', 'feature/test'], worktreeDir);
+
+    const result = await revertBannedFiles({
+      worktreePath: worktreeDir,
+      baseBranch: 'dev',
+      bannedFiles: ['CLAUDE.md'],
+      prNumber: 1,
+      repo: 'owner/repo',
+    });
+
+    expect(result.syncedTo).toBeTruthy();
+    // syncedTo must be a 40-char hex SHA
+    expect(result.syncedTo).toMatch(/^[0-9a-f]{40}$/);
+    // syncedTo must match the actual HEAD SHA after sync
+    const headSha = await git(['rev-parse', 'HEAD'], worktreeDir);
+    expect(result.syncedTo).toBe(headSha);
+  });
+
+  it('returns syncedTo: null when bannedFiles is empty', async () => {
+    const result = await revertBannedFiles({
+      worktreePath: worktreeDir,
+      baseBranch: 'dev',
+      bannedFiles: [],
+      prNumber: 1,
+      repo: 'owner/repo',
+    });
+    expect(result.syncedTo).toBeNull();
+  });
+
+  it('local branch pointer matches origin after revert (no divergence)', async () => {
+    // Add CLAUDE.md to origin/dev
+    await git(['checkout', 'dev'], worktreeDir);
+    fs.writeFileSync(path.join(worktreeDir, 'CLAUDE.md'), 'base\n');
+    await git(['add', 'CLAUDE.md'], worktreeDir);
+    await git([...GIT_AUTHOR, 'commit', '-m', 'base CLAUDE.md'], worktreeDir);
+    await git(['push', 'origin', 'dev'], worktreeDir);
+
+    // Feature branch: inject CLAUDE.md
+    await git(['checkout', 'feature/test'], worktreeDir);
+    await git(['merge', 'dev', '--no-edit'], worktreeDir);
+    fs.writeFileSync(path.join(worktreeDir, 'CLAUDE.md'), 'injected\n');
+    await git(['add', 'CLAUDE.md'], worktreeDir);
+    await git([...GIT_AUTHOR, 'commit', '-m', 'inject'], worktreeDir);
+    await git(['push', 'origin', 'feature/test'], worktreeDir);
+
+    await revertBannedFiles({
+      worktreePath: worktreeDir,
+      baseBranch: 'dev',
+      bannedFiles: ['CLAUDE.md'],
+      prNumber: 1,
+      repo: 'owner/repo',
+    });
+
+    // Local HEAD must equal origin/feature/test (no divergence)
+    const localSha = await git(['rev-parse', 'HEAD'], worktreeDir);
+    const originSha = await git(['rev-parse', 'origin/feature/test'], worktreeDir);
+    expect(localSha).toBe(originSha);
+  });
 });

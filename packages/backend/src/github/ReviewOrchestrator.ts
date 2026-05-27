@@ -57,6 +57,8 @@ export class ReviewOrchestrator {
   private running = 0;
   /** SHA of the last autofix commit per PR, keyed by "prNumber:repo". */
   private lastAutofixShas = new Map<string, string>();
+  /** In-flight post-revert worktree sync promises, keyed by "prNumber:repo". */
+  private pendingSyncs = new Map<string, Promise<void>>();
 
   constructor(
     private reviewService: PRReviewService,
@@ -67,6 +69,18 @@ export class ReviewOrchestrator {
   ) {
     sessionManager.on('pr_opened', (job: ReviewJob) => this.onPrOpened(job));
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
+    sessionManager.on(
+      'revert_sync_registered',
+      (payload: { prNumber: number; repo: string; syncPromise: Promise<void> }) => {
+        this.registerRevertSync(payload.prNumber, payload.repo, payload.syncPromise);
+      },
+    );
+  }
+
+  /** Store a pending sync promise so executeReview can await it before fetching the diff. */
+  registerRevertSync(prNumber: number, repo: string, syncPromise: Promise<void>): void {
+    const key = `${prNumber}:${repo}`;
+    this.pendingSyncs.set(key, syncPromise);
   }
 
   private onPrOpened(job: ReviewJob): void {
@@ -322,6 +336,15 @@ export class ReviewOrchestrator {
   }
 
   private async executeReview(job: ReviewJob): Promise<void> {
+    // Await any in-flight post-revert worktree sync before fetching the diff,
+    // so the review sees the canonical file state, not the contaminated version.
+    const syncKey = `${job.prNumber}:${job.repo}`;
+    const pendingSync = this.pendingSyncs.get(syncKey);
+    if (pendingSync) {
+      this.pendingSyncs.delete(syncKey);
+      await pendingSync;
+    }
+
     const project = getProjectByGithubRepo(job.repo);
     if (!project) {
       console.warn(

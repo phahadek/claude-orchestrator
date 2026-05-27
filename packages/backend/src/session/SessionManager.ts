@@ -1038,6 +1038,15 @@ export class SessionManager extends EventEmitter {
     this.sessions.get(sessionId)?.deny(reason);
   }
 
+  /**
+   * Register a Promise that resolves when the post-revert worktree sync completes.
+   * Emits a 'revert_sync_registered' event so ReviewOrchestrator can await it
+   * before fetching the PR diff for a re-review.
+   */
+  registerRevertSync(prNumber: number, repo: string, syncPromise: Promise<void>): void {
+    this.emit('revert_sync_registered', { prNumber, repo, syncPromise });
+  }
+
   /** Send a follow-up user message to a running session via stdin. */
   send(sessionId: string, message: string): void {
     const session = this.sessions.get(sessionId);
