@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { validatePRFiles, HARD_BANNED_FILES, HARD_BANNED_PATTERNS } from './PRFileValidator';
+import {
+  validatePRFiles,
+  HARD_BANNED_FILES,
+  HARD_BANNED_PATTERNS,
+} from './PRFileValidator';
 
 describe('HARD_BANNED_FILES', () => {
   it('contains CLAUDE.md, .commit-msg, .commit_msg', () => {
@@ -11,19 +15,27 @@ describe('HARD_BANNED_FILES', () => {
 
 describe('HARD_BANNED_PATTERNS', () => {
   it('matches commit-msg.txt', () => {
-    expect(HARD_BANNED_PATTERNS.some((p) => p.test('commit-msg.txt'))).toBe(true);
+    expect(HARD_BANNED_PATTERNS.some((p) => p.test('commit-msg.txt'))).toBe(
+      true,
+    );
   });
 
   it('matches commit_msg.txt', () => {
-    expect(HARD_BANNED_PATTERNS.some((p) => p.test('commit_msg.txt'))).toBe(true);
+    expect(HARD_BANNED_PATTERNS.some((p) => p.test('commit_msg.txt'))).toBe(
+      true,
+    );
   });
 
   it('matches commit-msg.draft', () => {
-    expect(HARD_BANNED_PATTERNS.some((p) => p.test('commit-msg.draft'))).toBe(true);
+    expect(HARD_BANNED_PATTERNS.some((p) => p.test('commit-msg.draft'))).toBe(
+      true,
+    );
   });
 
   it('matches commit_msg.md', () => {
-    expect(HARD_BANNED_PATTERNS.some((p) => p.test('commit_msg.md'))).toBe(true);
+    expect(HARD_BANNED_PATTERNS.some((p) => p.test('commit_msg.md'))).toBe(
+      true,
+    );
   });
 
   it('does not match README.txt', () => {

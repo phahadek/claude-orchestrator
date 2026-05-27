@@ -9,9 +9,7 @@ export const HARD_BANNED_FILES: readonly string[] = [
 
 // Patterns (case-insensitive) that match commit-message scratch files regardless of extension.
 // Catches commit-msg.txt, commit_msg.txt, commit-msg.draft, commit_msg.md, etc.
-export const HARD_BANNED_PATTERNS: readonly RegExp[] = [
-  /^commit[-_]msg\..+$/i,
-];
+export const HARD_BANNED_PATTERNS: readonly RegExp[] = [/^commit[-_]msg\..+$/i];
 
 export interface PRFileValidationResult {
   valid: boolean;
