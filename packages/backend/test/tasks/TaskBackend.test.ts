@@ -38,7 +38,9 @@ describe('getTaskBackend(projectId)', () => {
     });
     const backend = getTaskBackend('p-notion');
     expect(backend).toBeInstanceOf(AuditingTaskBackend);
-    expect((backend as AuditingTaskBackend).inner).toBeInstanceOf(NotionTaskBackend);
+    expect((backend as AuditingTaskBackend).inner).toBeInstanceOf(
+      NotionTaskBackend,
+    );
     expect(backend.type).toBe('notion');
   });
 
@@ -51,7 +53,9 @@ describe('getTaskBackend(projectId)', () => {
     });
     const backend = getTaskBackend('p-yaml');
     expect(backend).toBeInstanceOf(AuditingTaskBackend);
-    expect((backend as AuditingTaskBackend).inner).toBeInstanceOf(LocalTaskBackend);
+    expect((backend as AuditingTaskBackend).inner).toBeInstanceOf(
+      LocalTaskBackend,
+    );
     expect(backend.type).toBe('local');
   });
 
@@ -64,7 +68,9 @@ describe('getTaskBackend(projectId)', () => {
     ).run();
     const backend = getTaskBackend('p-jira');
     expect(backend).toBeInstanceOf(AuditingTaskBackend);
-    expect((backend as AuditingTaskBackend).inner).toBeInstanceOf(JiraTaskSourceProvider);
+    expect((backend as AuditingTaskBackend).inner).toBeInstanceOf(
+      JiraTaskSourceProvider,
+    );
     expect(backend.type).toBe('jira');
   });
 

@@ -472,7 +472,10 @@ export class GitHubClient {
     prNumber: number,
   ): Promise<Array<{ sha: string; message: string; author?: string | null }>> {
     const data = await this.request<
-      Array<{ sha: string; commit: { message: string; author?: { email?: string } } }>
+      Array<{
+        sha: string;
+        commit: { message: string; author?: { email?: string } };
+      }>
     >(`/repos/${repo}/pulls/${prNumber}/commits?per_page=100`);
     return data.map((c) => ({
       sha: c.sha,

@@ -213,7 +213,9 @@ sessionsRouter.post('/:id/mark-merged', async (req: Request, res: Response) => {
   }
 
   try {
-    await getTaskBackend(projectId).updateStatus(notionTaskId, '✅ Done', { source: 'human' });
+    await getTaskBackend(projectId).updateStatus(notionTaskId, '✅ Done', {
+      source: 'human',
+    });
     _broadcast({
       type: 'task_status_changed',
       notionTaskId,

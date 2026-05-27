@@ -1,0 +1,9 @@
+feat: add missing audit_log event types commit and status_updated
+
+- Emit `commit` audit event for every commit inspected by CommitAttributionWatcher (alongside existing `attribution_missing` for trailer violations)
+- Emit `status_updated` audit event on every TaskBackend.updateStatus call via AuditingTaskBackend factory wrapper
+- Add `source` field distinguishing 'orchestrator' vs 'human' status transitions
+- Add PATCH /api/tasks/:id/status route endpoint for human-initiated status changes
+- Update GitHubClient.getCommitsForPR to include author email in commit data
+
+AI-Authored-By: claude-sonnet-4-6 (session: 96c69dcd)

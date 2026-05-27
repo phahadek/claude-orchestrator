@@ -124,7 +124,11 @@ Run in order — all must pass before opening the PR:
 
 ## Git Isolation
 
+<<<<<<< HEAD
 > **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\340c6ddf-449c-442d-b57e-1119b4b455a8`.**
+=======
+> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\96c69dcd-9c9a-4d83-9aa0-32fd95498759`.**
+>>>>>>> bcc354b (chore: apply autofix [orchestrator])
 > This is your `cwd`. All commands run here. Never navigate to or operate on any parent directory.
 
 - All git commands must run inside the worktree directory (your `cwd`)
@@ -141,7 +145,11 @@ Run in order — all must pass before opening the PR:
 > namespace to prevent writes outside the worktree. All isolation is prompt-level.
 > Violating these rules can corrupt the developer's live environment.
 
+<<<<<<< HEAD
 All file writes **must stay inside the worktree directory** (`C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\340c6ddf-449c-442d-b57e-1119b4b455a8`).
+=======
+All file writes **must stay inside the worktree directory** (`C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\96c69dcd-9c9a-4d83-9aa0-32fd95498759`).
+>>>>>>> bcc354b (chore: apply autofix [orchestrator])
 
 - **Never write to the project root or any path above the worktree.**
   Scripts, tools, and generated outputs must target paths under the worktree, not the parent repo.
@@ -182,6 +190,7 @@ Use the Write tool for any file creation. Never use `cat >`, `printf >`, or `ech
 > Do NOT re-fetch this from Notion — use the content below as your source of truth.
 
 ## Summary
+<<<<<<< HEAD
 After D3 (Unify task_cache write conventions) shipped, the per-task cache rows are now keyed notion:<id> (prefixed) but the board sentinel cache row's raw_json still contains tasks with the raw Notion UUID in their id field. The /api/tasks/active route reads task IDs from the board JSON and queries getActiveTaskAggregates(taskIds) with raw IDs — zero matches against the prefixed per-task rows. The Tasks panel renders "No active tasks found" for every milestone, not just M6. Fix is write-side: have each TaskBackend.fetchReadyTasks re-write the board cache row with task IDs already prefixed, keeping the cache's internal invariants consistent.
 ## Dependencies
 None. Surgical write-side fix; no schema change.
@@ -222,6 +231,80 @@ D3 (PR 7fa5d1d) deleted the per-task raw-fan-out write at NotionClient.writeBoar
 - packages/backend/src/tasks/JiraTaskSourceProvider.ts (update — same)
 - packages/backend/src/tasks/NotionTaskBackend.test.ts (or equivalent) (update — assert board cache JSON shape)
 - packages/backend/src/__tests__/tasks.test.ts (update — add the integration assertion against /api/tasks/active)
+=======
+The Manual Verification Gate requires audit_log to contain entries for: session-launch, commit, PR-open, PR-merge, and status-update. Today only the first, third, fourth, and a separate attribution_missing event are emitted — commit (per-commit observation) and status_updated (task status transitions) are missing. Add the two missing event types at the same per-event granularity, with structured payloads.
+## Dependencies
+None. Hooks attach to existing emit sites; no schema change to audit_log itself.
+## Context
+### Current state (verified 2026-05-27)
+SELECT event_type, COUNT(*) FROM audit_log GROUP BY event_type returns:
+- session_launched (30)
+- pr_opened (23)
+- attribution_missing (11)
+- pr_merged (8)
+Gate-required types missing:
+- commit — per-commit observation event with {sha, author, has_trailer, pr_number?, repo}
+- status_updated — task status transition with {task_id, from, to, source: 'orchestrator' | 'human'}
+### commit — emit alongside attribution check
+CommitAttributionWatcher (packages/backend/src/github/CommitAttributionWatcher.ts) already iterates pushed commits and inspects each for the AI-Authored-By: trailer. Right now it only emits attribution_missing when the trailer is absent. Extend it to emit a commit event for every commit it inspects, with the trailer-presence captured in the payload:
+```typescript
+recordEvent({
+  event_type: 'commit',
+  actor_type: hasAITrailer ? 'ai' : 'human',  // bot commits become 'system' — see the bot-author exemption task
+  actor_id: sessionId ?? null,
+  task_id: taskId ?? null,
+  payload: {
+    sha: commit.sha,
+    author: commit.author.email,
+    has_trailer: hasAITrailer,
+    pr_number: prNumber,
+    repo,
+  },
+});
+```
+The existing attribution_missing event continues to fire when hasAITrailer === false (and the author isn't the orchestrator bot — see the companion bot-author exemption task). The two events are complementary: commit is the per-event observation; attribution_missing is the policy violation flag.
+### status_updated — emit on every TaskBackend.updateStatus call
+Every task status transition flows through TaskBackend.updateStatus(taskId, status). The two implementations are NotionTaskBackend.updateStatus (packages/backend/src/tasks/NotionTaskBackend.ts:65-68) and LocalTaskBackend.updateStatus. Wrap both call sites — ideally at the factory boundary (getTaskBackend() in TaskBackend.ts) — so the audit emit happens once for every implementation.
+Payload:
+```typescript
+recordEvent({
+  event_type: 'status_updated',
+  actor_type: source === 'human' ? 'human' : 'system',
+  actor_id: sessionId ?? null,
+  task_id: taskId,
+  payload: {
+    from: previousStatus ?? null,  // null if not retrievable without an extra round-trip
+    to: newStatus,
+    source: 'orchestrator' | 'human',
+  },
+});
+```
+previousStatus is a nice-to-have. If retrieving it costs an extra Notion/local round-trip, write null and add a note in payload.notes ("previous status not captured") rather than skip the event. The gate primarily wants the event to fire; the from field is a refinement.
+source is set by the caller: SessionManager updates pass 'orchestrator'; manual UI-driven status changes via the routes layer pass 'human'.
+### Out of scope
+- Exempting bot-author commits from attribution_missing (separate task — see the bot-author task in the M6 board).
+- Backfilling historical sessions — audit log is forward-only.
+- Surfacing commit / status_updated in any dashboard UI — audit-log only for now.
+- Adding new actor_type values beyond the existing ai | human | system enum.
+## Acceptance criteria
+### 🤖 Automated tests
+- tsc --noEmit passes for both packages
+- Unit test: CommitAttributionWatcher inspecting a commit WITH the AI-Authored-By: trailer writes exactly one commit audit entry with has_trailer: true and zero attribution_missing entries
+- Unit test: same watcher inspecting a commit WITHOUT the trailer writes one commit (with has_trailer: false) and one attribution_missing (unchanged behavior modulo the bot-author exemption from the companion task)
+- Unit test: NotionTaskBackend.updateStatus('notion:abc', '👀 In Review') writes one status_updated audit entry with the expected payload shape
+- Unit test: LocalTaskBackend.updateStatus(...) writes the equivalent entry
+- Unit test: status_updated source field is 'orchestrator' when called from SessionManager's lifecycle hooks, 'human' when called from the PATCH /api/tasks/:id/status route handler
+- Integration test: starting a session, opening a PR, and merging it produces all five required event types in audit_log (session_launched, commit for at least one commit, pr_opened, pr_merged, status_updated for at least one transition)
+- Regression: existing pr_opened, pr_merged, session_launched, attribution_missing events continue to fire as before
+## Files / paths affected
+- packages/backend/src/github/CommitAttributionWatcher.ts (update — emit commit alongside existing attribution_missing)
+- packages/backend/src/tasks/TaskBackend.ts (update if wrapping at factory boundary)
+- packages/backend/src/tasks/NotionTaskBackend.ts (update — alternative: emit at impl boundary)
+- packages/backend/src/tasks/LocalTaskBackend.ts (update — same)
+- packages/backend/src/audit/types.ts (update — add commit and status_updated event types with payload shapes)
+- packages/backend/src/session/SessionManager.ts (update — pass source: 'orchestrator' through any status update path that doesn't already)
+- packages/backend/src/routes/tasks.ts (update — pass source: 'human' from manual UI status changes)
+>>>>>>> bcc354b (chore: apply autofix [orchestrator])
 ## Implementation notes
 > To be filled in during/after implementation.
 
@@ -230,6 +313,217 @@ D3 (PR 7fa5d1d) deleted the per-task raw-fan-out write at NotionClient.writeBoar
 > These are the current contents of files listed in the task spec.
 > They were pre-read by the orchestrator so you can skip exploration.
 
+<<<<<<< HEAD
+=======
+### `packages/backend/src/github/CommitAttributionWatcher.ts`
+```
+import { recordEvent } from '../audit/AuditLog';
+import { setPauseReason } from '../db/queries';
+import type { GitHubClient } from './GitHubClient';
+
+/** Matches the AI-Authored-By trailer in a commit message. */
+export const AI_TRAILER_REGEX = /^AI-Authored-By:/m;
+
+export interface CommitInfo {
+  sha: string;
+  message: string;
+}
+
+export interface AttributionCheckResult {
+  checked: number;
+  missing: number;
+  paused: boolean;
+}
+
+/**
+ * Check that all commits in a PR carry the AI-Authored-By trailer.
+ * In corporate mode, missing trailers pause the PR and are audit-logged.
+ * In non-corporate mode, only audit-logs (no pause).
+ *
+ * Returns a summary of what was found.
+ */
+export async function checkCommitAttribution(
+  client: GitHubClient,
+  repo: string,
+  prNumber: number,
+  sessionId: string,
+  projectId: string | null,
+  taskId: string | null,
+  isCorporateMode: boolean,
+): Promise<AttributionCheckResult> {
+  let commits: CommitInfo[];
+  try {
+    commits = await client.getCommitsForPR(repo, prNumber);
+  } catch (err) {
+    console.warn(
+      `[CommitAttributionWatcher] failed to fetch commits for PR #${prNumber} in ${repo}: ${(err as Error).message}`,
+    );
+    return { checked: 0, missing: 0, paused: false };
+  }
+
+  const missingTrailer = commits.filter(
+    (c) => !AI_TRAILER_REGEX.test(c.message),
+  );
+
+  if (missingTrailer.length === 0) {
+    return { checked: commits.length, missing: 0, paused: false };
+  }
+
+  for (const commit of missingTrailer) {
+    recordEvent({
+      event_type: 'attribution_missing',
+      actor_type: 'ai',
+      actor_id: sessionId,
+      project_id: projectId,
+      task_id: taskId,
+      payload: { sha: commit.sha, pr_number: prNumber, repo },
+    });
+  }
+
+  if (isCorporateMode) {
+    setPauseReason(prNumber, repo, 'attribution_missing');
+    return {
+      checked: commits.length,
+      missing: missingTrailer.length,
+      paused: true,
+    };
+  }
+
+  return {
+    checked: commits.length,
+    missing: missingTrailer.length,
+    paused: false,
+  };
+}
+
+```
+
+### `packages/backend/src/tasks/TaskBackend.ts`
+```
+import type { ResolvedTask } from './types';
+import { ProjectService } from '../projects/ProjectService';
+import { NotionClient } from '../notion/NotionClient';
+import { NotionTaskBackend } from './NotionTaskBackend';
+import { LocalTaskBackend } from './LocalTaskBackend';
+import { JiraClient } from './JiraClient';
+import {
+  JiraTaskSourceProvider,
+  type JiraProjectConfig,
+} from './JiraTaskSourceProvider';
+import { JIRA_HOST, JIRA_TOKEN, JIRA_EMAIL } from '../config';
+
+/**
+ * Per-project configuration that identifies where non-milestone tasks are sourced from.
+ * Stored as JSON in projects.non_milestone_source_config.
+ */
+export interface NonMilestoneSourceConfig {
+  /** Notion database ID (for notion-backed projects). */
+  notionDatabaseId?: string;
+  /** tasks.yaml milestone id (for yaml-backed projects). */
+  milestoneId?: string;
+}
+
+/**
+ * Project-scoped task tracker. An instance is bound to a single project via the
+ * factory `getTaskBackend(projectId)` — callers do not pass projectId to methods.
+ */
+export interface TaskBackend {
+  /** Backend identifier; reflects the project's task_source. */
+  readonly type: 'notion' | 'local' | 'jira';
+
+  /**
+   * Fetch tasks that are ready to be dispatched for the given milestone.
+   * For Notion projects, milestoneId is resolved to the milestone row's source_id
+   * (the Notion database ID). For YAML projects, pass null to fetch all tasks
+   * across all milestones, or a milestone id to scope to one.
+   */
+  fetchReadyTasks(
+    milestoneId: string | null,
+    skipCache?: boolean,
+  ): Promise<ResolvedTask[]>;
+
+  /** Mark a task as in-review and attach a PR URL. */
+  attachPR(taskId: string, prUrl: string): Promise<void>;
+
+  /** Update task status (display-format string with emoji prefix). */
+  updateStatus(taskId: string, status: string): Promise<void>;
+
+  /** Fetch the full task page body as markdown (for review/session context). */
+  fetchTaskPage(taskId: string): Promise<string>;
+
+  /**
+   * Fetch tasks ready to launch that are not tied to a milestone.
+   * sourceConfig identifies which source (Notion database or YAML milestone) to query.
+   * Returns [] when sourceConfig is null or the source is not configured.
+   */
+  fetchNonMilestoneReadyTasks(
+    sourceConfig: NonMilestoneSourceConfig | null,
+    projectId?: string,
+  ): Promise<ResolvedTask[]>;
+}
+
+/**
+ * Backwards-compatible alias for the previous interface name.
+ * Prefer `TaskBackend` in new code.
+ */
+export type TaskTrackerBackend = TaskBackend;
+
+// ── Factory ─────────────────────────────────────────────────────────────────
+
+let _notionBackend: NotionTaskBackend | undefined;
+
+function getNotionBackend(): NotionTaskBackend {
+  _notionBackend ??= new NotionTaskBackend(new NotionClient());
+  return _notionBackend;
+}
+
+/**
+ * Resolve the task backend for a project, honoring its `task_source` column.
+ * Throws if the project is not found.
+ */
+export function getTaskBackend(projectId: string): TaskBackend {
+  const project = ProjectService.getById(projectId);
+  if (!project) {
+    throw new Error(`[getTaskBackend] project not found: ${projectId}`);
+  }
+  if (project.taskSource === 'yaml') {
+    return new LocalTaskBackend(project.projectDir);
+  }
+  if (project.taskSource === 'jira') {
+    return buildJiraBackend(project.taskSourceConfig);
+  }
+  return getNotionBackend();
+}
+
+function buildJiraBackend(
+  taskSourceConfigJson: string | null,
+): JiraTaskSourceProvider {
+  let projectConfig: JiraProjectConfig;
+  try {
+    projectConfig = taskSourceConfigJson
+      ? (JSON.parse(taskSourceConfigJson) as JiraProjectConfig)
+      : { host: JIRA_HOST, project_key: '' };
+  } catch {
+    projectConfig = { host: JIRA_HOST, project_key: '' };
+  }
+  const host = projectConfig.host || JIRA_HOST;
+  const token = JIRA_TOKEN;
+  const email = JIRA_EMAIL || undefined;
+  const client = new JiraClient(host, token, email);
+  return new JiraTaskSourceProvider(client, { ...projectConfig, host });
+}
+
+/**
+ * Test-only: reset the cached Notion backend so subsequent `getTaskBackend()`
+ * calls re-instantiate it. Useful for vi.mocked NotionClient.
+ */
+export function _resetTaskBackendCacheForTests(): void {
+  _notionBackend = undefined;
+}
+
+```
+
+>>>>>>> bcc354b (chore: apply autofix [orchestrator])
 ### `packages/backend/src/tasks/NotionTaskBackend.ts`
 ```
 import type { TaskBackend, NonMilestoneSourceConfig } from './TaskBackend';
@@ -598,6 +892,7 @@ export class LocalTaskBackend implements TaskBackend {
 [... truncated]
 ```
 
+<<<<<<< HEAD
 ### `packages/backend/src/tasks/JiraTaskSourceProvider.ts`
 ```
 import type { TaskBackend } from './TaskBackend';
@@ -1002,6 +1297,518 @@ describe('GET /api/tasks/export?format=yaml', () => {
   ];
 
   beforeEach(() =>
+=======
+### `packages/backend/src/audit/types.ts`
+```
+export type EventType =
+  | 'session_launched'
+  | 'commit'
+  | 'pr_opened'
+  | 'pr_merged'
+  | 'status_updated'
+  | 'pr_body_invalid'
+  | 'pr_body_invalid_warning'
+  | 'attribution_missing'
+  | 'session_launch_refused_zdr'
+  | 'data_residency_flag_toggled'
+  | 'file_pollution_reverted'
+  | 'autofix_for_ci_failure';
+
+export type ActorType = 'ai' | 'human' | 'system';
+
+export interface AuditEvent {
+  event_type: EventType;
+  actor_type: ActorType;
+  actor_id?: string | null;
+  project_id?: string | null;
+  task_id?: string | null;
+  payload: Record<string, unknown>;
+}
+
+```
+
+### `packages/backend/src/session/SessionManager.ts`
+```
+import path from 'path';
+import fs from 'fs';
+import { execSync } from 'child_process';
+import { EventEmitter } from 'events';
+import { recordEvent } from '../audit/AuditLog';
+import { scrubSecrets } from '../security/scrubSecrets';
+import { AgentSession, parseNotionPageId } from './AgentSession';
+import { formatTaskId } from '../tasks/taskId';
+import { buildSessionContext } from './ContextBuilder';
+import { buildReviewClaudeMd } from './orchestrator-claudemd';
+import { resolveStartingPoint, ensureMilestoneBranch } from './branchModel';
+import { loadOrchestratorConfig } from './orchestrator-config';
+import { CliSessionRunner } from './CliSessionRunner';
+import { ApiSessionRunner } from './ApiSessionRunner';
+import {
+  DockerSessionRunner,
+  reapOrphanContainers,
+} from './DockerSessionRunner';
+import { getCorporateMode } from '../config/corporateMode';
+import {
+  config,
+  getProjectById,
+  normalizePath,
+  runtimeSettings,
+} from '../config';
+import {
+  insertSession,
+  updateSessionStatus,
+  insertEvent,
+  getSession,
+  getSessionsByStatus,
+  getPRByNotionTaskId,
+  getEventsBySession,
+  getPRByNumber,
+  backfillStuckResultSessions,
+} from '../db/queries';
+import type { Session } from '../db/types';
+import { getTaskBackend } from '../tasks/TaskBackend';
+import type { GitHubClient } from '../github/GitHubClient';
+import type { ServerMessage } from '../ws/types';
+import { deriveDisplayStatusFromDb } from '../tasks/TaskStatusEngine';
+import type { DisplayStatus } from '../tasks/TaskStatusEngine';
+import { emitTaskUpdated } from '../routes/tasks';
+import { parseSection } from '../notion/NotionClient';
+
+/** Max chars per file snippet to avoid bloating the CLAUDE.md. */
+const MAX_FILE_CHARS = 8_000;
+/** Max total chars for all file snippets combined. */
+const MAX_TOTAL_SNIPPET_CHARS = 40_000;
+
+/**
+ * Parse file paths from the task spec's "Files" section, read each file from
+ * the project directory, and return a markdown block with their contents.
+ * Returns undefined if no files are found or all reads fail.
+ */
+function readTaskFiles(
+  taskMarkdown: string,
+  projectDir: string,
+): string | undefined {
+  const filesSection = parseSection(taskMarkdown, 'files');
+  if (!filesSection.trim()) return undefined;
+
+  const filePaths = filesSection
+    .split('\n')
+    .map((line) => line.replace(/^[-*\s]+/, '').trim())
+    // Strip backticks, trailing descriptions, and markdown formatting like *(new)*
+    .map((line) =>
+      line
+        .replace(/`/g, '') // remove backticks
+        .replace(/\s+\*?\(.*?\)\*?\s*$/, '') // remove *(new)*, (update), etc.
+        .replace(/\s+[-—–].*$/, '') // remove "— description" suffixes
+        .trim(),
+    )
+    .filter(
+      (line) => line.length > 0 && (line.includes('/') || line.includes('.')),
+    );
+
+  if (filePaths.length === 0) return undefined;
+
+  const snippets: string[] = [];
+  let totalChars = 0;
+
+  for (const filePath of filePaths) {
+    if (totalChars >= MAX_TOTAL_SNIPPET_CHARS) break;
+
+    const fullPath = path.join(projectDir, filePath);
+    try {
+      if (!fs.existsSync(fullPath)) continue;
+      const stat = fs.statSync(fullPath);
+      if (!stat.isFile()) continue;
+
+      let content = fs.readFileSync(fullPath, 'utf-8');
+      if (content.length > MAX_FILE_CHARS) {
+        content = content.slice(0, MAX_FILE_CHARS) + '\n[... truncated]';
+      }
+
+      snippets.push(`### \`${filePath}\`\n\`\`\`\n${content}\n\`\`\``);
+      totalChars += content.length;
+    } catch {
+      // Skip unreadable files silently
+    }
+  }
+
+  if (snippets.length === 0) return undefined;
+
+  return (
+    `## Referenced Files\n\n` +
+    `> These are the current contents of files listed in the task spec.\n` +
+    `> They were pre-read by the orchestrator so you can skip exploration.\n\n` +
+    snippets.join('\n\n')
+  );
+}
+
+export interface StartOptions {
+  taskType?: string;
+  sessionType?: 'standard' | 'review';
+  customPrompt?: string;
+  projectId?: string;
+  taskName?: string;
+  /** Pre-generated session ID. If omitted, a new UUID is generated internally. */
+  sessionId?: string;
+  /** Milestone row id used for starting-point resolution in two_tier branch mode. */
+  milestoneId?: string | null;
+  /** Whether this is a milestone task or a non-milestone task; recorded in the audit log. */
+  taskKind?: 'milestone' | 'non_milestone';
+}
+
+/** How long to suppress lastMessage-only task_updated broadcasts per task (ms). */
+const LAST_MESSAGE_THROTTLE_MS = 3_000;
+
+/**
+ * Continuation nudge sent to a resumed session after its first CLI event.
+ * Exported so tests can verify the exact message without hardcoding it.
+ */
+export const RESUME_NUDGE_MESSAGE =
+  'Continue implementing the task. Check git status and your todo list to see where you left off.';
+
+export class SessionManager extends EventEmitter {
+  private sessions = new Map<string, AgentSession>();
+  private pendingStarts = new Map<
+    string,
+    { sessionType: 'standard' | 'review' }
+  >();
+
+  /** Last known DisplayStatus per notionTaskId — used to skip no-op broadcasts. */
+  private _lastDisplayStatus = new Map<string, DisplayStatus>();
+  /** Timestamp of last lastMessage-only task_updated per notionTaskId. */
+  private _lastMessageThrottle = new Map<string, number>();
+  /** Guards against re-entrant task_updated emission inside the emit override. */
+  private _inTaskUpdate = false;
+
+  constructor(private readonly githubClient?: GitHubClient) {
+    super();
+  }
+
+  /**
+   * Override emit to intercept `message` events and emit `task_updated` whenever a
+   * message could change a task's derived display status. Guards against re-entrant
+   * calls so the task_updated broadcast itself never triggers another one.
+   */
+  override emit(event: string | symbol, ...args: unknown[]): boolean {
+    let emitArgs = args;
+    if (event === 'message') {
+      const msg = args[0] as ServerMessage;
+      if (msg.type === 'session_event' && typeof msg.content === 'string') {
+        const scrubbed = scrubSecrets(msg.content);
+        if (scrubbed !== msg.content) {
+          emitArgs = [{ ...msg, content: scrubbed }, ...args.slice(1)];
+        }
+      }
+    }
+    const result = super.emit(event, ...emitArgs);
+    if (event === 'message' && !this._inTaskUpdate) {
+      this._inTaskUpdate = true;
+      try {
+        this._handleTaskUpdated(emitArgs[0] as ServerMessage);
+      } catch (err) {
+        console.error('[SessionManager] task_updated handler error:', err);
+      } finally {
+        this._inTaskUpdate = false;
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Inspect an outgoing ServerMessage and, if it could change a task's derived
+   * display status, re-derive and broadcast task_updated (de-duped by last known status).
+   */
+  private _handleTaskUpdated(msg: ServerMessage): void {
+    const notionTaskId = this._notionTaskIdForMessage(msg);
+    if (!notionTaskId) return;
+
+    const isLastMessageOnly = msg.type === 'session_event';
+
+    if (isLastMessageOnly) {
+      const last = this._lastMessageThrottle.get(notionTaskId) ?? 0;
+      const now = Date.now();
+      if (now - last < LAST_MESSAGE_THROTTLE_MS) return;
+      this._lastMessageThrottle.set(notionTaskId, now);
+    }
+
+    const displayStatus = deriveDisplayStatusFromDb(notionTaskId);
+    const prev = this._lastDisplayStatus.get(notionTaskId);
+
+    if (!isLastMessageOnly && displayStatus === prev) return;
+    if (isLastMessageOnly && displayStatus === prev) {
+      // lastMessage-only and status unchanged — skip entirely (throttle already passed,
+      // but there's nothing interesting to send)
+      return;
+    }
+
+    this._lastDisplayStatus.set(notionTaskId, displayStatus);
+    emitTaskUpdated(notionTaskId);
+  }
+
+  /**
+   * Determine the notionTaskId affected by a ServerMessage, if any.
+   * Returns null for messages that cannot change task display status.
+   */
+  private _notionTaskIdForMessage(msg: ServerMessage): string | null {
+    switch (msg.type) {
+      case 'session_started':
+      case 'session_ended':
+      case 'se
+[... truncated]
+```
+
+### `packages/backend/src/routes/tasks.ts`
+```
+import { Router } from 'express';
+import type { Request, Response } from 'express';
+import { getProjectById } from '../config';
+import { ProjectService } from '../projects/ProjectService';
+import {
+  getTaskCache,
+  getActiveTaskAggregates,
+  getSetting,
+} from '../db/queries';
+import type { TaskAggregateRow } from '../db/queries';
+import { deriveDisplayStatus } from '../tasks/TaskStatusEngine';
+import type { NotionTask } from '../notion/types';
+import { DependencyResolver } from '../notion/DependencyResolver';
+import type { PRReviewResult } from '../github/PRReviewService';
+import type { ServerMessage, TaskView } from '../ws/types';
+import type { PauseReason } from '../db/types';
+import yaml from 'js-yaml';
+export type { TaskView } from '../ws/types';
+
+/**
+ * The frontend sends milestone row ids as `boardId` after the milestone schema migration.
+ * Resolve to the milestone's `source_id` (the Notion database id) for cache key lookup.
+ * Falls back to the input value when no matching milestone exists (back-compat for callers
+ * that still pass a raw source_id).
+ */
+function resolveBoardCacheKey(boardId: string): string {
+  const milestone = ProjectService.getMilestone(boardId);
+  if (milestone?.sourceId) return milestone.sourceId;
+  return boardId;
+}
+
+const DEFAULT_MAX_REVIEW_ITERATIONS = 3;
+
+function getReviewIterationCap(): number {
+  const raw = getSetting('max_review_iterations');
+  if (!raw) return DEFAULT_MAX_REVIEW_ITERATIONS;
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_MAX_REVIEW_ITERATIONS;
+}
+
+// ── Broadcast infrastructure ─────────────────────────────────────────────────
+let taskBroadcastFn: ((msg: ServerMessage) => void) | null = null;
+
+export function setTaskBroadcast(fn: (msg: ServerMessage) => void): void {
+  taskBroadcastFn = fn;
+}
+
+/** Build a TaskView for a single notionTaskId and broadcast it as task_updated. */
+export function emitTaskUpdated(notionTaskId: string): void {
+  if (!taskBroadcastFn) return;
+  const task = buildTaskView(notionTaskId);
+  if (task) taskBroadcastFn({ type: 'task_updated', task });
+}
+
+/** Build a TaskView for a single notionTaskId from current DB state. Returns null if not found. */
+export function buildTaskView(notionTaskId: string): TaskView | null {
+  const rows = getActiveTaskAggregates([notionTaskId]);
+  if (rows.length === 0) return null;
+  return buildTaskViewFromRow(rows[0], getReviewIterationCap());
+}
+
+// ── Row → TaskView mapping ───────────────────────────────────────────────────
+
+function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
+  let notionTask: NotionTask | null = null;
+  try {
+    notionTask = JSON.parse(row.raw_json) as NotionTask;
+  } catch {
+    // leave as null
+  }
+
+  const notionStatus = notionTask?.status ?? '';
+  const priority = notionTask?.priority ?? '';
+
+  let codeSession: TaskView['codeSession'] = null;
+  if (row.code_session_id) {
+    const lastMessage = row.code_session_last_event_payload
+      ? summarizeEvent(row.code_session_last_event_payload)
+      : '';
+    codeSession = {
+      sessionId: row.code_session_id,
+      status: row.code_session_status ?? '',
+      startedAt: row.code_session_started_at ?? 0,
+      endedAt: row.code_session_ended_at ?? null,
+      lastMessage,
+      inputTokens: row.code_session_input_tokens ?? 0,
+      outputTokens: row.code_session_output_tokens ?? 0,
+    };
+  }
+
+  let pr: TaskView['pr'] = null;
+  if (row.pr_number != null && row.pr_url) {
+    pr = {
+      prNumber: row.pr_number,
+      prUrl: row.pr_url,
+      title: row.pr_title ?? '',
+      headBranch: row.pr_head_branch ?? '',
+      baseBranch: row.pr_base_branch ?? '',
+      state: row.pr_state ?? '',
+      draft: row.pr_draft === 1,
+      mergeState: row.pr_merge_state ?? null,
+    };
+  }
+
+  let review: TaskView['review'] = null;
+  let reviewVerdict: string | null = null;
+  let reviewSummary: string | null = null;
+  if (row.review_session_id) {
+    // Prefer PR-level review result (GitHub flow); fall back to session-level (local-only).
+    const rawReviewResult = row.pr_review_result ?? row.review_session_result;
+    if (rawReviewResult) {
+      try {
+        const result = JSON.parse(rawReviewResult) as PRReviewResult;
+        reviewVerdict = result.verdict ?? null;
+        reviewSummary = result.summary ?? null;
+      } catch {
+        // ignore
+      }
+    }
+    review = {
+      sessionId: row.review_session_id,
+      status: row.review_session_status ?? '',
+      verdict: reviewVerdict,
+      summary: reviewSummary,
+      iterationCount: row.pr_review_iteration ?? 0,
+      inputTokens: row.review_session_input_tokens ?? 0,
+      outputTokens: row.review_session_output_tokens ?? 0,
+    };
+  }
+
+  const pauseReason = (row.pr_pause_reason ?? null) as PauseReason | null;
+
+  const displayStatus = deriveDisplayStatus({
+    notionStatus,
+    codeSessionStatus: row.code_session_status ?? null,
+    prState: row.pr_state ?? null,
+    prDraft: row.pr_draft === 1,
+    reviewVerdict,
+    reviewIterationCount: row.pr_review_iteration ?? 0,
+    reviewIterationCap: cap,
+    pauseReason,
+  });
+
+  const totalTokens = {
+    input:
+      (row.code_session_input_tokens ?? 0) +
+      (row.review_session_input_tokens ?? 0),
+    output:
+      (row.code_session_output_tokens ?? 0) +
+      (row.review_session_output_tokens ?? 0),
+  };
+
+  return {
+    taskId: row.task_id,
+    taskName: notionTask?.title ?? row.task_id,
+    notionStatus,
+    displayStatus,
+    pauseReason,
+    priority,
+    notionUrl: notionTask?.notionUrl ?? '',
+    taskType: notionTask?.type ?? '',
+    blocked: false,
+    blockerNames: [],
+    wave: 1,
+    codeSession,
+    pr,
+    review,
+    totalTokens,
+  };
+}
+
+const TOOL_MAX = 80;
+
+function extractToolArg(name: string, input: Record<string, unknown>): string {
+  const str = (v: unknown) => (typeof v === 'string' ? v : '');
+  switch (name) {
+    case 'Read':
+    case 'Write':
+    case 'Edit': {
+      const p = str(input.file_path);
+      return p ? (p.replace(/\\/g, '/').split('/').pop() ?? p) : '';
+    }
+    case 'Bash':
+      return str(input.command).trim().split(/\s+/)[0] ?? '';
+    case 'Grep':
+      return str(input.pattern);
+    case 'Glob':
+      return str(input.pattern);
+    case 'Agent':
+      return str(input.description);
+    case 'WebFetch':
+      return str(input.url);
+    case 'WebSearch':
+      return str(input.query);
+    default:
+      return '';
+  }
+}
+
+function formatToolCall(name: string, input: unknown): string {
+  const inputObj =
+    typeof input === 'object' && input !== null
+      ? (input as Record<string, unknown>)
+      : {};
+  const arg = extractToolArg(name, inputObj);
+  const label = arg ? `${name}(${arg})` : name;
+  return label.length > TOOL_MAX ? label.slice(0, TOOL_MAX - 1) + '…' : label;
+}
+
+/** Extract a brief human-readable summary from a raw session event payload (max 120 chars). */
+export function summarizeEvent(payload: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return payload.slice(0, 120);
+  }
+
+  if (typeof parsed !== 'object' || parsed === null) {
+    return String(parsed).slice(0, 120);
+  }
+
+  const p = parsed as Record<string, unknown>;
+
+  // Assistant text event: { type: 'assistant', message: { content: [...] } }
+  const msg = p.message as Record<string, unknown> | undefined;
+  const content = msg?.content ?? p.content;
+
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (typeof block !== 'object' || block === null) continue;
+      const b = block as Record<string, unknown>;
+      if (
+        b.type === 'text' &&
+        typeof b.text === 'string' &&
+        b.text.trim().length > 0
+      ) {
+        const text = b.text.trim().replace(/\s+/g, ' ');
+        return text.length > 120 ? text.slice(0, 117) + '…' : text;
+      }
+      if (b.type === 'tool_use' && typeof b.name === 'string') {
+        return formatToolCall(b.name, b.input);
+      }
+    }
+  }
+
+  if (typeof cont
+>>>>>>> bcc354b (chore: apply autofix [orchestrator])
 [... truncated]
 ```
 

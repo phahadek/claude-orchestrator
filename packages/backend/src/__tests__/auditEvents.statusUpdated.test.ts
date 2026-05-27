@@ -113,7 +113,9 @@ describe('AuditingTaskBackend — status_updated', () => {
     const inner = makeInnerBackend();
     const backend = new AuditingTaskBackend(inner, 'proj-1');
 
-    await backend.updateStatus('notion:xyz', '✅ Done', { source: 'orchestrator' });
+    await backend.updateStatus('notion:xyz', '✅ Done', {
+      source: 'orchestrator',
+    });
 
     expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
       expect.objectContaining({ actor_type: 'system' }),

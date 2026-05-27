@@ -83,7 +83,11 @@ describe('checkCommitAttribution()', () => {
 
   it('emits commit (has_trailer:false) and attribution_missing when trailer is absent', async () => {
     const client = makeClient([
-      { sha: 'bbb', message: 'feat: no trailer here', author: 'dev@example.com' },
+      {
+        sha: 'bbb',
+        message: 'feat: no trailer here',
+        author: 'dev@example.com',
+      },
     ]);
     await checkCommitAttribution(
       client,

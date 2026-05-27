@@ -444,7 +444,8 @@ export function createTasksRouter(): Router {
     const taskId = String(req.params.id);
     const body = req.body as { status?: unknown; projectId?: unknown };
     const status = typeof body.status === 'string' ? body.status : null;
-    const projectId = typeof body.projectId === 'string' ? body.projectId : null;
+    const projectId =
+      typeof body.projectId === 'string' ? body.projectId : null;
 
     if (!status) {
       res.status(400).json({ error: 'status is required' });
@@ -456,12 +457,16 @@ export function createTasksRouter(): Router {
     }
 
     try {
-      await getTaskBackend(projectId).updateStatus(taskId, status, { source: 'human' });
+      await getTaskBackend(projectId).updateStatus(taskId, status, {
+        source: 'human',
+      });
       res.json({ ok: true });
     } catch (err) {
       res
         .status(500)
-        .json({ error: err instanceof Error ? err.message : 'Failed to update status' });
+        .json({
+          error: err instanceof Error ? err.message : 'Failed to update status',
+        });
     }
   });
 

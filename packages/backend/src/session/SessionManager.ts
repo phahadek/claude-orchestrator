@@ -583,7 +583,10 @@ export class SessionManager extends EventEmitter {
       // Roll back task status to Ready so the card doesn't stay stuck In Progress.
       if (sessionType === 'standard' && notionTaskId) {
         getTaskBackend(projectId)
-          .updateStatus(notionTaskId, '🗂️ Ready', { source: 'orchestrator', sessionId })
+          .updateStatus(notionTaskId, '🗂️ Ready', {
+            source: 'orchestrator',
+            sessionId,
+          })
           .then(() => {
             this.emit('message', {
               type: 'task_status_changed',
@@ -604,7 +607,10 @@ export class SessionManager extends EventEmitter {
 
     if (sessionType === 'standard') {
       getTaskBackend(projectId)
-        .updateStatus(notionTaskId, '🔄 In Progress', { source: 'orchestrator', sessionId })
+        .updateStatus(notionTaskId, '🔄 In Progress', {
+          source: 'orchestrator',
+          sessionId,
+        })
         .then(() => {
           this.emit('message', {
             type: 'task_status_changed',
