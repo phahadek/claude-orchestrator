@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -251,7 +251,7 @@ describe('PRMergeWatcher.poll()', () => {
       'review-session',
     );
     expect(vi.mocked(notion.updateStatus)).toHaveBeenCalledWith(
-      'task-abc',
+      'notion:task-abc',
       '✅ Done',
     );
   });
@@ -278,7 +278,7 @@ describe('PRMergeWatcher.poll()', () => {
       'coding-session',
     );
     expect(vi.mocked(notion.updateStatus)).toHaveBeenCalledWith(
-      'task-abc',
+      'notion:task-abc',
       '✅ Done',
     );
   });
@@ -687,7 +687,7 @@ describe('PRMergeWatcher.handleMerged()', () => {
     await watcher.handleMerged(pr, null);
 
     expect(vi.mocked(notion.updateStatus)).toHaveBeenCalledWith(
-      'task-xyz',
+      'notion:task-xyz',
       '✅ Done',
     );
   });
@@ -941,6 +941,14 @@ describe('PRMergeWatcher ci_failing auto-recovery', () => {
 // ── autofix-first CI failure path ────────────────────────────────────────────
 
 describe('PRMergeWatcher autofix-first CI failure path', () => {
+  afterEach(() => {
+    // Restore defaults so subsequent describe blocks aren't polluted
+    vi.mocked(getProjectByGithubRepo).mockReturnValue(null);
+    vi.mocked(getSession).mockReturnValue(null);
+    vi.mocked(loadAutofixCommands).mockReturnValue([]);
+    vi.mocked(runAutofix).mockResolvedValue({ success: true, summary: 'no diff' });
+  });
+
   function mockCategorizeCI(github: GitHubClient): void {
     vi.mocked(
       (
