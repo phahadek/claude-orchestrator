@@ -213,8 +213,14 @@ describe('NotionClient — prefix stripping in public methods', () => {
 
     await client.updateStatus('notion:abc', '✅ Done');
 
-    expect(vi.mocked(updateTaskCacheStatus)).toHaveBeenCalledWith('notion:abc', '✅ Done');
-    expect(vi.mocked(updateTaskCacheStatus)).not.toHaveBeenCalledWith('abc', expect.anything());
+    expect(vi.mocked(updateTaskCacheStatus)).toHaveBeenCalledWith(
+      'notion:abc',
+      '✅ Done',
+    );
+    expect(vi.mocked(updateTaskCacheStatus)).not.toHaveBeenCalledWith(
+      'abc',
+      expect.anything(),
+    );
   });
 
   it('fetchTaskPage calls Notion API at /pages/abc (not /pages/notion:abc)', async () => {

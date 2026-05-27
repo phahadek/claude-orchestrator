@@ -584,12 +584,14 @@ describe('pull_requests backfill migration', () => {
 vi.mock('../tasks/JiraClient.js', () => ({
   JiraClient: vi.fn().mockImplementation(() => ({
     searchIssues: vi.fn().mockResolvedValue([]),
-    getTransitions: vi.fn().mockResolvedValue([
-      { id: 'tr-1', to: { name: 'In Progress' } },
-    ]),
+    getTransitions: vi
+      .fn()
+      .mockResolvedValue([{ id: 'tr-1', to: { name: 'In Progress' } }]),
     transitionIssue: vi.fn().mockResolvedValue(undefined),
     addComment: vi.fn().mockResolvedValue(undefined),
-    buildReadyJql: vi.fn().mockReturnValue('project = TEST AND status in ("To Do")'),
+    buildReadyJql: vi
+      .fn()
+      .mockReturnValue('project = TEST AND status in ("To Do")'),
     getIssue: vi.fn().mockResolvedValue({
       fields: {
         summary: 'Test Issue',
@@ -619,11 +621,16 @@ describe('JiraTaskSourceProvider — toExternalId regression guard', () => {
 
   it('updateStatus calls getTransitions with PROJ-123 (not jira:PROJ-123)', async () => {
     await provider.updateStatus('jira:PROJ-123', '🔄 In Progress');
-    expect(vi.mocked(jiraClient.getTransitions)).toHaveBeenCalledWith('PROJ-123');
+    expect(vi.mocked(jiraClient.getTransitions)).toHaveBeenCalledWith(
+      'PROJ-123',
+    );
   });
 
   it('updateStatus calls transitionIssue with PROJ-123 (not jira:PROJ-123)', async () => {
     await provider.updateStatus('jira:PROJ-123', '🔄 In Progress');
-    expect(vi.mocked(jiraClient.transitionIssue)).toHaveBeenCalledWith('PROJ-123', 'tr-1');
+    expect(vi.mocked(jiraClient.transitionIssue)).toHaveBeenCalledWith(
+      'PROJ-123',
+      'tr-1',
+    );
   });
 });

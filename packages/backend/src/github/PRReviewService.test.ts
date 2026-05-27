@@ -2847,10 +2847,18 @@ describe('PRReviewService — taskUrl strips notion: prefix', () => {
   const approvedPayload = {
     verdict: 'approved',
     dimensions: [
-      { name: 'Title and description vs task Summary', passed: true, notes: '' },
+      {
+        name: 'Title and description vs task Summary',
+        passed: true,
+        notes: '',
+      },
       { name: 'Diff vs Context spec', passed: true, notes: '' },
       { name: 'Diff vs Acceptance Criteria', passed: true, notes: '' },
-      { name: 'Changed files vs Files/paths affected list', passed: true, notes: '' },
+      {
+        name: 'Changed files vs Files/paths affected list',
+        passed: true,
+        notes: '',
+      },
       { name: 'Size proportionality', passed: true, notes: '' },
     ],
     summary: 'All good.',
@@ -2868,7 +2876,10 @@ describe('PRReviewService — taskUrl strips notion: prefix', () => {
         setImmediate(() =>
           mockSM.emit(
             'message',
-            makeSessionEventMessage(opts.sessionId, JSON.stringify(approvedPayload)),
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(approvedPayload),
+            ),
           ),
         );
         return opts.sessionId;
