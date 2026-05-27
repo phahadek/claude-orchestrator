@@ -71,14 +71,26 @@ export class ReviewOrchestrator {
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
     sessionManager.on(
       'revert_sync_registered',
-      (payload: { prNumber: number; repo: string; syncPromise: Promise<void> }) => {
-        this.registerRevertSync(payload.prNumber, payload.repo, payload.syncPromise);
+      (payload: {
+        prNumber: number;
+        repo: string;
+        syncPromise: Promise<void>;
+      }) => {
+        this.registerRevertSync(
+          payload.prNumber,
+          payload.repo,
+          payload.syncPromise,
+        );
       },
     );
   }
 
   /** Store a pending sync promise so executeReview can await it before fetching the diff. */
-  registerRevertSync(prNumber: number, repo: string, syncPromise: Promise<void>): void {
+  registerRevertSync(
+    prNumber: number,
+    repo: string,
+    syncPromise: Promise<void>,
+  ): void {
     const key = `${prNumber}:${repo}`;
     this.pendingSyncs.set(key, syncPromise);
   }

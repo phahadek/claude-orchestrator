@@ -1043,7 +1043,11 @@ export class SessionManager extends EventEmitter {
    * Emits a 'revert_sync_registered' event so ReviewOrchestrator can await it
    * before fetching the PR diff for a re-review.
    */
-  registerRevertSync(prNumber: number, repo: string, syncPromise: Promise<void>): void {
+  registerRevertSync(
+    prNumber: number,
+    repo: string,
+    syncPromise: Promise<void>,
+  ): void {
     this.emit('revert_sync_registered', { prNumber, repo, syncPromise });
   }
 

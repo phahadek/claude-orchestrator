@@ -16,7 +16,11 @@ export async function revertBannedFiles(opts: {
   bannedFiles: string[];
   prNumber: number;
   repo: string;
-}): Promise<{ commitSha: string | null; reverted: string[]; syncedTo: string | null }> {
+}): Promise<{
+  commitSha: string | null;
+  reverted: string[];
+  syncedTo: string | null;
+}> {
   const { worktreePath, baseBranch, bannedFiles } = opts;
 
   if (bannedFiles.length === 0) {
@@ -123,7 +127,10 @@ export async function revertBannedFiles(opts: {
  * Fetch the named branch from origin and hard-reset the local HEAD to match it.
  * Returns the resulting HEAD SHA, or null if either step fails.
  */
-async function syncToOrigin(worktreePath: string, branch: string): Promise<string | null> {
+async function syncToOrigin(
+  worktreePath: string,
+  branch: string,
+): Promise<string | null> {
   try {
     await git(['fetch', 'origin', branch], worktreePath);
     await git(['reset', '--hard', `origin/${branch}`], worktreePath);

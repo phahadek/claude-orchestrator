@@ -110,7 +110,9 @@ function makeSession(
     undefined,
     undefined,
     'standard',
-    sessionManager as unknown as import('./SessionAuditor').ISessionManager | undefined,
+    sessionManager as unknown as
+      | import('./SessionAuditor').ISessionManager
+      | undefined,
     undefined,
     [],
     undefined,
@@ -190,14 +192,18 @@ describe('AgentSession.injectContextFile() — per-session revert lock', () => {
 
     // Blocked injection
     session.injectContextFile('CLAUDE.md', 'blocked\n');
-    expect(fs.readFileSync(path.join(tmpDir, 'CLAUDE.md'), 'utf8')).toBe('first\n');
+    expect(fs.readFileSync(path.join(tmpDir, 'CLAUDE.md'), 'utf8')).toBe(
+      'first\n',
+    );
 
     // Lock entry must have been consumed (deleted)
     expect(session.revertedFiles.has('CLAUDE.md')).toBe(false);
 
     // Third injection must succeed
     session.injectContextFile('CLAUDE.md', 'third\n');
-    expect(fs.readFileSync(path.join(tmpDir, 'CLAUDE.md'), 'utf8')).toBe('third\n');
+    expect(fs.readFileSync(path.join(tmpDir, 'CLAUDE.md'), 'utf8')).toBe(
+      'third\n',
+    );
   });
 
   it('lock is per-session — a new AgentSession for the same worktree starts with an empty lock', () => {

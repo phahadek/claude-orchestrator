@@ -348,7 +348,10 @@ describe('revertBannedFiles()', () => {
 
     // Local HEAD must equal origin/feature/test (no divergence)
     const localSha = await git(['rev-parse', 'HEAD'], worktreeDir);
-    const originSha = await git(['rev-parse', 'origin/feature/test'], worktreeDir);
+    const originSha = await git(
+      ['rev-parse', 'origin/feature/test'],
+      worktreeDir,
+    );
     expect(localSha).toBe(originSha);
   });
 });

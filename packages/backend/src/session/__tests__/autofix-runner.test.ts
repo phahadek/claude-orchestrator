@@ -424,7 +424,8 @@ describe('runAutofix — syncedTo after fetch + reset', () => {
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
-      if (cmd === 'git' && a[0] === 'fetch') return makeProc(1, '', 'network error');
+      if (cmd === 'git' && a[0] === 'fetch')
+        return makeProc(1, '', 'network error');
       if (cmd === 'git' && a[0] === 'rev-parse') {
         if (a[1] === '--abbrev-ref') return makeProc(0, 'feature/test\n');
         return makeProc(0, 'sha-abc\n');
