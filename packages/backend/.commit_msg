@@ -1,0 +1,3 @@
+fix: pass --session-id to CLI on initial spawn so --resume succeeds
+
+AI-Authored-By: claude-sonnet-4-6 (session: da902cd6)

@@ -36,7 +36,9 @@ export class CliSessionRunner implements ISessionRunner {
     const { worktreePath, model, allowedTools } = options;
 
     const spawnArgs = [
-      ...(resumeSessionId ? ['--resume', resumeSessionId] : []),
+      ...(resumeSessionId
+        ? ['--resume', resumeSessionId]
+        : ['--session-id', this.sessionId]),
       '--print',
       '--output-format',
       'stream-json',
