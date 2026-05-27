@@ -271,11 +271,7 @@ describe('AgentSession — file pollution E2E integration', () => {
 
 // ── Push-detected test helpers ────────────────────────────────────────────────
 
-function emitPush(
-  stdout: Readable,
-  toolUseId: string,
-  msgId?: string,
-): void {
+function emitPush(stdout: Readable, toolUseId: string, msgId?: string): void {
   stdout.push(
     JSON.stringify({
       type: 'assistant',
@@ -301,10 +297,7 @@ function emitPush(
   );
 }
 
-function makeSession(
-  sessionId: string,
-  ghClient: GitHubClient,
-): AgentSession {
+function makeSession(sessionId: string, ghClient: GitHubClient): AgentSession {
   return new AgentSession(
     sessionId,
     'https://notion.so/task',
@@ -357,7 +350,10 @@ describe('AgentSession — file pollution on push-detected', () => {
       createIssueComment: vi.fn().mockResolvedValue(undefined),
       fetchPR: vi.fn().mockImplementation(() => {
         fetchCount++;
-        return Promise.resolve({ headSha: `sha-${fetchCount}`, nodeId: 'node-x' });
+        return Promise.resolve({
+          headSha: `sha-${fetchCount}`,
+          nodeId: 'node-x',
+        });
       }),
     } as unknown as GitHubClient;
 
@@ -425,7 +421,10 @@ describe('AgentSession — file pollution on push-detected', () => {
       createIssueComment: vi.fn().mockResolvedValue(undefined),
       fetchPR: vi.fn().mockImplementation(() => {
         fetchCount++;
-        return Promise.resolve({ headSha: `session-sha-${fetchCount}`, nodeId: 'node-x' });
+        return Promise.resolve({
+          headSha: `session-sha-${fetchCount}`,
+          nodeId: 'node-x',
+        });
       }),
     } as unknown as GitHubClient;
 
@@ -449,12 +448,17 @@ describe('AgentSession — file pollution on push-detected', () => {
   });
 
   it('file_pollution_checked audit entry fires on every push-detected validation run, with banned_files_found: 0 when clean', async () => {
-    vi.mocked(validatePRFiles).mockReturnValue({ valid: true, bannedFiles: [] });
+    vi.mocked(validatePRFiles).mockReturnValue({
+      valid: true,
+      bannedFiles: [],
+    });
 
     const ghClient = {
       getPRFiles: vi.fn().mockResolvedValue(['src/index.ts']),
       createIssueComment: vi.fn().mockResolvedValue(undefined),
-      fetchPR: vi.fn().mockResolvedValue({ headSha: 'clean-sha', nodeId: 'node-x' }),
+      fetchPR: vi
+        .fn()
+        .mockResolvedValue({ headSha: 'clean-sha', nodeId: 'node-x' }),
     } as unknown as GitHubClient;
 
     session = makeSession('push-session-clean', ghClient);
@@ -498,7 +502,10 @@ describe('AgentSession — file pollution on push-detected', () => {
       createIssueComment: vi.fn().mockResolvedValue(undefined),
       fetchPR: vi.fn().mockImplementation(() => {
         fetchSeq++;
-        return Promise.resolve({ headSha: `pr410-session-sha-${fetchSeq}`, nodeId: 'node-410' });
+        return Promise.resolve({
+          headSha: `pr410-session-sha-${fetchSeq}`,
+          nodeId: 'node-410',
+        });
       }),
     } as unknown as GitHubClient;
 
