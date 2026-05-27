@@ -99,6 +99,11 @@ vi.mock('../db/db.js', async () => {
       pause_reason           TEXT,
       failing_checks         TEXT
     );
+    CREATE TABLE IF NOT EXISTS devices (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, user_agent TEXT, last_ip TEXT,
+      last_seen INTEGER, enrolled_at INTEGER NOT NULL,
+      token TEXT NOT NULL UNIQUE, revoked INTEGER NOT NULL DEFAULT 0
+    );
   `);
   return { db: memDb };
 });
