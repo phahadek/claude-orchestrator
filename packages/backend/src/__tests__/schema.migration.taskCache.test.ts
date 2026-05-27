@@ -31,9 +31,11 @@ function runMigration(db: InstanceType<typeof Database>) {
 }
 
 function getIds(db: InstanceType<typeof Database>): string[] {
-  return (db.prepare('SELECT task_id FROM task_cache ORDER BY task_id').all() as { task_id: string }[]).map(
-    (r) => r.task_id,
-  );
+  return (
+    db.prepare('SELECT task_id FROM task_cache ORDER BY task_id').all() as {
+      task_id: string;
+    }[]
+  ).map((r) => r.task_id);
 }
 
 describe('task_cache migration — DELETE-then-UPDATE prefix backfill', () => {
@@ -56,26 +58,38 @@ describe('task_cache migration — DELETE-then-UPDATE prefix backfill', () => {
   });
 
   it('only prefixed rows — no-op, rows unchanged', () => {
-    db.prepare("INSERT INTO task_cache VALUES ('notion:abc123', 1, '{}')").run();
+    db.prepare(
+      "INSERT INTO task_cache VALUES ('notion:abc123', 1, '{}')",
+    ).run();
     runMigration(db);
     expect(getIds(db)).toEqual(['notion:abc123']);
   });
 
   it('mixed raw + prefixed twin — raw row dropped, prefixed kept, no constraint violation', () => {
-    db.prepare("INSERT INTO task_cache VALUES ('abc123', 1, '{\"old\":true}')").run();
-    db.prepare("INSERT INTO task_cache VALUES ('notion:abc123', 2, '{\"new\":true}')").run();
+    db.prepare(
+      "INSERT INTO task_cache VALUES ('abc123', 1, '{\"old\":true}')",
+    ).run();
+    db.prepare(
+      "INSERT INTO task_cache VALUES ('notion:abc123', 2, '{\"new\":true}')",
+    ).run();
     expect(() => runMigration(db)).not.toThrow();
     expect(getIds(db)).toEqual(['notion:abc123']);
     // Prefixed row survives unchanged
     const row = db
-      .prepare("SELECT raw_json FROM task_cache WHERE task_id = 'notion:abc123'")
+      .prepare(
+        "SELECT raw_json FROM task_cache WHERE task_id = 'notion:abc123'",
+      )
       .get() as { raw_json: string };
     expect(JSON.parse(row.raw_json)).toEqual({ new: true });
   });
 
   it('mixed: some have twins, some do not — twins dropped, orphan raws prefixed', () => {
-    db.prepare("INSERT INTO task_cache VALUES ('has-twin', 1, '{\"old\":true}')").run();
-    db.prepare("INSERT INTO task_cache VALUES ('notion:has-twin', 2, '{}')").run();
+    db.prepare(
+      "INSERT INTO task_cache VALUES ('has-twin', 1, '{\"old\":true}')",
+    ).run();
+    db.prepare(
+      "INSERT INTO task_cache VALUES ('notion:has-twin', 2, '{}')",
+    ).run();
     db.prepare("INSERT INTO task_cache VALUES ('no-twin', 3, '{}')").run();
     runMigration(db);
     expect(getIds(db)).toEqual(['notion:has-twin', 'notion:no-twin']);
@@ -93,7 +107,9 @@ describe('task_cache migration — DELETE-then-UPDATE prefix backfill', () => {
 
   it('idempotent — running twice on mixed DB produces same result', () => {
     db.prepare("INSERT INTO task_cache VALUES ('raw-id', 1, '{}')").run();
-    db.prepare("INSERT INTO task_cache VALUES ('notion:raw-id', 2, '{}')").run();
+    db.prepare(
+      "INSERT INTO task_cache VALUES ('notion:raw-id', 2, '{}')",
+    ).run();
     runMigration(db);
     const afterFirst = getIds(db);
     runMigration(db);

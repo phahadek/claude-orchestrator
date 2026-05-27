@@ -7,8 +7,8 @@
 
 ## Task Assignment
 
-- **Task**: Add regression test that resumeOrphan spawn args use a real CLI-resolvable session_id
-- **Notion task**: https://www.notion.so/Add-regression-test-that-resumeOrphan-spawn-args-use-a-real-CLI-resolvable-session_id-36c22f9152f381c9acd0c2e3d74d2fd2
+- **Task**: Bridge fix: prevent boot crash + restore UI task→session mapping during the task-id-convention transition
+- **Notion task**: https://www.notion.so/Bridge-fix-prevent-boot-crash-restore-UI-task-session-mapping-during-the-task-id-convention-trans-36d22f9152f38146b2b5c47329be669d
 - **Project context**: https://www.notion.so/33222f9152f38188b65fd912e40890a2
 
 ---
@@ -124,7 +124,7 @@ Run in order — all must pass before opening the PR:
 
 ## Git Isolation
 
-> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\b31446ac-9155-4b06-81e8-5efeb14d6b90`.**
+> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\9e5f914e-8a93-4eee-b4ed-bc9378117a96`.**
 > This is your `cwd`. All commands run here. Never navigate to or operate on any parent directory.
 
 - All git commands must run inside the worktree directory (your `cwd`)
@@ -141,7 +141,7 @@ Run in order — all must pass before opening the PR:
 > namespace to prevent writes outside the worktree. All isolation is prompt-level.
 > Violating these rules can corrupt the developer's live environment.
 
-All file writes **must stay inside the worktree directory** (`C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\b31446ac-9155-4b06-81e8-5efeb14d6b90`).
+All file writes **must stay inside the worktree directory** (`C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\9e5f914e-8a93-4eee-b4ed-bc9378117a96`).
 
 - **Never write to the project root or any path above the worktree.**
   Scripts, tools, and generated outputs must target paths under the worktree, not the parent repo.
@@ -182,32 +182,62 @@ Use the Write tool for any file creation. Never use `cat >`, `printf >`, or `ech
 > Do NOT re-fetch this from Notion — use the content below as your source of truth.
 
 ## Summary
-The existing resumeOrphan.integration.test.ts mocks the CLI subprocess (a MockProcess that accepts any spawn args and returns canned events), so it never validated that --resume <orchestrator-session-id> actually works against the real CLI. That's why the broken-resume bug shipped. Add stricter spawn-arg assertions so a regression would fail this test.
+Two narrowly-scoped patches that unblock backend startup and dashboard rendering while the proper unification work (sibling Planning task: Audit & unify task_id storage conventions) is in flight. This is explicitly a bridge — the join-normalization piece is expected to be reverted once the unified-write-site work from the Planning task ships. The migration-safety piece stays regardless.
 ## Dependencies
-- Fix: claude --resume always fails because orchestrator's session_id isn't passed as the CLI's conversation_id
+None — Wave 1.
 ## Context
-### Root cause
-resumeOrphan.integration.test.ts:162-338 uses vi.mock to replace child_process.spawn with a mock that constructs MockProcess (defined in the same test file). The mock captures the spawn arguments but the assertions on lines 313-333 only verify:
-- That a session_status message of running was broadcast
-- That RESUME_NUDGE_MESSAGE was written to mock stdin
-- That a user_message WS event with the nudge content was emitted
-There is no assertion that the spawn args include --session-id <sessionId> on initial spawn, nor that the resume spawn uses the same UUID for --session-id (on initial) and --resume (on resume). A broken implementation that omits --session-id (today's behaviour) passes this test.
-### Fix
-Add two assertions to the existing test (or split into a new test):
-1. Initial spawn (when the session is first created): assert the captured spawn args include '--session-id' followed by the session's UUID.
-1. Resume spawn: assert the captured spawn args include '--resume' followed by the same UUID used in the initial spawn.
-Reuse the existing mockProc.spawnArgs (or capture them via a new spy on spawn). No need to invoke a real CLI — the goal is to lock in the contract that the same UUID is used for both --session-id (originally) and --resume (on resume).
+Two pain points uncovered during the 2026-05-26 debug session both trace to the same underlying issue: task IDs are persisted in inconsistent formats across sessions.task_id, pull_requests.notion_task_id, and task_cache.task_id (mix of raw <uuid> and notion:<uuid>, plus task: / board: cache-key prefixes). The proper fix is the sibling Planning task. This task is the transitional armor.
+### Piece 1 — Migration conflict-safety (permanent hardening)
+schema.ts:327-329 blindly runs UPDATE task_cache SET task_id = 'notion:' || task_id WHERE task_id NOT LIKE '%:%'. When a raw row and its notion:-prefixed twin coexist (which happens because NotionClient.writeBoardCache:144 writes raw keys while NotionTaskBackend.fetchReadyTasks writes prefixed ones), the UPDATE crashes with SqliteError: UNIQUE constraint failed: task_cache.task_id and the backend fails to boot. Observed live; required a manual cleanup script to recover.
+This patch is not a band-aid — even after writes are unified, pre-existing raw-vs-prefixed coexistence still needs a one-time defensive migration. Keep this part permanently.
+### Piece 2 — Join prefix-tolerance (band-aid, remove after sibling Planning task ships)
+getActiveTaskAggregates in queries.ts:1304-1374 joins task_cache ↔ sessions / pull_requests by comparing full task_id strings (just stripping hyphens). After the task-source-extraction PR + PR #393, sessions store notion:<id> but task_cache rows from NotionClient.writeBoardCache are still raw, so the join finds zero matches and the UI shows "No active sessions or PRs for this task" even when a session is alive in the DB.
+The band-aid: make the join prefix-tolerant via SUBSTR(s, INSTR(s, ':') + 1) (identity for raw, prefix-strip for prefixed). This restores UI functionality without changing any write site.
+Explicit follow-up: once the Planning task's derived code tasks unify all writes to a single canonical format, this join change should be reverted to direct column comparison (faster, uses indexes). Leave a TODO comment on the modified join referencing the Planning task's Notion URL.
+## Fix
+### Piece 1 — schema.ts:312-330
+Replace the unconditional UPDATE with a DELETE-then-UPDATE pattern that drops raw rows whose prefixed twin already exists, then prefixes the remaining raw rows:
+```sql
+-- Drop raw task_cache rows whose 'notion:'-prefixed twin already exists.
+DELETE FROM task_cache
+WHERE task_id NOT LIKE '%:%'
+  AND EXISTS (SELECT 1 FROM task_cache t2 WHERE t2.task_id = 'notion:' || task_cache.task_id);
+
+UPDATE task_cache
+SET task_id = 'notion:' || task_id
+WHERE task_id NOT LIKE '%:%';
+```
+Apply the same DELETE-then-UPDATE pattern to the yaml: backfill at :323-325.
+### Piece 2 — queries.ts:1304-1374
+Wrap session/review/PR task_id columns in both the PARTITION BY and JOIN ON clauses with REPLACE(SUBSTR(COALESCE(<col>, ''), INSTR(COALESCE(<col>, ''), ':') + 1), '-', ''). Add the same normalization to the tc.task_id side of all three joins. ~6-line edit.
+Add a TODO comment block above the joins:
+```typescript
+// TODO: revert to direct column comparison once the unified-task-id work lands
+// (see Planning task: https://www.notion.so/36d22f9152f381d4b070d12c34142ca6).
+// The SUBSTR-after-colon wrappers are a prefix-tolerance band-aid; they prevent
+// index usage on idx_sessions_notion_task_id_session_type and friends.
+```
+## Out of scope
+- Touching any write site (NotionClient, AutoMerger, AgentSession, NotionTaskBackend, etc.) — that's the Planning task's domain.
+- Renaming pull_requests.notion_task_id — also Planning.
+- Performance tuning of the new joins — accepted regression for the bridge period.
+## Files / paths affected
+- packages/backend/src/db/schema.ts (update — migration block at :312-330)
+- packages/backend/src/db/queries.ts (update — getActiveTaskAggregates query at :1304-1374)
 ## Acceptance criteria
 ### 🤖 Automated tests
 tsc --noEmit passes for both packages
-New assertion: resume spawn args include '--resume', <sessionId> where <sessionId> is the row's session_id
-New assertion: initial spawn args (whichever test covers initial spawn) include '--session-id', <sessionId>
-If the companion --session-id fix is reverted (re-introducing the bug), the new assertions fail
+Migration unit test: fresh DB → no-op (no rows affected).
+Migration unit test: DB with only raw rows → all prefixed.
+Migration unit test: DB with mixed raw + prefixed twins → raw rows dropped, prefixed kept, no constraint violation.
+Migration unit test: idempotent — running twice produces same result.
+Aggregate unit test: task_cache row keyed raw + session with task_id = 'notion:<id>' for same external ID → getActiveTaskAggregates([raw_id]) returns the session as code_session_id (not null).
+Aggregate unit test: same shape but session is raw → still works (backwards-compat).
+Aggregate unit test: pull_requests.notion_task_id = 'notion:<id>' with raw tc.task_id → PR fields populated.
+Existing queries.taskAggregates.test.ts tests continue to pass.
 ### 👁️ Manual verification
-Covered by the Manual Verification Gate task.
-## Files / paths affected
-- packages/backend/src/__tests__/resumeOrphan.integration.test.ts (update — add spawn-arg assertions)
-- Possibly packages/backend/src/__tests__/SessionManager.test.ts (update — if it's a better home for the assertion)
+Backend boots cleanly even when task_cache has mixed raw + prefixed rows.
+Launch a fresh session; within ~30s the dashboard's task panel shows the session card associated with the task. (In M6 gate.)
 ## Implementation notes
 > To be filled in during/after implementation.
 
@@ -216,263 +246,546 @@ Covered by the Manual Verification Gate task.
 > These are the current contents of files listed in the task spec.
 > They were pre-read by the orchestrator so you can skip exploration.
 
-### `packages/backend/src/__tests__/resumeOrphan.integration.test.ts`
+### `packages/backend/src/db/schema.ts`
 ```
-/**
- * Integration tests for SessionManager.resumeOrphanSessions().
- *
- * These tests "seed" sessions via the mocked DB layer and call
- * resumeOrphanSessions() on a real SessionManager. They verify the three
- * end-to-end behaviors required by the hardening task:
- *   1. Missing worktree → session marked error, server stays alive, other
- *      sessions resume normally.
- *   2. Healthy worktree → session re-attached, status broadcast, resume nudge
- *      delivered via stdin to the CLI runner.
- *   3. pr_url carry-forward → AgentSession.prUrl populated from row.pr_url so
- *      a subsequent clean exit does not delete the PR branch.
- */
+import { db } from './db';
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { EventEmitter } from 'events';
-import { Readable, Writable } from 'stream';
+export function runMigrations(): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      session_id          TEXT    PRIMARY KEY,
+      task_id             TEXT,
+      task_url            TEXT,
+      project_context_url TEXT,
+      status              TEXT    NOT NULL,
+      started_at          INTEGER NOT NULL,
+      ended_at            INTEGER,
+      pr_url              TEXT,
+      worktree_path       TEXT,
+      favorited           INTEGER NOT NULL DEFAULT 0
+    );
 
-// ── Module mocks ─────────────────────────────────────────────────────────────
-// All vi.mock calls must appear before importing the code under test.
+    CREATE TABLE IF NOT EXISTS session_events (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id   TEXT    NOT NULL,
+      event_type   TEXT    NOT NULL,
+      payload      TEXT    NOT NULL,
+      timestamp    INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+    );
 
-function createMockProc() {
-  const stdout = new Readable({ read() {} });
-  const stderr = new Readable({ read() {} });
-  const stdinChunks: string[] = [];
-  const stdin = new Writable({
-    write(chunk, _enc, cb) {
-      stdinChunks.push(chunk.toString());
-      cb();
-    },
-  });
-  const proc = Object.assign(new EventEmitter(), {
-    stdout,
-    stderr,
-    stdin,
-    kill: vi.fn(),
-    pid: 12345,
-    exitCode: null as number | null,
-  });
-  return { proc, stdinChunks, stdout, stderr };
-}
+    CREATE TABLE IF NOT EXISTS permission_events (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id      TEXT    NOT NULL,
+      tool_name       TEXT    NOT NULL,
+      proposed_action TEXT,
+      decision        TEXT    NOT NULL,
+      rule_matched    TEXT,
+      decided_at      INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+    );
 
-let mockProc: ReturnType<typeof createMockProc>;
+    CREATE TABLE IF NOT EXISTS permission_rules (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      order_index INTEGER NOT NULL,
+      pattern     TEXT    NOT NULL,
+      match_type  TEXT    NOT NULL,
+      decision    TEXT    NOT NULL,
+      label       TEXT,
+      enabled     INTEGER NOT NULL DEFAULT 1
+    );
 
-vi.mock('child_process', () => ({
-  spawn: vi.fn(() => mockProc.proc),
-  execSync: vi.fn(() => ''),
-  execFile: vi.fn(),
-}));
+    CREATE TABLE IF NOT EXISTS permission_denials (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id  TEXT    NOT NULL,
+      tool_name   TEXT    NOT NULL,
+      tool_use_id TEXT    NOT NULL,
+      tool_input  TEXT    NOT NULL,
+      timestamp   INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+    );
 
-// fs is mocked so existsSync can be controlled per-test; readFileSync /
-// statSync / writeFileSync are no-ops because the SessionManager paths under
-// test (resumeOrphanSessions → resumeSession) only need existsSync. Anything
-// else used transitively is shimmed below as a safe no-op.
-vi.mock('fs', async () => {
-  const actual = await vi.importActual<typeof import('fs')>('fs');
-  return {
-    ...actual,
-    default: {
-      ...actual,
-      existsSync: vi.fn(() => true),
-      readFileSync: vi.fn(() => ''),
-      writeFileSync: vi.fn(),
-      statSync: vi.fn(() => ({ isFile: () => true })),
-    },
-    existsSync: vi.fn(() => true),
-    readFileSync: vi.fn(() => ''),
-    writeFileSync: vi.fn(),
-    statSync: vi.fn(() => ({ isFile: () => true })),
-  };
-});
+    CREATE TABLE IF NOT EXISTS task_cache (
+      task_id    TEXT    PRIMARY KEY,
+      fetched_at INTEGER NOT NULL,
+      raw_json   TEXT    NOT NULL
+    );
 
-const projectFixture = {
-  id: 'test-project',
-  name: 'Test Project',
-  projectDir: '/fake/project',
-  contextUrl: 'https://notion.so/ctx',
-  boardId: 'board-1',
-  githubRepo: 'owner/repo',
-  taskSource: 'notion' as const,
-};
+    CREATE TABLE IF NOT EXISTS settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
 
-vi.mock('../config', () => ({
-  AUTO_REVIEW_ENABLED: false,
-  AUTO_REVIEW_CONCURRENCY: 1,
-  ALLOWED_TOOLS: [],
-  config: {
-    claudePath: '/fake/claude',
-    maxConcurrentCodeSessions: 20,
-    projectDir: '/fake/project',
-  },
-  getProjectById: vi.fn((id: string) =>
-    id === 'test-project' ? projectFixture : undefined,
-  ),
-  getAllProjects: vi.fn(() => [projectFixture]),
-  normalizePath: (p: string) => p,
-  runtimeSettings: {
-    session_mode: 'cli',
-    code_session_model: '',
-    review_session_model: '',
-    max_concurrent_code_sessions: 20,
-  },
-}));
+    CREATE TABLE IF NOT EXISTS session_audits (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id    TEXT NOT NULL,
+      pr_opened     INTEGER NOT NULL DEFAULT 0,
+      pr_targets    TEXT,
+      task_status   TEXT,
+      violations    TEXT NOT NULL DEFAULT '[]',
+      spec_mismatch TEXT,
+      audited_at    TEXT NOT NULL
+    );
 
-vi.mock('../session/orchestrator-config', () => ({
-  loadOrchestratorConfig: vi.fn(() => ({
-    allowedTools: [],
-    prGate: { typeCheck: '', build: '' },
-    bootstrapScript: '',
-    bashRules: [],
-  })),
-}));
+    CREATE TABLE IF NOT EXISTS projects (
+      id           TEXT    PRIMARY KEY,
+      name         TEXT    NOT NULL,
+      project_dir  TEXT    NOT NULL,
+      context_url  TEXT,
+      github_repo  TEXT,
+      task_source  TEXT    NOT NULL DEFAULT 'notion',
+      created_at   INTEGER NOT NULL,
+      updated_at   INTEGER NOT NULL
+    );
 
-vi.mock('../session/orchestrator-claudemd', () => ({
-  buildReviewClaudeMd: vi.fn(() => ''),
-}));
+    CREATE TABLE IF NOT EXISTS milestones (
+      id            TEXT    PRIMARY KEY,
+      project_id    TEXT    NOT NULL,
+      name          TEXT    NOT NULL,
+      source_id     TEXT,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      created_at    INTEGER NOT NULL,
+      updated_at    INTEGER NOT NULL,
+      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
 
-vi.mock('../session/ContextBuilder', () => ({
-  buildSessionContext: vi.fn(() => ''),
-}));
+    CREATE TABLE IF NOT EXISTS local_branches (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id    TEXT NOT NULL,
+      session_id    TEXT NOT NULL,
+      branch_name   TEXT NOT NULL,
+      base_branch   TEXT NOT NULL DEFAULT 'dev',
+      status        TEXT NOT NULL DEFAULT 'open',
+      review_result TEXT,
+      created_at    TEXT NOT NULL,
+      updated_at    TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_local_branches_project_status ON local_branches(project_id, status);
 
-const fakeTaskBackend = {
-  fetchTaskPage: vi.fn(async () => ''),
-  fetchReadyTasks: vi.fn(async () => []),
-  updateStatus: vi.fn(async () => {}),
-  attachPR: vi.fn(async () => {}),
-};
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts         INTEGER NOT NULL,
+      event_type TEXT    NOT NULL,
+      actor_type TEXT    NOT NULL,
+      actor_id   TEXT,
+      project_id TEXT,
+      task_id    TEXT,
+      payload    TEXT    NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_log_ts ON audit_log(ts);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_event_type ON audit_log(event_type);
 
-vi.mock('../tasks/TaskBackend', () => ({
-  getTaskBackend: vi.fn(() => fakeTaskBackend),
-}));
+    CREATE TABLE IF NOT EXISTS devices (
+      id          TEXT    PRIMARY KEY,
+      name        TEXT    NOT NULL,
+      user_agent  TEXT,
+      last_ip     TEXT,
+      last_seen   INTEGER,
+      enrolled_at INTEGER NOT NULL,
+      token       TEXT    NOT NULL UNIQUE,
+      revoked     INTEGER NOT NULL DEFAULT 0
+    );
 
-vi.mock('../routes/tasks', () => ({
-  emitTaskUpdated: vi.fn(),
-}));
+    CREATE TABLE IF NOT EXISTS pr_review_comments_routed (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      pr_number  INTEGER NOT NULL,
+      repo       TEXT    NOT NULL,
+      comment_id TEXT    NOT NULL,
+      routed_at  INTEGER NOT NULL,
+      UNIQUE(pr_number, repo, comment_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_pr_review_comments_routed_pr ON pr_review_comments_routed(pr_number, repo);
 
-vi.mock('../tasks/TaskStatusEngine', () => ({
-  deriveDisplayStatusFromDb: vi.fn(() => 'Running'),
-}));
+    CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events(session_id, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_session_events_session_id_event_type ON session_events(session_id, event_type);
+    CREATE INDEX IF NOT EXISTS idx_session_events_timestamp ON session_events(timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_sessions_archived_started_at ON sessions(archived, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sessions_notion_task_id_session_type ON sessions(task_id, session_type, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_pull_requests_notion_task_id_pr_number ON pull_requests(notion_task_id, pr_number DESC);
+  `);
 
-vi.mock('../db/queries', () => ({
-  getSessionsByStatus: vi.fn(() => []),
-  getSession: vi.fn(),
-  getEventsBySession: vi.fn(() => []),
-  getPRByNotionTaskId: vi.fn(() => null),
-  getPRByNumber: vi.fn(() => null),
-  updateSessionStatus: vi.fn(),
-  markSessionDone: vi.fn(),
-  backfillStuckResultSessions: vi.fn(() => 0),
-  insertSession: vi.fn(),
-  insertEvent: vi.fn(),
-  upsertSessionEvent: vi.fn(() => 1),
-  upsertPullRequest: vi.fn(),
-  insertPermissionDenial: vi.fn(),
-  incrementTokens: vi.fn(),
-  insertSessionAudit: vi.fn(),
-  setSessionModel: vi.fn(),
-  getPRBySessionId: vi.fn(() => null),
-  setHeadSha: vi.fn(),
-}));
+  // Idempotent column additions for existing databases
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN worktree_path TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN project_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'standard'`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN note TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN tags TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE session_events ADD COLUMN message_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN favorited INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN total_input_tokens INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN total_output_tokens INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN review_session_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE pull_requests ADD COLUMN review_iteration INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN head_sha TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN last_reviewed_sha TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE projects ADD COLUMN auto_launch_enabled INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE projects ADD COLUMN auto_launch_milestone_id TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN pause_reason TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE pull_reques
+[... truncated]
+```
 
-// Now import the modules under test (after all mocks are in place).
-import fs from 'fs';
-import { spawn, execSync } from 'child_process';
-import {
-  SessionManager,
-  RESUME_NUDGE_MESSAGE,
-} from '../session/SessionManager';
-import * as queries from '../db/queries';
-import type { ServerMessage } from '../ws/types';
-import type { Session } from '../db/types';
-import { backfillStuckResultSessions } from '../db/queries';
+### `packages/backend/src/db/queries.ts`
+```
+import { db } from './db';
+import { parseTaskId } from '../tasks/taskId';
+import type {
+  Session,
+  NewSession,
+  SessionEvent,
+  NewSessionEvent,
+  PermissionEvent,
+  NewPermissionEvent,
+  PermissionRule,
+  NewPermissionRule,
+  PermissionDenialRow,
+  NewPermissionDenialRow,
+  TaskCache,
+  PullRequestRow,
+  PauseReason,
+  ProjectRow,
+  NewProjectRow,
+  MilestoneRow,
+  NewMilestoneRow,
+  LocalBranchRow,
+  NewLocalBranchRow,
+  DeviceRow,
+  NewDeviceRow,
+} from './types';
 
-function makeRunningSession(overrides: Partial<Session> = {}): Session {
-  return {
-    session_id: 'session-uuid-default',
-    task_id: 'notion-task-id',
-    task_url: 'https://notion.so/task',
-    project_context_url: 'https://notion.so/ctx',
-    project_id: 'test-project',
-    status: 'running',
-    started_at: 1_000_000,
+// ─── sessions ──────────────────────────────────────────────────────────────
+
+const stmtInsertSession = db.prepare<NewSession>(`
+  INSERT INTO sessions
+    (session_id, task_id, task_url, project_context_url,
+     project_id, status, started_at, ended_at, pr_url, worktree_path, session_type, task_name)
+  VALUES
+    (@session_id, @task_id, @task_url, @project_context_url,
+     @project_id, @status, @started_at, @ended_at, @pr_url, @worktree_path, @session_type, @task_name)
+`);
+
+const stmtUpdateSessionStatus = db.prepare<{
+  session_id: string;
+  status: string;
+  ended_at: number | null;
+}>(`
+  UPDATE sessions
+  SET status = @status, ended_at = @ended_at
+  WHERE session_id = @session_id
+`);
+
+const stmtGetSession = db.prepare<{ session_id: string }>(`
+  SELECT * FROM sessions WHERE session_id = @session_id
+`);
+
+const stmtGetAllSessions = db.prepare(`
+  SELECT * FROM sessions ORDER BY started_at DESC
+`);
+
+const stmtGetAllSessionIds = db.prepare(`
+  SELECT session_id FROM sessions
+`);
+
+const stmtDeleteSessionEvents = db.prepare<{ session_id: string }>(`
+  DELETE FROM session_events WHERE session_id = @session_id
+`);
+
+const stmtDeleteSession = db.prepare<{ session_id: string }>(`
+  DELETE FROM sessions WHERE session_id = @session_id
+`);
+
+const stmtInsertSessionOrIgnore = db.prepare<NewSession>(`
+  INSERT OR IGNORE INTO sessions
+    (session_id, task_id, task_url, project_context_url,
+     project_id, status, started_at, ended_at, pr_url, worktree_path, session_type, task_name)
+  VALUES
+    (@session_id, @task_id, @task_url, @project_context_url,
+     @project_id, @status, @started_at, @ended_at, @pr_url, @worktree_path, @session_type, @task_name)
+`);
+
+export function insertSession(s: NewSession): void {
+  stmtInsertSession.run({
     ended_at: null,
     pr_url: null,
-    worktree_path: '/fake/project/.claude/worktrees/session-uuid-default',
-    archived: 0,
-    favorited: 0,
+    worktree_path: null,
+    project_id: null,
     session_type: 'standard',
-    note: null,
-    tags: null,
-    model: null,
-    task_name: 'fixture-task',
-    ...overrides,
-  } as Session;
+    ...s,
+    task_name: s.task_name ?? null,
+  });
 }
 
-beforeEach(() => {
-  mockProc = createMockProc();
-  vi.clearAllMocks();
-  // execSync no-op stub (used for git fetch / git rev-parse / git worktree).
-  vi.mocked(execSync).mockReturnValue('');
-});
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
-
-// ── Test 1: missing-worktree pre-check ─────────────────────────────────────
-describe('resumeOrphanSessions() — missing-worktree pre-check (integration)', () => {
-  it('marks the orphan with a missing worktree as error and emits session_ended without throwing', async () => {
-    const missing = makeRunningSession({
-      session_id: 'missing-session',
-      worktree_path: '/fake/project/.claude/worktrees/missing-session',
-    });
-    vi.mocked(queries.getSessionsByStatus).mockReturnValue([missing]);
-
-    // fs.existsSync(missing.worktreePath) → false (worktree was deleted).
-    vi.mocked(fs.existsSync).mockReturnValue(false);
-
-    const sm = new SessionManager();
-    const messages: ServerMessage[] = [];
-    sm.on('message', (m: ServerMessage) => messages.push(m));
-
-    // Server-alive proxy: resumeOrphanSessions must not throw.
-    await expect(sm.resumeOrphanSessions()).resolves.not.toThrow();
-
-    // The missing session must be marked as error.
-    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
-      'missing-session',
-      'error',
-      expect.any(Number),
-    );
-    // ... and a session_ended (status=error) broadcast must have been emitted.
-    const ended = messages.filter(
-      (m) =>
-        m.type === 'session_ended' &&
-        (m as { sessionId: string }).sessionId === 'missing-session',
-    );
-    expect(ended).toHaveLength(1);
-    expect((ended[0] as { status: string }).status).toBe('error');
-
-    // No CLI process should have been spawned for the missing-worktree orphan.
-    expect(spawn).not.toHaveBeenCalled();
+export function updateSessionStatus(
+  sessionId: string,
+  status: string,
+  endedAt?: number,
+): void {
+  stmtUpdateSessionStatus.run({
+    session_id: sessionId,
+    status,
+    ended_at: endedAt ?? null,
   });
+}
 
-  it('resumes a healthy orphan in the same batch even when another orphan has a missing worktree', async () => {
-    const missing = makeRunningSession({
-      session_id: 'missing-session',
-      worktree_path: '/fake/project/.claude/worktrees/missing-session',
-    });
-    const healthy = makeRunningSession({
-      session_id: 'healthy-session',
-      worktree_path: '/fake/project/.claude/worktrees/healthy-session',
-    });
-    vi.mocked(querie
+const stmtMarkSessionDone = db.prepare<{
+  session_id: string;
+  ended_at: number;
+  pr_url: string | null;
+}>(`
+  UPDATE sessions
+  SET status = 'done', ended_at = @ended_at, pr_url = COALESCE(@pr_url, pr_url)
+  WHERE session_id = @session_id
+`);
+
+/**
+ * Atomically mark a session as done, setting ended_at and pr_url in a single
+ * write. Preferred over updateSessionStatus for clean-exit paths because it
+ * also persists pr_url without a second round-trip.
+ * pr_url is only overwritten when non-null — existing value is preserved otherwise.
+ */
+export function markSessionDone(
+  sessionId: string,
+  endedAt: number,
+  prUrl?: string | null,
+): void {
+  stmtMarkSessionDone.run({
+    session_id: sessionId,
+    ended_at: endedAt,
+    pr_url: prUrl ?? null,
+  });
+}
+
+/**
+ * Backfill sessions that are stuck at status='running' but whose last recorded
+ * event is a 'result' event (the CLI's clean-exit signal). These sessions
+ * completed normally but the done transition was missed — most likely because
+ * the downstream review pipeline threw before handleCleanExit could persist it.
+ * Returns the number of sessions updated.
+ */
+export function backfillStuckResultSessions(): number {
+  const stuckRows = db
+    .prepare(
+      `
+    SELECT s.session_id, e.timestamp AS last_ts
+    FROM sessions s
+    JOIN session_events e ON e.session_id = s.session_id
+    WHERE s.status = 'running'
+      AND e.id = (
+        SELECT MAX(id) FROM session_events WHERE session_id = s.session_id
+      )
+      AND e.event_type = 'result'
+  `,
+    )
+    .all() as Array<{ session_id: string; last_ts: number }>;
+
+  if (stuckRows.length === 0) return 0;
+
+  const updateStmt = db.prepare(
+    `UPDATE sessions SET status = 'done', ended_at = ? WHERE session_id = ? AND status = 'running'`,
+  );
+
+  for (const row of stuckRows) {
+    updateStmt.run(row.last_ts, row.session_id);
+    console.log(
+      `[backfill] session ${row.session_id.slice(0, 8)} running→done (last_event=result at ${new Date(row.last_ts).toISOString()})`,
+    );
+  }
+  return stuckRows.length;
+}
+
+export function getSession(sessionId: string): Session | undefined {
+  return stmtGetSession.get({ session_id: sessionId }) as Session | undefined;
+}
+
+export function getAllSessions(): Session[] {
+  return stmtGetAllSessions.all() as Session[];
+}
+
+export function getAllSessionIds(): string[] {
+  return (stmtGetAllSessionIds.all() as { session_id: string }[]).map(
+    (r) => r.session_id,
+  );
+}
+
+export function insertSessionOrIgnore(s: NewSession): void {
+  stmtInsertSessionOrIgnore.run({
+    ended_at: null,
+    pr_url: null,
+    worktree_path: null,
+    project_id: null,
+    session_type: 'standard',
+    ...s,
+    task_name: s.task_name ?? null,
+  });
+}
+
+export function deleteSession(sessionId: string): boolean {
+  stmtDeleteSessionEvents.run({ session_id: sessionId });
+  const result = stmtDeleteSession.run({ session_id: sessionId });
+  return result.changes > 0;
+}
+
+/**
+ * Delete sessions that have no events — these are "ghost sessions" created by
+ * either empty JSONL imports or session starts that never ran the subprocess.
+ * Returns the number of sessions deleted.
+ */
+export function deleteGhostSessions(): number {
+  const result = db
+    .prepare(
+      `
+    DELETE FROM sessions
+    WHERE session_id NOT IN (SELECT DISTINCT session_id FROM session_events)
+  `,
+    )
+    .run();
+  return result.changes;
+}
+
+export function getSessionsByStatus(statuses: string[]): Session[] {
+  const placeholders = statuses.map(() => '?').join(', ');
+  return db
+    .prepare(
+      `
+    SELECT * FROM sessions WHERE status IN (${placeholders}) ORDER BY started_at DESC
+  `,
+    )
+    .all(...statuses) as Session[];
+}
+
+/**
+ * Returns true when a standard (non-review) session is currently active for the
+ * given task id. "Active" means not in a terminal status (done, error, killed).
+ * Used by AutoLauncher to avoid re-launching a task whose status hasn't yet
+ * propagated back from the task backend.
+ * Strips hyphens from both sides to normalize UUID format differences.
+ */
+export function hasActiveSessionForTask(taskId: string): boolean {
+  const norm = taskId.replace(/-/g, '');
+  const row = db
+    .prepare<{ task_id: string }>(
+      `
+    SELECT 1 FROM sessions
+    WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
+      AND status NOT IN ('done', 'error', 'killed')
+      AND (session_type = 'standard' OR session_type IS NULL)
+    LIMIT 1
+  `,
+    )
+    .get({ task_id: norm });
+  return !!row;
+}
+
+export function getActiveSessions(): Session[] {
+  // LEFT JOIN pull_requests so that prUrl is populated even when sessions.pr_url
+  // is NULL (e.g. sessions started before their PR was linked back to the row).
+  return db
+    .prepare(
+      `
+    SELECT
+      s.session_id, s.task_id, s.task_url, s.project_context_url,
+      s.project_id, s.status, s.started_at, s.ended_at, s.worktree_path,
+      s.archived, s.favorited, s.session_type, s.note, s.tags,
+      s.total_input_tokens, s.total_output_tokens, s.model, s.task_name,
+      COALESCE(s.pr_url, (
+        SELECT p.pr_url FROM pull_requests p WHERE p.session_id = s.session_id LIMIT 1
+      )) AS pr_url
+    FROM sessions s
+    WHERE s.archived = 0
+    ORDER BY s.started_at DESC
+  `,
+    )
+    .all() as Session[];
+}
+
+export function getArchivedSessions(): Session[] {
+  return db
+    .prepare(
+      'SELECT * FROM sessions WH
 [... truncated]
 ```
 
