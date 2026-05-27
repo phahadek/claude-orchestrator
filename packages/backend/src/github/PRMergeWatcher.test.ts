@@ -946,7 +946,10 @@ describe('PRMergeWatcher autofix-first CI failure path', () => {
     vi.mocked(getProjectByGithubRepo).mockReturnValue(null);
     vi.mocked(getSession).mockReturnValue(null);
     vi.mocked(loadAutofixCommands).mockReturnValue([]);
-    vi.mocked(runAutofix).mockResolvedValue({ success: true, summary: 'no diff' });
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      summary: 'no diff',
+    });
   });
 
   function mockCategorizeCI(github: GitHubClient): void {
