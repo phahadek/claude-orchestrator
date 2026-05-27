@@ -209,7 +209,10 @@ export class LocalTaskBackend implements TaskBackend {
     }));
     // Overwrite board cache with prefixed IDs so /api/tasks/active joins correctly.
     if (milestoneId !== null) {
-      upsertTaskCache(`board:${milestoneId}`, JSON.stringify(prefixed.map((r) => r.task)));
+      upsertTaskCache(
+        `board:${milestoneId}`,
+        JSON.stringify(prefixed.map((r) => r.task)),
+      );
     }
     return prefixed;
   }
