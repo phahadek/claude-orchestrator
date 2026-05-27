@@ -9,6 +9,10 @@ const MIGRATION_SQL = `
   WHERE task_id NOT LIKE '%:%'
     AND EXISTS (SELECT 1 FROM task_cache t2 WHERE t2.task_id = 'notion:' || task_cache.task_id);
 
+  DELETE FROM task_cache
+  WHERE task_id NOT LIKE '%:%'
+    AND EXISTS (SELECT 1 FROM task_cache t2 WHERE t2.task_id = 'yaml:' || task_cache.task_id);
+
   UPDATE task_cache
   SET task_id = 'notion:' || task_id
   WHERE task_id NOT LIKE '%:%';
@@ -103,6 +107,15 @@ describe('task_cache migration — DELETE-then-UPDATE prefix backfill', () => {
     const afterSecond = getIds(db);
     expect(afterSecond).toEqual(afterFirst);
     expect(afterSecond).toEqual(['notion:abc123']);
+  });
+
+  it('yaml:-prefixed twin — raw row dropped, yaml: prefixed row kept, no constraint violation', () => {
+    db.prepare("INSERT INTO task_cache VALUES ('abc123', 1, '{\"old\":true}')").run();
+    db.prepare(
+      "INSERT INTO task_cache VALUES ('yaml:abc123', 2, '{\"new\":true}')",
+    ).run();
+    expect(() => runMigration(db)).not.toThrow();
+    expect(getIds(db)).toEqual(['yaml:abc123']);
   });
 
   it('idempotent — running twice on mixed DB produces same result', () => {

@@ -328,6 +328,10 @@ export function runMigrations(): void {
     WHERE task_id NOT LIKE '%:%'
       AND EXISTS (SELECT 1 FROM task_cache t2 WHERE t2.task_id = 'notion:' || task_cache.task_id);
 
+    DELETE FROM task_cache
+    WHERE task_id NOT LIKE '%:%'
+      AND EXISTS (SELECT 1 FROM task_cache t2 WHERE t2.task_id = 'yaml:' || task_cache.task_id);
+
     UPDATE task_cache
     SET task_id = 'notion:' || task_id
     WHERE task_id NOT LIKE '%:%';
