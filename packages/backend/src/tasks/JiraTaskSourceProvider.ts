@@ -52,7 +52,7 @@ export class JiraTaskSourceProvider implements TaskBackend {
   ) {}
 
   async fetchReadyTasks(
-    _milestoneId: string | null,
+    milestoneId: string | null,
     _skipCache?: boolean,
   ): Promise<ResolvedTask[]> {
     const jql = this.buildReadyJql();
@@ -74,10 +74,15 @@ export class JiraTaskSourceProvider implements TaskBackend {
     }
 
     const resolved = resolver.resolve(tasks, 'jira');
-    return resolved.map((r) => ({
+    const prefixed = resolved.map((r) => ({
       ...r,
       task: { ...r.task, id: formatTaskId('jira', r.task.id) },
     }));
+    // Overwrite board cache with prefixed IDs so /api/tasks/active joins correctly.
+    if (milestoneId !== null) {
+      upsertTaskCache(`board:${milestoneId}`, JSON.stringify(prefixed.map((r) => r.task)));
+    }
+    return prefixed;
   }
 
   async attachPR(taskId: string, prUrl: string): Promise<void> {

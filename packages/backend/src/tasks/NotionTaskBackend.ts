@@ -41,7 +41,7 @@ export class NotionTaskBackend implements TaskBackend {
       milestone.sourceId,
       skipCache,
     );
-    return tasks.map((r) => {
+    const prefixed = tasks.map((r) => {
       const prefixedId = formatTaskId('notion', r.task.id);
       // Also cache under the prefixed key so getTaskTitleFromCache works with
       // prefixed session.task_id lookups.
@@ -55,6 +55,13 @@ export class NotionTaskBackend implements TaskBackend {
         source: 'notion' as const,
       };
     });
+    // Overwrite board cache with prefixed IDs so /api/tasks/active joins correctly
+    // against per-task rows (fixes post-D3 mismatch where raw IDs were stored).
+    upsertTaskCache(
+      `board:${milestone.sourceId}`,
+      JSON.stringify(prefixed.map((r) => r.task)),
+    );
+    return prefixed;
   }
 
   async attachPR(taskId: string, prUrl: string): Promise<void> {

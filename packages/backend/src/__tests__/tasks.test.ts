@@ -152,6 +152,61 @@ describe('GET /api/tasks/active', () => {
     );
     expect(res.status).toBe(404);
   });
+
+  it('returns non-empty results when board cache has prefixed task IDs matching aggregates', async () => {
+    vi.mocked(queries.getTaskCache).mockReturnValue({
+      cache_key: 'board:board-1',
+      raw_json: JSON.stringify([
+        { id: 'notion:task-abc', title: 'Task ABC', status: '🗂️ Ready', type: '💻 Code', dependsOn: [], notionUrl: '' },
+      ]),
+      fetched_at: Date.now(),
+    } as never);
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('notion:task-abc', '🗂️ Ready'),
+    ]);
+
+    const res = await supertest(buildApp()).get('/api/tasks/active?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].taskId).toBe('notion:task-abc');
+  });
+
+  it('dependency resolver populates blocked and blockerNames when dependsOn uses prefixed IDs', async () => {
+    const boardTasks: NotionTask[] = [
+      {
+        id: 'notion:task-a',
+        title: 'Task A',
+        status: '🗂️ Ready',
+        type: '💻 Code',
+        dependsOn: ['notion:task-b'],
+        notionUrl: '',
+      },
+      {
+        id: 'notion:task-b',
+        title: 'Task B',
+        status: '🗂️ Ready',
+        type: '💻 Code',
+        dependsOn: [],
+        notionUrl: '',
+      },
+    ];
+    vi.mocked(queries.getTaskCache).mockReturnValue({
+      cache_key: 'board:board-1',
+      raw_json: JSON.stringify(boardTasks),
+      fetched_at: Date.now(),
+    } as never);
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('notion:task-a', '🗂️ Ready'),
+      makeAggregate('notion:task-b', '🗂️ Ready'),
+    ]);
+
+    const res = await supertest(buildApp()).get('/api/tasks/active?projectId=proj-1');
+    expect(res.status).toBe(200);
+    const taskA = res.body.find((t: { taskId: string }) => t.taskId === 'notion:task-a');
+    expect(taskA).toBeDefined();
+    expect(taskA.blocked).toBe(true);
+    expect(taskA.blockerNames).toContain('Task B');
+  });
 });
 
 // ── totalTokens aggregation ────────────────────────────────────────────────────
