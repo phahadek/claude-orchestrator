@@ -1,4 +1,6 @@
 import { EventEmitter } from 'events';
+import fs from 'fs';
+import path from 'path';
 import { ALLOWED_TOOLS, runtimeSettings } from '../config';
 import {
   upsertSessionEvent,
@@ -31,6 +33,8 @@ import {
   validatePRBody,
   buildValidationComment,
 } from '../github/PRBodyValidator';
+import { validatePRFiles } from '../github/PRFileValidator';
+import { revertBannedFiles } from '../github/PRFileReverter';
 import { checkCommitAttribution } from '../github/CommitAttributionWatcher';
 import { recordEvent } from '../audit/AuditLog';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
@@ -45,6 +49,37 @@ import {
 } from './eventTypes';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
+
+/** Walk a directory tree collecting all .gitignore files, root-first. */
+function collectGitignoreSources(
+  rootDir: string,
+): Array<{ dir: string; content: string }> {
+  const results: Array<{ dir: string; content: string }> = [];
+  function walk(dir: string): void {
+    const rel = path.relative(rootDir, dir).replace(/\\/g, '/');
+    const gitignorePath = path.join(dir, '.gitignore');
+    if (fs.existsSync(gitignorePath)) {
+      try {
+        results.push({ dir: rel, content: fs.readFileSync(gitignorePath, 'utf8') });
+      } catch {
+        // ignore unreadable
+      }
+    }
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.isDirectory() && e.name !== 'node_modules' && e.name !== '.git') {
+        walk(path.join(dir, e.name));
+      }
+    }
+  }
+  walk(rootDir);
+  return results;
+}
 
 /**
  * Returns true if the tool call represents a git push operation.
@@ -763,6 +798,15 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         }
       }
 
+      // File pollution check + auto-revert (mode-independent).
+      if (this.githubClient) {
+        void this.runFilePollutionCheck(
+          repo,
+          prNumber,
+          prShape.base?.ref ?? 'dev',
+        );
+      }
+
       // Apply ai-authored label server-side after PR creation.
       if (this.githubClient) {
         const ghClient = this.githubClient;
@@ -817,6 +861,18 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         repo: pr.repo,
       });
 
+      // File pollution check + auto-revert on every push.
+      if (this.githubClient) {
+        const prRow = getPRBySessionId(this.sessionId);
+        if (prRow) {
+          void this.runFilePollutionCheck(
+            prRow.repo,
+            prRow.pr_number,
+            prRow.base_branch ?? 'dev',
+          );
+        }
+      }
+
       // Fire-and-forget: verify commit attribution trailers.
       if (this.githubClient) {
         const ghClient = this.githubClient;
@@ -832,6 +888,50 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           console.warn(`[AgentSession] checkCommitAttribution failed: ${e}`),
         );
       }
+    }
+  }
+
+  /** Fetch the PR's changed files, validate for banned/gitignored paths, and revert if needed. */
+  private async runFilePollutionCheck(
+    repo: string,
+    prNumber: number,
+    baseBranch: string,
+  ): Promise<void> {
+    if (!this.githubClient) return;
+    const ghClient = this.githubClient;
+    try {
+      const changedFiles = await ghClient.getPRFiles(repo, prNumber);
+      const gitignoreSources = collectGitignoreSources(this.worktreePath);
+      const validation = validatePRFiles(changedFiles, gitignoreSources);
+      if (validation.valid) return;
+
+      const { commitSha, reverted } = await revertBannedFiles({
+        worktreePath: this.worktreePath,
+        baseBranch,
+        bannedFiles: validation.bannedFiles,
+        prNumber,
+        repo,
+      });
+
+      if (commitSha === null || reverted.length === 0) return;
+
+      recordEvent({
+        event_type: 'file_pollution_reverted',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: this.projectId || null,
+        task_id: this.taskId || null,
+        payload: { files: reverted, pr_number: prNumber, commit_sha: commitSha },
+      });
+
+      const comment = `🤖 Orchestrator auto-reverted banned files: ${reverted.map((f) => `\`${f}\``).join(', ')} (commit ${commitSha.slice(0, 7)})`;
+      await ghClient
+        .createIssueComment(repo, prNumber, comment)
+        .catch((e) =>
+          console.warn(`[AgentSession] revert comment failed: ${e}`),
+        );
+    } catch (e) {
+      console.warn(`[AgentSession] runFilePollutionCheck failed: ${e}`);
     }
   }
 

@@ -22,3 +22,7 @@ packages/frontend/.env
 
 # Local task backend file (per-project, copied from tasks.yaml.example)
 /tasks.yaml
+
+# Scratch commit message files — never tracked
+.commit-msg
+*.commit_msg
