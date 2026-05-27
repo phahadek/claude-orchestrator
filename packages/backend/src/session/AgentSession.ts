@@ -60,7 +60,10 @@ function collectGitignoreSources(
     const gitignorePath = path.join(dir, '.gitignore');
     if (fs.existsSync(gitignorePath)) {
       try {
-        results.push({ dir: rel, content: fs.readFileSync(gitignorePath, 'utf8') });
+        results.push({
+          dir: rel,
+          content: fs.readFileSync(gitignorePath, 'utf8'),
+        });
       } catch {
         // ignore unreadable
       }
@@ -921,7 +924,11 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         actor_id: this.sessionId,
         project_id: this.projectId || null,
         task_id: this.taskId || null,
-        payload: { files: reverted, pr_number: prNumber, commit_sha: commitSha },
+        payload: {
+          files: reverted,
+          pr_number: prNumber,
+          commit_sha: commitSha,
+        },
       });
 
       const comment = `🤖 Orchestrator auto-reverted banned files: ${reverted.map((f) => `\`${f}\``).join(', ')} (commit ${commitSha.slice(0, 7)})`;

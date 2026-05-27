@@ -98,10 +98,7 @@ export async function revertBannedFiles(opts: {
     worktreePath,
   );
 
-  const { stdout: sha } = await git(
-    ['rev-parse', 'HEAD'],
-    worktreePath,
-  );
+  const { stdout: sha } = await git(['rev-parse', 'HEAD'], worktreePath);
   const commitSha = sha.trim();
 
   // Push the revert commit

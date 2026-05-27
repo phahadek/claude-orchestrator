@@ -1,8 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  validatePRFiles,
-  HARD_BANNED_FILES,
-} from './PRFileValidator';
+import { validatePRFiles, HARD_BANNED_FILES } from './PRFileValidator';
 
 describe('HARD_BANNED_FILES', () => {
   it('contains CLAUDE.md, .commit-msg, .commit_msg', () => {
@@ -55,10 +52,7 @@ describe('validatePRFiles()', () => {
   });
 
   it('rejects .env via gitignore pattern', () => {
-    const result = validatePRFiles(
-      ['.env'],
-      [{ dir: '', content: '.env\n' }],
-    );
+    const result = validatePRFiles(['.env'], [{ dir: '', content: '.env\n' }]);
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('.env');
     expect(result.reason).toBe('gitignore_match');

@@ -80,7 +80,10 @@ describe('revertBannedFiles()', () => {
     await git(['checkout', 'dev'], worktreeDir);
     fs.writeFileSync(path.join(worktreeDir, 'CLAUDE.md'), 'base content\n');
     await git(['add', 'CLAUDE.md'], worktreeDir);
-    await git([...GIT_AUTHOR, 'commit', '-m', 'add CLAUDE.md to dev'], worktreeDir);
+    await git(
+      [...GIT_AUTHOR, 'commit', '-m', 'add CLAUDE.md to dev'],
+      worktreeDir,
+    );
     await git(['push', 'origin', 'dev'], worktreeDir);
 
     // Switch to feature branch, merge dev, then override CLAUDE.md with injected content
