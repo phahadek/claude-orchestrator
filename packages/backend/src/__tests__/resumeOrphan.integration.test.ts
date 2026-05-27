@@ -482,12 +482,7 @@ describe('resumeOrphanSessions() — spawn arg contract: --resume <session_id>',
     // This assertion is a structural guard: verify CliSessionRunner.ts uses
     // '--session-id' when no resumeSessionId is provided.
     const source = require('fs').readFileSync(
-      require('path').join(
-        __dirname,
-        '..',
-        'session',
-        'CliSessionRunner.ts',
-      ),
+      require('path').join(__dirname, '..', 'session', 'CliSessionRunner.ts'),
       'utf-8',
     ) as string;
 

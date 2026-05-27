@@ -7,8 +7,8 @@
 
 ## Task Assignment
 
-- **Task**: Fix: claude --resume always fails because orchestrator's session_id isn't passed as the CLI's conversation_id
-- **Notion task**: https://www.notion.so/Fix-claude-resume-always-fails-because-orchestrator-s-session_id-isn-t-passed-as-the-CLI-s-conver-36c22f9152f381a690aaef8b3f22984f
+- **Task**: Add regression test that resumeOrphan spawn args use a real CLI-resolvable session_id
+- **Notion task**: https://www.notion.so/Add-regression-test-that-resumeOrphan-spawn-args-use-a-real-CLI-resolvable-session_id-36c22f9152f381c9acd0c2e3d74d2fd2
 - **Project context**: https://www.notion.so/33222f9152f38188b65fd912e40890a2
 
 ---
@@ -124,7 +124,7 @@ Run in order — all must pass before opening the PR:
 
 ## Git Isolation
 
-> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\da902cd6-1003-4d8a-8270-77ea7525d56d`.**
+> **Your worktree directory is `C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\b31446ac-9155-4b06-81e8-5efeb14d6b90`.**
 > This is your `cwd`. All commands run here. Never navigate to or operate on any parent directory.
 
 - All git commands must run inside the worktree directory (your `cwd`)
@@ -141,7 +141,7 @@ Run in order — all must pass before opening the PR:
 > namespace to prevent writes outside the worktree. All isolation is prompt-level.
 > Violating these rules can corrupt the developer's live environment.
 
-All file writes **must stay inside the worktree directory** (`C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\da902cd6-1003-4d8a-8270-77ea7525d56d`).
+All file writes **must stay inside the worktree directory** (`C:\Users\phadek\IdeaProjects\claude-orchestrator\.claude\worktrees\b31446ac-9155-4b06-81e8-5efeb14d6b90`).
 
 - **Never write to the project root or any path above the worktree.**
   Scripts, tools, and generated outputs must target paths under the worktree, not the parent repo.
@@ -182,58 +182,32 @@ Use the Write tool for any file creation. Never use `cat >`, `printf >`, or `ech
 > Do NOT re-fetch this from Notion — use the content below as your source of truth.
 
 ## Summary
-Pass --session-id <sessionId> to the Claude CLI on initial spawn so the CLI uses the orchestrator's UUID as its conversation ID. Today the CLI generates its own conversation ID, which makes the orchestrator's later --resume <orchestrator-session-id> attempts fail with "No conversation found." This breaks every recovery path: backend restart, stuck-session detection, send-to-dead-session.
+The existing resumeOrphan.integration.test.ts mocks the CLI subprocess (a MockProcess that accepts any spawn args and returns canned events), so it never validated that --resume <orchestrator-session-id> actually works against the real CLI. That's why the broken-resume bug shipped. Add stricter spawn-arg assertions so a regression would fail this test.
 ## Dependencies
-None — Wave 1.
+- Fix: claude --resume always fails because orchestrator's session_id isn't passed as the CLI's conversation_id
 ## Context
 ### Root cause
-CliSessionRunner.ts:38-51 and DockerSessionRunner.ts:148-160 spawn the CLI with --print --output-format stream-json … but never pass --session-id. The CLI generates its own conversation ID per spawn (we observed 06330dcb, 3205bb21, 30d50fcd, 4cf5f53a for two orchestrator-tracked sessions c8ee68b9 and 3edb8e7d).
-When SessionManager.ts:761 later tries to resume, it passes row.session_id (the orchestrator's UUID) to --resume:
-```typescript
-row.session_id, // resumeSessionId — passes --resume to CLI / SDK
-```
-The CLI has no conversation with that ID and immediately errors:
-```javascript
-stderr: No conversation found with session ID: c8ee68b9-d982-4ee4-a6ca-f9448d49a57e
-```
-It returns result(error_during_execution, num_turns: 0, duration_ms: 0) and exits. The orchestrator catches the failure, marks the session as error, and sends RESUME_NUDGE_MESSAGE ("Continue implementing the task…") to a stdin that's already closed.
-Confirmed on 2026-05-26: two sessions launched at 22:52 UTC for the two milestone-switch bug-fix tasks died at 22:56:36 / 22:57:02 without a result event in their JSONL. The orchestrator then tried to resume them, the resume failed for the reason above, and they were finalized as error.
+resumeOrphan.integration.test.ts:162-338 uses vi.mock to replace child_process.spawn with a mock that constructs MockProcess (defined in the same test file). The mock captures the spawn arguments but the assertions on lines 313-333 only verify:
+- That a session_status message of running was broadcast
+- That RESUME_NUDGE_MESSAGE was written to mock stdin
+- That a user_message WS event with the nudge content was emitted
+There is no assertion that the spawn args include --session-id <sessionId> on initial spawn, nor that the resume spawn uses the same UUID for --session-id (on initial) and --resume (on resume). A broken implementation that omits --session-id (today's behaviour) passes this test.
 ### Fix
-The Claude CLI supports --session-id <uuid> (confirmed via claude --help):
-> --session-id <uuid>  Use a specific session ID for the conversation (must be a valid UUID)
-In CliSessionRunner.ts:38-51, change the spawnArgs construction so initial spawns include --session-id:
-```typescript
-const spawnArgs = [
-  ...(resumeSessionId
-    ? ['--resume', resumeSessionId]
-    : ['--session-id', this.sessionId]),
-  '--print',
-  '--output-format', 'stream-json',
-  '--input-format', 'stream-json',
-  '--verbose',
-  '--permission-mode', 'acceptEdits',
-  ...(model ? ['--model', model] : []),
-  '--allowed-tools',
-  ...allowedTools,
-];
-```
-Apply the same change to DockerSessionRunner.ts:148-160. Use --session-id and --resume mutually exclusively — one or the other, never both.
-Constraint: this.sessionId is already a valid UUID generated by the orchestrator (SessionManager calls randomUUID() when creating new sessions). No new ID generation needed.
-### Out of scope
-- Backfilling existing sessions whose CLIs already used self-generated IDs — they remain unresumable. That's an accepted one-time loss.
-- A separate "captured CLI session_id" column. Once this fix lands, the orchestrator's session_id IS the CLI's conversation_id, so no separate tracking needed.
+Add two assertions to the existing test (or split into a new test):
+1. Initial spawn (when the session is first created): assert the captured spawn args include '--session-id' followed by the session's UUID.
+1. Resume spawn: assert the captured spawn args include '--resume' followed by the same UUID used in the initial spawn.
+Reuse the existing mockProc.spawnArgs (or capture them via a new spy on spawn). No need to invoke a real CLI — the goal is to lock in the contract that the same UUID is used for both --session-id (originally) and --resume (on resume).
 ## Acceptance criteria
 ### 🤖 Automated tests
 tsc --noEmit passes for both packages
-Unit test (CliSessionRunner): initial-spawn args (no resumeSessionId) include --session-id <sessionId> and do not include --resume
-Unit test (CliSessionRunner): resume-spawn args (with resumeSessionId) include --resume <resumeSessionId> and do not include --session-id
-Unit test (DockerSessionRunner): same two assertions on the constructed docker-run claude args
-Existing resumeOrphan.integration.test.ts continues to pass
+New assertion: resume spawn args include '--resume', <sessionId> where <sessionId> is the row's session_id
+New assertion: initial spawn args (whichever test covers initial spawn) include '--session-id', <sessionId>
+If the companion --session-id fix is reverted (re-introducing the bug), the new assertions fail
 ### 👁️ Manual verification
-Launch a session, kill the orchestrator backend mid-session, restart. The orphan-resume completes successfully — claude --resume <sessionId> finds the conversation and continues. The session does not end in error with error_during_execution. (In M6 gate.)
+Covered by the Manual Verification Gate task.
 ## Files / paths affected
-- packages/backend/src/session/CliSessionRunner.ts (update)
-- packages/backend/src/session/DockerSessionRunner.ts (update)
+- packages/backend/src/__tests__/resumeOrphan.integration.test.ts (update — add spawn-arg assertions)
+- Possibly packages/backend/src/__tests__/SessionManager.test.ts (update — if it's a better home for the assertion)
 ## Implementation notes
 > To be filled in during/after implementation.
 
@@ -242,456 +216,263 @@ Launch a session, kill the orchestrator backend mid-session, restart. The orphan
 > These are the current contents of files listed in the task spec.
 > They were pre-read by the orchestrator so you can skip exploration.
 
-### `packages/backend/src/session/CliSessionRunner.ts`
+### `packages/backend/src/__tests__/resumeOrphan.integration.test.ts`
 ```
-import { spawn, ChildProcess, execSync } from 'child_process';
-import { createInterface } from 'readline';
-import { config } from '../config';
-import type {
-  ISessionRunner,
-  RawSessionEvent,
-  SessionRunnerOptions,
-} from './SessionRunner';
-
-function log(sessionId: string, ...args: unknown[]) {
-  console.log(`[CliSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
-}
-
 /**
- * Session runner that spawns the `claude` CLI as a subprocess and communicates
- * via stdin/stdout using the stream-json protocol.
+ * Integration tests for SessionManager.resumeOrphanSessions().
  *
- * This is the original transport and the default when SESSION_MODE is 'cli'.
+ * These tests "seed" sessions via the mocked DB layer and call
+ * resumeOrphanSessions() on a real SessionManager. They verify the three
+ * end-to-end behaviors required by the hardening task:
+ *   1. Missing worktree → session marked error, server stays alive, other
+ *      sessions resume normally.
+ *   2. Healthy worktree → session re-attached, status broadcast, resume nudge
+ *      delivered via stdin to the CLI runner.
+ *   3. pr_url carry-forward → AgentSession.prUrl populated from row.pr_url so
+ *      a subsequent clean exit does not delete the PR branch.
  */
-export class CliSessionRunner implements ISessionRunner {
-  private proc: ChildProcess | null = null;
-  private _hasSpawnError = false;
 
-  constructor(private readonly sessionId: string) {}
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'events';
+import { Readable, Writable } from 'stream';
 
-  get hasSpawnError(): boolean {
-    return this._hasSpawnError;
-  }
+// ── Module mocks ─────────────────────────────────────────────────────────────
+// All vi.mock calls must appear before importing the code under test.
 
-  async run(
-    initialPrompt: string | undefined,
-    resumeSessionId: string | undefined,
-    options: SessionRunnerOptions,
-    onEvent: (event: RawSessionEvent) => void,
-  ): Promise<number | null> {
-    const { worktreePath, model, allowedTools } = options;
-
-    const spawnArgs = [
-      ...(resumeSessionId ? ['--resume', resumeSessionId] : []),
-      '--print',
-      '--output-format',
-      'stream-json',
-      '--input-format',
-      'stream-json',
-      '--verbose',
-      '--permission-mode',
-      'acceptEdits',
-      ...(model ? ['--model', model] : []),
-      '--allowed-tools',
-      ...allowedTools,
-    ];
-
-    const envKeys = ['PROJECT_DIR', 'SESSIONS_DIR', 'DB_PATH'] as const;
-    const envStr = envKeys
-      .filter((k) => process.env[k] !== undefined)
-      .map((k) => `${k}=${process.env[k]}`)
-      .join(', ');
-    log(
-      this.sessionId,
-      `spawning: cwd=${worktreePath} cmd=${config.claudePath} ${spawnArgs.join(' ')} env={${envStr}}`,
-    );
-
-    this.proc = spawn(config.claudePath, spawnArgs, {
-      cwd: worktreePath,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      ...(process.platform !== 'win32' && { detached: true }),
-    });
-
-    // Async stdin errors (e.g. EPIPE when the child exits) must not bubble up
-    // as unhandled 'error' events on the process.
-    this.proc.stdin!.on('error', (err: Error) => {
-      log(this.sessionId, `stdin error (ignored): ${err.message}`);
-    });
-
-    // Send initial prompt via stdin (required by --input-format stream-json).
-    // Resumed sessions skip the initial prompt — the caller delivers via sendMessage().
-    if (!resumeSessionId && initialPrompt) {
-      try {
-        this.proc.stdin!.write(
-          JSON.stringify({
-            type: 'user',
-            message: { role: 'user', content: initialPrompt },
-          }) + '\n',
-        );
-      } catch (err) {
-        log(
-          this.sessionId,
-          `initial prompt stdin.write failed (ignored): ${(err as Error).message}`,
-        );
-      }
-    }
-
-    this.proc.on('error', (err) => {
-      this._hasSpawnError = true;
-      console.error(`[CliSessionRunner] spawn error: ${err.message}`);
-    });
-
-    // Pipe stderr to console for diagnostics
-    this.proc.stderr!.on('data', (chunk: Buffer) => {
-      log(this.sessionId, `stderr: ${chunk.toString().trimEnd()}`);
-    });
-
-    const rl = createInterface({ input: this.proc.stdout! });
-
-    // Capture readline completion early so we can drain after exit.
-    const rlDone = new Promise<void>((resolve) => rl.once('close', resolve));
-
-    rl.on('line', (line) => {
-      if (!line.trim()) return;
-      let event: Record<string, unknown>;
-      try {
-        event = JSON.parse(line) as Record<string, unknown>;
-      } catch {
-        return;
-      }
-      try {
-        onEvent(event);
-      } catch (err) {
-        console.error(
-          `[CliSessionRunner] event handler threw for session ${this.sessionId}: ${(err as Error).message}`,
-          err,
-        );
-      }
-    });
-
-    // Wait for the subprocess to exit.
-    const exitCode = await new Promise<number | null>((resolve) => {
-      this.proc!.once('exit', (code) => resolve(code));
-    });
-
-    // Drain remaining buffered lines (5s guard).
-    await Promise.race([
-      rlDone,
-      new Promise<void>((resolve) =>
-        setTimeout(() => {
-          rl.close();
-          resolve();
-        }, 5_000),
-      ),
-    ]);
-
-    return exitCode;
-  }
-
-  sendMessage(message: string): void {
-    if (!this.proc?.stdin?.writable) return;
-    try {
-      this.proc.stdin.write(
-        JSON.stringify({
-          type: 'user',
-          message: { role: 'user', content: message },
-        }) + '\n',
-      );
-    } catch (err) {
-      log(
-        this.sessionId,
-        `sendMessage stdin.write failed (ignored): ${(err as Error).message}`,
-      );
-    }
-  }
-
-  endSession(): void {
-    if (this.proc?.stdin?.writable) {
-      this.proc.stdin.end();
-    }
-  }
-
-  async kill(): Promise<void> {
-    if (!this.proc || this.proc.exitCode !== null) return;
-    try {
-      this.killProcessTree(this.proc.pid!);
-    } catch {
-      // Process may have exited between guard check and here
-    }
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        try {
-          this.killProcessTree(this.proc!.pid!);
-        } catch {
-          // Already gone
-        }
-        resolve();
-      }, 15_000);
-      this.proc!.once('exit', () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-    });
-  }
-
-  private killProcessTree(pid: number): void {
-    if (process.platform === 'win32') {
-      try {
-        execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' });
-      } catch {
-        // Process may have already exited
-      }
-    } else {
-      try {
-        process.kill(-pid, 'SIGTERM');
-      } catch {
-        // ESRCH = process already gone
-      }
-    }
-  }
+function createMockProc() {
+  const stdout = new Readable({ read() {} });
+  const stderr = new Readable({ read() {} });
+  const stdinChunks: string[] = [];
+  const stdin = new Writable({
+    write(chunk, _enc, cb) {
+      stdinChunks.push(chunk.toString());
+      cb();
+    },
+  });
+  const proc = Object.assign(new EventEmitter(), {
+    stdout,
+    stderr,
+    stdin,
+    kill: vi.fn(),
+    pid: 12345,
+    exitCode: null as number | null,
+  });
+  return { proc, stdinChunks, stdout, stderr };
 }
 
-```
+let mockProc: ReturnType<typeof createMockProc>;
 
-### `packages/backend/src/session/DockerSessionRunner.ts`
-```
-import { spawn, ChildProcess, execSync } from 'child_process';
-import { createInterface } from 'readline';
-import { config } from '../config';
-import type {
-  ISessionRunner,
-  RawSessionEvent,
-  SessionRunnerOptions,
-} from './SessionRunner';
+vi.mock('child_process', () => ({
+  spawn: vi.fn(() => mockProc.proc),
+  execSync: vi.fn(() => ''),
+  execFile: vi.fn(),
+}));
 
-function log(sessionId: string, ...args: unknown[]) {
-  console.log(`[DockerSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
+// fs is mocked so existsSync can be controlled per-test; readFileSync /
+// statSync / writeFileSync are no-ops because the SessionManager paths under
+// test (resumeOrphanSessions → resumeSession) only need existsSync. Anything
+// else used transitively is shimmed below as a safe no-op.
+vi.mock('fs', async () => {
+  const actual = await vi.importActual<typeof import('fs')>('fs');
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      existsSync: vi.fn(() => true),
+      readFileSync: vi.fn(() => ''),
+      writeFileSync: vi.fn(),
+      statSync: vi.fn(() => ({ isFile: () => true })),
+    },
+    existsSync: vi.fn(() => true),
+    readFileSync: vi.fn(() => ''),
+    writeFileSync: vi.fn(),
+    statSync: vi.fn(() => ({ isFile: () => true })),
+  };
+});
+
+const projectFixture = {
+  id: 'test-project',
+  name: 'Test Project',
+  projectDir: '/fake/project',
+  contextUrl: 'https://notion.so/ctx',
+  boardId: 'board-1',
+  githubRepo: 'owner/repo',
+  taskSource: 'notion' as const,
+};
+
+vi.mock('../config', () => ({
+  AUTO_REVIEW_ENABLED: false,
+  AUTO_REVIEW_CONCURRENCY: 1,
+  ALLOWED_TOOLS: [],
+  config: {
+    claudePath: '/fake/claude',
+    maxConcurrentCodeSessions: 20,
+    projectDir: '/fake/project',
+  },
+  getProjectById: vi.fn((id: string) =>
+    id === 'test-project' ? projectFixture : undefined,
+  ),
+  getAllProjects: vi.fn(() => [projectFixture]),
+  normalizePath: (p: string) => p,
+  runtimeSettings: {
+    session_mode: 'cli',
+    code_session_model: '',
+    review_session_model: '',
+    max_concurrent_code_sessions: 20,
+  },
+}));
+
+vi.mock('../session/orchestrator-config', () => ({
+  loadOrchestratorConfig: vi.fn(() => ({
+    allowedTools: [],
+    prGate: { typeCheck: '', build: '' },
+    bootstrapScript: '',
+    bashRules: [],
+  })),
+}));
+
+vi.mock('../session/orchestrator-claudemd', () => ({
+  buildReviewClaudeMd: vi.fn(() => ''),
+}));
+
+vi.mock('../session/ContextBuilder', () => ({
+  buildSessionContext: vi.fn(() => ''),
+}));
+
+const fakeTaskBackend = {
+  fetchTaskPage: vi.fn(async () => ''),
+  fetchReadyTasks: vi.fn(async () => []),
+  updateStatus: vi.fn(async () => {}),
+  attachPR: vi.fn(async () => {}),
+};
+
+vi.mock('../tasks/TaskBackend', () => ({
+  getTaskBackend: vi.fn(() => fakeTaskBackend),
+}));
+
+vi.mock('../routes/tasks', () => ({
+  emitTaskUpdated: vi.fn(),
+}));
+
+vi.mock('../tasks/TaskStatusEngine', () => ({
+  deriveDisplayStatusFromDb: vi.fn(() => 'Running'),
+}));
+
+vi.mock('../db/queries', () => ({
+  getSessionsByStatus: vi.fn(() => []),
+  getSession: vi.fn(),
+  getEventsBySession: vi.fn(() => []),
+  getPRByNotionTaskId: vi.fn(() => null),
+  getPRByNumber: vi.fn(() => null),
+  updateSessionStatus: vi.fn(),
+  markSessionDone: vi.fn(),
+  backfillStuckResultSessions: vi.fn(() => 0),
+  insertSession: vi.fn(),
+  insertEvent: vi.fn(),
+  upsertSessionEvent: vi.fn(() => 1),
+  upsertPullRequest: vi.fn(),
+  insertPermissionDenial: vi.fn(),
+  incrementTokens: vi.fn(),
+  insertSessionAudit: vi.fn(),
+  setSessionModel: vi.fn(),
+  getPRBySessionId: vi.fn(() => null),
+  setHeadSha: vi.fn(),
+}));
+
+// Now import the modules under test (after all mocks are in place).
+import fs from 'fs';
+import { spawn, execSync } from 'child_process';
+import {
+  SessionManager,
+  RESUME_NUDGE_MESSAGE,
+} from '../session/SessionManager';
+import * as queries from '../db/queries';
+import type { ServerMessage } from '../ws/types';
+import type { Session } from '../db/types';
+import { backfillStuckResultSessions } from '../db/queries';
+
+function makeRunningSession(overrides: Partial<Session> = {}): Session {
+  return {
+    session_id: 'session-uuid-default',
+    task_id: 'notion-task-id',
+    task_url: 'https://notion.so/task',
+    project_context_url: 'https://notion.so/ctx',
+    project_id: 'test-project',
+    status: 'running',
+    started_at: 1_000_000,
+    ended_at: null,
+    pr_url: null,
+    worktree_path: '/fake/project/.claude/worktrees/session-uuid-default',
+    archived: 0,
+    favorited: 0,
+    session_type: 'standard',
+    note: null,
+    tags: null,
+    model: null,
+    task_name: 'fixture-task',
+    ...overrides,
+  } as Session;
 }
 
-/**
- * Container name prefix for session containers.
- * Used by the orphan-reap logic to identify containers owned by this system.
- */
-export const SESSION_CONTAINER_PREFIX = 'claude-session-';
-export const PROXY_CONTAINER_PREFIX = 'claude-session-proxy-';
-export const NETWORK_PREFIX = 'claude-session-net-';
+beforeEach(() => {
+  mockProc = createMockProc();
+  vi.clearAllMocks();
+  // execSync no-op stub (used for git fetch / git rev-parse / git worktree).
+  vi.mocked(execSync).mockReturnValue('');
+});
 
-/**
- * Default egress allowlist for the squid proxy.
- * Extended per-project with the Jira host from task_source_config when applicable.
- */
-export const DEFAULT_EGRESS_ALLOWLIST = [
-  'api.anthropic.com',
-  'api.github.com',
-  'github.com',
-  'api.notion.com',
-];
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
-/**
- * Session runner that launches each session inside a dedicated Docker container
- * with a restricted egress proxy. Used when gates.dockerMandatory is true.
- *
- * Lifecycle per session:
- *  1. Create an internal Docker network (--internal).
- *  2. Start a squid proxy container joined to both the internal and external networks.
- *  3. Start the session container on the internal network only.
- *  4. Run bootstrap commands inside the container (if configured).
- *  5. Exec `claude` via docker exec with stdio piped through.
- *  6. On session end, stop and remove all three resources.
- */
-export class DockerSessionRunner implements ISessionRunner {
-  private _hasSpawnError = false;
-  private containerName: string;
-  private proxyContainerName: string;
-  private networkName: string;
-  private execProc: ChildProcess | null = null;
-  private _killed = false;
+// ── Test 1: missing-worktree pre-check ─────────────────────────────────────
+describe('resumeOrphanSessions() — missing-worktree pre-check (integration)', () => {
+  it('marks the orphan with a missing worktree as error and emits session_ended without throwing', async () => {
+    const missing = makeRunningSession({
+      session_id: 'missing-session',
+      worktree_path: '/fake/project/.claude/worktrees/missing-session',
+    });
+    vi.mocked(queries.getSessionsByStatus).mockReturnValue([missing]);
 
-  constructor(private readonly sessionId: string) {
-    this.containerName = `${SESSION_CONTAINER_PREFIX}${sessionId}`;
-    this.proxyContainerName = `${PROXY_CONTAINER_PREFIX}${sessionId}`;
-    this.networkName = `${NETWORK_PREFIX}${sessionId}`;
-  }
+    // fs.existsSync(missing.worktreePath) → false (worktree was deleted).
+    vi.mocked(fs.existsSync).mockReturnValue(false);
 
-  get hasSpawnError(): boolean {
-    return this._hasSpawnError;
-  }
+    const sm = new SessionManager();
+    const messages: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => messages.push(m));
 
-  async run(
-    initialPrompt: string | undefined,
-    resumeSessionId: string | undefined,
-    options: SessionRunnerOptions,
-    onEvent: (event: RawSessionEvent) => void,
-  ): Promise<number | null> {
-    const { worktreePath, model, allowedTools } = options;
+    // Server-alive proxy: resumeOrphanSessions must not throw.
+    await expect(sm.resumeOrphanSessions()).resolves.not.toThrow();
 
-    const claudeBin = config.claudePath;
-    const homeDir = process.env.HOME ?? process.env.USERPROFILE ?? '/root';
-    const claudeConfigDir = `${homeDir}/.claude`;
-
-    // Build proxy allowlist: default + any extra hosts from environment
-    const extraHosts = process.env.DOCKER_EGRESS_EXTRA_HOSTS
-      ? process.env.DOCKER_EGRESS_EXTRA_HOSTS.split(',').map((h) => h.trim())
-      : [];
-    const allowlist = [...DEFAULT_EGRESS_ALLOWLIST, ...extraHosts].join(' ');
-
-    // Session image — use pre-built image name from env or default
-    const sessionImage =
-      process.env.DOCKER_SESSION_IMAGE ?? 'claude-orchestrator-session:latest';
-
-    try {
-      // 1. Create isolated internal network
-      log(this.sessionId, `creating network ${this.networkName}`);
-      execSync(`docker network create --internal ${this.networkName}`, {
-        stdio: 'pipe',
-      });
-
-      // 2. Start squid proxy on both external and internal networks
-      log(this.sessionId, `starting proxy ${this.proxyContainerName}`);
-      const squidConf = this._buildSquidConf(allowlist);
-      execSync(
-        [
-          'docker run -d',
-          `--name ${this.proxyContainerName}`,
-          `--network ${this.networkName}`,
-          `-e SQUID_ALLOWED_DSTS="${allowlist}"`,
-          `-e SQUID_CONF="${squidConf}"`,
-          'ubuntu/squid:latest',
-        ].join(' '),
-        { stdio: 'pipe' },
-      );
-      // Also connect proxy to the default bridge so it can reach the internet
-      execSync(`docker network connect bridge ${this.proxyContainerName}`, {
-        stdio: 'pipe',
-      });
-
-      // 3. Start the session container on the internal network only (no internet)
-      log(this.sessionId, `starting session container ${this.containerName}`);
-      const proxyAddr = `http://${this.proxyContainerName}:3128`;
-      execSync(
-        [
-          'docker run -d',
-          `--name ${this.containerName}`,
-          `--network ${this.networkName}`,
-          // Mount worktree (read-write — claude needs to modify files)
-          `-v "${worktreePath}:${worktreePath}"`,
-          // Mount claude binary (read-only)
-          `-v "${claudeBin}:${claudeBin}:ro"`,
-          // Mount claude credentials and config (read-only)
-          `-v "${claudeConfigDir}:/root/.claude:ro"`,
-          // Egress proxy env vars
-          `-e HTTPS_PROXY=${proxyAddr}`,
-          `-e HTTP_PROXY=${proxyAddr}`,
-          `-e NO_PROXY=localhost,127.0.0.1`,
-          // Working directory
-          `-w "${worktreePath}"`,
-          // ANTHROPIC_API_KEY is intentionally NOT passed (not visible via docker inspect)
-          sessionImage,
-          // Keep container alive so we can docker exec into it
-          'sleep infinity',
-        ].join(' '),
-        { stdio: 'pipe' },
-      );
-    } catch (err) {
-      this._hasSpawnError = true;
-      console.error(
-        `[DockerSessionRunner] container setup failed for ${this.sessionId}: ${err}`,
-      );
-      await this._teardown();
-      throw err;
-    }
-
-    // Build claude command arguments (same as CliSessionRunner)
-    const claudeArgs = [
-      ...(resumeSessionId ? ['--resume', resumeSessionId] : []),
-      '--print',
-      '--output-format',
-      'stream-json',
-      '--input-format',
-      'stream-json',
-      '--verbose',
-      '--permission-mode',
-      'acceptEdits',
-      ...(model ? ['--model', model] : []),
-      '--allowed-tools',
-      ...allowedTools,
-    ];
-
-    log(this.sessionId, `exec claude in container: ${claudeArgs.join(' ')}`);
-
-    // 4. Exec claude inside the container with stdio piped
-    this.execProc = spawn(
-      'docker',
-      ['exec', '-i', this.containerName, claudeBin, ...claudeArgs],
-      { stdio: ['pipe', 'pipe', 'pipe'] },
+    // The missing session must be marked as error.
+    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+      'missing-session',
+      'error',
+      expect.any(Number),
     );
+    // ... and a session_ended (status=error) broadcast must have been emitted.
+    const ended = messages.filter(
+      (m) =>
+        m.type === 'session_ended' &&
+        (m as { sessionId: string }).sessionId === 'missing-session',
+    );
+    expect(ended).toHaveLength(1);
+    expect((ended[0] as { status: string }).status).toBe('error');
 
-    this.execProc.stdin!.on('error', (err: Error) => {
-      log(this.sessionId, `stdin error (ignored): ${err.message}`);
+    // No CLI process should have been spawned for the missing-worktree orphan.
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('resumes a healthy orphan in the same batch even when another orphan has a missing worktree', async () => {
+    const missing = makeRunningSession({
+      session_id: 'missing-session',
+      worktree_path: '/fake/project/.claude/worktrees/missing-session',
     });
-
-    this.execProc.on('error', (err) => {
-      this._hasSpawnError = true;
-      console.error(`[DockerSessionRunner] exec error: ${err.message}`);
+    const healthy = makeRunningSession({
+      session_id: 'healthy-session',
+      worktree_path: '/fake/project/.claude/worktrees/healthy-session',
     });
-
-    this.execProc.stderr!.on('data', (chunk: Buffer) => {
-      log(this.sessionId, `stderr: ${chunk.toString().trimEnd()}`);
-    });
-
-    // Send initial prompt via stdin (same protocol as CliSessionRunner)
-    if (!resumeSessionId && initialPrompt) {
-      try {
-        this.execProc.stdin!.write(
-          JSON.stringify({
-            type: 'user',
-            message: { role: 'user', content: initialPrompt },
-          }) + '\n',
-        );
-      } catch (err) {
-        log(
-          this.sessionId,
-          `initial prompt stdin.write failed (ignored): ${(err as Error).message}`,
-        );
-      }
-    }
-
-    const rl = createInterface({ input: this.execProc.stdout! });
-    const rlDone = new Promise<void>((resolve) => rl.once('close', resolve));
-
-    rl.on('line', (line) => {
-      if (!line.trim()) return;
-      let event: Record<string, unknown>;
-      try {
-        event = JSON.parse(line) as Record<string, unknown>;
-      } catch {
-        return;
-      }
-      try {
-        onEvent(event);
-      } catch (err) {
-        console.error(
-          `[DockerSessionRunner] event handler threw for session ${this.sessionId}: ${(err as Error).message}`,
-          err,
-        );
-      }
-    });
-
-    const exitCode = await new Promise<number | null>((resolve) => {
-      this.execProc!.once('exit', (code) => resolve(code));
-    });
-
-    await Promise.race([
-      rlDone,
-      new Promise<void>((resolve) =>
-        setTimeout(() => {
-          rl.close();
-          resolve();
-        }, 5_000),
-      ),
-    ]);
-
-    // 5. Teardown containers and netw
+    vi.mocked(querie
 [... truncated]
 ```
 
