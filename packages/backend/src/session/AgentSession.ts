@@ -171,10 +171,10 @@ export class AgentSession extends EventEmitter {
   private retryCount = 0;
   /** Guard: fires at most once per session to avoid duplicate pause broadcasts. */
   private inSessionApiErrorFired = false;
-  /** Maps `${repo}/${prNumber}` to the commit SHA of the last orchestrator-issued
-   *  auto-revert, so that the push of our own revert commit does not re-trigger
-   *  the validator (loop guard). */
-  private lastRevertShaPerPR = new Map<string, string>();
+  /** One-cycle injection skip lock set by PRFileReverter.
+   *  Each entry is consumed (deleted) the first time injectContextFile checks it,
+   *  blocking exactly one injection attempt per reverted file before resetting. */
+  private readonly _revertLock = new Set<string>();
 
   /** The underlying I/O adapter (CLI subprocess or Agent SDK). */
   private runner: ISessionRunner;
@@ -916,12 +916,6 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       );
     }
 
-    const prKey = `${repo}/${prNumber}`;
-    // Loop guard: skip validation when the triggering push is our own revert commit.
-    if (headSha !== null && this.lastRevertShaPerPR.get(prKey) === headSha) {
-      return;
-    }
-
     try {
       const changedFiles = await ghClient.getPRFiles(repo, prNumber);
       const gitignoreSources = collectGitignoreSources(this.worktreePath);
@@ -944,18 +938,33 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 
       if (validation.valid) return;
 
-      const { commitSha, reverted } = await revertBannedFiles({
-        worktreePath: this.worktreePath,
-        baseBranch,
-        bannedFiles: validation.bannedFiles,
-        prNumber,
-        repo,
+      // Register the sync promise BEFORE starting work so ReviewOrchestrator can await it
+      let resolveSyncPromise!: () => void;
+      const syncPromise = new Promise<void>((r) => {
+        resolveSyncPromise = r;
       });
+      this.sessionManager?.registerRevertSync?.(prNumber, repo, syncPromise);
+
+      let commitSha: string | null = null;
+      let reverted: string[] = [];
+      try {
+        ({ commitSha, reverted } = await revertBannedFiles({
+          worktreePath: this.worktreePath,
+          baseBranch,
+          bannedFiles: validation.bannedFiles,
+          prNumber,
+          repo,
+        }));
+      } finally {
+        resolveSyncPromise();
+      }
 
       if (commitSha === null || reverted.length === 0) return;
 
-      // Update loop guard so we don't re-process our own revert push.
-      this.lastRevertShaPerPR.set(prKey, commitSha);
+      // Lock the reverted files so injectContextFile skips the next injection cycle
+      for (const f of reverted) {
+        this._revertLock.add(f);
+      }
 
       recordEvent({
         event_type: 'file_pollution_reverted',
@@ -969,13 +978,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           commit_sha: commitSha,
         },
       });
-
-      const comment = `🤖 Orchestrator auto-reverted banned files: ${reverted.map((f) => `\`${f}\``).join(', ')} (commit ${commitSha.slice(0, 7)})`;
-      await ghClient
-        .createIssueComment(repo, prNumber, comment)
-        .catch((e) =>
-          console.warn(`[AgentSession] revert comment failed: ${e}`),
-        );
+      // No session-facing send() — the _revertLock silently prevents re-injection.
     } catch (e) {
       console.warn(`[AgentSession] runFilePollutionCheck failed: ${e}`);
     }
@@ -1211,6 +1214,47 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           `[AgentSession] audit failed for ${this.sessionId}: ${err}`,
         );
       });
+  }
+
+  /** Files reverted during this session that the injector must not overwrite (one cycle). */
+  get revertedFiles(): ReadonlySet<string> {
+    return this._revertLock;
+  }
+
+  /** Add a file to the one-cycle injection skip lock (called by the autofix path). */
+  lockFileForNextInjection(filename: string): void {
+    this._revertLock.add(filename);
+  }
+
+  /**
+   * Write orchestrator context content to a file in the worktree.
+   * If the file is in the revert lock, the write is suppressed for one cycle:
+   * the lock entry is consumed so subsequent injections are allowed.
+   */
+  injectContextFile(filename: string, content: string): void {
+    if (this._revertLock.has(filename)) {
+      this._revertLock.delete(filename); // consume — one cycle only
+      recordEvent({
+        event_type: 'file_pollution_re_injected_blocked',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: this.projectId || null,
+        task_id: this.taskId || null,
+        payload: { filename, session_id: this.sessionId },
+      });
+      return;
+    }
+    try {
+      fs.writeFileSync(
+        path.join(this.worktreePath, filename),
+        content,
+        'utf-8',
+      );
+    } catch (err) {
+      console.error(
+        `[AgentSession] injectContextFile: failed to write ${filename}: ${err}`,
+      );
+    }
   }
 
   /** No-op — CLI does not support mid-session permission approval. */

@@ -10,6 +10,10 @@ interface OrchestratorYml {
 export interface AutofixResult {
   success: boolean;
   commitSha?: string;
+  /** HEAD SHA after the local branch was synced to origin via fetch + reset --hard. */
+  syncedTo?: string;
+  /** Files included in the autofix commit (from git diff --name-only HEAD~1 HEAD). */
+  touchedFiles?: string[];
   summary: string;
 }
 
@@ -140,6 +144,27 @@ export async function runAutofix(
   const sha = await getHeadSha(worktreePath);
   log(`[autofix] committed ${sha}\n`);
 
+  // Collect the files included in the commit so callers can populate _revertLock
+  let touchedFiles: string[] | undefined;
+  try {
+    const diffResult = await spawnCmd(
+      'git',
+      ['diff', '--name-only', 'HEAD~1', 'HEAD'],
+      { cwd: worktreePath },
+    );
+    touchedFiles = diffResult.stdout.split('\n').filter(Boolean);
+  } catch {
+    // best-effort
+  }
+
+  // Capture current branch before pushing so we can sync to it afterward
+  const { stdout: branchRaw } = await spawnCmd(
+    'git',
+    ['rev-parse', '--abbrev-ref', 'HEAD'],
+    { cwd: worktreePath },
+  );
+  const branch = branchRaw.trim();
+
   const pushResult = await spawnCmd('git', ['push', 'origin', 'HEAD'], {
     cwd: worktreePath,
     env,
@@ -162,10 +187,33 @@ export async function runAutofix(
     log(`[autofix] WARN: failed to append to .git-blame-ignore-revs: ${err}\n`);
   }
 
+  // Sync local branch to origin after push so subsequent git operations see
+  // a consistent state (no local/origin divergence).
+  let syncedTo: string | undefined;
+  if (failures.length === 0 && branch && branch !== 'HEAD') {
+    const fetchResult = await spawnCmd('git', ['fetch', 'origin', branch], {
+      cwd: worktreePath,
+    });
+    if (fetchResult.exitCode === 0) {
+      const resetResult = await spawnCmd(
+        'git',
+        ['reset', '--hard', `origin/${branch}`],
+        { cwd: worktreePath },
+      );
+      if (resetResult.exitCode === 0) {
+        const headResult = await spawnCmd('git', ['rev-parse', 'HEAD'], {
+          cwd: worktreePath,
+        });
+        syncedTo = headResult.stdout.trim() || undefined;
+        log(`[autofix] synced to origin/${branch} at ${syncedTo}\n`);
+      }
+    }
+  }
+
   const success = failures.length === 0;
   const summary = success
     ? `autofix committed ${sha}`
     : `autofix committed ${sha} with failures: ${failures.join('; ')}`;
 
-  return { success, commitSha: sha, summary };
+  return { success, commitSha: sha, syncedTo, touchedFiles, summary };
 }

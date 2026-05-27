@@ -11,6 +11,7 @@ export type EventType =
   | 'data_residency_flag_toggled'
   | 'file_pollution_reverted'
   | 'file_pollution_checked'
+  | 'file_pollution_re_injected_blocked'
   | 'autofix_for_ci_failure';
 
 export type ActorType = 'ai' | 'human' | 'system';

@@ -1,0 +1,9 @@
+feat: auto-revert restore session worktree not just push revert commit
+
+After PRFileReverter reverts banned files, the worktree now retains base-branch
+content instead of being restored to the injected state, preventing subsequent
+git add cycles from re-staging the contaminated file. AgentSession tracks reverted
+files in a per-session lock; injectContextFile() consults the lock and emits a
+file_pollution_re_injected_blocked audit event when blocked.
+
+AI-Authored-By: claude-sonnet-4-6 (session: 8a278537)

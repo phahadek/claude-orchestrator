@@ -21,6 +21,13 @@ export interface SessionAudit {
 /** Minimal interface used to route audit failures back to a live session. */
 export interface ISessionManager {
   send(sessionId: string, message: string): void;
+  /** Register a Promise that resolves when the post-revert worktree sync completes.
+   *  ReviewOrchestrator awaits this before fetching the PR diff for a re-review. */
+  registerRevertSync?(
+    prNumber: number,
+    repo: string,
+    syncPromise: Promise<void>,
+  ): void;
 }
 
 /** Minimal session shape needed by the auditor — avoids a circular import. */
