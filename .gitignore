@@ -26,3 +26,7 @@ packages/frontend/.env
 # Scratch commit message files — never tracked
 .commit-msg
 *.commit_msg
+commit-msg.txt
+commit_msg.txt
+commit-msg.*
+commit_msg.*

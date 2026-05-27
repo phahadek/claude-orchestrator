@@ -7,6 +7,12 @@ export const HARD_BANNED_FILES: readonly string[] = [
   '.commit_msg',
 ];
 
+// Patterns (case-insensitive) that match commit-message scratch files regardless of extension.
+// Catches commit-msg.txt, commit_msg.txt, commit-msg.draft, commit_msg.md, etc.
+export const HARD_BANNED_PATTERNS: readonly RegExp[] = [
+  /^commit[-_]msg\..+$/i,
+];
+
 export interface PRFileValidationResult {
   valid: boolean;
   bannedFiles: string[];
@@ -15,7 +21,9 @@ export interface PRFileValidationResult {
 
 function isHardBanned(filePath: string): boolean {
   const base = path.basename(filePath).toLowerCase();
-  return HARD_BANNED_FILES.some((f) => f.toLowerCase() === base);
+  if (HARD_BANNED_FILES.some((f) => f.toLowerCase() === base)) return true;
+  const basename = path.basename(filePath);
+  return HARD_BANNED_PATTERNS.some((p) => p.test(basename));
 }
 
 export function validatePRFiles(
