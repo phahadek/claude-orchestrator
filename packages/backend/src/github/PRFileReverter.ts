@@ -114,7 +114,7 @@ export async function revertBannedFiles(opts: {
   // Sync the local branch pointer to match origin after the push so the session's
   // subsequent git operations see a consistent state (no divergence between local
   // and origin/<branch>).
-  const syncedTo = await syncToOrigin(worktreePath, branch);
+  const syncedTo = await syncToOrigin(worktreePath, currentBranch);
 
   return { commitSha, reverted, syncedTo };
 }
