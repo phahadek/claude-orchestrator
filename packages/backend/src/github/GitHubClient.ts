@@ -451,12 +451,19 @@ export class GitHubClient {
     return { failingChecks, hasMissingNamedCheck };
   }
 
-  /** Fetch the list of changed files for a pull request. */
+  /** Fetch the full list of changed files for a pull request (paginated). */
   async getPRFiles(repo: string, prNumber: number): Promise<string[]> {
-    const data = await this.request<Array<{ filename: string }>>(
-      `/repos/${repo}/pulls/${prNumber}/files?per_page=100`,
-    );
-    return data.map((f) => f.filename);
+    const files: string[] = [];
+    let page = 1;
+    while (true) {
+      const data = await this.request<Array<{ filename: string }>>(
+        `/repos/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`,
+      );
+      for (const f of data) files.push(f.filename);
+      if (data.length < 100) break;
+      page++;
+    }
+    return files;
   }
 
   /** Fetch the list of commits for a pull request. */

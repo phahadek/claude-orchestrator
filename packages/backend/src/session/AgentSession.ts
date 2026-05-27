@@ -496,17 +496,17 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         const content = event.content as
           | Array<Record<string, unknown>>
           | undefined;
-        this.handlePRCreatedFromContent(content ?? []);
+        void this.handlePRCreatedFromContent(content ?? []);
       }
       if (toolUseId && this.pendingPushFileToolUseIds.has(toolUseId)) {
         this.pendingPushFileToolUseIds.delete(toolUseId);
-        this.handlePushDetected();
+        void this.handlePushDetected();
       }
       if (toolUseId && this.pendingBashCommands.has(toolUseId)) {
         const cmd = this.pendingBashCommands.get(toolUseId)!;
         this.pendingBashCommands.delete(toolUseId);
         if (isPushCommand('Bash', cmd)) {
-          this.handlePushDetected();
+          void this.handlePushDetected();
         }
       }
     }
@@ -526,7 +526,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               const innerContent = block.content as
                 | Array<Record<string, unknown>>
                 | undefined;
-              this.handlePRCreatedFromContent(innerContent ?? []);
+              void this.handlePRCreatedFromContent(innerContent ?? []);
             }
           }
         }
@@ -542,7 +542,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           this.sessionId,
           `turn complete — PR #${pr.pr_number} has review session, signalling push_detected`,
         );
-        this.handlePushDetected();
+        void this.handlePushDetected();
       }
 
       const denials = event.permission_denials as
@@ -672,9 +672,9 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
    * Parse PR data from the content blocks of a mcp__github__create_pull_request tool_result,
    * upsert the PR to SQLite with full metadata, and broadcast pr_created.
    */
-  private handlePRCreatedFromContent(
+  private async handlePRCreatedFromContent(
     contentBlocks: Array<Record<string, unknown>>,
-  ): void {
+  ): Promise<void> {
     if (this.prDetectedLive) return;
 
     // Extract text from content blocks
@@ -801,9 +801,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         }
       }
 
-      // File pollution check + auto-revert (mode-independent).
+      // File pollution check + auto-revert runs inline so AutoMerger never
+      // sees a contaminated diff (must complete before pr_created WS broadcast).
       if (this.githubClient) {
-        void this.runFilePollutionCheck(
+        await this.runFilePollutionCheck(
           repo,
           prNumber,
           prShape.base?.ref ?? 'dev',
@@ -853,7 +854,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
    * if a PR row exists for this session, also broadcast the WS push_detected message
    * with prNumber and repo included.
    */
-  private handlePushDetected(): void {
+  private async handlePushDetected(): Promise<void> {
     this.emit('push_detected', { sessionId: this.sessionId });
     const pr = getPRBySessionId(this.sessionId);
     if (pr) {
@@ -864,16 +865,13 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         repo: pr.repo,
       });
 
-      // File pollution check + auto-revert on every push.
+      // File pollution check + auto-revert runs inline on every push.
       if (this.githubClient) {
-        const prRow = getPRBySessionId(this.sessionId);
-        if (prRow) {
-          void this.runFilePollutionCheck(
-            prRow.repo,
-            prRow.pr_number,
-            prRow.base_branch ?? 'dev',
-          );
-        }
+        await this.runFilePollutionCheck(
+          pr.repo,
+          pr.pr_number,
+          pr.base_branch ?? 'dev',
+        );
       }
 
       // Fire-and-forget: verify commit attribution trailers.
