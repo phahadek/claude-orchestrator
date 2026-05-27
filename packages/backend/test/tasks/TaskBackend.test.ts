@@ -9,10 +9,13 @@ vi.mock('../../src/db/db.js', async () => {
   return { db: memDb };
 });
 
+vi.mock('../../src/audit/AuditLog', () => ({ recordEvent: vi.fn() }));
+
 import { ProjectService } from '../../src/projects/ProjectService.js';
 import { db } from '../../src/db/db.js';
 import {
   getTaskBackend,
+  AuditingTaskBackend,
   _resetTaskBackendCacheForTests,
 } from '../../src/tasks/TaskBackend';
 import { LocalTaskBackend } from '../../src/tasks/LocalTaskBackend';
@@ -26,7 +29,7 @@ beforeEach(() => {
 });
 
 describe('getTaskBackend(projectId)', () => {
-  it('returns a NotionTaskBackend when project.task_source === "notion"', () => {
+  it('returns an AuditingTaskBackend wrapping NotionTaskBackend when project.task_source === "notion"', () => {
     ProjectService.create({
       id: 'p-notion',
       name: 'Notion P',
@@ -34,11 +37,12 @@ describe('getTaskBackend(projectId)', () => {
       taskSource: 'notion',
     });
     const backend = getTaskBackend('p-notion');
-    expect(backend).toBeInstanceOf(NotionTaskBackend);
+    expect(backend).toBeInstanceOf(AuditingTaskBackend);
+    expect((backend as AuditingTaskBackend).inner).toBeInstanceOf(NotionTaskBackend);
     expect(backend.type).toBe('notion');
   });
 
-  it('returns a LocalTaskBackend when project.task_source === "yaml"', () => {
+  it('returns an AuditingTaskBackend wrapping LocalTaskBackend when project.task_source === "yaml"', () => {
     ProjectService.create({
       id: 'p-yaml',
       name: 'YAML P',
@@ -46,11 +50,12 @@ describe('getTaskBackend(projectId)', () => {
       taskSource: 'yaml',
     });
     const backend = getTaskBackend('p-yaml');
-    expect(backend).toBeInstanceOf(LocalTaskBackend);
+    expect(backend).toBeInstanceOf(AuditingTaskBackend);
+    expect((backend as AuditingTaskBackend).inner).toBeInstanceOf(LocalTaskBackend);
     expect(backend.type).toBe('local');
   });
 
-  it('returns a JiraTaskSourceProvider when project.task_source === "jira"', () => {
+  it('returns an AuditingTaskBackend wrapping JiraTaskSourceProvider when project.task_source === "jira"', () => {
     db.prepare(
       `INSERT INTO projects (id, name, project_dir, task_source, task_source_config, created_at, updated_at)
        VALUES ('p-jira', 'Jira P', '/tmp/j', 'jira',
@@ -58,7 +63,8 @@ describe('getTaskBackend(projectId)', () => {
          1, 1)`,
     ).run();
     const backend = getTaskBackend('p-jira');
-    expect(backend).toBeInstanceOf(JiraTaskSourceProvider);
+    expect(backend).toBeInstanceOf(AuditingTaskBackend);
+    expect((backend as AuditingTaskBackend).inner).toBeInstanceOf(JiraTaskSourceProvider);
     expect(backend.type).toBe('jira');
   });
 
@@ -68,7 +74,7 @@ describe('getTaskBackend(projectId)', () => {
     );
   });
 
-  it('reuses the same NotionTaskBackend instance across calls', () => {
+  it('reuses the same inner NotionTaskBackend instance across calls for notion projects', () => {
     ProjectService.create({
       id: 'p1',
       name: 'P1',
@@ -81,9 +87,12 @@ describe('getTaskBackend(projectId)', () => {
       projectDir: '/tmp/2',
       taskSource: 'notion',
     });
-    const a = getTaskBackend('p1');
-    const b = getTaskBackend('p2');
-    expect(a).toBe(b);
+    const a = getTaskBackend('p1') as AuditingTaskBackend;
+    const b = getTaskBackend('p2') as AuditingTaskBackend;
+    // The inner NotionTaskBackend is a singleton shared across notion projects
+    expect(a.inner).toBe(b.inner);
+    expect(a.type).toBe('notion');
+    expect(b.type).toBe('notion');
   });
 
   it('returns fresh LocalTaskBackend instances bound to the right projectDir', () => {
@@ -99,12 +108,11 @@ describe('getTaskBackend(projectId)', () => {
       projectDir: '/tmp/projectB',
       taskSource: 'yaml',
     });
-    const a = getTaskBackend('pa');
-    const b = getTaskBackend('pb');
-    expect(a).toBeInstanceOf(LocalTaskBackend);
-    expect(b).toBeInstanceOf(LocalTaskBackend);
-    // Each call may return a new LocalTaskBackend instance — the contract is
-    // that they are bound to the configured projectDir.
-    expect(a).not.toBe(b);
+    const a = getTaskBackend('pa') as AuditingTaskBackend;
+    const b = getTaskBackend('pb') as AuditingTaskBackend;
+    expect(a.inner).toBeInstanceOf(LocalTaskBackend);
+    expect(b.inner).toBeInstanceOf(LocalTaskBackend);
+    // Each call returns a new LocalTaskBackend instance bound to the configured projectDir.
+    expect(a.inner).not.toBe(b.inner);
   });
 });

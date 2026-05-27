@@ -11,15 +11,15 @@ describe('SessionManager.start() — In Progress status', () => {
   );
 
   it('routes updateStatus through getTaskBackend(projectId) for In Progress', () => {
-    // Must call getTaskBackend(projectId).updateStatus(notionTaskId, In Progress)
+    // Must call getTaskBackend(projectId).updateStatus(notionTaskId, '🔄 In Progress', ...)
     expect(source).toMatch(
-      /getTaskBackend\(projectId\)\.updateStatus\s*\(\s*notionTaskId\s*,\s*'🔄 In Progress'\s*\)/,
+      /getTaskBackend\(projectId\)\s*\.updateStatus\s*\(\s*notionTaskId\s*,\s*'🔄 In Progress'/,
     );
   });
 
   it('In Progress call is fire-and-forget with .catch() error handler', () => {
     expect(source).toMatch(
-      /getTaskBackend\(projectId\)\.updateStatus\s*\(\s*notionTaskId\s*,\s*'🔄 In Progress'\s*\)[\s\S]*?\.catch\b/,
+      /getTaskBackend\(projectId\)\s*\.updateStatus\s*\(\s*notionTaskId\s*,\s*'🔄 In Progress'[\s\S]*?\.catch\b/,
     );
   });
 
@@ -27,7 +27,7 @@ describe('SessionManager.start() — In Progress status', () => {
     expect(source).toMatch(/sessionType\s*===\s*'standard'/);
     const gateIdx = source.indexOf("sessionType === 'standard'");
     const inProgressIdx = source.indexOf(
-      "getTaskBackend(projectId).updateStatus(notionTaskId, '🔄 In Progress')",
+      "updateStatus(notionTaskId, '🔄 In Progress'",
     );
     expect(inProgressIdx).toBeGreaterThan(gateIdx);
   });
@@ -745,7 +745,7 @@ describe('SessionManager — error broadcast and rollback', () => {
   it('broadcasts an error message when updateStatus(In Progress) fails', () => {
     // The .catch() on updateStatus must emit a ServerMessage with type: 'error'
     const inProgressIdx = source.indexOf(
-      "updateStatus(notionTaskId, '🔄 In Progress')",
+      "updateStatus(notionTaskId, '🔄 In Progress'",
     );
     expect(inProgressIdx).toBeGreaterThan(-1);
     const catchBlock = source.slice(inProgressIdx, inProgressIdx + 500);
@@ -761,7 +761,7 @@ describe('SessionManager — error broadcast and rollback', () => {
     const catchBlock = source.slice(launchCatchIdx, launchCatchIdx + 1000);
     expect(catchBlock).toMatch(/'🗂️ Ready'/);
     expect(catchBlock).toMatch(
-      /updateStatus\s*\(\s*notionTaskId\s*,\s*'🗂️ Ready'\s*\)/,
+      /updateStatus\s*\(\s*notionTaskId\s*,\s*'🗂️ Ready'/,
     );
   });
 

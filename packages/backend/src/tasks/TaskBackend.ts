@@ -9,6 +9,7 @@ import {
   type JiraProjectConfig,
 } from './JiraTaskSourceProvider';
 import { JIRA_HOST, JIRA_TOKEN, JIRA_EMAIL } from '../config';
+import { recordEvent } from '../audit/AuditLog';
 
 /**
  * Per-project configuration that identifies where non-milestone tasks are sourced from.
@@ -19,6 +20,11 @@ export interface NonMilestoneSourceConfig {
   notionDatabaseId?: string;
   /** tasks.yaml milestone id (for yaml-backed projects). */
   milestoneId?: string;
+}
+
+export interface UpdateStatusOptions {
+  source?: 'orchestrator' | 'human';
+  sessionId?: string | null;
 }
 
 /**
@@ -44,7 +50,11 @@ export interface TaskBackend {
   attachPR(taskId: string, prUrl: string): Promise<void>;
 
   /** Update task status (display-format string with emoji prefix). */
-  updateStatus(taskId: string, status: string): Promise<void>;
+  updateStatus(
+    taskId: string,
+    status: string,
+    options?: UpdateStatusOptions,
+  ): Promise<void>;
 
   /** Fetch the full task page body as markdown (for review/session context). */
   fetchTaskPage(taskId: string): Promise<string>;
@@ -66,6 +76,65 @@ export interface TaskBackend {
  */
 export type TaskTrackerBackend = TaskBackend;
 
+// ── AuditingTaskBackend ──────────────────────────────────────────────────────
+
+/**
+ * Thin wrapper that emits a status_updated audit event on every updateStatus call.
+ * Applied at the factory boundary so all implementations are covered automatically.
+ */
+export class AuditingTaskBackend implements TaskBackend {
+  constructor(
+    readonly inner: TaskBackend,
+    private readonly projectId: string,
+  ) {}
+
+  get type(): 'notion' | 'local' | 'jira' {
+    return this.inner.type;
+  }
+
+  fetchReadyTasks(milestoneId: string | null, skipCache?: boolean) {
+    return this.inner.fetchReadyTasks(milestoneId, skipCache);
+  }
+
+  attachPR(taskId: string, prUrl: string) {
+    return this.inner.attachPR(taskId, prUrl);
+  }
+
+  async updateStatus(
+    taskId: string,
+    status: string,
+    options?: UpdateStatusOptions,
+  ): Promise<void> {
+    await this.inner.updateStatus(taskId, status);
+    const source = options?.source ?? 'orchestrator';
+    const sessionId = options?.sessionId ?? null;
+    recordEvent({
+      event_type: 'status_updated',
+      actor_type: source === 'human' ? 'human' : 'system',
+      actor_id: sessionId,
+      project_id: this.projectId,
+      task_id: taskId,
+      payload: {
+        from: null,
+        to: status,
+        source,
+        notes: 'previous status not captured',
+      },
+    });
+  }
+
+  fetchTaskPage(taskId: string) {
+    return this.inner.fetchTaskPage(taskId);
+  }
+
+  fetchNonMilestoneReadyTasks(
+    sourceConfig: NonMilestoneSourceConfig | null,
+    projectId?: string,
+  ) {
+    return this.inner.fetchNonMilestoneReadyTasks(sourceConfig, projectId);
+  }
+}
+
 // ── Factory ─────────────────────────────────────────────────────────────────
 
 let _notionBackend: NotionTaskBackend | undefined;
@@ -84,13 +153,15 @@ export function getTaskBackend(projectId: string): TaskBackend {
   if (!project) {
     throw new Error(`[getTaskBackend] project not found: ${projectId}`);
   }
+  let inner: TaskBackend;
   if (project.taskSource === 'yaml') {
-    return new LocalTaskBackend(project.projectDir);
+    inner = new LocalTaskBackend(project.projectDir);
+  } else if (project.taskSource === 'jira') {
+    inner = buildJiraBackend(project.taskSourceConfig);
+  } else {
+    inner = getNotionBackend();
   }
-  if (project.taskSource === 'jira') {
-    return buildJiraBackend(project.taskSourceConfig);
-  }
-  return getNotionBackend();
+  return new AuditingTaskBackend(inner, projectId);
 }
 
 function buildJiraBackend(

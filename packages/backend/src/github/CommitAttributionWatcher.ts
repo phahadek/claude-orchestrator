@@ -9,7 +9,7 @@ export const AI_TRAILER_REGEX = /^AI-Authored-By:/m;
 export interface CommitInfo {
   sha: string;
   message: string;
-  author?: { email?: string };
+  author?: string | null;
 }
 
 export interface AttributionCheckResult {
@@ -44,39 +44,55 @@ export async function checkCommitAttribution(
     return { checked: 0, missing: 0, paused: false };
   }
 
-  const missingTrailer = commits.filter(
-    (c) =>
-      !AI_TRAILER_REGEX.test(c.message) &&
-      c.author?.email !== ORCHESTRATOR_BOT_EMAIL,
-  );
+  let missingCount = 0;
+  let shouldPause = false;
 
-  if (missingTrailer.length === 0) {
-    return { checked: commits.length, missing: 0, paused: false };
-  }
+  for (const commit of commits) {
+    // Skip bot-authored commits entirely — no audit events emitted
+    if (commit.author === ORCHESTRATOR_BOT_EMAIL) {
+      continue;
+    }
 
-  for (const commit of missingTrailer) {
+    const hasAITrailer = AI_TRAILER_REGEX.test(commit.message);
+
     recordEvent({
-      event_type: 'attribution_missing',
-      actor_type: 'ai',
+      event_type: 'commit',
+      actor_type: hasAITrailer ? 'ai' : 'human',
       actor_id: sessionId,
       project_id: projectId,
       task_id: taskId,
-      payload: { sha: commit.sha, pr_number: prNumber, repo },
+      payload: {
+        sha: commit.sha,
+        author: commit.author ?? null,
+        has_trailer: hasAITrailer,
+        pr_number: prNumber,
+        repo,
+      },
     });
+
+    if (!hasAITrailer) {
+      missingCount++;
+      recordEvent({
+        event_type: 'attribution_missing',
+        actor_type: 'ai',
+        actor_id: sessionId,
+        project_id: projectId,
+        task_id: taskId,
+        payload: { sha: commit.sha, pr_number: prNumber, repo },
+      });
+      if (isCorporateMode) {
+        shouldPause = true;
+      }
+    }
   }
 
-  if (isCorporateMode) {
+  if (shouldPause) {
     setPauseReason(prNumber, repo, 'attribution_missing');
-    return {
-      checked: commits.length,
-      missing: missingTrailer.length,
-      paused: true,
-    };
   }
 
   return {
     checked: commits.length,
-    missing: missingTrailer.length,
-    paused: false,
+    missing: missingCount,
+    paused: shouldPause,
   };
 }

@@ -719,8 +719,9 @@ describe('POST /api/prs/:prNumber/merge', () => {
       .send({});
     expect(res.status).toBe(200);
     expect(vi.mocked(notionClient.updateStatus)).toHaveBeenCalledWith(
-      'notion-task-abc',
+      'notion:notion-task-abc',
       '✅ Done',
+      { source: 'orchestrator' },
     );
   });
 
@@ -739,7 +740,7 @@ describe('POST /api/prs/:prNumber/merge', () => {
       .send({});
     expect(res.status).toBe(200);
     expect(vi.mocked(tasksRoute.emitTaskUpdated)).toHaveBeenCalledWith(
-      'notion-task-abc',
+      'notion:notion-task-abc',
     );
   });
 
@@ -752,7 +753,7 @@ describe('POST /api/prs/:prNumber/merge', () => {
 
     expect(broadcastedMessages).toContainEqual({
       type: 'task_status_changed',
-      notionTaskId: 'notion-task-abc',
+      notionTaskId: 'notion:notion-task-abc',
       newStatus: '✅ Done',
     });
 
@@ -1205,6 +1206,7 @@ describe('POST /api/prs/:owner/:repo/:prNumber/approve', () => {
     expect(vi.mocked(notionClient.updateStatus)).toHaveBeenCalledWith(
       'notion:notion-task-abc',
       '👀 In Review',
+      { source: 'orchestrator' },
     );
   });
 
