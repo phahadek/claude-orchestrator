@@ -669,12 +669,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
     setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
     if (finalResult.verdict === 'approved') {
-      await this.handleApprovedVerdict(
-        prNumber,
-        repo,
-        pr.task_id,
-        projectId,
-      );
+      await this.handleApprovedVerdict(prNumber, repo, pr.task_id, projectId);
     }
     return finalResult;
   }

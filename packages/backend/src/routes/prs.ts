@@ -166,9 +166,7 @@ export function createPrsRouter(
       baseBranch: pr.base_branch ?? '',
       state: reconciledStates.get(pr.pr_number) ?? pr.state,
       notionTaskId: pr.task_id,
-      notionTaskTitle: pr.task_id
-        ? getTaskTitleFromCache(pr.task_id)
-        : null,
+      notionTaskTitle: pr.task_id ? getTaskTitleFromCache(pr.task_id) : null,
       sessionId: pr.session_id ?? null,
       reviewSessionId: pr.review_session_id ?? null,
       repo: pr.repo,

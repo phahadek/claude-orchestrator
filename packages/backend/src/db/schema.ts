@@ -346,7 +346,9 @@ export function runMigrations(): void {
 
   // ── pull_requests: notion_task_id → task_id ──────────────────────────────────
   try {
-    db.exec(`ALTER TABLE pull_requests RENAME COLUMN notion_task_id TO task_id`);
+    db.exec(
+      `ALTER TABLE pull_requests RENAME COLUMN notion_task_id TO task_id`,
+    );
   } catch {
     /* already renamed or column doesn't exist (fresh DB uses task_id already) */
   }
