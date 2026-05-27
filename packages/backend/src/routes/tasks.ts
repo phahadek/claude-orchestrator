@@ -462,11 +462,9 @@ export function createTasksRouter(): Router {
       });
       res.json({ ok: true });
     } catch (err) {
-      res
-        .status(500)
-        .json({
-          error: err instanceof Error ? err.message : 'Failed to update status',
-        });
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Failed to update status',
+      });
     }
   });
 

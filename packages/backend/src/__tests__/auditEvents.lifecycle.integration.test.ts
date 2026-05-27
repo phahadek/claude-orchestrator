@@ -25,9 +25,7 @@ vi.mock('../db/db.js', async () => {
 // ── Imports (resolved after mock is installed) ────────────────────────────────
 
 import { recordEvent } from '../audit/AuditLog';
-import {
-  checkCommitAttribution,
-} from '../github/CommitAttributionWatcher';
+import { checkCommitAttribution } from '../github/CommitAttributionWatcher';
 import { AuditingTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { GitHubClient } from '../github/GitHubClient';
@@ -174,7 +172,11 @@ describe('Audit event lifecycle — integration', () => {
 
     // Trigger attribution_missing via CommitAttributionWatcher with a commit missing the trailer
     const clientMissingTrailer = makeMockClient([
-      { sha: 'no-trailer-sha', message: 'fix: some fix', author: 'human@example.com' },
+      {
+        sha: 'no-trailer-sha',
+        message: 'fix: some fix',
+        author: 'human@example.com',
+      },
     ]);
     await checkCommitAttribution(
       clientMissingTrailer,
