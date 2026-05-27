@@ -510,6 +510,165 @@ describe('auditWorktreeEscape', () => {
   });
 });
 
+// ── Windows path normalization — false-positive fix ──────────────────────────
+// The Claude CLI on Windows reports file_path in Unix drive-rootless form
+// (/Users/phadek/...) while worktree_path is stored Windows-native (C:\Users\...).
+// These tests verify the fix: path.resolve(worktreePath, p) recovers the drive.
+
+describe('auditWorktreeEscape — Windows path normalization', () => {
+  const WORKTREE_WIN =
+    'C:\\Users\\phadek\\IdeaProjects\\X\\.claude\\worktrees\\test-id';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getPRByNotionTaskId).mockReturnValue(null);
+    vi.mocked(queries.getEventsBySession).mockReturnValue([]);
+  });
+
+  // Guards: path.resolve on Linux doesn't add a drive letter, so these tests
+  // are inherently Windows-specific.
+  const itWin = process.platform === 'win32' ? it : it.skip;
+
+  itWin(
+    'Edit with Unix-style drive-rootless path inside worktree produces no violation',
+    async () => {
+      vi.mocked(queries.getEventsBySession).mockReturnValue([
+        makeToolUseEvent('Edit', {
+          file_path:
+            '/Users/phadek/IdeaProjects/X/.claude/worktrees/test-id/file.ts',
+          old_string: 'a',
+          new_string: 'b',
+        }),
+      ]);
+      const auditor = new SessionAuditor(
+        makeNotionClient(),
+        undefined,
+        undefined,
+      );
+      const violations = await auditor.auditWorktreeEscape(
+        'test-session-id',
+        WORKTREE_WIN,
+      );
+      expect(violations).toHaveLength(0);
+    },
+  );
+
+  itWin(
+    'Edit with Unix-style drive-rootless path outside worktree produces a violation',
+    async () => {
+      vi.mocked(queries.getEventsBySession).mockReturnValue([
+        makeToolUseEvent('Edit', {
+          file_path: '/Users/phadek/Documents/elsewhere.txt',
+          old_string: 'a',
+          new_string: 'b',
+        }),
+      ]);
+      const auditor = new SessionAuditor(
+        makeNotionClient(),
+        undefined,
+        undefined,
+      );
+      const violations = await auditor.auditWorktreeEscape(
+        'test-session-id',
+        WORKTREE_WIN,
+      );
+      expect(violations).toHaveLength(1);
+      expect(violations[0].type).toBe('worktree_escape');
+      expect(violations[0].tool).toBe('Edit');
+    },
+  );
+
+  itWin(
+    'Write with Git-Bash path inside worktree produces no violation (regression)',
+    async () => {
+      vi.mocked(queries.getEventsBySession).mockReturnValue([
+        makeToolUseEvent('Write', {
+          file_path:
+            '/c/Users/phadek/IdeaProjects/X/.claude/worktrees/test-id/file.ts',
+          content: '',
+        }),
+      ]);
+      const auditor = new SessionAuditor(
+        makeNotionClient(),
+        undefined,
+        undefined,
+      );
+      const violations = await auditor.auditWorktreeEscape(
+        'test-session-id',
+        WORKTREE_WIN,
+      );
+      expect(violations).toHaveLength(0);
+    },
+  );
+
+  itWin(
+    'Bash with Windows-native path inside worktree produces no violation (regression)',
+    async () => {
+      vi.mocked(queries.getEventsBySession).mockReturnValue([
+        makeToolUseEvent('Bash', {
+          command: `npx tsc ${WORKTREE_WIN}\\packages\\backend\\src\\db\\types.ts`,
+        }),
+      ]);
+      const auditor = new SessionAuditor(
+        makeNotionClient(),
+        undefined,
+        undefined,
+      );
+      const violations = await auditor.auditWorktreeEscape(
+        'test-session-id',
+        WORKTREE_WIN,
+      );
+      expect(violations).toHaveLength(0);
+    },
+  );
+
+  itWin(
+    'Bash with Windows-native absolute path outside worktree produces a violation',
+    async () => {
+      vi.mocked(queries.getEventsBySession).mockReturnValue([
+        makeToolUseEvent('Bash', {
+          command: 'C:\\Users\\phadek\\outside\\script.ps1',
+        }),
+      ]);
+      const auditor = new SessionAuditor(
+        makeNotionClient(),
+        undefined,
+        undefined,
+      );
+      const violations = await auditor.auditWorktreeEscape(
+        'test-session-id',
+        WORKTREE_WIN,
+      );
+      expect(violations).toHaveLength(1);
+      expect(violations[0].type).toBe('worktree_escape');
+      expect(violations[0].tool).toBe('Bash');
+    },
+  );
+
+  itWin(
+    'relative file_path is resolved against worktree and produces no violation when inside',
+    async () => {
+      vi.mocked(queries.getEventsBySession).mockReturnValue([
+        makeToolUseEvent('Edit', {
+          file_path: 'packages/backend/src/db/types.ts',
+          old_string: 'a',
+          new_string: 'b',
+        }),
+      ]);
+      const auditor = new SessionAuditor(
+        makeNotionClient(),
+        undefined,
+        undefined,
+      );
+      const violations = await auditor.auditWorktreeEscape(
+        'test-session-id',
+        WORKTREE_WIN,
+      );
+      expect(violations).toHaveLength(0);
+    },
+  );
+});
+
 // ── runMigrations() — session_audits table ───────────────────────────────────
 
 describe('runMigrations() — session_audits table', () => {
