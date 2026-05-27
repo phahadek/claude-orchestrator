@@ -139,10 +139,6 @@ function readBoardCache(boardId: string): NotionTask[] | null {
 
 function writeBoardCache(boardId: string, tasks: NotionTask[]): void {
   upsertTaskCache(boardCacheKey(boardId), JSON.stringify(tasks));
-  // Also cache individual tasks by their own ID
-  for (const task of tasks) {
-    upsertTaskCache(task.id, JSON.stringify(task));
-  }
 }
 
 // ─── Notion API helpers ─────────────────────────────────────────────────────
@@ -333,7 +329,7 @@ export function parseExpectedSize(markdown: string): number | undefined {
 }
 
 function taskPageCacheKey(taskId: string): string {
-  return `task:${taskId}`;
+  return `task:notion:${taskId}`;
 }
 
 // ─── NotionClient ───────────────────────────────────────────────────────────
