@@ -88,7 +88,7 @@ export function applyTestSchema(db: Database.Database): void {
       id                     INTEGER PRIMARY KEY AUTOINCREMENT,
       pr_number              INTEGER NOT NULL,
       pr_url                 TEXT    NOT NULL UNIQUE,
-      notion_task_id         TEXT,
+      task_id                TEXT,
       session_id             TEXT,
       repo                   TEXT    NOT NULL,
       title                  TEXT,
@@ -111,7 +111,8 @@ export function applyTestSchema(db: Database.Database): void {
       merge_state            TEXT,
       merge_state_checked_at TEXT,
       pending_push           INTEGER NOT NULL DEFAULT 0,
-      pause_reason           TEXT
+      pause_reason           TEXT,
+      failing_checks         TEXT
     );
     CREATE TABLE IF NOT EXISTS projects (
       id                       TEXT    PRIMARY KEY,

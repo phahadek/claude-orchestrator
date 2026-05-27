@@ -13,8 +13,8 @@ vi.mock('../db/db.js', async () => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       session_id TEXT PRIMARY KEY,
-      notion_task_id TEXT,
-      notion_task_url TEXT,
+      task_id TEXT,
+      task_url TEXT,
       project_context_url TEXT,
       status TEXT NOT NULL,
       started_at INTEGER NOT NULL,
@@ -69,7 +69,7 @@ vi.mock('../db/db.js', async () => {
       timestamp INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS task_cache (
-      notion_task_id TEXT PRIMARY KEY,
+      task_id TEXT PRIMARY KEY,
       fetched_at INTEGER NOT NULL,
       raw_json TEXT NOT NULL
     );

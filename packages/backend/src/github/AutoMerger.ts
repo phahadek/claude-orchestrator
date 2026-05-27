@@ -381,7 +381,7 @@ export class AutoMerger {
         actor_type: 'system',
         actor_id: null,
         project_id: getProjectByGithubRepo(pr.repo)?.id ?? null,
-        task_id: pr.notion_task_id ?? null,
+        task_id: pr.task_id ?? null,
         payload: {
           pr_number: pr.pr_number,
           repo: pr.repo,
@@ -470,8 +470,8 @@ export class AutoMerger {
           ? failingCheckNames
           : undefined,
     });
-    if (pr.notion_task_id) {
-      emitTaskUpdated(pr.notion_task_id);
+    if (pr.task_id) {
+      emitTaskUpdated(pr.task_id);
     }
     console.log(
       `[AutoMerger] PR #${pr.pr_number}: paused with reason '${reason}'`,

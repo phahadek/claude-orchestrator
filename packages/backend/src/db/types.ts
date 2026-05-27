@@ -296,7 +296,7 @@ export interface PullRequestRow {
   id: number;
   pr_number: number;
   pr_url: string;
-  notion_task_id: string | null;
+  task_id: string | null;
   session_id: string | null;
   repo: string;
   title: string | null;

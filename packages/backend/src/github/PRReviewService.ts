@@ -248,7 +248,7 @@ export class PRReviewService {
         // Recompute size signal against the FULL refreshed diff each iteration.
         const { filesSection, expectedSize } = await this.fetchSizeSignalInputs(
           projectId,
-          prRow.notion_task_id,
+          prRow.task_id,
         );
         const sizeSignal = computeSizeSignal(diff, filesSection, expectedSize);
         const followUp = [
@@ -277,7 +277,7 @@ export class PRReviewService {
           await this.handleApprovedVerdict(
             prNumber,
             repo,
-            prRow.notion_task_id,
+            prRow.task_id,
             projectId,
           );
         }
@@ -294,14 +294,14 @@ export class PRReviewService {
       );
       const diffData = { prId: prNumber, diff, filesChanged: [] };
 
-      if (!prRow.notion_task_id) {
-        throw new Error(`PR #${prNumber} has no linked Notion task`);
+      if (!prRow.task_id) {
+        throw new Error(`PR #${prNumber} has no linked task`);
       }
 
       const taskBody = await this.resolveBackend(projectId).fetchTaskPage(
-        prRow.notion_task_id,
+        prRow.task_id,
       );
-      const taskUrl = `https://www.notion.so/${prRow.notion_task_id}`;
+      const taskUrl = `https://www.notion.so/${prRow.task_id}`;
       const prompt = this.buildPrompt(prData, diffData, taskBody);
       const sizeSignal = computeSizeSignal(
         diff,
@@ -332,7 +332,7 @@ export class PRReviewService {
           await this.handleApprovedVerdict(
             prNumber,
             repo,
-            prRow.notion_task_id,
+            prRow.task_id,
             projectId,
           );
         }
@@ -371,7 +371,7 @@ export class PRReviewService {
         actor_type: 'system',
         actor_id: null,
         project_id: projectId || null,
-        task_id: prRow.notion_task_id ?? null,
+        task_id: prRow.task_id ?? null,
         payload: {
           pr_number: prNumber,
           repo,
@@ -389,7 +389,7 @@ export class PRReviewService {
         await this.handleApprovedVerdict(
           prNumber,
           repo,
-          prRow.notion_task_id,
+          prRow.task_id,
           projectId,
         );
       }
@@ -621,7 +621,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     const diffData = await this.github.fetchDiff(prNumber, repo, branches);
     const { filesSection, expectedSize } = await this.fetchSizeSignalInputs(
       projectId,
-      pr.notion_task_id,
+      pr.task_id,
     );
     const sizeSignal = computeSizeSignal(
       diffData.diff,
@@ -669,12 +669,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
     setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
     if (finalResult.verdict === 'approved') {
-      await this.handleApprovedVerdict(
-        prNumber,
-        repo,
-        pr.notion_task_id,
-        projectId,
-      );
+      await this.handleApprovedVerdict(prNumber, repo, pr.task_id, projectId);
     }
     return finalResult;
   }

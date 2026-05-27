@@ -165,10 +165,8 @@ export function createPrsRouter(
       branchName: pr.head_branch ?? '',
       baseBranch: pr.base_branch ?? '',
       state: reconciledStates.get(pr.pr_number) ?? pr.state,
-      notionTaskId: pr.notion_task_id,
-      notionTaskTitle: pr.notion_task_id
-        ? getTaskTitleFromCache(pr.notion_task_id)
-        : null,
+      notionTaskId: pr.task_id,
+      notionTaskTitle: pr.task_id ? getTaskTitleFromCache(pr.task_id) : null,
       sessionId: pr.session_id ?? null,
       reviewSessionId: pr.review_session_id ?? null,
       repo: pr.repo,
@@ -212,7 +210,7 @@ export function createPrsRouter(
         upsertPullRequest({
           pr_number: pr.id,
           pr_url: pr.url,
-          notion_task_id: null,
+          task_id: null,
           session_id: null,
           repo,
           title: pr.title,
@@ -321,7 +319,7 @@ export function createPrsRouter(
             mergeState: category.mergeState,
             failingChecks: failingNamesOrNull,
           });
-          if (prRow.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
+          if (prRow.task_id) emitTaskUpdated(prRow.task_id);
         }
         res.json({
           mergeable,
@@ -367,7 +365,7 @@ export function createPrsRouter(
             mergeable: false,
             mergeState: mergeableState ?? 'dirty',
           });
-          if (prRow?.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
+          if (prRow?.task_id) emitTaskUpdated(prRow.task_id);
           if (prRow?.session_id) {
             const baseBranch = prRow.base_branch ?? 'dev';
             const msg = `PR #${prNumber} has merge conflicts with the base branch. Rebase onto \`${baseBranch}\`, resolve the conflicts, and push the fixed branch.`;
@@ -411,8 +409,8 @@ export function createPrsRouter(
         }
 
         // Update task to Done via the project-scoped task backend and broadcast task_updated
-        if (prRow?.notion_task_id) {
-          const taskId = prRow.notion_task_id;
+        if (prRow?.task_id) {
+          const taskId = prRow.task_id;
           const backend = resolveBackendForRepo(repo);
           if (backend) {
             try {
@@ -503,7 +501,7 @@ export function createPrsRouter(
             mergeState: category.mergeState,
             failingChecks: failingNamesOrNull,
           });
-          if (prRow?.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
+          if (prRow?.task_id) emitTaskUpdated(prRow.task_id);
 
           let errorMessage: string;
           switch (category.category) {
@@ -651,11 +649,11 @@ export function createPrsRouter(
       }
 
       // Update task status to In Review via the project-scoped task backend
-      if (prRow.notion_task_id) {
+      if (prRow.task_id) {
         const backend = resolveBackendForRepo(repo);
         if (backend) {
           await backend
-            .updateStatus(prRow.notion_task_id, '👀 In Review')
+            .updateStatus(prRow.task_id, '👀 In Review')
             .catch((e: unknown) =>
               console.warn(
                 '[prs] task backend updateStatus failed:',
@@ -792,7 +790,7 @@ export function createPrsRouter(
         mergeable: null,
         mergeState: null,
       });
-      if (prRow.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
+      if (prRow.task_id) emitTaskUpdated(prRow.task_id);
       res.json({ sessionId });
     },
   );

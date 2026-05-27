@@ -69,7 +69,7 @@ vi.mock('../db/db.js', async () => {
       id                INTEGER PRIMARY KEY AUTOINCREMENT,
       pr_number         INTEGER NOT NULL,
       pr_url            TEXT    NOT NULL UNIQUE,
-      notion_task_id    TEXT,
+      task_id           TEXT,
       session_id        TEXT,
       repo              TEXT    NOT NULL,
       title             TEXT,

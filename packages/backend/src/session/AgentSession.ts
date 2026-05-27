@@ -692,7 +692,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       upsertPullRequest({
         pr_number: prNumber,
         pr_url: prUrl,
-        notion_task_id: this.taskId,
+        task_id: this.taskId,
         session_id: this.sessionId,
         repo,
         title: prShape.title ?? null,
@@ -869,7 +869,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             );
         }
 
-        // Always upsert notion_task_id and session_id onto the PR row when a
+        // Always upsert task_id and session_id onto the PR row when a
         // PR URL is known at session end. This ensures the link is set even if
         // PRSyncJob ran before handleCleanExit and created the row with null values.
         // Capture existing PR state BEFORE the upsert overwrites it so the
@@ -900,7 +900,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               upsertPullRequest({
                 pr_number: prNumber,
                 pr_url: prUrl,
-                notion_task_id: this.taskId || null,
+                task_id: this.taskId || null,
                 session_id: this.sessionId,
                 repo,
                 title: null,

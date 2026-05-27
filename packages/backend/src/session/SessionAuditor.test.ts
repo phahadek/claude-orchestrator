@@ -258,7 +258,7 @@ describe('SessionAuditor', () => {
       id: 1,
       pr_number: 10,
       pr_url: 'https://github.com/owner/repo/pull/10',
-      notion_task_id: 'task-abc123',
+      task_id: 'notion:task-abc123',
       session_id: 'original-session',
       repo: 'owner/repo',
       title: 'feat: something',

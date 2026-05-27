@@ -158,7 +158,7 @@ const basePRRow = {
   id: 1,
   pr_number: 1,
   pr_url: 'https://github.com/owner/repo/pull/1',
-  notion_task_id: 'task-abc',
+  task_id: 'notion:task-abc',
   session_id: 'coding-session-id',
   repo: 'owner/repo',
   title: 'feat: test',

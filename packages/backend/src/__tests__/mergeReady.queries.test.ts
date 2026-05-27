@@ -55,7 +55,7 @@ vi.mock('../db/db.js', async () => {
       id                     INTEGER PRIMARY KEY AUTOINCREMENT,
       pr_number              INTEGER NOT NULL,
       pr_url                 TEXT    NOT NULL UNIQUE,
-      notion_task_id         TEXT,
+      task_id                TEXT,
       session_id             TEXT,
       repo                   TEXT    NOT NULL,
       title                  TEXT,
@@ -146,7 +146,7 @@ function insertPR(
   (db as import('better-sqlite3').Database)
     .prepare(
       `INSERT INTO pull_requests
-         (pr_number, pr_url, notion_task_id, repo, state, draft,
+         (pr_number, pr_url, task_id, repo, state, draft,
           review_result, mergeable, pause_reason, created_at, updated_at, synced_at)
        VALUES (?, ?, ?, 'owner/repo', ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
@@ -244,7 +244,7 @@ describe('getMergeReadyPRs', () => {
     expect(getMergeReadyPRs(projectId, milestoneId)).toHaveLength(0);
   });
 
-  it('matches notion_task_id with or without hyphens', () => {
+  it('matches task_id with or without hyphens', () => {
     cleanDb();
     insertMilestone(milestoneId, projectId, sourceId);
     insertBoardCache(`board:${sourceId}`, [

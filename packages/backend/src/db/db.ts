@@ -70,7 +70,7 @@ db.exec(`
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     pr_number       INTEGER NOT NULL,
     pr_url          TEXT    NOT NULL UNIQUE,
-    notion_task_id  TEXT,
+    task_id         TEXT,
     session_id      TEXT,
     repo            TEXT    NOT NULL,
     title           TEXT,
@@ -137,6 +137,35 @@ try {
   db.exec(`ALTER TABLE task_cache RENAME COLUMN notion_task_id TO task_id`);
 } catch {
   /* already renamed or column doesn't exist */
+}
+// pull_requests: notion_task_id → task_id
+try {
+  db.exec(`ALTER TABLE pull_requests RENAME COLUMN notion_task_id TO task_id`);
+} catch {
+  /* already renamed or column doesn't exist (fresh DB uses task_id already) */
+}
+// Backfill pull_requests.task_id: add 'notion:' prefix for legacy unprefixed rows.
+// Idempotent: only touches rows where task_id has no ':' separator.
+// Handles duplicate-shape collisions: delete the raw row when a prefixed twin exists.
+try {
+  db.exec(`
+    DELETE FROM pull_requests
+    WHERE task_id IS NOT NULL
+      AND task_id NOT LIKE '%:%'
+      AND EXISTS (
+        SELECT 1 FROM pull_requests pr2
+        WHERE pr2.task_id = 'notion:' || pull_requests.task_id
+          AND pr2.pr_url != pull_requests.pr_url
+      )
+  `);
+  db.exec(`
+    UPDATE pull_requests
+    SET task_id = 'notion:' || task_id
+    WHERE task_id IS NOT NULL
+      AND task_id NOT LIKE '%:%'
+  `);
+} catch {
+  /* backfill already ran or table doesn't exist */
 }
 
 // ── Migrations (idempotent column additions for existing databases) ──────────

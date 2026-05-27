@@ -1258,7 +1258,7 @@ describe('AgentSession', () => {
       id: 1,
       pr_number: 77,
       pr_url: 'https://github.com/owner/repo/pull/77',
-      notion_task_id: null,
+      task_id: null,
       session_id: 'sess-with-pr',
       repo: 'owner/repo',
       title: 'Test PR',

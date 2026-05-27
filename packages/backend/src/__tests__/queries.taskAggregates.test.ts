@@ -36,7 +36,7 @@ vi.mock('../db/db.js', async () => {
       id                     INTEGER PRIMARY KEY AUTOINCREMENT,
       pr_number              INTEGER NOT NULL,
       pr_url                 TEXT    NOT NULL UNIQUE,
-      notion_task_id         TEXT,
+      task_id         TEXT,
       session_id             TEXT,
       repo                   TEXT    NOT NULL,
       title                  TEXT,
@@ -153,14 +153,14 @@ const DASHLESS_UUID = '33722f9152f3816b967fc7f230b215ca';
 
 function makeSession(overrides: {
   session_id: string;
-  notion_task_id: string;
+  task_id: string;
   session_type?: string;
   started_at?: number;
 }) {
   return {
     session_id: overrides.session_id,
-    task_id: overrides.notion_task_id,
-    task_url: `https://www.notion.so/${overrides.notion_task_id}`,
+    task_id: overrides.task_id,
+    task_url: `https://www.notion.so/${overrides.task_id}`,
     project_context_url: 'https://www.notion.so/context',
     project_id: 'proj-1',
     status: 'completed',
@@ -175,14 +175,14 @@ function makeSession(overrides: {
 
 function makePR(overrides: {
   pr_number: number;
-  notion_task_id: string;
+  task_id: string;
   session_id?: string;
 }) {
   const now = '2024-01-01T00:00:00Z';
   return {
     pr_number: overrides.pr_number,
     pr_url: `https://github.com/owner/repo/pull/${overrides.pr_number}`,
-    notion_task_id: overrides.notion_task_id,
+    task_id: overrides.task_id,
     session_id: overrides.session_id ?? null,
     repo: 'owner/repo',
     title: `PR ${overrides.pr_number}`,
@@ -213,7 +213,7 @@ beforeEach(async () => {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe('getActiveTaskAggregates — notion_task_id format matching', () => {
+describe('getActiveTaskAggregates — pull_requests.task_id format matching', () => {
   it('returns non-null code_session_id when session uses dashless UUID and task_cache uses dashed UUID', () => {
     // task_cache stores dashed UUID (as returned by Notion API)
     upsertTaskCache(
@@ -228,7 +228,7 @@ describe('getActiveTaskAggregates — notion_task_id format matching', () => {
     insertSession(
       makeSession({
         session_id: 'sess-001',
-        notion_task_id: DASHLESS_UUID,
+        task_id: DASHLESS_UUID,
         session_type: 'standard',
       }),
     );
@@ -250,7 +250,7 @@ describe('getActiveTaskAggregates — notion_task_id format matching', () => {
     insertSession(
       makeSession({
         session_id: 'sess-002',
-        notion_task_id: DASHLESS_UUID,
+        task_id: DASHLESS_UUID,
         session_type: 'standard',
       }),
     );
@@ -269,7 +269,7 @@ describe('getActiveTaskAggregates — notion_task_id format matching', () => {
         status: '🔄 In Progress',
       }),
     );
-    upsertPullRequest(makePR({ pr_number: 42, notion_task_id: DASHLESS_UUID }));
+    upsertPullRequest(makePR({ pr_number: 42, task_id: DASHLESS_UUID }));
 
     const rows = getActiveTaskAggregates([DASHED_UUID]);
     expect(rows).toHaveLength(1);
@@ -285,7 +285,7 @@ describe('getActiveTaskAggregates — notion_task_id format matching', () => {
         status: '🔄 In Progress',
       }),
     );
-    upsertPullRequest(makePR({ pr_number: 43, notion_task_id: DASHLESS_UUID }));
+    upsertPullRequest(makePR({ pr_number: 43, task_id: DASHLESS_UUID }));
 
     const rows = getActiveTaskAggregates([DASHED_UUID]);
     expect(rows).toHaveLength(1);
@@ -305,7 +305,7 @@ describe('getActiveTaskAggregates — notion_task_id format matching', () => {
     insertSession(
       makeSession({
         session_id: 'sess-003',
-        notion_task_id: DASHED_UUID,
+        task_id: DASHED_UUID,
         session_type: 'standard',
       }),
     );
@@ -343,7 +343,7 @@ describe('getActiveTaskAggregates — notion_task_id format matching', () => {
     insertSession(
       makeSession({
         session_id: 'sess-old',
-        notion_task_id: DASHLESS_UUID,
+        task_id: DASHLESS_UUID,
         session_type: 'standard',
         started_at: 1000,
       }),
@@ -351,7 +351,7 @@ describe('getActiveTaskAggregates — notion_task_id format matching', () => {
     insertSession(
       makeSession({
         session_id: 'sess-new',
-        notion_task_id: DASHLESS_UUID,
+        task_id: DASHLESS_UUID,
         session_type: 'standard',
         started_at: 2000,
       }),
@@ -382,7 +382,7 @@ describe('getActiveTaskAggregates — prefix-tolerance (bridge band-aid)', () =>
     insertSession(
       makeSession({
         session_id: 'prefix-sess-1',
-        notion_task_id: PREFIXED_ID,
+        task_id: PREFIXED_ID,
         session_type: 'standard',
       }),
     );
@@ -402,7 +402,7 @@ describe('getActiveTaskAggregates — prefix-tolerance (bridge band-aid)', () =>
     insertSession(
       makeSession({
         session_id: 'raw-sess-1',
-        notion_task_id: RAW_ID,
+        task_id: RAW_ID,
         session_type: 'standard',
       }),
     );
@@ -412,12 +412,12 @@ describe('getActiveTaskAggregates — prefix-tolerance (bridge band-aid)', () =>
     expect(rows[0].code_session_id).toBe('raw-sess-1');
   });
 
-  it('raw tc.task_id + notion:-prefixed PR notion_task_id → PR fields populated', () => {
+  it('raw tc.task_id + notion:-prefixed PR task_id → PR fields populated (prefix-tolerance)', () => {
     upsertTaskCache(
       RAW_ID,
       JSON.stringify({ id: RAW_ID, title: 'T', status: 'In Progress' }),
     );
-    upsertPullRequest(makePR({ pr_number: 99, notion_task_id: PREFIXED_ID }));
+    upsertPullRequest(makePR({ pr_number: 99, task_id: PREFIXED_ID }));
 
     const rows = getActiveTaskAggregates([RAW_ID]);
     expect(rows).toHaveLength(1);
@@ -433,7 +433,7 @@ describe('getActiveTaskAggregates — prefix-tolerance (bridge band-aid)', () =>
     insertSession(
       makeSession({
         session_id: 'review-prefix-1',
-        notion_task_id: PREFIXED_ID,
+        task_id: PREFIXED_ID,
         session_type: 'review',
       }),
     );
@@ -458,14 +458,14 @@ describe('getActiveTaskAggregates — review session token fields', () => {
     insertSession(
       makeSession({
         session_id: 'code-sess',
-        notion_task_id: DASHLESS_UUID,
+        task_id: DASHLESS_UUID,
         session_type: 'standard',
       }),
     );
     insertSession(
       makeSession({
         session_id: 'review-sess',
-        notion_task_id: DASHLESS_UUID,
+        task_id: DASHLESS_UUID,
         session_type: 'review',
       }),
     );
@@ -492,7 +492,7 @@ describe('getActiveTaskAggregates — review session token fields', () => {
     insertSession(
       makeSession({
         session_id: 'code-only',
-        notion_task_id: DASHLESS_UUID,
+        task_id: DASHLESS_UUID,
         session_type: 'standard',
       }),
     );
@@ -517,14 +517,14 @@ describe('getActiveTaskAggregates — review session token fields', () => {
     insertSession(
       makeSession({
         session_id: 'code-sess-2',
-        notion_task_id: DASHLESS_UUID,
+        task_id: DASHLESS_UUID,
         session_type: 'standard',
       }),
     );
     insertSession(
       makeSession({
         session_id: 'review-sess-2',
-        notion_task_id: DASHLESS_UUID,
+        task_id: DASHLESS_UUID,
         session_type: 'review',
       }),
     );

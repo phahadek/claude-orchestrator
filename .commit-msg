@@ -1,7 +1,5 @@
-feat: bridge-fix-task-id-convention-transition
+feat: rename pull_requests.notion_task_id to task_id with backfill
 
-Prevent backend boot crash from task_cache UNIQUE constraint violation
-when raw and notion:-prefixed twins coexist, and restore dashboard UI
-session/PR matching via prefix-tolerant joins in getActiveTaskAggregates.
+Renames the pull_requests.notion_task_id column to task_id (matching the sessions and task_cache pattern), adds an idempotent migration with collision-safe backfill, and updates every TypeScript reference. No downgrade support after this migration runs.
 
-AI-Authored-By: claude-sonnet-4-6 (session: 9e5f914e)
+AI-Authored-By: claude-sonnet-4-6 (session: 632536ef-9992-4a07-b2cc-54960f744e6f)

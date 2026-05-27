@@ -117,7 +117,7 @@ const mockPRRow: PullRequestRow = {
   id: 1,
   pr_number: 42,
   pr_url: 'https://github.com/owner/repo/pull/42',
-  notion_task_id: 'notion-task-abc',
+  task_id: 'notion:notion-task-abc',
   session_id: 'session-xyz',
   repo: 'owner/repo',
   title: 'feat: add something',
@@ -148,7 +148,7 @@ const mockPRRowNoTask: PullRequestRow = {
   ...mockPRRow,
   id: 2,
   pr_number: 43,
-  notion_task_id: null,
+  task_id: null,
   session_id: null,
 };
 
@@ -568,7 +568,7 @@ describe('POST /api/prs/:prNumber/review', () => {
     expect(res.body.summary).toBe('Looks good');
   });
 
-  it('calls reviewPR even when PR has no notion_task_id (service handles error)', async () => {
+  it('calls reviewPR even when PR has no task_id (service handles error)', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRowNoTask);
     const res = await supertest(buildApp()).post(
       '/api/prs/43/review?projectId=proj-1',
@@ -759,7 +759,7 @@ describe('POST /api/prs/:prNumber/merge', () => {
     setPRBroadcast(() => {});
   });
 
-  it('does NOT call emitTaskUpdated when PR has no notion_task_id', async () => {
+  it('does NOT call emitTaskUpdated when PR has no task_id', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRowNoTask);
     const res = await supertest(buildApp())
       .post('/api/prs/owner/repo/43/merge')
@@ -1190,8 +1190,8 @@ describe('POST /api/prs/:owner/:repo/:prNumber/approve', () => {
     );
   });
 
-  it('calls notionClient.updateStatus with In Review when PR has notion_task_id', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow); // notion_task_id: 'notion-task-abc'
+  it('calls notionClient.updateStatus with In Review when PR has task_id', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow); // task_id: 'notion:notion-task-abc'
     const notionClient = makeMockNotionClient();
     const res = await supertest(
       buildApp(
@@ -1203,13 +1203,13 @@ describe('POST /api/prs/:owner/:repo/:prNumber/approve', () => {
     ).post('/api/prs/owner/repo/42/approve');
     expect(res.status).toBe(200);
     expect(vi.mocked(notionClient.updateStatus)).toHaveBeenCalledWith(
-      'notion-task-abc',
+      'notion:notion-task-abc',
       '👀 In Review',
     );
   });
 
-  it('does NOT call notionClient.updateStatus when PR has no notion_task_id', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRowNoTask); // notion_task_id: null
+  it('does NOT call notionClient.updateStatus when PR has no task_id', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRowNoTask); // task_id: null
     const notionClient = makeMockNotionClient();
     const res = await supertest(
       buildApp(
