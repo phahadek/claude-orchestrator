@@ -1,9 +1,16 @@
 /**
  * Secret patterns to redact. Pattern-only matching — no entropy heuristic.
- * Patterns: sk-ant-* (Anthropic), ghp_* (GitHub PAT), secret_* (generic), ntn_* (Notion).
+ * Patterns: sk-ant-* (Anthropic), gh[poursi]_* (GitHub PATs), secret_* (generic),
+ * ntn_* (Notion), xox[bpars]-* (Slack).
  */
 const SECRET_PATTERN =
-  /\b(sk-ant-[A-Za-z0-9_-]{10,}|ghp_[A-Za-z0-9]{10,}|secret_[A-Za-z0-9_-]{10,}|ntn_[A-Za-z0-9_-]{10,})\b/g;
+  /\b(sk-ant-[A-Za-z0-9_-]{10,}|gh[poursi]_[A-Za-z0-9_-]{10,}|secret_[A-Za-z0-9_-]{10,}|ntn_[A-Za-z0-9_-]{10,}|xox[bpars]-[A-Za-z0-9-]+)\b/g;
+
+/**
+ * Matches Authorization: Bearer <token> (case-insensitive). Captures the token
+ * as group 1 so it can be replaced regardless of shape or length.
+ */
+const BEARER_PATTERN = /\bBearer\s+(\S+)/gi;
 
 const REDACTED = '[REDACTED]';
 
@@ -14,7 +21,12 @@ const REDACTED = '[REDACTED]';
  */
 export function scrubSecrets<T>(value: T): T {
   if (typeof value === 'string') {
-    return value.replace(SECRET_PATTERN, REDACTED) as T;
+    return value
+      .replace(
+        BEARER_PATTERN,
+        (match) => `${match.split(/\s+/)[0]} ${REDACTED}`,
+      )
+      .replace(SECRET_PATTERN, REDACTED) as T;
   }
   if (Array.isArray(value)) {
     return value.map(scrubSecrets) as unknown as T;
