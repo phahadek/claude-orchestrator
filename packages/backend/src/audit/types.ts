@@ -9,7 +9,8 @@ export type EventType =
   | 'attribution_missing'
   | 'session_launch_refused_zdr'
   | 'data_residency_flag_toggled'
-  | 'file_pollution_reverted';
+  | 'file_pollution_reverted'
+  | 'autofix_for_ci_failure';
 
 export type ActorType = 'ai' | 'human' | 'system';
 

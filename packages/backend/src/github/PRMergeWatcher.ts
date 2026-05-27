@@ -5,6 +5,8 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { getProjectByGithubRepo } from '../config';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
+import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
+import { recordEvent } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
 import type { AutoMerger } from './AutoMerger';
@@ -15,6 +17,7 @@ import {
   updateMergeState,
   getPRByNumber,
   setPauseReason,
+  getSession,
 } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 
@@ -30,6 +33,9 @@ export class PRMergeWatcher {
    */
   private firstPollPending = true;
   private autoMerger: AutoMerger | undefined;
+  /** SHA of the last autofix commit per PR, keyed by "prNumber:repo". Used to
+   *  prevent re-triggering autofix when the autofix commit itself fails CI. */
+  private lastAutofixShas = new Map<string, string>();
 
   constructor(
     private github: GitHubClient,
@@ -235,6 +241,54 @@ export class PRMergeWatcher {
         `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has failing CI checks: ${failingNames.join(', ') || '(unknown)'}`,
       );
       if (pr.session_id) {
+        const autofixKey = `${pr.pr_number}:${pr.repo}`;
+        const lastSha = this.lastAutofixShas.get(autofixKey);
+        const alreadyAutofixed =
+          lastSha !== undefined && lastSha === pr.head_sha;
+
+        if (!alreadyAutofixed) {
+          const session = getSession(pr.session_id);
+          const worktreePath = session?.worktree_path ?? '';
+          const project = getProjectByGithubRepo(pr.repo);
+          const autofixCommands = project
+            ? loadAutofixCommands(project.projectDir)
+            : [];
+
+          if (worktreePath && autofixCommands.length > 0) {
+            try {
+              const result = await runAutofix(
+                worktreePath,
+                project!.projectDir,
+                autofixCommands,
+                (msg) =>
+                  console.log(
+                    `[PRMergeWatcher] autofix PR #${pr.pr_number}: ${msg}`,
+                  ),
+              );
+              if (result.commitSha) {
+                this.lastAutofixShas.set(autofixKey, result.commitSha);
+                recordEvent({
+                  event_type: 'autofix_for_ci_failure',
+                  actor_type: 'system',
+                  task_id: pr.task_id ?? null,
+                  payload: {
+                    pr_number: pr.pr_number,
+                    commit_sha: result.commitSha,
+                    failing_checks: failingNames,
+                    source: 'ci',
+                  },
+                });
+                return; // CI will re-run on the new SHA
+              }
+            } catch (err) {
+              console.warn(
+                `[PRMergeWatcher] autofix error for PR #${pr.pr_number}:`,
+                (err as Error).message,
+              );
+            }
+          }
+        }
+
         const runUrl = `https://github.com/${pr.repo}/pull/${pr.pr_number}/checks`;
         const msg = formatCIFailureFeedback({
           prNumber: pr.pr_number,

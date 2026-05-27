@@ -23,6 +23,7 @@ import { formatReviewFeedback, formatCIFailureFeedback } from './reviewUtils';
 import { runVerifyAsGate } from '../orchestration/verifyRunner';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
+import { recordEvent } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
 
 const REVIEW_TIMEOUT_MS = 120_000;
@@ -173,16 +174,91 @@ export class ReviewOrchestrator {
         config.verify,
       );
       if (!verifyResult.passed) {
-        setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
-        this.sessionManager.send(
-          job.sessionId,
-          formatCIFailureFeedback({
-            source: 'verify',
-            failedCommand: verifyResult.failedCommand,
-            truncatedOutput: verifyResult.truncatedOutput,
-          }),
-        );
-        return;
+        const autofixCommands = loadAutofixCommands(project.projectDir);
+        if (autofixCommands.length > 0) {
+          try {
+            const autofixResult = await runAutofix(
+              job.worktreePath,
+              project.projectDir,
+              autofixCommands,
+              (msg) =>
+                console.log(
+                  `[ReviewOrchestrator] autofix local branch ${job.branchName}: ${msg}`,
+                ),
+            );
+            if (autofixResult.commitSha) {
+              recordEvent({
+                event_type: 'autofix_for_ci_failure',
+                actor_type: 'system',
+                task_id: job.taskId ?? null,
+                payload: {
+                  pr_number: job.localBranchId,
+                  commit_sha: autofixResult.commitSha,
+                  failing_checks: verifyResult.failedCommand
+                    ? [verifyResult.failedCommand]
+                    : [],
+                  source: 'verify',
+                },
+              });
+              // Re-run verify to see if autofix resolved it
+              const retryResult = await runVerifyAsGate(
+                job.worktreePath,
+                config.verify,
+              );
+              if (retryResult.passed) {
+                // Autofix fixed the gate — fall through to AI review
+              } else {
+                setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
+                this.sessionManager.send(
+                  job.sessionId,
+                  formatCIFailureFeedback({
+                    source: 'verify',
+                    failedCommand: retryResult.failedCommand,
+                    truncatedOutput: retryResult.truncatedOutput,
+                  }),
+                );
+                return;
+              }
+            } else {
+              setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
+              this.sessionManager.send(
+                job.sessionId,
+                formatCIFailureFeedback({
+                  source: 'verify',
+                  failedCommand: verifyResult.failedCommand,
+                  truncatedOutput: verifyResult.truncatedOutput,
+                }),
+              );
+              return;
+            }
+          } catch (err) {
+            console.warn(
+              `[ReviewOrchestrator] autofix error for local branch ${job.branchName}:`,
+              err,
+            );
+            setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
+            this.sessionManager.send(
+              job.sessionId,
+              formatCIFailureFeedback({
+                source: 'verify',
+                failedCommand: verifyResult.failedCommand,
+                truncatedOutput: verifyResult.truncatedOutput,
+              }),
+            );
+            return;
+          }
+        } else {
+          setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
+          this.sessionManager.send(
+            job.sessionId,
+            formatCIFailureFeedback({
+              source: 'verify',
+              failedCommand: verifyResult.failedCommand,
+              truncatedOutput: verifyResult.truncatedOutput,
+            }),
+          );
+          return;
+        }
       }
     }
 
