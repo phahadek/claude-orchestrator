@@ -484,28 +484,6 @@ export class SessionManager extends EventEmitter {
         }
       }
 
-      if (sessionMode === 'cli' && sessionContextContent) {
-        // Write orchestrator content to root CLAUDE.md in the worktree.
-        // No assume-unchanged (blocked rebase/checkout). No .claude/CLAUDE.md
-        // (worktrees don't resolve project-level CLAUDE.md correctly).
-        // The modified file is unstaged — git checkout -b works fine.
-        // For rebase, the pre-PR gate tells sessions to stash first.
-        try {
-          fs.writeFileSync(
-            path.join(worktreePath, 'CLAUDE.md'),
-            sessionContextContent,
-            'utf-8',
-          );
-          console.log(
-            `[SessionManager] orchestrator CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`,
-          );
-        } catch (err) {
-          console.error(
-            `[SessionManager] failed to write orchestrator CLAUDE.md for ${sessionId}: ${err}`,
-          );
-        }
-      }
-
       const session = new AgentSession(
         sessionId,
         taskUrl,
@@ -523,6 +501,18 @@ export class SessionManager extends EventEmitter {
         runner,
         projectId,
       );
+
+      if (sessionMode === 'cli' && sessionContextContent) {
+        // Write orchestrator content to root CLAUDE.md in the worktree via injectContextFile
+        // so that the per-session revert lock is honoured (new sessions always have an empty
+        // lock, so this always proceeds on first launch).
+        // No assume-unchanged (blocked rebase/checkout). No .claude/CLAUDE.md
+        // (worktrees don't resolve project-level CLAUDE.md correctly).
+        session.injectContextFile('CLAUDE.md', sessionContextContent);
+        console.log(
+          `[SessionManager] orchestrator CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`,
+        );
+      }
 
       this.pendingStarts.delete(sessionId);
       this.sessions.set(sessionId, session);

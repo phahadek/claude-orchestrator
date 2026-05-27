@@ -175,6 +175,9 @@ export class AgentSession extends EventEmitter {
    *  auto-revert, so that the push of our own revert commit does not re-trigger
    *  the validator (loop guard). */
   private lastRevertShaPerPR = new Map<string, string>();
+  /** Files that have been reverted by PRFileReverter during this session lifetime.
+   *  The injector must not overwrite these — doing so would re-stage the banned content. */
+  private readonly _revertedFiles = new Set<string>();
 
   /** The underlying I/O adapter (CLI subprocess or Agent SDK). */
   private runner: ISessionRunner;
@@ -956,6 +959,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 
       // Update loop guard so we don't re-process our own revert push.
       this.lastRevertShaPerPR.set(prKey, commitSha);
+      // Lock the reverted files so injectContextFile cannot overwrite them
+      for (const f of reverted) {
+        this._revertedFiles.add(f);
+      }
 
       recordEvent({
         event_type: 'file_pollution_reverted',
@@ -1211,6 +1218,37 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           `[AgentSession] audit failed for ${this.sessionId}: ${err}`,
         );
       });
+  }
+
+  /** Files reverted during this session that the injector must not overwrite. */
+  get revertedFiles(): ReadonlySet<string> {
+    return this._revertedFiles;
+  }
+
+  /**
+   * Write orchestrator context content to a file in the worktree.
+   * If the file was already reverted by PRFileReverter this session, the write is
+   * suppressed and a file_pollution_re_injected_blocked audit event is emitted.
+   */
+  injectContextFile(filename: string, content: string): void {
+    if (this._revertedFiles.has(filename)) {
+      recordEvent({
+        event_type: 'file_pollution_re_injected_blocked',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: this.projectId || null,
+        task_id: this.taskId || null,
+        payload: { filename, session_id: this.sessionId },
+      });
+      return;
+    }
+    try {
+      fs.writeFileSync(path.join(this.worktreePath, filename), content, 'utf-8');
+    } catch (err) {
+      console.error(
+        `[AgentSession] injectContextFile: failed to write ${filename}: ${err}`,
+      );
+    }
   }
 
   /** No-op — CLI does not support mid-session permission approval. */

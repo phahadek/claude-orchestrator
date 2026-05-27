@@ -30,6 +30,8 @@ async function setupTestRepo(): Promise<{
   await git(['clone', originDir, worktreeDir], base);
   await git(['config', 'user.email', 'test@test.com'], worktreeDir);
   await git(['config', 'user.name', 'Test'], worktreeDir);
+  // Disable CRLF conversion so file content comparisons are consistent on Windows
+  await git(['config', 'core.autocrlf', 'false'], worktreeDir);
 
   // Initial commit on dev
   fs.writeFileSync(path.join(worktreeDir, 'readme.txt'), 'hello\n');
@@ -108,12 +110,12 @@ describe('revertBannedFiles()', () => {
     expect(result.commitSha).not.toBeNull();
     expect(result.reverted).toContain('CLAUDE.md');
 
-    // Worktree must still have injected content (restored after push)
+    // Worktree must have base content — the revert sticks so git add won't re-stage it
     const worktreeContent = fs.readFileSync(
       path.join(worktreeDir, 'CLAUDE.md'),
       'utf8',
     );
-    expect(worktreeContent).toBe('orchestrator-injected content\n');
+    expect(worktreeContent).toBe('base content\n');
 
     // The HEAD commit on the branch must have the base-branch CLAUDE.md content
     const committedContent = await git(['show', 'HEAD:CLAUDE.md'], worktreeDir);
@@ -149,7 +151,7 @@ describe('revertBannedFiles()', () => {
     expect(exists).toBe(false);
   });
 
-  it('preserves the worktree CLAUDE.md content (orchestrator injection survives the revert)', async () => {
+  it('does NOT restore injected worktree content after revert — the base content sticks', async () => {
     const injectedContent = '# Orchestrator injected\nrules here\n';
 
     // Add CLAUDE.md to origin/dev
@@ -175,12 +177,13 @@ describe('revertBannedFiles()', () => {
       repo: 'owner/repo',
     });
 
-    // Worktree CLAUDE.md must still be the injected content
+    // Worktree CLAUDE.md must have base content (NOT the injected content)
+    // so that a subsequent `git add .` does not re-stage the banned file.
     const content = fs.readFileSync(
       path.join(worktreeDir, 'CLAUDE.md'),
       'utf8',
     );
-    expect(content).toBe(injectedContent);
+    expect(content).toBe('base\n');
   });
 
   it('is idempotent — second call when no banned files remain returns { commitSha: null }', async () => {
@@ -218,6 +221,61 @@ describe('revertBannedFiles()', () => {
       repo: 'owner/repo',
     });
     expect(second.commitSha).toBeNull();
-    expect(second.reverted).toHaveLength(0);
+  });
+
+  it('PR #410 regression: second push after revert does not re-introduce CLAUDE.md', async () => {
+    // Set up: CLAUDE.md on origin/dev (base content)
+    await git(['checkout', 'dev'], worktreeDir);
+    fs.writeFileSync(path.join(worktreeDir, 'CLAUDE.md'), 'base content\n');
+    await git(['add', 'CLAUDE.md'], worktreeDir);
+    await git([...GIT_AUTHOR, 'commit', '-m', 'base CLAUDE.md'], worktreeDir);
+    await git(['push', 'origin', 'dev'], worktreeDir);
+
+    await git(['checkout', 'feature/test'], worktreeDir);
+    await git(['merge', 'dev', '--no-edit'], worktreeDir);
+
+    // Session accidentally commits injected CLAUDE.md (the initial contamination)
+    fs.writeFileSync(
+      path.join(worktreeDir, 'CLAUDE.md'),
+      'orchestrator-injected\n',
+    );
+    await git(['add', 'CLAUDE.md'], worktreeDir);
+    await git(
+      [...GIT_AUTHOR, 'commit', '-m', 'session work + injected CLAUDE.md'],
+      worktreeDir,
+    );
+    await git(['push', 'origin', 'feature/test'], worktreeDir);
+
+    // Auto-revert fires (PR #410 step 3)
+    const revertResult = await revertBannedFiles({
+      worktreePath: worktreeDir,
+      baseBranch: 'dev',
+      bannedFiles: ['CLAUDE.md'],
+      prNumber: 410,
+      repo: 'owner/repo',
+    });
+    expect(revertResult.commitSha).not.toBeNull();
+
+    // After the revert, the worktree has base content — NOT the injected content
+    const contentAfterRevert = fs.readFileSync(
+      path.join(worktreeDir, 'CLAUDE.md'),
+      'utf8',
+    );
+    expect(contentAfterRevert).toBe('base content\n');
+
+    // git status must not show CLAUDE.md as modified — it won't be re-staged
+    const statusOutput = await git(['status', '--porcelain'], worktreeDir);
+    const claudeMdInStatus = statusOutput
+      .split('\n')
+      .some((line) => line.includes('CLAUDE.md'));
+    expect(claudeMdInStatus).toBe(false);
+
+    // The 3-dot diff from dev to HEAD must NOT contain CLAUDE.md
+    const diffOutput = await git(
+      ['diff', 'origin/dev...HEAD', '--name-only'],
+      worktreeDir,
+    );
+    const diffLines = diffOutput.split('\n').filter(Boolean);
+    expect(diffLines).not.toContain('CLAUDE.md');
   });
 });

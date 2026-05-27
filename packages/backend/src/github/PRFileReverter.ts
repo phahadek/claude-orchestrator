@@ -1,7 +1,5 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import fs from 'fs';
-import path from 'path';
 
 const execFileAsync = promisify(execFile);
 
@@ -23,17 +21,6 @@ export async function revertBannedFiles(opts: {
 
   if (bannedFiles.length === 0) {
     return { commitSha: null, reverted: [] };
-  }
-
-  // Save current worktree content for each banned file so we can restore after push
-  const saved = new Map<string, Buffer | null>();
-  for (const f of bannedFiles) {
-    const abs = path.join(worktreePath, f);
-    try {
-      saved.set(f, fs.readFileSync(abs));
-    } catch {
-      saved.set(f, null);
-    }
   }
 
   // Fetch base branch from origin so we have origin/<baseBranch> available
@@ -94,8 +81,6 @@ export async function revertBannedFiles(opts: {
   }
 
   if (!hasStagedChanges) {
-    // Nothing actually changed — restore worktree content and return no-op
-    restoreWorktree(worktreePath, saved);
     return { commitSha: null, reverted: [] };
   }
 
@@ -121,25 +106,10 @@ export async function revertBannedFiles(opts: {
   // Push the revert commit
   await git(['push', 'origin', `HEAD:${currentBranch}`], worktreePath);
 
-  // Restore the worktree files (e.g. CLAUDE.md with orchestrator injection)
-  restoreWorktree(worktreePath, saved);
+  // Intentionally do NOT restore the worktree files to their pre-revert (injected) state.
+  // Restoring would allow the next `git add` cycle to re-stage the banned file,
+  // causing the repeated contamination loop observed in PR #410.
+  // The base-branch content stays on disk so subsequent git add cycles are clean.
 
   return { commitSha, reverted };
-}
-
-function restoreWorktree(
-  worktreePath: string,
-  saved: Map<string, Buffer | null>,
-): void {
-  for (const [f, content] of saved) {
-    const abs = path.join(worktreePath, f);
-    if (content !== null) {
-      try {
-        fs.mkdirSync(path.dirname(abs), { recursive: true });
-        fs.writeFileSync(abs, content);
-      } catch {
-        // best-effort
-      }
-    }
-  }
 }
