@@ -157,6 +157,9 @@ vi.mock('../db/queries', () => ({
   setSessionModel: vi.fn(),
   getPRBySessionId: vi.fn(() => null),
   setHeadSha: vi.fn(),
+  // Required by getCorporateMode() which is called unconditionally in resumeOrphanSessions().
+  // Returning null makes it fall through to the default personal-mode config (no dockerMandatory).
+  getSetting: vi.fn(() => null),
 }));
 
 // Now import the modules under test (after all mocks are in place).
@@ -304,6 +307,15 @@ describe('resumeOrphanSessions() — healthy-worktree resume (integration)', () 
       expect(sm.isAlive('healthy-session')).toBe(true);
       expect(spawn).toHaveBeenCalledTimes(1);
 
+      // Regression guard: resume spawn must pass '--resume <row.session_id>' so
+      // the CLI restores the correct conversation. A wrong or fresh UUID here
+      // would silently start a blank session instead of resuming.
+      const resumeSpawnArgs = vi.mocked(spawn).mock.calls[0][1] as string[];
+      const resumeIdx = resumeSpawnArgs.indexOf('--resume');
+      expect(resumeIdx).toBeGreaterThan(-1);
+      expect(resumeSpawnArgs[resumeIdx + 1]).toBe('healthy-session');
+      expect(resumeSpawnArgs).not.toContain('--session-id');
+
       // session_status: running was broadcast on the WS bus.
       const statusMsgs = messages.filter(
         (m) =>
@@ -430,5 +442,58 @@ describe('resumeOrphanSessions() — pr_url carry-forward (integration)', () => 
       ([cmd]) => typeof cmd === 'string' && /git\s+branch\s+-D/.test(cmd),
     );
     expect(branchDeletions).toHaveLength(0);
+  });
+});
+
+// ── Test 5: spawn arg contract ───────────────────────────────────────────────
+// Dedicated regression test for the session_id/--resume contract.
+// Ensures resumeOrphanSessions() always passes the DB row's session_id as the
+// --resume value, not a fresh UUID. If the fix is reverted, this test fails.
+describe('resumeOrphanSessions() — spawn arg contract: --resume <session_id>', () => {
+  it('resume spawn uses the DB row session_id as the --resume value, not a fresh UUID', async () => {
+    const SESSION_UUID = 'cafebabe-dead-beef-cafe-deadbeef1234';
+    const orphan = makeRunningSession({
+      session_id: SESSION_UUID,
+      worktree_path: `/fake/project/.claude/worktrees/${SESSION_UUID}`,
+    });
+    vi.mocked(queries.getSessionsByStatus).mockReturnValue([orphan]);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(execSync).mockReturnValue(`session/${SESSION_UUID}`);
+
+    const sm = new SessionManager();
+    await sm.resumeOrphanSessions();
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    const spawnArgs = vi.mocked(spawn).mock.calls[0][1] as string[];
+
+    // '--resume' must be present and immediately followed by the exact UUID
+    // stored in the DB row — this is the CLI conversation_id the CLI uses to
+    // restore history.
+    const resumeIdx = spawnArgs.indexOf('--resume');
+    expect(resumeIdx).toBeGreaterThan(-1);
+    expect(spawnArgs[resumeIdx + 1]).toBe(SESSION_UUID);
+
+    // '--session-id' is only for initial spawns, never for resume.
+    expect(spawnArgs).not.toContain('--session-id');
+  });
+
+  it('initial spawn (via CliSessionRunner) includes --session-id <sessionId> and not --resume', () => {
+    // Covered at the unit level in session/__tests__/CliSessionRunner.spawnArgs.test.ts.
+    // This assertion is a structural guard: verify CliSessionRunner.ts uses
+    // '--session-id' when no resumeSessionId is provided.
+    const source = require('fs').readFileSync(
+      require('path').join(
+        __dirname,
+        '..',
+        'session',
+        'CliSessionRunner.ts',
+      ),
+      'utf-8',
+    ) as string;
+
+    // The spawn args branch must use '--session-id' for fresh sessions and
+    // '--resume' for resumed ones — never both, never swapped.
+    expect(source).toMatch(/'--session-id',\s*this\.sessionId/);
+    expect(source).toMatch(/'--resume',\s*resumeSessionId/);
   });
 });
