@@ -942,15 +942,27 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           const branchName = await getCurrentBranch(this.worktreePath);
           featureBranchName = branchName ?? undefined;
           if (branchName && branchName !== baseBranch) {
-            hasDiff = await hasNonEmptyDiff(this.worktreePath, baseBranch, branchName);
+            hasDiff = await hasNonEmptyDiff(
+              this.worktreePath,
+              baseBranch,
+              branchName,
+            );
           }
         } catch (e) {
           console.error(`[AgentSession] hasDiff computation failed: ${e}`);
         }
 
         // No-op detection: clean exit with no PR and no diff → spawn investigator.
-        if (!prUrl && !hasDiff && this.taskId && this.sessionManager && 'start' in this.sessionManager) {
-          const project = this.projectId ? getProjectRowById(this.projectId) : undefined;
+        if (
+          !prUrl &&
+          !hasDiff &&
+          this.taskId &&
+          this.sessionManager &&
+          'start' in this.sessionManager
+        ) {
+          const project = this.projectId
+            ? getProjectRowById(this.projectId)
+            : undefined;
           const repo = project?.github_repo ?? '';
           const sessionRow = getSession(this.sessionId);
           const taskCreatedAt = sessionRow
@@ -1079,7 +1091,11 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           const project = getProjectRowById(this.projectId);
           if (project?.git_mode === 'local-only') {
             try {
-              if (featureBranchName && featureBranchName !== baseBranch && hasDiff) {
+              if (
+                featureBranchName &&
+                featureBranchName !== baseBranch &&
+                hasDiff
+              ) {
                 const now = new Date().toISOString();
                 insertLocalBranch({
                   project_id: this.projectId,

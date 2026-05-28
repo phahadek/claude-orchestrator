@@ -1,6 +1,10 @@
 import crypto from 'crypto';
 import { EventEmitter } from 'events';
-import { getEventsBySession, getTaskNoOpAttempts, bumpTaskNoOpAttempts } from '../db/queries';
+import {
+  getEventsBySession,
+  getTaskNoOpAttempts,
+  bumpTaskNoOpAttempts,
+} from '../db/queries';
 import { renderNoOpInvestigationPrompt } from './reviewUtils';
 import type { GitHubClient } from './GitHubClient';
 import type { TaskBackend } from '../tasks/TaskBackend';
@@ -48,7 +52,11 @@ export function tryParseNoOpVerdict(text: string): NoOpVerdict | null {
       typeof parsed.resolvedByPrUrl === 'string' &&
       typeof parsed.reason === 'string'
     ) {
-      return { kind: 'resolved', resolvedByPrUrl: parsed.resolvedByPrUrl, reason: parsed.reason };
+      return {
+        kind: 'resolved',
+        resolvedByPrUrl: parsed.resolvedByPrUrl,
+        reason: parsed.reason,
+      };
     }
     if (parsed.kind === 'retry' && typeof parsed.reason === 'string') {
       return { kind: 'retry', reason: parsed.reason };
@@ -69,7 +77,9 @@ function extractVerdictFromEvents(sessionId: string): NoOpVerdict | null {
       try {
         const parsed = JSON.parse(ev.payload) as Record<string, unknown>;
         if (parsed.type === 'assistant') {
-          const message = parsed.message as { content?: Array<{ type: string; text?: string }> } | undefined;
+          const message = parsed.message as
+            | { content?: Array<{ type: string; text?: string }> }
+            | undefined;
           for (const block of message?.content ?? []) {
             if (block.type === 'text' && block.text) {
               const verdict = tryParseNoOpVerdict(block.text);
@@ -93,14 +103,23 @@ function waitForNoOpVerdict(
     const cleanup = () => sessionManager.off('message', handler);
 
     const handler = (msg: ServerMessage) => {
-      if (!('sessionId' in msg) || (msg as { sessionId?: string }).sessionId !== sessionId) return;
+      if (
+        !('sessionId' in msg) ||
+        (msg as { sessionId?: string }).sessionId !== sessionId
+      )
+        return;
 
-      if (msg.type === 'session_event' && (msg as { eventType?: string }).eventType === 'text') {
+      if (
+        msg.type === 'session_event' &&
+        (msg as { eventType?: string }).eventType === 'text'
+      ) {
         const content = (msg as { content?: string }).content ?? '';
         try {
           const event = JSON.parse(content) as Record<string, unknown>;
           if (event.type === 'assistant') {
-            const message = event.message as { content?: Array<{ type: string; text?: string }> } | undefined;
+            const message = event.message as
+              | { content?: Array<{ type: string; text?: string }> }
+              | undefined;
             for (const block of message?.content ?? []) {
               if (block.type === 'text' && block.text) {
                 const verdict = tryParseNoOpVerdict(block.text);
@@ -124,7 +143,11 @@ function waitForNoOpVerdict(
         if (verdict) {
           resolve(verdict);
         } else {
-          resolve({ kind: 'human', reason: 'Investigator session ended without emitting a valid verdict.' });
+          resolve({
+            kind: 'human',
+            reason:
+              'Investigator session ended without emitting a valid verdict.',
+          });
         }
       }
     };
@@ -141,7 +164,16 @@ export class NoOpInvestigator {
   ) {}
 
   async investigate(ctx: NoOpInvestigatorContext): Promise<void> {
-    const { taskId, taskUrl, projectContextUrl, projectId, noOpSessionId, baseBranch, repo, taskCreatedAt } = ctx;
+    const {
+      taskId,
+      taskUrl,
+      projectContextUrl,
+      projectId,
+      noOpSessionId,
+      baseBranch,
+      repo,
+      taskCreatedAt,
+    } = ctx;
 
     const investigatorSessionId = crypto.randomUUID();
 
@@ -153,22 +185,43 @@ export class NoOpInvestigator {
       const firstHeading = taskMarkdown.match(/^#\s+(.+)$/m);
       if (firstHeading) taskTitle = firstHeading[1];
     } catch (e) {
-      console.error(`[NoOpInvestigator] fetchTaskPage failed for ${taskId}:`, e);
+      console.error(
+        `[NoOpInvestigator] fetchTaskPage failed for ${taskId}:`,
+        e,
+      );
     }
 
     const noOpSessionEvents = getEventsBySession(noOpSessionId);
 
-    let mergedPRs: Array<{ number: number; title: string; url: string; mergedAt: string }> = [];
-    let recentCommits: Array<{ sha: string; message: string; author: string; date: string }> = [];
+    let mergedPRs: Array<{
+      number: number;
+      title: string;
+      url: string;
+      mergedAt: string;
+    }> = [];
+    let recentCommits: Array<{
+      sha: string;
+      message: string;
+      author: string;
+      date: string;
+    }> = [];
 
     if (this.githubClient && repo) {
       try {
-        mergedPRs = await this.githubClient.listMergedPRsSince(repo, baseBranch, taskCreatedAt);
+        mergedPRs = await this.githubClient.listMergedPRsSince(
+          repo,
+          baseBranch,
+          taskCreatedAt,
+        );
       } catch (e) {
         console.error(`[NoOpInvestigator] listMergedPRsSince failed:`, e);
       }
       try {
-        recentCommits = await this.githubClient.listCommitsSince(repo, baseBranch, taskCreatedAt);
+        recentCommits = await this.githubClient.listCommitsSince(
+          repo,
+          baseBranch,
+          taskCreatedAt,
+        );
       } catch (e) {
         console.error(`[NoOpInvestigator] listCommitsSince failed:`, e);
       }
@@ -185,7 +238,10 @@ export class NoOpInvestigator {
     });
 
     // Attach listener BEFORE start() to avoid missing fast verdicts.
-    const verdictPromise = waitForNoOpVerdict(this.sessionManager, investigatorSessionId);
+    const verdictPromise = waitForNoOpVerdict(
+      this.sessionManager,
+      investigatorSessionId,
+    );
 
     try {
       this.sessionManager.start(taskUrl, projectContextUrl, {
@@ -231,7 +287,10 @@ export class NoOpInvestigator {
       try {
         await this.taskBackend.updateStatus(taskId, '✅ Done');
       } catch (e) {
-        console.error(`[NoOpInvestigator] updateStatus(Done) failed for ${taskId}:`, e);
+        console.error(
+          `[NoOpInvestigator] updateStatus(Done) failed for ${taskId}:`,
+          e,
+        );
       }
       try {
         await this.taskBackend.appendImplementationNote(
@@ -239,13 +298,19 @@ export class NoOpInvestigator {
           `Auto-resolved by investigator: ${verdict.resolvedByPrUrl} — ${verdict.reason}`,
         );
       } catch (e) {
-        console.error(`[NoOpInvestigator] appendImplementationNote failed for ${taskId}:`, e);
+        console.error(
+          `[NoOpInvestigator] appendImplementationNote failed for ${taskId}:`,
+          e,
+        );
       }
       if (this.githubClient && repo && featureBranchName) {
         try {
           await this.githubClient.deleteBranch(repo, featureBranchName);
         } catch (e) {
-          console.error(`[NoOpInvestigator] deleteBranch(${featureBranchName}) failed:`, e);
+          console.error(
+            `[NoOpInvestigator] deleteBranch(${featureBranchName}) failed:`,
+            e,
+          );
         }
       }
       return;
@@ -259,7 +324,10 @@ export class NoOpInvestigator {
         try {
           await this.taskBackend.updateStatus(taskId, '🗂️ Ready');
         } catch (e) {
-          console.error(`[NoOpInvestigator] updateStatus(Ready) failed for ${taskId}:`, e);
+          console.error(
+            `[NoOpInvestigator] updateStatus(Ready) failed for ${taskId}:`,
+            e,
+          );
         }
         return;
       }
@@ -270,12 +338,16 @@ export class NoOpInvestigator {
     try {
       await this.taskBackend.updateStatus(taskId, '🚫 Blocked');
     } catch (e) {
-      console.error(`[NoOpInvestigator] updateStatus(Blocked) failed for ${taskId}:`, e);
+      console.error(
+        `[NoOpInvestigator] updateStatus(Blocked) failed for ${taskId}:`,
+        e,
+      );
     }
     try {
-      const reason = verdict.kind === 'retry'
-        ? `Retry budget exhausted. Last investigator verdict: ${verdict.reason}`
-        : verdict.reason;
+      const reason =
+        verdict.kind === 'retry'
+          ? `Retry budget exhausted. Last investigator verdict: ${verdict.reason}`
+          : verdict.reason;
       await this.taskBackend.updateNotes(taskId, reason);
     } catch (e) {
       console.error(`[NoOpInvestigator] updateNotes failed for ${taskId}:`, e);

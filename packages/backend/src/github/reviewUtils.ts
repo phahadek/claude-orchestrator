@@ -187,9 +187,23 @@ export function formatHumanReviewFeedback(
 export interface NoOpInvestigationArgs {
   taskTitle: string;
   taskMarkdown: string;
-  noOpSessionEvents: Array<{ event_type: string; payload: string; timestamp: number }>;
-  mergedPRs: Array<{ number: number; title: string; url: string; mergedAt: string }>;
-  recentCommits: Array<{ sha: string; message: string; author: string; date: string }>;
+  noOpSessionEvents: Array<{
+    event_type: string;
+    payload: string;
+    timestamp: number;
+  }>;
+  mergedPRs: Array<{
+    number: number;
+    title: string;
+    url: string;
+    mergedAt: string;
+  }>;
+  recentCommits: Array<{
+    sha: string;
+    message: string;
+    author: string;
+    date: string;
+  }>;
   sessionId: string;
   taskId: string;
 }
@@ -198,8 +212,18 @@ export interface NoOpInvestigationArgs {
  * Render the investigator prompt for a no-op coding session.
  * The investigator is asked to emit exactly one JSON NoOpVerdict object.
  */
-export function renderNoOpInvestigationPrompt(args: NoOpInvestigationArgs): string {
-  const { taskTitle, taskMarkdown, noOpSessionEvents, mergedPRs, recentCommits, sessionId, taskId } = args;
+export function renderNoOpInvestigationPrompt(
+  args: NoOpInvestigationArgs,
+): string {
+  const {
+    taskTitle,
+    taskMarkdown,
+    noOpSessionEvents,
+    mergedPRs,
+    recentCommits,
+    sessionId,
+    taskId,
+  } = args;
 
   const eventsBlock = noOpSessionEvents
     .slice(-50)
@@ -210,10 +234,19 @@ export function renderNoOpInvestigationPrompt(args: NoOpInvestigationArgs): stri
         const parsed = JSON.parse(e.payload) as Record<string, unknown>;
         // Extract readable text from assistant/tool events
         if (parsed.type === 'assistant') {
-          const content = parsed.message as { content?: Array<{ type: string; text?: string }> } | undefined;
-          const texts = content?.content?.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('') ?? '';
+          const content = parsed.message as
+            | { content?: Array<{ type: string; text?: string }> }
+            | undefined;
+          const texts =
+            content?.content
+              ?.filter((b) => b.type === 'text')
+              .map((b) => b.text ?? '')
+              .join('') ?? '';
           if (texts) payload = texts.slice(0, 500);
-        } else if (parsed.type === 'tool_result' || parsed.type === 'tool_use') {
+        } else if (
+          parsed.type === 'tool_result' ||
+          parsed.type === 'tool_use'
+        ) {
           payload = JSON.stringify(parsed).slice(0, 300);
         }
       } catch {
@@ -223,13 +256,22 @@ export function renderNoOpInvestigationPrompt(args: NoOpInvestigationArgs): stri
     })
     .join('\n');
 
-  const mergedPRsBlock = mergedPRs.length > 0
-    ? mergedPRs.map((pr) => `- PR #${pr.number}: ${pr.title} (${pr.url}) merged at ${pr.mergedAt}`).join('\n')
-    : '(none)';
+  const mergedPRsBlock =
+    mergedPRs.length > 0
+      ? mergedPRs
+          .map(
+            (pr) =>
+              `- PR #${pr.number}: ${pr.title} (${pr.url}) merged at ${pr.mergedAt}`,
+          )
+          .join('\n')
+      : '(none)';
 
-  const commitsBlock = recentCommits.length > 0
-    ? recentCommits.map((c) => `- ${c.sha} ${c.message} by ${c.author} at ${c.date}`).join('\n')
-    : '(none)';
+  const commitsBlock =
+    recentCommits.length > 0
+      ? recentCommits
+          .map((c) => `- ${c.sha} ${c.message} by ${c.author} at ${c.date}`)
+          .join('\n')
+      : '(none)';
 
   return `You are an investigator reviewing a no-op coding session.
 

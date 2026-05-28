@@ -13,7 +13,11 @@ import {
   type INoOpSessionManager,
   type NoOpInvestigatorContext,
 } from '../github/NoOpInvestigator';
-import { getEventsBySession, getTaskNoOpAttempts, bumpTaskNoOpAttempts } from '../db/queries';
+import {
+  getEventsBySession,
+  getTaskNoOpAttempts,
+  bumpTaskNoOpAttempts,
+} from '../db/queries';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { GitHubClient } from '../github/GithubClient';
 import type { ResolvedTask } from '../tasks/types';
@@ -66,24 +70,40 @@ function baseCtx(): NoOpInvestigatorContext {
 
 describe('tryParseNoOpVerdict', () => {
   it('parses a resolved verdict', () => {
-    const text = '{"kind":"resolved","resolvedByPrUrl":"https://github.com/owner/repo/pull/42","reason":"Already merged"}';
+    const text =
+      '{"kind":"resolved","resolvedByPrUrl":"https://github.com/owner/repo/pull/42","reason":"Already merged"}';
     const verdict = tryParseNoOpVerdict(text);
-    expect(verdict).toEqual({ kind: 'resolved', resolvedByPrUrl: 'https://github.com/owner/repo/pull/42', reason: 'Already merged' });
+    expect(verdict).toEqual({
+      kind: 'resolved',
+      resolvedByPrUrl: 'https://github.com/owner/repo/pull/42',
+      reason: 'Already merged',
+    });
   });
 
   it('parses a retry verdict', () => {
-    const verdict = tryParseNoOpVerdict('{"kind":"retry","reason":"Session hit a transient error"}');
-    expect(verdict).toEqual({ kind: 'retry', reason: 'Session hit a transient error' });
+    const verdict = tryParseNoOpVerdict(
+      '{"kind":"retry","reason":"Session hit a transient error"}',
+    );
+    expect(verdict).toEqual({
+      kind: 'retry',
+      reason: 'Session hit a transient error',
+    });
   });
 
   it('parses a human verdict', () => {
-    const verdict = tryParseNoOpVerdict('{"kind":"human","reason":"Needs human attention"}');
+    const verdict = tryParseNoOpVerdict(
+      '{"kind":"human","reason":"Needs human attention"}',
+    );
     expect(verdict).toEqual({ kind: 'human', reason: 'Needs human attention' });
   });
 
   it('extracts verdict from mixed text', () => {
-    const text = 'Some analysis...\n{"kind":"retry","reason":"confusing"}\n...done';
-    expect(tryParseNoOpVerdict(text)).toEqual({ kind: 'retry', reason: 'confusing' });
+    const text =
+      'Some analysis...\n{"kind":"retry","reason":"confusing"}\n...done';
+    expect(tryParseNoOpVerdict(text)).toEqual({
+      kind: 'retry',
+      reason: 'confusing',
+    });
   });
 
   it('returns null for invalid JSON', () => {
@@ -110,24 +130,35 @@ describe('NoOpInvestigator.investigate', () => {
     const sm = fakeSessionManager();
     const backend = fakeTaskBackend();
     const gh = fakeGithubClient();
-    const investigator = new NoOpInvestigator(sm, backend, gh as unknown as GitHubClient);
+    const investigator = new NoOpInvestigator(
+      sm,
+      backend,
+      gh as unknown as GitHubClient,
+    );
 
     // Simulate verdict via session_ended event
-    vi.mocked(getEventsBySession).mockReturnValueOnce([]).mockReturnValue([
-      {
-        id: 1,
-        session_id: 'inv-session',
-        event_type: 'text',
-        payload: JSON.stringify({
-          type: 'assistant',
-          message: {
-            content: [{ type: 'text', text: '{"kind":"resolved","resolvedByPrUrl":"https://github.com/owner/repo/pull/5","reason":"Already done"}' }],
-          },
-        }),
-        timestamp: Date.now(),
-        message_id: null,
-      },
-    ]);
+    vi.mocked(getEventsBySession)
+      .mockReturnValueOnce([])
+      .mockReturnValue([
+        {
+          id: 1,
+          session_id: 'inv-session',
+          event_type: 'text',
+          payload: JSON.stringify({
+            type: 'assistant',
+            message: {
+              content: [
+                {
+                  type: 'text',
+                  text: '{"kind":"resolved","resolvedByPrUrl":"https://github.com/owner/repo/pull/5","reason":"Already done"}',
+                },
+              ],
+            },
+          }),
+          timestamp: Date.now(),
+          message_id: null,
+        },
+      ]);
 
     const investigatePromise = investigator.investigate(baseCtx());
 
@@ -135,7 +166,8 @@ describe('NoOpInvestigator.investigate', () => {
     await new Promise((r) => setTimeout(r, 10));
 
     // Emit session_ended to trigger fallback verdict parsing from stored events
-    const startFn = (sm as unknown as Record<string, unknown>).start as ReturnType<typeof vi.fn>;
+    const startFn = (sm as unknown as Record<string, unknown>)
+      .start as ReturnType<typeof vi.fn>;
     const startCall = startFn.mock.calls[0];
     expect(startCall).toBeDefined();
     const sessionId = startCall[2].sessionId as string;
@@ -147,12 +179,18 @@ describe('NoOpInvestigator.investigate', () => {
 
     await investigatePromise;
 
-    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc123', '✅ Done');
+    expect(backend.updateStatus).toHaveBeenCalledWith(
+      'notion:abc123',
+      '✅ Done',
+    );
     expect(backend.appendImplementationNote).toHaveBeenCalledWith(
       'notion:abc123',
       expect.stringContaining('Auto-resolved by investigator'),
     );
-    expect(gh.deleteBranch).toHaveBeenCalledWith('owner/repo', 'feature/my-task');
+    expect(gh.deleteBranch).toHaveBeenCalledWith(
+      'owner/repo',
+      'feature/my-task',
+    );
   });
 
   it('sets status to Ready on first retry verdict (retry_count === 0)', async () => {
@@ -166,7 +204,8 @@ describe('NoOpInvestigator.investigate', () => {
     const investigatePromise = investigator.investigate(baseCtx());
     await new Promise((r) => setTimeout(r, 10));
 
-    const startFn = (sm as unknown as Record<string, unknown>).start as ReturnType<typeof vi.fn>;
+    const startFn = (sm as unknown as Record<string, unknown>)
+      .start as ReturnType<typeof vi.fn>;
     const sessionId = startFn.mock.calls[0][2].sessionId as string;
 
     // Emit verdict directly via session_event
@@ -176,14 +215,24 @@ describe('NoOpInvestigator.investigate', () => {
       eventType: 'text',
       content: JSON.stringify({
         type: 'assistant',
-        message: { content: [{ type: 'text', text: '{"kind":"retry","reason":"Session was confused"}' }] },
+        message: {
+          content: [
+            {
+              type: 'text',
+              text: '{"kind":"retry","reason":"Session was confused"}',
+            },
+          ],
+        },
       }),
     });
 
     await investigatePromise;
 
     expect(bumpTaskNoOpAttempts).toHaveBeenCalledWith('notion:abc123');
-    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc123', '🗂️ Ready');
+    expect(backend.updateStatus).toHaveBeenCalledWith(
+      'notion:abc123',
+      '🗂️ Ready',
+    );
   });
 
   it('sets status to Blocked when retry_count >= 1 (exhausted budget)', async () => {
@@ -201,7 +250,8 @@ describe('NoOpInvestigator.investigate', () => {
     const investigatePromise = investigator.investigate(baseCtx());
     await new Promise((r) => setTimeout(r, 10));
 
-    const startFn = (sm as unknown as Record<string, unknown>).start as ReturnType<typeof vi.fn>;
+    const startFn = (sm as unknown as Record<string, unknown>)
+      .start as ReturnType<typeof vi.fn>;
     const sessionId = startFn.mock.calls[0][2].sessionId as string;
 
     sm.emit('message', {
@@ -210,15 +260,28 @@ describe('NoOpInvestigator.investigate', () => {
       eventType: 'text',
       content: JSON.stringify({
         type: 'assistant',
-        message: { content: [{ type: 'text', text: '{"kind":"retry","reason":"Again confused"}' }] },
+        message: {
+          content: [
+            {
+              type: 'text',
+              text: '{"kind":"retry","reason":"Again confused"}',
+            },
+          ],
+        },
       }),
     });
 
     await investigatePromise;
 
     expect(bumpTaskNoOpAttempts).not.toHaveBeenCalled();
-    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc123', '🚫 Blocked');
-    expect(backend.updateNotes).toHaveBeenCalledWith('notion:abc123', expect.stringContaining('Retry budget exhausted'));
+    expect(backend.updateStatus).toHaveBeenCalledWith(
+      'notion:abc123',
+      '🚫 Blocked',
+    );
+    expect(backend.updateNotes).toHaveBeenCalledWith(
+      'notion:abc123',
+      expect.stringContaining('Retry budget exhausted'),
+    );
   });
 
   it('sets status to Blocked and writes Notes for human verdict', async () => {
@@ -231,7 +294,8 @@ describe('NoOpInvestigator.investigate', () => {
     const investigatePromise = investigator.investigate(baseCtx());
     await new Promise((r) => setTimeout(r, 10));
 
-    const startFn = (sm as unknown as Record<string, unknown>).start as ReturnType<typeof vi.fn>;
+    const startFn = (sm as unknown as Record<string, unknown>)
+      .start as ReturnType<typeof vi.fn>;
     const sessionId = startFn.mock.calls[0][2].sessionId as string;
 
     sm.emit('message', {
@@ -240,14 +304,27 @@ describe('NoOpInvestigator.investigate', () => {
       eventType: 'text',
       content: JSON.stringify({
         type: 'assistant',
-        message: { content: [{ type: 'text', text: '{"kind":"human","reason":"Needs human review"}' }] },
+        message: {
+          content: [
+            {
+              type: 'text',
+              text: '{"kind":"human","reason":"Needs human review"}',
+            },
+          ],
+        },
       }),
     });
 
     await investigatePromise;
 
-    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc123', '🚫 Blocked');
-    expect(backend.updateNotes).toHaveBeenCalledWith('notion:abc123', 'Needs human review');
+    expect(backend.updateStatus).toHaveBeenCalledWith(
+      'notion:abc123',
+      '🚫 Blocked',
+    );
+    expect(backend.updateNotes).toHaveBeenCalledWith(
+      'notion:abc123',
+      'Needs human review',
+    );
   });
 
   it('does not mutate task status when investigator session fails to start', async () => {
@@ -255,8 +332,11 @@ describe('NoOpInvestigator.investigate', () => {
     const backend = fakeTaskBackend();
     const investigator = new NoOpInvestigator(sm, backend, undefined);
 
-    const startFn = (sm as unknown as Record<string, unknown>).start as ReturnType<typeof vi.fn>;
-    startFn.mockImplementation(() => { throw new Error('session start failed'); });
+    const startFn = (sm as unknown as Record<string, unknown>)
+      .start as ReturnType<typeof vi.fn>;
+    startFn.mockImplementation(() => {
+      throw new Error('session start failed');
+    });
 
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 

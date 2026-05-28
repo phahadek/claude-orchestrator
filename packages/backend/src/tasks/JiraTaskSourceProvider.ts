@@ -142,7 +142,10 @@ export class JiraTaskSourceProvider implements TaskBackend {
     // Jira backend does not support Notion-specific Notes property
   }
 
-  async appendImplementationNote(_taskId: string, _note: string): Promise<void> {
+  async appendImplementationNote(
+    _taskId: string,
+    _note: string,
+  ): Promise<void> {
     // Jira backend does not support Notion page block appending
   }
 

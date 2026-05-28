@@ -612,7 +612,9 @@ export class GitHubClient {
     repo: string,
     baseBranch: string,
     since: string,
-  ): Promise<Array<{ number: number; title: string; url: string; mergedAt: string }>> {
+  ): Promise<
+    Array<{ number: number; title: string; url: string; mergedAt: string }>
+  > {
     const data = await this.request<GitHubRawPR[]>(
       `/repos/${repo}/pulls?state=closed&base=${encodeURIComponent(baseBranch)}&sort=updated&direction=desc&per_page=50`,
     );
@@ -623,7 +625,12 @@ export class GitHubClient {
       })
       .map((pr) => {
         const raw = pr as GitHubRawPR & { merged_at: string };
-        return { number: pr.number, title: pr.title, url: pr.html_url, mergedAt: raw.merged_at };
+        return {
+          number: pr.number,
+          title: pr.title,
+          url: pr.html_url,
+          mergedAt: raw.merged_at,
+        };
       });
   }
 
@@ -631,13 +638,17 @@ export class GitHubClient {
     repo: string,
     branch: string,
     since: string,
-  ): Promise<Array<{ sha: string; message: string; author: string; date: string }>> {
+  ): Promise<
+    Array<{ sha: string; message: string; author: string; date: string }>
+  > {
     const data = await this.request<
       Array<{
         sha: string;
         commit: { message: string; author: { name: string; date: string } };
       }>
-    >(`/repos/${repo}/commits?sha=${encodeURIComponent(branch)}&since=${encodeURIComponent(since)}&per_page=30`);
+    >(
+      `/repos/${repo}/commits?sha=${encodeURIComponent(branch)}&since=${encodeURIComponent(since)}&per_page=30`,
+    );
     return data.map((c) => ({
       sha: c.sha.slice(0, 8),
       message: c.commit.message.split('\n')[0],

@@ -285,7 +285,10 @@ export class LocalTaskBackend implements TaskBackend {
     // Local task backend does not support Notion-specific Notes property
   }
 
-  async appendImplementationNote(_taskId: string, _note: string): Promise<void> {
+  async appendImplementationNote(
+    _taskId: string,
+    _note: string,
+  ): Promise<void> {
     // Local task backend does not support Notion page block appending
   }
 }

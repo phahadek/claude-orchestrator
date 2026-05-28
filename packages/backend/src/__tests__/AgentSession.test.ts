@@ -1631,7 +1631,10 @@ describe('AgentSession', () => {
 
     const mockInvestigate = vi.fn(async () => {});
     vi.mocked(NoOpInvestigator).mockImplementation(
-      () => ({ investigate: mockInvestigate }) as unknown as InstanceType<typeof NoOpInvestigator>,
+      () =>
+        ({ investigate: mockInvestigate }) as unknown as InstanceType<
+          typeof NoOpInvestigator
+        >,
     );
 
     // sessionManager with start() so the 'start' in sessionManager guard passes
@@ -1678,7 +1681,14 @@ describe('AgentSession', () => {
         event_type: 'text',
         payload: JSON.stringify({
           type: 'assistant',
-          message: { content: [{ type: 'text', text: 'PR: https://github.com/owner/repo/pull/99' }] },
+          message: {
+            content: [
+              {
+                type: 'text',
+                text: 'PR: https://github.com/owner/repo/pull/99',
+              },
+            ],
+          },
         }),
         timestamp: Date.now(),
         message_id: null,
@@ -1687,7 +1697,10 @@ describe('AgentSession', () => {
 
     const mockInvestigate = vi.fn(async () => {});
     vi.mocked(NoOpInvestigator).mockImplementation(
-      () => ({ investigate: mockInvestigate }) as unknown as InstanceType<typeof NoOpInvestigator>,
+      () =>
+        ({ investigate: mockInvestigate }) as unknown as InstanceType<
+          typeof NoOpInvestigator
+        >,
     );
 
     const sessionManager = { send: vi.fn(), start: vi.fn(() => 'inv-session') };
@@ -1723,7 +1736,10 @@ describe('AgentSession', () => {
 
     const mockInvestigate = vi.fn(async () => {});
     vi.mocked(NoOpInvestigator).mockImplementation(
-      () => ({ investigate: mockInvestigate }) as unknown as InstanceType<typeof NoOpInvestigator>,
+      () =>
+        ({ investigate: mockInvestigate }) as unknown as InstanceType<
+          typeof NoOpInvestigator
+        >,
     );
 
     const sessionManager = { send: vi.fn(), start: vi.fn(() => 'inv-session') };

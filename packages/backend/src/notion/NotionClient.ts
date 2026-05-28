@@ -584,7 +584,8 @@ export class NotionClient {
       const path = `/blocks/${externalId}/children?page_size=100${startCursor ? `&start_cursor=${startCursor}` : ''}`;
       const resp = await notionRequest<NotionBlocksResponse>('GET', path);
       blocks.push(...resp.results);
-      startCursor = resp.has_more && resp.next_cursor ? resp.next_cursor : undefined;
+      startCursor =
+        resp.has_more && resp.next_cursor ? resp.next_cursor : undefined;
     } while (startCursor);
 
     // Find the "Implementation Notes" heading block.
@@ -593,7 +594,9 @@ export class NotionClient {
     for (const block of blocks) {
       const type = block.type as string;
       if (type.startsWith('heading_')) {
-        const inner = block[type] as { rich_text?: NotionRichText[] } | undefined;
+        const inner = block[type] as
+          | { rich_text?: NotionRichText[] }
+          | undefined;
         const text = inner?.rich_text ? richTextToString(inner.rich_text) : '';
         if (text.toLowerCase().includes('implementation notes')) {
           inSection = true;
