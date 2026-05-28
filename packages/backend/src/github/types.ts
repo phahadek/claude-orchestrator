@@ -68,6 +68,8 @@ export interface MergeabilityCategory {
   rawMergeableState: string | null;
   /** Names + conclusions of failing check-runs. Empty unless category is 'ci_failed'. */
   failingChecks: FailingCheck[];
+  /** Current head commit SHA from GitHub. null when not available. */
+  headSha: string | null;
 }
 
 export interface ReviewJob {

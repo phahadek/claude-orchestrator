@@ -1,9 +1,10 @@
 /**
- * Tests for the push_detected re-review handler in server.ts verifying that
- * runAutofixPipeline is called before prReviewService.reReviewPR on every push.
+ * Regression tests for the push_detected path verifying that
+ * PRMergeWatcher.handlePushDetected (the unified push pipeline) correctly
+ * invokes runAutofixPipeline before prReviewService.reReviewPR.
  *
  * Acceptance criteria covered:
- * AC3 — push_detected handler invokes runAutofixPipeline before reReviewPR.
+ * AC3 — push pipeline invokes runAutofixPipeline before reReviewPR.
  * AC4 — consumeAutofixSha suppresses re-review for an autofix-only push.
  */
 
@@ -19,21 +20,43 @@ vi.mock('../db/queries.js', () => ({
   setPauseReason: vi.fn(),
   setPendingPush: vi.fn(),
   getSetting: vi.fn().mockReturnValue(null),
+  getAllOpenPRs: vi.fn().mockReturnValue([]),
+  updatePRState: vi.fn(),
+  updateMergeState: vi.fn(),
+  getSession: vi.fn().mockReturnValue(null),
+  addAutofixSha: vi.fn(),
+  consumeAutofixSha: vi.fn().mockReturnValue(false),
+  deleteAllAutofixShasForPR: vi.fn(),
+  setCiRemediationAttemptedSha: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
   AUTO_REVIEW_ENABLED: true,
   AUTO_REVIEW_CONCURRENCY: 1,
   runtimeSettings: {},
-  getProjectByGithubRepo: vi.fn(),
+  getProjectByGithubRepo: vi.fn().mockReturnValue(null),
   getProjectById: vi.fn(),
   getAllProjects: vi.fn(() => []),
 }));
 
+vi.mock('../session/orchestrator-config.js', () => ({
+  loadOrchestratorConfig: vi.fn().mockReturnValue({ ci_check_name: [] }),
+}));
+
+vi.mock('../session/autofix-runner.js', () => ({
+  loadAutofixCommands: vi.fn().mockReturnValue([]),
+  runAutofix: vi.fn().mockResolvedValue({ success: true, summary: 'no diff' }),
+}));
+
+vi.mock('../audit/AuditLog.js', () => ({
+  recordEvent: vi.fn(),
+}));
+
 import * as queries from '../db/queries.js';
-import { shouldAutoReview } from '../github/reviewUtils.js';
+import { PRMergeWatcher } from '../github/PRMergeWatcher.js';
 import type { PullRequestRow } from '../db/types.js';
 import type { GitHubClient } from '../github/GitHubClient.js';
+import type { SessionManager } from '../session/SessionManager.js';
 
 const REPO = 'owner/repo';
 const PR_NUMBER = 1;
@@ -70,199 +93,57 @@ function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
     pending_push: 0,
     pause_reason: null,
     failing_checks: null,
+    ci_remediation_attempted_sha: null,
     ...overrides,
   };
 }
 
 class MockSessionManager extends EventEmitter {
   send = vi.fn();
-  sendOrResume = vi.fn();
+  sendOrResume = vi.fn().mockResolvedValue('session-id');
 }
 
 function makeMockGitHub(headSha = HEAD_SHA): GitHubClient {
   return {
     fetchPR: vi.fn().mockResolvedValue({ headSha }),
+    getPRState: vi.fn().mockResolvedValue({ state: 'open', headSha: null }),
+    categorizeMergeability: vi.fn().mockResolvedValue({
+      category: 'unknown',
+      mergeState: 'unknown',
+      rawMergeableState: null,
+      failingChecks: [],
+      headSha: null,
+    }),
   } as unknown as GitHubClient;
 }
 
-const PUSH_REVIEW_TIMEOUT_MS = 120_000;
-const DEFAULT_MAX_REVIEW_ITERATIONS = 3;
-
-function getMaxReviewIterationsMock(): number {
-  const raw = vi.mocked(queries.getSetting)('max_review_iterations');
-  if (!raw) return DEFAULT_MAX_REVIEW_ITERATIONS;
-  const parsed = parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0
-    ? parsed
-    : DEFAULT_MAX_REVIEW_ITERATIONS;
+function makeMockNotion() {
+  return { updateStatus: vi.fn().mockResolvedValue(undefined) };
 }
 
 /**
- * Wires the push_detected handler from server.ts — including the
- * runAutofixPipeline call added by this task — onto a mock session manager.
- * Both reviewOrchestrator.runAutofixPipeline and reviewOrchestrator.consumeAutofixSha
- * are injectable mocks so tests can verify call order.
+ * Creates a PRMergeWatcher wired with injectable reviewService and reviewOrchestrator,
+ * mimicking the server.ts setup. The watcher's handlePushDetected is the unified
+ * push pipeline (replacing the old inline wirePushDetectedHandler).
  */
-function wirePushDetectedHandler(
-  sessionManager: MockSessionManager,
+function makeWatcher(
   reviewService: { reReviewPR: ReturnType<typeof vi.fn> },
   githubClient: GitHubClient,
   reviewOrchestrator: {
     runAutofixPipeline: ReturnType<typeof vi.fn>;
     consumeAutofixSha: ReturnType<typeof vi.fn>;
   },
-): void {
-  const pendingReReviews = new Set<string>();
-
-  sessionManager.on(
-    'push_detected',
-    ({ sessionId: codingSessionId }: { sessionId: string }) => {
-      if (pendingReReviews.has(codingSessionId)) return;
-
-      const prRow = vi.mocked(queries.getPRBySessionId)(codingSessionId);
-      if (!prRow || prRow.state !== 'open') return;
-      if (!prRow.review_session_id) {
-        vi.mocked(queries.setPendingPush)(prRow.pr_number, prRow.repo, 1);
-        return;
-      }
-
-      pendingReReviews.add(codingSessionId);
-
-      void (async () => {
-        let headSha = prRow.head_sha;
-        try {
-          const freshPR = await githubClient.fetchPR(
-            prRow.repo,
-            prRow.pr_number,
-          );
-          headSha = freshPR.headSha;
-          if (headSha !== prRow.head_sha) {
-            vi.mocked(queries.setHeadSha)(prRow.pr_number, prRow.repo, headSha);
-          }
-        } catch {
-          // swallow
-        }
-
-        if (
-          headSha &&
-          reviewOrchestrator.consumeAutofixSha(
-            prRow.pr_number,
-            prRow.repo,
-            headSha,
-          )
-        ) {
-          pendingReReviews.delete(codingSessionId);
-          return;
-        }
-
-        const maxIter = getMaxReviewIterationsMock();
-
-        if (prRow.review_iteration >= maxIter) {
-          vi.mocked(queries.setPauseReason)(
-            prRow.pr_number,
-            prRow.repo,
-            'max_reviews',
-          );
-          sessionManager.emit('message', {
-            type: 'review_escalated',
-            prNumber: prRow.pr_number,
-            repo: prRow.repo,
-            message: `Review loop for PR #${prRow.pr_number} reached ${maxIter} iterations.`,
-          });
-          pendingReReviews.delete(codingSessionId);
-          return;
-        }
-
-        if (
-          !shouldAutoReview(
-            {
-              reviewIteration: prRow.review_iteration,
-              headSha,
-              lastReviewedSha: prRow.last_reviewed_sha,
-            },
-            maxIter,
-          )
-        ) {
-          pendingReReviews.delete(codingSessionId);
-          return;
-        }
-
-        const iteration = prRow.review_iteration + 1;
-
-        // Run autofix + pollution-check on every push, same as first review.
-        await reviewOrchestrator.runAutofixPipeline(
-          prRow.pr_number,
-          prRow.repo,
-          prRow.task_id,
-        );
-
-        try {
-          let result: { verdict: string; summary: string };
-          try {
-            result = await Promise.race([
-              reviewService.reReviewPR(prRow.pr_number, prRow.repo),
-              new Promise<never>((_, reject) =>
-                setTimeout(
-                  () => reject(new Error('Re-review timed out')),
-                  PUSH_REVIEW_TIMEOUT_MS,
-                ),
-              ),
-            ]);
-          } catch (e) {
-            const summary = e instanceof Error ? e.message : String(e);
-            vi.mocked(queries.setPauseReason)(
-              prRow.pr_number,
-              prRow.repo,
-              'review_failed',
-            );
-            sessionManager.emit('message', {
-              type: 'review_failed',
-              prNumber: prRow.pr_number,
-              repo: prRow.repo,
-              message: `Re-review for PR #${prRow.pr_number} failed: ${summary}`,
-            });
-            vi.mocked(queries.setPRReviewResult)(
-              prRow.pr_number,
-              prRow.repo,
-              JSON.stringify({ verdict: 'error', summary, dimensions: [] }),
-            );
-            sessionManager.emit('message', {
-              type: 'review_verdict',
-              prNumber: prRow.pr_number,
-              repo: prRow.repo,
-              verdict: 'error',
-              summary,
-              iteration,
-            });
-            return;
-          }
-
-          vi.mocked(queries.setLastReviewedSha)(
-            prRow.pr_number,
-            prRow.repo,
-            headSha,
-          );
-          if (result.verdict === 'approved' && prRow.pause_reason !== null) {
-            vi.mocked(queries.setPauseReason)(
-              prRow.pr_number,
-              prRow.repo,
-              null,
-            );
-          }
-          sessionManager.emit('message', {
-            type: 'review_verdict',
-            prNumber: prRow.pr_number,
-            repo: prRow.repo,
-            verdict: result.verdict,
-            summary: result.summary,
-            iteration,
-          });
-        } finally {
-          pendingReReviews.delete(codingSessionId);
-        }
-      })();
-    },
+  sessions: MockSessionManager,
+): PRMergeWatcher {
+  const watcher = new PRMergeWatcher(
+    githubClient,
+    sessions as unknown as SessionManager,
+    makeMockNotion() as any,
+    () => {},
   );
+  watcher.setPRReviewService(reviewService as any);
+  watcher.setReviewOrchestrator(reviewOrchestrator as any);
+  return watcher;
 }
 
 beforeEach(() => {
@@ -275,7 +156,7 @@ describe('push_detected: runAutofixPipeline called before reReviewPR', () => {
   it('calls runAutofixPipeline before reReviewPR on a valid push', async () => {
     const callOrder: string[] = [];
 
-    const sessionManager = new MockSessionManager();
+    const sessions = new MockSessionManager();
     const github = makeMockGitHub();
     const reviewOrchestrator = {
       runAutofixPipeline: vi.fn().mockImplementation(async () => {
@@ -286,24 +167,17 @@ describe('push_detected: runAutofixPipeline called before reReviewPR', () => {
     const reviewService = {
       reReviewPR: vi.fn().mockImplementation(async () => {
         callOrder.push('reReviewPR');
-        return {
-          verdict: 'approved',
-          summary: 'Looks good',
-          dimensions: [],
-        };
+        return { verdict: 'approved', summary: 'Looks good', dimensions: [] };
       }),
     };
 
-    wirePushDetectedHandler(
-      sessionManager,
+    const watcher = makeWatcher(
       reviewService,
       github,
       reviewOrchestrator,
+      sessions,
     );
-
-    vi.mocked(queries.getPRBySessionId).mockReturnValue(makePRRow());
-
-    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
+    await watcher.handlePushDetected(makePRRow());
     await new Promise((r) => setTimeout(r, 50));
 
     expect(callOrder.indexOf('runAutofixPipeline')).toBeLessThan(
@@ -312,7 +186,7 @@ describe('push_detected: runAutofixPipeline called before reReviewPR', () => {
   });
 
   it('passes prNumber, repo, and task_id to runAutofixPipeline', async () => {
-    const sessionManager = new MockSessionManager();
+    const sessions = new MockSessionManager();
     const github = makeMockGitHub();
     const reviewOrchestrator = {
       runAutofixPipeline: vi.fn().mockResolvedValue(undefined),
@@ -326,16 +200,13 @@ describe('push_detected: runAutofixPipeline called before reReviewPR', () => {
       }),
     };
 
-    wirePushDetectedHandler(
-      sessionManager,
+    const watcher = makeWatcher(
       reviewService,
       github,
       reviewOrchestrator,
+      sessions,
     );
-
-    vi.mocked(queries.getPRBySessionId).mockReturnValue(makePRRow());
-
-    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
+    await watcher.handlePushDetected(makePRRow());
     await new Promise((r) => setTimeout(r, 50));
 
     expect(reviewOrchestrator.runAutofixPipeline).toHaveBeenCalledWith(
@@ -346,7 +217,7 @@ describe('push_detected: runAutofixPipeline called before reReviewPR', () => {
   });
 
   it('does NOT call runAutofixPipeline when consumeAutofixSha is true (autofix-only push)', async () => {
-    const sessionManager = new MockSessionManager();
+    const sessions = new MockSessionManager();
     const github = makeMockGitHub();
     const reviewOrchestrator = {
       runAutofixPipeline: vi.fn().mockResolvedValue(undefined),
@@ -354,16 +225,13 @@ describe('push_detected: runAutofixPipeline called before reReviewPR', () => {
     };
     const reviewService = { reReviewPR: vi.fn() };
 
-    wirePushDetectedHandler(
-      sessionManager,
+    const watcher = makeWatcher(
       reviewService,
       github,
       reviewOrchestrator,
+      sessions,
     );
-
-    vi.mocked(queries.getPRBySessionId).mockReturnValue(makePRRow());
-
-    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
+    await watcher.handlePushDetected(makePRRow());
     await new Promise((r) => setTimeout(r, 50));
 
     expect(reviewOrchestrator.runAutofixPipeline).not.toHaveBeenCalled();
@@ -378,7 +246,7 @@ describe('push_detected: consumeAutofixSha suppresses autofix-only push', () => 
     const AUTOFIX_SHA = 'autofix-commit-sha-xyz';
     let storedAutofixSha: string | null = null;
 
-    const sessionManager = new MockSessionManager();
+    const sessions = new MockSessionManager();
     const github = makeMockGitHub(AUTOFIX_SHA);
 
     // Simulate ReviewOrchestrator: runAutofixPipeline records the SHA,
@@ -406,16 +274,15 @@ describe('push_detected: consumeAutofixSha suppresses autofix-only push', () => 
       }),
     };
 
-    wirePushDetectedHandler(
-      sessionManager,
+    const watcher = makeWatcher(
       reviewService,
       github,
       reviewOrchestrator,
+      sessions,
     );
 
     // First push: coding session push → autofix runs, re-review runs
-    vi.mocked(queries.getPRBySessionId).mockReturnValue(makePRRow());
-    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
+    await watcher.handlePushDetected(makePRRow());
     await new Promise((r) => setTimeout(r, 50));
 
     expect(reviewOrchestrator.runAutofixPipeline).toHaveBeenCalledTimes(1);
@@ -423,7 +290,10 @@ describe('push_detected: consumeAutofixSha suppresses autofix-only push', () => 
 
     // Second push: autofix commit arrives — headSha is the autofix SHA
     // consumeAutofixSha returns true → re-review (and autofix) skipped
-    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
+    // Use a new PR row with a different session_id to bypass pendingReReviews dedup
+    await watcher.handlePushDetected(
+      makePRRow({ session_id: 'coding-session-2' }),
+    );
     await new Promise((r) => setTimeout(r, 50));
 
     // runAutofixPipeline must NOT be called again for the autofix-only push
@@ -437,16 +307,8 @@ describe('push_detected: consumeAutofixSha suppresses autofix-only push', () => 
 function makePushHelper(
   pauseReason: string | null,
   verdict: string,
-): {
-  sessionManager: MockSessionManager;
-  github: ReturnType<typeof makeMockGitHub>;
-  reviewOrchestrator: {
-    runAutofixPipeline: ReturnType<typeof vi.fn>;
-    consumeAutofixSha: ReturnType<typeof vi.fn>;
-  };
-  reviewService: { reReviewPR: ReturnType<typeof vi.fn> };
-} {
-  const sessionManager = new MockSessionManager();
+): { watcher: PRMergeWatcher; prRow: PullRequestRow } {
+  const sessions = new MockSessionManager();
   const github = makeMockGitHub();
   const reviewOrchestrator = {
     runAutofixPipeline: vi.fn().mockResolvedValue(undefined),
@@ -460,24 +322,20 @@ function makePushHelper(
     }),
   };
 
-  wirePushDetectedHandler(
-    sessionManager,
+  const watcher = makeWatcher(
     reviewService,
     github,
     reviewOrchestrator,
+    sessions,
   );
-
-  vi.mocked(queries.getPRBySessionId).mockReturnValue(
-    makePRRow({ pause_reason: pauseReason }),
-  );
-
-  return { sessionManager, github, reviewOrchestrator, reviewService };
+  const prRow = makePRRow({ pause_reason: pauseReason });
+  return { watcher, prRow };
 }
 
 describe('push_detected: pause_reason cleared on approved verdict', () => {
   it('clears pause_reason when prior pause was review_failed and verdict is approved', async () => {
-    const { sessionManager } = makePushHelper('review_failed', 'approved');
-    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
+    const { watcher, prRow } = makePushHelper('review_failed', 'approved');
+    await watcher.handlePushDetected(prRow);
     await new Promise((r) => setTimeout(r, 50));
 
     expect(vi.mocked(queries.setPauseReason)).toHaveBeenCalledWith(
@@ -488,8 +346,8 @@ describe('push_detected: pause_reason cleared on approved verdict', () => {
   });
 
   it('clears pause_reason when prior pause was stuck_timeout and verdict is approved', async () => {
-    const { sessionManager } = makePushHelper('stuck_timeout', 'approved');
-    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
+    const { watcher, prRow } = makePushHelper('stuck_timeout', 'approved');
+    await watcher.handlePushDetected(prRow);
     await new Promise((r) => setTimeout(r, 50));
 
     expect(vi.mocked(queries.setPauseReason)).toHaveBeenCalledWith(
@@ -500,8 +358,8 @@ describe('push_detected: pause_reason cleared on approved verdict', () => {
   });
 
   it('clears pause_reason when prior pause was max_reviews and verdict is approved', async () => {
-    const { sessionManager } = makePushHelper('max_reviews', 'approved');
-    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
+    const { watcher, prRow } = makePushHelper('max_reviews', 'approved');
+    await watcher.handlePushDetected(prRow);
     await new Promise((r) => setTimeout(r, 50));
 
     expect(vi.mocked(queries.setPauseReason)).toHaveBeenCalledWith(
@@ -512,8 +370,8 @@ describe('push_detected: pause_reason cleared on approved verdict', () => {
   });
 
   it('does NOT clear pause_reason when verdict is needs_changes', async () => {
-    const { sessionManager } = makePushHelper('review_failed', 'needs_changes');
-    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
+    const { watcher, prRow } = makePushHelper('review_failed', 'needs_changes');
+    await watcher.handlePushDetected(prRow);
     await new Promise((r) => setTimeout(r, 50));
 
     expect(vi.mocked(queries.setPauseReason)).not.toHaveBeenCalledWith(
@@ -524,8 +382,8 @@ describe('push_detected: pause_reason cleared on approved verdict', () => {
   });
 
   it('does NOT clear pause_reason when verdict is incomplete', async () => {
-    const { sessionManager } = makePushHelper('review_failed', 'incomplete');
-    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
+    const { watcher, prRow } = makePushHelper('review_failed', 'incomplete');
+    await watcher.handlePushDetected(prRow);
     await new Promise((r) => setTimeout(r, 50));
 
     expect(vi.mocked(queries.setPauseReason)).not.toHaveBeenCalledWith(
@@ -536,8 +394,8 @@ describe('push_detected: pause_reason cleared on approved verdict', () => {
   });
 
   it('does not call setPauseReason(null) when pause_reason is already null and verdict is approved', async () => {
-    const { sessionManager } = makePushHelper(null, 'approved');
-    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
+    const { watcher, prRow } = makePushHelper(null, 'approved');
+    await watcher.handlePushDetected(prRow);
     await new Promise((r) => setTimeout(r, 50));
 
     expect(vi.mocked(queries.setPauseReason)).not.toHaveBeenCalledWith(

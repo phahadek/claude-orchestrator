@@ -185,7 +185,7 @@ const mockGitHubPR = {
 function makeMockGitHub(): GitHubClient {
   return {
     listOpenPRs: vi.fn().mockResolvedValue([]),
-    getPRState: vi.fn().mockResolvedValue('merged'),
+    getPRState: vi.fn().mockResolvedValue({ state: 'merged', headSha: null }),
     fetchDiff: vi.fn(),
     fetchPR: vi.fn().mockResolvedValue(mockGitHubPR),
     mergePR: vi
@@ -335,7 +335,10 @@ describe('GET /api/prs', () => {
     const github = makeMockGitHub();
     // GitHub returns no open PRs → PR 99 is stale
     vi.mocked(github.listOpenPRs).mockResolvedValue([]);
-    vi.mocked(github.getPRState).mockResolvedValue('merged');
+    vi.mocked(github.getPRState).mockResolvedValue({
+      state: 'merged',
+      headSha: null,
+    });
 
     const res = await supertest(buildApp(github)).get(
       '/api/prs?projectId=proj-1',
