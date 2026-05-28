@@ -143,7 +143,10 @@ describe('dashless→dashed migration — sessions', () => {
     );
     runMigration(db);
     // Ordered by session_id: s3 before s4
-    expect(getSessionTaskIds(db)).toEqual(['yaml:some-task-id', 'jira:PROJ-123']);
+    expect(getSessionTaskIds(db)).toEqual([
+      'yaml:some-task-id',
+      'jira:PROJ-123',
+    ]);
   });
 
   it('leaves NULL task_ids unchanged', () => {
@@ -196,25 +199,28 @@ describe('dashless→dashed migration — pull_requests', () => {
   });
 
   it('converts dashless PR task_id to dashed form', () => {
-    db.prepare(
-      'INSERT INTO pull_requests(pr_url, task_id) VALUES(?,?)',
-    ).run('https://github.com/owner/repo/pull/1', DASHLESS);
+    db.prepare('INSERT INTO pull_requests(pr_url, task_id) VALUES(?,?)').run(
+      'https://github.com/owner/repo/pull/1',
+      DASHLESS,
+    );
     runMigration(db);
     expect(getPRTaskIds(db)).toEqual([DASHED]);
   });
 
   it('leaves already-dashed PR task_id unchanged', () => {
-    db.prepare(
-      'INSERT INTO pull_requests(pr_url, task_id) VALUES(?,?)',
-    ).run('https://github.com/owner/repo/pull/2', DASHED);
+    db.prepare('INSERT INTO pull_requests(pr_url, task_id) VALUES(?,?)').run(
+      'https://github.com/owner/repo/pull/2',
+      DASHED,
+    );
     runMigration(db);
     expect(getPRTaskIds(db)).toEqual([DASHED]);
   });
 
   it('is idempotent for pull_requests', () => {
-    db.prepare(
-      'INSERT INTO pull_requests(pr_url, task_id) VALUES(?,?)',
-    ).run('https://github.com/owner/repo/pull/3', DASHLESS);
+    db.prepare('INSERT INTO pull_requests(pr_url, task_id) VALUES(?,?)').run(
+      'https://github.com/owner/repo/pull/3',
+      DASHLESS,
+    );
     runMigration(db);
     runMigration(db);
     expect(getPRTaskIds(db)).toEqual([DASHED]);

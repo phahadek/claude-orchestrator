@@ -408,7 +408,10 @@ export class SessionManager extends EventEmitter {
     // downstream parseTaskId() callers (NotionTaskBackend.updateStatus, attachPR,
     // etc.) succeed. parseNotionPageIdDashed converts URL-embedded dashless IDs to
     // dashed UUID form (Notion's native) so the JOIN with task_cache matches.
-    const notionTaskId = formatTaskId('notion', parseNotionPageIdDashed(taskUrl));
+    const notionTaskId = formatTaskId(
+      'notion',
+      parseNotionPageIdDashed(taskUrl),
+    );
     const sessionMode = runtimeSettings.session_mode;
     const runner =
       sessionMode === 'api'
