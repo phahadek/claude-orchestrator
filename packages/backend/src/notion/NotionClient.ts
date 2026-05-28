@@ -132,7 +132,14 @@ function readBoardCache(boardId: string): NotionTask[] | null {
   const row = getTaskCache(boardCacheKey(boardId));
   if (!row) return null;
   try {
-    return JSON.parse(row.raw_json) as NotionTask[];
+    const tasks = JSON.parse(row.raw_json) as NotionTask[];
+    // Strip notion: prefix if present — cache may store prefixed IDs (post-PR #411 write
+    // convention). The contract of fetchReadyTasks is to return raw Notion page IDs so
+    // NotionTaskBackend's formatTaskId call is the single point of prefixing.
+    return tasks.map((t) => ({
+      ...t,
+      id: t.id.startsWith('notion:') ? t.id.slice('notion:'.length) : t.id,
+    }));
   } catch {
     return null;
   }
@@ -330,7 +337,10 @@ export function parseExpectedSize(markdown: string): number | undefined {
 }
 
 function taskPageCacheKey(taskId: string): string {
-  return `task:notion:${taskId}`;
+  // Strip source prefix (e.g., 'notion:') so the key is always task:notion:<raw-uuid>.
+  const colonIdx = taskId.indexOf(':');
+  const rawId = colonIdx >= 0 ? taskId.slice(colonIdx + 1) : taskId;
+  return `task:notion:${rawId}`;
 }
 
 // ─── NotionClient ───────────────────────────────────────────────────────────

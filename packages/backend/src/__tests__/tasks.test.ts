@@ -180,6 +180,45 @@ describe('GET /api/tasks/active', () => {
     expect(res.body[0].taskId).toBe('notion:task-abc');
   });
 
+  it('returns task IDs in notion:<dashed-uuid> form — no notion:notion: double-prefix in response', async () => {
+    const DASHED_UUID = '36d22f91-52f3-8121-9dce-d6993942354b';
+    const PREFIXED_ID = `notion:${DASHED_UUID}`;
+
+    vi.mocked(queries.getTaskCache).mockReturnValue({
+      cache_key: 'board:board-1',
+      raw_json: JSON.stringify([
+        {
+          id: PREFIXED_ID,
+          title: 'Task Alpha',
+          status: '🗂️ Ready',
+          type: '💻 Code',
+          dependsOn: [],
+          notionUrl: `https://notion.so/${DASHED_UUID}`,
+        },
+      ]),
+      fetched_at: Date.now(),
+    } as never);
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate(PREFIXED_ID, '🗂️ Ready'),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+
+    // The full response JSON must not contain a double-prefix anywhere.
+    const responseText = JSON.stringify(res.body);
+    expect(responseText).not.toContain('notion:notion:');
+
+    // The single task must have a correctly-formed taskId.
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].taskId).toBe(PREFIXED_ID);
+    expect(res.body[0].taskId).toMatch(
+      /^notion:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+  });
+
   it('dependency resolver populates blocked and blockerNames when dependsOn uses prefixed IDs', async () => {
     const boardTasks: NotionTask[] = [
       {
