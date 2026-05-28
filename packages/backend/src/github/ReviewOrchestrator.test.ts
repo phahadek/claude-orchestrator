@@ -22,7 +22,9 @@ vi.mock('../session/autofix-runner.js', () => ({
 }));
 
 vi.mock('../session/filePollutionCheck.js', () => ({
-  runFilePollutionCheck: vi.fn().mockResolvedValue({ headSha: null, revertCommitSha: null }),
+  runFilePollutionCheck: vi
+    .fn()
+    .mockResolvedValue({ headSha: null, revertCommitSha: null }),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -1830,7 +1832,9 @@ describe('ReviewOrchestrator — file pollution check after autofix', () => {
 
   it('invokes runFilePollutionCheck after autofix produces a commitSha', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
-    vi.mocked(getSession).mockReturnValue({ worktree_path: '/fake/worktree' } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
     vi.mocked(loadAutofixCommands).mockReturnValue(['npm run format:write']);
     vi.mocked(runAutofix).mockResolvedValue({
       success: true,
@@ -1860,7 +1864,9 @@ describe('ReviewOrchestrator — file pollution check after autofix', () => {
 
   it('does NOT invoke runFilePollutionCheck when autofix produces no commit', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
-    vi.mocked(getSession).mockReturnValue({ worktree_path: '/fake/worktree' } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
     vi.mocked(loadAutofixCommands).mockReturnValue(['npm run format:write']);
     vi.mocked(runAutofix).mockResolvedValue({
       success: true,
@@ -1881,7 +1887,9 @@ describe('ReviewOrchestrator — file pollution check after autofix', () => {
 
   it('proceeds to reviewPR even when runFilePollutionCheck finds no banned files', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
-    vi.mocked(getSession).mockReturnValue({ worktree_path: '/fake/worktree' } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
     vi.mocked(loadAutofixCommands).mockReturnValue(['npm run format:write']);
     vi.mocked(runAutofix).mockResolvedValue({
       success: true,
@@ -1907,7 +1915,9 @@ describe('ReviewOrchestrator — file pollution check after autofix', () => {
 
   it('calls runFilePollutionCheck before reviewPR (ordering)', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
-    vi.mocked(getSession).mockReturnValue({ worktree_path: '/fake/worktree' } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
     vi.mocked(loadAutofixCommands).mockReturnValue(['npm run format:write']);
     vi.mocked(runAutofix).mockResolvedValue({
       success: true,
@@ -1948,7 +1958,9 @@ describe('ReviewOrchestrator — file pollution check after autofix', () => {
 
   it('does NOT invoke runFilePollutionCheck when no GitHub client is configured', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
-    vi.mocked(getSession).mockReturnValue({ worktree_path: '/fake/worktree' } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
     vi.mocked(loadAutofixCommands).mockReturnValue(['npm run format:write']);
     vi.mocked(runAutofix).mockResolvedValue({
       success: true,
@@ -1969,7 +1981,9 @@ describe('ReviewOrchestrator — file pollution check after autofix', () => {
 
   it('calls sessionManager.addToRevertLock when pollution check reverts files', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
-    vi.mocked(getSession).mockReturnValue({ worktree_path: '/fake/worktree' } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
     vi.mocked(loadAutofixCommands).mockReturnValue(['npm run format:write']);
     vi.mocked(runAutofix).mockResolvedValue({
       success: true,

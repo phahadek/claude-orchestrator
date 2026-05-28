@@ -445,4 +445,3 @@ describe('runAutofix — syncedTo after fetch + reset', () => {
     expect(result.syncedTo).toBeUndefined();
   });
 });
-

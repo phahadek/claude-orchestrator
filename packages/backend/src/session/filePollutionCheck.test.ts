@@ -73,7 +73,9 @@ describe('runFilePollutionCheck — no violations', () => {
   it('does not call createIssueComment when no files are reverted', async () => {
     const github = makeGitHub();
     await runFilePollutionCheck({ github, ...BASE_OPTS });
-    expect(vi.mocked(github.createIssueComment as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(github.createIssueComment as ReturnType<typeof vi.fn>),
+    ).not.toHaveBeenCalled();
   });
 });
 
@@ -144,7 +146,9 @@ describe('runFilePollutionCheck — banned file found and reverted', () => {
     await runFilePollutionCheck({ github, ...BASE_OPTS });
     // createIssueComment is called fire-and-forget; give it a tick to resolve
     await Promise.resolve();
-    expect(vi.mocked(github.createIssueComment as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
+    expect(
+      vi.mocked(github.createIssueComment as ReturnType<typeof vi.fn>),
+    ).toHaveBeenCalledWith(
       'owner/repo',
       42,
       expect.stringContaining('CLAUDE.md'),
@@ -216,7 +220,11 @@ describe('runFilePollutionCheck — loop guard', () => {
     });
 
     const github = makeGitHub();
-    const result = await runFilePollutionCheck({ github, ...BASE_OPTS, lastRevertSha: null });
+    const result = await runFilePollutionCheck({
+      github,
+      ...BASE_OPTS,
+      lastRevertSha: null,
+    });
 
     expect(vi.mocked(revertBannedFiles)).toHaveBeenCalledOnce();
     expect(result.revertCommitSha).toBe('revert-sha');
@@ -250,8 +258,14 @@ describe('runFilePollutionCheck — registerRevertSync', () => {
     const github = makeGitHub();
     await runFilePollutionCheck({ github, ...BASE_OPTS, registerRevertSync });
 
-    expect(registerRevertSync).toHaveBeenCalledWith(42, 'owner/repo', expect.any(Promise));
-    expect(callOrder.indexOf('register')).toBeLessThan(callOrder.indexOf('revert'));
+    expect(registerRevertSync).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      expect.any(Promise),
+    );
+    expect(callOrder.indexOf('register')).toBeLessThan(
+      callOrder.indexOf('revert'),
+    );
   });
 });
 
@@ -272,13 +286,17 @@ describe('runFilePollutionCheck — revert no-op', () => {
 
     const onReverted = vi.fn();
     const github = makeGitHub();
-    const result = await runFilePollutionCheck({ github, ...BASE_OPTS, onReverted });
+    const result = await runFilePollutionCheck({
+      github,
+      ...BASE_OPTS,
+      onReverted,
+    });
 
     expect(result.revertCommitSha).toBeNull();
     expect(onReverted).not.toHaveBeenCalled();
-    const revertedEvents = vi.mocked(recordEvent).mock.calls.filter(
-      ([e]) => e.event_type === 'file_pollution_reverted',
-    );
+    const revertedEvents = vi
+      .mocked(recordEvent)
+      .mock.calls.filter(([e]) => e.event_type === 'file_pollution_reverted');
     expect(revertedEvents).toHaveLength(0);
   });
 });

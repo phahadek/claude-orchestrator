@@ -176,9 +176,7 @@ export async function runFilePollutionCheck(
 
     return { headSha, revertCommitSha: commitSha };
   } catch (e) {
-    console.warn(
-      `[filePollutionCheck] check failed for PR #${prNumber}: ${e}`,
-    );
+    console.warn(`[filePollutionCheck] check failed for PR #${prNumber}: ${e}`);
     return { headSha, revertCommitSha: null };
   }
 }
