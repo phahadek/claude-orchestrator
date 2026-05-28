@@ -349,4 +349,33 @@ describe('NoOpInvestigator.investigate', () => {
 
     consoleSpy.mockRestore();
   });
+
+  it('does not mutate task status when session_ended fires with no parseable verdict', async () => {
+    const sm = fakeSessionManager();
+    const backend = fakeTaskBackend();
+    const investigator = new NoOpInvestigator(sm, backend, undefined);
+
+    // getEventsBySession returns no events with a parseable verdict
+    vi.mocked(getEventsBySession).mockReturnValue([]);
+
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const investigatePromise = investigator.investigate(baseCtx());
+    await new Promise((r) => setTimeout(r, 10));
+
+    const startFn = (sm as unknown as Record<string, unknown>).start as ReturnType<typeof vi.fn>;
+    const sessionId = startFn.mock.calls[0][2].sessionId as string;
+
+    // Emit session_ended without any verdict events — simulates crash or malformed output
+    sm.emit('message', { type: 'session_ended', sessionId });
+
+    await investigatePromise;
+
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/no parseable verdict.*notion:abc123/),
+    );
+
+    consoleSpy.mockRestore();
+  });
 });

@@ -98,8 +98,8 @@ function extractVerdictFromEvents(sessionId: string): NoOpVerdict | null {
 function waitForNoOpVerdict(
   sessionManager: INoOpSessionManager,
   sessionId: string,
-): Promise<NoOpVerdict> {
-  return new Promise<NoOpVerdict>((resolve) => {
+): Promise<NoOpVerdict | null> {
+  return new Promise<NoOpVerdict | null>((resolve) => {
     const cleanup = () => sessionManager.off('message', handler);
 
     const handler = (msg: ServerMessage) => {
@@ -139,16 +139,10 @@ function waitForNoOpVerdict(
 
       if (msg.type === 'session_ended') {
         cleanup();
+        // Try one last scan of stored events for a verdict emitted before session_ended.
         const verdict = extractVerdictFromEvents(sessionId);
-        if (verdict) {
-          resolve(verdict);
-        } else {
-          resolve({
-            kind: 'human',
-            reason:
-              'Investigator session ended without emitting a valid verdict.',
-          });
-        }
+        // If no parseable verdict found, resolve null — caller must NOT mutate task status.
+        resolve(verdict);
       }
     };
 
@@ -258,7 +252,7 @@ export class NoOpInvestigator {
       return;
     }
 
-    let verdict: NoOpVerdict;
+    let verdict: NoOpVerdict | null;
     try {
       verdict = await Promise.race([
         verdictPromise,
@@ -269,6 +263,13 @@ export class NoOpInvestigator {
     } catch (e) {
       console.error(
         `[NoOpInvestigator] verdict wait failed — sessionId=${investigatorSessionId} taskId=${taskId} reason=${String(e)}`,
+      );
+      return;
+    }
+
+    if (!verdict) {
+      console.error(
+        `[NoOpInvestigator] session ended with no parseable verdict — sessionId=${investigatorSessionId} taskId=${taskId} — leaving task status unchanged`,
       );
       return;
     }
