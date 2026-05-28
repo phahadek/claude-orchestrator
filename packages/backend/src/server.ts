@@ -371,6 +371,9 @@ sessionManager.on(
         }
 
         setLastReviewedSha(prRow.pr_number, prRow.repo, headSha);
+        if (result.verdict === 'approved' && prRow.pause_reason !== null) {
+          setPauseReason(prRow.pr_number, prRow.repo, null);
+        }
         sessionManager.emit('message', {
           type: 'review_verdict',
           prNumber: prRow.pr_number,
