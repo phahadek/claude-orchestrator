@@ -178,8 +178,103 @@ export class ReviewOrchestrator {
   }
 
   /**
+   * Runs the autofix + file-pollution-check pipeline for a PR.
+   * Called from both executeReview (first review) and the server.ts
+   * push_detected re-review path so every push goes through the same pipeline.
+   */
+  async runAutofixPipeline(
+    prNumber: number,
+    repo: string,
+    taskId: string | null,
+  ): Promise<void> {
+    const project = getProjectByGithubRepo(repo);
+    if (!project) return;
+
+    const autofixCommands = loadAutofixCommands(project.projectDir);
+    if (autofixCommands.length === 0) return;
+
+    this.sessionManager.emit('message', {
+      type: 'autofix_started',
+      prNumber,
+      repo,
+    });
+
+    const prRow = getPRByNumber(prNumber, repo);
+    const worktreePath = prRow?.session_id
+      ? (getSession(prRow.session_id)?.worktree_path ?? '')
+      : '';
+
+    let autofixSuccess = true;
+    let autofixSummary = 'no worktree available — autofix skipped';
+
+    if (worktreePath) {
+      try {
+        const result = await runAutofix(
+          worktreePath,
+          project.projectDir,
+          autofixCommands,
+          (msg) =>
+            console.log(`[ReviewOrchestrator] autofix PR #${prNumber}: ${msg}`),
+        );
+        autofixSuccess = result.success;
+        autofixSummary = result.summary;
+        if (result.commitSha) {
+          this.lastAutofixShas.set(`${prNumber}:${repo}`, result.commitSha);
+          if (prRow?.session_id && result.touchedFiles?.length) {
+            this.sessionManager.addToRevertLock(
+              prRow.session_id,
+              result.touchedFiles,
+            );
+          }
+          if (this.github) {
+            await runFilePollutionCheck({
+              github: this.github,
+              worktreePath,
+              repo,
+              prNumber,
+              baseBranch: prRow?.base_branch ?? 'dev',
+              sessionId: prRow?.session_id ?? null,
+              projectId: project.id,
+              taskId,
+              onReverted: (files) => {
+                if (prRow?.session_id) {
+                  this.sessionManager.addToRevertLock(
+                    prRow.session_id,
+                    files,
+                  );
+                }
+              },
+            });
+          }
+        }
+      } catch (err) {
+        autofixSuccess = false;
+        autofixSummary = `autofix threw: ${String(err)}`;
+        console.error(
+          `[ReviewOrchestrator] autofix error for PR #${prNumber}:`,
+          err,
+        );
+      }
+    }
+
+    this.sessionManager.emit('message', {
+      type: 'autofix_complete',
+      prNumber,
+      repo,
+      success: autofixSuccess,
+      summary: autofixSummary,
+    });
+
+    if (!autofixSuccess) {
+      console.warn(
+        `[ReviewOrchestrator] autofix failed for PR #${prNumber} (fail open): ${autofixSummary}`,
+      );
+    }
+  }
+
+  /**
    * Returns true (and consumes the entry) when the given SHA is the autofix
-   * commit that was pushed during the last executeReview() for this PR.
+   * commit that was pushed during the last runAutofixPipeline() for this PR.
    * Used by the push_detected handler to skip re-reviews for autofix-only pushes
    * so they do not count against the iteration cap.
    */
@@ -382,94 +477,8 @@ export class ReviewOrchestrator {
       return;
     }
 
-    // ── Autofix step ──────────────────────────────────────────────────────────
-    const autofixCommands = loadAutofixCommands(project.projectDir);
-    if (autofixCommands.length > 0) {
-      this.sessionManager.emit('message', {
-        type: 'autofix_started',
-        prNumber: job.prNumber,
-        repo: job.repo,
-      });
-
-      const worktreePath = prRow?.session_id
-        ? (getSession(prRow.session_id)?.worktree_path ?? '')
-        : '';
-
-      let autofixSuccess = true;
-      let autofixSummary = 'no worktree available — autofix skipped';
-
-      if (worktreePath) {
-        try {
-          const result = await runAutofix(
-            worktreePath,
-            project.projectDir,
-            autofixCommands,
-            (msg) =>
-              console.log(
-                `[ReviewOrchestrator] autofix PR #${job.prNumber}: ${msg}`,
-              ),
-          );
-          autofixSuccess = result.success;
-          autofixSummary = result.summary;
-          if (result.commitSha) {
-            this.lastAutofixShas.set(
-              `${job.prNumber}:${job.repo}`,
-              result.commitSha,
-            );
-            // Populate _revertLock for files touched by autofix so the
-            // orchestrator context writer does not re-dirty them on next injection.
-            if (prRow?.session_id && result.touchedFiles?.length) {
-              this.sessionManager.addToRevertLock(
-                prRow.session_id,
-                result.touchedFiles,
-              );
-            }
-            // File pollution check: revert any banned files the autofix committed.
-            if (this.github) {
-              await runFilePollutionCheck({
-                github: this.github,
-                worktreePath,
-                repo: job.repo,
-                prNumber: job.prNumber,
-                baseBranch: prRow?.base_branch ?? 'dev',
-                sessionId: prRow?.session_id ?? null,
-                projectId: project.id,
-                taskId: job.taskId ?? null,
-                onReverted: (files) => {
-                  if (prRow?.session_id) {
-                    this.sessionManager.addToRevertLock(
-                      prRow.session_id,
-                      files,
-                    );
-                  }
-                },
-              });
-            }
-          }
-        } catch (err) {
-          autofixSuccess = false;
-          autofixSummary = `autofix threw: ${String(err)}`;
-          console.error(
-            `[ReviewOrchestrator] autofix error for PR #${job.prNumber}:`,
-            err,
-          );
-        }
-      }
-
-      this.sessionManager.emit('message', {
-        type: 'autofix_complete',
-        prNumber: job.prNumber,
-        repo: job.repo,
-        success: autofixSuccess,
-        summary: autofixSummary,
-      });
-
-      if (!autofixSuccess) {
-        console.warn(
-          `[ReviewOrchestrator] autofix failed for PR #${job.prNumber} (fail open): ${autofixSummary}`,
-        );
-      }
-    }
+    // ── Autofix + file-pollution-check step ──────────────────────────────────
+    await this.runAutofixPipeline(job.prNumber, job.repo, job.taskId ?? null);
     // ─────────────────────────────────────────────────────────────────────────
 
     this.sessionManager.emit('message', {

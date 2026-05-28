@@ -2009,3 +2009,151 @@ describe('ReviewOrchestrator — file pollution check after autofix', () => {
     );
   });
 });
+
+// ── runAutofixPipeline (shared helper) ───────────────────────────────────────
+// AC: The extracted helper is invoked by both executeReview and server.ts
+// push_detected. These tests exercise the helper directly so its contract is
+// independently verified.
+
+describe('ReviewOrchestrator — runAutofixPipeline helper', () => {
+  function makeGitHubClient() {
+    return {
+      markPRReady: vi.fn().mockResolvedValue(undefined),
+      fetchPR: vi.fn().mockResolvedValue({ ...baseFreshPR }),
+    } as unknown as GitHubClient;
+  }
+
+  it('emits autofix_started and autofix_complete in order when commands are configured', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({ success: true, summary: 'done' });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    await orch.runAutofixPipeline(1, 'owner/repo', 'task-xyz');
+
+    const types = messages.map((m: any) => m.type as string);
+    const startIdx = types.indexOf('autofix_started');
+    const completeIdx = types.indexOf('autofix_complete');
+    expect(startIdx).toBeGreaterThanOrEqual(0);
+    expect(completeIdx).toBeGreaterThan(startIdx);
+  });
+
+  it('does nothing when no autofix commands are configured', async () => {
+    vi.mocked(loadAutofixCommands).mockReturnValue([]);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    await orch.runAutofixPipeline(1, 'owner/repo', null);
+
+    expect(messages).toHaveLength(0);
+    expect(vi.mocked(runAutofix)).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when no project is found for the repo', async () => {
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    // 'unknown/repo' returns undefined from getProjectByGithubRepo mock
+    await orch.runAutofixPipeline(1, 'unknown/repo', null);
+
+    expect(messages).toHaveLength(0);
+    expect(vi.mocked(runAutofix)).not.toHaveBeenCalled();
+  });
+
+  it('calls runFilePollutionCheck after autofix commits (ordering)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run format:write']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      commitSha: 'autofix-sha-direct',
+      summary: 'formatted',
+    });
+
+    const callOrder: string[] = [];
+    vi.mocked(runFilePollutionCheck).mockImplementation(async () => {
+      callOrder.push('pollutionCheck');
+      return { headSha: null, revertCommitSha: null };
+    });
+
+    const sm = makeMockSessionManager();
+    const gc = makeGitHubClient();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, 1, true, gc);
+
+    await orch.runAutofixPipeline(1, 'owner/repo', 'task-direct');
+
+    expect(vi.mocked(runAutofix)).toHaveBeenCalledOnce();
+    expect(callOrder).toContain('pollutionCheck');
+  });
+
+  it('stores autofix SHA in lastAutofixShas so consumeAutofixSha returns true', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      commitSha: 'pipeline-sha-42',
+      summary: 'done',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    await orch.runAutofixPipeline(1, 'owner/repo', null);
+
+    expect(orch.consumeAutofixSha(1, 'owner/repo', 'pipeline-sha-42')).toBe(
+      true,
+    );
+  });
+
+  it('fails open — proceeds with autofix_complete(success:false) when runAutofix throws', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockRejectedValue(new Error('disk full'));
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    await orch.runAutofixPipeline(1, 'owner/repo', null);
+
+    const complete = messages.find(
+      (m: any) => m.type === 'autofix_complete',
+    ) as any;
+    expect(complete).toBeDefined();
+    expect(complete.success).toBe(false);
+    expect(complete.summary).toContain('disk full');
+  });
+});

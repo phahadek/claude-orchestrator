@@ -320,6 +320,14 @@ sessionManager.on(
       }
 
       const iteration = prRow.review_iteration + 1;
+
+      // Run autofix + pollution-check on every push, same as first review.
+      await reviewOrchestrator.runAutofixPipeline(
+        prRow.pr_number,
+        prRow.repo,
+        prRow.task_id,
+      );
+
       try {
         let result: PRReviewResult;
         try {
