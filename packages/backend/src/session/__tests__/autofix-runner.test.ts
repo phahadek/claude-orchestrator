@@ -488,7 +488,8 @@ describe('runAutofix — CLAUDE.md protection', () => {
       spawnCalls.push({ cmd, args: a });
       if (cmd === 'git' && a[0] === 'restore') return makeProc(0, '');
       // After restore, status still shows the source file (CLAUDE.md was cleaned)
-      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  src/foo.ts\n');
+      if (cmd === 'git' && a[0] === 'status')
+        return makeProc(0, 'M  src/foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
@@ -532,8 +533,10 @@ describe('runAutofix — CLAUDE.md protection', () => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       spawnCalls.push({ cmd, args: a });
       // git restore exits 1 (file not in index) — should not abort the run
-      if (cmd === 'git' && a[0] === 'restore') return makeProc(1, '', 'error: pathspec');
-      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  src/bar.ts\n');
+      if (cmd === 'git' && a[0] === 'restore')
+        return makeProc(1, '', 'error: pathspec');
+      if (cmd === 'git' && a[0] === 'status')
+        return makeProc(0, 'M  src/bar.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
