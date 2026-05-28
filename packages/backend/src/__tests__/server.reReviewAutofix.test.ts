@@ -242,6 +242,13 @@ function wirePushDetectedHandler(
             prRow.repo,
             headSha,
           );
+          if (result.verdict === 'approved' && prRow.pause_reason !== null) {
+            vi.mocked(queries.setPauseReason)(
+              prRow.pr_number,
+              prRow.repo,
+              null,
+            );
+          }
           sessionManager.emit('message', {
             type: 'review_verdict',
             prNumber: prRow.pr_number,
@@ -422,5 +429,121 @@ describe('push_detected: consumeAutofixSha suppresses autofix-only push', () => 
     // runAutofixPipeline must NOT be called again for the autofix-only push
     expect(reviewOrchestrator.runAutofixPipeline).toHaveBeenCalledTimes(1);
     expect(reviewService.reReviewPR).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── pause_reason cleared on approved verdict ──────────────────────────────────
+
+function makePushHelper(
+  pauseReason: string | null,
+  verdict: string,
+): {
+  sessionManager: MockSessionManager;
+  github: ReturnType<typeof makeMockGitHub>;
+  reviewOrchestrator: {
+    runAutofixPipeline: ReturnType<typeof vi.fn>;
+    consumeAutofixSha: ReturnType<typeof vi.fn>;
+  };
+  reviewService: { reReviewPR: ReturnType<typeof vi.fn> };
+} {
+  const sessionManager = new MockSessionManager();
+  const github = makeMockGitHub();
+  const reviewOrchestrator = {
+    runAutofixPipeline: vi.fn().mockResolvedValue(undefined),
+    consumeAutofixSha: vi.fn().mockReturnValue(false),
+  };
+  const reviewService = {
+    reReviewPR: vi.fn().mockResolvedValue({
+      verdict,
+      summary: 'test summary',
+      dimensions: [],
+    }),
+  };
+
+  wirePushDetectedHandler(
+    sessionManager,
+    reviewService,
+    github,
+    reviewOrchestrator,
+  );
+
+  vi.mocked(queries.getPRBySessionId).mockReturnValue(
+    makePRRow({ pause_reason: pauseReason }),
+  );
+
+  return { sessionManager, github, reviewOrchestrator, reviewService };
+}
+
+describe('push_detected: pause_reason cleared on approved verdict', () => {
+  it('clears pause_reason when prior pause was review_failed and verdict is approved', async () => {
+    const { sessionManager } = makePushHelper('review_failed', 'approved');
+    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(queries.setPauseReason)).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      null,
+    );
+  });
+
+  it('clears pause_reason when prior pause was stuck_timeout and verdict is approved', async () => {
+    const { sessionManager } = makePushHelper('stuck_timeout', 'approved');
+    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(queries.setPauseReason)).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      null,
+    );
+  });
+
+  it('clears pause_reason when prior pause was max_reviews and verdict is approved', async () => {
+    const { sessionManager } = makePushHelper('max_reviews', 'approved');
+    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(queries.setPauseReason)).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      null,
+    );
+  });
+
+  it('does NOT clear pause_reason when verdict is needs_changes', async () => {
+    const { sessionManager } = makePushHelper('review_failed', 'needs_changes');
+    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(queries.setPauseReason)).not.toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      null,
+    );
+  });
+
+  it('does NOT clear pause_reason when verdict is incomplete', async () => {
+    const { sessionManager } = makePushHelper('review_failed', 'incomplete');
+    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(queries.setPauseReason)).not.toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      null,
+    );
+  });
+
+  it('does not call setPauseReason(null) when pause_reason is already null and verdict is approved', async () => {
+    const { sessionManager } = makePushHelper(null, 'approved');
+    sessionManager.emit('push_detected', { sessionId: CODE_SESSION_ID });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(queries.setPauseReason)).not.toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      null,
+    );
   });
 });
