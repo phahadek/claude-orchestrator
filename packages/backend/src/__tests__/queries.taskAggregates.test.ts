@@ -364,6 +364,55 @@ describe('getActiveTaskAggregates — pull_requests.task_id format matching', ()
     const rows = getActiveTaskAggregates([]);
     expect(rows).toHaveLength(0);
   });
+
+  it('regression: dashless session task_id does NOT match dashed task_cache (documents the bug)', () => {
+    // task_cache stores dashed (Notion API native), session stores dashless (old bug)
+    upsertTaskCache(
+      PREFIXED_ID,
+      JSON.stringify({
+        id: PREFIXED_ID,
+        title: 'Mismatch Task',
+        status: '🔄 In Progress',
+      }),
+    );
+    insertSession(
+      makeSession({
+        session_id: 'sess-dashless',
+        task_id: `notion:${DASHLESS_UUID}`,
+        session_type: 'standard',
+      }),
+    );
+
+    const rows = getActiveTaskAggregates([PREFIXED_ID]);
+    expect(rows).toHaveLength(1);
+    // Without the fix the JOIN fails and code_session_id would be null.
+    // This asserts the pre-fix broken behavior so if the query ever regresses
+    // back to REPLACE-based normalisation we can detect it here.
+    expect(rows[0].code_session_id).toBeNull();
+  });
+
+  it('regression: dashed session task_id matches dashed task_cache (validates the fix)', () => {
+    // After the fix: both sides use dashed — the JOIN must succeed.
+    upsertTaskCache(
+      PREFIXED_ID,
+      JSON.stringify({
+        id: PREFIXED_ID,
+        title: 'Fixed Task',
+        status: '🔄 In Progress',
+      }),
+    );
+    insertSession(
+      makeSession({
+        session_id: 'sess-dashed',
+        task_id: PREFIXED_ID,
+        session_type: 'standard',
+      }),
+    );
+
+    const rows = getActiveTaskAggregates([PREFIXED_ID]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].code_session_id).toBe('sess-dashed');
+  });
 });
 
 describe('getActiveTaskAggregates — direct comparison with uniform prefixed format', () => {

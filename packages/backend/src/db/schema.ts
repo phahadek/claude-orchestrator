@@ -376,4 +376,43 @@ export function runMigrations(): void {
   } catch {
     /* ignore */
   }
+
+  // ── Dashless → dashed backfill (idempotent) ──────────────────────────────
+  // SessionManager historically wrote dashless 32-hex UUIDs (from URL regex).
+  // task_cache stores dashed UUIDs (from Notion API). Align sessions, pull_requests,
+  // and audit_log to the dashed form so the JOIN in getActiveTaskAggregates matches.
+  // Guard: LENGTH = 39 means 'notion:' (7) + dashless 32-hex (32) — already-dashed
+  // rows are 43 chars and are untouched. Non-notion task_ids (yaml:, jira:) are
+  // untouched because they don't match LIKE 'notion:%'.
+  db.exec(`
+    UPDATE sessions
+    SET task_id = 'notion:' ||
+      SUBSTR(task_id, 8, 8) || '-' ||
+      SUBSTR(task_id, 16, 4) || '-' ||
+      SUBSTR(task_id, 20, 4) || '-' ||
+      SUBSTR(task_id, 24, 4) || '-' ||
+      SUBSTR(task_id, 28)
+    WHERE task_id LIKE 'notion:%'
+      AND LENGTH(task_id) = 39;
+
+    UPDATE pull_requests
+    SET task_id = 'notion:' ||
+      SUBSTR(task_id, 8, 8) || '-' ||
+      SUBSTR(task_id, 16, 4) || '-' ||
+      SUBSTR(task_id, 20, 4) || '-' ||
+      SUBSTR(task_id, 24, 4) || '-' ||
+      SUBSTR(task_id, 28)
+    WHERE task_id LIKE 'notion:%'
+      AND LENGTH(task_id) = 39;
+
+    UPDATE audit_log
+    SET task_id = 'notion:' ||
+      SUBSTR(task_id, 8, 8) || '-' ||
+      SUBSTR(task_id, 16, 4) || '-' ||
+      SUBSTR(task_id, 20, 4) || '-' ||
+      SUBSTR(task_id, 24, 4) || '-' ||
+      SUBSTR(task_id, 28)
+    WHERE task_id LIKE 'notion:%'
+      AND LENGTH(task_id) = 39;
+  `);
 }

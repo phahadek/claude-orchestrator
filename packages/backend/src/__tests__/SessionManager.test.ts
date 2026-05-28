@@ -779,3 +779,22 @@ describe('SessionManager — error broadcast and rollback', () => {
     expect(catchBlock).toMatch(/'🗂️ Ready'/);
   });
 });
+
+// ── AC: SessionManager.start() writes sessions.task_id in dashed UUID form ───
+describe('SessionManager.start() — dashed task_id', () => {
+  const smSource = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('imports parseNotionPageIdDashed (not parseNotionPageId) from AgentSession', () => {
+    expect(smSource).toMatch(/parseNotionPageIdDashed/);
+    expect(smSource).not.toMatch(/import.*parseNotionPageId[^D]/);
+  });
+
+  it('uses parseNotionPageIdDashed when building notionTaskId', () => {
+    expect(smSource).toMatch(
+      /formatTaskId\s*\(\s*'notion'\s*,\s*parseNotionPageIdDashed\s*\(\s*taskUrl\s*\)\s*\)/,
+    );
+  });
+});
