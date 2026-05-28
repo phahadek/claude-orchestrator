@@ -1542,7 +1542,10 @@ describe('PRMergeWatcher — ci_remediation_attempted_sha per-SHA dedup', () => 
     vi.mocked(getProjectByGithubRepo).mockReturnValue(null);
     vi.mocked(getSession).mockReturnValue(null);
     vi.mocked(loadAutofixCommands).mockReturnValue([]);
-    vi.mocked(runAutofix).mockResolvedValue({ success: true, summary: 'no diff' });
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      summary: 'no diff',
+    });
   });
 
   function mockCategorizeCI(
