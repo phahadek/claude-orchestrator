@@ -33,8 +33,7 @@ import {
   validatePRBody,
   buildValidationComment,
 } from '../github/PRBodyValidator';
-import { validatePRFiles } from '../github/PRFileValidator';
-import { revertBannedFiles } from '../github/PRFileReverter';
+import { runFilePollutionCheck as filePollutionCheckFn } from './filePollutionCheck';
 import { checkCommitAttribution } from '../github/CommitAttributionWatcher';
 import { recordEvent } from '../audit/AuditLog';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
@@ -49,40 +48,6 @@ import {
 } from './eventTypes';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
-
-/** Walk a directory tree collecting all .gitignore files, root-first. */
-function collectGitignoreSources(
-  rootDir: string,
-): Array<{ dir: string; content: string }> {
-  const results: Array<{ dir: string; content: string }> = [];
-  function walk(dir: string): void {
-    const rel = path.relative(rootDir, dir).replace(/\\/g, '/');
-    const gitignorePath = path.join(dir, '.gitignore');
-    if (fs.existsSync(gitignorePath)) {
-      try {
-        results.push({
-          dir: rel,
-          content: fs.readFileSync(gitignorePath, 'utf8'),
-        });
-      } catch {
-        // ignore unreadable
-      }
-    }
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      if (e.isDirectory() && e.name !== 'node_modules' && e.name !== '.git') {
-        walk(path.join(dir, e.name));
-      }
-    }
-  }
-  walk(rootDir);
-  return results;
-}
 
 /**
  * Returns true if the tool call represents a git push operation.
@@ -187,6 +152,10 @@ export class AgentSession extends EventEmitter {
    *  Each entry is consumed (deleted) the first time injectContextFile checks it,
    *  blocking exactly one injection attempt per reverted file before resetting. */
   private readonly _revertLock = new Set<string>();
+  /** SHA of the last orchestrator-revert commit pushed by runFilePollutionCheck.
+   *  Used as a loop guard: if the PR's HEAD equals this SHA, the check is skipped
+   *  so we don't re-revert our own revert commit. */
+  private lastFilePollutionRevertSha: string | null = null;
 
   /** The underlying I/O adapter (CLI subprocess or Agent SDK). */
   private runner: ISessionRunner;
@@ -915,84 +884,24 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     baseBranch: string,
   ): Promise<void> {
     if (!this.githubClient) return;
-    const ghClient = this.githubClient;
-
-    // Fetch the current head SHA for the loop guard check.
-    let headSha: string | null = null;
-    try {
-      const pr = await ghClient.fetchPR(repo, prNumber);
-      headSha = pr.headSha ?? null;
-    } catch (e) {
-      console.warn(
-        `[AgentSession] runFilePollutionCheck: could not fetch head SHA for PR #${prNumber}: ${e}`,
-      );
-    }
-
-    try {
-      const changedFiles = await ghClient.getPRFiles(repo, prNumber);
-      const gitignoreSources = collectGitignoreSources(this.worktreePath);
-      const validation = validatePRFiles(changedFiles, gitignoreSources);
-
-      // Record that the validator ran — observable even when no violations found.
-      recordEvent({
-        event_type: 'file_pollution_checked',
-        actor_type: 'system',
-        actor_id: this.sessionId,
-        project_id: this.projectId || null,
-        task_id: this.taskId || null,
-        payload: {
-          pr_number: prNumber,
-          repo,
-          head_sha: headSha,
-          banned_files_found: validation.bannedFiles.length,
-        },
-      });
-
-      if (validation.valid) return;
-
-      // Register the sync promise BEFORE starting work so ReviewOrchestrator can await it
-      let resolveSyncPromise!: () => void;
-      const syncPromise = new Promise<void>((r) => {
-        resolveSyncPromise = r;
-      });
-      this.sessionManager?.registerRevertSync?.(prNumber, repo, syncPromise);
-
-      let commitSha: string | null = null;
-      let reverted: string[] = [];
-      try {
-        ({ commitSha, reverted } = await revertBannedFiles({
-          worktreePath: this.worktreePath,
-          baseBranch,
-          bannedFiles: validation.bannedFiles,
-          prNumber,
-          repo,
-        }));
-      } finally {
-        resolveSyncPromise();
-      }
-
-      if (commitSha === null || reverted.length === 0) return;
-
-      // Lock the reverted files so injectContextFile skips the next injection cycle
-      for (const f of reverted) {
-        this._revertLock.add(f);
-      }
-
-      recordEvent({
-        event_type: 'file_pollution_reverted',
-        actor_type: 'system',
-        actor_id: this.sessionId,
-        project_id: this.projectId || null,
-        task_id: this.taskId || null,
-        payload: {
-          files: reverted,
-          pr_number: prNumber,
-          commit_sha: commitSha,
-        },
-      });
-      // No session-facing send() — the _revertLock silently prevents re-injection.
-    } catch (e) {
-      console.warn(`[AgentSession] runFilePollutionCheck failed: ${e}`);
+    const { revertCommitSha } = await filePollutionCheckFn({
+      github: this.githubClient,
+      worktreePath: this.worktreePath,
+      repo,
+      prNumber,
+      baseBranch,
+      sessionId: this.sessionId,
+      projectId: this.projectId || null,
+      taskId: this.taskId || null,
+      onReverted: (files) => {
+        for (const f of files) this._revertLock.add(f);
+      },
+      registerRevertSync: (pr, r, p) =>
+        this.sessionManager?.registerRevertSync?.(pr, r, p),
+      lastRevertSha: this.lastFilePollutionRevertSha,
+    });
+    if (revertCommitSha) {
+      this.lastFilePollutionRevertSha = revertCommitSha;
     }
   }
 

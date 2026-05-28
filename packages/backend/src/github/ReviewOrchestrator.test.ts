@@ -21,6 +21,12 @@ vi.mock('../session/autofix-runner.js', () => ({
   runAutofix: vi.fn().mockResolvedValue({ success: true, summary: 'no diff' }),
 }));
 
+vi.mock('../session/filePollutionCheck.js', () => ({
+  runFilePollutionCheck: vi
+    .fn()
+    .mockResolvedValue({ headSha: null, revertCommitSha: null }),
+}));
+
 vi.mock('../audit/AuditLog.js', () => ({
   recordEvent: vi.fn(),
 }));
@@ -82,6 +88,7 @@ import {
   setLocalBranchPauseReason,
 } from '../db/queries';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
+import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { recordEvent } from '../audit/AuditLog';
 import { runVerifyAsGate } from '../orchestration/verifyRunner';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
@@ -1810,5 +1817,195 @@ describe('ReviewOrchestrator — registerRevertSync pendingSyncs mutex', () => {
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
     expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── Autofix → file pollution check wiring ────────────────────────────────────
+
+describe('ReviewOrchestrator — file pollution check after autofix', () => {
+  function makeGitHubClient(): GitHubClient {
+    return {
+      markPRReady: vi.fn().mockResolvedValue(undefined),
+      fetchPR: vi.fn().mockResolvedValue({ ...baseFreshPR }),
+    } as unknown as GitHubClient;
+  }
+
+  it('invokes runFilePollutionCheck after autofix produces a commitSha', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run format:write']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      commitSha: 'autofix-sha-abc',
+      touchedFiles: ['src/foo.ts', 'CLAUDE.md'],
+      summary: 'formatted',
+    });
+
+    const sm = makeMockSessionManager();
+    const gc = makeGitHubClient();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true, gc);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(runFilePollutionCheck)).toHaveBeenCalledOnce();
+    expect(vi.mocked(runFilePollutionCheck)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repo: 'owner/repo',
+        prNumber: 1,
+        baseBranch: 'dev',
+        worktreePath: '/fake/worktree',
+      }),
+    );
+  });
+
+  it('does NOT invoke runFilePollutionCheck when autofix produces no commit', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run format:write']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      summary: 'no diff',
+      // no commitSha
+    });
+
+    const sm = makeMockSessionManager();
+    const gc = makeGitHubClient();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true, gc);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(runFilePollutionCheck)).not.toHaveBeenCalled();
+  });
+
+  it('proceeds to reviewPR even when runFilePollutionCheck finds no banned files', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run format:write']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      commitSha: 'autofix-sha-clean',
+      touchedFiles: ['src/foo.ts'],
+      summary: 'formatted',
+    });
+    vi.mocked(runFilePollutionCheck).mockResolvedValue({
+      headSha: 'autofix-sha-clean',
+      revertCommitSha: null, // no banned files
+    });
+
+    const sm = makeMockSessionManager();
+    const gc = makeGitHubClient();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true, gc);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+  });
+
+  it('calls runFilePollutionCheck before reviewPR (ordering)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run format:write']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      commitSha: 'autofix-sha-order',
+      summary: 'formatted',
+    });
+
+    const callOrder: string[] = [];
+    vi.mocked(runFilePollutionCheck).mockImplementation(async () => {
+      callOrder.push('pollutionCheck');
+      return { headSha: null, revertCommitSha: null };
+    });
+
+    const sm = makeMockSessionManager();
+    const gc = makeGitHubClient();
+    const rs: PRReviewService = {
+      reviewPR: vi.fn().mockImplementation(async () => {
+        callOrder.push('reviewPR');
+        return {
+          prNumber: 1,
+          repo: 'owner/repo',
+          verdict: 'approved',
+          dimensions: [],
+          summary: 'ok',
+          reviewedAt: new Date().toISOString(),
+        };
+      }),
+    } as unknown as PRReviewService;
+    new ReviewOrchestrator(rs, sm as any, 1, true, gc);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(callOrder.indexOf('pollutionCheck')).toBeLessThan(
+      callOrder.indexOf('reviewPR'),
+    );
+  });
+
+  it('does NOT invoke runFilePollutionCheck when no GitHub client is configured', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run format:write']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      commitSha: 'autofix-sha-nogithub',
+      summary: 'formatted',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    // No GitHub client passed
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(runFilePollutionCheck)).not.toHaveBeenCalled();
+  });
+
+  it('calls sessionManager.addToRevertLock when pollution check reverts files', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run format:write']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      commitSha: 'autofix-sha-revert',
+      summary: 'formatted',
+    });
+    vi.mocked(runFilePollutionCheck).mockImplementation(async (opts) => {
+      opts.onReverted?.(['CLAUDE.md']);
+      return { headSha: 'autofix-sha-revert', revertCommitSha: 'revert-sha-1' };
+    });
+
+    const sm = makeMockSessionManager();
+    const gc = makeGitHubClient();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true, gc);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(sm.addToRevertLock)).toHaveBeenCalledWith(
+      basePRRow.session_id,
+      ['CLAUDE.md'],
+    );
   });
 });
