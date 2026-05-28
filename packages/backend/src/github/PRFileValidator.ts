@@ -17,7 +17,7 @@ export interface PRFileValidationResult {
   reason?: 'hard_banned' | 'gitignore_match' | 'mixed';
 }
 
-function isHardBanned(filePath: string): boolean {
+export function isHardBanned(filePath: string): boolean {
   const base = path.basename(filePath).toLowerCase();
   if (HARD_BANNED_FILES.some((f) => f.toLowerCase() === base)) return true;
   const basename = path.basename(filePath);

@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import yaml from 'js-yaml';
+import { isHardBanned } from '../github/PRFileValidator';
+import { recordEvent } from '../audit/AuditLog';
 
 interface OrchestratorYml {
   autofix?: string[];
@@ -125,6 +127,45 @@ export async function runAutofix(
     const msg = `git add -A failed (exit ${addResult.exitCode})`;
     log(`[autofix] ERROR: ${msg}\n`);
     failures.push(msg);
+  }
+
+  // Proactively un-stage hard-banned files so they never appear in the commit.
+  const stagedListResult = await spawnCmd(
+    'git',
+    ['diff', '--cached', '--name-only'],
+    { cwd: worktreePath },
+  );
+  const stagedFiles = stagedListResult.stdout.split('\n').filter(Boolean);
+  for (const stagedFile of stagedFiles) {
+    if (isHardBanned(stagedFile)) {
+      log(`[autofix] un-staging banned file: ${stagedFile}\n`);
+      await spawnCmd('git', ['restore', '--staged', '--', stagedFile], {
+        cwd: worktreePath,
+        env,
+      });
+      recordEvent({
+        event_type: 'autofix_banned_file_unstaged',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: null,
+        task_id: null,
+        payload: { file: stagedFile, worktree_path: worktreePath },
+      });
+    }
+  }
+
+  // If un-staging banned files left nothing staged, skip the commit entirely.
+  const remainingResult = await spawnCmd(
+    'git',
+    ['diff', '--cached', '--name-only'],
+    { cwd: worktreePath },
+  );
+  if (!remainingResult.stdout.trim()) {
+    const summary =
+      failures.length > 0
+        ? `autofix: only banned files were staged; skipped commit (failures: ${failures.join('; ')})`
+        : 'autofix: only banned files were staged; skipped commit';
+    return { success: failures.length === 0, summary };
   }
 
   const commitResult = await spawnCmd(

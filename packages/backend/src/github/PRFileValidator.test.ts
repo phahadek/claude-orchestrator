@@ -1,9 +1,40 @@
 import { describe, it, expect } from 'vitest';
 import {
   validatePRFiles,
+  isHardBanned,
   HARD_BANNED_FILES,
   HARD_BANNED_PATTERNS,
 } from './PRFileValidator';
+
+describe('isHardBanned()', () => {
+  it('returns true for CLAUDE.md', () => {
+    expect(isHardBanned('CLAUDE.md')).toBe(true);
+  });
+
+  it('returns true for CLAUDE.MD (uppercase extension)', () => {
+    expect(isHardBanned('CLAUDE.MD')).toBe(true);
+  });
+
+  it('returns true for .commit-msg', () => {
+    expect(isHardBanned('.commit-msg')).toBe(true);
+  });
+
+  it('returns true for commit-msg.draft (pattern match)', () => {
+    expect(isHardBanned('commit-msg.draft')).toBe(true);
+  });
+
+  it('returns true for nested path containing CLAUDE.md', () => {
+    expect(isHardBanned('some/subdir/CLAUDE.md')).toBe(true);
+  });
+
+  it('returns false for src/index.ts', () => {
+    expect(isHardBanned('src/index.ts')).toBe(false);
+  });
+
+  it('returns false for README.md', () => {
+    expect(isHardBanned('README.md')).toBe(false);
+  });
+});
 
 describe('HARD_BANNED_FILES', () => {
   it('contains CLAUDE.md, .commit-msg, .commit_msg', () => {
