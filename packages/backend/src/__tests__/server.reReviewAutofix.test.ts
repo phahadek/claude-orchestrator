@@ -171,7 +171,12 @@ describe('push_detected: runAutofixPipeline called before reReviewPR', () => {
       }),
     };
 
-    const watcher = makeWatcher(reviewService, github, reviewOrchestrator, sessions);
+    const watcher = makeWatcher(
+      reviewService,
+      github,
+      reviewOrchestrator,
+      sessions,
+    );
     await watcher.handlePushDetected(makePRRow());
     await new Promise((r) => setTimeout(r, 50));
 
@@ -195,7 +200,12 @@ describe('push_detected: runAutofixPipeline called before reReviewPR', () => {
       }),
     };
 
-    const watcher = makeWatcher(reviewService, github, reviewOrchestrator, sessions);
+    const watcher = makeWatcher(
+      reviewService,
+      github,
+      reviewOrchestrator,
+      sessions,
+    );
     await watcher.handlePushDetected(makePRRow());
     await new Promise((r) => setTimeout(r, 50));
 
@@ -215,7 +225,12 @@ describe('push_detected: runAutofixPipeline called before reReviewPR', () => {
     };
     const reviewService = { reReviewPR: vi.fn() };
 
-    const watcher = makeWatcher(reviewService, github, reviewOrchestrator, sessions);
+    const watcher = makeWatcher(
+      reviewService,
+      github,
+      reviewOrchestrator,
+      sessions,
+    );
     await watcher.handlePushDetected(makePRRow());
     await new Promise((r) => setTimeout(r, 50));
 
@@ -259,7 +274,12 @@ describe('push_detected: consumeAutofixSha suppresses autofix-only push', () => 
       }),
     };
 
-    const watcher = makeWatcher(reviewService, github, reviewOrchestrator, sessions);
+    const watcher = makeWatcher(
+      reviewService,
+      github,
+      reviewOrchestrator,
+      sessions,
+    );
 
     // First push: coding session push → autofix runs, re-review runs
     await watcher.handlePushDetected(makePRRow());
@@ -271,7 +291,9 @@ describe('push_detected: consumeAutofixSha suppresses autofix-only push', () => 
     // Second push: autofix commit arrives — headSha is the autofix SHA
     // consumeAutofixSha returns true → re-review (and autofix) skipped
     // Use a new PR row with a different session_id to bypass pendingReReviews dedup
-    await watcher.handlePushDetected(makePRRow({ session_id: 'coding-session-2' }));
+    await watcher.handlePushDetected(
+      makePRRow({ session_id: 'coding-session-2' }),
+    );
     await new Promise((r) => setTimeout(r, 50));
 
     // runAutofixPipeline must NOT be called again for the autofix-only push
@@ -300,7 +322,12 @@ function makePushHelper(
     }),
   };
 
-  const watcher = makeWatcher(reviewService, github, reviewOrchestrator, sessions);
+  const watcher = makeWatcher(
+    reviewService,
+    github,
+    reviewOrchestrator,
+    sessions,
+  );
   const prRow = makePRRow({ pause_reason: pauseReason });
   return { watcher, prRow };
 }

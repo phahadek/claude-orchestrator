@@ -335,7 +335,10 @@ describe('GET /api/prs', () => {
     const github = makeMockGitHub();
     // GitHub returns no open PRs → PR 99 is stale
     vi.mocked(github.listOpenPRs).mockResolvedValue([]);
-    vi.mocked(github.getPRState).mockResolvedValue({ state: 'merged', headSha: null });
+    vi.mocked(github.getPRState).mockResolvedValue({
+      state: 'merged',
+      headSha: null,
+    });
 
     const res = await supertest(buildApp(github)).get(
       '/api/prs?projectId=proj-1',

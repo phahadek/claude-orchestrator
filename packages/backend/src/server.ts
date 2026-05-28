@@ -39,10 +39,7 @@ import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
 import { getCorporateMode } from './config/corporateMode';
 import { AutoLauncher } from './orchestration/AutoLauncher';
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
-import {
-  deleteGhostSessions,
-  getPRBySessionId,
-} from './db/queries';
+import { deleteGhostSessions, getPRBySessionId } from './db/queries';
 
 runMigrations();
 loadRuntimeSettingsFromDb();

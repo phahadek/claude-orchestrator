@@ -13,7 +13,11 @@ import type { PullRequestRow } from '../db/types';
 import type { AutoMerger } from './AutoMerger';
 import type { PRReviewService, PRReviewResult } from './PRReviewService';
 import type { ReviewOrchestrator } from './ReviewOrchestrator';
-import { formatCIFailureFeedback, shouldAutoReview, formatReviewFeedback } from './reviewUtils';
+import {
+  formatCIFailureFeedback,
+  shouldAutoReview,
+  formatReviewFeedback,
+} from './reviewUtils';
 import {
   getAllOpenPRs,
   updatePRState,
@@ -458,7 +462,10 @@ export class PRMergeWatcher {
       let fetchError: unknown;
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          const freshPR = await this.github.fetchPR(prRow.repo, prRow.pr_number);
+          const freshPR = await this.github.fetchPR(
+            prRow.repo,
+            prRow.pr_number,
+          );
           headSha = freshPR.headSha;
           fetchError = undefined;
           if (headSha !== prRow.head_sha) {
