@@ -1898,7 +1898,9 @@ export function getTaskNoOpAttempts(
   return db
     .prepare<{
       task_id: string;
-    }>(`SELECT task_id, retry_count, last_attempt_at FROM task_no_op_attempts WHERE task_id = @task_id`)
+    }>(
+      `SELECT task_id, retry_count, last_attempt_at FROM task_no_op_attempts WHERE task_id = @task_id`,
+    )
     .get({ task_id: taskId }) as TaskNoOpAttemptRow | undefined;
 }
 

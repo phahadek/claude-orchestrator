@@ -363,7 +363,8 @@ describe('NoOpInvestigator.investigate', () => {
     const investigatePromise = investigator.investigate(baseCtx());
     await new Promise((r) => setTimeout(r, 10));
 
-    const startFn = (sm as unknown as Record<string, unknown>).start as ReturnType<typeof vi.fn>;
+    const startFn = (sm as unknown as Record<string, unknown>)
+      .start as ReturnType<typeof vi.fn>;
     const sessionId = startFn.mock.calls[0][2].sessionId as string;
 
     // Emit session_ended without any verdict events — simulates crash or malformed output
