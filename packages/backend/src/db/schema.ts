@@ -309,6 +309,17 @@ export function runMigrations(): void {
     /* already exists */
   }
 
+  // ── Double-prefix cleanup (notion:notion: contamination from pre-fix-release) ──
+  // Per-task rows with double-prefixed keys are deleted; they re-populate on next fetch.
+  // Board-cache JSON is repaired in-place so the route doesn't serve stale IDs.
+  db.exec(`
+    DELETE FROM task_cache WHERE task_id LIKE 'notion:notion:%';
+
+    UPDATE task_cache
+    SET raw_json = REPLACE(raw_json, '"id":"notion:notion:', '"id":"notion:')
+    WHERE task_id LIKE 'board:%' AND raw_json LIKE '%notion:notion:%';
+  `);
+
   // ── Source-prefix backfill (idempotent: NOT LIKE '%:%' guard) ──────────────
   // Prefix sessions.task_id with source based on owning project's task_source.
   // Rows with no project_id default to 'notion:' (all pre-M6 sessions were Notion).

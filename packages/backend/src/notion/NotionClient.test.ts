@@ -20,7 +20,7 @@ import {
   parseExpectedSize,
   NotionClient,
 } from './NotionClient';
-import { updateTaskCacheStatus } from '../db/queries';
+import { updateTaskCacheStatus, getCacheAge, getTaskCache } from '../db/queries';
 
 const source = fs.readFileSync(
   path.join(__dirname, 'NotionClient.ts'),
@@ -247,5 +247,74 @@ describe('NotionClient — prefix stripping in public methods', () => {
     const firstUrl = fetchSpy.mock.calls[0][0] as string;
     expect(firstUrl).toContain('/pages/abc');
     expect(firstUrl).not.toContain('notion:abc');
+  });
+});
+
+// ─── NotionClient.readBoardCache — prefix-stripping on cache-hit ──────────────
+
+describe('NotionClient.fetchReadyTasks — readBoardCache strips notion: prefix', () => {
+  const BOARD_ID_STRIP = 'strip-test-board-id';
+  const RAW_TASK_ID = 'aaaa1111-bbbb-2222-cccc-ddddeeeeeeee';
+  const PREFIXED_TASK_ID = `notion:${RAW_TASK_ID}`;
+
+  let client: NotionClient;
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.mocked(getCacheAge).mockReset();
+    vi.mocked(getTaskCache).mockReset();
+    fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    client = new NotionClient();
+  });
+
+  it('returns raw IDs when board cache contains notion:-prefixed IDs', async () => {
+    vi.mocked(getCacheAge).mockReturnValue(0);
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: `board:${BOARD_ID_STRIP}`,
+      fetched_at: Date.now(),
+      raw_json: JSON.stringify([
+        {
+          id: PREFIXED_TASK_ID,
+          title: 'Task A',
+          status: '🗂️ Ready',
+          type: '💻 Code',
+          dependsOn: [],
+          notionUrl: 'https://notion.so/x',
+          priority: '',
+        },
+      ]),
+    });
+
+    const tasks = await client.fetchReadyTasks(BOARD_ID_STRIP);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].task.id).toBe(RAW_TASK_ID);
+    expect(tasks[0].task.id).not.toContain('notion:');
+  });
+
+  it('leaves raw IDs unchanged when board cache has no prefix', async () => {
+    vi.mocked(getCacheAge).mockReturnValue(0);
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: `board:${BOARD_ID_STRIP}`,
+      fetched_at: Date.now(),
+      raw_json: JSON.stringify([
+        {
+          id: RAW_TASK_ID,
+          title: 'Task A',
+          status: '🗂️ Ready',
+          type: '💻 Code',
+          dependsOn: [],
+          notionUrl: 'https://notion.so/x',
+          priority: '',
+        },
+      ]),
+    });
+
+    const tasks = await client.fetchReadyTasks(BOARD_ID_STRIP);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(tasks[0].task.id).toBe(RAW_TASK_ID);
   });
 });

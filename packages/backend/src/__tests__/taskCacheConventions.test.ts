@@ -347,11 +347,51 @@ describe('JiraTaskSourceProvider.fetchReadyTasks — board cache JSON content', 
   });
 });
 
+// ─── NotionTaskBackend.fetchReadyTasks: no double-prefix on cache-hit (regression) ──
+
+describe('NotionTaskBackend.fetchReadyTasks — no double-prefix on cache-hit', () => {
+  it('second call (cache-hit) returns same single-prefixed IDs as first call (cache-miss)', async () => {
+    vi.mocked(ProjectService.getMilestone).mockReturnValue({
+      id: 'milestone-1',
+      projectId: 'proj-1',
+      name: 'M1',
+      sourceId: BOARD_ID,
+      displayOrder: 0,
+      createdAt: 0,
+      updatedAt: 0,
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => makeNotionQueryResponse([TASK_1, TASK_2, TASK_3]),
+      }),
+    );
+
+    const backend = new NotionTaskBackend(new NotionClient());
+
+    // First call: cache miss — fetches from Notion API, writes board cache with prefixed IDs
+    const firstResult = await backend.fetchReadyTasks('milestone-1');
+    const firstIds = firstResult.map((r) => r.task.id).sort();
+
+    // Second call: board cache is fresh (just written), NotionClient uses cache-hit path
+    const secondResult = await backend.fetchReadyTasks('milestone-1');
+    const secondIds = secondResult.map((r) => r.task.id).sort();
+
+    // IDs must be identical and exactly single-prefixed (no notion:notion: amplification)
+    expect(secondIds).toEqual(firstIds);
+    expect(firstIds.every((id) => id.startsWith('notion:'))).toBe(true);
+    expect(firstIds.every((id) => !id.startsWith('notion:notion:'))).toBe(true);
+    expect(secondIds.every((id) => !id.startsWith('notion:notion:'))).toBe(true);
+  });
+});
+
 // ─── NotionClient.fetchTaskPage: cache key includes source prefix ─────────────
 
 describe('NotionClient.fetchTaskPage — cache key shape', () => {
-  it('writes a row keyed task:notion:<taskId>, not task:<taskId>', async () => {
-    const taskId = TASK_1;
+  it('writes a row keyed task:notion:<raw-uuid>, not task:<raw-uuid>', async () => {
+    const taskId = `notion:${TASK_1}`;
 
     vi.stubGlobal(
       'fetch',
@@ -359,7 +399,7 @@ describe('NotionClient.fetchTaskPage — cache key shape', () => {
         .fn()
         .mockResolvedValueOnce({
           ok: true,
-          json: async () => makeNotionPageResponse(taskId),
+          json: async () => makeNotionPageResponse(TASK_1),
         })
         .mockResolvedValueOnce({
           ok: true,
@@ -374,11 +414,12 @@ describe('NotionClient.fetchTaskPage — cache key shape', () => {
     const client = new NotionClient();
     await client.fetchTaskPage(taskId);
 
-    const row = getTaskCache(`task:notion:${taskId}`);
+    // Cache key uses raw UUID (source prefix stripped by taskPageCacheKey)
+    const row = getTaskCache(`task:notion:${TASK_1}`);
     expect(row).toBeDefined();
-    expect(row!.task_id).toBe(`task:notion:${taskId}`);
+    expect(row!.task_id).toBe(`task:notion:${TASK_1}`);
 
-    // Old shape must not exist
-    expect(getTaskCache(`task:${taskId}`)).toBeUndefined();
+    // Old un-prefixed shape must not exist
+    expect(getTaskCache(`task:${TASK_1}`)).toBeUndefined();
   });
 });
