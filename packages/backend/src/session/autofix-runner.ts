@@ -105,6 +105,12 @@ export async function runAutofix(
     }
   }
 
+  // Restore CLAUDE.md (both casings) so that prettier-formatting noise on the
+  // orchestrator-injected file is never staged into the autofix commit.
+  for (const file of ['CLAUDE.md', 'CLAUDE.MD']) {
+    await spawnCmd('git', ['restore', file], { cwd: worktreePath });
+  }
+
   const dirty = await isWorktreeDirty(worktreePath);
   if (!dirty) {
     const summary =
