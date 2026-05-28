@@ -296,7 +296,7 @@ You are already in the worktree directory. Just run the command directly.
 
 **Rule 3 — No heredoc subshells in git commit.**
 \`git commit -m "$(cat <<'EOF'...)"\` is denied. Use a simple \`-m "message"\` instead.
-For multiline commit messages, use \`git commit -F <file>\` and write the file with the Write tool first.
+For multiline commit messages, write the message to \`.claude/.commit-msg\` with the Write tool, then run \`git commit -F .claude/.commit-msg\`. **Use that exact path** — the \`.claude/\` directory is gitignored, so the scratch file is never accidentally staged. Do not invent other filenames (\`commit-msg.txt\`, \`.git-commit-msg.txt\`, etc.) — they will leak into the PR diff.
 
 **Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
 Use the Write tool for any file creation. Never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
