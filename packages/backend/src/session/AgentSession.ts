@@ -19,7 +19,10 @@ import {
   setPauseReason,
   getProjectRowById,
   insertLocalBranch,
+  getSession,
 } from '../db/queries';
+import { NoOpInvestigator } from '../github/NoOpInvestigator';
+import type { INoOpSessionManager } from '../github/NoOpInvestigator';
 import {
   getCurrentBranch,
   hasNonEmptyDiff,
@@ -930,6 +933,65 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       // Wrap in try-catch so review-pipeline errors (e.g. fetch failures) can
       // never abort handleCleanExit and leave the session stuck at 'running'.
       try {
+        // Compute hasDiff once at the top of the standard-session block so it
+        // can be used for both local-only submission and no-op detection.
+        let hasDiff = false;
+        let featureBranchName: string | undefined;
+        const baseBranch = 'dev';
+        try {
+          const branchName = await getCurrentBranch(this.worktreePath);
+          featureBranchName = branchName ?? undefined;
+          if (branchName && branchName !== baseBranch) {
+            hasDiff = await hasNonEmptyDiff(
+              this.worktreePath,
+              baseBranch,
+              branchName,
+            );
+          }
+        } catch (e) {
+          console.error(`[AgentSession] hasDiff computation failed: ${e}`);
+        }
+
+        // No-op detection: clean exit with no PR and no diff → spawn investigator.
+        if (
+          !prUrl &&
+          !hasDiff &&
+          this.taskId &&
+          this.sessionManager &&
+          'start' in this.sessionManager
+        ) {
+          const project = this.projectId
+            ? getProjectRowById(this.projectId)
+            : undefined;
+          const repo = project?.github_repo ?? '';
+          const sessionRow = getSession(this.sessionId);
+          const taskCreatedAt = sessionRow
+            ? new Date(sessionRow.started_at).toISOString()
+            : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+          const investigator = new NoOpInvestigator(
+            this.sessionManager as unknown as INoOpSessionManager,
+            this.taskBackend(),
+            this.githubClient,
+          );
+          investigator
+            .investigate({
+              taskId: this.taskId,
+              taskUrl: this.taskUrl,
+              projectContextUrl: this.projectContextUrl,
+              projectId: this.projectId,
+              noOpSessionId: this.sessionId,
+              baseBranch,
+              featureBranchName,
+              repo,
+              taskCreatedAt,
+            })
+            .catch((e) => {
+              console.error(
+                `[AgentSession] NoOpInvestigator.investigate failed for ${this.sessionId}: ${e}`,
+              );
+            });
+        }
+
         if (prUrl && !this.prDetectedLive) {
           // Fallback: live detection didn't fire (e.g. gh pr create via Bash).
           this.taskBackend()
@@ -1024,51 +1086,47 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         }
 
         // Local-only project: detect a non-empty diff and emit submission event.
+        // Reuses hasDiff and featureBranchName computed at the top of this block.
         if (this.projectId) {
           const project = getProjectRowById(this.projectId);
           if (project?.git_mode === 'local-only') {
             try {
-              const branchName = await getCurrentBranch(this.worktreePath);
-              const baseBranch = 'dev';
-              if (branchName && branchName !== baseBranch) {
-                const hasDiff = await hasNonEmptyDiff(
-                  this.worktreePath,
+              if (
+                featureBranchName &&
+                featureBranchName !== baseBranch &&
+                hasDiff
+              ) {
+                const now = new Date().toISOString();
+                insertLocalBranch({
+                  project_id: this.projectId,
+                  session_id: this.sessionId,
+                  branch_name: featureBranchName,
+                  base_branch: baseBranch,
+                  status: 'open',
+                  review_result: null,
+                  created_at: now,
+                  updated_at: now,
+                });
+                this.broadcast({
+                  type: 'local_branch_submitted',
+                  projectId: this.projectId,
+                  sessionId: this.sessionId,
+                  branchName: featureBranchName,
                   baseBranch,
-                  branchName,
-                );
-                if (hasDiff) {
-                  const now = new Date().toISOString();
-                  insertLocalBranch({
-                    project_id: this.projectId,
-                    session_id: this.sessionId,
-                    branch_name: branchName,
-                    base_branch: baseBranch,
-                    status: 'open',
-                    review_result: null,
-                    created_at: now,
-                    updated_at: now,
-                  });
-                  this.broadcast({
-                    type: 'local_branch_submitted',
-                    projectId: this.projectId,
-                    sessionId: this.sessionId,
-                    branchName,
-                    baseBranch,
-                  });
-                  this.taskBackend()
-                    .updateStatus(this.taskId, '👀 In Review')
-                    .then(() => {
-                      this.broadcast({
-                        type: 'task_status_changed',
-                        notionTaskId: this.taskId,
-                        newStatus: '👀 In Review',
-                      });
-                      emitTaskUpdated(this.taskId);
-                    })
-                    .catch((e) =>
-                      console.error(`[AgentSession] updateStatus failed: ${e}`),
-                    );
-                }
+                });
+                this.taskBackend()
+                  .updateStatus(this.taskId, '👀 In Review')
+                  .then(() => {
+                    this.broadcast({
+                      type: 'task_status_changed',
+                      notionTaskId: this.taskId,
+                      newStatus: '👀 In Review',
+                    });
+                    emitTaskUpdated(this.taskId);
+                  })
+                  .catch((e) =>
+                    console.error(`[AgentSession] updateStatus failed: ${e}`),
+                  );
               }
             } catch (e) {
               console.error(

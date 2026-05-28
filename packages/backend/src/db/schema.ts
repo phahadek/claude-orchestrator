@@ -154,6 +154,12 @@ export function runMigrations(): void {
       PRIMARY KEY (pr_number, repo, sha)
     );
 
+    CREATE TABLE IF NOT EXISTS task_no_op_attempts (
+      task_id          TEXT PRIMARY KEY,
+      retry_count      INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at  TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events(session_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_event_type ON session_events(session_id, event_type);
     CREATE INDEX IF NOT EXISTS idx_session_events_timestamp ON session_events(timestamp DESC);
