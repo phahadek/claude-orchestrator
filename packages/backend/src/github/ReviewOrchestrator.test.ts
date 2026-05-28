@@ -2238,9 +2238,9 @@ describe('ReviewOrchestrator — runAutofixPipeline helper', () => {
     // Fresh ReviewOrchestrator instance (no in-memory state from previous instance)
     const freshOrch = new ReviewOrchestrator(rs, sm as any, 1, true);
 
-    expect(freshOrch.consumeAutofixSha(1, 'owner/repo', 'pre-restart-sha')).toBe(
-      true,
-    );
+    expect(
+      freshOrch.consumeAutofixSha(1, 'owner/repo', 'pre-restart-sha'),
+    ).toBe(true);
     expect(vi.mocked(dbConsumeAutofixSha)).toHaveBeenCalledWith(
       1,
       'owner/repo',

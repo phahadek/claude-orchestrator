@@ -1355,7 +1355,11 @@ describe('PRMergeWatcher.checkMergeabilityNow terminal-state guard', () => {
 
 describe('PRMergeWatcher — autofix SHA cleanup on merge/close', () => {
   it('handleMerged calls deleteAllAutofixShasForPR for the merged PR', async () => {
-    const pr = makePRRow({ task_id: null, session_id: null, review_session_id: null });
+    const pr = makePRRow({
+      task_id: null,
+      session_id: null,
+      review_session_id: null,
+    });
     const watcher = new PRMergeWatcher(
       makeMockGitHub(),
       makeMockSessions(),
@@ -1377,7 +1381,12 @@ describe('PRMergeWatcher — autofix SHA cleanup on merge/close', () => {
     const github = makeMockGitHub();
     vi.mocked(github.getPRState).mockResolvedValue('closed');
 
-    const watcher = new PRMergeWatcher(github, makeMockSessions(), undefined, () => {});
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
     await watcher.poll();
 
     expect(vi.mocked(deleteAllAutofixShasForPR)).toHaveBeenCalledWith(
@@ -1410,9 +1419,7 @@ describe('PRMergeWatcher — CI-failure autofix dedup reads from DB', () => {
     vi.mocked(consumeAutofixSha).mockReturnValue(true);
 
     const github = makeMockGitHub();
-    vi.mocked(
-      (github as any).categorizeMergeability,
-    ).mockResolvedValue({
+    vi.mocked((github as any).categorizeMergeability).mockResolvedValue({
       category: 'ci_failed',
       mergeState: 'ci_failed',
       rawMergeableState: 'unstable',
@@ -1501,7 +1508,12 @@ describe('PRMergeWatcher — CI-failure autofix dedup reads from DB', () => {
       failingChecks: [{ name: 'lint', conclusion: 'failure' }],
     });
 
-    const watcher = new PRMergeWatcher(github, makeMockSessions(), undefined, () => {});
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
     await watcher.checkMergeabilityNow(42, 'owner/repo');
 
     expect(vi.mocked(runAutofix)).toHaveBeenCalled();
