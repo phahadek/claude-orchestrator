@@ -326,3 +326,43 @@ describe('runFilePollutionCheck — headSha in audit event', () => {
     expect(result.headSha).toBe('result-sha');
   });
 });
+
+// ── Silent-failure observability ──────────────────────────────────────────────
+
+describe('runFilePollutionCheck — file_pollution_check_failed audit event', () => {
+  it('emits file_pollution_check_failed when getPRFiles throws', async () => {
+    const error = new Error('GitHub API rate limit');
+    const github = makeGitHub({
+      getPRFiles: vi.fn().mockRejectedValue(error),
+    });
+
+    await runFilePollutionCheck({ github, ...BASE_OPTS });
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'file_pollution_check_failed',
+        actor_type: 'system',
+        actor_id: 'sess-1',
+        project_id: 'proj-1',
+        task_id: 'task-1',
+        payload: expect.objectContaining({
+          pr_number: 42,
+          repo: 'owner/repo',
+          error: expect.stringContaining('rate limit'),
+        }),
+      }),
+    );
+  });
+
+  it('does not emit file_pollution_check_failed on the happy path', async () => {
+    const github = makeGitHub();
+    await runFilePollutionCheck({ github, ...BASE_OPTS });
+
+    const failedEvents = vi
+      .mocked(recordEvent)
+      .mock.calls.filter(
+        ([e]) => e.event_type === 'file_pollution_check_failed',
+      );
+    expect(failedEvents).toHaveLength(0);
+  });
+});

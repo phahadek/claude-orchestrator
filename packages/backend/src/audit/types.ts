@@ -12,7 +12,9 @@ export type EventType =
   | 'file_pollution_reverted'
   | 'file_pollution_checked'
   | 'file_pollution_re_injected_blocked'
-  | 'autofix_for_ci_failure';
+  | 'autofix_for_ci_failure'
+  | 'autofix_banned_file_unstaged'
+  | 'file_pollution_check_failed';
 
 export type ActorType = 'ai' | 'human' | 'system';
 

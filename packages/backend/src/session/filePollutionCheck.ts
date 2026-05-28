@@ -177,6 +177,19 @@ export async function runFilePollutionCheck(
     return { headSha, revertCommitSha: commitSha };
   } catch (e) {
     console.warn(`[filePollutionCheck] check failed for PR #${prNumber}: ${e}`);
+    recordEvent({
+      event_type: 'file_pollution_check_failed',
+      actor_type: 'system',
+      actor_id: sessionId,
+      project_id: projectId,
+      task_id: taskId,
+      payload: {
+        pr_number: prNumber,
+        repo,
+        head_sha: headSha,
+        error: String(e),
+      },
+    });
     return { headSha, revertCommitSha: null };
   }
 }
