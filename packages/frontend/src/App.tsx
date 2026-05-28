@@ -53,6 +53,7 @@ const MIN_RIGHT_PANEL_PX = 300;
 
 const ACTIVE_PROJECT_KEY = 'activeProjectId';
 const ACTIVE_MILESTONE_KEY_PREFIX = 'activeMilestone_';
+const NON_MILESTONE_BOARD_ID = '__non_milestone__';
 
 function getMilestoneKey(projectId: string) {
   return `${ACTIVE_MILESTONE_KEY_PREFIX}${projectId}`;
@@ -172,6 +173,7 @@ export default function App() {
   const [topView, setTopView] = useState<TopView>('tasks');
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskViews, setTaskViews] = useState<TaskView[]>([]);
+  const [taskViewsLoading, setTaskViewsLoading] = useState(true);
   const settingsInitialTab = 'general' as const;
   const isMobile = useIsMobile();
 
@@ -332,18 +334,33 @@ export default function App() {
       });
   }, []);
 
-  // Fetch TaskView list whenever tasks are ready, project/board changes, or a review session starts
+  // Fetch TaskView list whenever tasks are ready, project/board changes, or a review session starts.
+  // This is the single source of truth for task data — TaskList reads from taskViews via props.
   useEffect(() => {
-    if (!activeProjectId) return;
-    const params = new URLSearchParams({ projectId: activeProjectId });
-    if (activeBoardId) params.set('boardId', activeBoardId);
-    fetch(`/api/tasks/active?${params}`)
+    if (!activeProjectId) {
+      setTaskViews([]);
+      setTaskViewsLoading(false);
+      return;
+    }
+    setTaskViewsLoading(true);
+    let url: string;
+    if (activeBoardId === NON_MILESTONE_BOARD_ID) {
+      url = `/api/tasks/non-milestone?projectId=${encodeURIComponent(activeProjectId)}`;
+    } else {
+      const params = new URLSearchParams({ projectId: activeProjectId });
+      if (activeBoardId) params.set('boardId', activeBoardId);
+      url = `/api/tasks/active?${params.toString()}`;
+    }
+    fetch(url)
       .then((r) =>
         r.ok ? (r.json() as Promise<TaskView[]>) : Promise.resolve([]),
       )
-      .then(setTaskViews)
+      .then((data) => {
+        setTaskViews(data);
+        setTaskViewsLoading(false);
+      })
       .catch(() => {
-        /* non-critical */
+        setTaskViewsLoading(false);
       });
   }, [activeProjectId, activeBoardId, tasksReady, taskListRefreshTrigger]);
 
@@ -358,6 +375,43 @@ export default function App() {
       return next;
     });
   }, [lastTaskUpdate]);
+
+  // Passed to TaskList so it can apply optimistic status updates without a full re-fetch
+  const handleTaskOptimisticDispatch = useCallback((taskIds: string[]) => {
+    setTaskViews((prev) =>
+      prev.map((t) =>
+        taskIds.includes(t.taskId)
+          ? {
+              ...t,
+              notionStatus: '🔄 In Progress',
+              displayStatus: 'in_progress' as const,
+            }
+          : t,
+      ),
+    );
+  }, []);
+
+  // Used by TaskList's Sync button for non-milestone views (WS sync not supported there)
+  const handleForceRefetch = useCallback(async () => {
+    if (!activeProjectId) return;
+    setTaskViewsLoading(true);
+    try {
+      let url: string;
+      if (activeBoardId === NON_MILESTONE_BOARD_ID) {
+        url = `/api/tasks/non-milestone?projectId=${encodeURIComponent(activeProjectId)}`;
+      } else {
+        const params = new URLSearchParams({ projectId: activeProjectId });
+        if (activeBoardId) params.set('boardId', activeBoardId);
+        url = `/api/tasks/active?${params.toString()}`;
+      }
+      const res = await fetch(url);
+      if (res.ok) setTaskViews((await res.json()) as TaskView[]);
+    } catch {
+      /* ignore */
+    } finally {
+      setTaskViewsLoading(false);
+    }
+  }, [activeProjectId, activeBoardId]);
 
   useEffect(() => {
     for (const session of sessions) {
@@ -884,7 +938,7 @@ export default function App() {
         {topView === 'tasks' && (
           <ErrorBoundary name="TasksView">
             <div
-              className={`${styles.contentArea}${selectedTaskId && taskViews.find((t) => t.taskId === selectedTaskId) ? ` ${styles.contentAreaHasDetail}` : ''}`}
+              className={`${styles.contentArea}${selectedTaskId ? ` ${styles.contentAreaHasDetail}` : ''}`}
             >
               <div className={styles.leftPanel}>
                 <TaskList
@@ -892,7 +946,10 @@ export default function App() {
                   boardId={activeBoardId}
                   selectedTaskId={selectedTaskId}
                   onSelectTask={setSelectedTaskId}
-                  lastTaskUpdate={lastTaskUpdate}
+                  tasks={taskViews}
+                  loading={taskViewsLoading}
+                  onOptimisticDispatch={handleTaskOptimisticDispatch}
+                  onForceRefetch={handleForceRefetch}
                   reviewRefreshTrigger={taskListRefreshTrigger}
                   send={send}
                   project={activeProject}
@@ -904,44 +961,68 @@ export default function App() {
                 onMouseDown={handleResizeMouseDown}
               />
 
-              {selectedTaskId &&
-                taskViews.find((t) => t.taskId === selectedTaskId) && (
-                  <div
-                    className={styles.mobileBackdrop}
-                    onClick={() => setSelectedTaskId(null)}
-                    aria-hidden="true"
-                    data-testid="task-mobile-backdrop"
-                  />
-                )}
+              {selectedTaskId && (
+                <div
+                  className={styles.mobileBackdrop}
+                  onClick={() => setSelectedTaskId(null)}
+                  aria-hidden="true"
+                  data-testid="task-mobile-backdrop"
+                />
+              )}
 
               <div
                 className={styles.rightPanel}
                 style={isMobile ? undefined : { width: `${detailWidthPct}%` }}
               >
-                {selectedTaskId &&
-                taskViews.find((t) => t.taskId === selectedTaskId) ? (
-                  <ErrorBoundary name="TaskDetail">
-                    <TaskDetail
-                      task={taskViews.find((t) => t.taskId === selectedTaskId)!}
-                      send={send}
-                      sessions={sessions}
-                      onClose={() => setSelectedTaskId(null)}
-                      projectId={activeProjectId ?? undefined}
-                      isLocalOnly={
-                        projects.find((p) => p.id === activeProjectId)
-                          ?.gitMode === 'local-only'
-                      }
-                      autoMergeEnabled={
-                        projects.find((p) => p.id === activeProjectId)
-                          ?.autoMergeEnabled ?? false
-                      }
-                    />
-                  </ErrorBoundary>
-                ) : (
-                  <div className={styles.detailPlaceholder}>
-                    <p>Select a task to view details</p>
-                  </div>
-                )}
+                {(() => {
+                  if (!selectedTaskId) {
+                    return (
+                      <div className={styles.detailPlaceholder}>
+                        <p>Select a task to view details</p>
+                      </div>
+                    );
+                  }
+                  const selectedTask = taskViews.find(
+                    (t) => t.taskId === selectedTaskId,
+                  );
+                  if (selectedTask) {
+                    return (
+                      <ErrorBoundary name="TaskDetail">
+                        <TaskDetail
+                          task={selectedTask}
+                          send={send}
+                          sessions={sessions}
+                          onClose={() => setSelectedTaskId(null)}
+                          projectId={activeProjectId ?? undefined}
+                          isLocalOnly={
+                            projects.find((p) => p.id === activeProjectId)
+                              ?.gitMode === 'local-only'
+                          }
+                          autoMergeEnabled={
+                            projects.find((p) => p.id === activeProjectId)
+                              ?.autoMergeEnabled ?? false
+                          }
+                        />
+                      </ErrorBoundary>
+                    );
+                  }
+                  if (
+                    process.env.NODE_ENV !== 'production' &&
+                    !taskViewsLoading
+                  ) {
+                    console.warn(
+                      `[TaskDetail] selectedTaskId "${selectedTaskId}" not found in taskViews (${taskViews.length} tasks). Possible state drift.`,
+                    );
+                  }
+                  return (
+                    <div
+                      className={styles.detailPlaceholder}
+                      data-testid="task-detail-loading"
+                    >
+                      <p>Loading task details…</p>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           </ErrorBoundary>

@@ -992,4 +992,25 @@ describe('TaskDetail', () => {
     fireEvent.click(screen.getByText('View full session'));
     expect(screen.getByTestId('session-overlay')).toBeTruthy();
   });
+
+  // ── Shared task-views source — detail pane AC tests ──
+
+  it('renders task data when the task prop is provided (shared source has the task)', () => {
+    const task = makeTask({ taskId: 'task-001', taskName: 'Feature Work' });
+    render(<TaskDetail task={task} send={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByText('Feature Work')).toBeTruthy();
+  });
+
+  it('renders the correct task after the task prop is swapped to a different task', () => {
+    const taskA = makeTask({ taskId: 'task-a', taskName: 'Task A' });
+    const taskB = makeTask({ taskId: 'task-b', taskName: 'Task B' });
+    const { rerender } = render(
+      <TaskDetail task={taskA} send={vi.fn()} onClose={vi.fn()} />,
+    );
+    expect(screen.getByText('Task A')).toBeTruthy();
+
+    rerender(<TaskDetail task={taskB} send={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByText('Task B')).toBeTruthy();
+    expect(screen.queryByText('Task A')).toBeNull();
+  });
 });
