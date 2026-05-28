@@ -1,4 +1,10 @@
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  act,
+} from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const MOCK_TASK = {
@@ -65,7 +71,11 @@ vi.mock('../Header', () => ({
 
 vi.mock('../SessionGrid', () => ({
   SessionGrid: ({ onSelect }: { onSelect: (id: string) => void }) => (
-    <div data-testid="session-grid" onClick={() => onSelect('sess-1')} role="list" />
+    <div
+      data-testid="session-grid"
+      onClick={() => onSelect('sess-1')}
+      role="list"
+    />
   ),
 }));
 
@@ -149,9 +159,15 @@ beforeEach(() => {
   const store: Record<string, string> = {};
   vi.stubGlobal('localStorage', {
     getItem: (k: string) => store[k] ?? null,
-    setItem: (k: string, v: string) => { store[k] = v; },
-    removeItem: (k: string) => { delete store[k]; },
-    clear: () => { Object.keys(store).forEach((k) => delete store[k]); },
+    setItem: (k: string, v: string) => {
+      store[k] = v;
+    },
+    removeItem: (k: string) => {
+      delete store[k];
+    },
+    clear: () => {
+      Object.keys(store).forEach((k) => delete store[k]);
+    },
   });
 
   vi.stubGlobal(
@@ -166,7 +182,13 @@ beforeEach(() => {
       return Promise.resolve({
         ok: true,
         json: async () => [
-          { id: 'proj-1', name: 'P1', projectDir: '/p', contextUrl: '', boardId: 'board-1' },
+          {
+            id: 'proj-1',
+            name: 'P1',
+            projectDir: '/p',
+            contextUrl: '',
+            boardId: 'board-1',
+          },
         ],
       });
     }),
@@ -214,9 +236,7 @@ describe('App — navigation history', () => {
       window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
     });
 
-    await waitFor(() =>
-      expect(screen.queryByTestId('task-detail')).toBeNull(),
-    );
+    await waitFor(() => expect(screen.queryByTestId('task-detail')).toBeNull());
   });
 
   it('clicking backdrop calls history.back()', async () => {
@@ -238,9 +258,7 @@ describe('App — navigation history', () => {
 
     fireEvent.click(screen.getByTestId('task-mobile-backdrop'));
 
-    await waitFor(() =>
-      expect(screen.queryByTestId('task-detail')).toBeNull(),
-    );
+    await waitFor(() => expect(screen.queryByTestId('task-detail')).toBeNull());
   });
 
   it('task detail onClose calls history.back() and dismisses overlay', async () => {
@@ -252,9 +270,7 @@ describe('App — navigation history', () => {
     fireEvent.click(screen.getByRole('button', { name: /close task detail/i }));
 
     expect(window.history.back).toHaveBeenCalledOnce();
-    await waitFor(() =>
-      expect(screen.queryByTestId('task-detail')).toBeNull(),
-    );
+    await waitFor(() => expect(screen.queryByTestId('task-detail')).toBeNull());
   });
 
   it('onOpenSessionOverlay calls history.pushState with sessionOverlay type', async () => {
@@ -291,11 +307,14 @@ describe('App — navigation history', () => {
 
     fireEvent.click(screen.getByTestId('task-list'));
     await waitFor(() => screen.getByTestId('task-detail'));
-    const pushCallCount = (window.history.pushState as ReturnType<typeof vi.fn>).mock.calls.length;
+    const pushCallCount = (window.history.pushState as ReturnType<typeof vi.fn>)
+      .mock.calls.length;
 
     fireEvent.click(screen.getByTestId('task-list'));
 
     // Should not push again
-    expect((window.history.pushState as ReturnType<typeof vi.fn>).mock.calls.length).toBe(pushCallCount);
+    expect(
+      (window.history.pushState as ReturnType<typeof vi.fn>).mock.calls.length,
+    ).toBe(pushCallCount);
   });
 });

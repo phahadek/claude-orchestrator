@@ -29,13 +29,22 @@ describe('useNavigationHistory', () => {
     const { result } = renderHook(() => useNavigationHistory(handlers));
 
     result.current.pushView({ type: 'task', id: 'task-1' });
-    expect(window.history.pushState).toHaveBeenCalledWith({ type: 'task', id: 'task-1' }, '');
+    expect(window.history.pushState).toHaveBeenCalledWith(
+      { type: 'task', id: 'task-1' },
+      '',
+    );
 
     result.current.pushView({ type: 'session', id: 'sess-1' });
-    expect(window.history.pushState).toHaveBeenCalledWith({ type: 'session', id: 'sess-1' }, '');
+    expect(window.history.pushState).toHaveBeenCalledWith(
+      { type: 'session', id: 'sess-1' },
+      '',
+    );
 
     result.current.pushView({ type: 'sessionOverlay', taskId: 'task-1' });
-    expect(window.history.pushState).toHaveBeenCalledWith({ type: 'sessionOverlay', taskId: 'task-1' }, '');
+    expect(window.history.pushState).toHaveBeenCalledWith(
+      { type: 'sessionOverlay', taskId: 'task-1' },
+      '',
+    );
   });
 
   it('popView calls history.back', () => {
@@ -51,7 +60,9 @@ describe('useNavigationHistory', () => {
     const handlers = makeHandlers();
     renderHook(() => useNavigationHistory(handlers));
 
-    const popstateCalls = addSpy.mock.calls.filter(([event]) => event === 'popstate');
+    const popstateCalls = addSpy.mock.calls.filter(
+      ([event]) => event === 'popstate',
+    );
     expect(popstateCalls).toHaveLength(1);
     addSpy.mockRestore();
   });
@@ -63,7 +74,9 @@ describe('useNavigationHistory', () => {
 
     unmount();
 
-    const popstateCalls = removeSpy.mock.calls.filter(([event]) => event === 'popstate');
+    const popstateCalls = removeSpy.mock.calls.filter(
+      ([event]) => event === 'popstate',
+    );
     expect(popstateCalls).toHaveLength(1);
     removeSpy.mockRestore();
   });
@@ -136,10 +149,9 @@ describe('useNavigationHistory', () => {
   it('uses latest handlers from ref (no stale closures)', () => {
     const handlers1 = makeHandlers();
     const handlers2 = makeHandlers();
-    const { rerender } = renderHook(
-      ({ h }) => useNavigationHistory(h),
-      { initialProps: { h: handlers1 } },
-    );
+    const { rerender } = renderHook(({ h }) => useNavigationHistory(h), {
+      initialProps: { h: handlers1 },
+    });
 
     rerender({ h: handlers2 });
     firePopState({ type: 'task', id: 'task-x' });

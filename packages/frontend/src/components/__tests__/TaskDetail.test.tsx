@@ -142,7 +142,9 @@ describe('TaskDetail', () => {
   });
 
   it('close button calls history.back() (not onClose directly)', () => {
-    const backSpy = vi.spyOn(window.history, 'back').mockImplementation(() => {});
+    const backSpy = vi
+      .spyOn(window.history, 'back')
+      .mockImplementation(() => {});
     const onClose = vi.fn();
     render(<TaskDetail task={makeTask()} send={vi.fn()} onClose={onClose} />);
     fireEvent.click(screen.getByLabelText('Close panel'));
@@ -1018,7 +1020,9 @@ describe('TaskDetail', () => {
     const sessions: SessionState[] = [
       makeSessionState({ sessionId: 'sess-1', events: [] }),
     ];
-    const backSpy = vi.spyOn(window.history, 'back').mockImplementation(() => {});
+    const backSpy = vi
+      .spyOn(window.history, 'back')
+      .mockImplementation(() => {});
     render(
       <TaskDetail
         task={makeTask({ codeSession })}

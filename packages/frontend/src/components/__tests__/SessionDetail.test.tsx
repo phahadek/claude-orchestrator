@@ -344,7 +344,9 @@ describe('SessionDetail', () => {
   });
 
   it('close button calls history.back() (not onClose directly)', () => {
-    const backSpy = vi.spyOn(window.history, 'back').mockImplementation(() => {});
+    const backSpy = vi
+      .spyOn(window.history, 'back')
+      .mockImplementation(() => {});
     const onClose = vi.fn();
     render(
       <SessionDetail
