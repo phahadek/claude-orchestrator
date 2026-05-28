@@ -51,10 +51,6 @@ import {
   consumeAutofixSha,
   deleteAllAutofixShasForPR,
   setHeadSha,
-  setLastReviewedSha,
-  setPRReviewResult,
-  setPendingPush,
-  getSetting,
 } from '../db/queries';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { recordEvent } from '../audit/AuditLog';
