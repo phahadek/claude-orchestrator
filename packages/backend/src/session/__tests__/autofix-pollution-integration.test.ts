@@ -103,140 +103,132 @@ describe('integration: autofix + file pollution check pipeline', () => {
 
   // ── AC4 ─────────────────────────────────────────────────────────────────────
 
-  it(
-    'AC4: tracked CLAUDE.md formatted by prettier is absent from the final PR diff',
-    async () => {
-      initRepo(true);
+  it('AC4: tracked CLAUDE.md formatted by prettier is absent from the final PR diff', async () => {
+    initRepo(true);
 
-      // Step 1 — run real prettier as the autofix command
-      const autofixResult = await runAutofix(
-        worktreeDir,
-        worktreeDir,
-        [`node "${PRETTIER_BIN}" --write .`],
-        () => {},
-      );
+    // Step 1 — run real prettier as the autofix command
+    const autofixResult = await runAutofix(
+      worktreeDir,
+      worktreeDir,
+      [`node "${PRETTIER_BIN}" --write .`],
+      () => {},
+    );
 
-      expect(
-        autofixResult.commitSha,
-        'prettier must produce a diff (CLAUDE.md bullet normalisation)',
-      ).toBeDefined();
+    expect(
+      autofixResult.commitSha,
+      'prettier must produce a diff (CLAUDE.md bullet normalisation)',
+    ).toBeDefined();
 
-      const autofixChangedFiles = git(
-        ['diff', '--name-only', 'HEAD~1', 'HEAD'],
-        worktreeDir,
-      );
-      expect(
-        autofixChangedFiles,
-        'autofix commit must include CLAUDE.md',
-      ).toContain('CLAUDE.md');
+    const autofixChangedFiles = git(
+      ['diff', '--name-only', 'HEAD~1', 'HEAD'],
+      worktreeDir,
+    );
+    expect(
+      autofixChangedFiles,
+      'autofix commit must include CLAUDE.md',
+    ).toContain('CLAUDE.md');
 
-      // Step 2 — build a GitHub mock from the real post-autofix state
-      const headSha = git(['rev-parse', 'HEAD'], worktreeDir).trim();
-      const changedFiles = autofixChangedFiles.split('\n').filter(Boolean);
+    // Step 2 — build a GitHub mock from the real post-autofix state
+    const headSha = git(['rev-parse', 'HEAD'], worktreeDir).trim();
+    const changedFiles = autofixChangedFiles.split('\n').filter(Boolean);
 
-      const github = {
-        fetchPR: vi.fn().mockResolvedValue({ headSha }),
-        getPRFiles: vi.fn().mockResolvedValue(changedFiles),
-        createIssueComment: vi.fn().mockResolvedValue(undefined),
-      } as unknown as GitHubClient;
+    const github = {
+      fetchPR: vi.fn().mockResolvedValue({ headSha }),
+      getPRFiles: vi.fn().mockResolvedValue(changedFiles),
+      createIssueComment: vi.fn().mockResolvedValue(undefined),
+    } as unknown as GitHubClient;
 
-      // Step 3 — run the pollution check
-      const result = await runFilePollutionCheck({
-        github,
-        worktreePath: worktreeDir,
-        repo: 'owner/repo',
-        prNumber: 1,
-        baseBranch,
-        sessionId: null,
-        projectId: null,
-        taskId: null,
-      });
+    // Step 3 — run the pollution check
+    const result = await runFilePollutionCheck({
+      github,
+      worktreePath: worktreeDir,
+      repo: 'owner/repo',
+      prNumber: 1,
+      baseBranch,
+      sessionId: null,
+      projectId: null,
+      taskId: null,
+    });
 
-      expect(
-        result.revertCommitSha,
-        'pollution check must produce a revert commit',
-      ).not.toBeNull();
+    expect(
+      result.revertCommitSha,
+      'pollution check must produce a revert commit',
+    ).not.toBeNull();
 
-      // Step 4 — final diff: CLAUDE.md must be absent
-      const finalDiff = git(
-        ['diff', '--name-only', `origin/${baseBranch}`, 'HEAD'],
-        worktreeDir,
-      );
-      expect(
-        finalDiff,
-        'CLAUDE.md must not appear in the final PR diff after revert',
-      ).not.toContain('CLAUDE.md');
-    },
-    30_000,
-  );
+    // Step 4 — final diff: CLAUDE.md must be absent
+    const finalDiff = git(
+      ['diff', '--name-only', `origin/${baseBranch}`, 'HEAD'],
+      worktreeDir,
+    );
+    expect(
+      finalDiff,
+      'CLAUDE.md must not appear in the final PR diff after revert',
+    ).not.toContain('CLAUDE.md');
+  }, 30_000);
 
   // ── AC5 ─────────────────────────────────────────────────────────────────────
 
-  it(
-    'AC5: untracked CLAUDE.md staged by git add -A is absent from the final PR diff',
-    async () => {
-      initRepo(false); // creates untracked CLAUDE.md
+  it('AC5: untracked CLAUDE.md staged by git add -A is absent from the final PR diff', async () => {
+    initRepo(false); // creates untracked CLAUDE.md
 
-      // Step 1 — run real prettier; it will format the untracked CLAUDE.md,
-      // then runAutofix's `git add -A` will stage it as a brand-new file.
-      const autofixResult = await runAutofix(
-        worktreeDir,
-        worktreeDir,
-        [`node "${PRETTIER_BIN}" --write .`],
-        () => {},
-      );
+    // Step 1 — run real prettier; it will format the untracked CLAUDE.md,
+    // then runAutofix's `git add -A` will stage it as a brand-new file.
+    const autofixResult = await runAutofix(
+      worktreeDir,
+      worktreeDir,
+      [`node "${PRETTIER_BIN}" --write .`],
+      () => {},
+    );
 
-      expect(
-        autofixResult.commitSha,
-        'autofix must commit the new untracked CLAUDE.md',
-      ).toBeDefined();
+    expect(
+      autofixResult.commitSha,
+      'autofix must commit the new untracked CLAUDE.md',
+    ).toBeDefined();
 
-      const autofixChangedFiles = git(
-        ['diff', '--name-only', 'HEAD~1', 'HEAD'],
-        worktreeDir,
-      );
-      expect(
-        autofixChangedFiles,
-        'autofix commit must include CLAUDE.md (new file)',
-      ).toContain('CLAUDE.md');
+    const autofixChangedFiles = git(
+      ['diff', '--name-only', 'HEAD~1', 'HEAD'],
+      worktreeDir,
+    );
+    expect(
+      autofixChangedFiles,
+      'autofix commit must include CLAUDE.md (new file)',
+    ).toContain('CLAUDE.md');
 
-      // Step 2 — build GitHub mock
-      const headSha = git(['rev-parse', 'HEAD'], worktreeDir).trim();
-      const changedFiles = autofixChangedFiles.split('\n').filter(Boolean);
+    // Step 2 — build GitHub mock
+    const headSha = git(['rev-parse', 'HEAD'], worktreeDir).trim();
+    const changedFiles = autofixChangedFiles.split('\n').filter(Boolean);
 
-      const github = {
-        fetchPR: vi.fn().mockResolvedValue({ headSha }),
-        getPRFiles: vi.fn().mockResolvedValue(changedFiles),
-        createIssueComment: vi.fn().mockResolvedValue(undefined),
-      } as unknown as GitHubClient;
+    const github = {
+      fetchPR: vi.fn().mockResolvedValue({ headSha }),
+      getPRFiles: vi.fn().mockResolvedValue(changedFiles),
+      createIssueComment: vi.fn().mockResolvedValue(undefined),
+    } as unknown as GitHubClient;
 
-      // Step 3 — run pollution check (uses `git rm -f` for files not on base branch)
-      const result = await runFilePollutionCheck({
-        github,
-        worktreePath: worktreeDir,
-        repo: 'owner/repo',
-        prNumber: 1,
-        baseBranch,
-        sessionId: null,
-        projectId: null,
-        taskId: null,
-      });
+    // Step 3 — run pollution check (uses `git rm -f` for files not on base branch)
+    const result = await runFilePollutionCheck({
+      github,
+      worktreePath: worktreeDir,
+      repo: 'owner/repo',
+      prNumber: 1,
+      baseBranch,
+      sessionId: null,
+      projectId: null,
+      taskId: null,
+    });
 
-      expect(
-        result.revertCommitSha,
-        'pollution check must produce a revert commit',
-      ).not.toBeNull();
+    expect(
+      result.revertCommitSha,
+      'pollution check must produce a revert commit',
+    ).not.toBeNull();
 
-      // Step 4 — final diff: CLAUDE.md must be absent
-      const finalDiff = git(
-        ['diff', '--name-only', `origin/${baseBranch}`, 'HEAD'],
-        worktreeDir,
-      );
-      expect(
-        finalDiff,
-        'CLAUDE.md must not appear in the final PR diff after removal',
-      ).not.toContain('CLAUDE.md');
-    },
-    30_000,
-  );
+    // Step 4 — final diff: CLAUDE.md must be absent
+    const finalDiff = git(
+      ['diff', '--name-only', `origin/${baseBranch}`, 'HEAD'],
+      worktreeDir,
+    );
+    expect(
+      finalDiff,
+      'CLAUDE.md must not appear in the final PR diff after removal',
+    ).not.toContain('CLAUDE.md');
+  }, 30_000);
 });
