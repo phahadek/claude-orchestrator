@@ -830,7 +830,10 @@ describe('TaskList', () => {
             displayStatus: 'in_progress',
           }),
         ],
-        { boardId: 'board-1', send: disconnectedSend as (msg: unknown) => boolean },
+        {
+          boardId: 'board-1',
+          send: disconnectedSend as (msg: unknown) => boolean,
+        },
       );
 
       const syncBtn = screen.getByTestId('sync-btn') as HTMLButtonElement;
@@ -852,7 +855,10 @@ describe('TaskList', () => {
             displayStatus: 'in_progress',
           }),
         ],
-        { boardId: 'board-1', send: connectedSend as (msg: unknown) => boolean },
+        {
+          boardId: 'board-1',
+          send: connectedSend as (msg: unknown) => boolean,
+        },
       );
 
       const syncBtn = screen.getByTestId('sync-btn') as HTMLButtonElement;
@@ -904,7 +910,13 @@ describe('TaskList', () => {
             boardId="board-1"
             selectedTaskId={null}
             onSelectTask={vi.fn()}
-            tasks={[makeTask({ taskId: 't1', taskName: 'Task', displayStatus: 'in_progress' })]}
+            tasks={[
+              makeTask({
+                taskId: 't1',
+                taskName: 'Task',
+                displayStatus: 'in_progress',
+              }),
+            ]}
             loading={false}
             onOptimisticDispatch={noopOptimistic}
             reviewRefreshTrigger={1}

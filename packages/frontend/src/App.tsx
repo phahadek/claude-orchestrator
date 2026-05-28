@@ -381,7 +381,11 @@ export default function App() {
     setTaskViews((prev) =>
       prev.map((t) =>
         taskIds.includes(t.taskId)
-          ? { ...t, notionStatus: '🔄 In Progress', displayStatus: 'in_progress' as const }
+          ? {
+              ...t,
+              notionStatus: '🔄 In Progress',
+              displayStatus: 'in_progress' as const,
+            }
           : t,
       ),
     );
@@ -1002,7 +1006,10 @@ export default function App() {
                       </ErrorBoundary>
                     );
                   }
-                  if (process.env.NODE_ENV !== 'production' && !taskViewsLoading) {
+                  if (
+                    process.env.NODE_ENV !== 'production' &&
+                    !taskViewsLoading
+                  ) {
                     console.warn(
                       `[TaskDetail] selectedTaskId "${selectedTaskId}" not found in taskViews (${taskViews.length} tasks). Possible state drift.`,
                     );

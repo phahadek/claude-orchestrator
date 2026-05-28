@@ -310,9 +310,12 @@ export function TaskList({
     setSyncing(false);
   }, [reviewRefreshTrigger]);
 
-  const handleOptimisticDispatch = useCallback((taskIds: string[]) => {
-    onOptimisticDispatch(taskIds);
-  }, [onOptimisticDispatch]);
+  const handleOptimisticDispatch = useCallback(
+    (taskIds: string[]) => {
+      onOptimisticDispatch(taskIds);
+    },
+    [onOptimisticDispatch],
+  );
 
   const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -356,7 +359,14 @@ export function TaskList({
         setSyncing(false);
       }
     }, 5000);
-  }, [activeProjectId, boardId, isNonMilestoneView, syncing, send, onForceRefetch]);
+  }, [
+    activeProjectId,
+    boardId,
+    isNonMilestoneView,
+    syncing,
+    send,
+    onForceRefetch,
+  ]);
 
   const mergeReadyCount = tasks.filter(
     (t) =>
