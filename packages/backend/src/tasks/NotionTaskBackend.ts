@@ -50,7 +50,11 @@ export class NotionTaskBackend implements TaskBackend {
       // prefixed session.task_id lookups.
       upsertTaskCache(
         prefixedId,
-        JSON.stringify({ ...r.task, id: prefixedId, dependsOn: prefixedDependsOn }),
+        JSON.stringify({
+          ...r.task,
+          id: prefixedId,
+          dependsOn: prefixedDependsOn,
+        }),
       );
       return {
         ...r,
@@ -96,7 +100,11 @@ export class NotionTaskBackend implements TaskBackend {
       );
       upsertTaskCache(
         prefixedId,
-        JSON.stringify({ ...r.task, id: prefixedId, dependsOn: prefixedDependsOn }),
+        JSON.stringify({
+          ...r.task,
+          id: prefixedId,
+          dependsOn: prefixedDependsOn,
+        }),
       );
       return {
         ...r,

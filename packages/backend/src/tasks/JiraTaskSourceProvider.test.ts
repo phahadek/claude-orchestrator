@@ -36,11 +36,12 @@ describe('JiraTaskSourceProvider.fetchReadyTasks — dependsOn prefixing', () =>
     // Jira issues currently have no dependsOn (always [] from the mapper).
     // The test confirms the shape is correct after prefixing.
     const mockClient = {
-      searchIssues: vi.fn().mockResolvedValue([
-        makeIssue('TEST-1'),
-        makeIssue('TEST-2'),
-      ]),
-      buildReadyJql: vi.fn().mockReturnValue("project = TEST AND status = 'To Do'"),
+      searchIssues: vi
+        .fn()
+        .mockResolvedValue([makeIssue('TEST-1'), makeIssue('TEST-2')]),
+      buildReadyJql: vi
+        .fn()
+        .mockReturnValue("project = TEST AND status = 'To Do'"),
     };
     const provider = new JiraTaskSourceProvider(
       mockClient as never,
@@ -61,7 +62,9 @@ describe('JiraTaskSourceProvider.fetchReadyTasks — dependsOn prefixing', () =>
   it('writes board cache with jira:-prefixed task IDs', async () => {
     const mockClient = {
       searchIssues: vi.fn().mockResolvedValue([makeIssue('TEST-1')]),
-      buildReadyJql: vi.fn().mockReturnValue("project = TEST AND status = 'To Do'"),
+      buildReadyJql: vi
+        .fn()
+        .mockReturnValue("project = TEST AND status = 'To Do'"),
     };
     const provider = new JiraTaskSourceProvider(
       mockClient as never,
@@ -85,7 +88,9 @@ describe('JiraTaskSourceProvider.fetchReadyTasks — dependsOn prefixing', () =>
   it('does not write board cache when milestoneId is null', async () => {
     const mockClient = {
       searchIssues: vi.fn().mockResolvedValue([makeIssue('TEST-1')]),
-      buildReadyJql: vi.fn().mockReturnValue("project = TEST AND status = 'To Do'"),
+      buildReadyJql: vi
+        .fn()
+        .mockReturnValue("project = TEST AND status = 'To Do'"),
     };
     const provider = new JiraTaskSourceProvider(
       mockClient as never,

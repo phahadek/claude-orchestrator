@@ -49,10 +49,12 @@ beforeEach(() => {
 describe('NotionTaskBackend.fetchReadyTasks — dependsOn prefixing', () => {
   it('prefixes every dependsOn entry with notion: alongside the task id', async () => {
     const mockClient = {
-      fetchReadyTasks: vi.fn().mockResolvedValue([
-        makeResolvedTask('raw-id-a', ['raw-id-b']),
-        makeResolvedTask('raw-id-b', []),
-      ]),
+      fetchReadyTasks: vi
+        .fn()
+        .mockResolvedValue([
+          makeResolvedTask('raw-id-a', ['raw-id-b']),
+          makeResolvedTask('raw-id-b', []),
+        ]),
     };
     const backend = new NotionTaskBackend(mockClient as never);
 
@@ -65,9 +67,9 @@ describe('NotionTaskBackend.fetchReadyTasks — dependsOn prefixing', () => {
 
   it('returns tasks with no dependsOn entries unchanged (empty array)', async () => {
     const mockClient = {
-      fetchReadyTasks: vi.fn().mockResolvedValue([
-        makeResolvedTask('raw-id-x', []),
-      ]),
+      fetchReadyTasks: vi
+        .fn()
+        .mockResolvedValue([makeResolvedTask('raw-id-x', [])]),
     };
     const backend = new NotionTaskBackend(mockClient as never);
 
@@ -78,9 +80,9 @@ describe('NotionTaskBackend.fetchReadyTasks — dependsOn prefixing', () => {
 
   it('writes board cache with prefixed-everywhere shape (both id and dependsOn)', async () => {
     const mockClient = {
-      fetchReadyTasks: vi.fn().mockResolvedValue([
-        makeResolvedTask('raw-id-a', ['raw-id-b']),
-      ]),
+      fetchReadyTasks: vi
+        .fn()
+        .mockResolvedValue([makeResolvedTask('raw-id-a', ['raw-id-b'])]),
     };
     const backend = new NotionTaskBackend(mockClient as never);
 
@@ -100,9 +102,9 @@ describe('NotionTaskBackend.fetchReadyTasks — dependsOn prefixing', () => {
 
   it('writes per-task cache with prefixed-everywhere shape', async () => {
     const mockClient = {
-      fetchReadyTasks: vi.fn().mockResolvedValue([
-        makeResolvedTask('raw-id-a', ['raw-id-b']),
-      ]),
+      fetchReadyTasks: vi
+        .fn()
+        .mockResolvedValue([makeResolvedTask('raw-id-a', ['raw-id-b'])]),
     };
     const backend = new NotionTaskBackend(mockClient as never);
 
@@ -124,10 +126,12 @@ describe('NotionTaskBackend.fetchReadyTasks — dependsOn prefixing', () => {
 describe('NotionTaskBackend.fetchNonMilestoneReadyTasks — dependsOn prefixing', () => {
   it('prefixes every dependsOn entry with notion:', async () => {
     const mockClient = {
-      fetchReadyTasks: vi.fn().mockResolvedValue([
-        makeResolvedTask('raw-nm-a', ['raw-nm-b']),
-        makeResolvedTask('raw-nm-b', []),
-      ]),
+      fetchReadyTasks: vi
+        .fn()
+        .mockResolvedValue([
+          makeResolvedTask('raw-nm-a', ['raw-nm-b']),
+          makeResolvedTask('raw-nm-b', []),
+        ]),
     };
     const backend = new NotionTaskBackend(mockClient as never);
 
@@ -142,9 +146,9 @@ describe('NotionTaskBackend.fetchNonMilestoneReadyTasks — dependsOn prefixing'
 
   it('writes non-milestone cache with prefixed-everywhere shape', async () => {
     const mockClient = {
-      fetchReadyTasks: vi.fn().mockResolvedValue([
-        makeResolvedTask('raw-nm-a', ['raw-nm-b']),
-      ]),
+      fetchReadyTasks: vi
+        .fn()
+        .mockResolvedValue([makeResolvedTask('raw-nm-a', ['raw-nm-b'])]),
     };
     const backend = new NotionTaskBackend(mockClient as never);
 
