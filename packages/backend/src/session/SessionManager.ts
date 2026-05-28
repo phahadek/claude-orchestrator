@@ -4,7 +4,7 @@ import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
 import { recordEvent } from '../audit/AuditLog';
 import { scrubSecrets } from '../security/scrubSecrets';
-import { AgentSession, parseNotionPageId } from './AgentSession';
+import { AgentSession, parseNotionPageIdDashed } from './AgentSession';
 import { formatTaskId } from '../tasks/taskId';
 import { buildSessionContext } from './ContextBuilder';
 import { buildReviewClaudeMd } from './orchestrator-claudemd';
@@ -406,10 +406,9 @@ export class SessionManager extends EventEmitter {
 
     // SessionManager.start() must store prefixed task IDs in sessions.task_id so
     // downstream parseTaskId() callers (NotionTaskBackend.updateStatus, attachPR,
-    // etc.) succeed. parseNotionPageId returns the raw page ID; wrap with
-    // formatTaskId to add the 'notion:' prefix that the post-task-source-extraction
-    // code expects.
-    const notionTaskId = formatTaskId('notion', parseNotionPageId(taskUrl));
+    // etc.) succeed. parseNotionPageIdDashed converts URL-embedded dashless IDs to
+    // dashed UUID form (Notion's native) so the JOIN with task_cache matches.
+    const notionTaskId = formatTaskId('notion', parseNotionPageIdDashed(taskUrl));
     const sessionMode = runtimeSettings.session_mode;
     const runner =
       sessionMode === 'api'

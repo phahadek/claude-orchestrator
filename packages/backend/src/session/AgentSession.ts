@@ -113,6 +113,18 @@ export function parseNotionPageId(url: string): string {
 }
 
 /**
+ * Like parseNotionPageId, but always returns the dashed UUID form (Notion's native).
+ * Converts a 32-hex dashless ID to dashed; passes through already-dashed or non-UUID inputs unchanged.
+ */
+export function parseNotionPageIdDashed(url: string): string {
+  const raw = parseNotionPageId(url);
+  if (/^[0-9a-f]{32}$/i.test(raw)) {
+    return `${raw.slice(0, 8)}-${raw.slice(8, 12)}-${raw.slice(12, 16)}-${raw.slice(16, 20)}-${raw.slice(20)}`;
+  }
+  return raw;
+}
+
+/**
  * Merge assistant message content blocks so that text blocks emitted in earlier
  * streaming events are not lost when later streaming events contain only tool_use
  * blocks. The Claude CLI can stream multiple `assistant` events for the same message

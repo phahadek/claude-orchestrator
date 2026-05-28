@@ -66,6 +66,7 @@ import {
   getPRByNumber,
   setPauseReason,
 } from '../db/queries';
+import { parseNotionPageIdDashed } from '../session/AgentSession';
 
 function fakeNotionClient(): NotionClient {
   return {
@@ -1599,5 +1600,33 @@ describe('AgentSession', () => {
     await new Promise((r) => setTimeout(r, 0));
     mockProc.proc.emit('exit', 0);
     await runPromise;
+  });
+});
+
+// ── AC: parseNotionPageIdDashed ───────────────────────────────────────────────
+describe('parseNotionPageIdDashed', () => {
+  it('converts a 32-hex dashless ID to dashed UUID', () => {
+    expect(parseNotionPageIdDashed('36e22f9152f381018dd2f6f7c0b402e9')).toBe(
+      '36e22f91-52f3-8101-8dd2-f6f7c0b402e9',
+    );
+  });
+
+  it('returns a dashed UUID input unchanged', () => {
+    expect(
+      parseNotionPageIdDashed('36e22f91-52f3-8101-8dd2-f6f7c0b402e9'),
+    ).toBe('36e22f91-52f3-8101-8dd2-f6f7c0b402e9');
+  });
+
+  it('passes through non-UUID inputs unchanged', () => {
+    expect(parseNotionPageIdDashed('not-a-uuid')).toBe('not-a-uuid');
+    expect(parseNotionPageIdDashed('yaml:some-id')).toBe('yaml:some-id');
+  });
+
+  it('extracts dashless ID from a Notion URL and converts to dashed', () => {
+    expect(
+      parseNotionPageIdDashed(
+        'https://www.notion.so/My-Task-36e22f9152f381018dd2f6f7c0b402e9',
+      ),
+    ).toBe('36e22f91-52f3-8101-8dd2-f6f7c0b402e9');
   });
 });
