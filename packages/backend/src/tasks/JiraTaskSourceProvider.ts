@@ -76,7 +76,11 @@ export class JiraTaskSourceProvider implements TaskBackend {
     const resolved = resolver.resolve(tasks, 'jira');
     const prefixed = resolved.map((r) => ({
       ...r,
-      task: { ...r.task, id: formatTaskId('jira', r.task.id) },
+      task: {
+        ...r.task,
+        id: formatTaskId('jira', r.task.id),
+        dependsOn: r.task.dependsOn.map((dep) => formatTaskId('jira', dep)),
+      },
     }));
     // Overwrite board cache with prefixed IDs so /api/tasks/active joins correctly.
     if (milestoneId !== null) {

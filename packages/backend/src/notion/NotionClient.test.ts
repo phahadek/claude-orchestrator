@@ -321,4 +321,64 @@ describe('NotionClient.fetchReadyTasks — readBoardCache strips notion: prefix'
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(tasks[0].task.id).toBe(RAW_TASK_ID);
   });
+
+  it('strips notion: prefix from dependsOn entries when board cache has prefixed-everywhere shape', async () => {
+    const DEP_RAW = 'bbbb2222-cccc-3333-dddd-eeeeffffffff';
+    const DEP_PREFIXED = `notion:${DEP_RAW}`;
+    vi.mocked(getCacheAge).mockReturnValue(0);
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: `board:${BOARD_ID_STRIP}`,
+      fetched_at: Date.now(),
+      raw_json: JSON.stringify([
+        {
+          id: PREFIXED_TASK_ID,
+          title: 'Task A',
+          status: '🗂️ Ready',
+          type: '💻 Code',
+          dependsOn: [DEP_PREFIXED],
+          notionUrl: 'https://notion.so/x',
+          priority: '',
+        },
+        {
+          id: DEP_PREFIXED,
+          title: 'Task B',
+          status: '🗂️ Ready',
+          type: '💻 Code',
+          dependsOn: [],
+          notionUrl: 'https://notion.so/y',
+          priority: '',
+        },
+      ]),
+    });
+
+    const tasks = await client.fetchReadyTasks(BOARD_ID_STRIP);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(tasks[0].task.dependsOn).toEqual([DEP_RAW]);
+    expect(tasks[0].task.dependsOn[0]).not.toContain('notion:');
+  });
+
+  it('leaves raw dependsOn entries unchanged when board cache has no prefix', async () => {
+    const DEP_RAW = 'bbbb2222-cccc-3333-dddd-eeeeffffffff';
+    vi.mocked(getCacheAge).mockReturnValue(0);
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: `board:${BOARD_ID_STRIP}`,
+      fetched_at: Date.now(),
+      raw_json: JSON.stringify([
+        {
+          id: RAW_TASK_ID,
+          title: 'Task A',
+          status: '🗂️ Ready',
+          type: '💻 Code',
+          dependsOn: [DEP_RAW],
+          notionUrl: 'https://notion.so/x',
+          priority: '',
+        },
+      ]),
+    });
+
+    const tasks = await client.fetchReadyTasks(BOARD_ID_STRIP);
+
+    expect(tasks[0].task.dependsOn).toEqual([DEP_RAW]);
+  });
 });

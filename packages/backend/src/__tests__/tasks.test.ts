@@ -259,6 +259,184 @@ describe('GET /api/tasks/active', () => {
     expect(taskA.blocked).toBe(true);
     expect(taskA.blockerNames).toContain('Task B');
   });
+
+  it('3-task chain A←B←C (notion:) — B at wave 1 unblocked, C at wave 2 blocked by B', async () => {
+    // A is Done, B depends on A (satisfied), C depends on B (not Done → blocked)
+    const boardTasks: NotionTask[] = [
+      {
+        id: 'notion:task-a',
+        title: 'Task A',
+        status: '✅ Done',
+        type: '💻 Code',
+        dependsOn: [],
+        notionUrl: '',
+      },
+      {
+        id: 'notion:task-b',
+        title: 'Task B',
+        status: '🗂️ Ready',
+        type: '💻 Code',
+        dependsOn: ['notion:task-a'],
+        notionUrl: '',
+      },
+      {
+        id: 'notion:task-c',
+        title: 'Task C',
+        status: '🗂️ Ready',
+        type: '💻 Code',
+        dependsOn: ['notion:task-b'],
+        notionUrl: '',
+      },
+    ];
+    vi.mocked(queries.getTaskCache).mockReturnValue({
+      cache_key: 'board:board-1',
+      raw_json: JSON.stringify(boardTasks),
+      fetched_at: Date.now(),
+    } as never);
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('notion:task-b', '🗂️ Ready'),
+      makeAggregate('notion:task-c', '🗂️ Ready'),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+
+    const taskB = res.body.find(
+      (t: { taskId: string }) => t.taskId === 'notion:task-b',
+    );
+    const taskC = res.body.find(
+      (t: { taskId: string }) => t.taskId === 'notion:task-c',
+    );
+
+    expect(taskB).toBeDefined();
+    expect(taskB.wave).toBe(1);
+    expect(taskB.blocked).toBe(false);
+
+    expect(taskC).toBeDefined();
+    expect(taskC.wave).toBe(2);
+    expect(taskC.blocked).toBe(true);
+    expect(taskC.blockerNames).toContain('Task B');
+  });
+
+  it('3-task chain A←B←C (jira:) — B at wave 1 unblocked, C at wave 2 blocked by B', async () => {
+    const boardTasks: NotionTask[] = [
+      {
+        id: 'jira:PROJ-1',
+        title: 'Issue 1',
+        status: '✅ Done',
+        type: '💻 Code',
+        dependsOn: [],
+        notionUrl: '',
+      },
+      {
+        id: 'jira:PROJ-2',
+        title: 'Issue 2',
+        status: '🗂️ Ready',
+        type: '💻 Code',
+        dependsOn: ['jira:PROJ-1'],
+        notionUrl: '',
+      },
+      {
+        id: 'jira:PROJ-3',
+        title: 'Issue 3',
+        status: '🗂️ Ready',
+        type: '💻 Code',
+        dependsOn: ['jira:PROJ-2'],
+        notionUrl: '',
+      },
+    ];
+    vi.mocked(queries.getTaskCache).mockReturnValue({
+      cache_key: 'board:board-1',
+      raw_json: JSON.stringify(boardTasks),
+      fetched_at: Date.now(),
+    } as never);
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('jira:PROJ-2', '🗂️ Ready'),
+      makeAggregate('jira:PROJ-3', '🗂️ Ready'),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+
+    const task2 = res.body.find(
+      (t: { taskId: string }) => t.taskId === 'jira:PROJ-2',
+    );
+    const task3 = res.body.find(
+      (t: { taskId: string }) => t.taskId === 'jira:PROJ-3',
+    );
+
+    expect(task2).toBeDefined();
+    expect(task2.wave).toBe(1);
+    expect(task2.blocked).toBe(false);
+
+    expect(task3).toBeDefined();
+    expect(task3.wave).toBe(2);
+    expect(task3.blocked).toBe(true);
+    expect(task3.blockerNames).toContain('Issue 2');
+  });
+
+  it('3-task chain A←B←C (yaml:) — B at wave 1 unblocked, C at wave 2 blocked by B', async () => {
+    const boardTasks: NotionTask[] = [
+      {
+        id: 'yaml:task-alpha',
+        title: 'Alpha',
+        status: '✅ Done',
+        type: '💻 Code',
+        dependsOn: [],
+        notionUrl: '',
+      },
+      {
+        id: 'yaml:task-beta',
+        title: 'Beta',
+        status: '🗂️ Ready',
+        type: '💻 Code',
+        dependsOn: ['yaml:task-alpha'],
+        notionUrl: '',
+      },
+      {
+        id: 'yaml:task-gamma',
+        title: 'Gamma',
+        status: '🗂️ Ready',
+        type: '💻 Code',
+        dependsOn: ['yaml:task-beta'],
+        notionUrl: '',
+      },
+    ];
+    vi.mocked(queries.getTaskCache).mockReturnValue({
+      cache_key: 'board:board-1',
+      raw_json: JSON.stringify(boardTasks),
+      fetched_at: Date.now(),
+    } as never);
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('yaml:task-beta', '🗂️ Ready'),
+      makeAggregate('yaml:task-gamma', '🗂️ Ready'),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/active?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+
+    const taskBeta = res.body.find(
+      (t: { taskId: string }) => t.taskId === 'yaml:task-beta',
+    );
+    const taskGamma = res.body.find(
+      (t: { taskId: string }) => t.taskId === 'yaml:task-gamma',
+    );
+
+    expect(taskBeta).toBeDefined();
+    expect(taskBeta.wave).toBe(1);
+    expect(taskBeta.blocked).toBe(false);
+
+    expect(taskGamma).toBeDefined();
+    expect(taskGamma.wave).toBe(2);
+    expect(taskGamma.blocked).toBe(true);
+    expect(taskGamma.blockerNames).toContain('Beta');
+  });
 });
 
 // ── totalTokens aggregation ────────────────────────────────────────────────────

@@ -43,15 +43,22 @@ export class NotionTaskBackend implements TaskBackend {
     );
     const prefixed = tasks.map((r) => {
       const prefixedId = formatTaskId('notion', r.task.id);
+      const prefixedDependsOn = r.task.dependsOn.map((dep) =>
+        formatTaskId('notion', dep),
+      );
       // Also cache under the prefixed key so getTaskTitleFromCache works with
       // prefixed session.task_id lookups.
       upsertTaskCache(
         prefixedId,
-        JSON.stringify({ ...r.task, id: prefixedId }),
+        JSON.stringify({
+          ...r.task,
+          id: prefixedId,
+          dependsOn: prefixedDependsOn,
+        }),
       );
       return {
         ...r,
-        task: { ...r.task, id: prefixedId },
+        task: { ...r.task, id: prefixedId, dependsOn: prefixedDependsOn },
         source: 'notion' as const,
       };
     });
@@ -88,13 +95,20 @@ export class NotionTaskBackend implements TaskBackend {
     );
     const resolved = tasks.map((r) => {
       const prefixedId = formatTaskId('notion', r.task.id);
+      const prefixedDependsOn = r.task.dependsOn.map((dep) =>
+        formatTaskId('notion', dep),
+      );
       upsertTaskCache(
         prefixedId,
-        JSON.stringify({ ...r.task, id: prefixedId }),
+        JSON.stringify({
+          ...r.task,
+          id: prefixedId,
+          dependsOn: prefixedDependsOn,
+        }),
       );
       return {
         ...r,
-        task: { ...r.task, id: prefixedId },
+        task: { ...r.task, id: prefixedId, dependsOn: prefixedDependsOn },
         source: 'notion' as const,
       };
     });
