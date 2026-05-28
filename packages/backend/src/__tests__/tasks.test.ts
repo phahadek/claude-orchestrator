@@ -439,6 +439,159 @@ describe('GET /api/tasks/active', () => {
   });
 });
 
+// ── GET /api/tasks/non-milestone — resolver back-fill ────────────────────────
+
+describe('GET /api/tasks/non-milestone', () => {
+  it('runs the resolver and back-fills wave, blocked, blockerNames on each view', async () => {
+    const nonMilestoneTasks: NotionTask[] = [
+      {
+        id: 'notion:task-x',
+        title: 'Task X',
+        status: '🗂️ Ready',
+        type: '💻 Code',
+        dependsOn: ['notion:task-y'],
+        notionUrl: '',
+      },
+      {
+        id: 'notion:task-y',
+        title: 'Task Y',
+        status: '🗂️ Ready',
+        type: '💻 Code',
+        dependsOn: [],
+        notionUrl: '',
+      },
+    ];
+    vi.mocked(queries.getTaskCache).mockReturnValue({
+      cache_key: 'non_milestone:proj-1',
+      raw_json: JSON.stringify(nonMilestoneTasks),
+      fetched_at: Date.now(),
+    } as never);
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('notion:task-x', '🗂️ Ready'),
+      makeAggregate('notion:task-y', '🗂️ Ready'),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/non-milestone?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    const taskX = res.body.find(
+      (t: { taskId: string }) => t.taskId === 'notion:task-x',
+    );
+    const taskY = res.body.find(
+      (t: { taskId: string }) => t.taskId === 'notion:task-y',
+    );
+    expect(taskX).toBeDefined();
+    expect(taskX.blocked).toBe(true);
+    expect(taskX.blockerNames).toContain('Task Y');
+    expect(taskY).toBeDefined();
+    expect(taskY.blocked).toBe(false);
+    expect(taskY.wave).toBe(1);
+  });
+
+  it('3-task chain A←B←C: B at wave 1 unblocked, C at wave 2 blocked by B', async () => {
+    const nonMilestoneTasks: NotionTask[] = [
+      {
+        id: 'notion:task-a',
+        title: 'Task A',
+        status: '✅ Done',
+        type: '💻 Code',
+        dependsOn: [],
+        notionUrl: '',
+      },
+      {
+        id: 'notion:task-b',
+        title: 'Task B',
+        status: '🗂️ Ready',
+        type: '💻 Code',
+        dependsOn: ['notion:task-a'],
+        notionUrl: '',
+      },
+      {
+        id: 'notion:task-c',
+        title: 'Task C',
+        status: '🗂️ Ready',
+        type: '💻 Code',
+        dependsOn: ['notion:task-b'],
+        notionUrl: '',
+      },
+    ];
+    vi.mocked(queries.getTaskCache).mockReturnValue({
+      cache_key: 'non_milestone:proj-1',
+      raw_json: JSON.stringify(nonMilestoneTasks),
+      fetched_at: Date.now(),
+    } as never);
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('notion:task-b', '🗂️ Ready'),
+      makeAggregate('notion:task-c', '🗂️ Ready'),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/non-milestone?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+
+    const taskB = res.body.find(
+      (t: { taskId: string }) => t.taskId === 'notion:task-b',
+    );
+    const taskC = res.body.find(
+      (t: { taskId: string }) => t.taskId === 'notion:task-c',
+    );
+
+    expect(taskB).toBeDefined();
+    expect(taskB.wave).toBe(1);
+    expect(taskB.blocked).toBe(false);
+
+    expect(taskC).toBeDefined();
+    expect(taskC.wave).toBe(2);
+    expect(taskC.blocked).toBe(true);
+    expect(taskC.blockerNames).toContain('Task B');
+  });
+
+  it('dependsOn referencing an ID not in the non-milestone cache resolves to blocked: false', async () => {
+    const nonMilestoneTasks: NotionTask[] = [
+      {
+        id: 'notion:task-orphan',
+        title: 'Orphan Task',
+        status: '🗂️ Ready',
+        type: '💻 Code',
+        dependsOn: ['notion:task-from-other-db'],
+        notionUrl: '',
+      },
+    ];
+    vi.mocked(queries.getTaskCache).mockReturnValue({
+      cache_key: 'non_milestone:proj-1',
+      raw_json: JSON.stringify(nonMilestoneTasks),
+      fetched_at: Date.now(),
+    } as never);
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([
+      makeAggregate('notion:task-orphan', '🗂️ Ready'),
+    ]);
+
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/non-milestone?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].taskId).toBe('notion:task-orphan');
+    expect(res.body[0].blocked).toBe(false);
+  });
+
+  it('returns 400 when projectId is missing', async () => {
+    const res = await supertest(buildApp()).get('/api/tasks/non-milestone');
+    expect(res.status).toBe(400);
+  });
+
+  it('returns empty array when cache is missing', async () => {
+    vi.mocked(queries.getTaskCache).mockReturnValue(null);
+    const res = await supertest(buildApp()).get(
+      '/api/tasks/non-milestone?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+});
+
 // ── totalTokens aggregation ────────────────────────────────────────────────────
 
 describe('buildTaskViewFromRow — totalTokens', () => {
