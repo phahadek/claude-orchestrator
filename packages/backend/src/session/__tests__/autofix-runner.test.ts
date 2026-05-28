@@ -99,7 +99,6 @@ function makeProc(exitCode: number, stdout = '', stderr = ''): MockProc {
 
 import { loadAutofixCommands, runAutofix } from '../autofix-runner';
 import { recordEvent } from '../../audit/AuditLog';
-import { isHardBanned } from '../../github/PRFileValidator';
 
 // ── test setup ────────────────────────────────────────────────────────────────
 
