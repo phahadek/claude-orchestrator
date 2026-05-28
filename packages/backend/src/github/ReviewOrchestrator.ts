@@ -8,6 +8,8 @@ import {
   getLocalBranchBySession,
   setLocalBranchPauseReason,
   getSession,
+  addAutofixSha,
+  consumeAutofixSha as dbConsumeAutofixSha,
 } from '../db/queries';
 import type {
   PRReviewService,
@@ -56,8 +58,6 @@ type QueuedJob = (ReviewJob & { type?: 'pr' }) | LocalBranchJob;
 export class ReviewOrchestrator {
   private queue: QueuedJob[] = [];
   private running = 0;
-  /** SHA of the last autofix commit per PR, keyed by "prNumber:repo". */
-  private lastAutofixShas = new Map<string, string>();
   /** In-flight post-revert worktree sync promises, keyed by "prNumber:repo". */
   private pendingSyncs = new Map<string, Promise<void>>();
 
@@ -219,7 +219,7 @@ export class ReviewOrchestrator {
         autofixSuccess = result.success;
         autofixSummary = result.summary;
         if (result.commitSha) {
-          this.lastAutofixShas.set(`${prNumber}:${repo}`, result.commitSha);
+          addAutofixSha(prNumber, repo, result.commitSha);
           if (prRow?.session_id && result.touchedFiles?.length) {
             this.sessionManager.addToRevertLock(
               prRow.session_id,
@@ -227,7 +227,7 @@ export class ReviewOrchestrator {
             );
           }
           if (this.github) {
-            await runFilePollutionCheck({
+            const pollutionResult = await runFilePollutionCheck({
               github: this.github,
               worktreePath,
               repo,
@@ -242,6 +242,9 @@ export class ReviewOrchestrator {
                 }
               },
             });
+            if (pollutionResult.revertCommitSha) {
+              addAutofixSha(prNumber, repo, pollutionResult.revertCommitSha);
+            }
           }
         }
       } catch (err) {
@@ -276,12 +279,7 @@ export class ReviewOrchestrator {
    * so they do not count against the iteration cap.
    */
   consumeAutofixSha(prNumber: number, repo: string, sha: string): boolean {
-    const key = `${prNumber}:${repo}`;
-    if (this.lastAutofixShas.get(key) === sha) {
-      this.lastAutofixShas.delete(key);
-      return true;
-    }
-    return false;
+    return dbConsumeAutofixSha(prNumber, repo, sha);
   }
 
   private async executeLocalBranchReview(job: LocalBranchJob): Promise<void> {

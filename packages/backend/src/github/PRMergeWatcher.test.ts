@@ -9,6 +9,9 @@ vi.mock('../db/queries.js', () => ({
   setPauseReason: vi.fn(),
   getPRByNumber: vi.fn().mockReturnValue(null),
   getSession: vi.fn().mockReturnValue(null),
+  addAutofixSha: vi.fn(),
+  consumeAutofixSha: vi.fn().mockReturnValue(false),
+  deleteAllAutofixShasForPR: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
@@ -36,6 +39,9 @@ import {
   setPauseReason,
   getPRByNumber,
   getSession,
+  addAutofixSha,
+  consumeAutofixSha,
+  deleteAllAutofixShasForPR,
 } from '../db/queries';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { recordEvent } from '../audit/AuditLog';
@@ -1162,6 +1168,12 @@ describe('PRMergeWatcher autofix-first CI failure path', () => {
       head_sha: 'autofix-sha',
     });
 
+    // First poll: 'original-sha' not in DB → run autofix
+    // Second poll: 'autofix-sha' IS in DB (was just added by first poll) → skip
+    vi.mocked(consumeAutofixSha)
+      .mockReturnValueOnce(false) // first poll: original-sha not registered
+      .mockReturnValueOnce(true); // second poll: autofix-sha is registered
+
     vi.mocked(getAllOpenPRs)
       .mockReturnValueOnce([pr1])
       .mockReturnValueOnce([pr2]);
@@ -1335,6 +1347,180 @@ describe('PRMergeWatcher.checkMergeabilityNow terminal-state guard', () => {
     expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledWith(
       'coding-session',
       expect.stringMatching(/## CI Failure — PR #42/),
+    );
+  });
+});
+
+// ── orchestrator_autofix_shas cleanup ─────────────────────────────────────────
+
+describe('PRMergeWatcher — autofix SHA cleanup on merge/close', () => {
+  it('handleMerged calls deleteAllAutofixShasForPR for the merged PR', async () => {
+    const pr = makePRRow({
+      task_id: null,
+      session_id: null,
+      review_session_id: null,
+    });
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+
+    await watcher.handleMerged(pr, null);
+
+    expect(vi.mocked(deleteAllAutofixShasForPR)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
+  });
+
+  it('PR closed without merging calls deleteAllAutofixShasForPR', async () => {
+    const pr = makePRRow();
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    vi.mocked(github.getPRState).mockResolvedValue('closed');
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(deleteAllAutofixShasForPR)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
+  });
+});
+
+// ── CI-failure autofix dedup with DB ─────────────────────────────────────────
+
+describe('PRMergeWatcher — CI-failure autofix dedup reads from DB', () => {
+  it('skips autofix when consumeAutofixSha returns true for head_sha (DB dedup)', async () => {
+    const pr = makePRRow({
+      state: 'open',
+      merge_state: 'clean',
+      session_id: 'coding-session',
+      head_sha: 'already-autofixed-sha',
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+    vi.mocked(getSession).mockReturnValue({ worktree_path: '/fake/wt' } as any);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/tmp',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+
+    // Simulate: SHA was registered in DB (e.g., before a restart)
+    vi.mocked(consumeAutofixSha).mockReturnValue(true);
+
+    const github = makeMockGitHub();
+    vi.mocked((github as any).categorizeMergeability).mockResolvedValue({
+      category: 'ci_failed',
+      mergeState: 'ci_failed',
+      rawMergeableState: 'unstable',
+      failingChecks: [{ name: 'lint', conclusion: 'failure' }],
+    });
+
+    const sessions = makeMockSessions();
+    const watcher = new PRMergeWatcher(github, sessions, undefined, () => {});
+    await watcher.checkMergeabilityNow(42, 'owner/repo');
+
+    expect(vi.mocked(runAutofix)).not.toHaveBeenCalled();
+    expect(vi.mocked(consumeAutofixSha)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'already-autofixed-sha',
+    );
+  });
+
+  it('after restart, autofix does NOT re-run for a SHA registered before the restart', async () => {
+    const pr = makePRRow({
+      state: 'open',
+      merge_state: 'dirty',
+      session_id: 'coding-session',
+      head_sha: 'pre-restart-autofix-sha',
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+    vi.mocked(getSession).mockReturnValue({ worktree_path: '/fake/wt' } as any);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/tmp',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+
+    // SHA was added to DB by a previous instance; DB returns true on restart
+    vi.mocked(consumeAutofixSha).mockReturnValue(true);
+
+    const github = makeMockGitHub();
+    vi.mocked((github as any).categorizeMergeability).mockResolvedValue({
+      category: 'ci_failed',
+      mergeState: 'ci_failed',
+      rawMergeableState: 'unstable',
+      failingChecks: [{ name: 'ci', conclusion: 'failure' }],
+    });
+
+    // New PRMergeWatcher instance (simulating restart — no in-memory Map)
+    const freshWatcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    await freshWatcher.checkMergeabilityNow(42, 'owner/repo');
+
+    expect(vi.mocked(runAutofix)).not.toHaveBeenCalled();
+  });
+
+  it('autofix runs and calls addAutofixSha when head_sha is not in DB', async () => {
+    const pr = makePRRow({
+      state: 'open',
+      merge_state: 'clean',
+      session_id: 'coding-session',
+      head_sha: 'not-autofixed-sha',
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+    vi.mocked(getSession).mockReturnValue({ worktree_path: '/fake/wt' } as any);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/tmp',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      commitSha: 'new-autofix-sha',
+      summary: 'done',
+    });
+
+    vi.mocked(consumeAutofixSha).mockReturnValue(false);
+
+    const github = makeMockGitHub();
+    vi.mocked((github as any).categorizeMergeability).mockResolvedValue({
+      category: 'ci_failed',
+      mergeState: 'ci_failed',
+      rawMergeableState: 'unstable',
+      failingChecks: [{ name: 'lint', conclusion: 'failure' }],
+    });
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    await watcher.checkMergeabilityNow(42, 'owner/repo');
+
+    expect(vi.mocked(runAutofix)).toHaveBeenCalled();
+    expect(vi.mocked(addAutofixSha)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'new-autofix-sha',
     );
   });
 });

@@ -14,6 +14,9 @@ vi.mock('../db/queries.js', () => ({
   setPauseReason: vi.fn(),
   getLocalBranchBySession: vi.fn(),
   setLocalBranchPauseReason: vi.fn(),
+  addAutofixSha: vi.fn(),
+  consumeAutofixSha: vi.fn().mockReturnValue(false),
+  deleteAllAutofixShasForPR: vi.fn(),
 }));
 
 vi.mock('../session/autofix-runner.js', () => ({
@@ -86,6 +89,8 @@ import {
   setPauseReason,
   getLocalBranchBySession,
   setLocalBranchPauseReason,
+  addAutofixSha,
+  consumeAutofixSha as dbConsumeAutofixSha,
 } from '../db/queries';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
@@ -1053,6 +1058,14 @@ describe('ReviewOrchestrator — consumeAutofixSha (autofix-only iteration detec
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
+    // Verify the SHA was registered in DB
+    expect(vi.mocked(addAutofixSha)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'autofix-sha-123',
+    );
+    // DB mock returns true when asked for this SHA (consume once)
+    vi.mocked(dbConsumeAutofixSha).mockReturnValueOnce(true);
     expect(
       orchestrator.consumeAutofixSha(1, 'owner/repo', 'autofix-sha-123'),
     ).toBe(true);
@@ -1100,6 +1113,11 @@ describe('ReviewOrchestrator — consumeAutofixSha (autofix-only iteration detec
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
+
+    // DB mock: first call returns true (row exists), second call returns false (already deleted)
+    vi.mocked(dbConsumeAutofixSha)
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
 
     // First call consumes the entry
     expect(
@@ -2109,7 +2127,7 @@ describe('ReviewOrchestrator — runAutofixPipeline helper', () => {
     expect(callOrder).toContain('pollutionCheck');
   });
 
-  it('stores autofix SHA in lastAutofixShas so consumeAutofixSha returns true', async () => {
+  it('registers autofix commit SHA via addAutofixSha so consumeAutofixSha can match it', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
     vi.mocked(getSession).mockReturnValue({
       worktree_path: '/fake/worktree',
@@ -2127,8 +2145,106 @@ describe('ReviewOrchestrator — runAutofixPipeline helper', () => {
 
     await orch.runAutofixPipeline(1, 'owner/repo', null);
 
+    expect(vi.mocked(addAutofixSha)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'pipeline-sha-42',
+    );
+
+    // consumeAutofixSha delegates to DB — simulate a match
+    vi.mocked(dbConsumeAutofixSha).mockReturnValue(true);
     expect(orch.consumeAutofixSha(1, 'owner/repo', 'pipeline-sha-42')).toBe(
       true,
+    );
+    expect(vi.mocked(dbConsumeAutofixSha)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'pipeline-sha-42',
+    );
+  });
+
+  it('registers revert commit SHA from runFilePollutionCheck via addAutofixSha', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      commitSha: 'autofix-sha-abc',
+      summary: 'done',
+    });
+    vi.mocked(runFilePollutionCheck).mockResolvedValue({
+      headSha: 'autofix-sha-abc',
+      revertCommitSha: 'revert-sha-xyz',
+    });
+
+    const mockGithub = makeMockGitHubClient();
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, 1, true, mockGithub);
+
+    await orch.runAutofixPipeline(1, 'owner/repo', null);
+
+    expect(vi.mocked(addAutofixSha)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'autofix-sha-abc',
+    );
+    expect(vi.mocked(addAutofixSha)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'revert-sha-xyz',
+    );
+  });
+
+  it('consumeAutofixSha returns true for revert SHA registered by runFilePollutionCheck', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      commitSha: 'autofix-sha-abc',
+      summary: 'done',
+    });
+    vi.mocked(runFilePollutionCheck).mockResolvedValue({
+      headSha: 'autofix-sha-abc',
+      revertCommitSha: 'revert-sha-xyz',
+    });
+
+    const mockGithub = makeMockGitHubClient();
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, 1, true, mockGithub);
+
+    await orch.runAutofixPipeline(1, 'owner/repo', null);
+
+    // Simulate DB having the revert SHA registered
+    vi.mocked(dbConsumeAutofixSha).mockReturnValueOnce(true);
+    expect(orch.consumeAutofixSha(1, 'owner/repo', 'revert-sha-xyz')).toBe(
+      true,
+    );
+  });
+
+  it('consumeAutofixSha reads from DB — a fresh instance (simulating restart) still returns true for a registered SHA', () => {
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+
+    // Simulate SHA registered in DB before the restart
+    vi.mocked(dbConsumeAutofixSha).mockReturnValueOnce(true);
+
+    // Fresh ReviewOrchestrator instance (no in-memory state from previous instance)
+    const freshOrch = new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    expect(
+      freshOrch.consumeAutofixSha(1, 'owner/repo', 'pre-restart-sha'),
+    ).toBe(true);
+    expect(vi.mocked(dbConsumeAutofixSha)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'pre-restart-sha',
     );
   });
 

@@ -1848,3 +1848,38 @@ export function getActiveDeviceCount(): number {
   const row = stmtCountActiveDevices.get() as { count: number };
   return row.count;
 }
+
+// ─── orchestrator_autofix_shas ────────────────────────────────────────────────
+
+export function addAutofixSha(
+  prNumber: number,
+  repo: string,
+  sha: string,
+): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO orchestrator_autofix_shas (pr_number, repo, sha, created_at)
+     VALUES (?, ?, ?, ?)`,
+  ).run(prNumber, repo, sha, new Date().toISOString());
+}
+
+export function consumeAutofixSha(
+  prNumber: number,
+  repo: string,
+  sha: string,
+): boolean {
+  const result = db
+    .prepare(
+      `DELETE FROM orchestrator_autofix_shas WHERE pr_number = ? AND repo = ? AND sha = ?`,
+    )
+    .run(prNumber, repo, sha);
+  return result.changes > 0;
+}
+
+export function deleteAllAutofixShasForPR(
+  prNumber: number,
+  repo: string,
+): void {
+  db.prepare(
+    `DELETE FROM orchestrator_autofix_shas WHERE pr_number = ? AND repo = ?`,
+  ).run(prNumber, repo);
+}

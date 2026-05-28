@@ -146,6 +146,14 @@ export function runMigrations(): void {
     );
     CREATE INDEX IF NOT EXISTS idx_pr_review_comments_routed_pr ON pr_review_comments_routed(pr_number, repo);
 
+    CREATE TABLE IF NOT EXISTS orchestrator_autofix_shas (
+      pr_number  INTEGER NOT NULL,
+      repo       TEXT    NOT NULL,
+      sha        TEXT    NOT NULL,
+      created_at TEXT    NOT NULL,
+      PRIMARY KEY (pr_number, repo, sha)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events(session_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_event_type ON session_events(session_id, event_type);
     CREATE INDEX IF NOT EXISTS idx_session_events_timestamp ON session_events(timestamp DESC);

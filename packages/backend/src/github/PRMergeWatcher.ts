@@ -18,6 +18,9 @@ import {
   getPRByNumber,
   setPauseReason,
   getSession,
+  addAutofixSha,
+  consumeAutofixSha,
+  deleteAllAutofixShasForPR,
 } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 
@@ -33,9 +36,6 @@ export class PRMergeWatcher {
    */
   private firstPollPending = true;
   private autoMerger: AutoMerger | undefined;
-  /** SHA of the last autofix commit per PR, keyed by "prNumber:repo". Used to
-   *  prevent re-triggering autofix when the autofix commit itself fails CI. */
-  private lastAutofixShas = new Map<string, string>();
 
   constructor(
     private github: GitHubClient,
@@ -110,6 +110,7 @@ export class PRMergeWatcher {
       await this.handleMerged(pr, null, { silent: silentMerges });
     } else if (state === 'closed') {
       updatePRState(pr.pr_number, pr.repo, 'closed');
+      deleteAllAutofixShasForPR(pr.pr_number, pr.repo);
       this.broadcast({
         type: 'pr_closed',
         prNumber: pr.pr_number,
@@ -241,10 +242,9 @@ export class PRMergeWatcher {
         `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has failing CI checks: ${failingNames.join(', ') || '(unknown)'}`,
       );
       if (pr.session_id) {
-        const autofixKey = `${pr.pr_number}:${pr.repo}`;
-        const lastSha = this.lastAutofixShas.get(autofixKey);
-        const alreadyAutofixed =
-          lastSha !== undefined && lastSha === pr.head_sha;
+        const alreadyAutofixed = pr.head_sha
+          ? consumeAutofixSha(pr.pr_number, pr.repo, pr.head_sha)
+          : false;
 
         if (!alreadyAutofixed) {
           const session = getSession(pr.session_id);
@@ -266,7 +266,7 @@ export class PRMergeWatcher {
                   ),
               );
               if (result.commitSha) {
-                this.lastAutofixShas.set(autofixKey, result.commitSha);
+                addAutofixSha(pr.pr_number, pr.repo, result.commitSha);
                 recordEvent({
                   event_type: 'autofix_for_ci_failure',
                   actor_type: 'system',
@@ -341,6 +341,7 @@ export class PRMergeWatcher {
     options: { silent?: boolean } = {},
   ): Promise<void> {
     updatePRState(pr.pr_number, pr.repo, 'merged');
+    deleteAllAutofixShasForPR(pr.pr_number, pr.repo);
 
     // End coding session gracefully (stdin close → clean CLI exit)
     if (pr.session_id) {
