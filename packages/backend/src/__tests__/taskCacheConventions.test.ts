@@ -383,7 +383,9 @@ describe('NotionTaskBackend.fetchReadyTasks — no double-prefix on cache-hit', 
     expect(secondIds).toEqual(firstIds);
     expect(firstIds.every((id) => id.startsWith('notion:'))).toBe(true);
     expect(firstIds.every((id) => !id.startsWith('notion:notion:'))).toBe(true);
-    expect(secondIds.every((id) => !id.startsWith('notion:notion:'))).toBe(true);
+    expect(secondIds.every((id) => !id.startsWith('notion:notion:'))).toBe(
+      true,
+    );
   });
 });
 

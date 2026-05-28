@@ -20,7 +20,11 @@ import {
   parseExpectedSize,
   NotionClient,
 } from './NotionClient';
-import { updateTaskCacheStatus, getCacheAge, getTaskCache } from '../db/queries';
+import {
+  updateTaskCacheStatus,
+  getCacheAge,
+  getTaskCache,
+} from '../db/queries';
 
 const source = fs.readFileSync(
   path.join(__dirname, 'NotionClient.ts'),
