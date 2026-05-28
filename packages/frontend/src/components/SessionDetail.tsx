@@ -37,7 +37,8 @@ interface Props {
 export function SessionDetail({
   session,
   send,
-  onClose,
+  // onClose is kept in Props for API compatibility; close button calls history.back() directly
+  onClose: _onClose,
   onDelete,
   onArchive,
   onUnarchive,
@@ -298,7 +299,7 @@ export function SessionDetail({
           )}
           <button
             className={styles.closeButton}
-            onClick={onClose}
+            onClick={() => window.history.back()}
             aria-label="Close panel"
           >
             ✕

@@ -6,6 +6,7 @@ import { useWebSocket } from './hooks/useWebSocket';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useNotifications } from './hooks/useNotifications';
 import { useIsMobile } from './hooks/useIsMobile';
+import { useNavigationHistory } from './hooks/useNavigationHistory';
 import { Header } from './components/Header';
 import type { TopView } from './components/Header';
 import { SessionGrid } from './components/SessionGrid';
@@ -172,10 +173,41 @@ export default function App() {
 
   const [topView, setTopView] = useState<TopView>('tasks');
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [sessionOverlayOpen, setSessionOverlayOpen] = useState(false);
   const [taskViews, setTaskViews] = useState<TaskView[]>([]);
   const [taskViewsLoading, setTaskViewsLoading] = useState(true);
   const settingsInitialTab = 'general' as const;
   const isMobile = useIsMobile();
+
+  const { pushView } = useNavigationHistory({
+    setSelectedTaskId,
+    setSelectedId,
+    setSessionOverlayOpen,
+  });
+
+  const handleSelectTask = useCallback(
+    (taskId: string) => {
+      if (taskId === selectedTaskId) return;
+      pushView({ type: 'task', id: taskId });
+      setSelectedTaskId(taskId);
+    },
+    [selectedTaskId, pushView],
+  );
+
+  const handleSelectSession = useCallback(
+    (sessionId: string) => {
+      if (sessionId === selectedId) return;
+      pushView({ type: 'session', id: sessionId });
+      setSelectedId(sessionId);
+    },
+    [selectedId, pushView],
+  );
+
+  const handleOpenSessionOverlay = useCallback(() => {
+    if (!selectedTaskId) return;
+    pushView({ type: 'sessionOverlay', taskId: selectedTaskId });
+    setSessionOverlayOpen(true);
+  }, [selectedTaskId, pushView]);
 
   useEffect(() => {
     detailWidthRef.current = detailWidthPct;
@@ -858,10 +890,8 @@ export default function App() {
     onDismiss: () => {
       if (showModal) {
         setShowModal(false);
-      } else if (selectedTaskId) {
-        setSelectedTaskId(null);
-      } else if (selectedId) {
-        setSelectedId(null);
+      } else if (selectedTaskId || selectedId) {
+        window.history.back();
       } else if (filtersActive) {
         clearFilters();
         searchInputRef.current?.blur();
@@ -945,7 +975,7 @@ export default function App() {
                   activeProjectId={activeProjectId}
                   boardId={activeBoardId}
                   selectedTaskId={selectedTaskId}
-                  onSelectTask={setSelectedTaskId}
+                  onSelectTask={handleSelectTask}
                   tasks={taskViews}
                   loading={taskViewsLoading}
                   onOptimisticDispatch={handleTaskOptimisticDispatch}
@@ -964,7 +994,7 @@ export default function App() {
               {selectedTaskId && (
                 <div
                   className={styles.mobileBackdrop}
-                  onClick={() => setSelectedTaskId(null)}
+                  onClick={() => history.back()}
                   aria-hidden="true"
                   data-testid="task-mobile-backdrop"
                 />
@@ -992,7 +1022,9 @@ export default function App() {
                           task={selectedTask}
                           send={send}
                           sessions={sessions}
-                          onClose={() => setSelectedTaskId(null)}
+                          onClose={() => history.back()}
+                          sessionOverlayOpen={sessionOverlayOpen}
+                          onOpenSessionOverlay={handleOpenSessionOverlay}
                           projectId={activeProjectId ?? undefined}
                           isLocalOnly={
                             projects.find((p) => p.id === activeProjectId)
@@ -1099,7 +1131,7 @@ export default function App() {
                       projects={projects}
                       selectedId={selectedId}
                       keyboardSelectedId={keyboardHighlightedId}
-                      onSelect={setSelectedId}
+                      onSelect={handleSelectSession}
                       synced={synced}
                       onArchiveAll={handleArchiveAll}
                       filtersActive={filtersActive}
@@ -1124,7 +1156,7 @@ export default function App() {
               {selectedSession && (
                 <div
                   className={styles.mobileBackdrop}
-                  onClick={() => setSelectedId(null)}
+                  onClick={() => history.back()}
                   aria-hidden="true"
                   data-testid="session-mobile-backdrop"
                 />
@@ -1139,10 +1171,10 @@ export default function App() {
                     <SessionDetail
                       session={selectedSession}
                       send={send}
-                      onClose={() => setSelectedId(null)}
+                      onClose={() => history.back()}
                       onDelete={(sessionId) => {
                         deleteSession(sessionId);
-                        setSelectedId(null);
+                        window.history.back();
                       }}
                       onArchive={(sessionId) =>
                         setSessionArchived(sessionId, true)

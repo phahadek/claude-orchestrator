@@ -141,11 +141,16 @@ describe('TaskDetail', () => {
     expect(link.getAttribute('href')).toBe('https://notion.so/task-1');
   });
 
-  it('calls onClose when close button is clicked', () => {
+  it('close button calls history.back() (not onClose directly)', () => {
+    const backSpy = vi
+      .spyOn(window.history, 'back')
+      .mockImplementation(() => {});
     const onClose = vi.fn();
     render(<TaskDetail task={makeTask()} send={vi.fn()} onClose={onClose} />);
     fireEvent.click(screen.getByLabelText('Close panel'));
-    expect(onClose).toHaveBeenCalledOnce();
+    expect(backSpy).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
+    backSpy.mockRestore();
   });
 
   // ── Code session section ──
@@ -975,7 +980,23 @@ describe('TaskDetail', () => {
     expect(screen.queryByText('No events yet.')).toBeNull();
   });
 
-  it('mobile: tapping "View full session" opens SessionDetail overlay', () => {
+  it('mobile: tapping "View full session" calls onOpenSessionOverlay', () => {
+    isMobileValue = true;
+    const codeSession = makeCodeSession({ sessionId: 'sess-1' });
+    const onOpenSessionOverlay = vi.fn();
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onOpenSessionOverlay={onOpenSessionOverlay}
+      />,
+    );
+    fireEvent.click(screen.getByText('View full session'));
+    expect(onOpenSessionOverlay).toHaveBeenCalledOnce();
+  });
+
+  it('mobile: renders SessionDetail overlay when sessionOverlayOpen=true', () => {
     isMobileValue = true;
     const codeSession = makeCodeSession({ sessionId: 'sess-1' });
     const sessions: SessionState[] = [
@@ -987,10 +1008,33 @@ describe('TaskDetail', () => {
         send={vi.fn()}
         onClose={vi.fn()}
         sessions={sessions}
+        sessionOverlayOpen={true}
       />,
     );
-    fireEvent.click(screen.getByText('View full session'));
     expect(screen.getByTestId('session-overlay')).toBeTruthy();
+  });
+
+  it('mobile: session overlay backdrop calls history.back()', () => {
+    isMobileValue = true;
+    const codeSession = makeCodeSession({ sessionId: 'sess-1' });
+    const sessions: SessionState[] = [
+      makeSessionState({ sessionId: 'sess-1', events: [] }),
+    ];
+    const backSpy = vi
+      .spyOn(window.history, 'back')
+      .mockImplementation(() => {});
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={sessions}
+        sessionOverlayOpen={true}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('session-overlay-backdrop'));
+    expect(backSpy).toHaveBeenCalledOnce();
+    backSpy.mockRestore();
   });
 
   // ── Shared task-views source — detail pane AC tests ──
