@@ -13,7 +13,9 @@ interface Handlers {
 
 export function useNavigationHistory(handlers: Handlers) {
   const handlersRef = useRef(handlers);
-  handlersRef.current = handlers;
+  useEffect(() => {
+    handlersRef.current = handlers;
+  });
 
   useEffect(() => {
     function onPopState(event: PopStateEvent) {
