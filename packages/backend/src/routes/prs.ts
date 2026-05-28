@@ -144,7 +144,8 @@ export function createPrsRouter(
         (r) => r.state === 'open' && !openNumbers.has(r.pr_number),
       );
       for (const pr of stale) {
-        const state = await github.getPRState(pr.pr_number, repo);
+        const prStateResult = await github.getPRState(pr.pr_number, repo);
+        const state = prStateResult.state;
         if (state === 'merged' && mergeWatcher) {
           await mergeWatcher.handleMerged(pr, null);
         } else {
@@ -472,6 +473,7 @@ export function createPrsRouter(
               mergeState: 'dirty',
               rawMergeableState: null,
               failingChecks: [],
+              headSha: null,
             };
           }
           // GitHub may briefly still report 'clean' while the merge is failing
@@ -482,6 +484,7 @@ export function createPrsRouter(
               mergeState: 'unknown',
               rawMergeableState: category.rawMergeableState,
               failingChecks: [],
+              headSha: null,
             };
           }
 

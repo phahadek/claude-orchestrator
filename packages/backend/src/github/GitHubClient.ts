@@ -42,14 +42,19 @@ export class GitHubClient {
   async getPRState(
     prNumber: number,
     repo?: string,
-  ): Promise<'open' | 'merged' | 'closed'> {
+  ): Promise<{ state: 'open' | 'merged' | 'closed'; headSha: string | null }> {
     const r = repo ?? GITHUB_REPO;
-    const data = await this.request<{ state: string; merged: boolean }>(
-      `/repos/${r}/pulls/${prNumber}`,
-    );
-    if (data.merged) return 'merged';
-    if (data.state === 'closed') return 'closed';
-    return 'open';
+    const data = await this.request<{
+      state: string;
+      merged?: boolean;
+      head?: { sha: string };
+    }>(`/repos/${r}/pulls/${prNumber}`);
+    const state: 'open' | 'merged' | 'closed' = data.merged
+      ? 'merged'
+      : data.state === 'closed'
+        ? 'closed'
+        : 'open';
+    return { state, headSha: data.head?.sha ?? null };
   }
 
   async fetchPR(repo: string, prNumber: number): Promise<PullRequest> {
@@ -330,6 +335,7 @@ export class GitHubClient {
         mergeState: 'dirty',
         rawMergeableState,
         failingChecks: [],
+        headSha,
       };
     }
     if (rawMergeableState === 'unstable') {
@@ -343,6 +349,7 @@ export class GitHubClient {
           mergeState: 'ci_failed',
           rawMergeableState,
           failingChecks,
+          headSha,
         };
       }
       return {
@@ -350,6 +357,7 @@ export class GitHubClient {
         mergeState: 'unstable',
         rawMergeableState,
         failingChecks: [],
+        headSha,
       };
     }
     if (rawMergeableState === 'blocked') {
@@ -362,6 +370,7 @@ export class GitHubClient {
           mergeState: 'ci_failed',
           rawMergeableState,
           failingChecks,
+          headSha,
         };
       }
       // A named check that hasn't reported yet is treated as pending, not passing.
@@ -371,6 +380,7 @@ export class GitHubClient {
           mergeState: 'blocked',
           rawMergeableState,
           failingChecks: [],
+          headSha,
         };
       }
       return {
@@ -378,6 +388,7 @@ export class GitHubClient {
         mergeState: 'blocked',
         rawMergeableState,
         failingChecks: [],
+        headSha,
       };
     }
     if (rawMergeableState === 'clean') {
@@ -386,6 +397,7 @@ export class GitHubClient {
         mergeState: 'clean',
         rawMergeableState,
         failingChecks: [],
+        headSha,
       };
     }
     return {
@@ -393,6 +405,7 @@ export class GitHubClient {
       mergeState: rawMergeableState ?? 'unknown',
       rawMergeableState,
       failingChecks: [],
+      headSha,
     };
   }
 
