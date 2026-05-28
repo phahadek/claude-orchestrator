@@ -414,7 +414,9 @@ export function createPrsRouter(
           const backend = resolveBackendForRepo(repo);
           if (backend) {
             try {
-              await backend.updateStatus(taskId, '✅ Done');
+              await backend.updateStatus(taskId, '✅ Done', {
+                source: 'orchestrator',
+              });
               _broadcast({
                 type: 'task_status_changed',
                 notionTaskId: taskId,
@@ -653,7 +655,9 @@ export function createPrsRouter(
         const backend = resolveBackendForRepo(repo);
         if (backend) {
           await backend
-            .updateStatus(prRow.task_id, '👀 In Review')
+            .updateStatus(prRow.task_id, '👀 In Review', {
+              source: 'orchestrator',
+            })
             .catch((e: unknown) =>
               console.warn(
                 '[prs] task backend updateStatus failed:',

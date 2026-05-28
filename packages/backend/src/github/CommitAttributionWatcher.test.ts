@@ -19,7 +19,7 @@ import { setPauseReason } from '../db/queries';
 import type { GitHubClient } from './GitHubClient';
 
 function makeClient(
-  commits: Array<{ sha: string; message: string; author?: { email?: string } }>,
+  commits: Array<{ sha: string; message: string; author?: string | null }>,
 ): GitHubClient {
   return {
     getCommitsForPR: vi.fn().mockResolvedValue(commits),
@@ -47,11 +47,12 @@ describe('AI_TRAILER_REGEX', () => {
 });
 
 describe('checkCommitAttribution()', () => {
-  it('returns missing=0 when all commits have the trailer', async () => {
+  it('emits commit event with has_trailer:true and returns missing=0 when all commits have the trailer', async () => {
     const client = makeClient([
       {
         sha: 'aaa',
         message: 'feat: x\n\nAI-Authored-By: claude-sonnet-4-6 (session: s1)',
+        author: 'bot@example.com',
       },
     ]);
     const result = await checkCommitAttribution(
@@ -66,12 +67,27 @@ describe('checkCommitAttribution()', () => {
     expect(result.checked).toBe(1);
     expect(result.missing).toBe(0);
     expect(result.paused).toBe(false);
-    expect(vi.mocked(recordEvent)).not.toHaveBeenCalled();
+    // commit event emitted with has_trailer: true
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'commit',
+        actor_type: 'ai',
+        payload: expect.objectContaining({ sha: 'aaa', has_trailer: true }),
+      }),
+    );
+    // no attribution_missing when trailer is present
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'attribution_missing' }),
+    );
   });
 
-  it('records attribution_missing to the audit log when a trailer is absent', async () => {
+  it('emits commit (has_trailer:false) and attribution_missing when trailer is absent', async () => {
     const client = makeClient([
-      { sha: 'bbb', message: 'feat: no trailer here' },
+      {
+        sha: 'bbb',
+        message: 'feat: no trailer here',
+        author: 'dev@example.com',
+      },
     ]);
     await checkCommitAttribution(
       client,
@@ -82,6 +98,22 @@ describe('checkCommitAttribution()', () => {
       'task-1',
       false,
     );
+    // commit event with has_trailer: false
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'commit',
+        actor_type: 'human',
+        actor_id: 'session-xyz',
+        payload: expect.objectContaining({
+          sha: 'bbb',
+          has_trailer: false,
+          author: 'dev@example.com',
+          pr_number: 2,
+          repo: 'owner/repo',
+        }),
+      }),
+    );
+    // attribution_missing also emitted
     expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'attribution_missing',
@@ -152,7 +184,7 @@ describe('checkCommitAttribution()', () => {
     expect(vi.mocked(recordEvent)).not.toHaveBeenCalled();
   });
 
-  it('only records missing for commits without the trailer (mixed batch)', async () => {
+  it('emits commit for every commit and attribution_missing only for those without the trailer (mixed batch)', async () => {
     const client = makeClient([
       {
         sha: 'e1',
@@ -172,9 +204,23 @@ describe('checkCommitAttribution()', () => {
     );
     expect(result.checked).toBe(2);
     expect(result.missing).toBe(1);
-    expect(vi.mocked(recordEvent)).toHaveBeenCalledTimes(1);
+    // 2 commit events + 1 attribution_missing = 3 calls
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledTimes(3);
     expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
       expect.objectContaining({
+        event_type: 'commit',
+        payload: expect.objectContaining({ sha: 'e1', has_trailer: true }),
+      }),
+    );
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'commit',
+        payload: expect.objectContaining({ sha: 'e2', has_trailer: false }),
+      }),
+    );
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'attribution_missing',
         payload: expect.objectContaining({ sha: 'e2' }),
       }),
     );
@@ -185,7 +231,7 @@ describe('checkCommitAttribution()', () => {
       {
         sha: 'f1',
         message: 'chore: apply autofix [orchestrator]',
-        author: { email: ORCHESTRATOR_BOT_EMAIL },
+        author: ORCHESTRATOR_BOT_EMAIL,
       },
     ]);
     const result = await checkCommitAttribution(
@@ -208,7 +254,7 @@ describe('checkCommitAttribution()', () => {
         sha: 'f2',
         message:
           'chore: apply autofix [orchestrator]\n\nAI-Authored-By: claude-sonnet-4-6 (session: s1)',
-        author: { email: ORCHESTRATOR_BOT_EMAIL },
+        author: ORCHESTRATOR_BOT_EMAIL,
       },
     ]);
     const result = await checkCommitAttribution(
@@ -229,7 +275,7 @@ describe('checkCommitAttribution()', () => {
       {
         sha: 'g1',
         message: 'feat: session commit no trailer',
-        author: { email: 'session@example.com' },
+        author: 'session@example.com',
       },
     ]);
     await checkCommitAttribution(
@@ -255,7 +301,7 @@ describe('checkCommitAttribution()', () => {
         sha: 'g2',
         message:
           'feat: session commit with trailer\n\nAI-Authored-By: claude-sonnet-4-6 (session: s1)',
-        author: { email: 'session@example.com' },
+        author: 'session@example.com',
       },
     ]);
     const result = await checkCommitAttribution(
@@ -267,7 +313,17 @@ describe('checkCommitAttribution()', () => {
       null,
       false,
     );
-    expect(vi.mocked(recordEvent)).not.toHaveBeenCalled();
+    // commit event is emitted (has_trailer: true); attribution_missing is NOT emitted
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'commit',
+        payload: expect.objectContaining({ sha: 'g2', has_trailer: true }),
+      }),
+    );
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'attribution_missing' }),
+    );
     expect(result.missing).toBe(0);
   });
 });

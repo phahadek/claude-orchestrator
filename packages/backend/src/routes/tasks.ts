@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { getProjectById } from '../config';
 import { ProjectService } from '../projects/ProjectService';
+import { getTaskBackend } from '../tasks/TaskBackend';
 import {
   getTaskCache,
   getActiveTaskAggregates,
@@ -436,6 +437,35 @@ export function createTasksRouter(): Router {
     }
 
     res.json(views);
+  });
+
+  // ── PATCH /api/tasks/:id/status ──────────────────────────────────────────
+  router.patch('/tasks/:id/status', async (req: Request, res: Response) => {
+    const taskId = String(req.params.id);
+    const body = req.body as { status?: unknown; projectId?: unknown };
+    const status = typeof body.status === 'string' ? body.status : null;
+    const projectId =
+      typeof body.projectId === 'string' ? body.projectId : null;
+
+    if (!status) {
+      res.status(400).json({ error: 'status is required' });
+      return;
+    }
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId is required' });
+      return;
+    }
+
+    try {
+      await getTaskBackend(projectId).updateStatus(taskId, status, {
+        source: 'human',
+      });
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Failed to update status',
+      });
+    }
   });
 
   return router;

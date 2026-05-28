@@ -470,11 +470,18 @@ export class GitHubClient {
   async getCommitsForPR(
     repo: string,
     prNumber: number,
-  ): Promise<Array<{ sha: string; message: string }>> {
+  ): Promise<Array<{ sha: string; message: string; author?: string | null }>> {
     const data = await this.request<
-      Array<{ sha: string; commit: { message: string } }>
+      Array<{
+        sha: string;
+        commit: { message: string; author?: { email?: string } };
+      }>
     >(`/repos/${repo}/pulls/${prNumber}/commits?per_page=100`);
-    return data.map((c) => ({ sha: c.sha, message: c.commit.message }));
+    return data.map((c) => ({
+      sha: c.sha,
+      message: c.commit.message,
+      author: c.commit.author?.email ?? null,
+    }));
   }
 
   /**
