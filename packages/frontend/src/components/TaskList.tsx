@@ -13,9 +13,15 @@ interface Props {
   boardId: string | null;
   selectedTaskId: string | null;
   onSelectTask: (taskId: string) => void;
-  /** Latest task_updated WS message — merges a single task in-place without a full re-fetch. */
-  lastTaskUpdate?: TaskView | null;
-  /** Incremented when a review session starts or pr_review_complete arrives — triggers a full re-fetch. */
+  /** Task list from App — single source of truth shared with the detail pane. */
+  tasks: TaskView[];
+  /** True while App is loading/refreshing the task list. */
+  loading: boolean;
+  /** Called when tasks are optimistically moved to In Progress after dispatch. */
+  onOptimisticDispatch: (taskIds: string[]) => void;
+  /** Called to force a REST re-fetch (used by Sync in non-milestone views). */
+  onForceRefetch?: () => Promise<void>;
+  /** Incremented when tasks_ready / pr_review_complete arrive — used to clear syncing indicator. */
   reviewRefreshTrigger?: number;
   send: (msg: ClientMessage) => boolean;
   project: ProjectConfig | null;
@@ -264,13 +270,14 @@ export function TaskList({
   boardId,
   selectedTaskId,
   onSelectTask,
-  lastTaskUpdate,
+  tasks,
+  loading,
+  onOptimisticDispatch,
+  onForceRefetch,
   reviewRefreshTrigger,
   send,
   project,
 }: Props) {
-  const [tasks, setTasks] = useState<TaskView[]>([]);
-  const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(
     new Set(['done', 'backlog']),
@@ -288,99 +295,44 @@ export function TaskList({
   const NON_MILESTONE_BOARD_ID = '__non_milestone__';
   const isNonMilestoneView = boardId === NON_MILESTONE_BOARD_ID;
 
-  const fetchTasks = useCallback(async () => {
-    if (!activeProjectId) {
-      setLoading(false);
-      return;
-    }
-    try {
-      let url: string;
-      if (isNonMilestoneView) {
-        url = `/api/tasks/non-milestone?projectId=${encodeURIComponent(activeProjectId)}`;
-      } else {
-        const params = new URLSearchParams({ projectId: activeProjectId });
-        if (boardId) params.set('boardId', boardId);
-        url = `/api/tasks/active?${params.toString()}`;
-      }
-      const res = await fetch(url);
-      if (!res.ok) return;
-      const data = (await res.json()) as TaskView[];
-      setTasks(data);
-    } catch {
-      // ignore fetch errors — stale data remains visible
-    } finally {
-      setLoading(false);
-    }
-  }, [activeProjectId, boardId, isNonMilestoneView]);
-
-  // Full re-fetch only on mount and when projectId/boardId changes
-  useEffect(() => {
-    setLoading(true);
-    setTasks([]);
-    void fetchTasks();
-  }, [fetchTasks]);
-
-  // True while a user-initiated Sync is waiting for the tasks_ready → fetchTasks cycle to complete.
+  // True while a user-initiated Sync is waiting for the tasks_ready → fetch cycle to complete.
   const syncPendingRef = useRef(false);
 
-  // Re-fetch when tasks_ready arrives (covers sync, pr_review_complete, and other triggers).
-  // If a user-initiated Sync is pending, clear the loading state after the fetch completes.
+  // Clear syncing when tasks_ready arrives (the data refresh itself is handled by App.tsx).
   useEffect(() => {
     if (!reviewRefreshTrigger) return;
-    const clearSyncing = syncPendingRef.current;
+    if (!syncPendingRef.current) return;
     syncPendingRef.current = false;
     if (syncTimeoutRef.current) {
       clearTimeout(syncTimeoutRef.current);
       syncTimeoutRef.current = null;
     }
-    void fetchTasks().finally(() => {
-      if (clearSyncing) setSyncing(false);
-    });
-  }, [reviewRefreshTrigger, fetchTasks]);
-
-  // Merge a single task in-place when a task_updated WS message arrives.
-  // If the task ID is unknown (not yet in the list), trigger a full re-fetch.
-  useEffect(() => {
-    if (!lastTaskUpdate) return;
-    setTasks((prev) => {
-      const idx = prev.findIndex((t) => t.taskId === lastTaskUpdate.taskId);
-      if (idx < 0) {
-        void fetchTasks();
-        return prev;
-      }
-      const next = [...prev];
-      next[idx] = lastTaskUpdate;
-      return next;
-    });
-  }, [lastTaskUpdate, fetchTasks]);
+    setSyncing(false);
+  }, [reviewRefreshTrigger]);
 
   const handleOptimisticDispatch = useCallback((taskIds: string[]) => {
-    setTasks((prev) =>
-      prev.map((t) =>
-        taskIds.includes(t.taskId)
-          ? {
-              ...t,
-              notionStatus: '🔄 In Progress',
-              displayStatus: 'in_progress' as DisplayStatus,
-            }
-          : t,
-      ),
-    );
-  }, []);
+    onOptimisticDispatch(taskIds);
+  }, [onOptimisticDispatch]);
 
   const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Send WS fetch_tasks with skipCache=true and wait for the tasks_ready response before
-  // reading from the REST endpoint. The reviewRefreshTrigger effect handles the actual
-  // REST fetch once the cache is fresh (sequential, not parallel).
+  // reading from the REST endpoint. App.tsx handles the actual REST fetch via its effect.
   const handleSync = useCallback(() => {
     if (!activeProjectId || syncing) return;
     setSyncing(true);
     syncPendingRef.current = true;
     if (!boardId || isNonMilestoneView) {
-      // Non-milestone view: re-fetch from REST directly (no WS sync support yet).
-      void fetchTasks().finally(() => setSyncing(false));
-      syncPendingRef.current = false;
+      // Non-milestone view: delegate re-fetch to App.tsx via callback.
+      if (onForceRefetch) {
+        void onForceRefetch().finally(() => {
+          syncPendingRef.current = false;
+          setSyncing(false);
+        });
+      } else {
+        syncPendingRef.current = false;
+        setSyncing(false);
+      }
       return;
     }
     const sent = send({
@@ -397,8 +349,6 @@ export function TaskList({
     }
     // Safety timeout: clear syncing if no tasks_ready arrives within 5 seconds
     if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
-    // Timeout ref is shared between this callback and the reviewRefreshTrigger effect — unavoidable
-    // eslint-disable-next-line react-hooks/immutability
     syncTimeoutRef.current = setTimeout(() => {
       syncTimeoutRef.current = null;
       if (syncPendingRef.current) {
@@ -406,7 +356,7 @@ export function TaskList({
         setSyncing(false);
       }
     }, 5000);
-  }, [activeProjectId, boardId, syncing, send]);
+  }, [activeProjectId, boardId, isNonMilestoneView, syncing, send, onForceRefetch]);
 
   const mergeReadyCount = tasks.filter(
     (t) =>

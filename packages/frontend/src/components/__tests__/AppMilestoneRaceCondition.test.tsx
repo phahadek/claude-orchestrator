@@ -1,4 +1,4 @@
-import { render, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ConnectionState } from '../../hooks/useWebSocket';
 
@@ -88,10 +88,18 @@ vi.mock('../HistoryGrid', () => ({ HistoryGrid: () => <div /> }));
 vi.mock('../Notifications', () => ({ Notifications: () => null }));
 vi.mock('../ShortcutHint', () => ({ ShortcutHint: () => null }));
 vi.mock('../DispatchModal', () => ({ DispatchModal: () => null }));
+// Capture onSelectTask so tests can simulate a user clicking a task
+let capturedOnSelectTask: ((taskId: string) => void) | null = null;
+
 vi.mock('../TaskList', () => ({
-  TaskList: () => <div data-testid="task-list" />,
+  TaskList: ({ onSelectTask }: { onSelectTask: (id: string) => void }) => {
+    capturedOnSelectTask = onSelectTask;
+    return <div data-testid="task-list" />;
+  },
 }));
-vi.mock('../TaskDetail', () => ({ TaskDetail: () => <div /> }));
+vi.mock('../TaskDetail', () => ({
+  TaskDetail: () => <div data-testid="task-detail" />,
+}));
 
 const PROJECT = {
   id: 'proj-1',
@@ -141,9 +149,11 @@ beforeEach(() => {
   mockSend.mockClear();
   setWsConnectionState = null;
   capturedOnBoardChange = null;
+  capturedOnSelectTask = null;
   vi.stubGlobal('fetch', makeFetch());
   vi.stubGlobal('localStorage', makeLocalStore());
   vi.spyOn(console, 'error').mockImplementation(() => {});
+  vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -250,5 +260,194 @@ describe('App — milestone switch race condition', () => {
         (c) => (c[0] as { milestoneId: string }).milestoneId === 'board-2',
       ),
     ).toBe(true);
+  });
+});
+
+// ── Detail pane sync tests ─────────────────────────────────────────────────────
+// These tests verify that the detail pane uses the same task-views source as
+// TaskList (App.taskViews), eliminating the stale-state divergence bug.
+
+type FetchTaskView = {
+  taskId: string;
+  taskName: string;
+  notionStatus: string;
+  displayStatus: string;
+  pauseReason: null;
+  priority: string;
+  notionUrl: string;
+  taskType: string;
+  blocked: boolean;
+  blockerNames: string[];
+  wave: number;
+  codeSession: null;
+  pr: null;
+  review: null;
+  totalTokens: { input: number; output: number };
+};
+
+function makeTaskView(taskId: string, taskName: string): FetchTaskView {
+  return {
+    taskId,
+    taskName,
+    notionStatus: '🔄 In Progress',
+    displayStatus: 'in_progress',
+    pauseReason: null,
+    priority: '🔴 High',
+    notionUrl: `https://notion.so/${taskId}`,
+    taskType: '💻 Code',
+    blocked: false,
+    blockerNames: [],
+    wave: 1,
+    codeSession: null,
+    pr: null,
+    review: null,
+    totalTokens: { input: 0, output: 0 },
+  };
+}
+
+describe('App — detail pane sync with shared task-views source', () => {
+  it('TaskDetail renders when selectedTaskId matches a task in taskViews', async () => {
+    const task = makeTaskView('task-abc', 'My Task');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) =>
+        Promise.resolve({
+          ok: true,
+          json: async () => {
+            if (url.includes('/api/config')) return [PROJECT];
+            if (url.includes('/api/tasks')) return [task];
+            return {};
+          },
+        }),
+      ),
+    );
+
+    render(<App />);
+
+    // Wait for tasks to load into taskViews
+    await waitFor(() => {
+      expect(capturedOnSelectTask).not.toBeNull();
+    });
+
+    // Simulate user clicking a task — the task IS in taskViews
+    await act(async () => {
+      capturedOnSelectTask!('task-abc');
+    });
+
+    // TaskDetail should render (task found in shared taskViews)
+    await waitFor(() => {
+      expect(screen.getByTestId('task-detail')).toBeDefined();
+    });
+    expect(screen.queryByTestId('task-detail-loading')).toBeNull();
+  });
+
+  it('loading placeholder renders when selectedTaskId is set but task not yet in taskViews', async () => {
+    // Fetch returns tasks only after a delay — user clicks before taskViews is populated
+    let resolveTasksFetch!: (value: unknown) => void;
+    const tasksPromise = new Promise((resolve) => {
+      resolveTasksFetch = resolve;
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (url.includes('/api/config'))
+          return Promise.resolve({
+            ok: true,
+            json: async () => [PROJECT],
+          });
+        if (url.includes('/api/tasks')) return tasksPromise;
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      }),
+    );
+
+    render(<App />);
+
+    // Wait for TaskList mock to receive onSelectTask
+    await waitFor(() => {
+      expect(capturedOnSelectTask).not.toBeNull();
+    });
+
+    // Select a task BEFORE taskViews has been populated (fetch not yet resolved)
+    await act(async () => {
+      capturedOnSelectTask!('task-xyz');
+    });
+
+    // Should show loading placeholder, not the empty "Select a task" placeholder
+    await waitFor(() => {
+      expect(screen.getByTestId('task-detail-loading')).toBeDefined();
+    });
+    expect(screen.queryByTestId('task-detail')).toBeNull();
+
+    // Now resolve the fetch with the task data
+    resolveTasksFetch({
+      ok: true,
+      json: async () => [makeTaskView('task-xyz', 'Loaded Task')],
+    });
+
+    // TaskDetail should now appear
+    await waitFor(() => {
+      expect(screen.getByTestId('task-detail')).toBeDefined();
+    });
+    expect(screen.queryByTestId('task-detail-loading')).toBeNull();
+  });
+
+  it('detail pane shows the empty placeholder only when no task is selected', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) =>
+        Promise.resolve({
+          ok: true,
+          json: async () => {
+            if (url.includes('/api/config')) return [PROJECT];
+            if (url.includes('/api/tasks')) return [];
+            return {};
+          },
+        }),
+      ),
+    );
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(capturedOnSelectTask).not.toBeNull();
+    });
+
+    // No task selected — should show the "Select a task" placeholder
+    expect(screen.queryByTestId('task-detail')).toBeNull();
+    expect(screen.queryByTestId('task-detail-loading')).toBeNull();
+  });
+
+  it('onSelectTask from TaskList propagates taskId matching the key in taskViews (shape regression)', async () => {
+    const task = makeTaskView('prefixed-task-id-001', 'Shape Test Task');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) =>
+        Promise.resolve({
+          ok: true,
+          json: async () => {
+            if (url.includes('/api/config')) return [PROJECT];
+            if (url.includes('/api/tasks')) return [task];
+            return {};
+          },
+        }),
+      ),
+    );
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(capturedOnSelectTask).not.toBeNull();
+    });
+
+    // Simulate TaskList calling onSelectTask with the same taskId format stored in taskViews
+    await act(async () => {
+      capturedOnSelectTask!('prefixed-task-id-001');
+    });
+
+    // TaskDetail must render — the taskId shapes match
+    await waitFor(() => {
+      expect(screen.getByTestId('task-detail')).toBeDefined();
+    });
   });
 });
