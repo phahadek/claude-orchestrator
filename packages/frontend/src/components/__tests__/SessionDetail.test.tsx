@@ -343,7 +343,8 @@ describe('SessionDetail', () => {
     expect(screen.getByText(/1 permission denial(?!s)/)).toBeTruthy();
   });
 
-  it('onClose is called when close button is clicked', () => {
+  it('close button calls history.back() (not onClose directly)', () => {
+    const backSpy = vi.spyOn(window.history, 'back').mockImplementation(() => {});
     const onClose = vi.fn();
     render(
       <SessionDetail
@@ -356,7 +357,9 @@ describe('SessionDetail', () => {
       />,
     );
     fireEvent.click(screen.getByLabelText('Close panel'));
-    expect(onClose).toHaveBeenCalled();
+    expect(backSpy).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
+    backSpy.mockRestore();
   });
 });
 

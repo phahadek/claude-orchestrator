@@ -181,6 +181,11 @@ function mockMatchMedia(isMobile: boolean) {
 beforeEach(() => {
   mockMatchMedia(false);
 
+  // Mock history.back to fire popstate synchronously (jsdom doesn't navigate the history stack)
+  vi.spyOn(window.history, 'back').mockImplementation(() => {
+    window.dispatchEvent(new PopStateEvent('popstate', { state: null }));
+  });
+
   const store: Record<string, string> = {};
   vi.stubGlobal('localStorage', {
     getItem: (k: string) => store[k] ?? null,
