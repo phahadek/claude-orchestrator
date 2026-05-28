@@ -43,9 +43,22 @@ export function handleMessage(
           sessions.start(t.taskUrl, t.projectContextUrl, {
             taskType: t.taskType,
             projectId: t.projectId,
+            milestoneId: t.milestoneId,
+            taskKind: t.taskKind ?? 'milestone',
+            taskName: t.taskName,
           });
         } catch (e) {
-          ws.send(JSON.stringify({ type: 'error', message: String(e) }));
+          const err = e as Error & { alreadyRunning?: boolean };
+          if (err.alreadyRunning) {
+            ws.send(
+              JSON.stringify({
+                type: 'error',
+                message: `Task already has an active session — no duplicate launched.`,
+              }),
+            );
+          } else {
+            ws.send(JSON.stringify({ type: 'error', message: String(e) }));
+          }
         }
       });
       break;

@@ -33,6 +33,7 @@ import {
   getEventsBySession,
   getPRByNumber,
   backfillStuckResultSessions,
+  hasActiveSessionForTask,
 } from '../db/queries';
 import type { Session } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -262,6 +263,12 @@ export class SessionManager extends EventEmitter {
       taskKind,
     } = options ?? {};
 
+    if (sessionType !== 'review' && taskKind === undefined) {
+      throw new Error(
+        `sessionManager.start() requires taskKind for standard sessions`,
+      );
+    }
+
     if (sessionType !== 'review') {
       const codeSessionCount = [...this.sessions.values()].filter(
         (s) => s.sessionType !== 'review',
@@ -294,6 +301,28 @@ export class SessionManager extends EventEmitter {
         `Session launch refused: project "${project.name}" has not confirmed Zero Data Retention (ZDR). ` +
           `Enable the Data Residency attestation in project Settings before launching sessions in corporate mode.`,
       );
+    }
+
+    // Dedup: if a live or DB-active session already exists for this task, return early.
+    // This lifts the AutoLauncher guard into SessionManager so every caller benefits.
+    if (sessionType !== 'review') {
+      const earlyNotionTaskId = formatTaskId(
+        'notion',
+        parseNotionPageIdDashed(taskUrl),
+      );
+      if (
+        this.hasLiveSessionForTask(earlyNotionTaskId) ||
+        hasActiveSessionForTask(earlyNotionTaskId)
+      ) {
+        const existing = [...this.sessions.values()].find((s) => {
+          const tid = s.taskId?.replace(/-/g, '');
+          return tid && tid === earlyNotionTaskId.replace(/-/g, '');
+        });
+        throw Object.assign(
+          new Error(`Session already running for task ${earlyNotionTaskId}`),
+          { alreadyRunning: true, sessionId: existing?.sessionId ?? '' },
+        );
+      }
     }
 
     const sessionId = providedSessionId ?? crypto.randomUUID();
@@ -556,7 +585,7 @@ export class SessionManager extends EventEmitter {
       payload: {
         session_type: sessionType,
         task_url: taskUrl,
-        task_kind: taskKind ?? (milestoneId ? 'milestone' : 'non_milestone'),
+        task_kind: taskKind,
       },
     });
 

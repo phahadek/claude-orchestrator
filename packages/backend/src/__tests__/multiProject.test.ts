@@ -134,4 +134,14 @@ describe('WS ClientMessage types', () => {
     expect(source).toMatch(/fetch_tasks.*projectId:\s*string/s);
     expect(source).toMatch(/fetch_tasks.*milestoneId:\s*string/s);
   });
+
+  it('dispatch task items include milestoneId, taskKind, and taskName optional fields', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'ws', 'types.ts'),
+      'utf-8',
+    );
+    expect(source).toMatch(/milestoneId\?:\s*string\s*\|\s*null/);
+    expect(source).toMatch(/taskKind\?:\s*'milestone'\s*\|\s*'non_milestone'/);
+    expect(source).toMatch(/taskName\?:\s*string/);
+  });
 });

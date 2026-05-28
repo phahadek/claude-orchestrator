@@ -53,6 +53,8 @@ vi.mock('../db/queries', () => ({
   getSessionsByStatus: vi.fn().mockReturnValue([]),
   getEventsBySession: vi.fn().mockReturnValue([]),
   getPRByNumber: vi.fn().mockReturnValue(null),
+  hasActiveSessionForTask: vi.fn().mockReturnValue(false),
+  getSetting: vi.fn().mockReturnValue(null),
 }));
 
 vi.mock('../tasks/TaskBackend', () => ({
@@ -135,6 +137,10 @@ vi.mock('../session/AgentSession', () => {
   };
 });
 
+vi.mock('../audit/AuditLog', () => ({
+  recordEvent: vi.fn(),
+}));
+
 import { SessionManager } from '../session/SessionManager';
 import { AgentSession } from '../session/AgentSession';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -189,6 +195,7 @@ describe('SessionManager — updateStatus("In Progress") failure broadcasts erro
     sm.start(YAML_TASK_ID, CTX_URL, {
       sessionType: 'standard',
       projectId: PROJECT_ID,
+      taskKind: 'milestone',
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -211,6 +218,7 @@ describe('SessionManager — updateStatus("In Progress") failure broadcasts erro
     sm.start(YAML_TASK_ID, CTX_URL, {
       sessionType: 'standard',
       projectId: PROJECT_ID,
+      taskKind: 'milestone',
     });
 
     // session_started is broadcast synchronously before any async rejection
@@ -243,6 +251,7 @@ describe('SessionManager — launchSession failure broadcasts error and rolls ba
     sm.start(YAML_TASK_ID, CTX_URL, {
       sessionType: 'standard',
       projectId: PROJECT_ID,
+      taskKind: 'milestone',
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -266,6 +275,7 @@ describe('SessionManager — launchSession failure broadcasts error and rolls ba
     sm.start(YAML_TASK_ID, CTX_URL, {
       sessionType: 'standard',
       projectId: PROJECT_ID,
+      taskKind: 'milestone',
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -273,6 +283,7 @@ describe('SessionManager — launchSession failure broadcasts error and rolls ba
     expect(fakeBackend.updateStatus).toHaveBeenCalledWith(
       expect.anything(),
       '🗂️ Ready',
+      expect.anything(),
     );
   });
 
@@ -288,6 +299,7 @@ describe('SessionManager — launchSession failure broadcasts error and rolls ba
     sm.start(YAML_TASK_ID, CTX_URL, {
       sessionType: 'standard',
       projectId: PROJECT_ID,
+      taskKind: 'milestone',
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -348,6 +360,7 @@ describe('SessionManager — YAML task dispatch integration', () => {
       sessionType: 'standard',
       projectId: PROJECT_ID,
       taskType: '💻 Code',
+      taskKind: 'milestone',
     });
 
     const started = msgs.find((m) => m.type === 'session_started') as
@@ -366,6 +379,7 @@ describe('SessionManager — YAML task dispatch integration', () => {
       sessionType: 'standard',
       projectId: PROJECT_ID,
       taskType: '💻 Code',
+      taskKind: 'milestone',
     });
 
     expect(msgs.filter((m) => m.type === 'error')).toHaveLength(0);
@@ -379,6 +393,7 @@ describe('SessionManager — YAML task dispatch integration', () => {
     sm.start(NOTION_TASK_URL, CTX_URL, {
       sessionType: 'standard',
       projectId: PROJECT_ID,
+      taskKind: 'milestone',
     });
 
     expect(msgs.find((m) => m.type === 'session_started')).toBeDefined();
