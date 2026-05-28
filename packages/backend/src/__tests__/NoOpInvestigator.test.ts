@@ -19,7 +19,7 @@ import {
   bumpTaskNoOpAttempts,
 } from '../db/queries';
 import type { TaskBackend } from '../tasks/TaskBackend';
-import type { GitHubClient } from '../github/GithubClient';
+import type { GitHubClient } from '../github/GitHubClient';
 import type { ResolvedTask } from '../tasks/types';
 import type { NonMilestoneSourceConfig } from '../tasks/TaskBackend';
 
