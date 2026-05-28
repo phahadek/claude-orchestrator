@@ -328,4 +328,5 @@ export interface PullRequestRow {
   failing_checks: string | null;
   pending_push: number; // 0 | 1 — push arrived before initial review completed
   pause_reason: PauseReason | null; // non-null marks the task as needs_attention
+  ci_remediation_attempted_sha: string | null; // last head_sha for which CI remediation was attempted
 }

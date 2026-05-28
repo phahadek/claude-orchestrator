@@ -734,6 +734,7 @@ export function upsertPullRequest(
     | 'failing_checks'
     | 'pending_push'
     | 'pause_reason'
+    | 'ci_remediation_attempted_sha'
   > & {
     review_session_id?: string | null;
     review_iteration?: number;
@@ -1121,6 +1122,16 @@ export function resetReviewIteration(prNumber: number, repo: string): void {
     WHERE pr_number = @pr_number AND repo = @repo
   `,
   ).run({ pr_number: prNumber, repo });
+}
+
+export function setCiRemediationAttemptedSha(
+  prNumber: number,
+  repo: string,
+  sha: string | null,
+): void {
+  db.prepare(
+    `UPDATE pull_requests SET ci_remediation_attempted_sha = ? WHERE pr_number = ? AND repo = ?`,
+  ).run(sha, prNumber, repo);
 }
 
 export function setPauseReason(
