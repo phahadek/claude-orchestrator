@@ -360,7 +360,9 @@ describe('runFilePollutionCheck — file_pollution_check_failed audit event', ()
 
     const failedEvents = vi
       .mocked(recordEvent)
-      .mock.calls.filter(([e]) => e.event_type === 'file_pollution_check_failed');
+      .mock.calls.filter(
+        ([e]) => e.event_type === 'file_pollution_check_failed',
+      );
     expect(failedEvents).toHaveLength(0);
   });
 });

@@ -32,7 +32,11 @@ vi.mock('js-yaml', () => ({
 vi.mock('../../github/PRFileValidator', () => ({
   isHardBanned: vi.fn((f: string) => {
     const base = f.split('/').pop() ?? f;
-    return /^claude\.md$/i.test(base) || /^\.commit[-_]msg$/i.test(base) || /^commit[-_]msg\..+$/i.test(base);
+    return (
+      /^claude\.md$/i.test(base) ||
+      /^\.commit[-_]msg$/i.test(base) ||
+      /^commit[-_]msg\..+$/i.test(base)
+    );
   }),
 }));
 
@@ -479,14 +483,17 @@ describe('runAutofix — proactive banned-file unstaging', () => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       spawnCalls.push({ cmd: cmd as string, args: a });
 
-      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  src/foo.ts\n');
+      if (cmd === 'git' && a[0] === 'status')
+        return makeProc(0, 'M  src/foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached') {
         // First call: staged list; second call: remaining after restore
         const callsBefore = spawnCalls.filter(
-          (c) => c.cmd === 'git' && c.args[0] === 'diff' && c.args[1] === '--cached',
+          (c) =>
+            c.cmd === 'git' && c.args[0] === 'diff' && c.args[1] === '--cached',
         );
-        if (callsBefore.length <= 1) return makeProc(0, 'CLAUDE.md\nsrc/foo.ts\n');
+        if (callsBefore.length <= 1)
+          return makeProc(0, 'CLAUDE.md\nsrc/foo.ts\n');
         return makeProc(0, 'src/foo.ts\n');
       }
       if (cmd === 'git' && a[0] === 'restore') return makeProc(0, '');
@@ -501,7 +508,9 @@ describe('runAutofix — proactive banned-file unstaging', () => {
 
     await runAutofix('/worktree', '/project', ['npm run lint'], () => {});
 
-    const addIdx = spawnCalls.findIndex((c) => c.cmd === 'git' && c.args[0] === 'add');
+    const addIdx = spawnCalls.findIndex(
+      (c) => c.cmd === 'git' && c.args[0] === 'add',
+    );
     const restoreIdx = spawnCalls.findIndex(
       (c) => c.cmd === 'git' && c.args[0] === 'restore',
     );
@@ -513,7 +522,12 @@ describe('runAutofix — proactive banned-file unstaging', () => {
     expect(commitIdx).toBeGreaterThan(restoreIdx);
 
     const restoreCall = spawnCalls[restoreIdx];
-    expect(restoreCall.args).toEqual(['restore', '--staged', '--', 'CLAUDE.md']);
+    expect(restoreCall.args).toEqual([
+      'restore',
+      '--staged',
+      '--',
+      'CLAUDE.md',
+    ]);
   });
 
   it('handles CLAUDE.MD (uppercase extension) by exact staged path', async () => {
@@ -521,7 +535,8 @@ describe('runAutofix — proactive banned-file unstaging', () => {
 
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
-      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  CLAUDE.MD\n');
+      if (cmd === 'git' && a[0] === 'status')
+        return makeProc(0, 'M  CLAUDE.MD\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'restore') {
         restoreCalls.push(a);
@@ -546,7 +561,8 @@ describe('runAutofix — proactive banned-file unstaging', () => {
 
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
-      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  commit-msg.draft\n');
+      if (cmd === 'git' && a[0] === 'status')
+        return makeProc(0, 'M  commit-msg.draft\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'restore') {
         restoreCalls.push(a);
@@ -563,7 +579,12 @@ describe('runAutofix — proactive banned-file unstaging', () => {
     await runAutofix('/worktree', '/project', ['echo hi'], () => {});
 
     expect(restoreCalls).toHaveLength(1);
-    expect(restoreCalls[0]).toEqual(['restore', '--staged', '--', 'commit-msg.draft']);
+    expect(restoreCalls[0]).toEqual([
+      'restore',
+      '--staged',
+      '--',
+      'commit-msg.draft',
+    ]);
   });
 
   it('makes no git restore calls when no staged paths are banned', async () => {
@@ -572,7 +593,8 @@ describe('runAutofix — proactive banned-file unstaging', () => {
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       spawnCalls.push({ cmd: cmd as string, args: a });
-      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  src/clean.ts\n');
+      if (cmd === 'git' && a[0] === 'status')
+        return makeProc(0, 'M  src/clean.ts\n');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
         return makeProc(0, 'src/clean.ts\n');
       if (cmd === 'git' && a[0] === 'rev-parse') {
@@ -582,7 +604,12 @@ describe('runAutofix — proactive banned-file unstaging', () => {
       return makeProc(0, '');
     };
 
-    const result = await runAutofix('/worktree', '/project', ['echo hi'], () => {});
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['echo hi'],
+      () => {},
+    );
 
     expect(result.commitSha).toBeDefined();
     const restoreCalls = spawnCalls.filter(
@@ -597,7 +624,8 @@ describe('runAutofix — proactive banned-file unstaging', () => {
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       spawnCalls.push({ cmd: cmd as string, args: a });
-      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  CLAUDE.md\n');
+      if (cmd === 'git' && a[0] === 'status')
+        return makeProc(0, 'M  CLAUDE.md\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'restore') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached') {
@@ -610,7 +638,12 @@ describe('runAutofix — proactive banned-file unstaging', () => {
       return makeProc(0, '');
     };
 
-    const result = await runAutofix('/worktree', '/project', ['echo hi'], () => {});
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['echo hi'],
+      () => {},
+    );
 
     expect(result.success).toBe(true);
     expect(result.commitSha).toBeUndefined();
@@ -628,7 +661,8 @@ describe('runAutofix — proactive banned-file unstaging', () => {
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       spawnCalls.push({ cmd: cmd as string, args: a });
-      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  src/app.ts\nM  CLAUDE.md\n');
+      if (cmd === 'git' && a[0] === 'status')
+        return makeProc(0, 'M  src/app.ts\nM  CLAUDE.md\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'restore') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached') {
@@ -649,7 +683,12 @@ describe('runAutofix — proactive banned-file unstaging', () => {
       return makeProc(0, '');
     };
 
-    const result = await runAutofix('/worktree', '/project', ['echo hi'], () => {});
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['echo hi'],
+      () => {},
+    );
 
     expect(result.commitSha).toBe('cleansha');
     expect(result.touchedFiles).toEqual(['src/app.ts']);
@@ -668,15 +707,19 @@ describe('runAutofix — proactive banned-file unstaging', () => {
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       spawnCalls.push({ cmd: cmd as string, args: a });
-      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  CLAUDE.md\nM  src/a.ts\n');
+      if (cmd === 'git' && a[0] === 'status')
+        return makeProc(0, 'M  CLAUDE.md\nM  src/a.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'restore') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached') {
-        const rc = spawnCalls.filter((c) => c.cmd === 'git' && c.args[0] === 'restore').length;
+        const rc = spawnCalls.filter(
+          (c) => c.cmd === 'git' && c.args[0] === 'restore',
+        ).length;
         if (rc === 0) return makeProc(0, 'CLAUDE.md\nsrc/a.ts\n');
         return makeProc(0, 'src/a.ts\n');
       }
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only') return makeProc(0, 'src/a.ts\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only')
+        return makeProc(0, 'src/a.ts\n');
       if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'rev-parse') {
@@ -690,7 +733,10 @@ describe('runAutofix — proactive banned-file unstaging', () => {
 
     // No worktree restore (--worktree flag)
     const worktreeRestore = spawnCalls.filter(
-      (c) => c.cmd === 'git' && c.args[0] === 'restore' && c.args.includes('--worktree'),
+      (c) =>
+        c.cmd === 'git' &&
+        c.args[0] === 'restore' &&
+        c.args.includes('--worktree'),
     );
     expect(worktreeRestore).toHaveLength(0);
 
@@ -704,17 +750,20 @@ describe('runAutofix — proactive banned-file unstaging', () => {
 
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
-      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  CLAUDE.md\nM  .commit-msg\nM  src/ok.ts\n');
+      if (cmd === 'git' && a[0] === 'status')
+        return makeProc(0, 'M  CLAUDE.md\nM  .commit-msg\nM  src/ok.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'restore') {
         restoreCalls.push(a);
         return makeProc(0, '');
       }
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached') {
-        if (restoreCalls.length === 0) return makeProc(0, 'CLAUDE.md\n.commit-msg\nsrc/ok.ts\n');
+        if (restoreCalls.length === 0)
+          return makeProc(0, 'CLAUDE.md\n.commit-msg\nsrc/ok.ts\n');
         return makeProc(0, 'src/ok.ts\n');
       }
-      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only') return makeProc(0, 'src/ok.ts\n');
+      if (cmd === 'git' && a[0] === 'diff' && a[1] === '--name-only')
+        return makeProc(0, 'src/ok.ts\n');
       if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'rev-parse') {
@@ -728,10 +777,14 @@ describe('runAutofix — proactive banned-file unstaging', () => {
 
     const bannedEvents = vi
       .mocked(recordEvent)
-      .mock.calls.filter(([e]) => e.event_type === 'autofix_banned_file_unstaged');
+      .mock.calls.filter(
+        ([e]) => e.event_type === 'autofix_banned_file_unstaged',
+      );
     expect(bannedEvents).toHaveLength(2);
 
-    const files = bannedEvents.map(([e]) => (e.payload as { file: string }).file);
+    const files = bannedEvents.map(
+      ([e]) => (e.payload as { file: string }).file,
+    );
     expect(files).toContain('CLAUDE.md');
     expect(files).toContain('.commit-msg');
   });
