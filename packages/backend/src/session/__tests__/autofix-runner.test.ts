@@ -445,3 +445,113 @@ describe('runAutofix — syncedTo after fetch + reset', () => {
     expect(result.syncedTo).toBeUndefined();
   });
 });
+
+// ── runAutofix — CLAUDE.md protection ────────────────────────────────────────
+
+describe('runAutofix — CLAUDE.md protection', () => {
+  it('produces no commit when only CLAUDE.md was changed by autofix', async () => {
+    const spawnCalls: Array<{ cmd: string; args: string[] }> = [];
+
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      spawnCalls.push({ cmd, args: a });
+      // git restore succeeds; git status returns clean (CLAUDE.md was the only change)
+      if (cmd === 'git' && a[0] === 'restore') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, '');
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['npm run format:write'],
+      () => {},
+    );
+
+    expect(result.commitSha).toBeUndefined();
+    expect(result.success).toBe(true);
+    const restoreCalls = spawnCalls.filter(
+      (c) => c.cmd === 'git' && c.args[0] === 'restore',
+    );
+    expect(restoreCalls.map((c) => c.args[1])).toContain('CLAUDE.md');
+    expect(restoreCalls.map((c) => c.args[1])).toContain('CLAUDE.MD');
+    expect(
+      spawnCalls.some((c) => c.cmd === 'git' && c.args[0] === 'commit'),
+    ).toBe(false);
+  });
+
+  it('commits source files when CLAUDE.md and a source file are both dirty, with restore called first', async () => {
+    const spawnCalls: Array<{ cmd: string; args: string[] }> = [];
+
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      spawnCalls.push({ cmd, args: a });
+      if (cmd === 'git' && a[0] === 'restore') return makeProc(0, '');
+      // After restore, status still shows the source file (CLAUDE.md was cleaned)
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  src/foo.ts\n');
+      if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'rev-parse') {
+        if (a[1] === '--abbrev-ref') return makeProc(0, 'feature/test\n');
+        return makeProc(0, 'commit-sha\n');
+      }
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['npm run format:write'],
+      () => {},
+    );
+
+    expect(result.commitSha).toBe('commit-sha');
+    expect(result.success).toBe(true);
+    // restore was called for both casings
+    const restoreCalls = spawnCalls.filter(
+      (c) => c.cmd === 'git' && c.args[0] === 'restore',
+    );
+    expect(restoreCalls.map((c) => c.args[1])).toContain('CLAUDE.md');
+    expect(restoreCalls.map((c) => c.args[1])).toContain('CLAUDE.MD');
+    // restore happens before git add
+    const firstRestoreIdx = spawnCalls.findIndex(
+      (c) => c.cmd === 'git' && c.args[0] === 'restore',
+    );
+    const addIdx = spawnCalls.findIndex(
+      (c) => c.cmd === 'git' && c.args[0] === 'add',
+    );
+    expect(firstRestoreIdx).toBeGreaterThanOrEqual(0);
+    expect(addIdx).toBeGreaterThan(firstRestoreIdx);
+  });
+
+  it('restores CLAUDE.md even when git restore exits non-zero (file not tracked)', async () => {
+    const spawnCalls: Array<{ cmd: string; args: string[] }> = [];
+
+    _spawnHook = (cmd, args) => {
+      const a = Array.isArray(args) ? (args as string[]) : [];
+      spawnCalls.push({ cmd, args: a });
+      // git restore exits 1 (file not in index) — should not abort the run
+      if (cmd === 'git' && a[0] === 'restore') return makeProc(1, '', 'error: pathspec');
+      if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  src/bar.ts\n');
+      if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'rev-parse') {
+        if (a[1] === '--abbrev-ref') return makeProc(0, 'feature/test\n');
+        return makeProc(0, 'sha-xyz\n');
+      }
+      return makeProc(0, '');
+    };
+
+    const result = await runAutofix(
+      '/worktree',
+      '/project',
+      ['npm run format:write'],
+      () => {},
+    );
+
+    expect(result.commitSha).toBe('sha-xyz');
+    expect(result.success).toBe(true);
+  });
+});
