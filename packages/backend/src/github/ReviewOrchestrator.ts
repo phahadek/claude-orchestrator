@@ -238,10 +238,7 @@ export class ReviewOrchestrator {
               taskId,
               onReverted: (files) => {
                 if (prRow?.session_id) {
-                  this.sessionManager.addToRevertLock(
-                    prRow.session_id,
-                    files,
-                  );
+                  this.sessionManager.addToRevertLock(prRow.session_id, files);
                 }
               },
             });

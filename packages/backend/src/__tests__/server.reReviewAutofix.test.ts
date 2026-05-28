@@ -380,15 +380,15 @@ describe('push_detected: consumeAutofixSha suppresses autofix-only push', () => 
       runAutofixPipeline: vi.fn().mockImplementation(async () => {
         storedAutofixSha = AUTOFIX_SHA;
       }),
-      consumeAutofixSha: vi.fn().mockImplementation(
-        (_prNumber: number, _repo: string, sha: string) => {
+      consumeAutofixSha: vi
+        .fn()
+        .mockImplementation((_prNumber: number, _repo: string, sha: string) => {
           if (storedAutofixSha && sha === storedAutofixSha) {
             storedAutofixSha = null;
             return true;
           }
           return false;
-        },
-      ),
+        }),
     };
 
     const reviewService = {
