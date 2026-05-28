@@ -1883,3 +1883,32 @@ export function deleteAllAutofixShasForPR(
     `DELETE FROM orchestrator_autofix_shas WHERE pr_number = ? AND repo = ?`,
   ).run(prNumber, repo);
 }
+
+// ─── task_no_op_attempts ──────────────────────────────────────────────────────
+
+export interface TaskNoOpAttemptRow {
+  task_id: string;
+  retry_count: number;
+  last_attempt_at: string;
+}
+
+export function getTaskNoOpAttempts(
+  taskId: string,
+): TaskNoOpAttemptRow | undefined {
+  return db
+    .prepare<{ task_id: string }>(
+      `SELECT task_id, retry_count, last_attempt_at FROM task_no_op_attempts WHERE task_id = @task_id`,
+    )
+    .get({ task_id: taskId }) as TaskNoOpAttemptRow | undefined;
+}
+
+export function bumpTaskNoOpAttempts(taskId: string): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO task_no_op_attempts (task_id, retry_count, last_attempt_at)
+     VALUES (?, 1, ?)
+     ON CONFLICT(task_id) DO UPDATE SET
+       retry_count = retry_count + 1,
+       last_attempt_at = excluded.last_attempt_at`,
+  ).run(taskId, now);
+}

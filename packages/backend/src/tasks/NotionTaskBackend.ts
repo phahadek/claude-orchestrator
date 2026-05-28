@@ -84,6 +84,14 @@ export class NotionTaskBackend implements TaskBackend {
     return page.rawMarkdown;
   }
 
+  async updateNotes(taskId: string, notes: string): Promise<void> {
+    return this.client.updateNotes(taskId, notes);
+  }
+
+  async appendImplementationNote(taskId: string, note: string): Promise<void> {
+    return this.client.appendImplementationNote(taskId, note);
+  }
+
   async fetchNonMilestoneReadyTasks(
     sourceConfig: NonMilestoneSourceConfig | null,
     projectId?: string,

@@ -556,4 +556,77 @@ export class NotionClient {
       },
     });
   }
+
+  /** Overwrite the Notes rich_text property on a Notion task page. */
+  async updateNotes(taskId: string, notes: string): Promise<void> {
+    const externalId = toExternalId(taskId);
+    await notionRequest('PATCH', `/pages/${externalId}`, {
+      properties: {
+        Notes: {
+          rich_text: [{ text: { content: notes } }],
+        },
+      },
+    });
+  }
+
+  /**
+   * Append a line to the "Implementation Notes" section in the page body.
+   * Finds the heading block for "Implementation Notes" then appends a paragraph
+   * after the last block in that section. Falls back to appending at the page end.
+   */
+  async appendImplementationNote(taskId: string, note: string): Promise<void> {
+    const externalId = toExternalId(taskId);
+
+    // Fetch all page blocks to find the Implementation Notes section.
+    const blocks: NotionBlock[] = [];
+    let startCursor: string | undefined;
+    do {
+      const path = `/blocks/${externalId}/children?page_size=100${startCursor ? `&start_cursor=${startCursor}` : ''}`;
+      const resp = await notionRequest<NotionBlocksResponse>('GET', path);
+      blocks.push(...resp.results);
+      startCursor = resp.has_more && resp.next_cursor ? resp.next_cursor : undefined;
+    } while (startCursor);
+
+    // Find the "Implementation Notes" heading block.
+    let afterBlockId: string | undefined;
+    let inSection = false;
+    for (const block of blocks) {
+      const type = block.type as string;
+      if (type.startsWith('heading_')) {
+        const inner = block[type] as { rich_text?: NotionRichText[] } | undefined;
+        const text = inner?.rich_text ? richTextToString(inner.rich_text) : '';
+        if (text.toLowerCase().includes('implementation notes')) {
+          inSection = true;
+          afterBlockId = block.id as string;
+          continue;
+        }
+        if (inSection) {
+          // Next heading ends the section — stop scanning.
+          break;
+        }
+      }
+      if (inSection) {
+        afterBlockId = block.id as string;
+      }
+    }
+
+    const newParagraph = {
+      object: 'block',
+      type: 'paragraph',
+      paragraph: {
+        rich_text: [{ type: 'text', text: { content: note } }],
+      },
+    };
+
+    if (afterBlockId) {
+      await notionRequest('PATCH', `/blocks/${externalId}/children`, {
+        children: [newParagraph],
+        after: afterBlockId,
+      });
+    } else {
+      await notionRequest('PATCH', `/blocks/${externalId}/children`, {
+        children: [newParagraph],
+      });
+    }
+  }
 }

@@ -68,6 +68,12 @@ export interface TaskBackend {
     sourceConfig: NonMilestoneSourceConfig | null,
     projectId?: string,
   ): Promise<ResolvedTask[]>;
+
+  /** Overwrite the Notes property on a task page. */
+  updateNotes(taskId: string, notes: string): Promise<void>;
+
+  /** Append a line to the "Implementation Notes" section in the task page body. */
+  appendImplementationNote(taskId: string, note: string): Promise<void>;
 }
 
 /**
@@ -132,6 +138,14 @@ export class AuditingTaskBackend implements TaskBackend {
     projectId?: string,
   ) {
     return this.inner.fetchNonMilestoneReadyTasks(sourceConfig, projectId);
+  }
+
+  updateNotes(taskId: string, notes: string) {
+    return this.inner.updateNotes(taskId, notes);
+  }
+
+  appendImplementationNote(taskId: string, note: string) {
+    return this.inner.appendImplementationNote(taskId, note);
   }
 }
 
