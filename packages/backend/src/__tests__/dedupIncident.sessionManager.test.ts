@@ -117,27 +117,29 @@ vi.mock('../session/ApiSessionRunner', () => ({
 }));
 
 vi.mock('../session/AgentSession', () => {
-  const AgentSession = vi.fn().mockImplementation(
-    (
-      _sid: string,
-      _url: string,
-      _ctx: string,
-      _override: unknown,
-      _wt: string,
-      taskId: string,
-      _resume: string,
-      _prompt: string,
-      sessionType: string,
-    ) => ({
-      sessionType: sessionType ?? 'standard',
-      taskId,
-      prUrl: null,
-      hasEnded: true,
-      on: vi.fn(),
-      run: vi.fn().mockReturnValue(new Promise(() => {})),
-      injectContextFile: vi.fn(),
-    }),
-  );
+  const AgentSession = vi
+    .fn()
+    .mockImplementation(
+      (
+        _sid: string,
+        _url: string,
+        _ctx: string,
+        _override: unknown,
+        _wt: string,
+        taskId: string,
+        _resume: string,
+        _prompt: string,
+        sessionType: string,
+      ) => ({
+        sessionType: sessionType ?? 'standard',
+        taskId,
+        prUrl: null,
+        hasEnded: true,
+        on: vi.fn(),
+        run: vi.fn().mockReturnValue(new Promise(() => {})),
+        injectContextFile: vi.fn(),
+      }),
+    );
   return {
     AgentSession,
     // parseNotionPageIdDashed: convert URL to the dashless 32-hex-char ID portion,
@@ -145,7 +147,10 @@ vi.mock('../session/AgentSession', () => {
     parseNotionPageIdDashed: vi.fn().mockImplementation((url: string) => {
       // Extract last path segment and treat last 32 chars as the page ID
       const segment = url.split('/').pop() ?? url;
-      const raw = segment.replace(/[^a-f0-9]/gi, '').slice(-32).padEnd(32, '0');
+      const raw = segment
+        .replace(/[^a-f0-9]/gi, '')
+        .slice(-32)
+        .padEnd(32, '0');
       return `${raw.slice(0, 8)}-${raw.slice(8, 12)}-${raw.slice(12, 16)}-${raw.slice(16, 20)}-${raw.slice(20)}`;
     }),
   };
