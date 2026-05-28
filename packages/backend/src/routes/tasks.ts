@@ -369,6 +369,23 @@ export function createTasksRouter(): Router {
       .map((row) => buildTaskViewFromRow(row, cap))
       .filter((v) => !v.notionStatus.includes('Deferred'));
 
+    // Resolve blocked status from the full non-milestone task list
+    try {
+      const resolver = new DependencyResolver();
+      const resolved = resolver.resolve(notionTasks);
+      const resolvedMap = new Map(resolved.map((r) => [r.task.id, r]));
+      for (const view of views) {
+        const r = resolvedMap.get(view.taskId);
+        if (r) {
+          view.blocked = r.blocked;
+          view.blockerNames = r.blockers.map((b) => b.title);
+          view.wave = r.wave;
+        }
+      }
+    } catch {
+      // ignore — views retain their default blocked: false
+    }
+
     res.json(views);
   });
 
