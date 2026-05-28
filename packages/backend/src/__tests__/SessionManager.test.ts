@@ -814,7 +814,9 @@ describe('SessionManager.start() — taskKind required', () => {
   });
 
   it('does not throw for review sessions without taskKind (gate is conditional)', () => {
-    const gateIdx = source.indexOf("sessionType !== 'review' && taskKind === undefined");
+    const gateIdx = source.indexOf(
+      "sessionType !== 'review' && taskKind === undefined",
+    );
     expect(gateIdx).toBeGreaterThan(-1);
     const gateBlock = source.slice(gateIdx, gateIdx + 200);
     expect(gateBlock).toMatch(/sessionType\s*!==\s*'review'/);
@@ -898,9 +900,7 @@ describe('ws/types.ts — dispatch message shape', () => {
   });
 
   it('dispatch task items include taskKind optional field', () => {
-    expect(source).toMatch(
-      /taskKind\?:\s*'milestone'\s*\|\s*'non_milestone'/,
-    );
+    expect(source).toMatch(/taskKind\?:\s*'milestone'\s*\|\s*'non_milestone'/);
   });
 
   it('dispatch task items include taskName optional field', () => {

@@ -76,7 +76,13 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
   const handleLaunch = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!isLaunchable) return;
-    dispatchTask([{ notionUrl: task.notionUrl, taskType: task.taskType, taskName: task.taskName }]);
+    dispatchTask([
+      {
+        notionUrl: task.notionUrl,
+        taskType: task.taskType,
+        taskName: task.taskName,
+      },
+    ]);
   };
 
   return (

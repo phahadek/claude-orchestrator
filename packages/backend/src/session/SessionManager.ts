@@ -319,9 +319,7 @@ export class SessionManager extends EventEmitter {
           return tid && tid === earlyNotionTaskId.replace(/-/g, '');
         });
         throw Object.assign(
-          new Error(
-            `Session already running for task ${earlyNotionTaskId}`,
-          ),
+          new Error(`Session already running for task ${earlyNotionTaskId}`),
           { alreadyRunning: true, sessionId: existing?.sessionId ?? '' },
         );
       }
