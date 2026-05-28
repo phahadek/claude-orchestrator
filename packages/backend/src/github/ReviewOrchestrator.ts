@@ -23,6 +23,7 @@ import { formatReviewFeedback, formatCIFailureFeedback } from './reviewUtils';
 import { runVerifyAsGate } from '../orchestration/verifyRunner';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
+import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { recordEvent } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
 
@@ -422,6 +423,27 @@ export class ReviewOrchestrator {
                 prRow.session_id,
                 result.touchedFiles,
               );
+            }
+            // File pollution check: revert any banned files the autofix committed.
+            if (this.github) {
+              await runFilePollutionCheck({
+                github: this.github,
+                worktreePath,
+                repo: job.repo,
+                prNumber: job.prNumber,
+                baseBranch: prRow?.base_branch ?? 'dev',
+                sessionId: prRow?.session_id ?? null,
+                projectId: project.id,
+                taskId: job.taskId ?? null,
+                onReverted: (files) => {
+                  if (prRow?.session_id) {
+                    this.sessionManager.addToRevertLock(
+                      prRow.session_id,
+                      files,
+                    );
+                  }
+                },
+              });
             }
           }
         } catch (err) {
