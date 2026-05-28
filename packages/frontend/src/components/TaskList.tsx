@@ -352,6 +352,7 @@ export function TaskList({
     }
     // Safety timeout: clear syncing if no tasks_ready arrives within 5 seconds
     if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+    // eslint-disable-next-line react-hooks/immutability
     syncTimeoutRef.current = setTimeout(() => {
       syncTimeoutRef.current = null;
       if (syncPendingRef.current) {
