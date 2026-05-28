@@ -271,6 +271,9 @@ export type ClientMessage =
         projectContextUrl: string;
         taskType?: string;
         projectId: string;
+        milestoneId?: string | null;
+        taskKind?: 'milestone' | 'non_milestone';
+        taskName?: string;
       }[];
     }
   | { type: 'approve'; sessionId: string }

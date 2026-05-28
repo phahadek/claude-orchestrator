@@ -166,6 +166,7 @@ vi.mock('../db/queries', () => ({
   // Required by getCorporateMode() which is called unconditionally in resumeOrphanSessions().
   // Returning null makes it fall through to the default personal-mode config (no dockerMandatory).
   getSetting: vi.fn(() => null),
+  hasActiveSessionForTask: vi.fn(() => false),
 }));
 
 // Now import the modules under test (after all mocks are in place).
@@ -493,6 +494,7 @@ describe('resumeOrphanSessions() — spawn arg contract: --resume <session_id>',
     sm.start('https://notion.so/task', 'https://notion.so/ctx', {
       projectId: 'test-project',
       sessionId: SESSION_UUID,
+      taskKind: 'milestone',
     });
 
     // launchSession() is async — it awaits fetchTaskPage() before calling

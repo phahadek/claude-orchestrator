@@ -48,6 +48,7 @@ vi.mock('../db/queries', () => ({
   getEventsBySession: vi.fn().mockReturnValue([]),
   getPRByNumber: vi.fn().mockReturnValue(null),
   backfillStuckResultSessions: vi.fn(),
+  hasActiveSessionForTask: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock('../tasks/TaskBackend', () => ({
@@ -213,6 +214,7 @@ describe('SessionManager.start() ZDR gate — corporate mode, data_residency_con
       sm.start(TASK_URL, CTX_URL, {
         sessionType: 'standard',
         projectId: PROJECT_ID,
+        taskKind: 'milestone',
       }),
     ).toThrow(/Session launch refused/);
   });
@@ -223,6 +225,7 @@ describe('SessionManager.start() ZDR gate — corporate mode, data_residency_con
       sm.start(TASK_URL, CTX_URL, {
         sessionType: 'standard',
         projectId: PROJECT_ID,
+        taskKind: 'milestone',
       }),
     ).toThrow(/Zero Data Retention|ZDR/);
   });
@@ -233,6 +236,7 @@ describe('SessionManager.start() ZDR gate — corporate mode, data_residency_con
       sm.start(TASK_URL, CTX_URL, {
         sessionType: 'standard',
         projectId: PROJECT_ID,
+        taskKind: 'milestone',
       });
     } catch {
       // expected
@@ -256,6 +260,7 @@ describe('SessionManager.start() ZDR gate — corporate mode, data_residency_con
       sessionId = sm.start(TASK_URL, CTX_URL, {
         sessionType: 'standard',
         projectId: PROJECT_ID,
+        taskKind: 'milestone',
       });
     }).not.toThrow();
     expect(typeof sessionId).toBe('string');
@@ -266,6 +271,7 @@ describe('SessionManager.start() ZDR gate — corporate mode, data_residency_con
     sm.start(TASK_URL, CTX_URL, {
       sessionType: 'standard',
       projectId: PROJECT_ID,
+      taskKind: 'milestone',
     });
     const refusalCalls = vi
       .mocked(recordEvent)
@@ -290,6 +296,7 @@ describe('SessionManager.start() ZDR gate — non-corporate mode, flag NOT check
       sm.start(TASK_URL, CTX_URL, {
         sessionType: 'standard',
         projectId: PROJECT_ID,
+        taskKind: 'milestone',
       }),
     ).not.toThrow();
   });
@@ -299,6 +306,7 @@ describe('SessionManager.start() ZDR gate — non-corporate mode, flag NOT check
     sm.start(TASK_URL, CTX_URL, {
       sessionType: 'standard',
       projectId: PROJECT_ID,
+      taskKind: 'milestone',
     });
     const refusalCalls = vi
       .mocked(recordEvent)

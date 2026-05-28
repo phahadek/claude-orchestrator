@@ -52,6 +52,8 @@ vi.mock('../db/queries', () => ({
   getSessionsByStatus: vi.fn().mockReturnValue([]),
   getEventsBySession: vi.fn().mockReturnValue([]),
   getPRByNumber: vi.fn().mockReturnValue(null),
+  hasActiveSessionForTask: vi.fn().mockReturnValue(false),
+  getSetting: vi.fn().mockReturnValue(null),
 }));
 
 vi.mock('../tasks/TaskBackend', () => ({
@@ -136,6 +138,10 @@ vi.mock('../session/AgentSession', () => {
   };
 });
 
+vi.mock('../audit/AuditLog', () => ({
+  recordEvent: vi.fn(),
+}));
+
 import { SessionManager } from '../session/SessionManager';
 import { AgentSession } from '../session/AgentSession';
 
@@ -174,6 +180,7 @@ describe('SessionManager.getLiveCodeSessionCount() — behavioral pendingStarts 
       sessionType: 'standard',
       projectId: 'test-proj',
       taskName: 'Test Task',
+      taskKind: 'milestone',
     });
     // Synchronous check — launchSession() is suspended at "await fetchTaskPage",
     // so pendingStarts still contains the entry.
@@ -192,6 +199,7 @@ describe('SessionManager.getLiveCodeSessionCount() — behavioral pendingStarts 
       sessionType: 'standard',
       projectId: 'test-proj',
       taskName: 'Test Task',
+      taskKind: 'milestone',
     });
 
     // Count is 1 right after start() — rejection hasn't settled yet

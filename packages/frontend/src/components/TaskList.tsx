@@ -121,7 +121,7 @@ function ReadySection({
   function handleLaunch() {
     const toDispatch = wave1CodeTasks
       .filter((t) => checkedIds.has(t.taskId))
-      .map((t) => ({ taskId: t.taskId, taskType: t.taskType }));
+      .map((t) => ({ notionUrl: t.notionUrl, taskType: t.taskType, taskName: t.taskName }));
     if (toDispatch.length === 0) return;
     dispatch(toDispatch);
     if (project) {
