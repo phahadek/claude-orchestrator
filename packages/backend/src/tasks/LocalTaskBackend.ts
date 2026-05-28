@@ -197,16 +197,20 @@ export class LocalTaskBackend implements TaskBackend {
       }
       allTasks = milestone.tasks.map((t) => this.mapToNotionTask(t));
     }
-    // Cache each task under its prefixed key
-    for (const task of allTasks) {
-      upsertTaskCache(formatTaskId('yaml', task.id), JSON.stringify(task));
-    }
     const resolved = resolver.resolve(allTasks, 'yaml');
-    // Prepend yaml: prefix to task IDs in returned results
+    // Prepend yaml: prefix to task IDs and dependsOn in returned results
     const prefixed = resolved.map((r) => ({
       ...r,
-      task: { ...r.task, id: formatTaskId('yaml', r.task.id) },
+      task: {
+        ...r.task,
+        id: formatTaskId('yaml', r.task.id),
+        dependsOn: r.task.dependsOn.map((dep) => formatTaskId('yaml', dep)),
+      },
     }));
+    // Cache each task under its prefixed key with prefixed-everywhere shape
+    for (const r of prefixed) {
+      upsertTaskCache(r.task.id, JSON.stringify(r.task));
+    }
     // Overwrite board cache with prefixed IDs so /api/tasks/active joins correctly.
     if (milestoneId !== null) {
       upsertTaskCache(

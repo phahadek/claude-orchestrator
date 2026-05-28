@@ -133,12 +133,17 @@ function readBoardCache(boardId: string): NotionTask[] | null {
   if (!row) return null;
   try {
     const tasks = JSON.parse(row.raw_json) as NotionTask[];
-    // Strip notion: prefix if present — cache may store prefixed IDs (post-PR #411 write
-    // convention). The contract of fetchReadyTasks is to return raw Notion page IDs so
-    // NotionTaskBackend's formatTaskId call is the single point of prefixing.
+    // Strip notion: prefix if present — cache stores prefixed-everywhere IDs (post-PR #411
+    // convention extended to dependsOn). The contract of fetchReadyTasks is to return raw
+    // Notion page IDs so NotionTaskBackend's formatTaskId call is the single point of prefixing.
     return tasks.map((t) => ({
       ...t,
       id: t.id.startsWith('notion:') ? t.id.slice('notion:'.length) : t.id,
+      dependsOn: t.dependsOn
+        ? t.dependsOn.map((dep) =>
+            dep.startsWith('notion:') ? dep.slice('notion:'.length) : dep,
+          )
+        : t.dependsOn,
     }));
   } catch {
     return null;
