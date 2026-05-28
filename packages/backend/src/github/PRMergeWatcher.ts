@@ -17,6 +17,7 @@ import {
   updateMergeState,
   getPRByNumber,
   setPauseReason,
+  setCiRemediationAttemptedSha,
   getSession,
   addAutofixSha,
   consumeAutofixSha,
@@ -188,6 +189,18 @@ export class PRMergeWatcher {
       failingNames,
     );
 
+    // CI-failure remediation: decoupled from stateChanged via per-SHA dedup.
+    // Fires whenever we observe ci_failed for a SHA we haven't remediated yet,
+    // regardless of whether AutoMerger already wrote merge_state='ci_failed'.
+    if (category.category === 'ci_failed' && pr.session_id) {
+      if (pr.ci_remediation_attempted_sha !== pr.head_sha) {
+        // Reserve this SHA atomically before running remediation so a restart
+        // can't re-fire for the same SHA.
+        setCiRemediationAttemptedSha(pr.pr_number, pr.repo, pr.head_sha);
+        await this.runCIFailureRemediation(pr, failingNames);
+      }
+    }
+
     // Only update + broadcast if something actually changed.
     if (!stateChanged && !failingChecksChanged) {
       this.tryCIFailingRecovery(pr, category.mergeState);
@@ -217,8 +230,7 @@ export class PRMergeWatcher {
 
     this.tryCIFailingRecovery(pr, category.mergeState);
 
-    // Send session messages only when the state itself transitioned, so the
-    // agent doesn't get re-pinged every 5-minute poll for unchanged states.
+    // Conflict and blocked messages are still gated on state transition.
     if (!stateChanged) return;
 
     if (category.category === 'conflict') {
@@ -237,79 +249,88 @@ export class PRMergeWatcher {
             ),
           );
       }
-    } else if (category.category === 'ci_failed') {
-      console.log(
-        `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has failing CI checks: ${failingNames.join(', ') || '(unknown)'}`,
-      );
-      if (pr.session_id) {
-        const alreadyAutofixed = pr.head_sha
-          ? consumeAutofixSha(pr.pr_number, pr.repo, pr.head_sha)
-          : false;
-
-        if (!alreadyAutofixed) {
-          const session = getSession(pr.session_id);
-          const worktreePath = session?.worktree_path ?? '';
-          const project = getProjectByGithubRepo(pr.repo);
-          const autofixCommands = project
-            ? loadAutofixCommands(project.projectDir)
-            : [];
-
-          if (worktreePath && autofixCommands.length > 0) {
-            try {
-              const result = await runAutofix(
-                worktreePath,
-                project!.projectDir,
-                autofixCommands,
-                (msg) =>
-                  console.log(
-                    `[PRMergeWatcher] autofix PR #${pr.pr_number}: ${msg}`,
-                  ),
-              );
-              if (result.commitSha) {
-                addAutofixSha(pr.pr_number, pr.repo, result.commitSha);
-                recordEvent({
-                  event_type: 'autofix_for_ci_failure',
-                  actor_type: 'system',
-                  task_id: pr.task_id ?? null,
-                  payload: {
-                    pr_number: pr.pr_number,
-                    commit_sha: result.commitSha,
-                    failing_checks: failingNames,
-                    source: 'ci',
-                  },
-                });
-                return; // CI will re-run on the new SHA
-              }
-            } catch (err) {
-              console.warn(
-                `[PRMergeWatcher] autofix error for PR #${pr.pr_number}:`,
-                (err as Error).message,
-              );
-            }
-          }
-        }
-
-        const runUrl = `https://github.com/${pr.repo}/pull/${pr.pr_number}/checks`;
-        const msg = formatCIFailureFeedback({
-          prNumber: pr.pr_number,
-          failingCheckNames: failingNames,
-          runUrl,
-          logExcerpt: null,
-        });
-        this.sessions
-          .sendOrResume(pr.session_id, msg)
-          .catch((err: unknown) =>
-            console.warn(
-              `[PRMergeWatcher] sendOrResume failed for session ${pr.session_id}:`,
-              (err as Error).message,
-            ),
-          );
-      }
     } else if (category.category === 'blocked') {
       console.log(
         `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} is blocked by branch protection`,
       );
     }
+  }
+
+  /**
+   * Run autofix-then-session-feedback remediation for a CI-failing PR.
+   * The caller is responsible for the per-SHA dedup check and recording
+   * ci_remediation_attempted_sha before calling this method.
+   */
+  private async runCIFailureRemediation(
+    pr: PullRequestRow,
+    failingNames: string[],
+  ): Promise<void> {
+    console.log(
+      `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has failing CI checks: ${failingNames.join(', ') || '(unknown)'}`,
+    );
+
+    const alreadyAutofixed = pr.head_sha
+      ? consumeAutofixSha(pr.pr_number, pr.repo, pr.head_sha)
+      : false;
+
+    if (!alreadyAutofixed) {
+      const session = getSession(pr.session_id!);
+      const worktreePath = session?.worktree_path ?? '';
+      const project = getProjectByGithubRepo(pr.repo);
+      const autofixCommands = project
+        ? loadAutofixCommands(project.projectDir)
+        : [];
+
+      if (worktreePath && autofixCommands.length > 0) {
+        try {
+          const result = await runAutofix(
+            worktreePath,
+            project!.projectDir,
+            autofixCommands,
+            (msg) =>
+              console.log(
+                `[PRMergeWatcher] autofix PR #${pr.pr_number}: ${msg}`,
+              ),
+          );
+          if (result.commitSha) {
+            addAutofixSha(pr.pr_number, pr.repo, result.commitSha);
+            recordEvent({
+              event_type: 'autofix_for_ci_failure',
+              actor_type: 'system',
+              task_id: pr.task_id ?? null,
+              payload: {
+                pr_number: pr.pr_number,
+                commit_sha: result.commitSha,
+                failing_checks: failingNames,
+                source: 'ci',
+              },
+            });
+            return; // CI will re-run on the new SHA
+          }
+        } catch (err) {
+          console.warn(
+            `[PRMergeWatcher] autofix error for PR #${pr.pr_number}:`,
+            (err as Error).message,
+          );
+        }
+      }
+    }
+
+    const runUrl = `https://github.com/${pr.repo}/pull/${pr.pr_number}/checks`;
+    const msg = formatCIFailureFeedback({
+      prNumber: pr.pr_number,
+      failingCheckNames: failingNames,
+      runUrl,
+      logExcerpt: null,
+    });
+    this.sessions
+      .sendOrResume(pr.session_id!, msg)
+      .catch((err: unknown) =>
+        console.warn(
+          `[PRMergeWatcher] sendOrResume failed for session ${pr.session_id}:`,
+          (err as Error).message,
+        ),
+      );
   }
 
   private tryCIFailingRecovery(

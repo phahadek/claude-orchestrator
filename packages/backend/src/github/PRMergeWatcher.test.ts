@@ -7,6 +7,7 @@ vi.mock('../db/queries.js', () => ({
   updatePRState: vi.fn(),
   updateMergeState: vi.fn(),
   setPauseReason: vi.fn(),
+  setCiRemediationAttemptedSha: vi.fn(),
   getPRByNumber: vi.fn().mockReturnValue(null),
   getSession: vi.fn().mockReturnValue(null),
   addAutofixSha: vi.fn(),
@@ -37,6 +38,7 @@ import {
   updatePRState,
   updateMergeState,
   setPauseReason,
+  setCiRemediationAttemptedSha,
   getPRByNumber,
   getSession,
   addAutofixSha,
@@ -128,6 +130,7 @@ function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
     failing_checks: null,
     pending_push: 0,
     pause_reason: null,
+    ci_remediation_attempted_sha: null,
     ...overrides,
   };
 }
@@ -472,6 +475,7 @@ describe('PRMergeWatcher categorization branches', () => {
     const pr = makePRRow({
       merge_state: 'clean',
       session_id: 'coding-session',
+      head_sha: 'abc123', // non-null sha so per-SHA dedup fires on first observation
     });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeMockGitHub();
@@ -1024,6 +1028,7 @@ describe('PRMergeWatcher autofix-first CI failure path', () => {
     const pr = makePRRow({
       merge_state: 'clean',
       session_id: 'coding-session',
+      head_sha: 'sha-test',
     });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeMockGitHub();
@@ -1061,6 +1066,7 @@ describe('PRMergeWatcher autofix-first CI failure path', () => {
     const pr = makePRRow({
       merge_state: 'clean',
       session_id: 'coding-session',
+      head_sha: 'sha-test',
     });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeMockGitHub();
@@ -1094,6 +1100,7 @@ describe('PRMergeWatcher autofix-first CI failure path', () => {
     const pr = makePRRow({
       merge_state: 'clean',
       session_id: 'coding-session',
+      head_sha: 'sha-test',
     });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeMockGitHub();
@@ -1125,6 +1132,7 @@ describe('PRMergeWatcher autofix-first CI failure path', () => {
     const pr = makePRRow({
       merge_state: 'clean',
       session_id: 'coding-session',
+      head_sha: 'sha-test',
     });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeMockGitHub();
@@ -1318,6 +1326,7 @@ describe('PRMergeWatcher.checkMergeabilityNow terminal-state guard', () => {
       state: 'open',
       merge_state: 'clean',
       session_id: 'coding-session',
+      head_sha: 'sha-test', // non-null so per-SHA dedup fires on first observation
     });
     vi.mocked(getPRByNumber).mockReturnValue(pr);
     const github = makeMockGitHub();
@@ -1521,6 +1530,271 @@ describe('PRMergeWatcher — CI-failure autofix dedup reads from DB', () => {
       42,
       'owner/repo',
       'new-autofix-sha',
+    );
+  });
+});
+
+// ── ci_remediation_attempted_sha per-SHA dedup ────────────────────────────────
+
+describe('PRMergeWatcher — ci_remediation_attempted_sha per-SHA dedup', () => {
+  beforeEach(() => {
+    // Reset mocks that may have been set to non-default values by prior describe blocks
+    vi.mocked(getProjectByGithubRepo).mockReturnValue(null);
+    vi.mocked(getSession).mockReturnValue(null);
+    vi.mocked(loadAutofixCommands).mockReturnValue([]);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      summary: 'no diff',
+    });
+  });
+
+  function mockCategorizeCI(
+    github: GitHubClient,
+    failingChecks = [{ name: 'build', conclusion: 'failure' }],
+  ): void {
+    vi.mocked((github as any).categorizeMergeability).mockResolvedValue({
+      category: 'ci_failed',
+      mergeState: 'ci_failed',
+      rawMergeableState: 'unstable',
+      failingChecks,
+    });
+  }
+
+  it('fires remediation on first observation when ci_remediation_attempted_sha is null (paused PR scenario)', async () => {
+    // Simulates: AutoMerger already wrote merge_state='ci_failed', stateChanged=false.
+    const pr = makePRRow({
+      pause_reason: 'ci_failing',
+      merge_state: 'ci_failed',
+      session_id: 'coding-session',
+      head_sha: 'sha-abc',
+      ci_remediation_attempted_sha: null,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeCI(github);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(setCiRemediationAttemptedSha)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-abc',
+    );
+    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledWith(
+      'coding-session',
+      expect.stringMatching(/## CI Failure — PR #42/),
+    );
+  });
+
+  it('does NOT re-fire remediation on subsequent polls with the same head_sha', async () => {
+    const pr = makePRRow({
+      merge_state: 'ci_failed',
+      session_id: 'coding-session',
+      head_sha: 'sha-abc',
+      ci_remediation_attempted_sha: 'sha-abc', // already remediated for this SHA
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeCI(github);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(setCiRemediationAttemptedSha)).not.toHaveBeenCalled();
+    expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
+  });
+
+  it('fires remediation again when head_sha advances to a new SHA after a push', async () => {
+    const pr = makePRRow({
+      merge_state: 'ci_failed',
+      session_id: 'coding-session',
+      head_sha: 'sha-B',
+      ci_remediation_attempted_sha: 'sha-A', // remediated for old SHA
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeCI(github);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(setCiRemediationAttemptedSha)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-B',
+    );
+    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledWith(
+      'coding-session',
+      expect.stringMatching(/## CI Failure — PR #42/),
+    );
+  });
+
+  it('does NOT touch ci_remediation_attempted_sha for clean category polls', async () => {
+    const pr = makePRRow({
+      merge_state: 'clean',
+      session_id: 'coding-session',
+      head_sha: 'sha-abc',
+      ci_remediation_attempted_sha: null,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    vi.mocked((github as any).categorizeMergeability).mockResolvedValue({
+      category: 'clean',
+      mergeState: 'clean',
+      rawMergeableState: 'clean',
+      failingChecks: [],
+    });
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(setCiRemediationAttemptedSha)).not.toHaveBeenCalled();
+  });
+
+  it('autofix path sets ci_remediation_attempted_sha before producing a commit', async () => {
+    const pr = makePRRow({
+      merge_state: 'clean',
+      session_id: 'coding-session',
+      head_sha: 'original-sha',
+      ci_remediation_attempted_sha: null,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeCI(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({ worktree_path: '/wt' } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run format:write']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      commitSha: 'autofix-sha',
+      summary: 'formatted',
+    });
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    // SHA reservation happened before autofix
+    expect(vi.mocked(setCiRemediationAttemptedSha)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'original-sha',
+    );
+    // Autofix ran and session was NOT messaged (CI re-runs on new SHA)
+    expect(vi.mocked(runAutofix)).toHaveBeenCalled();
+    expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
+  });
+
+  it('session-feedback path sets ci_remediation_attempted_sha so it does not re-send on next poll', async () => {
+    const pr = makePRRow({
+      merge_state: 'clean',
+      session_id: 'coding-session',
+      head_sha: 'sha-xyz',
+      ci_remediation_attempted_sha: null,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeCI(github);
+    // No autofix commands → falls through to session feedback
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({ worktree_path: '/wt' } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue([]);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(setCiRemediationAttemptedSha)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-xyz',
+    );
+    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledWith(
+      'coding-session',
+      expect.stringMatching(/## CI Failure — PR #42/),
+    );
+  });
+
+  it('existing lastAutofixShas dedup still prevents autofix re-run even when ci_remediation fires', async () => {
+    const pr = makePRRow({
+      merge_state: 'ci_failed',
+      session_id: 'coding-session',
+      head_sha: 'sha-new',
+      ci_remediation_attempted_sha: null, // not yet remediated for this SHA
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeCI(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({ worktree_path: '/wt' } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    // Autofix SHA already recorded in orchestrator_autofix_shas
+    vi.mocked(consumeAutofixSha).mockReturnValue(true);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    // ci_remediation_attempted_sha was set (outer dedup reserved the SHA)
+    expect(vi.mocked(setCiRemediationAttemptedSha)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-new',
+    );
+    // Inner autofix dedup prevented the re-run
+    expect(vi.mocked(runAutofix)).not.toHaveBeenCalled();
+    // Session still got the message (autofix skipped → fall through)
+    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledWith(
+      'coding-session',
+      expect.stringMatching(/## CI Failure — PR #42/),
     );
   });
 });
