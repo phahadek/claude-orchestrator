@@ -148,6 +148,46 @@ describe('buildOrchestratorClaudeMd', () => {
     );
   });
 
+  it('Efficiency Rules contain rule preferring Edit over Write for existing files', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    const efficiencySection = result.slice(
+      result.indexOf('## Efficiency Rules'),
+      result.indexOf('---', result.indexOf('## Efficiency Rules')),
+    );
+    expect(efficiencySection).toContain(
+      'Prefer Edit over Write for files that already exist',
+    );
+    expect(efficiencySection).toContain('Never re-emit an unchanged file body');
+  });
+
+  it('Efficiency Rules forbid re-reading a just-written or just-edited file', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    const efficiencySection = result.slice(
+      result.indexOf('## Efficiency Rules'),
+      result.indexOf('---', result.indexOf('## Efficiency Rules')),
+    );
+    expect(efficiencySection).toContain(
+      'Never Read a file you just wrote or edited',
+    );
+  });
+
+  it('Efficiency Rules forbid Read/cat of raw tasks/*.output files and point to TaskOutput', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    const efficiencySection = result.slice(
+      result.indexOf('## Efficiency Rules'),
+      result.indexOf('---', result.indexOf('## Efficiency Rules')),
+    );
+    expect(efficiencySection).toContain('tasks/*.output');
+    expect(efficiencySection).toContain('TaskOutput');
+  });
+
+  it('Rule 4 text is unchanged — pipes/redirects remain forbidden', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    expect(result).toContain(
+      'Do not write to `/tmp/` or paths outside the worktree.',
+    );
+  });
+
   it('does not include format or lint commands in the Pre-PR Gate', () => {
     const prGateSection = buildOrchestratorClaudeMd(defaultParams).slice(
       buildOrchestratorClaudeMd(defaultParams).indexOf('## Pre-PR Gate'),
