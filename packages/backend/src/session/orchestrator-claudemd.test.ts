@@ -154,7 +154,9 @@ describe('buildOrchestratorClaudeMd', () => {
       result.indexOf('## Efficiency Rules'),
       result.indexOf('---', result.indexOf('## Efficiency Rules')),
     );
-    expect(efficiencySection).toContain('Prefer Edit over Write for files that already exist');
+    expect(efficiencySection).toContain(
+      'Prefer Edit over Write for files that already exist',
+    );
     expect(efficiencySection).toContain('Never re-emit an unchanged file body');
   });
 
@@ -164,7 +166,9 @@ describe('buildOrchestratorClaudeMd', () => {
       result.indexOf('## Efficiency Rules'),
       result.indexOf('---', result.indexOf('## Efficiency Rules')),
     );
-    expect(efficiencySection).toContain('Never Read a file you just wrote or edited');
+    expect(efficiencySection).toContain(
+      'Never Read a file you just wrote or edited',
+    );
   });
 
   it('Efficiency Rules forbid Read/cat of raw tasks/*.output files and point to TaskOutput', () => {
@@ -179,7 +183,9 @@ describe('buildOrchestratorClaudeMd', () => {
 
   it('Rule 4 text is unchanged — pipes/redirects remain forbidden', () => {
     const result = buildOrchestratorClaudeMd(defaultParams);
-    expect(result).toContain('Do not write to `/tmp/` or paths outside the worktree.');
+    expect(result).toContain(
+      'Do not write to `/tmp/` or paths outside the worktree.',
+    );
   });
 
   it('does not include format or lint commands in the Pre-PR Gate', () => {
