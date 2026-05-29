@@ -162,6 +162,9 @@ Optimize for speed and token efficiency:
 - **Do NOT use Agent subagents for exploration.** Use Glob and Grep directly.
 - **Minimize tool calls.** Batch independent reads. Don't re-read files you already read.
 - **Keep commit messages and PR descriptions concise.** One sentence summaries, not essays.
+- **Prefer Edit over Write for files that already exist.** Only use Write to create a new file or when replacing the majority of a file. Never re-emit an unchanged file body.
+- **Never Read a file you just wrote or edited** — you already know its contents and line layout.
+- **Never Read/cat raw \`tasks/*.output\` background-task files** — they bypass the Bash output cap. Use the TaskOutput tool if you must inspect a backgrounded command's output.
 
 ---
 
