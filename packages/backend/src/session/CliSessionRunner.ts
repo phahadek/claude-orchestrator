@@ -1,6 +1,6 @@
 import { spawn, ChildProcess, execSync } from 'child_process';
 import { createInterface } from 'readline';
-import { config } from '../config';
+import { config, BASH_MAX_OUTPUT_LENGTH, BASH_DEFAULT_TIMEOUT_MS } from '../config';
 import type {
   ISessionRunner,
   RawSessionEvent,
@@ -65,6 +65,11 @@ export class CliSessionRunner implements ISessionRunner {
     this.proc = spawn(config.claudePath, spawnArgs, {
       cwd: worktreePath,
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        BASH_MAX_OUTPUT_LENGTH: String(BASH_MAX_OUTPUT_LENGTH),
+        BASH_DEFAULT_TIMEOUT_MS: String(BASH_DEFAULT_TIMEOUT_MS),
+      },
       ...(process.platform !== 'win32' && { detached: true }),
     });
 

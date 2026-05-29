@@ -81,6 +81,18 @@ export const AUTO_REVIEW_CONCURRENCY = Number(
   process.env.AUTO_REVIEW_CONCURRENCY ?? 1,
 );
 
+// ── Session Bash output / timeout caps ───────────────────────────────────────
+// Single source for both CLI (spawn) and API (Agent SDK) mode.
+// Set on process.env so spawned sessions inherit without explicit env override.
+export const BASH_MAX_OUTPUT_LENGTH = Number(
+  process.env.BASH_MAX_OUTPUT_LENGTH ?? 30000,
+);
+export const BASH_DEFAULT_TIMEOUT_MS = Number(
+  process.env.BASH_DEFAULT_TIMEOUT_MS ?? 300000,
+);
+process.env.BASH_MAX_OUTPUT_LENGTH = String(BASH_MAX_OUTPUT_LENGTH);
+process.env.BASH_DEFAULT_TIMEOUT_MS = String(BASH_DEFAULT_TIMEOUT_MS);
+
 export const ALLOWED_TOOLS = [
   'Bash(git:*)',
   'Bash(npm:*)',

@@ -4,10 +4,13 @@ import { Readable, Writable } from 'stream';
 
 vi.mock('../../config', () => ({
   config: { claudePath: '/fake/claude' },
+  BASH_MAX_OUTPUT_LENGTH: 30000,
+  BASH_DEFAULT_TIMEOUT_MS: 300000,
 }));
 
-// We capture the args passed to spawn so we can assert on them.
+// We capture the args and options passed to spawn so we can assert on them.
 let capturedSpawnArgs: string[] = [];
+let capturedSpawnOptions: Record<string, unknown> = {};
 
 function makeMockProc() {
   const stdout = new Readable({ read() {} });
@@ -33,8 +36,9 @@ function makeMockProc() {
 }
 
 vi.mock('child_process', () => ({
-  spawn: vi.fn((_cmd: string, args: string[]) => {
+  spawn: vi.fn((_cmd: string, args: string[], options: Record<string, unknown>) => {
     capturedSpawnArgs = args;
+    capturedSpawnOptions = options;
     return makeMockProc();
   }),
   execSync: vi.fn(() => ''),
@@ -53,6 +57,7 @@ const defaultOptions = {
 
 beforeEach(() => {
   capturedSpawnArgs = [];
+  capturedSpawnOptions = {};
   vi.clearAllMocks();
 });
 
@@ -78,5 +83,14 @@ describe('CliSessionRunner spawn args', () => {
     expect(capturedSpawnArgs).not.toContain('--session-id');
     const idx = capturedSpawnArgs.indexOf('--resume');
     expect(capturedSpawnArgs[idx + 1]).toBe(RESUME_ID);
+  });
+
+  it('spawn env carries BASH_MAX_OUTPUT_LENGTH=30000 and BASH_DEFAULT_TIMEOUT_MS=300000', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run('hello', undefined, defaultOptions, () => {});
+
+    const env = capturedSpawnOptions.env as Record<string, string>;
+    expect(env.BASH_MAX_OUTPUT_LENGTH).toBe('30000');
+    expect(env.BASH_DEFAULT_TIMEOUT_MS).toBe('300000');
   });
 });
