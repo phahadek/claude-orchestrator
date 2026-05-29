@@ -36,11 +36,13 @@ function makeMockProc() {
 }
 
 vi.mock('child_process', () => ({
-  spawn: vi.fn((_cmd: string, args: string[], options: Record<string, unknown>) => {
-    capturedSpawnArgs = args;
-    capturedSpawnOptions = options;
-    return makeMockProc();
-  }),
+  spawn: vi.fn(
+    (_cmd: string, args: string[], options: Record<string, unknown>) => {
+      capturedSpawnArgs = args;
+      capturedSpawnOptions = options;
+      return makeMockProc();
+    },
+  ),
   execSync: vi.fn(() => ''),
 }));
 

@@ -1,6 +1,10 @@
 import { spawn, ChildProcess, execSync } from 'child_process';
 import { createInterface } from 'readline';
-import { config, BASH_MAX_OUTPUT_LENGTH, BASH_DEFAULT_TIMEOUT_MS } from '../config';
+import {
+  config,
+  BASH_MAX_OUTPUT_LENGTH,
+  BASH_DEFAULT_TIMEOUT_MS,
+} from '../config';
 import type {
   ISessionRunner,
   RawSessionEvent,
