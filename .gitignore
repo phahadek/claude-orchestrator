@@ -30,3 +30,6 @@ commit-msg.txt
 commit_msg.txt
 commit-msg.*
 commit_msg.*
+
+# Local-only baseline / analysis output (raw telemetry, never committed)
+/session-efficiency-baseline-output/
