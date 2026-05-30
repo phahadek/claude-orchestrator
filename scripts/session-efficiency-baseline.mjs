@@ -230,8 +230,7 @@ const fmtMs = (ms) => {
 };
 const fmtInt = (n) =>
   n === null ? 'n/a' : Math.round(n).toLocaleString('en-US');
-const isMsMetric = (m) =>
-  m === 'wall_clock_ms' || m === 'time_to_pr_ms';
+const isMsMetric = (m) => m === 'wall_clock_ms' || m === 'time_to_pr_ms';
 const fmtMetric = (m, v) => (isMsMetric(m) ? fmtMs(v) : fmtInt(v));
 
 // ── Write outputs ──────────────────────────────────────────────────────────
