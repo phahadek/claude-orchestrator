@@ -14,7 +14,7 @@ import { EnvFileConfigSource } from '../config/EnvFileConfigSource.js';
 import { ConfigValidationError } from '../config/types.js';
 import {
   getOrchestratorConfig,
-  writeOrchestratorConfig,
+  writeOrchestratorConfig as _writeOrchestratorConfig,
   _setConfigSourceForTesting,
   _resetAppConfigCache,
 } from '../config/appConfig.js';
@@ -226,12 +226,8 @@ describe('getOrchestratorConfig resolution order', () => {
   });
 
   it('uses EnvFileConfigSource and logs deprecation when no config.json', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     process.env.NOTION_API_KEY = 'ntn-from-env';
     try {
-      // Empty data dir → no config.json → falls back to env
-      const dataDirSrc = new DataDirConfigSource(tmpDir);
-      // Simulate the resolution logic: dataDirSrc.exists() is false, so use env
       const envSrc = new EnvFileConfigSource();
       _setConfigSourceForTesting(envSrc);
       const cfg = getOrchestratorConfig();
