@@ -15,6 +15,7 @@ import {
 import { GitHubClient } from '../github/GitHubClient';
 import { JIRA_HOST, JIRA_TOKEN, JIRA_EMAIL } from '../config';
 import { recordEvent } from '../audit/AuditLog';
+import { upsertTaskCache } from '../db/queries';
 
 /**
  * Per-project configuration that identifies where non-milestone tasks are sourced from.
@@ -103,8 +104,23 @@ export class AuditingTaskBackend implements TaskBackend {
     return this.inner.type;
   }
 
-  fetchReadyTasks(milestoneId: string | null, skipCache?: boolean) {
-    return this.inner.fetchReadyTasks(milestoneId, skipCache);
+  async fetchReadyTasks(
+    milestoneId: string | null,
+    skipCache?: boolean,
+  ): Promise<ResolvedTask[]> {
+    const results = await this.inner.fetchReadyTasks(milestoneId, skipCache);
+    if (this.inner.type === 'github') {
+      for (const r of results) {
+        upsertTaskCache(r.task.id, JSON.stringify(r.task));
+      }
+      if (milestoneId !== null) {
+        upsertTaskCache(
+          `board:${milestoneId}`,
+          JSON.stringify(results.map((r) => r.task)),
+        );
+      }
+    }
+    return results;
   }
 
   attachPR(taskId: string, prUrl: string) {

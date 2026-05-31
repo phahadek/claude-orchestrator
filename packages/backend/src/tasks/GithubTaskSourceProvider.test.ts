@@ -1,11 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-
-vi.mock('../db/queries', () => ({
-  upsertTaskCache: vi.fn(),
-}));
-
 import { GithubTaskSourceProvider } from './GithubTaskSourceProvider';
-import { upsertTaskCache } from '../db/queries';
 import type { Issue, IssueComment } from '../github/types';
 
 function makeIssue(id: number, overrides: Partial<Issue> = {}): Issue {
@@ -139,41 +133,6 @@ describe('GithubTaskSourceProvider.fetchReadyTasks', () => {
     }
   });
 
-  it('writes board cache with github:-prefixed IDs when milestoneId is set', async () => {
-    const client = makeClient({
-      listIssues: vi.fn().mockResolvedValue([makeIssue(1)]),
-    });
-    const provider = new GithubTaskSourceProvider(
-      client as never,
-      PROJECT_CONFIG,
-    );
-
-    await provider.fetchReadyTasks('3');
-
-    const boardCall = vi
-      .mocked(upsertTaskCache)
-      .mock.calls.find(([key]) => key === 'board:3');
-    expect(boardCall).toBeDefined();
-    const cached = JSON.parse(boardCall![1] as string) as Array<{ id: string }>;
-    expect(cached[0].id).toBe('github:1');
-  });
-
-  it('does not write board cache when milestoneId is null', async () => {
-    const client = makeClient({
-      listIssues: vi.fn().mockResolvedValue([makeIssue(1)]),
-    });
-    const provider = new GithubTaskSourceProvider(
-      client as never,
-      PROJECT_CONFIG,
-    );
-
-    await provider.fetchReadyTasks(null);
-
-    const boardCalls = vi
-      .mocked(upsertTaskCache)
-      .mock.calls.filter(([key]) => (key as string).startsWith('board:'));
-    expect(boardCalls).toHaveLength(0);
-  });
 });
 
 // ── fetchNonMilestoneReadyTasks ─────────────────────────────────────────────
@@ -438,6 +397,27 @@ describe('GithubTaskSourceProvider.attachPR', () => {
       1,
       'PR: https://github.com/owner/repo/pull/42',
     );
+    expect(client.updateIssue).toHaveBeenCalledWith('owner/repo', 1, {
+      labels: ['type:code', 'status:in-review'],
+    });
+  });
+
+  it('removes any status:* label (not just status:ready) before adding status:in-review', async () => {
+    const issue = makeIssue(1, { labels: ['status:in-progress', 'type:code'] });
+    const client = makeClient({
+      getIssue: vi.fn().mockResolvedValue(issue),
+      listIssueComments: vi.fn().mockResolvedValue([]),
+    });
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
+
+    await provider.attachPR(
+      'github:1',
+      'https://github.com/owner/repo/pull/99',
+    );
+
     expect(client.updateIssue).toHaveBeenCalledWith('owner/repo', 1, {
       labels: ['type:code', 'status:in-review'],
     });

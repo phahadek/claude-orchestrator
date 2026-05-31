@@ -3,7 +3,6 @@ import type { ResolvedTask } from './types';
 import type { NotionTask } from '../notion/types';
 import { formatTaskId } from './taskId';
 import { DependencyResolver } from '../notion/DependencyResolver';
-import { upsertTaskCache } from '../db/queries';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { Issue } from '../github/types';
 
@@ -140,7 +139,7 @@ export class GithubTaskSourceProvider implements TaskBackend {
       state: 'open',
     });
 
-    return this.buildResolvedTasks(issues, milestoneId);
+    return this.buildResolvedTasks(issues);
   }
 
   async fetchNonMilestoneReadyTasks(
@@ -152,7 +151,7 @@ export class GithubTaskSourceProvider implements TaskBackend {
       milestone: 'none',
       state: 'open',
     });
-    return this.buildResolvedTasks(issues, null);
+    return this.buildResolvedTasks(issues);
   }
 
   async attachPR(taskId: string, prUrl: string): Promise<void> {
@@ -167,8 +166,10 @@ export class GithubTaskSourceProvider implements TaskBackend {
     await this.client.addIssueComment(this.repo, issueNumber, `PR: ${prUrl}`);
 
     const issue = await this.client.getIssue(this.repo, issueNumber);
-    const labels = [...issue.labels.filter((l) => l !== 'status:ready')];
-    if (!labels.includes('status:in-review')) labels.push('status:in-review');
+    const labels = [
+      ...issue.labels.filter((l) => !l.startsWith('status:')),
+      STATUS_LABELS['👀 In Review'],
+    ];
     await this.client.updateIssue(this.repo, issueNumber, { labels });
   }
 
@@ -239,19 +240,10 @@ export class GithubTaskSourceProvider implements TaskBackend {
     return n;
   }
 
-  private buildResolvedTasks(
-    issues: Issue[],
-    milestoneId: string | null,
-  ): ResolvedTask[] {
+  private buildResolvedTasks(issues: Issue[]): ResolvedTask[] {
     const tasks = issues.map(issueToTask);
-
-    for (const task of tasks) {
-      const prefixedId = formatTaskId('github', task.id);
-      upsertTaskCache(prefixedId, JSON.stringify({ ...task, id: prefixedId }));
-    }
-
     const resolved = resolver.resolve(tasks, 'github');
-    const prefixed = resolved.map((r) => ({
+    return resolved.map((r) => ({
       ...r,
       task: {
         ...r.task,
@@ -259,14 +251,5 @@ export class GithubTaskSourceProvider implements TaskBackend {
         dependsOn: r.task.dependsOn.map((dep) => formatTaskId('github', dep)),
       },
     }));
-
-    if (milestoneId !== null) {
-      upsertTaskCache(
-        `board:${milestoneId}`,
-        JSON.stringify(prefixed.map((r) => r.task)),
-      );
-    }
-
-    return prefixed;
   }
 }
