@@ -702,6 +702,24 @@ export function incrementCompactionCount(sessionId: string): void {
   ).run(sessionId);
 }
 
+/**
+ * Returns all cached tasks (from task_cache) whose status matches the given display
+ * status string. Only returns individual task entries (skips board/page/non-milestone
+ * sentinel keys). Prefix filters to a specific task source (e.g. 'notion:').
+ */
+export function getTasksByStatusFromCache(
+  status: string,
+  prefix: string,
+): { task_id: string; raw_json: string }[] {
+  return db
+    .prepare(
+      `SELECT task_id, raw_json FROM task_cache
+       WHERE task_id LIKE ?
+         AND JSON_EXTRACT(raw_json, '$.status') = ?`,
+    )
+    .all(`${prefix}%`, status) as { task_id: string; raw_json: string }[];
+}
+
 export function getZeroTokenSessions(limit: number): Session[] {
   return db
     .prepare(

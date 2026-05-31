@@ -74,6 +74,13 @@ export interface TaskBackend {
 
   /** Append a line to the "Implementation Notes" section in the task page body. */
   appendImplementationNote(taskId: string, note: string): Promise<void>;
+
+  /**
+   * List all tasks currently at the given display status (e.g. '🔄 In Progress').
+   * Used by the orphaned-task sweep to find tasks that need reconciliation.
+   * Implementations may return from cache rather than making live API calls.
+   */
+  listTasksByStatus(status: string): Promise<ResolvedTask[]>;
 }
 
 /**
@@ -146,6 +153,10 @@ export class AuditingTaskBackend implements TaskBackend {
 
   appendImplementationNote(taskId: string, note: string) {
     return this.inner.appendImplementationNote(taskId, note);
+  }
+
+  listTasksByStatus(status: string) {
+    return this.inner.listTasksByStatus(status);
   }
 }
 

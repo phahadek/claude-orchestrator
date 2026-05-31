@@ -1,9 +1,10 @@
 import type { TaskBackend, NonMilestoneSourceConfig } from './TaskBackend';
 import type { ResolvedTask } from './types';
+import type { NotionTask } from '../notion/types';
 import { formatTaskId } from './taskId';
 import { NotionClient } from '../notion/NotionClient';
 import { ProjectService } from '../projects/ProjectService';
-import { upsertTaskCache } from '../db/queries';
+import { upsertTaskCache, getTasksByStatusFromCache } from '../db/queries';
 
 /**
  * Notion-backed implementation of TaskBackend. Resolves the Notion database ID
@@ -90,6 +91,27 @@ export class NotionTaskBackend implements TaskBackend {
 
   async appendImplementationNote(taskId: string, note: string): Promise<void> {
     return this.client.appendImplementationNote(taskId, note);
+  }
+
+  async listTasksByStatus(status: string): Promise<ResolvedTask[]> {
+    const rows = getTasksByStatusFromCache(status, 'notion:');
+    const results: ResolvedTask[] = [];
+    for (const row of rows) {
+      try {
+        const task = JSON.parse(row.raw_json) as NotionTask;
+        results.push({
+          task,
+          source: 'notion' as const,
+          blocked: false,
+          blockers: [],
+          nonCode: false,
+          wave: 0,
+        });
+      } catch {
+        // skip malformed cache entries
+      }
+    }
+    return results;
   }
 
   async fetchNonMilestoneReadyTasks(
