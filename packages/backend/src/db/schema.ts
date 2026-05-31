@@ -160,6 +160,13 @@ export function runMigrations(): void {
       last_attempt_at  TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS pending_review_sync (
+      pr_number  INTEGER NOT NULL,
+      repo       TEXT    NOT NULL,
+      sync_state TEXT    NOT NULL DEFAULT 'pending',
+      PRIMARY KEY (pr_number, repo)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events(session_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_event_type ON session_events(session_id, event_type);
     CREATE INDEX IF NOT EXISTS idx_session_events_timestamp ON session_events(timestamp DESC);

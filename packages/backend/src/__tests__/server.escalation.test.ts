@@ -30,6 +30,9 @@ vi.mock('../db/queries.js', () => ({
   getLocalBranchBySession: vi.fn(),
   setLocalBranchPauseReason: vi.fn(),
   getSession: vi.fn(),
+  getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
+  insertPendingReviewSync: vi.fn(),
+  deletePendingReviewSync: vi.fn(),
 }));
 
 const projectFixture = {
