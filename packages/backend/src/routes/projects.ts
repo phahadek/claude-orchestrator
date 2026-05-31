@@ -159,20 +159,30 @@ projectsRouter.patch('/projects/:id', (req: Request, res: Response) => {
       try {
         parsed = JSON.parse(body.nonMilestoneSourceConfig);
       } catch {
-        res.status(400).json({ error: 'nonMilestoneSourceConfig is not valid JSON' });
+        res
+          .status(400)
+          .json({ error: 'nonMilestoneSourceConfig is not valid JSON' });
         return;
       }
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        res.status(400).json({ error: 'nonMilestoneSourceConfig must be a JSON object' });
+      if (
+        typeof parsed !== 'object' ||
+        parsed === null ||
+        Array.isArray(parsed)
+      ) {
+        res
+          .status(400)
+          .json({ error: 'nonMilestoneSourceConfig must be a JSON object' });
         return;
       }
       const obj = parsed as Record<string, unknown>;
       if (
-        (obj.notionDatabaseId !== undefined && typeof obj.notionDatabaseId !== 'string') ||
+        (obj.notionDatabaseId !== undefined &&
+          typeof obj.notionDatabaseId !== 'string') ||
         (obj.milestoneId !== undefined && typeof obj.milestoneId !== 'string')
       ) {
         res.status(400).json({
-          error: 'nonMilestoneSourceConfig must have shape {notionDatabaseId?: string; milestoneId?: string}',
+          error:
+            'nonMilestoneSourceConfig must have shape {notionDatabaseId?: string; milestoneId?: string}',
         });
         return;
       }
@@ -180,18 +190,23 @@ projectsRouter.patch('/projects/:id', (req: Request, res: Response) => {
     } else if (typeof body.nonMilestoneSourceConfig === 'object') {
       const obj = body.nonMilestoneSourceConfig as Record<string, unknown>;
       if (
-        (obj.notionDatabaseId !== undefined && typeof obj.notionDatabaseId !== 'string') ||
+        (obj.notionDatabaseId !== undefined &&
+          typeof obj.notionDatabaseId !== 'string') ||
         (obj.milestoneId !== undefined && typeof obj.milestoneId !== 'string')
       ) {
         res.status(400).json({
-          error: 'nonMilestoneSourceConfig must have shape {notionDatabaseId?: string; milestoneId?: string}',
+          error:
+            'nonMilestoneSourceConfig must have shape {notionDatabaseId?: string; milestoneId?: string}',
         });
         return;
       }
-      patch.non_milestone_source_config = JSON.stringify(body.nonMilestoneSourceConfig);
+      patch.non_milestone_source_config = JSON.stringify(
+        body.nonMilestoneSourceConfig,
+      );
     } else {
       res.status(400).json({
-        error: 'nonMilestoneSourceConfig must be a JSON object, JSON string, or null',
+        error:
+          'nonMilestoneSourceConfig must be a JSON object, JSON string, or null',
       });
       return;
     }

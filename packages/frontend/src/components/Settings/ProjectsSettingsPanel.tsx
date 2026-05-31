@@ -46,7 +46,9 @@ function ConfigReadOnly({ config }: { config: OrchestratorConfig }) {
 function toCreatePayload(values: ProjectFormValues) {
   const rawCfg = values.nonMilestoneSourceConfigRaw.trim();
   const nonMilestoneSourceConfig = rawCfg
-    ? (JSON.parse(rawCfg) as import('../../api/projects').NonMilestoneSourceConfig)
+    ? (JSON.parse(
+        rawCfg,
+      ) as import('../../api/projects').NonMilestoneSourceConfig)
     : null;
   return {
     name: values.name.trim(),

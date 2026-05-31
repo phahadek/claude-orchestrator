@@ -103,7 +103,9 @@ describe('PATCH /api/projects/:id — nonMilestoneSourceConfig', () => {
     expect(res.status).toBe(200);
     expect(mockUpdate).toHaveBeenCalledWith(
       'p1',
-      expect.objectContaining({ non_milestone_source_config: '{"milestoneId":"backlog"}' }),
+      expect.objectContaining({
+        non_milestone_source_config: '{"milestoneId":"backlog"}',
+      }),
     );
   });
 

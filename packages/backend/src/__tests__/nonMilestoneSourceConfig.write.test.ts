@@ -11,11 +11,15 @@ const queriesSource = fs.readFileSync(
 
 describe('ProjectPatch — non_milestone_source_config field', () => {
   it('ProjectPatch interface includes non_milestone_source_config', () => {
-    expect(queriesSource).toMatch(/non_milestone_source_config\?:\s*string\s*\|\s*null/);
+    expect(queriesSource).toMatch(
+      /non_milestone_source_config\?:\s*string\s*\|\s*null/,
+    );
   });
 
   it('updateProject SET clause includes non_milestone_source_config', () => {
-    expect(queriesSource).toContain('non_milestone_source_config = @non_milestone_source_config');
+    expect(queriesSource).toContain(
+      'non_milestone_source_config = @non_milestone_source_config',
+    );
   });
 
   it('updateProject preserves non_milestone_source_config when absent from patch', () => {
@@ -139,7 +143,9 @@ describe('updateProject — non_milestone_source_config round-trip', () => {
     updateProject(id, { non_milestone_source_config: cfg });
     const row = getProjectRowById(id);
     expect(row!.non_milestone_source_config).toBe(cfg);
-    expect((JSON.parse(cfg) as { notionDatabaseId: string }).notionDatabaseId).toBe('nm-abc');
+    expect(
+      (JSON.parse(cfg) as { notionDatabaseId: string }).notionDatabaseId,
+    ).toBe('nm-abc');
   });
 
   it('persists a YAML milestone id config', () => {
@@ -153,7 +159,9 @@ describe('updateProject — non_milestone_source_config round-trip', () => {
   it('clears config when patched to null', () => {
     const id = newId();
     create(id);
-    updateProject(id, { non_milestone_source_config: '{"notionDatabaseId":"x"}' });
+    updateProject(id, {
+      non_milestone_source_config: '{"notionDatabaseId":"x"}',
+    });
     updateProject(id, { non_milestone_source_config: null });
     expect(getProjectRowById(id)!.non_milestone_source_config).toBeNull();
   });
@@ -170,6 +178,8 @@ describe('updateProject — non_milestone_source_config round-trip', () => {
   });
 
   it('returns undefined for a non-existent project', () => {
-    expect(updateProject('no-such-id', { non_milestone_source_config: '{}' })).toBeUndefined();
+    expect(
+      updateProject('no-such-id', { non_milestone_source_config: '{}' }),
+    ).toBeUndefined();
   });
 });

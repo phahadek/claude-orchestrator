@@ -98,13 +98,19 @@ export function ProjectFormModal({
     if (rawCfg) {
       try {
         const parsed = JSON.parse(rawCfg) as unknown;
-        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        if (
+          typeof parsed !== 'object' ||
+          parsed === null ||
+          Array.isArray(parsed)
+        ) {
           nextErrors.nonMilestoneSourceConfigRaw = 'Must be a JSON object';
         } else {
           const obj = parsed as Record<string, unknown>;
           if (
-            (obj.notionDatabaseId !== undefined && typeof obj.notionDatabaseId !== 'string') ||
-            (obj.milestoneId !== undefined && typeof obj.milestoneId !== 'string')
+            (obj.notionDatabaseId !== undefined &&
+              typeof obj.notionDatabaseId !== 'string') ||
+            (obj.milestoneId !== undefined &&
+              typeof obj.milestoneId !== 'string')
           ) {
             nextErrors.nonMilestoneSourceConfigRaw =
               'Must have shape {notionDatabaseId?: string; milestoneId?: string}';
@@ -312,7 +318,9 @@ export function ProjectFormModal({
               type="text"
               className={styles.input}
               value={values.nonMilestoneSourceConfigRaw}
-              onChange={(e) => update('nonMilestoneSourceConfigRaw', e.target.value)}
+              onChange={(e) =>
+                update('nonMilestoneSourceConfigRaw', e.target.value)
+              }
               placeholder={
                 values.taskSource === 'yaml'
                   ? '{"milestoneId":"backlog"}'
@@ -326,7 +334,9 @@ export function ProjectFormModal({
                 : ' For Notion projects: {"notionDatabaseId": "…"}'}
             </p>
             {errors.nonMilestoneSourceConfigRaw && (
-              <p className={styles.fieldError}>{errors.nonMilestoneSourceConfigRaw}</p>
+              <p className={styles.fieldError}>
+                {errors.nonMilestoneSourceConfigRaw}
+              </p>
             )}
           </div>
 
