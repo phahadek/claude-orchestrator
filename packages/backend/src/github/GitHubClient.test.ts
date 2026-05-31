@@ -547,10 +547,32 @@ describe('GitHubClient.categorizeMergeability()', () => {
     expect(result.mergeState).toBe('unknown');
   });
 
-  it('categorizes unstable + no failing checks as unknown (CI still pending)', async () => {
+  it('categorizes unstable + running checks as ci_running (CI in progress)', async () => {
     mockPRThenChecks({ mergeable_state: 'unstable' }, [
       { name: 'lint', status: 'in_progress', conclusion: null },
       { name: 'unit-tests', status: 'in_progress', conclusion: null },
+    ]);
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo');
+    expect(result.category).toBe('unknown');
+    expect(result.mergeState).toBe('ci_running');
+    expect(result.failingChecks).toEqual([]);
+  });
+
+  it('categorizes unstable + queued check as ci_running', async () => {
+    mockPRThenChecks({ mergeable_state: 'unstable' }, [
+      { name: 'build', status: 'queued', conclusion: null },
+    ]);
+    const client = new GitHubClient();
+    const result = await client.categorizeMergeability(42, 'owner/repo');
+    expect(result.category).toBe('unknown');
+    expect(result.mergeState).toBe('ci_running');
+    expect(result.failingChecks).toEqual([]);
+  });
+
+  it('categorizes unstable + no failing and no running checks as unstable (genuine edge case)', async () => {
+    mockPRThenChecks({ mergeable_state: 'unstable' }, [
+      { name: 'check', status: 'completed', conclusion: 'success' },
     ]);
     const client = new GitHubClient();
     const result = await client.categorizeMergeability(42, 'owner/repo');
@@ -559,7 +581,7 @@ describe('GitHubClient.categorizeMergeability()', () => {
     expect(result.failingChecks).toEqual([]);
   });
 
-  it('categorizes unstable + one failed check as ci_failed', async () => {
+  it('categorizes unstable + one failed check as ci_failed (unchanged)', async () => {
     mockPRThenChecks({ mergeable_state: 'unstable' }, [
       { name: 'unit-tests', status: 'completed', conclusion: 'failure' },
     ]);
