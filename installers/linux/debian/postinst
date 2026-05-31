@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+
+INSTALL_DIR=/opt/claude-orchestrator
+BIN_LINK=/usr/local/bin/claude-orchestrator
+DESKTOP_SRC="${INSTALL_DIR}/share/autostart.desktop"
+
+# Create symlink
+ln -sf "${INSTALL_DIR}/bin/claude-orchestrator" "${BIN_LINK}"
+
+# Place autostart .desktop for the invoking user
+if [ -n "${SUDO_USER}" ] && [ "${SUDO_USER}" != "root" ]; then
+    AUTOSTART_DIR="$(getent passwd "${SUDO_USER}" | cut -d: -f6)/.config/autostart"
+    install -d -o "${SUDO_USER}" "${AUTOSTART_DIR}"
+    install -m 644 -o "${SUDO_USER}" "${DESKTOP_SRC}" "${AUTOSTART_DIR}/claude-orchestrator.desktop"
+else
+    echo "To enable auto-start, run: cp ${DESKTOP_SRC} ~/.config/autostart/"
+fi
+
+#DEBHELPER#

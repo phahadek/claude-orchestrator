@@ -1,0 +1,14 @@
+#!/bin/sh
+# AppImage entry point — resolve APPDIR and launch the bundled Node server.
+APPDIR="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
+
+# Create data and config dirs on first launch
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/claude-orchestrator"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/claude-orchestrator"
+mkdir -p "$DATA_DIR" "$CONFIG_DIR"
+
+# Set HOME-relative data path for the app
+export CLAUDE_ORCHESTRATOR_DATA_DIR="$DATA_DIR"
+export CLAUDE_ORCHESTRATOR_CONFIG_DIR="$CONFIG_DIR"
+
+exec "${APPDIR}/node" "${APPDIR}/app/server.js" "$@"

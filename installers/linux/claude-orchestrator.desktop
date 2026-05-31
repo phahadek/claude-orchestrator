@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Claude Orchestrator
+Comment=Local web dashboard for Claude Code sessions
+Exec=/opt/claude-orchestrator/bin/claude-orchestrator
+Icon=/opt/claude-orchestrator/share/icon.png
+Terminal=false
+Categories=Development;
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=5
