@@ -164,4 +164,15 @@ describe('ProjectFormModal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));
     expect(screen.getByText(/shape/)).toBeTruthy();
   });
+
+  it('applies modal container class to the inner dialog box for responsive padding', () => {
+    const { container } = render(
+      <ProjectFormModal onCancel={vi.fn()} onSubmit={vi.fn()} />,
+    );
+    const overlay = screen.getByRole('dialog');
+    const modalBox = overlay.firstElementChild as HTMLElement;
+    expect(modalBox).toBeTruthy();
+    expect(modalBox.className).toContain('modal');
+    expect(container.querySelector('h3')).toBeTruthy();
+  });
 });
