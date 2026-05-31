@@ -178,7 +178,6 @@ async function verifyGpgSignature(
   }
 
   const sigPath = filePath + '.sig';
-  const updatesDir = getUpdatesDir();
   const sigUrl = asset.browser_download_url
     .replace(encodeURIComponent(asset.name), encodeURIComponent(sigAssetName))
     .replace(asset.name, sigAssetName);
