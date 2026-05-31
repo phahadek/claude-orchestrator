@@ -39,6 +39,7 @@ import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
 import { getCorporateMode } from './config/corporateMode';
 import { AutoLauncher } from './orchestration/AutoLauncher';
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
+import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
 import { deleteGhostSessions, getPRBySessionId } from './db/queries';
 
 runMigrations();
@@ -224,6 +225,10 @@ const autoLauncher = new AutoLauncher(sessionManager, broadcast);
 // events on construction; lifetime tied to the process.
 const stuckSessionMonitor = new StuckSessionMonitor(sessionManager, broadcast);
 
+// Orphaned-task sweep: runs at the auto-launch poll interval, finds tasks stuck
+// at In Progress with no live session and reverts them to Ready.
+const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast);
+
 jsonlReader
   .importAll()
   .then(async () => {
@@ -250,6 +255,8 @@ jsonlReader
         ),
       );
 
+    orphanedTaskSweeper.start();
+
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`[server] listening on port ${PORT}`);
       console.log('[server] LAN access enabled — device auth required');
@@ -264,6 +271,7 @@ async function gracefulShutdown(signal: string) {
   console.log(`[server] ${signal} received — shutting down`);
   autoLauncher.stop();
   stuckSessionMonitor.stop();
+  orphanedTaskSweeper.stop();
   reviewerCommentsWatcher.stop();
   wss.close();
   await sessionManager.shutdownAll();

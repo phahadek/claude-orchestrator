@@ -138,6 +138,10 @@ export class JiraTaskSourceProvider implements TaskBackend {
     return [];
   }
 
+  async listTasksByStatus(_status: string): Promise<ResolvedTask[]> {
+    return [];
+  }
+
   async updateNotes(_taskId: string, _notes: string): Promise<void> {
     // Jira backend does not support Notion-specific Notes property
   }

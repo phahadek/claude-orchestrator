@@ -281,6 +281,23 @@ export class LocalTaskBackend implements TaskBackend {
     return results;
   }
 
+  async listTasksByStatus(status: string): Promise<ResolvedTask[]> {
+    const file = this.readFile();
+    const matching = file.milestones
+      .flatMap((m) => m.tasks)
+      .filter((t) => toDisplayStatus(t.status) === status)
+      .map((t) => this.mapToNotionTask(t));
+    const resolved = resolver.resolve(matching, 'yaml');
+    return resolved.map((r) => ({
+      ...r,
+      task: {
+        ...r.task,
+        id: formatTaskId('yaml', r.task.id),
+        dependsOn: r.task.dependsOn.map((dep) => formatTaskId('yaml', dep)),
+      },
+    }));
+  }
+
   async updateNotes(_taskId: string, _notes: string): Promise<void> {
     // Local task backend does not support Notion-specific Notes property
   }
