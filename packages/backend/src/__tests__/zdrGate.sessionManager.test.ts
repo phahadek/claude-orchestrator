@@ -7,9 +7,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Prevent real git/fs operations ──────────────────────────────────────────
 
-vi.mock('child_process', () => ({
-  execSync: vi.fn().mockReturnValue('dev\n'),
-}));
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>();
+  return {
+    ...actual,
+    execSync: vi.fn().mockReturnValue('dev\n'),
+  };
+});
 
 vi.mock('fs', async () => {
   const actual = await vi.importActual<typeof import('fs')>('fs');
@@ -102,7 +106,8 @@ vi.mock('../session/ApiSessionRunner', () => ({
   })),
 }));
 
-vi.mock('../session/AgentSession', () => {
+vi.mock(import('../session/AgentSession'), async (importOriginal) => {
+  const actual = await importOriginal();
   const AgentSession = vi
     .fn()
     .mockImplementation(
@@ -126,15 +131,8 @@ vi.mock('../session/AgentSession', () => {
       }),
     );
   return {
+    ...actual,
     AgentSession,
-    parseNotionPageIdDashed: vi.fn().mockImplementation((url: string) => {
-      const segment = url.split('/').pop() ?? url;
-      const raw = segment
-        .replace(/[^a-f0-9]/gi, '')
-        .slice(-32)
-        .padEnd(32, '0');
-      return `${raw.slice(0, 8)}-${raw.slice(8, 12)}-${raw.slice(12, 16)}-${raw.slice(16, 20)}-${raw.slice(20)}`;
-    }),
   };
 });
 
