@@ -40,15 +40,15 @@ Either way, `tasks.yaml` is gitignored by default (listed in `.gitignore` at the
 `tasks.yaml` uses a milestone-keyed schema. Top-level structure:
 
 ```yaml
-project:           # optional
+project: # optional
   id: my-project
   name: My Project
 milestones:
   - id: m1
-    name: "M1 — MVP"
+    name: 'M1 — MVP'
     tasks:
       - id: task-001
-        name: "Implement feature X"
+        name: 'Implement feature X'
         status: Ready
         priority: High
         type: Code
@@ -61,42 +61,42 @@ milestones:
           - [ ] tsc --noEmit passes
         files_affected:
           - src/feature.ts (new)
-        notes: ""
+        notes: ''
   - id: m2
-    name: "M2 — Polish"
+    name: 'M2 — Polish'
     tasks: []
 ```
 
 ### Top-level fields
 
-| Field        | Type   | Required | Description                                         |
-| ------------ | ------ | -------- | --------------------------------------------------- |
-| `project`    | object | No       | Optional project metadata (`id`, `name`)            |
-| `milestones` | array  | Yes      | One or more milestone objects (see below)           |
+| Field        | Type   | Required | Description                               |
+| ------------ | ------ | -------- | ----------------------------------------- |
+| `project`    | object | No       | Optional project metadata (`id`, `name`)  |
+| `milestones` | array  | Yes      | One or more milestone objects (see below) |
 
 ### Milestone fields
 
-| Field   | Type   | Required | Description                             |
-| ------- | ------ | -------- | --------------------------------------- |
+| Field   | Type   | Required | Description                                       |
+| ------- | ------ | -------- | ------------------------------------------------- |
 | `id`    | string | Yes      | Unique identifier; used by the milestone selector |
-| `name`  | string | Yes      | Display name shown in the dashboard     |
-| `tasks` | array  | Yes      | List of task objects for this milestone |
+| `name`  | string | Yes      | Display name shown in the dashboard               |
+| `tasks` | array  | Yes      | List of task objects for this milestone           |
 
 ### Task fields
 
-| Field                  | Type            | Required | Description                                              |
-| ---------------------- | --------------- | -------- | -------------------------------------------------------- |
-| `id`                   | string          | Yes      | Unique identifier within the file (e.g. `task-001`)     |
-| `name`                 | string          | Yes      | Task title — shown in the Tasks panel                    |
-| `status`               | string          | Yes      | See [Status vocabulary](#status-vocabulary)              |
-| `priority`             | string          | No       | See [Priority vocabulary](#priority-vocabulary)          |
-| `type`                 | string          | No       | See [Type vocabulary](#type-vocabulary)                  |
-| `depends_on`           | string[]        | No       | IDs of tasks this task depends on (see [Depends On](#depends-on)) |
-| `pr_url`               | string or null  | No       | PR URL — written automatically by the orchestrator       |
-| `context`              | string          | No       | Implementation spec, design rationale, code skeletons    |
-| `acceptance_criteria`  | string          | No       | Checkboxes or prose; rendered as-is in the session spec  |
-| `files_affected`       | string[]        | No       | List of files the task creates or modifies               |
-| `notes`                | string          | No       | Short human-facing note; leave blank otherwise           |
+| Field                 | Type           | Required | Description                                                       |
+| --------------------- | -------------- | -------- | ----------------------------------------------------------------- |
+| `id`                  | string         | Yes      | Unique identifier within the file (e.g. `task-001`)               |
+| `name`                | string         | Yes      | Task title — shown in the Tasks panel                             |
+| `status`              | string         | Yes      | See [Status vocabulary](#status-vocabulary)                       |
+| `priority`            | string         | No       | See [Priority vocabulary](#priority-vocabulary)                   |
+| `type`                | string         | No       | See [Type vocabulary](#type-vocabulary)                           |
+| `depends_on`          | string[]       | No       | IDs of tasks this task depends on (see [Depends On](#depends-on)) |
+| `pr_url`              | string or null | No       | PR URL — written automatically by the orchestrator                |
+| `context`             | string         | No       | Implementation spec, design rationale, code skeletons             |
+| `acceptance_criteria` | string         | No       | Checkboxes or prose; rendered as-is in the session spec           |
+| `files_affected`      | string[]       | No       | List of files the task creates or modifies                        |
+| `notes`               | string         | No       | Short human-facing note; leave blank otherwise                    |
 
 ---
 
@@ -106,23 +106,23 @@ milestones:
 
 The `status` field must be one of these exact strings (no emoji prefix in the YAML — the dashboard adds display formatting):
 
-| YAML value    | Dashboard display    | Meaning                                             |
-| ------------- | -------------------- | --------------------------------------------------- |
-| `Backlog`     | `🔲 Backlog`         | Defined but not yet validated. Default for new tasks. |
-| `Ready`       | `🗂️ Ready`           | Scoped, reviewed, ready to be picked up.            |
-| `In Progress` | `🔄 In Progress`     | Actively being worked on.                           |
-| `In Review`   | `👀 In Review`       | PR open, awaiting review or merge.                  |
-| `Done`        | `✅ Done`            | Merged, verified, closed.                           |
+| YAML value    | Dashboard display | Meaning                                               |
+| ------------- | ----------------- | ----------------------------------------------------- |
+| `Backlog`     | `🔲 Backlog`      | Defined but not yet validated. Default for new tasks. |
+| `Ready`       | `🗂️ Ready`        | Scoped, reviewed, ready to be picked up.              |
+| `In Progress` | `🔄 In Progress`  | Actively being worked on.                             |
+| `In Review`   | `👀 In Review`    | PR open, awaiting review or merge.                    |
+| `Done`        | `✅ Done`         | Merged, verified, closed.                             |
 
 The orchestrator manages `In Progress`, `In Review`, and `Done` transitions automatically by writing back to the file. Set new tasks to `Backlog` or `Ready`.
 
 ### Type vocabulary
 
-| YAML value  | Dashboard display | Meaning                                               |
-| ----------- | ----------------- | ----------------------------------------------------- |
-| `Code`      | `💻 Code`         | Has a PR. Default if omitted.                         |
-| `Planning`  | `📋 Planning`     | Design or research task — not dispatchable.           |
-| `Testing`   | `🧪 Testing`      | Manual test task — not dispatchable.                  |
+| YAML value | Dashboard display | Meaning                                     |
+| ---------- | ----------------- | ------------------------------------------- |
+| `Code`     | `💻 Code`         | Has a PR. Default if omitted.               |
+| `Planning` | `📋 Planning`     | Design or research task — not dispatchable. |
+| `Testing`  | `🧪 Testing`      | Manual test task — not dispatchable.        |
 
 ### Priority vocabulary
 
@@ -140,7 +140,7 @@ The orchestrator manages `In Progress`, `In Review`, and `Done` transitions auto
 
 ```yaml
 - id: task-003
-  name: "Add export button"
+  name: 'Add export button'
   depends_on:
     - task-001
     - task-002
@@ -156,7 +156,7 @@ Manual verification tasks use `type: Testing` and are not dispatchable — they 
 
 ```yaml
 - id: mvg-m1
-  name: "Manual Verification Gate — M1"
+  name: 'Manual Verification Gate — M1'
   status: Ready
   type: Testing
   depends_on:
@@ -167,8 +167,8 @@ Manual verification tasks use `type: Testing` and are not dispatchable — they 
     - [ ] Dashboard loads at http://localhost:5173
     - [ ] Tasks panel shows tasks from tasks.yaml
     - [ ] Dispatching a Ready task spawns a session
-  acceptance_criteria: ""
-  notes: ""
+  acceptance_criteria: ''
+  notes: ''
 ```
 
 ---
