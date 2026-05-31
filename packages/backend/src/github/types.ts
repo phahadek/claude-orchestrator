@@ -73,16 +73,16 @@ export interface MergeabilityCategory {
 }
 
 export interface Issue {
-  id: number;           // GitHub issue number
+  id: number; // GitHub issue number
   nodeId: string;
   title: string;
   body: string | null;
   state: 'open' | 'closed';
-  labels: string[];     // label names
+  labels: string[]; // label names
   milestone: number | null; // milestone number, null if unset
   createdAt: string;
   updatedAt: string;
-  url: string;          // html_url
+  url: string; // html_url
 }
 
 export interface IssueComment {
@@ -90,11 +90,11 @@ export interface IssueComment {
   body: string;
   createdAt: string;
   updatedAt: string;
-  url: string;          // html_url
+  url: string; // html_url
 }
 
 export interface Milestone {
-  id: number;           // milestone number
+  id: number; // milestone number
   nodeId: string;
   title: string;
   description: string | null;

@@ -936,18 +936,20 @@ describe('computeSizeSignal()', () => {
 
 // ── Issues API ────────────────────────────────────────────────────────────────
 
-function makeRawIssue(overrides: Partial<{
-  number: number;
-  node_id: string;
-  title: string;
-  body: string | null;
-  state: string;
-  labels: Array<{ name: string }>;
-  milestone: { number: number } | null;
-  created_at: string;
-  updated_at: string;
-  html_url: string;
-}> = {}) {
+function makeRawIssue(
+  overrides: Partial<{
+    number: number;
+    node_id: string;
+    title: string;
+    body: string | null;
+    state: string;
+    labels: Array<{ name: string }>;
+    milestone: { number: number } | null;
+    created_at: string;
+    updated_at: string;
+    html_url: string;
+  }> = {},
+) {
   return {
     number: 1,
     node_id: 'I_kwDOTest',
@@ -963,17 +965,19 @@ function makeRawIssue(overrides: Partial<{
   };
 }
 
-function makeRawMilestone(overrides: Partial<{
-  number: number;
-  node_id: string;
-  title: string;
-  description: string | null;
-  state: string;
-  open_issues: number;
-  closed_issues: number;
-  created_at: string;
-  updated_at: string;
-}> = {}) {
+function makeRawMilestone(
+  overrides: Partial<{
+    number: number;
+    node_id: string;
+    title: string;
+    description: string | null;
+    state: string;
+    open_issues: number;
+    closed_issues: number;
+    created_at: string;
+    updated_at: string;
+  }> = {},
+) {
   return {
     number: 1,
     node_id: 'MI_kwDOTest',
@@ -1017,7 +1021,9 @@ describe('GitHubClient.listIssues()', () => {
     mockFetch({
       ok: true,
       headers: { get: () => 'application/json' } as unknown as Headers,
-      json: async () => [makeRawIssue({ labels: [{ name: 'bug' }], milestone: { number: 3 } })],
+      json: async () => [
+        makeRawIssue({ labels: [{ name: 'bug' }], milestone: { number: 3 } }),
+      ],
     } as unknown as Response);
 
     const client = new GitHubClient();
@@ -1039,7 +1045,9 @@ describe('GitHubClient.listIssues()', () => {
     } as unknown as Response);
 
     const client = new GitHubClient();
-    await expect(client.listIssues('owner/repo')).rejects.toMatchObject({ status: 403 });
+    await expect(client.listIssues('owner/repo')).rejects.toMatchObject({
+      status: 403,
+    });
   });
 });
 
@@ -1053,7 +1061,8 @@ describe('GitHubClient.createIssue() + getIssue()', () => {
       milestone: { number: 2 },
     });
 
-    const fetchSpy = vi.fn()
+    const fetchSpy = vi
+      .fn()
       .mockResolvedValueOnce({
         ok: true,
         headers: { get: () => 'application/json' },
@@ -1102,7 +1111,9 @@ describe('GitHubClient.createIssue() + getIssue()', () => {
     const [url, opts] = fetchSpy.mock.calls[0] as [string, RequestInit];
     expect(url).toContain('/repos/owner/repo/issues');
     expect(opts.method).toBe('POST');
-    expect(JSON.parse(opts.body as string)).toMatchObject({ title: 'New issue' });
+    expect(JSON.parse(opts.body as string)).toMatchObject({
+      title: 'New issue',
+    });
   });
 
   it('throws GitHubApiError on non-2xx for createIssue', async () => {
@@ -1137,7 +1148,9 @@ describe('GitHubClient.updateIssue()', () => {
     vi.stubGlobal('fetch', fetchSpy);
 
     const client = new GitHubClient();
-    const result = await client.updateIssue('owner/repo', 1, { labels: ['bug', 'p1'] });
+    const result = await client.updateIssue('owner/repo', 1, {
+      labels: ['bug', 'p1'],
+    });
 
     expect(result.labels).toEqual(['bug', 'p1']);
     expect(result.title).toBe('Updated');
@@ -1173,7 +1186,8 @@ describe('GitHubClient.addIssueComment() + listIssueComments()', () => {
   };
 
   it('round-trips addIssueComment + listIssueComments', async () => {
-    const fetchSpy = vi.fn()
+    const fetchSpy = vi
+      .fn()
       .mockResolvedValueOnce({
         ok: true,
         headers: { get: () => 'application/json' },
@@ -1189,7 +1203,11 @@ describe('GitHubClient.addIssueComment() + listIssueComments()', () => {
     vi.stubGlobal('fetch', fetchSpy);
 
     const client = new GitHubClient();
-    const created = await client.addIssueComment('owner/repo', 1, 'Great point!');
+    const created = await client.addIssueComment(
+      'owner/repo',
+      1,
+      'Great point!',
+    );
     expect(created.id).toBe(101);
     expect(created.body).toBe('Great point!');
 
@@ -1239,7 +1257,8 @@ describe('GitHubClient milestones round-trip', () => {
     const rawMs = makeRawMilestone({ number: 2, title: 'v2.0' });
     const rawMsClosed = { ...rawMs, state: 'closed' };
 
-    const fetchSpy = vi.fn()
+    const fetchSpy = vi
+      .fn()
       .mockResolvedValueOnce({
         ok: true,
         headers: { get: () => 'application/json' },
@@ -1262,7 +1281,10 @@ describe('GitHubClient milestones round-trip', () => {
 
     const client = new GitHubClient();
 
-    const created = await client.createMilestone('owner/repo', { title: 'v2.0', description: 'Second release' });
+    const created = await client.createMilestone('owner/repo', {
+      title: 'v2.0',
+      description: 'Second release',
+    });
     expect(created.id).toBe(2);
     expect(created.title).toBe('v2.0');
 
@@ -1270,7 +1292,9 @@ describe('GitHubClient milestones round-trip', () => {
     expect(list).toHaveLength(1);
     expect(list[0].id).toBe(2);
 
-    const updated = await client.updateMilestone('owner/repo', 2, { state: 'closed' });
+    const updated = await client.updateMilestone('owner/repo', 2, {
+      state: 'closed',
+    });
     expect(updated.state).toBe('closed');
   });
 
@@ -1284,12 +1308,18 @@ describe('GitHubClient milestones round-trip', () => {
     vi.stubGlobal('fetch', fetchSpy);
 
     const client = new GitHubClient();
-    await client.createMilestone('owner/repo', { title: 'v1.0', description: 'First' });
+    await client.createMilestone('owner/repo', {
+      title: 'v1.0',
+      description: 'First',
+    });
 
     const [url, opts] = fetchSpy.mock.calls[0] as [string, RequestInit];
     expect(url).toContain('/repos/owner/repo/milestones');
     expect(opts.method).toBe('POST');
-    expect(JSON.parse(opts.body as string)).toEqual({ title: 'v1.0', description: 'First' });
+    expect(JSON.parse(opts.body as string)).toEqual({
+      title: 'v1.0',
+      description: 'First',
+    });
   });
 
   it('throws GitHubApiError on non-2xx for createMilestone', async () => {
@@ -1311,28 +1341,40 @@ describe('GitHubClient milestones round-trip', () => {
 
 describe('GitHubClient.fetchIssuesConditional()', () => {
   it('returns not_modified with 304', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      status: 304,
-      ok: false,
-      headers: { get: () => null },
-      text: async () => '',
-    }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        status: 304,
+        ok: false,
+        headers: { get: () => null },
+        text: async () => '',
+      }),
+    );
 
     const client = new GitHubClient();
-    const result = await client.fetchIssuesConditional('owner/repo', '"abc123"', {});
+    const result = await client.fetchIssuesConditional(
+      'owner/repo',
+      '"abc123"',
+      {},
+    );
 
     expect(result.status).toBe('not_modified');
     expect(result.etag).toBe('"abc123"');
   });
 
   it('returns ok with issues and new etag on 200', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      status: 200,
-      ok: true,
-      headers: { get: (h: string) => h === 'etag' ? '"newetag"' : 'application/json' },
-      json: async () => [makeRawIssue({ number: 42, title: 'Fetched' })],
-      text: async () => '',
-    }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        status: 200,
+        ok: true,
+        headers: {
+          get: (h: string) => (h === 'etag' ? '"newetag"' : 'application/json'),
+        },
+        json: async () => [makeRawIssue({ number: 42, title: 'Fetched' })],
+        text: async () => '',
+      }),
+    );
 
     const client = new GitHubClient();
     const result = await client.fetchIssuesConditional('owner/repo', null, {});
@@ -1359,14 +1401,18 @@ describe('GitHubClient.fetchIssuesConditional()', () => {
     await client.fetchIssuesConditional('owner/repo', '"W/etag"', {});
 
     const [, opts] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    expect((opts.headers as Record<string, string>)['If-None-Match']).toBe('"W/etag"');
+    expect((opts.headers as Record<string, string>)['If-None-Match']).toBe(
+      '"W/etag"',
+    );
   });
 
   it('does not send If-None-Match when etag is null', async () => {
     const fetchSpy = vi.fn().mockResolvedValue({
       status: 200,
       ok: true,
-      headers: { get: (h: string) => h === 'etag' ? '"fresh"' : 'application/json' },
+      headers: {
+        get: (h: string) => (h === 'etag' ? '"fresh"' : 'application/json'),
+      },
       json: async () => [],
       text: async () => '',
     });
@@ -1376,14 +1422,18 @@ describe('GitHubClient.fetchIssuesConditional()', () => {
     await client.fetchIssuesConditional('owner/repo', null, {});
 
     const [, opts] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    expect((opts.headers as Record<string, string>)['If-None-Match']).toBeUndefined();
+    expect(
+      (opts.headers as Record<string, string>)['If-None-Match'],
+    ).toBeUndefined();
   });
 
   it('passes labels and since into the query string', async () => {
     const fetchSpy = vi.fn().mockResolvedValue({
       status: 200,
       ok: true,
-      headers: { get: (h: string) => h === 'etag' ? '"e"' : 'application/json' },
+      headers: {
+        get: (h: string) => (h === 'etag' ? '"e"' : 'application/json'),
+      },
       json: async () => [],
       text: async () => '',
     });
@@ -1401,12 +1451,15 @@ describe('GitHubClient.fetchIssuesConditional()', () => {
   });
 
   it('throws GitHubApiError on non-2xx non-304', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      status: 401,
-      ok: false,
-      headers: { get: () => null },
-      text: async () => 'Unauthorized',
-    }));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        status: 401,
+        ok: false,
+        headers: { get: () => null },
+        text: async () => 'Unauthorized',
+      }),
+    );
 
     const client = new GitHubClient();
     await expect(

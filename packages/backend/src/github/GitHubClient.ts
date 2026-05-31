@@ -708,7 +708,8 @@ export class GitHubClient {
     const params = new URLSearchParams();
     params.set('per_page', '100');
     if (opts.labels?.length) params.set('labels', opts.labels.join(','));
-    if (opts.milestone !== undefined) params.set('milestone', String(opts.milestone));
+    if (opts.milestone !== undefined)
+      params.set('milestone', String(opts.milestone));
     if (opts.state) params.set('state', opts.state);
     if (opts.since) params.set('since', opts.since);
     const data = await this.request<GitHubRawIssue[]>(
@@ -726,7 +727,12 @@ export class GitHubClient {
 
   async createIssue(
     repo: string,
-    input: { title: string; body?: string; labels?: string[]; milestone?: number },
+    input: {
+      title: string;
+      body?: string;
+      labels?: string[];
+      milestone?: number;
+    },
   ): Promise<Issue> {
     const data = await this.request<GitHubRawIssue>(`/repos/${repo}/issues`, {
       method: 'POST',
@@ -774,7 +780,10 @@ export class GitHubClient {
     return mapIssueComment(data);
   }
 
-  async listIssueComments(repo: string, number: number): Promise<IssueComment[]> {
+  async listIssueComments(
+    repo: string,
+    number: number,
+  ): Promise<IssueComment[]> {
     const data = await this.request<GitHubRawIssueComment[]>(
       `/repos/${repo}/issues/${number}/comments?per_page=100`,
     );
