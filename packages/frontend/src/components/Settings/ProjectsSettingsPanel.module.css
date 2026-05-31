@@ -264,6 +264,22 @@
   margin: 8px 0 0;
 }
 
+/* ── Modal: narrow viewport (<480px) ─────────────────────────── */
+@media (max-width: 480px) {
+  .modalOverlay {
+    padding: 0 var(--space-md, 1rem);
+    align-items: flex-start;
+    padding-top: var(--space-md, 1rem);
+  }
+
+  .modal {
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    padding: var(--space-md, 1rem);
+  }
+}
+
 /* ── Mobile card layout (<768px) ─────────────────────────────── */
 @media (max-width: 768px) {
   .table {
