@@ -1465,6 +1465,7 @@ export interface ProjectPatch {
   auto_launch_milestone_id?: string | null;
   auto_merge_enabled?: number;
   milestone_branching?: 'two_tier' | 'flat' | null;
+  non_milestone_source_config?: string | null;
   task_source_config?: string | null;
   data_residency_confirmed?: number;
 }
@@ -1488,6 +1489,7 @@ export function updateProject(
     auto_launch_milestone_id: string | null;
     auto_merge_enabled: number;
     milestone_branching: string | null;
+    non_milestone_source_config: string | null;
     task_source_config: string | null;
     data_residency_confirmed: number;
     updated_at: number;
@@ -1504,6 +1506,7 @@ export function updateProject(
         auto_launch_milestone_id = @auto_launch_milestone_id,
         auto_merge_enabled = @auto_merge_enabled,
         milestone_branching = @milestone_branching,
+        non_milestone_source_config = @non_milestone_source_config,
         task_source_config = @task_source_config,
         data_residency_confirmed = @data_residency_confirmed,
         updated_at = @updated_at
@@ -1539,6 +1542,10 @@ export function updateProject(
       'milestone_branching' in patch
         ? (patch.milestone_branching ?? null)
         : (existing.milestone_branching ?? null),
+    non_milestone_source_config:
+      'non_milestone_source_config' in patch
+        ? (patch.non_milestone_source_config ?? null)
+        : (existing.non_milestone_source_config ?? null),
     task_source_config:
       'task_source_config' in patch
         ? (patch.task_source_config ?? null)

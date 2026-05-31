@@ -44,6 +44,12 @@ function ConfigReadOnly({ config }: { config: OrchestratorConfig }) {
 }
 
 function toCreatePayload(values: ProjectFormValues) {
+  const rawCfg = values.nonMilestoneSourceConfigRaw.trim();
+  const nonMilestoneSourceConfig = rawCfg
+    ? (JSON.parse(
+        rawCfg,
+      ) as import('../../api/projects').NonMilestoneSourceConfig)
+    : null;
   return {
     name: values.name.trim(),
     projectDir: values.projectDir.trim(),
@@ -56,6 +62,7 @@ function toCreatePayload(values: ProjectFormValues) {
     autoLaunchMilestoneId: values.autoLaunchMilestoneId.trim() || null,
     autoMergeEnabled:
       values.gitMode !== 'local-only' ? values.autoMergeEnabled : false,
+    nonMilestoneSourceConfig,
     dataResidencyConfirmed: values.dataResidencyConfirmed,
   };
 }

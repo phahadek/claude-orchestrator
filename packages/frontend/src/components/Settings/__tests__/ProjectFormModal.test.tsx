@@ -15,6 +15,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     autoLaunchEnabled: false,
     autoLaunchMilestoneId: null,
     autoMergeEnabled: false,
+    nonMilestoneSourceConfig: null,
     dataResidencyConfirmed: false,
     createdAt: 1,
     updatedAt: 1,
@@ -101,5 +102,66 @@ describe('ProjectFormModal', () => {
     render(<ProjectFormModal onCancel={onCancel} onSubmit={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  it('renders non-milestone source field and pre-populates from initialProject', () => {
+    render(
+      <ProjectFormModal
+        initialProject={makeProject({
+          nonMilestoneSourceConfig: { notionDatabaseId: 'db-abc' },
+        })}
+        onCancel={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    );
+    const input = screen.getByLabelText(
+      'Non-milestone task source (optional)',
+    ) as HTMLInputElement;
+    expect(input.value).toBe('{"notionDatabaseId":"db-abc"}');
+  });
+
+  it('submits nonMilestoneSourceConfigRaw when field is filled', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    render(<ProjectFormModal onCancel={vi.fn()} onSubmit={onSubmit} />);
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'P' } });
+    fireEvent.change(screen.getByLabelText('Project Dir'), {
+      target: { value: '/dir' },
+    });
+    fireEvent.change(
+      screen.getByLabelText('Non-milestone task source (optional)'),
+      { target: { value: '{"milestoneId":"backlog"}' } },
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
+    const arg = onSubmit.mock.calls[0][0];
+    expect(arg.nonMilestoneSourceConfigRaw).toBe('{"milestoneId":"backlog"}');
+  });
+
+  it('shows validation error for invalid JSON in non-milestone source field', () => {
+    render(<ProjectFormModal onCancel={vi.fn()} onSubmit={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'P' } });
+    fireEvent.change(screen.getByLabelText('Project Dir'), {
+      target: { value: '/dir' },
+    });
+    fireEvent.change(
+      screen.getByLabelText('Non-milestone task source (optional)'),
+      { target: { value: 'not-json' } },
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect(screen.getByText('Invalid JSON')).toBeTruthy();
+  });
+
+  it('shows validation error when non-milestone source has wrong shape', () => {
+    render(<ProjectFormModal onCancel={vi.fn()} onSubmit={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'P' } });
+    fireEvent.change(screen.getByLabelText('Project Dir'), {
+      target: { value: '/dir' },
+    });
+    fireEvent.change(
+      screen.getByLabelText('Non-milestone task source (optional)'),
+      { target: { value: '{"notionDatabaseId":123}' } },
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect(screen.getByText(/shape/)).toBeTruthy();
   });
 });
