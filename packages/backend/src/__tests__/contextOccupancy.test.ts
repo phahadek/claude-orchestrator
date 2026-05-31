@@ -9,14 +9,27 @@ import * as path from 'path';
 function createMockProc() {
   const stdout = new Readable({ read() {} });
   const stderr = new Readable({ read() {} });
-  const stdin = new Writable({ write(_c, _e, cb) { cb(); } });
-  const proc = Object.assign(new EventEmitter(), { stdout, stderr, stdin, kill: vi.fn(), pid: 1 });
+  const stdin = new Writable({
+    write(_c, _e, cb) {
+      cb();
+    },
+  });
+  const proc = Object.assign(new EventEmitter(), {
+    stdout,
+    stderr,
+    stdin,
+    kill: vi.fn(),
+    pid: 1,
+  });
   return { proc, stdout };
 }
 
 let mockProc: ReturnType<typeof createMockProc>;
 
-vi.mock('child_process', () => ({ spawn: vi.fn(() => mockProc.proc), execFile: vi.fn() }));
+vi.mock('child_process', () => ({
+  spawn: vi.fn(() => mockProc.proc),
+  execFile: vi.fn(),
+}));
 
 // ── Mock DB queries ────────────────────────────────────────────────────────
 
@@ -51,7 +64,9 @@ vi.mock('../orchestration/localBranchHelpers', () => ({
 }));
 
 vi.mock('../github/NoOpInvestigator', () => ({
-  NoOpInvestigator: vi.fn().mockImplementation(() => ({ investigate: vi.fn(async () => {}) })),
+  NoOpInvestigator: vi
+    .fn()
+    .mockImplementation(() => ({ investigate: vi.fn(async () => {}) })),
 }));
 
 import { AgentSession } from '../session/AgentSession';
@@ -107,12 +122,20 @@ describe('context-window occupancy tracking', () => {
       {
         type: 'result',
         subtype: 'success',
-        usage: { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 50, cache_creation_input_tokens: 30 },
+        usage: {
+          input_tokens: 100,
+          output_tokens: 20,
+          cache_read_input_tokens: 50,
+          cache_creation_input_tokens: 30,
+        },
       },
     ]);
 
     const updated = messages.find(
-      m => m.type === 'session_updated' && (m as { contextOccupancyTokens?: number }).contextOccupancyTokens != null
+      (m) =>
+        m.type === 'session_updated' &&
+        (m as { contextOccupancyTokens?: number }).contextOccupancyTokens !=
+          null,
     ) as { contextOccupancyTokens?: number } | undefined;
     expect(updated).toBeDefined();
     // 100 + 50 + 30 = 180
@@ -125,12 +148,20 @@ describe('context-window occupancy tracking', () => {
       {
         type: 'result',
         subtype: 'success',
-        usage: { input_tokens: 20000, output_tokens: 500, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        usage: {
+          input_tokens: 20000,
+          output_tokens: 500,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
       },
     ]);
 
     const msg = messages.find(
-      m => m.type === 'session_updated' && (m as { contextOccupancyFraction?: number }).contextOccupancyFraction != null
+      (m) =>
+        m.type === 'session_updated' &&
+        (m as { contextOccupancyFraction?: number }).contextOccupancyFraction !=
+          null,
     ) as { contextOccupancyFraction?: number } | undefined;
     expect(msg).toBeDefined();
     // 20000 / 200000 = 0.1
@@ -143,17 +174,30 @@ describe('context-window occupancy tracking', () => {
       {
         type: 'result',
         subtype: 'success',
-        usage: { input_tokens: 50000, output_tokens: 100, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        usage: {
+          input_tokens: 50000,
+          output_tokens: 100,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
       },
       {
         type: 'result',
         subtype: 'success',
-        usage: { input_tokens: 30000, output_tokens: 100, cache_read_input_tokens: 5000, cache_creation_input_tokens: 0 },
+        usage: {
+          input_tokens: 30000,
+          output_tokens: 100,
+          cache_read_input_tokens: 5000,
+          cache_creation_input_tokens: 0,
+        },
       },
     ]);
 
     const updatedMsgs = messages.filter(
-      m => m.type === 'session_updated' && (m as { contextOccupancyTokens?: number }).contextOccupancyTokens != null
+      (m) =>
+        m.type === 'session_updated' &&
+        (m as { contextOccupancyTokens?: number }).contextOccupancyTokens !=
+          null,
     ) as Array<{ contextOccupancyTokens?: number }>;
     expect(updatedMsgs.length).toBeGreaterThanOrEqual(2);
     const last = updatedMsgs[updatedMsgs.length - 1];
@@ -167,12 +211,20 @@ describe('context-window occupancy tracking', () => {
       {
         type: 'result',
         subtype: 'success',
-        usage: { input_tokens: 1000, output_tokens: 200, cache_read_input_tokens: 500, cache_creation_input_tokens: 200 },
+        usage: {
+          input_tokens: 1000,
+          output_tokens: 200,
+          cache_read_input_tokens: 500,
+          cache_creation_input_tokens: 200,
+        },
       },
     ]);
 
     // 1000 + 500 + 200 = 1700
-    expect(vi.mocked(setContextOccupancy)).toHaveBeenCalledWith('occ-persist', 1700);
+    expect(vi.mocked(setContextOccupancy)).toHaveBeenCalledWith(
+      'occ-persist',
+      1700,
+    );
   });
 
   it('includes contextOccupancyTokens and contextOccupancyFraction in session_updated broadcast', async () => {
@@ -181,11 +233,18 @@ describe('context-window occupancy tracking', () => {
       {
         type: 'result',
         subtype: 'success',
-        usage: { input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        usage: {
+          input_tokens: 100,
+          output_tokens: 10,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
       },
     ]);
 
-    const msg = messages.find(m => m.type === 'session_updated') as Record<string, unknown> | undefined;
+    const msg = messages.find((m) => m.type === 'session_updated') as
+      | Record<string, unknown>
+      | undefined;
     expect(msg).toBeDefined();
     expect(msg!['contextOccupancyTokens']).toBe(100);
     expect(msg!['contextOccupancyFraction']).toBeCloseTo(100 / 200_000);
@@ -198,13 +257,20 @@ describe('context-window occupancy tracking', () => {
         type: 'result',
         subtype: 'success',
         // Near-full context: 190k / 200k
-        usage: { input_tokens: 190000, output_tokens: 1000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        usage: {
+          input_tokens: 190000,
+          output_tokens: 1000,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
       },
     ]);
 
     // No kill/pause status should have fired as a result of high occupancy
     const killedMsgs = messages.filter(
-      m => m.type === 'session_status' && (m as { status?: string }).status === 'killed'
+      (m) =>
+        m.type === 'session_status' &&
+        (m as { status?: string }).status === 'killed',
     );
     expect(killedMsgs).toHaveLength(0);
   });
@@ -218,7 +284,9 @@ describe('schema migration — context_occupancy_tokens column', () => {
       path.join(__dirname, '..', 'db', 'schema.ts'),
       'utf-8',
     );
-    expect(source).toMatch(/ALTER TABLE sessions ADD COLUMN.*context_occupancy_tokens/);
+    expect(source).toMatch(
+      /ALTER TABLE sessions ADD COLUMN.*context_occupancy_tokens/,
+    );
     const match = source.match(/try\s*\{[^}]*context_occupancy_tokens[^}]*\}/s);
     expect(match).not.toBeNull();
   });
@@ -240,8 +308,14 @@ describe('setContextOccupancy — SQLite integration', () => {
       );
       INSERT INTO sessions (session_id, status, started_at) VALUES ('s1', 'running', 0);
     `);
-    db.prepare(`UPDATE sessions SET context_occupancy_tokens = ? WHERE session_id = ?`).run(42000, 's1');
-    const row = db.prepare(`SELECT context_occupancy_tokens FROM sessions WHERE session_id = ?`).get('s1') as { context_occupancy_tokens: number };
+    db.prepare(
+      `UPDATE sessions SET context_occupancy_tokens = ? WHERE session_id = ?`,
+    ).run(42000, 's1');
+    const row = db
+      .prepare(
+        `SELECT context_occupancy_tokens FROM sessions WHERE session_id = ?`,
+      )
+      .get('s1') as { context_occupancy_tokens: number };
     expect(row.context_occupancy_tokens).toBe(42000);
     db.close();
   });
