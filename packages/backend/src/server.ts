@@ -37,6 +37,7 @@ import { AutoMerger } from './github/AutoMerger';
 import { ReviewerCommentsWatcher } from './github/ReviewerCommentsWatcher';
 import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
 import { getCorporateMode } from './config/corporateMode';
+import { getOrchestratorConfig } from './config/appConfig';
 import { AutoLauncher } from './orchestration/AutoLauncher';
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
 import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
@@ -58,7 +59,8 @@ if (ghostsRemoved > 0) {
   );
 }
 
-const rawSessionsDir = process.env.SESSIONS_DIR ?? DEFAULT_SESSIONS_DIR;
+const rawSessionsDir =
+  getOrchestratorConfig().sessions.dir || DEFAULT_SESSIONS_DIR;
 const sessionsDir = rawSessionsDir.replace(/^~/, os.homedir());
 const jsonlReader = new JsonlReader(sessionsDir);
 
@@ -87,7 +89,7 @@ const reviewOrchestrator = new ReviewOrchestrator(
   githubClient,
 );
 
-const PORT = parseInt(process.env.PORT ?? '3000');
+const PORT = getOrchestratorConfig().server.port;
 
 const app = express();
 app.use(express.json());

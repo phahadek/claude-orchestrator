@@ -1,7 +1,9 @@
 import Database from 'better-sqlite3';
 import path from 'path';
+import { getOrchestratorConfig } from '../config/appConfig';
 
-const dbPath = process.env.DB_PATH ?? path.join(process.cwd(), 'dashboard.db');
+const _configDbPath = getOrchestratorConfig().db.path;
+const dbPath = _configDbPath || path.join(process.cwd(), 'dashboard.db');
 
 export const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
