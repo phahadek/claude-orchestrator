@@ -42,7 +42,14 @@ import type { ServerMessage } from '../ws/types.js';
 
 function makeTask(id: string, status = '🔄 In Progress') {
   return {
-    task: { id, title: 'Test Task', status, type: '💻 Code', dependsOn: [], notionUrl: '' },
+    task: {
+      id,
+      title: 'Test Task',
+      status,
+      type: '💻 Code',
+      dependsOn: [],
+      notionUrl: '',
+    },
     source: 'notion' as const,
     blocked: false,
     blockers: [],
@@ -102,7 +109,9 @@ describe('OrphanedTaskSweeper', () => {
     const backend = makeBackend([makeTask('notion:abc')]);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
-      listProjects: () => [{ id: 'proj-1' } as ReturnType<typeof getAllProjects>[number]],
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
       resolveBackend: () => backend,
     });
 
@@ -128,11 +137,15 @@ describe('OrphanedTaskSweeper', () => {
     const backend = makeBackend([makeTask('notion:abc')]);
     // Session started 2 minutes ago
     vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
-      makeSession('done', 2 * 60 * 1000) as ReturnType<typeof getLatestCodeSessionByNotionTaskId>,
+      makeSession('done', 2 * 60 * 1000) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
     );
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
-      listProjects: () => [{ id: 'proj-1' } as ReturnType<typeof getAllProjects>[number]],
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
       resolveBackend: () => backend,
     });
 
@@ -146,11 +159,15 @@ describe('OrphanedTaskSweeper', () => {
   it('skips tasks whose latest session is error', async () => {
     const backend = makeBackend([makeTask('notion:abc')]);
     vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
-      makeSession('error', 10 * 60 * 1000) as ReturnType<typeof getLatestCodeSessionByNotionTaskId>,
+      makeSession('error', 10 * 60 * 1000) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
     );
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
-      listProjects: () => [{ id: 'proj-1' } as ReturnType<typeof getAllProjects>[number]],
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
       resolveBackend: () => backend,
     });
 
@@ -162,11 +179,15 @@ describe('OrphanedTaskSweeper', () => {
   it('skips tasks whose latest session is killed', async () => {
     const backend = makeBackend([makeTask('notion:abc')]);
     vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
-      makeSession('killed', 10 * 60 * 1000) as ReturnType<typeof getLatestCodeSessionByNotionTaskId>,
+      makeSession('killed', 10 * 60 * 1000) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
     );
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
-      listProjects: () => [{ id: 'proj-1' } as ReturnType<typeof getAllProjects>[number]],
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
       resolveBackend: () => backend,
     });
 
@@ -180,7 +201,9 @@ describe('OrphanedTaskSweeper', () => {
     vi.mocked(hasActiveSessionForTask).mockReturnValue(true);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
-      listProjects: () => [{ id: 'proj-1' } as ReturnType<typeof getAllProjects>[number]],
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
       resolveBackend: () => backend,
     });
 
@@ -193,7 +216,9 @@ describe('OrphanedTaskSweeper', () => {
     const backend = makeBackend([makeTask('')]);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
-      listProjects: () => [{ id: 'proj-1' } as ReturnType<typeof getAllProjects>[number]],
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
       resolveBackend: () => backend,
     });
 
@@ -229,7 +254,9 @@ describe('OrphanedTaskSweeper', () => {
     } as ReturnType<typeof getLatestCodeSessionByNotionTaskId>);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
-      listProjects: () => [{ id: 'proj-1' } as ReturnType<typeof getAllProjects>[number]],
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
       resolveBackend: () => backend,
     });
 
