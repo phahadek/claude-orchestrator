@@ -5,12 +5,12 @@ the compiled app, and production `node_modules`.
 
 ## Prerequisites
 
-| Tool | Notes |
-|------|-------|
-| Node.js 20+ | To run the build (`npm run build`) |
-| [Inno Setup 6](https://jrsoftware.org/isinfo.php) | Installer compiler |
-| PowerShell 5.1+ | Build script |
-| Internet access | To download Node 20 LTS binary from nodejs.org |
+| Tool                                              | Notes                                          |
+| ------------------------------------------------- | ---------------------------------------------- |
+| Node.js 20+                                       | To run the build (`npm run build`)             |
+| [Inno Setup 6](https://jrsoftware.org/isinfo.php) | Installer compiler                             |
+| PowerShell 5.1+                                   | Build script                                   |
+| Internet access                                   | To download Node 20 LTS binary from nodejs.org |
 
 ## Build
 
@@ -19,6 +19,7 @@ the compiled app, and production `node_modules`.
 ```
 
 The script will:
+
 1. Download Node 20 LTS Windows x64 from `nodejs.org` and verify its SHA-256
 2. Run `npm run build` to compile frontend + backend
 3. Assemble the payload under `installers/windows/payload/`
@@ -53,16 +54,16 @@ payload\
 
 ## Install locations
 
-| Item | Path |
-|------|------|
-| App files | `C:\Program Files\Claude Orchestrator\` |
-| Data directory | `%APPDATA%\ClaudeOrchestrator\` |
-| Start Menu | `Claude Orchestrator` |
-| Startup shortcut | All Users Startup folder |
+| Item             | Path                                    |
+| ---------------- | --------------------------------------- |
+| App files        | `C:\Program Files\Claude Orchestrator\` |
+| Data directory   | `%APPDATA%\ClaudeOrchestrator\`         |
+| Start Menu       | `Claude Orchestrator`                   |
+| Startup shortcut | All Users Startup folder                |
 
 ## Uninstall
 
-*Add or Remove Programs → Claude Orchestrator → Uninstall.*
+_Add or Remove Programs → Claude Orchestrator → Uninstall._
 
 The uninstaller preserves `%APPDATA%\ClaudeOrchestrator\` (config, database) by default.
 Check **"Also delete application data"** during uninstall to remove it.
@@ -70,6 +71,6 @@ Check **"Also delete application data"** during uninstall to remove it.
 ## Notes
 
 - **No code signing in v1.** Windows SmartScreen will warn on first run.
-  Click *More info → Run anyway* to proceed.
+  Click _More info → Run anyway_ to proceed.
 - Target compressed size: ≤ 48 MB. The build script warns if exceeded.
 - Windows x64 only.
