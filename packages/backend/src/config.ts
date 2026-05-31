@@ -1,4 +1,5 @@
 import { getSecret } from './security/secrets';
+import { getOrchestratorConfig } from './config/appConfig';
 import type { NonMilestoneSourceConfig } from './tasks/TaskBackend';
 
 export interface Board {
@@ -56,10 +57,12 @@ export function normalizePath(p: string): string {
   return p;
 }
 
+const _oc = getOrchestratorConfig();
+
 export const config = {
-  notionApiKey: getSecret('NOTION_API_KEY') ?? '',
-  sqlitePath: process.env.DB_PATH ?? './dashboard.db',
-  port: Number(process.env.PORT ?? 3000),
+  notionApiKey: _oc.notion.apiKey,
+  sqlitePath: _oc.db.path,
+  port: _oc.server.port,
   projectDir: normalizePath(process.env.PROJECT_DIR ?? process.cwd()),
   claudePath: resolveClaudePath(),
   maxConcurrentCodeSessions: Number(
@@ -68,18 +71,16 @@ export const config = {
   anthropicApiKey: getSecret('ANTHROPIC_API_KEY') ?? '',
 };
 
-export const GITHUB_TOKEN = getSecret('GITHUB_TOKEN') ?? '';
-export const GITHUB_REPO = process.env.GITHUB_REPO ?? ''; // "owner/repo"
+export const GITHUB_TOKEN = _oc.github.token;
+export const GITHUB_REPO = _oc.github.repo;
 
 // ── Jira integration ─────────────────────────────────────────────────────────
 export const JIRA_HOST = process.env.JIRA_HOST ?? ''; // e.g. https://mycompany.atlassian.net
 export const JIRA_TOKEN = getSecret('JIRA_TOKEN') ?? ''; // API token or PAT
 export const JIRA_EMAIL = process.env.JIRA_EMAIL ?? ''; // email for basic auth (optional)
 
-export const AUTO_REVIEW_ENABLED = process.env.AUTO_REVIEW !== 'false';
-export const AUTO_REVIEW_CONCURRENCY = Number(
-  process.env.AUTO_REVIEW_CONCURRENCY ?? 1,
-);
+export const AUTO_REVIEW_ENABLED = _oc.autoReview.enabled;
+export const AUTO_REVIEW_CONCURRENCY = _oc.autoReview.concurrency;
 
 // ── Session Bash output / timeout caps ───────────────────────────────────────
 // Single source for both CLI (spawn) and API (Agent SDK) mode.
@@ -218,8 +219,8 @@ export const runtimeSettings: RuntimeSettings = {
   max_concurrent_code_sessions: Number(
     process.env.MAX_CONCURRENT_CODE_SESSIONS ?? 20,
   ),
-  auto_review_concurrency: Number(process.env.AUTO_REVIEW_CONCURRENCY ?? 1),
-  auto_review: (process.env.AUTO_REVIEW ?? 'true') !== 'false',
+  auto_review_concurrency: _oc.autoReview.concurrency,
+  auto_review: _oc.autoReview.enabled,
   card_preview_lines: Number(process.env.CARD_PREVIEW_LINES ?? 3),
   code_session_model: '',
   review_session_model: '',
