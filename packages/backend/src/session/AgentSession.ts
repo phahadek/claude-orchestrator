@@ -12,26 +12,14 @@ import {
   incrementTokens,
   incrementCompactionCount,
   setContextOccupancy,
-  insertSessionAudit,
   setSessionModel,
   setSessionMetadata,
   getPRBySessionId,
-  getPRByNumber,
   setHeadSha,
   setPauseReason,
-  getProjectRowById,
-  insertLocalBranch,
-  getSession,
   insertPauseInterval,
 } from '../db/queries';
-import { NoOpInvestigator } from '../github/NoOpInvestigator';
-import type { INoOpSessionManager } from '../github/NoOpInvestigator';
-import {
-  getCurrentBranch,
-  hasNonEmptyDiff,
-} from '../orchestration/localBranchHelpers';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
-import { emitTaskUpdated } from '../routes/tasks';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { GitHubClient } from '../github/GitHubClient';
@@ -43,10 +31,10 @@ import { runFilePollutionCheck as filePollutionCheckFn } from './filePollutionCh
 import { checkCommitAttribution } from '../github/CommitAttributionWatcher';
 import { recordEvent } from '../audit/AuditLog';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
-import { SessionAuditor } from './SessionAuditor';
 import type { ISessionManager } from './SessionAuditor';
 import type { ISessionRunner } from './SessionRunner';
 import { CliSessionRunner } from './CliSessionRunner';
+import { recoverSession } from './sessionRecovery';
 import {
   VALID_EVENT_TYPES,
   SILENT_SKIP_TYPES,
@@ -1005,270 +993,22 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       payload: { session_id: this.sessionId, pr_url: prUrl ?? null },
     });
 
-    if (this.sessionType === 'standard') {
-      // Wrap in try-catch so review-pipeline errors (e.g. fetch failures) can
-      // never abort handleCleanExit and leave the session stuck at 'running'.
-      try {
-        // Compute hasDiff once at the top of the standard-session block so it
-        // can be used for both local-only submission and no-op detection.
-        let hasDiff = false;
-        let featureBranchName: string | undefined;
-        const baseBranch = 'dev';
-        try {
-          const branchName = await getCurrentBranch(this.worktreePath);
-          featureBranchName = branchName ?? undefined;
-          if (branchName && branchName !== baseBranch) {
-            hasDiff = await hasNonEmptyDiff(
-              this.worktreePath,
-              baseBranch,
-              branchName,
-            );
-          }
-        } catch (e) {
-          console.error(`[AgentSession] hasDiff computation failed: ${e}`);
-        }
-
-        // No-op detection: clean exit with no PR and no diff → spawn investigator.
-        if (
-          !prUrl &&
-          !hasDiff &&
-          this.taskId &&
-          this.sessionManager &&
-          'start' in this.sessionManager
-        ) {
-          const project = this.projectId
-            ? getProjectRowById(this.projectId)
-            : undefined;
-          const repo = project?.github_repo ?? '';
-          const sessionRow = getSession(this.sessionId);
-          const taskCreatedAt = sessionRow
-            ? new Date(sessionRow.started_at).toISOString()
-            : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-          const investigator = new NoOpInvestigator(
-            this.sessionManager as unknown as INoOpSessionManager,
-            this.taskBackend(),
-            this.githubClient,
-          );
-          investigator
-            .investigate({
-              taskId: this.taskId,
-              taskUrl: this.taskUrl,
-              projectContextUrl: this.projectContextUrl,
-              projectId: this.projectId,
-              noOpSessionId: this.sessionId,
-              baseBranch,
-              featureBranchName,
-              repo,
-              taskCreatedAt,
-            })
-            .catch((e) => {
-              console.error(
-                `[AgentSession] NoOpInvestigator.investigate failed for ${this.sessionId}: ${e}`,
-              );
-            });
-        }
-
-        if (prUrl && !this.prDetectedLive) {
-          // Fallback: live detection didn't fire (e.g. gh pr create via Bash).
-          this.taskBackend()
-            .attachPR(this.taskId, prUrl)
-            .catch((e) =>
-              console.error(`[AgentSession] attachPR failed: ${e}`),
-            );
-        }
-
-        // Always upsert task_id and session_id onto the PR row when a
-        // PR URL is known at session end. This ensures the link is set even if
-        // PRSyncJob ran before handleCleanExit and created the row with null values.
-        // Capture existing PR state BEFORE the upsert overwrites it so the
-        // status-update step below can tell when the PR has already been merged.
-        let existingPrState: string | undefined;
-        if (prUrl) {
-          const prMatch = prUrl.match(
-            /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/,
-          );
-          if (prMatch) {
-            const repo = prMatch[1];
-            const prNumber = parseInt(prMatch[2], 10);
-            existingPrState = getPRByNumber(prNumber, repo)?.state;
-            const now = new Date().toISOString();
-            let headSha: string | null = null;
-            if (this.githubClient) {
-              try {
-                const freshPR = await this.githubClient.fetchPR(repo, prNumber);
-                headSha = freshPR.headSha ?? null;
-              } catch (e) {
-                console.warn(
-                  `[AgentSession] handleCleanExit: failed to fetch PR #${prNumber} from GitHub for head_sha:`,
-                  e,
-                );
-              }
-            }
-            if (existingPrState !== 'merged' && existingPrState !== 'closed') {
-              upsertPullRequest({
-                pr_number: prNumber,
-                pr_url: prUrl,
-                task_id: this.taskId || null,
-                session_id: this.sessionId,
-                repo,
-                title: null,
-                body: null,
-                head_branch: null,
-                base_branch: null,
-                state: 'open',
-                draft: 0,
-                review_result: null,
-                review_at: null,
-                created_at: now,
-                updated_at: now,
-                synced_at: now,
-                node_id: null,
-                head_sha: headSha,
-              });
-              if (!this.prDetectedLive) {
-                this.emit('pr_opened', {
-                  prNumber,
-                  repo,
-                  taskId: this.taskId,
-                  taskUrl: this.taskUrl,
-                  contextUrl: this.projectContextUrl,
-                });
-              }
-            }
-          }
-        }
-
-        // Skip the "In Review" write when the PR is already merged or closed.
-        // The merge flow ends the session and sets the Notion task to "Done";
-        // without this guard handleCleanExit would race and regress the status.
-        if (
-          prUrl &&
-          existingPrState !== 'merged' &&
-          existingPrState !== 'closed'
-        ) {
-          this.taskBackend()
-            .updateStatus(this.taskId, '👀 In Review')
-            .then(() => {
-              this.broadcast({
-                type: 'task_status_changed',
-                notionTaskId: this.taskId,
-                newStatus: '👀 In Review',
-              });
-              emitTaskUpdated(this.taskId);
-            })
-            .catch((e) =>
-              console.error(`[AgentSession] updateStatus failed: ${e}`),
-            );
-        }
-
-        // Local-only project: detect a non-empty diff and emit submission event.
-        // Reuses hasDiff and featureBranchName computed at the top of this block.
-        if (this.projectId) {
-          const project = getProjectRowById(this.projectId);
-          if (project?.git_mode === 'local-only') {
-            try {
-              if (
-                featureBranchName &&
-                featureBranchName !== baseBranch &&
-                hasDiff
-              ) {
-                const now = new Date().toISOString();
-                insertLocalBranch({
-                  project_id: this.projectId,
-                  session_id: this.sessionId,
-                  branch_name: featureBranchName,
-                  base_branch: baseBranch,
-                  status: 'open',
-                  review_result: null,
-                  created_at: now,
-                  updated_at: now,
-                });
-                this.broadcast({
-                  type: 'local_branch_submitted',
-                  projectId: this.projectId,
-                  sessionId: this.sessionId,
-                  branchName: featureBranchName,
-                  baseBranch,
-                });
-                this.taskBackend()
-                  .updateStatus(this.taskId, '👀 In Review')
-                  .then(() => {
-                    this.broadcast({
-                      type: 'task_status_changed',
-                      notionTaskId: this.taskId,
-                      newStatus: '👀 In Review',
-                    });
-                    emitTaskUpdated(this.taskId);
-                  })
-                  .catch((e) =>
-                    console.error(`[AgentSession] updateStatus failed: ${e}`),
-                  );
-              }
-            } catch (e) {
-              console.error(
-                `[AgentSession] local-only submission check failed: ${e}`,
-              );
-            }
-          }
-        }
-      } catch (e) {
-        console.error(
-          `[AgentSession] handleCleanExit post-done error for ${this.sessionId}:`,
-          e,
-        );
-      }
-    }
-
-    this.broadcast({
-      type: 'session_ended',
-      sessionId: this.sessionId,
-      status: 'done',
-      ...(prUrl ? { prUrl } : {}),
+    await recoverSession(this.sessionId, {
+      scope: 'clean_exit',
+      prUrl,
+      prDetectedLive: this.prDetectedLive,
+      sessionType: this.sessionType,
+      taskId: this.taskId,
+      projectId: this.projectId,
+      worktreePath: this.worktreePath,
+      taskUrl: this.taskUrl,
+      projectContextUrl: this.projectContextUrl,
+      githubClient: this.githubClient,
+      taskBackend: this.taskBackend(),
+      sessionManager: this.sessionManager,
+      broadcast: (msg) => this.broadcast(msg),
+      emitPrOpened: (data) => this.emit('pr_opened', data),
     });
-
-    if (this.sessionType !== 'review') {
-      this.runAudit(0);
-    }
-  }
-
-  /**
-   * Run the post-session audit fire-and-forget.
-   * Stores the result in SQLite and broadcasts session_audit.
-   * Errors are logged but never thrown — the audit is always non-blocking.
-   */
-  private runAudit(exitCode: number | null): void {
-    const auditor = new SessionAuditor(
-      this.taskBackendOverride ?? this.projectId,
-      this.githubClient,
-      this.sessionManager,
-    );
-    auditor
-      .audit(this, exitCode)
-      .then((audit) => {
-        insertSessionAudit({
-          session_id: audit.sessionId,
-          pr_opened: audit.prOpened ? 1 : 0,
-          pr_targets: audit.prTargetsBranch,
-          task_status: audit.taskStatusAfter,
-          violations: JSON.stringify(audit.violations),
-          spec_mismatch: audit.specMismatch,
-          audited_at: audit.auditedAt,
-        });
-        this.broadcast({
-          type: 'session_audit',
-          sessionId: audit.sessionId,
-          prOpened: audit.prOpened,
-          prTargetsBranch: audit.prTargetsBranch,
-          violations: audit.violations,
-          specMismatch: audit.specMismatch,
-          auditedAt: audit.auditedAt,
-        });
-      })
-      .catch((err) => {
-        console.error(
-          `[AgentSession] audit failed for ${this.sessionId}: ${err}`,
-        );
-      });
   }
 
   /** Files reverted during this session that the injector must not overwrite (one cycle). */
