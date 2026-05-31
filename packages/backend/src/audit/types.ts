@@ -17,7 +17,8 @@ export type EventType =
   | 'file_pollution_check_failed'
   | 'handle_clean_exit_entered'
   | 'handle_clean_exit_session_marked_done'
-  | 'task_orphan_reverted';
+  | 'task_orphan_reverted'
+  | 'session_errored';
 
 export type ActorType = 'ai' | 'human' | 'system';
 

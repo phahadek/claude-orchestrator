@@ -134,6 +134,12 @@ const TERMINAL_STATUSES = new Set(['done', 'error', 'killed']);
 const ALWAYS_GUARDED_BRANCHES = new Set(['dev', 'main']);
 
 /**
+ * Error causes that indicate the runner crashed and the task needs human attention
+ * before it can be retried → Blocked. All other causes map to Ready (can retry).
+ */
+const BLOCKED_REASONS = new Set(['runner_non_zero', 'run_error', 'sendOrResume_run_error']);
+
+/**
  * Delete the local session/<sessionId> branch if it exists and conditions are met:
  * session row is terminal (done/error/killed) AND (no pr_url OR PR is merged/closed).
  * Dev/main are always guarded. Missing branch is a silent no-op.
@@ -300,6 +306,74 @@ export class SessionManager extends EventEmitter {
       default:
         return null;
     }
+  }
+
+  /**
+   * Single owner of the (DB session status + Notion task status + WS broadcast) trio
+   * for non-zero / killed exit paths. All call sites that previously called
+   * updateSessionStatus(..., 'error'|'killed', ...) must go through this method.
+   *
+   * - Updates sessions.status and ended_at in the DB.
+   * - Sets hasEnded on the in-memory AgentSession if still live.
+   * - Emits session_ended WS broadcast.
+   * - Records an audit_log event capturing the cause.
+   * - For standard sessions with a task_id, updates the Notion task status:
+   *   runner_non_zero / run_error → 🔴 Blocked; everything else → 🗂️ Ready.
+   * - Notion failures are logged but never re-thrown (matches handleCleanExit pattern).
+   */
+  markSessionErrored(
+    sessionId: string,
+    status: 'error' | 'killed',
+    reason: string,
+  ): void {
+    const endedAt = Date.now();
+
+    // 1. Update DB status and ended_at
+    updateSessionStatus(sessionId, status, endedAt);
+
+    // 2. Set hasEnded on live in-memory session to prevent double-broadcasts
+    const liveSession = this.sessions.get(sessionId);
+    if (liveSession) liveSession.hasEnded = true;
+
+    // 3. Emit session_ended WS broadcast
+    this.emit('message', {
+      type: 'session_ended',
+      sessionId,
+      status,
+    } satisfies ServerMessage);
+
+    // 4. Record audit_log event capturing the cause
+    recordEvent({
+      event_type: 'session_errored',
+      actor_type: 'system',
+      actor_id: sessionId,
+      project_id: null,
+      task_id: null,
+      payload: { sessionId, status, reason },
+    });
+
+    // 5. Look up session to determine task and project
+    const row = getSession(sessionId);
+    if (!row || row.session_type !== 'standard' || !row.task_id) return;
+
+    const notionStatus = BLOCKED_REASONS.has(reason) ? '🔴 Blocked' : '🗂️ Ready';
+    const taskId = row.task_id;
+    const projectId = row.project_id ?? '';
+
+    // 6. Update Notion task status (fire-and-forget; failures logged, not thrown)
+    getTaskBackend(projectId)
+      .updateStatus(taskId, notionStatus, { source: 'orchestrator', sessionId })
+      .then(() => {
+        this.emit('message', {
+          type: 'task_status_changed',
+          notionTaskId: taskId,
+          newStatus: notionStatus,
+        } satisfies ServerMessage);
+        emitTaskUpdated(taskId);
+      })
+      .catch((e) =>
+        console.error(`[SessionManager] markSessionErrored updateStatus failed: ${e}`),
+      );
   }
 
   start(
@@ -650,31 +724,7 @@ export class SessionManager extends EventEmitter {
       console.error(
         `[SessionManager] launchSession failed for ${sessionId}: ${err}`,
       );
-      updateSessionStatus(sessionId, 'error', Date.now());
-      this.emit('message', {
-        type: 'session_ended',
-        sessionId,
-        status: 'error',
-      } satisfies ServerMessage);
-      // Roll back task status to Ready so the card doesn't stay stuck In Progress.
-      if (sessionType === 'standard' && notionTaskId) {
-        getTaskBackend(projectId)
-          .updateStatus(notionTaskId, '🗂️ Ready', {
-            source: 'orchestrator',
-            sessionId,
-          })
-          .then(() => {
-            this.emit('message', {
-              type: 'task_status_changed',
-              notionTaskId,
-              newStatus: '🗂️ Ready',
-            } satisfies ServerMessage);
-            emitTaskUpdated(notionTaskId);
-          })
-          .catch((e) =>
-            console.error(`[SessionManager] rollback to Ready failed: ${e}`),
-          );
-      }
+      this.markSessionErrored(sessionId, 'error', 'launch_failed');
       this.emit('message', {
         type: 'error',
         message: `Session launch failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -770,12 +820,7 @@ export class SessionManager extends EventEmitter {
         // If run() threw before broadcasting session_ended, update SQLite and
         // notify the frontend so the session doesn't stay stuck at 'running'.
         if (!session.hasEnded) {
-          updateSessionStatus(sessionId, 'error', Date.now());
-          this.emit('message', {
-            type: 'session_ended',
-            sessionId,
-            status: 'error',
-          } satisfies ServerMessage);
+          this.markSessionErrored(sessionId, 'error', 'run_error');
         }
         return this.cleanupWorktree(
           sessionId,
@@ -798,7 +843,7 @@ export class SessionManager extends EventEmitter {
       console.warn(
         `[SessionManager] orphan ${row.session_id}: project not found, marking error`,
       );
-      updateSessionStatus(row.session_id, 'error', Date.now());
+      this.markSessionErrored(row.session_id, 'error', 'orphan_project_not_found');
       return;
     }
 
@@ -814,12 +859,7 @@ export class SessionManager extends EventEmitter {
       console.warn(
         `[SessionManager] resumability pre-check failed for ${row.session_id}: worktree missing (${worktreePath}) — marking error`,
       );
-      updateSessionStatus(row.session_id, 'error', Date.now());
-      this.emit('message', {
-        type: 'session_ended',
-        sessionId: row.session_id,
-        status: 'error',
-      } satisfies ServerMessage);
+      this.markSessionErrored(row.session_id, 'error', 'worktree_missing');
       return;
     }
 
@@ -905,12 +945,7 @@ export class SessionManager extends EventEmitter {
         console.warn(
           `[SessionManager] resumeSession ${row.session_id}: no events within 30s after resume — marking as error`,
         );
-        updateSessionStatus(row.session_id, 'error', Date.now());
-        this.emit('message', {
-          type: 'session_ended',
-          sessionId: row.session_id,
-          status: 'error',
-        } satisfies ServerMessage);
+        this.markSessionErrored(row.session_id, 'error', 'resume_timeout');
         session.kill().catch(() => {});
       }
     }, RESUME_TIMEOUT_MS);
@@ -980,7 +1015,7 @@ export class SessionManager extends EventEmitter {
           `[SessionManager] failed to resume ${row.session_id}: ${err}`,
         );
         // Mark as error so it doesn't retry forever on subsequent restarts.
-        updateSessionStatus(row.session_id, 'error', Date.now());
+        this.markSessionErrored(row.session_id, 'error', 'resume_failed');
       }
     }
 
@@ -988,7 +1023,7 @@ export class SessionManager extends EventEmitter {
       console.warn(
         `[SessionManager] max concurrent code sessions reached — marking orphan ${row.session_id} as error`,
       );
-      updateSessionStatus(row.session_id, 'error', Date.now());
+      this.markSessionErrored(row.session_id, 'error', 'max_concurrent');
     }
   }
 
@@ -1393,12 +1428,7 @@ export class SessionManager extends EventEmitter {
           `[SessionManager] resumed session ${newSessionId} error: ${err}`,
         );
         if (!session.hasEnded) {
-          updateSessionStatus(newSessionId, 'error', Date.now());
-          this.emit('message', {
-            type: 'session_ended',
-            sessionId: newSessionId,
-            status: 'error',
-          } satisfies ServerMessage);
+          this.markSessionErrored(newSessionId, 'error', 'sendOrResume_run_error');
         }
         return this.cleanupWorktree(
           newSessionId,

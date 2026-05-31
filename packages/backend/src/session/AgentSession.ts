@@ -337,12 +337,19 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         });
       } else {
         const status = exitCode === null ? 'killed' : 'error';
-        updateSessionStatus(this.sessionId, status, Date.now());
-        this.broadcast({
-          type: 'session_ended',
-          sessionId: this.sessionId,
-          status,
-        });
+        const reason = exitCode === null ? 'runner_killed_unexpected' : 'runner_non_zero';
+        if (!this.hasEnded) {
+          this.sessionManager?.markSessionErrored?.(this.sessionId, status, reason);
+          if (!this.hasEnded) {
+            // Fallback when sessionManager is absent (e.g. unit tests without a manager)
+            updateSessionStatus(this.sessionId, status, Date.now());
+            this.broadcast({
+              type: 'session_ended',
+              sessionId: this.sessionId,
+              status,
+            });
+          }
+        }
         return;
       }
     }
@@ -1325,12 +1332,18 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     if (this.isKilling) return;
     this.isKilling = true;
     await this.runner.kill();
-    updateSessionStatus(this.sessionId, 'killed', Date.now());
-    this.broadcast({
-      type: 'session_ended',
-      sessionId: this.sessionId,
-      status: 'killed',
-    });
+    if (!this.hasEnded) {
+      this.sessionManager?.markSessionErrored?.(this.sessionId, 'killed', 'user_kill');
+      if (!this.hasEnded) {
+        // Fallback when sessionManager is absent (e.g. unit tests without a manager)
+        updateSessionStatus(this.sessionId, 'killed', Date.now());
+        this.broadcast({
+          type: 'session_ended',
+          sessionId: this.sessionId,
+          status: 'killed',
+        });
+      }
+    }
   }
 
   /**

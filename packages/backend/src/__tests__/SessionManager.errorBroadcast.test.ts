@@ -134,6 +134,7 @@ vi.mock('../session/AgentSession', () => {
   return {
     AgentSession,
     parseNotionPageId: vi.fn().mockImplementation((url: string) => url),
+    parseNotionPageIdDashed: vi.fn().mockImplementation((url: string) => url),
   };
 });
 
@@ -144,6 +145,7 @@ vi.mock('../audit/AuditLog', () => ({
 import { SessionManager } from '../session/SessionManager';
 import { AgentSession } from '../session/AgentSession';
 import { getTaskBackend } from '../tasks/TaskBackend';
+import * as queries from '../db/queries';
 
 const YAML_TASK_ID = 't2-ready-unblocked';
 const NOTION_TASK_URL =
@@ -237,6 +239,12 @@ describe('SessionManager — launchSession failure broadcasts error and rolls ba
       updateStatus: vi.fn().mockResolvedValue(undefined),
     };
     vi.mocked(getTaskBackend).mockReturnValue(fakeBackend as never);
+    // markSessionErrored reads the session row to find task_id and project_id for Notion rollback
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_type: 'standard',
+      task_id: 'notion:t2-ready-unblocked',
+      project_id: PROJECT_ID,
+    } as never);
   });
 
   it('emits { type: "error" } with "Session launch failed" when AgentSession throws', async () => {
@@ -317,6 +325,11 @@ describe('SessionManager — launchSession failure broadcasts error and rolls ba
     vi.mocked(AgentSession).mockImplementationOnce(() => {
       throw new Error('worktree failed');
     });
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_type: 'review',
+      task_id: 'notion:t2-ready-unblocked',
+      project_id: PROJECT_ID,
+    } as never);
 
     const sm = new SessionManager();
     sm.start(YAML_TASK_ID, CTX_URL, {
