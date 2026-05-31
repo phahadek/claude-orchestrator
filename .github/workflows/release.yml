@@ -40,7 +40,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: "installers/windows/dist/ClaudeOrchestrator-Setup-${{ steps.version.outputs.VERSION }}-win-x64.exe"
+          path: 'installers/windows/dist/ClaudeOrchestrator-Setup-${{ steps.version.outputs.VERSION }}-win-x64.exe'
           if-no-files-found: error
 
   release-macos:
@@ -74,7 +74,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: macos-installer
-          path: "installers/macos/build/ClaudeOrchestrator-Setup-${{ steps.version.outputs.VERSION }}-macos-arm64.dmg"
+          path: 'installers/macos/build/ClaudeOrchestrator-Setup-${{ steps.version.outputs.VERSION }}-macos-arm64.dmg'
           if-no-files-found: error
 
   release-linux:
@@ -115,7 +115,7 @@ jobs:
 
       - name: Build AppImage
         env:
-          APPIMAGE_EXTRACT_AND_RUN: "1"
+          APPIMAGE_EXTRACT_AND_RUN: '1'
         run: ./installers/linux/build-appimage.sh "${{ steps.version.outputs.VERSION }}"
 
       - name: Rename artifacts
