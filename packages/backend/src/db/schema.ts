@@ -247,6 +247,13 @@ export function runMigrations(): void {
     /* already exists */
   }
   try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN context_occupancy_tokens INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
     db.exec(`ALTER TABLE pull_requests ADD COLUMN review_session_id TEXT`);
   } catch {
     /* already exists */

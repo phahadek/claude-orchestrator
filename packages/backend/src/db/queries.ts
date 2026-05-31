@@ -720,6 +720,12 @@ export function getTasksByStatusFromCache(
     .all(`${prefix}%`, status) as { task_id: string; raw_json: string }[];
 }
 
+export function setContextOccupancy(sessionId: string, tokens: number): void {
+  db.prepare(
+    `UPDATE sessions SET context_occupancy_tokens = ? WHERE session_id = ?`,
+  ).run(tokens, sessionId);
+}
+
 export function getZeroTokenSessions(limit: number): Session[] {
   return db
     .prepare(

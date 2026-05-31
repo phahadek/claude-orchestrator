@@ -11,6 +11,7 @@ import {
   upsertPullRequest,
   incrementTokens,
   incrementCompactionCount,
+  setContextOccupancy,
   insertSessionAudit,
   setSessionModel,
   setSessionMetadata,
@@ -151,6 +152,7 @@ export class AgentSession extends EventEmitter {
   private totalOutputTokens = 0;
   /** Count of compact_boundary events seen this session (in-memory, synced to SQLite). */
   private compactionCount = 0;
+  private static readonly CONTEXT_WINDOW_LIMIT = 200_000;
   /** Model name extracted from the first assistant event (e.g. 'claude-sonnet-4-6'). */
   public model: string | null = null;
   /** Count of consecutive transient-error retries for this session instance. Resets on clean exit. */
@@ -637,25 +639,37 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       this.messageIdMap.set(messageId, rowId);
     }
 
-    // After each result event (one per turn), increment token counters and broadcast
+    // After each result event (one per turn), update token counters and broadcast
     // session_updated so the frontend receives live totals during execution.
     if (rawType === 'result') {
       const usageData = event.usage as
-        | { input_tokens?: number; output_tokens?: number }
+        | {
+            input_tokens?: number;
+            output_tokens?: number;
+            cache_read_input_tokens?: number;
+            cache_creation_input_tokens?: number;
+          }
         | undefined;
       const inputTokens = usageData?.input_tokens ?? 0;
       const outputTokens = usageData?.output_tokens ?? 0;
+      const cacheRead = usageData?.cache_read_input_tokens ?? 0;
+      const cacheCreate = usageData?.cache_creation_input_tokens ?? 0;
       if (inputTokens > 0 || outputTokens > 0) {
         this.totalInputTokens += inputTokens;
         this.totalOutputTokens += outputTokens;
         incrementTokens(this.sessionId, inputTokens, outputTokens);
-        this.broadcast({
-          type: 'session_updated',
-          sessionId: this.sessionId,
-          totalInputTokens: this.totalInputTokens,
-          totalOutputTokens: this.totalOutputTokens,
-        });
       }
+      // Occupancy = this turn's full prompt token count (not cumulative).
+      const occupancy = inputTokens + cacheRead + cacheCreate;
+      setContextOccupancy(this.sessionId, occupancy);
+      this.broadcast({
+        type: 'session_updated',
+        sessionId: this.sessionId,
+        totalInputTokens: this.totalInputTokens,
+        totalOutputTokens: this.totalOutputTokens,
+        contextOccupancyTokens: occupancy,
+        contextOccupancyFraction: occupancy / AgentSession.CONTEXT_WINDOW_LIMIT,
+      });
     }
 
     // Skip broadcasting user events that contain only system-injected content
