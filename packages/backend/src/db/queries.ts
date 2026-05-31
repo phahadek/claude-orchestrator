@@ -21,6 +21,8 @@ import type {
   NewLocalBranchRow,
   DeviceRow,
   NewDeviceRow,
+  SessionPauseInterval,
+  SessionPauseReason,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -1957,4 +1959,54 @@ export function bumpTaskNoOpAttempts(taskId: string): void {
        retry_count = retry_count + 1,
        last_attempt_at = excluded.last_attempt_at`,
   ).run(taskId, now);
+}
+
+// ─── session_pause_intervals ────────────────────────────────────────────────
+
+export function insertPauseInterval(
+  sessionId: string,
+  pauseReason: SessionPauseReason,
+): void {
+  db.prepare(
+    `INSERT INTO session_pause_intervals (session_id, pause_reason, paused_at)
+     VALUES (?, ?, ?)`,
+  ).run(sessionId, pauseReason, Date.now());
+}
+
+export function closePauseInterval(sessionId: string): void {
+  db.prepare(
+    `UPDATE session_pause_intervals
+     SET resumed_at = ?
+     WHERE id = (
+       SELECT id FROM session_pause_intervals
+       WHERE session_id = ? AND resumed_at IS NULL
+       ORDER BY paused_at DESC, id DESC
+       LIMIT 1
+     )`,
+  ).run(Date.now(), sessionId);
+}
+
+export function getPauseIntervalsBySession(
+  sessionId: string,
+): SessionPauseInterval[] {
+  return db
+    .prepare(
+      `SELECT * FROM session_pause_intervals WHERE session_id = ? ORDER BY paused_at ASC`,
+    )
+    .all(sessionId) as SessionPauseInterval[];
+}
+
+export function getTotalPausedMs(
+  sessionId: string,
+  endedAt?: number | null,
+): number {
+  const implicit = endedAt ?? Date.now();
+  const row = db
+    .prepare(
+      `SELECT COALESCE(SUM(COALESCE(resumed_at, ?) - paused_at), 0) AS total
+       FROM session_pause_intervals
+       WHERE session_id = ?`,
+    )
+    .get(implicit, sessionId) as { total: number };
+  return row.total;
 }

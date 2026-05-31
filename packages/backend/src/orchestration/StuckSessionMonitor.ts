@@ -1,6 +1,11 @@
 import type { SessionManager } from '../session/SessionManager';
 import { runtimeSettings } from '../config';
-import { getPRBySessionId, setPauseReason } from '../db/queries';
+import {
+  getPRBySessionId,
+  setPauseReason,
+  insertPauseInterval,
+  closePauseInterval,
+} from '../db/queries';
 import type { ServerMessage } from '../ws/types';
 
 interface TimerState {
@@ -112,8 +117,10 @@ export class StuckSessionMonitor {
     const info = obj.rate_limit_info as Record<string, unknown> | undefined;
     if (!info) return;
     if (info.status === 'rate_limited') {
+      insertPauseInterval(sessionId, 'rate_limit');
       this.pauseTimers(sessionId, true);
     } else if (info.status === 'resumed') {
+      closePauseInterval(sessionId);
       this.resumeTimers(sessionId);
     }
   }
@@ -269,6 +276,7 @@ export class StuckSessionMonitor {
     if (pr) {
       setPauseReason(pr.pr_number, pr.repo, 'stuck_timeout');
     }
+    insertPauseInterval(sessionId, 'stuck_timeout');
 
     try {
       this.sessionManager.send(sessionId, PAUSE_MESSAGE);

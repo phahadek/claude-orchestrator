@@ -174,5 +174,12 @@ export function applyTestSchema(db: Database.Database): void {
       created_at    TEXT NOT NULL,
       updated_at    TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS session_pause_intervals (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id   TEXT    NOT NULL,
+      pause_reason TEXT    NOT NULL,
+      paused_at    INTEGER NOT NULL,
+      resumed_at   INTEGER NULL
+    );
   `);
 }

@@ -20,6 +20,7 @@ import {
   getProjectRowById,
   insertLocalBranch,
   getSession,
+  insertPauseInterval,
 } from '../db/queries';
 import { NoOpInvestigator } from '../github/NoOpInvestigator';
 import type { INoOpSessionManager } from '../github/NoOpInvestigator';
@@ -366,6 +367,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     if (pr) {
       setPauseReason(pr.pr_number, pr.repo, 'api_overloaded');
     }
+    insertPauseInterval(this.sessionId, 'api_overloaded');
 
     const pauseMessage =
       'The Anthropic API returned a 529 Overloaded or 500 error mid-session. ' +

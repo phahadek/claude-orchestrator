@@ -167,6 +167,16 @@ export function runMigrations(): void {
       PRIMARY KEY (pr_number, repo)
     );
 
+    CREATE TABLE IF NOT EXISTS session_pause_intervals (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id   TEXT    NOT NULL,
+      pause_reason TEXT    NOT NULL,
+      paused_at    INTEGER NOT NULL,
+      resumed_at   INTEGER NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_pause_intervals_session_id ON session_pause_intervals(session_id);
+
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events(session_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_event_type ON session_events(session_id, event_type);
     CREATE INDEX IF NOT EXISTS idx_session_events_timestamp ON session_events(timestamp DESC);
