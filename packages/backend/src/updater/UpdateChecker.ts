@@ -12,7 +12,6 @@ function isDevMode(): boolean {
 }
 
 function getCurrentVersion(): string {
-   
   const pkg = require('../../package.json') as { version: string };
   return pkg.version;
 }

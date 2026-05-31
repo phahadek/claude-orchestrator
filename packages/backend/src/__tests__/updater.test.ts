@@ -19,7 +19,7 @@ import type { GitHubAsset, UpdateInfo } from '../updater/types.js';
 import type { ServerMessage } from '../ws/types.js';
 
 // Read the actual version from package.json so tests stay correct as version bumps.
- 
+
 const CURRENT_VERSION: string = (
   require('../../package.json') as { version: string }
 ).version;
