@@ -924,7 +924,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         }
       }
     } catch (e) {
-      console.error(`[AgentSession] handleCleanExit pre-done failed for ${this.sessionId}:`, e);
+      console.error(
+        `[AgentSession] handleCleanExit pre-done failed for ${this.sessionId}:`,
+        e,
+      );
       // Fall through with prUrl=undefined — periodic recovery will retry PR extraction.
     }
 
