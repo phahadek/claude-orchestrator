@@ -1348,7 +1348,7 @@ export class SessionManager extends EventEmitter {
   }
 
   async shutdownAll(): Promise<void> {
-    const kills = [...this.sessions.keys()].map((id) => this.kill(id));
-    await Promise.allSettled(kills);
+    const pauses = [...this.sessions.values()].map((s) => s.gracefulPause());
+    await Promise.allSettled(pauses);
   }
 }
