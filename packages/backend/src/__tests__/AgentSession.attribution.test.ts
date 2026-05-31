@@ -40,6 +40,7 @@ vi.mock('../db/queries', () => ({
   upsertPullRequest: vi.fn(),
   insertSessionAudit: vi.fn(),
   incrementTokens: vi.fn(),
+  setContextOccupancy: vi.fn(),
   setSessionModel: vi.fn(),
   setSessionMetadata: vi.fn(),
   getPRBySessionId: vi.fn(() => null),

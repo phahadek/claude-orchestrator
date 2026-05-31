@@ -50,6 +50,7 @@ vi.mock('../db/queries', () => ({
   incrementTokens: vi.fn(),
   incrementCompactionCount: (...args: unknown[]) =>
     mockIncrementCompactionCount(...args),
+  setContextOccupancy: vi.fn(),
   setSessionModel: vi.fn(),
   getPRBySessionId: vi.fn(() => null),
   getPRByNotionTaskId: vi.fn(() => null),

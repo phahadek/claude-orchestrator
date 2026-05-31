@@ -130,6 +130,8 @@ export type ServerMessage =
       totalOutputTokens?: number;
       compactionCount?: number;
       model?: string;
+      contextOccupancyTokens?: number;
+      contextOccupancyFraction?: number;
     }
   | { type: 'tasks_ready'; tasks: ResolvedTask[] }
   | {
