@@ -128,6 +128,7 @@ export type ServerMessage =
       tags?: string[];
       totalInputTokens?: number;
       totalOutputTokens?: number;
+      compactionCount?: number;
       model?: string;
     }
   | { type: 'tasks_ready'; tasks: ResolvedTask[] }

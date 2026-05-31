@@ -694,6 +694,12 @@ export function incrementTokens(
   ).run(inputTokens, outputTokens, sessionId);
 }
 
+export function incrementCompactionCount(sessionId: string): void {
+  db.prepare(
+    `UPDATE sessions SET compaction_count = compaction_count + 1 WHERE session_id = ?`,
+  ).run(sessionId);
+}
+
 export function getZeroTokenSessions(limit: number): Session[] {
   return db
     .prepare(
