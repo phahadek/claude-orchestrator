@@ -341,7 +341,11 @@ export class GitHubClient {
     if (rawMergeableState === 'unstable') {
       const checksResult = headSha
         ? await this.getChecksForCategorization(headSha, r, ciCheckNames)
-        : { failingChecks: [] as FailingCheck[], hasMissingNamedCheck: false, hasRunningCheck: false };
+        : {
+            failingChecks: [] as FailingCheck[],
+            hasMissingNamedCheck: false,
+            hasRunningCheck: false,
+          };
       const { failingChecks, hasRunningCheck } = checksResult;
       if (failingChecks.length > 0) {
         return {
@@ -427,7 +431,11 @@ export class GitHubClient {
     sha: string,
     repo: string,
     ciCheckNames: string[],
-  ): Promise<{ failingChecks: FailingCheck[]; hasMissingNamedCheck: boolean; hasRunningCheck: boolean }> {
+  ): Promise<{
+    failingChecks: FailingCheck[];
+    hasMissingNamedCheck: boolean;
+    hasRunningCheck: boolean;
+  }> {
     let allCheckRuns: Array<{
       name: string;
       status: string;
@@ -447,7 +455,11 @@ export class GitHubClient {
         `[GitHubClient] getFailingChecks failed for ${sha} in ${repo}:`,
         (err as Error).message,
       );
-      return { failingChecks: [], hasMissingNamedCheck: false, hasRunningCheck: false };
+      return {
+        failingChecks: [],
+        hasMissingNamedCheck: false,
+        hasRunningCheck: false,
+      };
     }
 
     const hasRunningCheck = allCheckRuns.some((c) => c.status !== 'completed');
@@ -462,7 +474,11 @@ export class GitHubClient {
       .map((c) => ({ name: c.name, conclusion: c.conclusion as string }));
 
     if (ciCheckNames.length === 0) {
-      return { failingChecks: allFailingChecks, hasMissingNamedCheck: false, hasRunningCheck };
+      return {
+        failingChecks: allFailingChecks,
+        hasMissingNamedCheck: false,
+        hasRunningCheck,
+      };
     }
 
     const reportedNames = new Set(allCheckRuns.map((c) => c.name));

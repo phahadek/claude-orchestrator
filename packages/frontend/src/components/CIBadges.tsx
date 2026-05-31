@@ -59,10 +59,7 @@ export function CIBadges({
         </span>
       )}
       {showRunning && (
-        <span
-          className={styles.runningBadge}
-          title="CI checks are in progress"
-        >
+        <span className={styles.runningBadge} title="CI checks are in progress">
           <span className={styles.spinner} aria-hidden="true" />
           CI running
         </span>
