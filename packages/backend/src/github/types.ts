@@ -62,7 +62,7 @@ export type MergeCategory =
 
 export interface MergeabilityCategory {
   category: MergeCategory;
-  /** Value persisted in pull_requests.merge_state ('clean' | 'dirty' | 'ci_failed' | 'blocked' | 'unknown'). */
+  /** Value persisted in pull_requests.merge_state ('clean' | 'dirty' | 'ci_failed' | 'ci_running' | 'blocked' | 'unknown'). */
   mergeState: string;
   /** Raw mergeable_state from GitHub (null when GitHub is still computing). */
   rawMergeableState: string | null;

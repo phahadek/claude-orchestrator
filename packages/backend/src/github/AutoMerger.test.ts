@@ -407,6 +407,39 @@ describe('AutoMerger.attempt() — failure modes', () => {
     expect(github.mergePR).not.toHaveBeenCalled();
   });
 
+  it('does not merge a PR in ci_running state (keeps polling until timeout)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    // ci_running has category='unknown' but mergeState='ci_running' — must not trigger merge
+    const ciRunningMergeability: MergeabilityCategory = {
+      category: 'unknown',
+      mergeState: 'ci_running',
+      rawMergeableState: 'unstable',
+      failingChecks: [],
+      headSha: 'sha-abc',
+    };
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: ciRunningMergeability,
+        headSha: 'sha-abc',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(github.mergePR).not.toHaveBeenCalled();
+    expect(setPauseReason).not.toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'ci_failing',
+    );
+  });
+
   it('populates failing_checks in DB when ci_failed category has failing check names', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
     const github = makeMockGitHub([

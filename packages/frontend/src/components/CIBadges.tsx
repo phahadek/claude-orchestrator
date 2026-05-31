@@ -20,8 +20,9 @@ export function CIBadges({
   const showCiFailing =
     mergeState === 'ci_failed' || pauseReason === 'ci_failing';
   const showUnstable = mergeState === 'unstable';
+  const showRunning = mergeState === 'ci_running';
 
-  if (!showCiFailing && !showUnstable) return null;
+  if (!showCiFailing && !showUnstable && !showRunning) return null;
 
   const ciFailingTitle =
     failingChecks.length > 0
@@ -55,6 +56,15 @@ export function CIBadges({
           title="CI is unstable — checks may be failing"
         >
           ⚠ CI unstable
+        </span>
+      )}
+      {showRunning && (
+        <span
+          className={styles.runningBadge}
+          title="CI checks are in progress"
+        >
+          <span className={styles.spinner} aria-hidden="true" />
+          CI running
         </span>
       )}
     </>
