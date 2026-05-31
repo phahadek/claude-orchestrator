@@ -182,3 +182,5 @@ Every task — including the Manual Verification task — must use the two-subse
 - [Product Design](./design.md) — user goals, workflows, UI layout, decisions
 - [Technical Architecture](./architecture.md) — implementation details, project structure, data flow
 - [Coding Guidelines](./coding-guidelines.md) — architectural rules, naming, patterns, git etiquette
+
+For YAML-backed projects, the encoding of these conventions in YAML is documented in [yaml-template.md](./yaml-template.md).
