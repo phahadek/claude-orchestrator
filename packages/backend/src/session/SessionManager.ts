@@ -32,6 +32,7 @@ import {
   getPRByNotionTaskId,
   getEventsBySession,
   getPRByNumber,
+  getPRBySessionId,
   backfillStuckResultSessions,
   hasActiveSessionForTask,
 } from '../db/queries';
@@ -128,6 +129,58 @@ export interface StartOptions {
 
 /** How long to suppress lastMessage-only task_updated broadcasts per task (ms). */
 const LAST_MESSAGE_THROTTLE_MS = 3_000;
+
+const TERMINAL_STATUSES = new Set(['done', 'error', 'killed']);
+const ALWAYS_GUARDED_BRANCHES = new Set(['dev', 'main']);
+
+/**
+ * Delete the local session/<sessionId> branch if it exists and conditions are met:
+ * session row is terminal (done/error/killed) AND (no pr_url OR PR is merged/closed).
+ * Dev/main are always guarded. Missing branch is a silent no-op.
+ * Exported for backfill tests.
+ */
+export function pruneSessionBranch(
+  sessionId: string,
+  projectDir: string,
+): void {
+  const branchName = `session/${sessionId}`;
+
+  // Safety guard: never delete dev or main (defense-in-depth)
+  if (
+    ALWAYS_GUARDED_BRANCHES.has(branchName) ||
+    ALWAYS_GUARDED_BRANCHES.has(sessionId)
+  )
+    return;
+
+  // Silent no-op if the branch doesn't exist
+  try {
+    execSync(`git rev-parse --verify "${branchName}"`, {
+      cwd: projectDir,
+      stdio: 'pipe',
+    });
+  } catch {
+    return;
+  }
+
+  // Gate: session row must be in a terminal status
+  const row = getSession(sessionId);
+  if (!row || !TERMINAL_STATUSES.has(row.status)) return;
+
+  // Gate: no pr_url → safe to delete; pr_url → only delete when PR is merged/closed
+  if (row.pr_url) {
+    const prRow = getPRBySessionId(sessionId);
+    if (!prRow || prRow.state === 'open') return;
+  }
+
+  try {
+    execSync(`git branch -D "${branchName}"`, { cwd: projectDir });
+    console.log(
+      `[SessionManager] pruned ${branchName} (session ${sessionId.slice(0, 8)})`,
+    );
+  } catch (err) {
+    console.error(`[SessionManager] failed to prune ${branchName}: ${err}`);
+  }
+}
 
 /**
  * Continuation nudge sent to a resumed session after its first CLI event.
@@ -1024,6 +1077,9 @@ export class SessionManager extends EventEmitter {
         );
       }
     }
+
+    // Prune the legacy session/<sessionId> branch created by the pre-refactor dist code.
+    pruneSessionBranch(sessionId, projectDir);
   }
 
   /** Returns true if the session is currently live in the in-memory sessions map. */
