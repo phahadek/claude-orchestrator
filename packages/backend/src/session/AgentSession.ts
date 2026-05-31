@@ -289,7 +289,12 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         (event) => this.handleRawEvent(event),
       );
 
-      if (this.runner.hasSpawnError || this.isKilling || this.isPausingForShutdown) return;
+      if (
+        this.runner.hasSpawnError ||
+        this.isKilling ||
+        this.isPausingForShutdown
+      )
+        return;
 
       if (exitCode === 0) {
         this.retryCount = 0;

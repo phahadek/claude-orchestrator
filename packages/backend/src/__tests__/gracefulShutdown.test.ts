@@ -255,9 +255,11 @@ describe('AgentSession.gracefulPause()', () => {
 
     // Status must NOT have been updated to 'killed' or anything else — it
     // should remain 'running' so resumeOrphanSessions picks it up.
-    const killedCalls = vi.mocked(queries.updateSessionStatus).mock.calls.filter(
-      ([, status]) => status === 'killed' || status === 'error',
-    );
+    const killedCalls = vi
+      .mocked(queries.updateSessionStatus)
+      .mock.calls.filter(
+        ([, status]) => status === 'killed' || status === 'error',
+      );
     expect(killedCalls).toHaveLength(0);
 
     // No session_ended message must have been broadcast.
@@ -288,9 +290,11 @@ describe('AgentSession.gracefulPause()', () => {
     await Promise.all([p1, p2]);
     await runPromise;
 
-    const killedCalls = vi.mocked(queries.updateSessionStatus).mock.calls.filter(
-      ([, status]) => status === 'killed' || status === 'error',
-    );
+    const killedCalls = vi
+      .mocked(queries.updateSessionStatus)
+      .mock.calls.filter(
+        ([, status]) => status === 'killed' || status === 'error',
+      );
     expect(killedCalls).toHaveLength(0);
   });
 
@@ -353,9 +357,11 @@ describe('SessionManager.shutdownAll()', () => {
     await shutdownPromise;
 
     // updateSessionStatus must NOT have been called with 'killed' or 'error'.
-    const badCalls = vi.mocked(queries.updateSessionStatus).mock.calls.filter(
-      ([, status]) => status === 'killed' || status === 'error',
-    );
+    const badCalls = vi
+      .mocked(queries.updateSessionStatus)
+      .mock.calls.filter(
+        ([, status]) => status === 'killed' || status === 'error',
+      );
     expect(badCalls).toHaveLength(0);
   });
 });
@@ -385,9 +391,11 @@ describe('graceful shutdown integration: paused sessions resume on next boot', (
     await shutdownPromise;
 
     // DB status must still be 'running' (not 'killed') after shutdown.
-    const killedCalls = vi.mocked(queries.updateSessionStatus).mock.calls.filter(
-      ([id, status]) => id === 'integration-session' && status === 'killed',
-    );
+    const killedCalls = vi
+      .mocked(queries.updateSessionStatus)
+      .mock.calls.filter(
+        ([id, status]) => id === 'integration-session' && status === 'killed',
+      );
     expect(killedCalls).toHaveLength(0);
 
     // --- Second boot: new SessionManager with the same 'running' session ---
