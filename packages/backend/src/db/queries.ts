@@ -1821,45 +1821,13 @@ export function markCommentsRouted(
 
 // ─── devices ────────────────────────────────────────────────────────────────
 
-const stmtInsertDevice = db.prepare<NewDeviceRow>(`
-  INSERT INTO devices (id, name, user_agent, last_ip, last_seen, enrolled_at, token, revoked)
-  VALUES (@id, @name, @user_agent, @last_ip, @last_seen, @enrolled_at, @token, @revoked)
-`);
-
-const stmtGetDeviceByToken = db.prepare<{ token: string }>(`
-  SELECT * FROM devices WHERE token = @token AND revoked = 0
-`);
-
-const stmtGetDeviceById = db.prepare<{ id: string }>(`
-  SELECT * FROM devices WHERE id = @id
-`);
-
-const stmtListDevices = db.prepare(`
-  SELECT * FROM devices ORDER BY enrolled_at DESC
-`);
-
-const stmtUpdateDeviceName = db.prepare<{ id: string; name: string }>(`
-  UPDATE devices SET name = @name WHERE id = @id
-`);
-
-const stmtRevokeDevice = db.prepare<{ id: string }>(`
-  UPDATE devices SET revoked = 1 WHERE id = @id
-`);
-
-const stmtUpdateDeviceLastSeen = db.prepare<{
-  id: string;
-  last_ip: string | null;
-  last_seen: number;
-}>(`
-  UPDATE devices SET last_ip = @last_ip, last_seen = @last_seen WHERE id = @id
-`);
-
-const stmtCountActiveDevices = db.prepare(`
-  SELECT COUNT(*) as count FROM devices WHERE revoked = 0
-`);
-
 export function insertDevice(device: NewDeviceRow): void {
-  stmtInsertDevice.run({
+  db.prepare<NewDeviceRow>(
+    `
+    INSERT INTO devices (id, name, user_agent, last_ip, last_seen, enrolled_at, token, revoked)
+    VALUES (@id, @name, @user_agent, @last_ip, @last_seen, @enrolled_at, @token, @revoked)
+  `,
+  ).run({
     last_seen: null,
     revoked: 0,
     ...device,
@@ -1867,23 +1835,39 @@ export function insertDevice(device: NewDeviceRow): void {
 }
 
 export function getDeviceByToken(token: string): DeviceRow | null {
-  return (stmtGetDeviceByToken.get({ token }) as DeviceRow | undefined) ?? null;
+  return (
+    (db
+      .prepare<{
+        token: string;
+      }>(`SELECT * FROM devices WHERE token = @token AND revoked = 0`)
+      .get({ token }) as DeviceRow | undefined) ?? null
+  );
 }
 
 export function getDeviceById(id: string): DeviceRow | null {
-  return (stmtGetDeviceById.get({ id }) as DeviceRow | undefined) ?? null;
+  return (
+    (db
+      .prepare<{ id: string }>(`SELECT * FROM devices WHERE id = @id`)
+      .get({ id }) as DeviceRow | undefined) ?? null
+  );
 }
 
 export function listDevices(): DeviceRow[] {
-  return stmtListDevices.all() as DeviceRow[];
+  return db
+    .prepare(`SELECT * FROM devices ORDER BY enrolled_at DESC`)
+    .all() as DeviceRow[];
 }
 
 export function updateDeviceName(id: string, name: string): void {
-  stmtUpdateDeviceName.run({ id, name });
+  db.prepare<{ id: string; name: string }>(
+    `UPDATE devices SET name = @name WHERE id = @id`,
+  ).run({ id, name });
 }
 
 export function revokeDevice(id: string): void {
-  stmtRevokeDevice.run({ id });
+  db.prepare<{ id: string }>(
+    `UPDATE devices SET revoked = 1 WHERE id = @id`,
+  ).run({ id });
 }
 
 export function updateDeviceLastSeen(
@@ -1891,11 +1875,23 @@ export function updateDeviceLastSeen(
   lastIp: string | null,
   lastSeen: number,
 ): void {
-  stmtUpdateDeviceLastSeen.run({ id, last_ip: lastIp, last_seen: lastSeen });
+  db.prepare<{
+    id: string;
+    last_ip: string | null;
+    last_seen: number;
+  }>(
+    `UPDATE devices SET last_ip = @last_ip, last_seen = @last_seen WHERE id = @id`,
+  ).run({
+    id,
+    last_ip: lastIp,
+    last_seen: lastSeen,
+  });
 }
 
 export function getActiveDeviceCount(): number {
-  const row = stmtCountActiveDevices.get() as { count: number };
+  const row = db
+    .prepare(`SELECT COUNT(*) as count FROM devices WHERE revoked = 0`)
+    .get() as { count: number };
   return row.count;
 }
 
@@ -2055,42 +2051,6 @@ export interface StuckSessionTimerRow {
   hard_stop_remaining_ms: number | null;
 }
 
-const stmtUpsertStuckSessionTimer = db.prepare<{
-  session_id: string;
-  task_name: string;
-  notify_deadline: number;
-  pause_deadline: number;
-  hard_stop_deadline: number;
-  hard_stop_armed: number;
-  notify_remaining_ms: number | null;
-  pause_remaining_ms: number | null;
-  hard_stop_remaining_ms: number | null;
-}>(`
-  INSERT INTO stuck_session_timers
-    (session_id, task_name, notify_deadline, pause_deadline, hard_stop_deadline,
-     hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms)
-  VALUES
-    (@session_id, @task_name, @notify_deadline, @pause_deadline, @hard_stop_deadline,
-     @hard_stop_armed, @notify_remaining_ms, @pause_remaining_ms, @hard_stop_remaining_ms)
-  ON CONFLICT(session_id) DO UPDATE SET
-    task_name              = excluded.task_name,
-    notify_deadline        = excluded.notify_deadline,
-    pause_deadline         = excluded.pause_deadline,
-    hard_stop_deadline     = excluded.hard_stop_deadline,
-    hard_stop_armed        = excluded.hard_stop_armed,
-    notify_remaining_ms    = excluded.notify_remaining_ms,
-    pause_remaining_ms     = excluded.pause_remaining_ms,
-    hard_stop_remaining_ms = excluded.hard_stop_remaining_ms
-`);
-
-const stmtDeleteStuckSessionTimer = db.prepare<{ session_id: string }>(`
-  DELETE FROM stuck_session_timers WHERE session_id = @session_id
-`);
-
-const stmtGetAllStuckSessionTimers = db.prepare(`
-  SELECT * FROM stuck_session_timers
-`);
-
 export function upsertStuckSessionTimer(
   sessionId: string,
   taskName: string,
@@ -2102,7 +2062,35 @@ export function upsertStuckSessionTimer(
   pauseRemainingMs: number | null,
   hardStopRemainingMs: number | null,
 ): void {
-  stmtUpsertStuckSessionTimer.run({
+  db.prepare<{
+    session_id: string;
+    task_name: string;
+    notify_deadline: number;
+    pause_deadline: number;
+    hard_stop_deadline: number;
+    hard_stop_armed: number;
+    notify_remaining_ms: number | null;
+    pause_remaining_ms: number | null;
+    hard_stop_remaining_ms: number | null;
+  }>(
+    `
+    INSERT INTO stuck_session_timers
+      (session_id, task_name, notify_deadline, pause_deadline, hard_stop_deadline,
+       hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms)
+    VALUES
+      (@session_id, @task_name, @notify_deadline, @pause_deadline, @hard_stop_deadline,
+       @hard_stop_armed, @notify_remaining_ms, @pause_remaining_ms, @hard_stop_remaining_ms)
+    ON CONFLICT(session_id) DO UPDATE SET
+      task_name              = excluded.task_name,
+      notify_deadline        = excluded.notify_deadline,
+      pause_deadline         = excluded.pause_deadline,
+      hard_stop_deadline     = excluded.hard_stop_deadline,
+      hard_stop_armed        = excluded.hard_stop_armed,
+      notify_remaining_ms    = excluded.notify_remaining_ms,
+      pause_remaining_ms     = excluded.pause_remaining_ms,
+      hard_stop_remaining_ms = excluded.hard_stop_remaining_ms
+  `,
+  ).run({
     session_id: sessionId,
     task_name: taskName,
     notify_deadline: notifyDeadline,
@@ -2116,9 +2104,13 @@ export function upsertStuckSessionTimer(
 }
 
 export function deleteStuckSessionTimer(sessionId: string): void {
-  stmtDeleteStuckSessionTimer.run({ session_id: sessionId });
+  db.prepare<{ session_id: string }>(
+    `DELETE FROM stuck_session_timers WHERE session_id = @session_id`,
+  ).run({ session_id: sessionId });
 }
 
 export function getAllStuckSessionTimers(): StuckSessionTimerRow[] {
-  return stmtGetAllStuckSessionTimers.all() as StuckSessionTimerRow[];
+  return db
+    .prepare(`SELECT * FROM stuck_session_timers`)
+    .all() as StuckSessionTimerRow[];
 }
