@@ -8,10 +8,7 @@ import { GithubTaskSourceProvider } from './GithubTaskSourceProvider';
 import { upsertTaskCache } from '../db/queries';
 import type { Issue, IssueComment } from '../github/types';
 
-function makeIssue(
-  id: number,
-  overrides: Partial<Issue> = {},
-): Issue {
+function makeIssue(id: number, overrides: Partial<Issue> = {}): Issue {
   return {
     id,
     nodeId: `node-${id}`,
@@ -39,14 +36,16 @@ function makeComment(id: number, body: string): IssueComment {
 
 const PROJECT_CONFIG = { owner: 'owner', repo: 'repo' };
 
-function makeClient(overrides: Partial<{
-  listIssues: ReturnType<typeof vi.fn>;
-  getIssue: ReturnType<typeof vi.fn>;
-  updateIssue: ReturnType<typeof vi.fn>;
-  addIssueComment: ReturnType<typeof vi.fn>;
-  listIssueComments: ReturnType<typeof vi.fn>;
-  ensureLabelExists: ReturnType<typeof vi.fn>;
-}> = {}) {
+function makeClient(
+  overrides: Partial<{
+    listIssues: ReturnType<typeof vi.fn>;
+    getIssue: ReturnType<typeof vi.fn>;
+    updateIssue: ReturnType<typeof vi.fn>;
+    addIssueComment: ReturnType<typeof vi.fn>;
+    listIssueComments: ReturnType<typeof vi.fn>;
+    ensureLabelExists: ReturnType<typeof vi.fn>;
+  }> = {},
+) {
   return {
     listIssues: vi.fn().mockResolvedValue([]),
     getIssue: vi.fn(),
@@ -67,12 +66,17 @@ beforeEach(() => {
 describe('GithubTaskSourceProvider.fetchReadyTasks', () => {
   it('returns only issues with status:ready label', async () => {
     const client = makeClient({
-      listIssues: vi.fn().mockResolvedValue([
-        makeIssue(1, { labels: ['status:ready', 'type:code'] }),
-        makeIssue(2, { labels: ['status:ready', 'type:testing'] }),
-      ]),
+      listIssues: vi
+        .fn()
+        .mockResolvedValue([
+          makeIssue(1, { labels: ['status:ready', 'type:code'] }),
+          makeIssue(2, { labels: ['status:ready', 'type:testing'] }),
+        ]),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     const result = await provider.fetchReadyTasks(null);
 
@@ -88,7 +92,10 @@ describe('GithubTaskSourceProvider.fetchReadyTasks', () => {
 
   it('passes numeric milestone when milestoneId is provided', async () => {
     const client = makeClient();
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     await provider.fetchReadyTasks('7');
 
@@ -101,7 +108,10 @@ describe('GithubTaskSourceProvider.fetchReadyTasks', () => {
 
   it('passes undefined milestone when milestoneId is null', async () => {
     const client = makeClient();
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     await provider.fetchReadyTasks(null);
 
@@ -116,7 +126,10 @@ describe('GithubTaskSourceProvider.fetchReadyTasks', () => {
     const client = makeClient({
       listIssues: vi.fn().mockResolvedValue([makeIssue(42)]),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     const result = await provider.fetchReadyTasks(null);
 
@@ -130,7 +143,10 @@ describe('GithubTaskSourceProvider.fetchReadyTasks', () => {
     const client = makeClient({
       listIssues: vi.fn().mockResolvedValue([makeIssue(1)]),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     await provider.fetchReadyTasks('3');
 
@@ -146,7 +162,10 @@ describe('GithubTaskSourceProvider.fetchReadyTasks', () => {
     const client = makeClient({
       listIssues: vi.fn().mockResolvedValue([makeIssue(1)]),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     await provider.fetchReadyTasks(null);
 
@@ -162,9 +181,14 @@ describe('GithubTaskSourceProvider.fetchReadyTasks', () => {
 describe('GithubTaskSourceProvider.fetchNonMilestoneReadyTasks', () => {
   it('queries issues with milestone=none', async () => {
     const client = makeClient({
-      listIssues: vi.fn().mockResolvedValue([makeIssue(5, { milestone: null })]),
+      listIssues: vi
+        .fn()
+        .mockResolvedValue([makeIssue(5, { milestone: null })]),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     const result = await provider.fetchNonMilestoneReadyTasks(null);
 
@@ -184,7 +208,10 @@ describe('GithubTaskSourceProvider — body parsing', () => {
     const client = makeClient({
       listIssues: vi.fn().mockResolvedValue([makeIssue(1, { body: null })]),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     const result = await provider.fetchReadyTasks(null);
     expect(result[0].task.dependsOn).toEqual([]);
@@ -194,29 +221,44 @@ describe('GithubTaskSourceProvider — body parsing', () => {
     const client = makeClient({
       listIssues: vi.fn().mockResolvedValue([makeIssue(1, { body: '' })]),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     const result = await provider.fetchReadyTasks(null);
     expect(result[0].task.dependsOn).toEqual([]);
   });
 
   it('parses Depends-On line with multiple issue refs', async () => {
-    const body = '## Summary\nDoes stuff\n\nDepends on: #1 #2 #3\n\n## Context\nFoo';
+    const body =
+      '## Summary\nDoes stuff\n\nDepends on: #1 #2 #3\n\n## Context\nFoo';
     const client = makeClient({
       listIssues: vi.fn().mockResolvedValue([makeIssue(10, { body })]),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     const result = await provider.fetchReadyTasks(null);
-    expect(result[0].task.dependsOn).toEqual(['github:1', 'github:2', 'github:3']);
+    expect(result[0].task.dependsOn).toEqual([
+      'github:1',
+      'github:2',
+      'github:3',
+    ]);
   });
 
   it('ignores lines with issue refs that are not the Depends-On line', async () => {
-    const body = 'This relates to #4 and #5 but not a dependency\nDepends on: #7';
+    const body =
+      'This relates to #4 and #5 but not a dependency\nDepends on: #7';
     const client = makeClient({
       listIssues: vi.fn().mockResolvedValue([makeIssue(10, { body })]),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     const result = await provider.fetchReadyTasks(null);
     expect(result[0].task.dependsOn).toEqual(['github:7']);
@@ -227,7 +269,10 @@ describe('GithubTaskSourceProvider — body parsing', () => {
     const client = makeClient({
       listIssues: vi.fn().mockResolvedValue([makeIssue(10, { body })]),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     const result = await provider.fetchReadyTasks(null);
     expect(result[0].task.dependsOn).toEqual([]);
@@ -247,7 +292,10 @@ describe('GithubTaskSourceProvider — body parsing', () => {
     const client = makeClient({
       listIssues: vi.fn().mockResolvedValue([makeIssue(1, { body })]),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     await expect(provider.fetchReadyTasks(null)).resolves.toBeDefined();
   });
@@ -257,11 +305,18 @@ describe('GithubTaskSourceProvider — body parsing', () => {
 
 describe('GithubTaskSourceProvider — missing label tolerance', () => {
   it('defaults to 🔲 Backlog when no status:* label is present', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const warnSpy = vi
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined);
     const client = makeClient({
-      listIssues: vi.fn().mockResolvedValue([makeIssue(1, { labels: ['type:code'] })]),
+      listIssues: vi
+        .fn()
+        .mockResolvedValue([makeIssue(1, { labels: ['type:code'] })]),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     const result = await provider.fetchReadyTasks(null);
 
@@ -277,7 +332,10 @@ describe('GithubTaskSourceProvider — missing label tolerance', () => {
     const client = makeClient({
       listIssues: vi.fn().mockResolvedValue([makeIssue(1, { labels: [] })]),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     const result = await provider.fetchReadyTasks(null);
     expect(result).toHaveLength(1);
@@ -288,11 +346,16 @@ describe('GithubTaskSourceProvider — missing label tolerance', () => {
 
 describe('GithubTaskSourceProvider.updateStatus', () => {
   it('removes old status:* label and adds the new one', async () => {
-    const issue = makeIssue(1, { labels: ['status:ready', 'type:code', 'priority:high'] });
+    const issue = makeIssue(1, {
+      labels: ['status:ready', 'type:code', 'priority:high'],
+    });
     const client = makeClient({
       getIssue: vi.fn().mockResolvedValue(issue),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     await provider.updateStatus('github:1', '🔄 In Progress');
 
@@ -306,7 +369,10 @@ describe('GithubTaskSourceProvider.updateStatus', () => {
     const client = makeClient({
       getIssue: vi.fn().mockResolvedValue(issue),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     await provider.updateStatus('github:1', '✅ Done');
 
@@ -321,7 +387,10 @@ describe('GithubTaskSourceProvider.updateStatus', () => {
     const client = makeClient({
       getIssue: vi.fn().mockResolvedValue(issue),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     await provider.updateStatus('github:1', '🔄 In Progress');
 
@@ -334,7 +403,10 @@ describe('GithubTaskSourceProvider.updateStatus', () => {
     const client = makeClient({
       getIssue: vi.fn().mockResolvedValue(issue),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     await expect(
       provider.updateStatus('github:1', 'unknown status'),
@@ -351,9 +423,15 @@ describe('GithubTaskSourceProvider.attachPR', () => {
       getIssue: vi.fn().mockResolvedValue(issue),
       listIssueComments: vi.fn().mockResolvedValue([]),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
-    await provider.attachPR('github:1', 'https://github.com/owner/repo/pull/42');
+    await provider.attachPR(
+      'github:1',
+      'https://github.com/owner/repo/pull/42',
+    );
 
     expect(client.addIssueComment).toHaveBeenCalledWith(
       'owner/repo',
@@ -370,9 +448,14 @@ describe('GithubTaskSourceProvider.attachPR', () => {
     const issue = makeIssue(1, { labels: ['status:in-review', 'type:code'] });
     const client = makeClient({
       getIssue: vi.fn().mockResolvedValue(issue),
-      listIssueComments: vi.fn().mockResolvedValue([makeComment(100, `PR: ${prUrl}`)]),
+      listIssueComments: vi
+        .fn()
+        .mockResolvedValue([makeComment(100, `PR: ${prUrl}`)]),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     await provider.attachPR('github:1', prUrl);
 
@@ -384,11 +467,15 @@ describe('GithubTaskSourceProvider.attachPR', () => {
 
 describe('GithubTaskSourceProvider.fetchTaskPage', () => {
   it('returns the raw issue body', async () => {
-    const body = '## Summary\nDoes something important.\n\n## Context\nBackground.';
+    const body =
+      '## Summary\nDoes something important.\n\n## Context\nBackground.';
     const client = makeClient({
       getIssue: vi.fn().mockResolvedValue(makeIssue(5, { body })),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     const result = await provider.fetchTaskPage('github:5');
 
@@ -400,7 +487,10 @@ describe('GithubTaskSourceProvider.fetchTaskPage', () => {
     const client = makeClient({
       getIssue: vi.fn().mockResolvedValue(makeIssue(5, { body: null })),
     });
-    const provider = new GithubTaskSourceProvider(client as never, PROJECT_CONFIG);
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
 
     const result = await provider.fetchTaskPage('github:5');
     expect(result).toBe('');

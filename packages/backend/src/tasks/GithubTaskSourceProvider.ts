@@ -38,10 +38,26 @@ const LABEL_TO_PRIORITY: Record<string, string> = {
 };
 
 const LABEL_DEFINITIONS = [
-  { name: 'status:backlog', color: 'ededed', description: 'Task is in backlog' },
-  { name: 'status:ready', color: '0075ca', description: 'Task is ready to launch' },
-  { name: 'status:in-progress', color: 'e4e669', description: 'Task is in progress' },
-  { name: 'status:in-review', color: 'f9d0c4', description: 'Task is in review' },
+  {
+    name: 'status:backlog',
+    color: 'ededed',
+    description: 'Task is in backlog',
+  },
+  {
+    name: 'status:ready',
+    color: '0075ca',
+    description: 'Task is ready to launch',
+  },
+  {
+    name: 'status:in-progress',
+    color: 'e4e669',
+    description: 'Task is in progress',
+  },
+  {
+    name: 'status:in-review',
+    color: 'f9d0c4',
+    description: 'Task is in review',
+  },
   { name: 'status:done', color: '0e8a16', description: 'Task is done' },
   { name: 'type:code', color: 'c2e0c6', description: 'Code task' },
   { name: 'type:testing', color: 'fef2c0', description: 'Testing task' },
@@ -142,15 +158,16 @@ export class GithubTaskSourceProvider implements TaskBackend {
   async attachPR(taskId: string, prUrl: string): Promise<void> {
     const issueNumber = this.parseIssueNumber(taskId);
 
-    const comments = await this.client.listIssueComments(this.repo, issueNumber);
+    const comments = await this.client.listIssueComments(
+      this.repo,
+      issueNumber,
+    );
     if (comments.some((c) => c.body.includes(prUrl))) return;
 
     await this.client.addIssueComment(this.repo, issueNumber, `PR: ${prUrl}`);
 
     const issue = await this.client.getIssue(this.repo, issueNumber);
-    const labels = [
-      ...issue.labels.filter((l) => l !== 'status:ready'),
-    ];
+    const labels = [...issue.labels.filter((l) => l !== 'status:ready')];
     if (!labels.includes('status:in-review')) labels.push('status:in-review');
     await this.client.updateIssue(this.repo, issueNumber, { labels });
   }
@@ -191,14 +208,22 @@ export class GithubTaskSourceProvider implements TaskBackend {
     // GitHub Issues backend does not support a separate Notes property
   }
 
-  async appendImplementationNote(_taskId: string, _note: string): Promise<void> {
+  async appendImplementationNote(
+    _taskId: string,
+    _note: string,
+  ): Promise<void> {
     // GitHub Issues backend does not support block-level appending
   }
 
   /** Ensure all label vocabulary exists in the repo, creating missing labels. */
   async ensureLabels(): Promise<void> {
     for (const def of LABEL_DEFINITIONS) {
-      await this.client.ensureLabelExists(this.repo, def.name, def.color, def.description);
+      await this.client.ensureLabelExists(
+        this.repo,
+        def.name,
+        def.color,
+        def.description,
+      );
     }
   }
 
@@ -207,7 +232,9 @@ export class GithubTaskSourceProvider implements TaskBackend {
     const raw = colonIdx >= 0 ? taskId.substring(colonIdx + 1) : taskId;
     const n = parseInt(raw, 10);
     if (isNaN(n)) {
-      throw new Error(`[GithubTaskSourceProvider] invalid task ID: "${taskId}"`);
+      throw new Error(
+        `[GithubTaskSourceProvider] invalid task ID: "${taskId}"`,
+      );
     }
     return n;
   }
