@@ -146,7 +146,11 @@ export function pruneSessionBranch(
   const branchName = `session/${sessionId}`;
 
   // Safety guard: never delete dev or main (defense-in-depth)
-  if (ALWAYS_GUARDED_BRANCHES.has(branchName) || ALWAYS_GUARDED_BRANCHES.has(sessionId)) return;
+  if (
+    ALWAYS_GUARDED_BRANCHES.has(branchName) ||
+    ALWAYS_GUARDED_BRANCHES.has(sessionId)
+  )
+    return;
 
   // Silent no-op if the branch doesn't exist
   try {

@@ -59,7 +59,9 @@ let db;
 try {
   db = new Database(dbPath, { readonly: true });
 } catch (err) {
-  console.error(`[prune-session-branches] failed to open DB at ${dbPath}: ${err}`);
+  console.error(
+    `[prune-session-branches] failed to open DB at ${dbPath}: ${err}`,
+  );
   exit(1);
 }
 
@@ -92,11 +94,15 @@ const branches = branchOutput
   .filter((b) => b.startsWith('session/'));
 
 if (branches.length === 0) {
-  console.log('[prune-session-branches] no session/* branches found — nothing to do');
+  console.log(
+    '[prune-session-branches] no session/* branches found — nothing to do',
+  );
   exit(0);
 }
 
-console.log(`[prune-session-branches] found ${branches.length} session/* branch(es)`);
+console.log(
+  `[prune-session-branches] found ${branches.length} session/* branch(es)`,
+);
 
 // ── Apply gate and prune ───────────────────────────────────────────────────
 
@@ -117,14 +123,18 @@ for (const branch of branches) {
   // Look up sessions row
   const row = stmtGetSession.get(sessionId);
   if (!row) {
-    console.warn(`[prune-session-branches] no sessions row for ${branch} — skipping`);
+    console.warn(
+      `[prune-session-branches] no sessions row for ${branch} — skipping`,
+    );
     skipped++;
     continue;
   }
 
   // Gate: terminal status
   if (!TERMINAL_STATUSES.has(row.status)) {
-    console.log(`[prune-session-branches] active session (${row.status}) — keeping ${branch}`);
+    console.log(
+      `[prune-session-branches] active session (${row.status}) — keeping ${branch}`,
+    );
     kept++;
     continue;
   }
@@ -141,7 +151,9 @@ for (const branch of branches) {
 
   // Eligible for pruning
   if (dryRun) {
-    console.log(`[prune-session-branches] would delete ${branch} (status=${row.status})`);
+    console.log(
+      `[prune-session-branches] would delete ${branch} (status=${row.status})`,
+    );
     pruned++;
     continue;
   }
@@ -151,7 +163,9 @@ for (const branch of branches) {
     console.log(`[prune-session-branches] deleted ${branch}`);
     pruned++;
   } catch (err) {
-    console.error(`[prune-session-branches] failed to delete ${branch}: ${err}`);
+    console.error(
+      `[prune-session-branches] failed to delete ${branch}: ${err}`,
+    );
     skipped++;
   }
 }

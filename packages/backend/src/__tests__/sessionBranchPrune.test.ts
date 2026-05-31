@@ -166,7 +166,8 @@ describe('pruneSessionBranch — missing branch', () => {
   it('is a silent no-op when the branch does not exist', () => {
     // rev-parse throws → branch missing
     mockedExecSync.mockImplementation((cmd: string) => {
-      if (String(cmd).includes('rev-parse')) throw new Error('unknown revision');
+      if (String(cmd).includes('rev-parse'))
+        throw new Error('unknown revision');
       return '' as never;
     });
 
