@@ -409,7 +409,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       sessionLog(this.sessionId, `INIT permissionMode=${event.permissionMode}`);
     }
 
-    if (rawType === 'system' && (event.subtype as string) === 'compact_boundary') {
+    if (
+      rawType === 'system' &&
+      (event.subtype as string) === 'compact_boundary'
+    ) {
       this.compactionCount++;
       incrementCompactionCount(this.sessionId);
       this.broadcast({
