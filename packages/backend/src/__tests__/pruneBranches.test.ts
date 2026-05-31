@@ -161,7 +161,7 @@ describe('PRMergeWatcher.handleMerged — branch pruning', () => {
   });
 
   it('continues when deleteBranch throws (logs warning, does not abort)', async () => {
-    const { watcher, github, sessions } = makeWatcher({
+    const { watcher, sessions } = makeWatcher({
       deleteBranch: vi.fn().mockRejectedValue(new Error('not found')),
     });
     const pr = makePRRow({ head_branch: 'feature/test-task' });
