@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { ProjectsSettingsPanel } from './Settings/ProjectsSettingsPanel';
 import { SettingsDevices } from '../pages/SettingsDevices';
 import styles from './Settings.module.css';
@@ -72,6 +72,8 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
   const [settings, setSettings] = useState<SettingsValues | null>(null);
   const [loading, setLoading] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateCheckResult, setUpdateCheckResult] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<
     Partial<Record<keyof SettingsValues, string>>
   >({});
@@ -168,6 +170,24 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
       </div>
     );
   }
+
+  const handleCheckUpdate = useCallback(async () => {
+    setCheckingUpdate(true);
+    setUpdateCheckResult(null);
+    try {
+      const res = await fetch('/api/update/check', { method: 'POST' });
+      const body = (await res.json()) as { updateAvailable?: boolean; info?: { version: string } };
+      if (body.updateAvailable && body.info) {
+        setUpdateCheckResult(`Update available: ${body.info.version}`);
+      } else {
+        setUpdateCheckResult('You are on the latest version.');
+      }
+    } catch {
+      setUpdateCheckResult('Failed to check for updates.');
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }, []);
 
   return (
     <div className={styles.settings}>
@@ -374,6 +394,22 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                   1,
                   240,
                   1,
+                )}
+
+                <h3 className={styles.sectionTitle}>About</h3>
+                <div className={styles.field}>
+                  <label className={styles.label}>Check for updates</label>
+                  <button
+                    type="button"
+                    className={styles.toggle}
+                    onClick={() => void handleCheckUpdate()}
+                    disabled={checkingUpdate}
+                  >
+                    {checkingUpdate ? 'Checking…' : 'Check now'}
+                  </button>
+                </div>
+                {updateCheckResult && (
+                  <p className={styles.hint}>{updateCheckResult}</p>
                 )}
 
                 <h3 className={styles.sectionTitle}>Notifications</h3>
