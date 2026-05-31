@@ -26,7 +26,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $ScriptDir  = $PSScriptRoot
-$RepoRoot   = (Resolve-Path (Join-Path $ScriptDir "..\..\..")).Path
+$RepoRoot   = (Resolve-Path (Join-Path $ScriptDir "..\..")).Path
 $PayloadDir = Join-Path $ScriptDir "payload"
 $DistDir    = Join-Path $ScriptDir "dist"
 
