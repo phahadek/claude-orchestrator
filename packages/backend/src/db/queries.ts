@@ -1822,10 +1822,12 @@ export function markCommentsRouted(
 // ─── devices ────────────────────────────────────────────────────────────────
 
 export function insertDevice(device: NewDeviceRow): void {
-  db.prepare<NewDeviceRow>(`
+  db.prepare<NewDeviceRow>(
+    `
     INSERT INTO devices (id, name, user_agent, last_ip, last_seen, enrolled_at, token, revoked)
     VALUES (@id, @name, @user_agent, @last_ip, @last_seen, @enrolled_at, @token, @revoked)
-  `).run({
+  `,
+  ).run({
     last_seen: null,
     revoked: 0,
     ...device,
@@ -1834,20 +1836,20 @@ export function insertDevice(device: NewDeviceRow): void {
 
 export function getDeviceByToken(token: string): DeviceRow | null {
   return (
-    db
-      .prepare<{ token: string }>(
-        `SELECT * FROM devices WHERE token = @token AND revoked = 0`,
-      )
-      .get({ token }) as DeviceRow | undefined
-  ) ?? null;
+    (db
+      .prepare<{
+        token: string;
+      }>(`SELECT * FROM devices WHERE token = @token AND revoked = 0`)
+      .get({ token }) as DeviceRow | undefined) ?? null
+  );
 }
 
 export function getDeviceById(id: string): DeviceRow | null {
   return (
-    db
+    (db
       .prepare<{ id: string }>(`SELECT * FROM devices WHERE id = @id`)
-      .get({ id }) as DeviceRow | undefined
-  ) ?? null;
+      .get({ id }) as DeviceRow | undefined) ?? null
+  );
 }
 
 export function listDevices(): DeviceRow[] {
@@ -1863,7 +1865,9 @@ export function updateDeviceName(id: string, name: string): void {
 }
 
 export function revokeDevice(id: string): void {
-  db.prepare<{ id: string }>(`UPDATE devices SET revoked = 1 WHERE id = @id`).run({ id });
+  db.prepare<{ id: string }>(
+    `UPDATE devices SET revoked = 1 WHERE id = @id`,
+  ).run({ id });
 }
 
 export function updateDeviceLastSeen(
@@ -1875,7 +1879,9 @@ export function updateDeviceLastSeen(
     id: string;
     last_ip: string | null;
     last_seen: number;
-  }>(`UPDATE devices SET last_ip = @last_ip, last_seen = @last_seen WHERE id = @id`).run({
+  }>(
+    `UPDATE devices SET last_ip = @last_ip, last_seen = @last_seen WHERE id = @id`,
+  ).run({
     id,
     last_ip: lastIp,
     last_seen: lastSeen,
@@ -2066,7 +2072,8 @@ export function upsertStuckSessionTimer(
     notify_remaining_ms: number | null;
     pause_remaining_ms: number | null;
     hard_stop_remaining_ms: number | null;
-  }>(`
+  }>(
+    `
     INSERT INTO stuck_session_timers
       (session_id, task_name, notify_deadline, pause_deadline, hard_stop_deadline,
        hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms)
@@ -2082,7 +2089,8 @@ export function upsertStuckSessionTimer(
       notify_remaining_ms    = excluded.notify_remaining_ms,
       pause_remaining_ms     = excluded.pause_remaining_ms,
       hard_stop_remaining_ms = excluded.hard_stop_remaining_ms
-  `).run({
+  `,
+  ).run({
     session_id: sessionId,
     task_name: taskName,
     notify_deadline: notifyDeadline,
@@ -2102,5 +2110,7 @@ export function deleteStuckSessionTimer(sessionId: string): void {
 }
 
 export function getAllStuckSessionTimers(): StuckSessionTimerRow[] {
-  return db.prepare(`SELECT * FROM stuck_session_timers`).all() as StuckSessionTimerRow[];
+  return db
+    .prepare(`SELECT * FROM stuck_session_timers`)
+    .all() as StuckSessionTimerRow[];
 }
