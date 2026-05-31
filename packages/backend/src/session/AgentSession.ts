@@ -910,16 +910,22 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 
   private async handleCleanExit(): Promise<void> {
     const endedAt = Date.now();
-    const events = getEventsBySession(this.sessionId);
-    const last20 = events.slice(-20);
     let prUrl: string | undefined;
 
-    for (const ev of last20) {
-      const match = ev.payload.match(PR_URL_REGEX);
-      if (match) {
-        prUrl = match[0];
-        break;
+    try {
+      const events = getEventsBySession(this.sessionId);
+      const last20 = events.slice(-20);
+
+      for (const ev of last20) {
+        const match = ev.payload.match(PR_URL_REGEX);
+        if (match) {
+          prUrl = match[0];
+          break;
+        }
       }
+    } catch (e) {
+      console.error(`[AgentSession] handleCleanExit pre-done failed for ${this.sessionId}:`, e);
+      // Fall through with prUrl=undefined — periodic recovery will retry PR extraction.
     }
 
     this.prUrl = prUrl;
