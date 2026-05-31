@@ -72,9 +72,28 @@ function sessionStarted(
   } satisfies ServerMessage;
 }
 
+function getTimerRow(sessionId: string) {
+  return db
+    .prepare('SELECT * FROM stuck_session_timers WHERE session_id = ?')
+    .get(sessionId) as
+    | {
+        session_id: string;
+        task_name: string;
+        notify_deadline: number;
+        pause_deadline: number;
+        hard_stop_deadline: number;
+        hard_stop_armed: number;
+        notify_remaining_ms: number | null;
+        pause_remaining_ms: number | null;
+        hard_stop_remaining_ms: number | null;
+      }
+    | undefined;
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   db.prepare('DELETE FROM pull_requests').run();
+  db.prepare('DELETE FROM stuck_session_timers').run();
   runtimeSettings.session_notify_threshold_seconds = 60;
   runtimeSettings.session_pause_threshold_seconds = 120;
   runtimeSettings.session_hard_stop_window_seconds = 30;
@@ -552,5 +571,387 @@ describe('StuckSessionMonitor', () => {
     expect(broadcast).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'stuck_session_notified' }),
     );
+  });
+});
+
+describe('StuckSessionMonitor — persistence', () => {
+  it('persists deadlines to DB on startTracking', () => {
+    const sm = makeMockSessionManager();
+    new StuckSessionMonitor(sm, vi.fn());
+
+    const before = Date.now();
+    fireMessage(sm, sessionStarted());
+    const after = Date.now();
+
+    const row = getTimerRow(SESSION_ID);
+    expect(row).toBeDefined();
+    expect(row!.task_name).toBe(TASK_NAME);
+    expect(row!.notify_deadline).toBeGreaterThanOrEqual(before + 60_000);
+    expect(row!.notify_deadline).toBeLessThanOrEqual(after + 60_000);
+    expect(row!.pause_deadline).toBeGreaterThanOrEqual(before + 120_000);
+    expect(row!.pause_deadline).toBeLessThanOrEqual(after + 120_000);
+    expect(row!.hard_stop_deadline).toBe(0);
+    expect(row!.hard_stop_armed).toBe(0);
+    expect(row!.notify_remaining_ms).toBeNull();
+    expect(row!.pause_remaining_ms).toBeNull();
+  });
+
+  it('clears DB row on session_ended', () => {
+    const sm = makeMockSessionManager();
+    new StuckSessionMonitor(sm, vi.fn());
+
+    fireMessage(sm, sessionStarted());
+    expect(getTimerRow(SESSION_ID)).toBeDefined();
+
+    fireMessage(sm, {
+      type: 'session_ended',
+      sessionId: SESSION_ID,
+      status: 'done',
+    });
+    expect(getTimerRow(SESSION_ID)).toBeUndefined();
+  });
+
+  it('saves remainders on rate-limit pause', () => {
+    const sm = makeMockSessionManager();
+    new StuckSessionMonitor(sm, vi.fn());
+
+    fireMessage(sm, sessionStarted());
+    vi.advanceTimersByTime(40_000);
+
+    fireMessage(sm, {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: JSON.stringify({
+        type: 'rate_limit_event',
+        rate_limit_info: { status: 'rate_limited' },
+      }),
+    });
+
+    const row = getTimerRow(SESSION_ID);
+    expect(row).toBeDefined();
+    expect(row!.notify_remaining_ms).toBeGreaterThan(0);
+    expect(row!.pause_remaining_ms).toBeGreaterThan(0);
+    expect(row!.notify_remaining_ms).toBeLessThanOrEqual(20_000);
+    expect(row!.pause_remaining_ms).toBeLessThanOrEqual(80_000);
+  });
+
+  it('clears remainders and updates deadlines on rate-limit resume', () => {
+    const sm = makeMockSessionManager();
+    new StuckSessionMonitor(sm, vi.fn());
+
+    fireMessage(sm, sessionStarted());
+    vi.advanceTimersByTime(40_000);
+
+    fireMessage(sm, {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: JSON.stringify({
+        type: 'rate_limit_event',
+        rate_limit_info: { status: 'rate_limited' },
+      }),
+    });
+
+    vi.advanceTimersByTime(5 * 60_000);
+
+    fireMessage(sm, {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: JSON.stringify({
+        type: 'rate_limit_event',
+        rate_limit_info: { status: 'resumed' },
+      }),
+    });
+
+    const row = getTimerRow(SESSION_ID);
+    expect(row).toBeDefined();
+    expect(row!.notify_remaining_ms).toBeNull();
+    expect(row!.pause_remaining_ms).toBeNull();
+    expect(row!.notify_deadline).toBeGreaterThan(Date.now());
+  });
+
+  it('resets deadlines to 0 on PR pause (savingRemainder=false)', () => {
+    const sm = makeMockSessionManager();
+    new StuckSessionMonitor(sm, vi.fn());
+
+    fireMessage(sm, sessionStarted());
+    vi.advanceTimersByTime(30_000);
+
+    fireMessage(sm, {
+      type: 'pr_created',
+      sessionId: SESSION_ID,
+      prUrl: `https://github.com/${REPO}/pull/${PR_NUMBER}`,
+    });
+
+    const row = getTimerRow(SESSION_ID);
+    expect(row).toBeDefined();
+    expect(row!.notify_deadline).toBe(0);
+    expect(row!.pause_deadline).toBe(0);
+    expect(row!.hard_stop_deadline).toBe(0);
+    expect(row!.hard_stop_armed).toBe(0);
+    expect(row!.notify_remaining_ms).toBeNull();
+  });
+
+  it('persists hard_stop_deadline and hard_stop_armed after firePause', () => {
+    const sm = makeMockSessionManager();
+    new StuckSessionMonitor(sm, vi.fn());
+
+    fireMessage(sm, sessionStarted());
+    const pauseFireTime = Date.now() + 120_000;
+    vi.advanceTimersByTime(120_000);
+
+    const row = getTimerRow(SESSION_ID);
+    expect(row).toBeDefined();
+    expect(row!.pause_deadline).toBe(0);
+    expect(row!.hard_stop_armed).toBe(1);
+    expect(row!.hard_stop_deadline).toBeGreaterThanOrEqual(
+      pauseFireTime + 30_000 - 1,
+    );
+    expect(row!.hard_stop_deadline).toBeLessThanOrEqual(
+      pauseFireTime + 30_000 + 1,
+    );
+  });
+
+  it('resets notify_deadline to 0 after fireNotify', () => {
+    const sm = makeMockSessionManager();
+    new StuckSessionMonitor(sm, vi.fn());
+
+    fireMessage(sm, sessionStarted());
+    vi.advanceTimersByTime(60_000);
+
+    const row = getTimerRow(SESSION_ID);
+    expect(row).toBeDefined();
+    expect(row!.notify_deadline).toBe(0);
+    // pause_deadline still active
+    expect(row!.pause_deadline).toBeGreaterThan(0);
+  });
+});
+
+describe('StuckSessionMonitor — rehydration', () => {
+  it('rehydrates from DB and re-arms timers with remaining time', () => {
+    // Write a timer row simulating a session that has 10s left on notify, 70s on pause
+    const now = Date.now();
+    db.prepare(
+      `
+      INSERT INTO stuck_session_timers
+        (session_id, task_name, notify_deadline, pause_deadline, hard_stop_deadline,
+         hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms)
+      VALUES (?, ?, ?, ?, 0, 0, NULL, NULL, NULL)
+    `,
+    ).run(SESSION_ID, TASK_NAME, now + 10_000, now + 70_000);
+
+    const sm = makeMockSessionManager();
+    const broadcast = vi.fn();
+    const monitor = new StuckSessionMonitor(sm, broadcast);
+
+    monitor.rehydrate();
+
+    expect(monitor.isTracking(SESSION_ID)).toBe(true);
+
+    // Not yet — 9s elapsed
+    vi.advanceTimersByTime(9_000);
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'stuck_session_notified' }),
+    );
+
+    // At 10s — fires
+    vi.advanceTimersByTime(2_000);
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'stuck_session_notified',
+        sessionId: SESSION_ID,
+      }),
+    );
+  });
+
+  it('fires notify immediately when deadline already elapsed at boot', () => {
+    const past = Date.now() - 5_000;
+    db.prepare(
+      `
+      INSERT INTO stuck_session_timers
+        (session_id, task_name, notify_deadline, pause_deadline, hard_stop_deadline,
+         hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms)
+      VALUES (?, ?, ?, ?, 0, 0, NULL, NULL, NULL)
+    `,
+    ).run(SESSION_ID, TASK_NAME, past, Date.now() + 60_000);
+
+    const sm = makeMockSessionManager();
+    const broadcast = vi.fn();
+    const monitor = new StuckSessionMonitor(sm, broadcast);
+
+    monitor.rehydrate();
+
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'stuck_session_notified',
+        sessionId: SESSION_ID,
+      }),
+    );
+  });
+
+  it('fires pause immediately when pause deadline already elapsed at boot', () => {
+    const past = Date.now() - 1_000;
+    db.prepare(
+      `
+      INSERT INTO stuck_session_timers
+        (session_id, task_name, notify_deadline, pause_deadline, hard_stop_deadline,
+         hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms)
+      VALUES (?, ?, 0, ?, 0, 0, NULL, NULL, NULL)
+    `,
+    ).run(SESSION_ID, TASK_NAME, past);
+
+    const sm = makeMockSessionManager();
+    const broadcast = vi.fn();
+    const monitor = new StuckSessionMonitor(sm, broadcast);
+
+    monitor.rehydrate();
+
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'stuck_session_paused',
+        sessionId: SESSION_ID,
+      }),
+    );
+  });
+
+  it('rehydrates from remainder when rate-limit was active at restart', () => {
+    // Simulate: session was rate-limited with 15s remaining on notify
+    const now = Date.now();
+    db.prepare(
+      `
+      INSERT INTO stuck_session_timers
+        (session_id, task_name, notify_deadline, pause_deadline, hard_stop_deadline,
+         hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms)
+      VALUES (?, ?, ?, ?, 0, 0, 15000, 75000, NULL)
+    `,
+    ).run(SESSION_ID, TASK_NAME, now - 45_000, now + 15_000);
+
+    const sm = makeMockSessionManager();
+    const broadcast = vi.fn();
+    const monitor = new StuckSessionMonitor(sm, broadcast);
+
+    monitor.rehydrate();
+
+    // 14s after rehydration — not yet
+    vi.advanceTimersByTime(14_000);
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'stuck_session_notified' }),
+    );
+
+    // At 15s — fires
+    vi.advanceTimersByTime(2_000);
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'stuck_session_notified',
+        sessionId: SESSION_ID,
+      }),
+    );
+  });
+
+  it('does not re-arm timers for sessions with all-zero deadlines (PR-paused)', () => {
+    db.prepare(
+      `
+      INSERT INTO stuck_session_timers
+        (session_id, task_name, notify_deadline, pause_deadline, hard_stop_deadline,
+         hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms)
+      VALUES (?, ?, 0, 0, 0, 0, NULL, NULL, NULL)
+    `,
+    ).run(SESSION_ID, TASK_NAME);
+
+    const sm = makeMockSessionManager();
+    const broadcast = vi.fn();
+    const monitor = new StuckSessionMonitor(sm, broadcast);
+
+    monitor.rehydrate();
+
+    expect(monitor.isTracking(SESSION_ID)).toBe(true);
+
+    // No timer fires even after a long wait
+    vi.advanceTimersByTime(300_000);
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'stuck_session_notified' }),
+    );
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'stuck_session_paused' }),
+    );
+  });
+
+  it('skips sessions already being tracked (session_started before rehydrate)', () => {
+    const now = Date.now();
+    db.prepare(
+      `
+      INSERT INTO stuck_session_timers
+        (session_id, task_name, notify_deadline, pause_deadline, hard_stop_deadline,
+         hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms)
+      VALUES (?, ?, ?, ?, 0, 0, NULL, NULL, NULL)
+    `,
+    ).run(SESSION_ID, TASK_NAME, now + 5_000, now + 65_000);
+
+    const sm = makeMockSessionManager();
+    const broadcast = vi.fn();
+    const monitor = new StuckSessionMonitor(sm, broadcast);
+
+    // session_started causes startTracking with fresh thresholds
+    fireMessage(sm, sessionStarted());
+
+    // rehydrate should skip — session is already tracked
+    monitor.rehydrate();
+
+    // The fresh timer (60s from startTracking) should govern, not the 5s DB deadline
+    vi.advanceTimersByTime(6_000);
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'stuck_session_notified' }),
+    );
+  });
+
+  it('removes rehydrated session from DB when session_ended fires', () => {
+    const now = Date.now();
+    db.prepare(
+      `
+      INSERT INTO stuck_session_timers
+        (session_id, task_name, notify_deadline, pause_deadline, hard_stop_deadline,
+         hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms)
+      VALUES (?, ?, ?, ?, 0, 0, NULL, NULL, NULL)
+    `,
+    ).run(SESSION_ID, TASK_NAME, now + 60_000, now + 120_000);
+
+    const sm = makeMockSessionManager();
+    const monitor = new StuckSessionMonitor(sm, vi.fn());
+    monitor.rehydrate();
+
+    expect(getTimerRow(SESSION_ID)).toBeDefined();
+    fireMessage(sm, {
+      type: 'session_ended',
+      sessionId: SESSION_ID,
+      status: 'done',
+    });
+    expect(getTimerRow(SESSION_ID)).toBeUndefined();
+  });
+
+  it('disarms hard-stop at rehydration when window already expired', () => {
+    const past = Date.now() - 5_000;
+    db.prepare(
+      `
+      INSERT INTO stuck_session_timers
+        (session_id, task_name, notify_deadline, pause_deadline, hard_stop_deadline,
+         hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms)
+      VALUES (?, ?, 0, 0, ?, 1, NULL, NULL, NULL)
+    `,
+    ).run(SESSION_ID, TASK_NAME, past);
+
+    const sm = makeMockSessionManager();
+    const monitor = new StuckSessionMonitor(sm, vi.fn());
+    monitor.rehydrate();
+
+    // Tool use should NOT trigger hard-stop since window expired before restart
+    fireMessage(sm, {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'tool_use',
+      content: '',
+    });
+    expect(sm.kill).not.toHaveBeenCalled();
   });
 });

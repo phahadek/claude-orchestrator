@@ -5,6 +5,9 @@ import {
   setPauseReason,
   insertPauseInterval,
   closePauseInterval,
+  upsertStuckSessionTimer,
+  deleteStuckSessionTimer,
+  getAllStuckSessionTimers,
 } from '../db/queries';
 import type { ServerMessage } from '../ws/types';
 
@@ -13,7 +16,7 @@ interface TimerState {
   notifyTimer: NodeJS.Timeout | null;
   pauseTimer: NodeJS.Timeout | null;
   hardStopTimer: NodeJS.Timeout | null;
-  /** Absolute ms timestamps; valid while the corresponding timer is active. */
+  /** Absolute ms timestamps; valid while the corresponding timer is active. 0 = not active. */
   notifyDeadline: number;
   pauseDeadline: number;
   hardStopDeadline: number;
@@ -43,6 +46,9 @@ const PAUSE_MESSAGE =
  * only re-arm when a review verdict requests changes. Rate-limit interruptions
  * also pause timers, but preserve the remaining time so the session is judged
  * against the original wall-clock budget after resume.
+ *
+ * Timer state is persisted to the stuck_session_timers DB table on every state
+ * change. rehydrate() restores in-memory state from the DB on backend restart.
  */
 export class StuckSessionMonitor {
   private timers = new Map<string, TimerState>();
@@ -64,6 +70,115 @@ export class StuckSessionMonitor {
   /** Returns true if the monitor is currently tracking the given session. Test hook. */
   isTracking(sessionId: string): boolean {
     return this.timers.has(sessionId);
+  }
+
+  /**
+   * Restore timer state from the DB after a backend restart. Reads all rows
+   * from stuck_session_timers and re-arms setTimeout for each active deadline.
+   * Deadlines already elapsed fire their corresponding action immediately.
+   * Called from server.ts after resumeOrphanSessions().
+   */
+  rehydrate(): void {
+    const rows = getAllStuckSessionTimers();
+    const now = Date.now();
+
+    for (const row of rows) {
+      if (this.timers.has(row.session_id)) continue;
+
+      const state: TimerState = {
+        taskName: row.task_name,
+        notifyTimer: null,
+        pauseTimer: null,
+        hardStopTimer: null,
+        notifyDeadline: row.notify_deadline,
+        pauseDeadline: row.pause_deadline,
+        hardStopDeadline: row.hard_stop_deadline,
+        notifyRemainingMs: row.notify_remaining_ms,
+        pauseRemainingMs: row.pause_remaining_ms,
+        hardStopRemainingMs: row.hard_stop_remaining_ms,
+        hardStopArmed: row.hard_stop_armed !== 0,
+      };
+      this.timers.set(row.session_id, state);
+
+      // Re-arm notify: remainders take priority (rate-limit was active at restart)
+      if (state.notifyRemainingMs !== null) {
+        const remaining = state.notifyRemainingMs;
+        state.notifyDeadline = now + remaining;
+        state.notifyRemainingMs = null;
+        if (remaining <= 0) {
+          this.fireNotify(row.session_id);
+        } else {
+          state.notifyTimer = setTimeout(
+            () => this.fireNotify(row.session_id),
+            remaining,
+          );
+          state.notifyTimer.unref?.();
+        }
+      } else if (state.notifyDeadline > 0) {
+        const remaining = state.notifyDeadline - now;
+        if (remaining <= 0) {
+          this.fireNotify(row.session_id);
+        } else {
+          state.notifyTimer = setTimeout(
+            () => this.fireNotify(row.session_id),
+            remaining,
+          );
+          state.notifyTimer.unref?.();
+        }
+      }
+
+      // Re-arm pause
+      if (state.pauseRemainingMs !== null) {
+        const remaining = state.pauseRemainingMs;
+        state.pauseDeadline = now + remaining;
+        state.pauseRemainingMs = null;
+        if (remaining <= 0) {
+          this.firePause(row.session_id);
+        } else {
+          state.pauseTimer = setTimeout(
+            () => this.firePause(row.session_id),
+            remaining,
+          );
+          state.pauseTimer.unref?.();
+        }
+      } else if (state.pauseDeadline > 0) {
+        const remaining = state.pauseDeadline - now;
+        if (remaining <= 0) {
+          this.firePause(row.session_id);
+        } else {
+          state.pauseTimer = setTimeout(
+            () => this.firePause(row.session_id),
+            remaining,
+          );
+          state.pauseTimer.unref?.();
+        }
+      }
+
+      // Re-arm hard-stop disarm window (only re-arm if still in the future)
+      if (state.hardStopArmed) {
+        const remainingMs = state.hardStopRemainingMs;
+        state.hardStopRemainingMs = null;
+        const deadline =
+          remainingMs !== null ? now + remainingMs : state.hardStopDeadline;
+        const remaining = deadline - now;
+        if (remaining <= 0) {
+          // Window expired while server was down — disarm and persist
+          state.hardStopArmed = false;
+          state.hardStopDeadline = 0;
+          this.persistTimerState(row.session_id);
+        } else {
+          state.hardStopDeadline = deadline;
+          state.hardStopTimer = setTimeout(() => {
+            const s = this.timers.get(row.session_id);
+            if (s) {
+              s.hardStopArmed = false;
+              s.hardStopTimer = null;
+            }
+          }, remaining);
+          state.hardStopTimer.unref?.();
+        }
+      }
+    }
   }
 
   private onMessage(msg: ServerMessage): void {
@@ -162,6 +277,7 @@ export class StuckSessionMonitor {
       state.pauseTimer = setTimeout(() => this.firePause(sessionId), pauseMs);
       state.pauseTimer.unref?.();
     }
+    this.persistTimerState(sessionId);
   }
 
   private resetThresholds(sessionId: string): void {
@@ -198,6 +314,7 @@ export class StuckSessionMonitor {
         clearTimeout(state.hardStopTimer);
         state.hardStopTimer = null;
       }
+      this.persistTimerState(sessionId);
       return;
     }
 
@@ -207,10 +324,14 @@ export class StuckSessionMonitor {
     state.notifyTimer = null;
     state.pauseTimer = null;
     state.hardStopTimer = null;
+    state.notifyDeadline = 0;
+    state.pauseDeadline = 0;
+    state.hardStopDeadline = 0;
     state.notifyRemainingMs = null;
     state.pauseRemainingMs = null;
     state.hardStopRemainingMs = null;
     state.hardStopArmed = false;
+    this.persistTimerState(sessionId);
   }
 
   /**
@@ -252,12 +373,15 @@ export class StuckSessionMonitor {
       state.hardStopTimer.unref?.();
       state.hardStopRemainingMs = null;
     }
+    this.persistTimerState(sessionId);
   }
 
   private fireNotify(sessionId: string): void {
     const state = this.timers.get(sessionId);
     if (!state) return;
     state.notifyTimer = null;
+    state.notifyDeadline = 0;
+    this.persistTimerState(sessionId);
     const message = `⚠️ ${state.taskName} exceeding expected duration — possible grooming gap`;
     this.broadcast({
       type: 'stuck_session_notified',
@@ -271,6 +395,7 @@ export class StuckSessionMonitor {
     const state = this.timers.get(sessionId);
     if (!state) return;
     state.pauseTimer = null;
+    state.pauseDeadline = 0;
 
     const pr = getPRBySessionId(sessionId);
     if (pr) {
@@ -300,6 +425,7 @@ export class StuckSessionMonitor {
       }
     }, windowMs);
     state.hardStopTimer.unref?.();
+    this.persistTimerState(sessionId);
 
     this.broadcast({
       type: 'stuck_session_paused',
@@ -344,6 +470,7 @@ export class StuckSessionMonitor {
     if (state.pauseTimer) clearTimeout(state.pauseTimer);
     if (state.hardStopTimer) clearTimeout(state.hardStopTimer);
     this.timers.delete(sessionId);
+    deleteStuckSessionTimer(sessionId);
   }
 
   /**
@@ -356,5 +483,21 @@ export class StuckSessionMonitor {
       if (pr && pr.pr_number === prNumber && pr.repo === repo) return sessionId;
     }
     return undefined;
+  }
+
+  private persistTimerState(sessionId: string): void {
+    const state = this.timers.get(sessionId);
+    if (!state) return;
+    upsertStuckSessionTimer(
+      sessionId,
+      state.taskName,
+      state.notifyDeadline,
+      state.pauseDeadline,
+      state.hardStopDeadline,
+      state.hardStopArmed,
+      state.notifyRemainingMs,
+      state.pauseRemainingMs,
+      state.hardStopRemainingMs,
+    );
   }
 }

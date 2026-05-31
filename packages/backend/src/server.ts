@@ -245,6 +245,8 @@ jsonlReader
         ),
       );
 
+    stuckSessionMonitor.rehydrate();
+
     prMergeWatcher.start();
     reviewerCommentsWatcher.start();
 

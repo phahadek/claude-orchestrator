@@ -181,5 +181,16 @@ export function applyTestSchema(db: Database.Database): void {
       paused_at    INTEGER NOT NULL,
       resumed_at   INTEGER NULL
     );
+    CREATE TABLE IF NOT EXISTS stuck_session_timers (
+      session_id             TEXT    PRIMARY KEY,
+      task_name              TEXT    NOT NULL,
+      notify_deadline        INTEGER NOT NULL DEFAULT 0,
+      pause_deadline         INTEGER NOT NULL DEFAULT 0,
+      hard_stop_deadline     INTEGER NOT NULL DEFAULT 0,
+      hard_stop_armed        INTEGER NOT NULL DEFAULT 0,
+      notify_remaining_ms    INTEGER,
+      pause_remaining_ms     INTEGER,
+      hard_stop_remaining_ms INTEGER
+    );
   `);
 }

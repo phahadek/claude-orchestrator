@@ -2040,3 +2040,85 @@ export function getTotalPausedMs(
     .get(implicit, sessionId) as { total: number };
   return row.total;
 }
+
+// ─── stuck_session_timers ─────────────────────────────────────────────────────
+
+export interface StuckSessionTimerRow {
+  session_id: string;
+  task_name: string;
+  notify_deadline: number;
+  pause_deadline: number;
+  hard_stop_deadline: number;
+  hard_stop_armed: number;
+  notify_remaining_ms: number | null;
+  pause_remaining_ms: number | null;
+  hard_stop_remaining_ms: number | null;
+}
+
+const stmtUpsertStuckSessionTimer = db.prepare<{
+  session_id: string;
+  task_name: string;
+  notify_deadline: number;
+  pause_deadline: number;
+  hard_stop_deadline: number;
+  hard_stop_armed: number;
+  notify_remaining_ms: number | null;
+  pause_remaining_ms: number | null;
+  hard_stop_remaining_ms: number | null;
+}>(`
+  INSERT INTO stuck_session_timers
+    (session_id, task_name, notify_deadline, pause_deadline, hard_stop_deadline,
+     hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms)
+  VALUES
+    (@session_id, @task_name, @notify_deadline, @pause_deadline, @hard_stop_deadline,
+     @hard_stop_armed, @notify_remaining_ms, @pause_remaining_ms, @hard_stop_remaining_ms)
+  ON CONFLICT(session_id) DO UPDATE SET
+    task_name              = excluded.task_name,
+    notify_deadline        = excluded.notify_deadline,
+    pause_deadline         = excluded.pause_deadline,
+    hard_stop_deadline     = excluded.hard_stop_deadline,
+    hard_stop_armed        = excluded.hard_stop_armed,
+    notify_remaining_ms    = excluded.notify_remaining_ms,
+    pause_remaining_ms     = excluded.pause_remaining_ms,
+    hard_stop_remaining_ms = excluded.hard_stop_remaining_ms
+`);
+
+const stmtDeleteStuckSessionTimer = db.prepare<{ session_id: string }>(`
+  DELETE FROM stuck_session_timers WHERE session_id = @session_id
+`);
+
+const stmtGetAllStuckSessionTimers = db.prepare(`
+  SELECT * FROM stuck_session_timers
+`);
+
+export function upsertStuckSessionTimer(
+  sessionId: string,
+  taskName: string,
+  notifyDeadline: number,
+  pauseDeadline: number,
+  hardStopDeadline: number,
+  hardStopArmed: boolean,
+  notifyRemainingMs: number | null,
+  pauseRemainingMs: number | null,
+  hardStopRemainingMs: number | null,
+): void {
+  stmtUpsertStuckSessionTimer.run({
+    session_id: sessionId,
+    task_name: taskName,
+    notify_deadline: notifyDeadline,
+    pause_deadline: pauseDeadline,
+    hard_stop_deadline: hardStopDeadline,
+    hard_stop_armed: hardStopArmed ? 1 : 0,
+    notify_remaining_ms: notifyRemainingMs,
+    pause_remaining_ms: pauseRemainingMs,
+    hard_stop_remaining_ms: hardStopRemainingMs,
+  });
+}
+
+export function deleteStuckSessionTimer(sessionId: string): void {
+  stmtDeleteStuckSessionTimer.run({ session_id: sessionId });
+}
+
+export function getAllStuckSessionTimers(): StuckSessionTimerRow[] {
+  return stmtGetAllStuckSessionTimers.all() as StuckSessionTimerRow[];
+}
