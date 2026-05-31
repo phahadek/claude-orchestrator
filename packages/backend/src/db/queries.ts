@@ -720,7 +720,6 @@ export function getTasksByStatusFromCache(
     .all(`${prefix}%`, status) as { task_id: string; raw_json: string }[];
 }
 
-
 export function getZeroTokenSessions(limit: number): Session[] {
   return db
     .prepare(
