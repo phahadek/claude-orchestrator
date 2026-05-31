@@ -214,6 +214,11 @@ export function SessionDetail({
               {formatModelName(session.model)}
             </span>
           )}
+          {(session.compaction_count ?? 0) > 0 && (
+            <span className={styles.compactionBadge}>
+              compacted {session.compaction_count}×
+            </span>
+          )}
           {(session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0) >
             0 && (
             <span className={styles.tokenCount}>

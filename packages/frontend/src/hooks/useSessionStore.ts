@@ -63,6 +63,7 @@ export interface SessionState {
   /** Session ID of the code session whose PR this review session is reviewing */
   codeSessionId?: string;
   model?: string | null;
+  compaction_count?: number;
   /**
    * True when the most recent session_status message that updated `status`
    * carried `replay: true` (sent during the WS reconnect burst). Set false
@@ -313,6 +314,9 @@ export function useSessionStore() {
                 totalOutputTokens: msg.totalOutputTokens,
               }),
               ...(msg.model != null && { model: msg.model }),
+              ...(msg.compactionCount != null && {
+                compaction_count: msg.compactionCount,
+              }),
             });
           }
           break;
