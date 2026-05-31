@@ -100,27 +100,40 @@ describe('recoverSession', () => {
     const broadcast = vi.fn();
     await recoverSession('sess-1', baseOpts({ broadcast }));
     expect(broadcast).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'session_ended', sessionId: 'sess-1', status: 'done' }),
+      expect.objectContaining({
+        type: 'session_ended',
+        sessionId: 'sess-1',
+        status: 'done',
+      }),
     );
   });
 
   it('calls attachPR when prUrl present and not detected live', async () => {
     const taskBackend = makeTaskBackend();
-    await recoverSession('sess-2', baseOpts({
-      prUrl: 'https://github.com/owner/repo/pull/42',
-      prDetectedLive: false,
-      taskBackend,
-    }));
-    expect(taskBackend.attachPR).toHaveBeenCalledWith('task-abc', 'https://github.com/owner/repo/pull/42');
+    await recoverSession(
+      'sess-2',
+      baseOpts({
+        prUrl: 'https://github.com/owner/repo/pull/42',
+        prDetectedLive: false,
+        taskBackend,
+      }),
+    );
+    expect(taskBackend.attachPR).toHaveBeenCalledWith(
+      'task-abc',
+      'https://github.com/owner/repo/pull/42',
+    );
   });
 
   it('skips attachPR when PR was already detected live', async () => {
     const taskBackend = makeTaskBackend();
-    await recoverSession('sess-3', baseOpts({
-      prUrl: 'https://github.com/owner/repo/pull/42',
-      prDetectedLive: true,
-      taskBackend,
-    }));
+    await recoverSession(
+      'sess-3',
+      baseOpts({
+        prUrl: 'https://github.com/owner/repo/pull/42',
+        prDetectedLive: true,
+        taskBackend,
+      }),
+    );
     expect(taskBackend.attachPR).not.toHaveBeenCalled();
   });
 
@@ -128,24 +141,39 @@ describe('recoverSession', () => {
     vi.mocked(getPRByNumber).mockReturnValue(null); // no existing PR row → state=undefined
     const taskBackend = makeTaskBackend();
     const broadcast = vi.fn();
-    await recoverSession('sess-4', baseOpts({
-      prUrl: 'https://github.com/owner/repo/pull/7',
-      taskBackend,
-      broadcast,
-    }));
-    expect(upsertPullRequest).toHaveBeenCalledWith(
-      expect.objectContaining({ pr_number: 7, repo: 'owner/repo', session_id: 'sess-4' }),
+    await recoverSession(
+      'sess-4',
+      baseOpts({
+        prUrl: 'https://github.com/owner/repo/pull/7',
+        taskBackend,
+        broadcast,
+      }),
     );
-    expect(taskBackend.updateStatus).toHaveBeenCalledWith('task-abc', '👀 In Review');
+    expect(upsertPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pr_number: 7,
+        repo: 'owner/repo',
+        session_id: 'sess-4',
+      }),
+    );
+    expect(taskBackend.updateStatus).toHaveBeenCalledWith(
+      'task-abc',
+      '👀 In Review',
+    );
   });
 
   it('skips upsertPullRequest when PR is already merged', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue({ state: 'merged' } as ReturnType<typeof getPRByNumber>);
+    vi.mocked(getPRByNumber).mockReturnValue({ state: 'merged' } as ReturnType<
+      typeof getPRByNumber
+    >);
     const taskBackend = makeTaskBackend();
-    await recoverSession('sess-5', baseOpts({
-      prUrl: 'https://github.com/owner/repo/pull/8',
-      taskBackend,
-    }));
+    await recoverSession(
+      'sess-5',
+      baseOpts({
+        prUrl: 'https://github.com/owner/repo/pull/8',
+        taskBackend,
+      }),
+    );
     expect(upsertPullRequest).not.toHaveBeenCalled();
     expect(taskBackend.updateStatus).not.toHaveBeenCalled();
   });
@@ -153,11 +181,14 @@ describe('recoverSession', () => {
   it('emits pr_opened when prUrl is open and not detected live', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(null);
     const emitPrOpened = vi.fn();
-    await recoverSession('sess-6', baseOpts({
-      prUrl: 'https://github.com/owner/repo/pull/9',
-      prDetectedLive: false,
-      emitPrOpened,
-    }));
+    await recoverSession(
+      'sess-6',
+      baseOpts({
+        prUrl: 'https://github.com/owner/repo/pull/9',
+        prDetectedLive: false,
+        emitPrOpened,
+      }),
+    );
     expect(emitPrOpened).toHaveBeenCalledWith(
       expect.objectContaining({ prNumber: 9, repo: 'owner/repo' }),
     );
@@ -166,12 +197,15 @@ describe('recoverSession', () => {
   it('does not emit pr_opened for periodic scope', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(null);
     const emitPrOpened = vi.fn();
-    await recoverSession('sess-7', baseOpts({
-      scope: 'periodic',
-      prUrl: 'https://github.com/owner/repo/pull/9',
-      prDetectedLive: false,
-      emitPrOpened,
-    }));
+    await recoverSession(
+      'sess-7',
+      baseOpts({
+        scope: 'periodic',
+        prUrl: 'https://github.com/owner/repo/pull/9',
+        prDetectedLive: false,
+        emitPrOpened,
+      }),
+    );
     expect(emitPrOpened).not.toHaveBeenCalled();
   });
 
@@ -197,7 +231,10 @@ describe('recoverSession', () => {
 
   it('runs the SessionAuditor and broadcasts session_audit for non-review sessions', async () => {
     const broadcast = vi.fn();
-    await recoverSession('sess-10', baseOpts({ broadcast, sessionType: 'standard' }));
+    await recoverSession(
+      'sess-10',
+      baseOpts({ broadcast, sessionType: 'standard' }),
+    );
     expect(insertSessionAudit).toHaveBeenCalled();
     expect(broadcast).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'session_audit' }),
@@ -213,10 +250,13 @@ describe('recoverSession', () => {
     vi.mocked(getPRByNumber).mockReturnValue(null);
     const taskBackend = makeTaskBackend();
     vi.mocked(taskBackend.updateStatus).mockResolvedValue(undefined);
-    await recoverSession('sess-12', baseOpts({
-      prUrl: 'https://github.com/owner/repo/pull/10',
-      taskBackend,
-    }));
+    await recoverSession(
+      'sess-12',
+      baseOpts({
+        prUrl: 'https://github.com/owner/repo/pull/10',
+        taskBackend,
+      }),
+    );
     // Wait for the floating promise from updateStatus.then(...)
     await new Promise((r) => setTimeout(r, 10));
     expect(emitTaskUpdated).toHaveBeenCalledWith('task-abc');

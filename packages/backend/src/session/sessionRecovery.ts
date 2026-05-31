@@ -138,9 +138,7 @@ export async function recoverSession(
 
       let existingPrState: string | undefined;
       if (prUrl) {
-        const prMatch = prUrl.match(
-          /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/,
-        );
+        const prMatch = prUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
         if (prMatch) {
           const repo = prMatch[1];
           const prNumber = parseInt(prMatch[2], 10);
@@ -263,10 +261,7 @@ export async function recoverSession(
         }
       }
     } catch (e) {
-      console.error(
-        `[recoverSession] post-done error for ${sessionId}:`,
-        e,
-      );
+      console.error(`[recoverSession] post-done error for ${sessionId}:`, e);
     }
   }
 
@@ -278,7 +273,11 @@ export async function recoverSession(
   });
 
   if (sessionType !== 'review') {
-    const auditor = new SessionAuditor(taskBackend, githubClient, sessionManager);
+    const auditor = new SessionAuditor(
+      taskBackend,
+      githubClient,
+      sessionManager,
+    );
     auditor
       .audit({ sessionId, taskId, prUrl, sessionType, worktreePath }, 0)
       .then((audit) => {
@@ -302,9 +301,7 @@ export async function recoverSession(
         });
       })
       .catch((err) => {
-        console.error(
-          `[recoverSession] audit failed for ${sessionId}: ${err}`,
-        );
+        console.error(`[recoverSession] audit failed for ${sessionId}: ${err}`);
       });
   }
 
@@ -318,6 +315,8 @@ export async function recoverSession(
       payload: { scope },
     });
   } catch (e) {
-    console.error(`[recoverSession] session_backfilled audit write failed: ${e}`);
+    console.error(
+      `[recoverSession] session_backfilled audit write failed: ${e}`,
+    );
   }
 }
