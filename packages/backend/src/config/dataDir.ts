@@ -10,7 +10,9 @@ import path from 'path';
  *
  * The `platform` parameter is injectable for unit tests.
  */
-export function getDataDir(platform: NodeJS.Platform = process.platform): string {
+export function getDataDir(
+  platform: NodeJS.Platform = process.platform,
+): string {
   switch (platform) {
     case 'win32':
       return path.join(

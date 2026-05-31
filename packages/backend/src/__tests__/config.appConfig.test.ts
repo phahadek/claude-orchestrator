@@ -6,7 +6,10 @@ import path from 'path';
 // Must mock before importing the modules under test
 vi.mock('../db/queries.js', () => ({}));
 
-import { DataDirConfigSource, CONFIG_DEFAULTS } from '../config/DataDirConfigSource.js';
+import {
+  DataDirConfigSource,
+  CONFIG_DEFAULTS,
+} from '../config/DataDirConfigSource.js';
 import { EnvFileConfigSource } from '../config/EnvFileConfigSource.js';
 import { ConfigValidationError } from '../config/types.js';
 import {

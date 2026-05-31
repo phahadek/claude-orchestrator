@@ -124,7 +124,10 @@ function deepMerge(
     const sv = src[key];
     if (sv !== undefined && typeof sv === 'object' && sv !== null) {
       const tv = result[key];
-      result[key] = typeof tv === 'object' && tv !== null ? { ...(tv as object), ...(sv as object) } : { ...(sv as object) };
+      result[key] =
+        typeof tv === 'object' && tv !== null
+          ? { ...(tv as object), ...(sv as object) }
+          : { ...(sv as object) };
     } else if (sv !== undefined) {
       result[key] = sv;
     }
@@ -154,7 +157,9 @@ export class DataDirConfigSource implements ConfigSource {
   }
 
   write(partial: DeepPartial<OrchestratorConfig>): void {
-    const existing = this.exists() ? this.read() : structuredClone(CONFIG_DEFAULTS);
+    const existing = this.exists()
+      ? this.read()
+      : structuredClone(CONFIG_DEFAULTS);
     const merged = deepMerge(existing, partial);
     fs.writeFileSync(this.configPath, JSON.stringify(merged, null, 2), 'utf8');
   }

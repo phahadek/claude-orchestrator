@@ -58,7 +58,8 @@ if (ghostsRemoved > 0) {
   );
 }
 
-const rawSessionsDir = getOrchestratorConfig().sessions.dir || DEFAULT_SESSIONS_DIR;
+const rawSessionsDir =
+  getOrchestratorConfig().sessions.dir || DEFAULT_SESSIONS_DIR;
 const sessionsDir = rawSessionsDir.replace(/^~/, os.homedir());
 const jsonlReader = new JsonlReader(sessionsDir);
 
