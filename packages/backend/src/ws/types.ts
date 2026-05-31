@@ -263,6 +263,11 @@ export type ServerMessage =
       type: 'enrollment_approved';
       code: string;
       deviceId: string;
+    }
+  | {
+      type: 'update_available';
+      version: string;
+      releaseNotesUrl: string;
     };
 
 // ── Client → Server ──────────────────────────────────────────────

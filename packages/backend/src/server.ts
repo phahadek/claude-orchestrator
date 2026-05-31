@@ -42,6 +42,8 @@ import { AutoLauncher } from './orchestration/AutoLauncher';
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
 import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
 import { deleteGhostSessions, getPRBySessionId } from './db/queries';
+import { UpdateChecker, cleanUpdatesDir } from './updater/index';
+import { updateRouter, setUpdateChecker } from './routes/update';
 
 runMigrations();
 loadRuntimeSettingsFromDb();
@@ -141,6 +143,7 @@ app.use('/api', createTasksRouter());
 app.use('/api/analytics', analyticsRouter);
 app.use('/api', projectsRouter);
 app.use('/api', configRouter);
+app.use('/api', updateRouter);
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'index.html')),
@@ -223,6 +226,11 @@ wss.on('connection', (ws, req) => {
 // reservations (orphan resume reserves slots from this.sessions.size).
 const autoLauncher = new AutoLauncher(sessionManager, broadcast);
 
+// Auto-updater: polls GitHub Releases on startup + every 24h
+const updateChecker = new UpdateChecker(broadcast);
+setUpdateChecker(updateChecker, broadcast);
+cleanUpdatesDir();
+
 // Stuck-session timer: notify → pause → hard-stop. Wires itself to SessionManager
 // events on construction; lifetime tied to the process.
 const stuckSessionMonitor = new StuckSessionMonitor(sessionManager, broadcast);
@@ -260,6 +268,7 @@ jsonlReader
       );
 
     orphanedTaskSweeper.start();
+    updateChecker.start();
 
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`[server] listening on port ${PORT}`);
@@ -276,6 +285,7 @@ async function gracefulShutdown(signal: string) {
   autoLauncher.stop();
   stuckSessionMonitor.stop();
   orphanedTaskSweeper.stop();
+  updateChecker.stop();
   reviewerCommentsWatcher.stop();
   wss.close();
   await sessionManager.shutdownAll();

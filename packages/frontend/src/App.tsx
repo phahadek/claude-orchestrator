@@ -18,6 +18,7 @@ import { PermissionEventLog } from './components/PermissionEventLog';
 import { TaskList } from './components/TaskList';
 import { TaskDetail } from './components/TaskDetail';
 import { Settings } from './components/Settings';
+import { UpdateBanner } from './components/UpdateBanner';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { Notifications } from './components/Notifications';
 import { ShortcutHint } from './components/ShortcutHint';
@@ -127,6 +128,10 @@ export default function App() {
     'sessions' | 'history' | 'denials'
   >('sessions');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [updateInfo, setUpdateInfo] = useState<{
+    version: string;
+    releaseNotesUrl: string;
+  } | null>(null);
   const notifiedRef = useRef<Set<string>>(new Set());
   const [showReconnected, setShowReconnected] = useState(false);
   const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
@@ -145,6 +150,13 @@ export default function App() {
           { id: notifId, message: msg.message, status: 'error' },
         ]);
         setTimeout(() => dismissNotification(notifId), 10_000);
+        return;
+      }
+      if (msg.type === 'update_available') {
+        setUpdateInfo({
+          version: msg.version,
+          releaseNotesUrl: msg.releaseNotesUrl,
+        });
         return;
       }
       dispatch(msg);
@@ -964,6 +976,13 @@ export default function App() {
           autoLaunchPollIntervalMs={autoLaunchPollIntervalMs}
         />
       </ErrorBoundary>
+      {updateInfo && (
+        <UpdateBanner
+          version={updateInfo.version}
+          releaseNotesUrl={updateInfo.releaseNotesUrl}
+          onDismiss={() => setUpdateInfo(null)}
+        />
+      )}
       <div className={styles.mainArea}>
         {topView === 'tasks' && (
           <ErrorBoundary name="TasksView">
