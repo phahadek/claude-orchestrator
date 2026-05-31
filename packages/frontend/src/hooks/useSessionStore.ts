@@ -64,6 +64,7 @@ export interface SessionState {
   codeSessionId?: string;
   model?: string | null;
   compaction_count?: number;
+  context_occupancy_tokens?: number;
   /**
    * True when the most recent session_status message that updated `status`
    * carried `replay: true` (sent during the WS reconnect burst). Set false
@@ -316,6 +317,9 @@ export function useSessionStore() {
               ...(msg.model != null && { model: msg.model }),
               ...(msg.compactionCount != null && {
                 compaction_count: msg.compactionCount,
+              }),
+              ...(msg.contextOccupancyTokens != null && {
+                context_occupancy_tokens: msg.contextOccupancyTokens,
               }),
             });
           }

@@ -74,6 +74,11 @@ export function SessionDetail({
   const isActive =
     session.status === 'running' || session.status === 'needs_permission';
 
+  const ctxPct =
+    session.context_occupancy_tokens != null
+      ? Math.round((session.context_occupancy_tokens / 200_000) * 100)
+      : null;
+
   function handleKill() {
     if (!session) return;
     if (confirm('Kill this session? It will have 15 seconds to wrap up.')) {
@@ -217,6 +222,19 @@ export function SessionDetail({
           {(session.compaction_count ?? 0) > 0 && (
             <span className={styles.compactionBadge}>
               compacted {session.compaction_count}×
+            </span>
+          )}
+          {ctxPct != null && (
+            <span
+              className={styles.contextBadge}
+              title={`${(session.context_occupancy_tokens ?? 0).toLocaleString()} of 200,000 tokens`}
+            >
+              <span
+                className={styles.contextBarFill}
+                style={{ width: `${Math.min(ctxPct, 100)}%` }}
+                aria-hidden="true"
+              />
+              <span className={styles.contextText}>{ctxPct}% ctx</span>
             </span>
           )}
           {(session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0) >
