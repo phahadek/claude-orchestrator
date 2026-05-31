@@ -152,7 +152,8 @@ const records = rows.map((r) => {
     (r.total_input_tokens ?? 0) + (r.total_output_tokens ?? 0);
   // null = no session_launched events found for this session (data gap for old sessions);
   // otherwise: launches minus 1 (the first launch is the original spawn, not a resume).
-  const resume_count = r.launched_count > 0 ? Math.max(0, r.launched_count - 1) : null;
+  const resume_count =
+    r.launched_count > 0 ? Math.max(0, r.launched_count - 1) : null;
   return {
     session_id: r.session_id,
     era: eraOf(r.started_at),
@@ -371,7 +372,9 @@ for (const metric of METRICS) {
   for (const era of [...ERA_ORDER, 'ALL']) {
     const a = aggregates[era][metric];
     if (metric === 'resume_count' && a.n === 0) {
-      lines.push(`| ${era} | (data gap) | (data gap) | (data gap) | (data gap) |`);
+      lines.push(
+        `| ${era} | (data gap) | (data gap) | (data gap) | (data gap) |`,
+      );
     } else {
       lines.push(
         `| ${era} | ${a.n} | ${fmtMetric(metric, a.p50)} | ${fmtMetric(metric, a.p95)} | ${fmtMetric(metric, a.max)} |`,
