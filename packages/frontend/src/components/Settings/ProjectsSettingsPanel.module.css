@@ -238,6 +238,8 @@
   padding: 6px 10px;
   color: var(--text-primary);
   font-size: 0.875rem;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .input:focus {
