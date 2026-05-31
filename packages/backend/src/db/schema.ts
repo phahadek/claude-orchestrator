@@ -177,6 +177,19 @@ export function runMigrations(): void {
     );
     CREATE INDEX IF NOT EXISTS idx_session_pause_intervals_session_id ON session_pause_intervals(session_id);
 
+    CREATE TABLE IF NOT EXISTS stuck_session_timers (
+      session_id             TEXT    PRIMARY KEY,
+      task_name              TEXT    NOT NULL,
+      notify_deadline        INTEGER NOT NULL DEFAULT 0,
+      pause_deadline         INTEGER NOT NULL DEFAULT 0,
+      hard_stop_deadline     INTEGER NOT NULL DEFAULT 0,
+      hard_stop_armed        INTEGER NOT NULL DEFAULT 0,
+      notify_remaining_ms    INTEGER,
+      pause_remaining_ms     INTEGER,
+      hard_stop_remaining_ms INTEGER
+    );
+
+
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events(session_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_event_type ON session_events(session_id, event_type);
     CREATE INDEX IF NOT EXISTS idx_session_events_timestamp ON session_events(timestamp DESC);
