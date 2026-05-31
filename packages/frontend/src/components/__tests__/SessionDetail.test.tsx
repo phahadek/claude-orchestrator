@@ -343,6 +343,73 @@ describe('SessionDetail', () => {
     expect(screen.getByText(/1 permission denial(?!s)/)).toBeTruthy();
   });
 
+  it('renders compaction badge when compaction_count > 0', () => {
+    render(
+      <SessionDetail
+        session={makeSession({ compaction_count: 3 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('compacted 3×')).toBeTruthy();
+  });
+
+  it('hides compaction badge when compaction_count is 0', () => {
+    render(
+      <SessionDetail
+        session={makeSession({ compaction_count: 0 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/compacted/)).toBeNull();
+  });
+
+  it('hides compaction badge when compaction_count is absent', () => {
+    render(
+      <SessionDetail
+        session={makeSession()}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/compacted/)).toBeNull();
+  });
+
+  it('updates compaction badge when session prop changes', () => {
+    const { rerender } = render(
+      <SessionDetail
+        session={makeSession({ compaction_count: 1 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('compacted 1×')).toBeTruthy();
+    rerender(
+      <SessionDetail
+        session={makeSession({ compaction_count: 2 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('compacted 2×')).toBeTruthy();
+  });
+
   it('close button calls history.back() (not onClose directly)', () => {
     const backSpy = vi
       .spyOn(window.history, 'back')
