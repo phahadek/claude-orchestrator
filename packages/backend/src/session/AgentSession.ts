@@ -128,6 +128,8 @@ function mergeAssistantContent(
 
 export class AgentSession extends EventEmitter {
   private isKilling = false;
+  /** Set by gracefulPause() so the run loop exits without updating DB status. */
+  private isPausingForShutdown = false;
   public prUrl: string | undefined;
   /** True once a session_ended message has been broadcast. */
   public hasEnded = false;
@@ -291,7 +293,12 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         (event) => this.handleRawEvent(event),
       );
 
-      if (this.runner.hasSpawnError || this.isKilling) return;
+      if (
+        this.runner.hasSpawnError ||
+        this.isKilling ||
+        this.isPausingForShutdown
+      )
+        return;
 
       if (exitCode === 0) {
         this.retryCount = 0;
@@ -319,7 +326,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           status: 'retrying',
         });
         await new Promise<void>((resolve) => setTimeout(resolve, delay));
-        if (this.isKilling) return;
+        if (this.isKilling || this.isPausingForShutdown) return;
         resumeIdForSpawn = this.sessionId;
         this.broadcast({
           type: 'session_status',
@@ -1310,6 +1317,18 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       sessionId: this.sessionId,
       status: 'killed',
     });
+  }
+
+  /**
+   * Pause the session for graceful server shutdown.
+   * SIGTERMs the CLI subprocess and awaits exit without touching DB status or
+   * Notion — leaving status='running' so resumeOrphanSessions picks it up on
+   * next boot.
+   */
+  async gracefulPause(): Promise<void> {
+    if (this.isPausingForShutdown || this.isKilling) return;
+    this.isPausingForShutdown = true;
+    await this.runner.kill();
   }
 
   /** Persist to SQLite first, then emit. Caller (SessionManager) listens and broadcasts. */
