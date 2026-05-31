@@ -1794,4 +1794,44 @@ describe('parseNotionPageIdDashed', () => {
       ),
     ).toBe('36e22f91-52f3-8101-8dd2-f6f7c0b402e9');
   });
+
+  // ── AC: handleCleanExit resilient pre-markSessionDone ────────────────────
+  // When getEventsBySession throws, markSessionDone must still run so the
+  // session transitions to status='done' rather than remaining 'running'.
+  it('calls markSessionDone with null prUrl when getEventsBySession throws during clean exit', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockImplementation(() => {
+      throw new Error('DB read failure');
+    });
+
+    const session = new AgentSession(
+      'resilient-exit-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const messages: ServerMessage[] = [];
+    session.on('message', (msg: ServerMessage) => messages.push(msg));
+
+    const runPromise = session.run();
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    // Session must transition to done even though getEventsBySession threw
+    expect(vi.mocked(markSessionDone)).toHaveBeenCalledWith(
+      'resilient-exit-session',
+      expect.any(Number),
+      null,
+    );
+
+    const ended = messages.find((m) => m.type === 'session_ended');
+    expect(ended).toBeDefined();
+    expect((ended as { status: string }).status).toBe('done');
+  });
 });
