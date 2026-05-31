@@ -26,6 +26,7 @@ export interface Session {
   tags: string | null; // JSON array of strings, e.g. '["bugfix","auth"]'
   total_input_tokens: number;
   total_output_tokens: number;
+  compaction_count: number;
   model?: string | null;
   task_name: string | null;
   metadata: string | null; // JSON blob for small session metadata (e.g. aiTitle)
@@ -45,6 +46,7 @@ export type NewSession = Omit<
   | 'tags'
   | 'total_input_tokens'
   | 'total_output_tokens'
+  | 'compaction_count'
   | 'task_name'
   | 'metadata'
   | 'review_result'
@@ -60,6 +62,7 @@ export type NewSession = Omit<
   tags?: string | null;
   total_input_tokens?: number;
   total_output_tokens?: number;
+  compaction_count?: number;
   task_name?: string | null;
   metadata?: string | null;
   review_result?: string | null;

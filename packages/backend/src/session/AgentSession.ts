@@ -10,6 +10,7 @@ import {
   insertPermissionDenial,
   upsertPullRequest,
   incrementTokens,
+  incrementCompactionCount,
   insertSessionAudit,
   setSessionModel,
   setSessionMetadata,
@@ -145,6 +146,8 @@ export class AgentSession extends EventEmitter {
   /** Accumulated token counts for this session (in-memory, synced to SQLite). */
   private totalInputTokens = 0;
   private totalOutputTokens = 0;
+  /** Count of compact_boundary events seen this session (in-memory, synced to SQLite). */
+  private compactionCount = 0;
   /** Model name extracted from the first assistant event (e.g. 'claude-sonnet-4-6'). */
   public model: string | null = null;
   /** Count of consecutive transient-error retries for this session instance. Resets on clean exit. */
@@ -404,6 +407,19 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 
     if (rawType === 'system' && (event.subtype as string) === 'init') {
       sessionLog(this.sessionId, `INIT permissionMode=${event.permissionMode}`);
+    }
+
+    if (
+      rawType === 'system' &&
+      (event.subtype as string) === 'compact_boundary'
+    ) {
+      this.compactionCount++;
+      incrementCompactionCount(this.sessionId);
+      this.broadcast({
+        type: 'session_updated',
+        sessionId: this.sessionId,
+        compactionCount: this.compactionCount,
+      });
     }
 
     // ai-title: persist as session metadata only, no session event

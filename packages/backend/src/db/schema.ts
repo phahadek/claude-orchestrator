@@ -383,6 +383,13 @@ export function runMigrations(): void {
   } catch {
     /* already exists */
   }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN compaction_count INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
 
   // ── pull_requests: notion_task_id → task_id ──────────────────────────────────
   try {
