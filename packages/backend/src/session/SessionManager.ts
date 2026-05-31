@@ -202,6 +202,8 @@ export class SessionManager extends EventEmitter {
   private _lastMessageThrottle = new Map<string, number>();
   /** Guards against re-entrant task_updated emission inside the emit override. */
   private _inTaskUpdate = false;
+  /** Session IDs whose local branch should be deleted on worktree cleanup (merged PRs). */
+  private _mergedSessionIds = new Set<string>();
 
   constructor(private readonly githubClient?: GitHubClient) {
     super();
@@ -1066,7 +1068,10 @@ export class SessionManager extends EventEmitter {
       );
     }
 
-    if (!prUrl && branchName) {
+    const deleteBranch = !prUrl || this._mergedSessionIds.has(sessionId);
+    this._mergedSessionIds.delete(sessionId);
+
+    if (deleteBranch && branchName) {
       try {
         execSync(`git branch -D "${branchName}"`, {
           cwd: projectDir,
@@ -1121,6 +1126,11 @@ export class SessionManager extends EventEmitter {
   /** Close stdin on the session process so the CLI can exit cleanly. */
   endSession(sessionId: string): void {
     this.sessions.get(sessionId)?.endSession();
+  }
+
+  /** Mark a session so cleanupWorktree deletes its local branch (used on PR merge). */
+  markForBranchDeletion(sessionId: string): void {
+    this._mergedSessionIds.add(sessionId);
   }
 
   approve(sessionId: string): void {
