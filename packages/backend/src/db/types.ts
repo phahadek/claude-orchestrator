@@ -274,7 +274,10 @@ export type NewDeviceRow = Omit<DeviceRow, 'last_seen' | 'revoked'> & {
 
 // ─── session_pause_intervals ────────────────────────────────────────────────
 
-export type SessionPauseReason = 'rate_limit' | 'stuck_timeout' | 'api_overloaded';
+export type SessionPauseReason =
+  | 'rate_limit'
+  | 'stuck_timeout'
+  | 'api_overloaded';
 
 export interface SessionPauseInterval {
   id: number;

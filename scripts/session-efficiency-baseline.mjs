@@ -143,7 +143,9 @@ const records = rows.map((r) => {
     r.ended_at && r.started_at ? r.ended_at - r.started_at : null;
   const total_paused_ms = r.total_paused_ms ?? 0;
   const active_wall_clock_ms =
-    wall_clock_ms !== null ? Math.max(0, wall_clock_ms - total_paused_ms) : null;
+    wall_clock_ms !== null
+      ? Math.max(0, wall_clock_ms - total_paused_ms)
+      : null;
   const time_to_pr_ms = r.pr_opened_ts ? r.pr_opened_ts - r.started_at : null;
   const tokens_total =
     (r.total_input_tokens ?? 0) + (r.total_output_tokens ?? 0);
@@ -176,7 +178,13 @@ const pauseReasonBreakdown = {};
 for (const era of [...ERA_ORDER, 'ALL']) {
   pauseReasonBreakdown[era] = {};
 }
-if (db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='session_pause_intervals'`).get()) {
+if (
+  db
+    .prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='session_pause_intervals'`,
+    )
+    .get()
+) {
   const pauseRows = db
     .prepare(
       `SELECT pi.session_id, pi.pause_reason,
@@ -192,10 +200,14 @@ if (db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='sess
     const era = eraOf(p.started_at);
     for (const bucket of [era, 'ALL']) {
       if (!pauseReasonBreakdown[bucket][p.pause_reason]) {
-        pauseReasonBreakdown[bucket][p.pause_reason] = { count: 0, total_paused_ms: 0 };
+        pauseReasonBreakdown[bucket][p.pause_reason] = {
+          count: 0,
+          total_paused_ms: 0,
+        };
       }
       pauseReasonBreakdown[bucket][p.pause_reason].count += 1;
-      pauseReasonBreakdown[bucket][p.pause_reason].total_paused_ms += p.duration_ms ?? 0;
+      pauseReasonBreakdown[bucket][p.pause_reason].total_paused_ms +=
+        p.duration_ms ?? 0;
     }
   }
 }
@@ -275,7 +287,9 @@ const fmtMs = (ms) => {
 const fmtInt = (n) =>
   n === null ? 'n/a' : Math.round(n).toLocaleString('en-US');
 const isMsMetric = (m) =>
-  m === 'wall_clock_ms' || m === 'active_wall_clock_ms' || m === 'time_to_pr_ms';
+  m === 'wall_clock_ms' ||
+  m === 'active_wall_clock_ms' ||
+  m === 'time_to_pr_ms';
 const fmtMetric = (m, v) => (isMsMetric(m) ? fmtMs(v) : fmtInt(v));
 
 // ── Write outputs ──────────────────────────────────────────────────────────
@@ -369,7 +383,9 @@ if (Object.keys(allPauseBreakdown).length === 0) {
   lines.push('| Reason | Events | Total paused |');
   lines.push('| --- | --- | --- |');
   for (const [reason, data] of Object.entries(allPauseBreakdown)) {
-    lines.push(`| ${reason} | ${data.count} | ${fmtMs(data.total_paused_ms)} |`);
+    lines.push(
+      `| ${reason} | ${data.count} | ${fmtMs(data.total_paused_ms)} |`,
+    );
   }
   lines.push('');
   lines.push('### Per-era pause breakdown\n');
@@ -378,7 +394,9 @@ if (Object.keys(allPauseBreakdown).length === 0) {
     if (Object.keys(breakdown).length === 0) continue;
     lines.push(`**${era}**`);
     for (const [reason, data] of Object.entries(breakdown)) {
-      lines.push(`  - ${reason}: ${data.count} events, ${fmtMs(data.total_paused_ms)} total`);
+      lines.push(
+        `  - ${reason}: ${data.count} events, ${fmtMs(data.total_paused_ms)} total`,
+      );
     }
   }
   lines.push('');
