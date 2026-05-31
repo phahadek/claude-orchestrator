@@ -19,8 +19,8 @@
  *   - tokens_total           = total_input_tokens + total_output_tokens
  *   - tool_call_proxy        = COUNT(session_events.event_type='system')
  *   - rate_limit_events      = COUNT(session_events.event_type='rate_limit')
- *   - resume_count           = COUNT(audit_log session_launched events with mode='resume')
- *                              fallback: count of distinct 'init' subtypes in payloads
+ *   - resume_count           = COUNT(audit_log session_launched where actor_id=session_id) - 1
+ *                              null ("data gap") if no session_launched events recorded
  *   - review_iteration       = pull_requests.review_iteration for the session's PR
  *   - status                 = done|error|killed|running
  *
@@ -96,7 +96,8 @@ const rows = db
         SELECT MIN(a.ts)
         FROM audit_log a
         WHERE a.event_type = 'pr_opened'
-          AND a.task_id = s.task_id
+          AND a.actor_id = s.session_id
+          AND a.actor_id IS NOT NULL
           AND a.ts >= s.started_at
       ) AS pr_opened_ts,
       (
@@ -113,7 +114,7 @@ const rows = db
         SELECT COUNT(*)
         FROM audit_log a
         WHERE a.event_type = 'session_launched'
-          AND a.payload LIKE '%' || s.session_id || '%'
+          AND a.actor_id = s.session_id
       ) AS launched_count,
       (
         SELECT MAX(p.review_iteration)
@@ -149,8 +150,10 @@ const records = rows.map((r) => {
   const time_to_pr_ms = r.pr_opened_ts ? r.pr_opened_ts - r.started_at : null;
   const tokens_total =
     (r.total_input_tokens ?? 0) + (r.total_output_tokens ?? 0);
-  // resume_count is "launches minus 1" — first launch is the original spawn.
-  const resume_count = Math.max(0, (r.launched_count ?? 1) - 1);
+  // null = no session_launched events found for this session (data gap for old sessions);
+  // otherwise: launches minus 1 (the first launch is the original spawn, not a resume).
+  const resume_count =
+    r.launched_count > 0 ? Math.max(0, r.launched_count - 1) : null;
   return {
     session_id: r.session_id,
     era: eraOf(r.started_at),
@@ -368,9 +371,15 @@ for (const metric of METRICS) {
   lines.push('| --- | --- | --- | --- | --- |');
   for (const era of [...ERA_ORDER, 'ALL']) {
     const a = aggregates[era][metric];
-    lines.push(
-      `| ${era} | ${a.n} | ${fmtMetric(metric, a.p50)} | ${fmtMetric(metric, a.p95)} | ${fmtMetric(metric, a.max)} |`,
-    );
+    if (metric === 'resume_count' && a.n === 0) {
+      lines.push(
+        `| ${era} | (data gap) | (data gap) | (data gap) | (data gap) |`,
+      );
+    } else {
+      lines.push(
+        `| ${era} | ${a.n} | ${fmtMetric(metric, a.p50)} | ${fmtMetric(metric, a.p95)} | ${fmtMetric(metric, a.max)} |`,
+      );
+    }
   }
   lines.push('');
 }
