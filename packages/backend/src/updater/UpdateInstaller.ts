@@ -19,10 +19,14 @@ export function launchInstallerAndExit(installerPath: string): void {
     // For .dmg files: open with Finder so user can drag-install
     // For .pkg: installer command
     if (installerPath.endsWith('.pkg')) {
-      const child = spawn('sudo', ['installer', '-pkg', installerPath, '-target', '/'], {
-        detached: true,
-        stdio: 'ignore',
-      });
+      const child = spawn(
+        'sudo',
+        ['installer', '-pkg', installerPath, '-target', '/'],
+        {
+          detached: true,
+          stdio: 'ignore',
+        },
+      );
       child.unref();
       setTimeout(() => process.exit(0), 500);
       return;

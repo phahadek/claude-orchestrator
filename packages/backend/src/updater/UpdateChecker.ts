@@ -12,7 +12,7 @@ function isDevMode(): boolean {
 }
 
 function getCurrentVersion(): string {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
+   
   const pkg = require('../../package.json') as { version: string };
   return pkg.version;
 }
@@ -68,9 +68,7 @@ export class UpdateChecker {
   private timer: NodeJS.Timeout | null = null;
   private dismissedVersion: string | null = null;
 
-  constructor(
-    private readonly broadcast: (msg: ServerMessage) => void,
-  ) {}
+  constructor(private readonly broadcast: (msg: ServerMessage) => void) {}
 
   /** Start polling. Called after server boots. */
   start(): void {
@@ -108,7 +106,9 @@ export class UpdateChecker {
   private async runCheck(force: boolean): Promise<UpdateInfo | null> {
     const release = await fetchRelease();
     if (!release) {
-      console.warn('[updater] failed to fetch latest release — will retry next cycle');
+      console.warn(
+        '[updater] failed to fetch latest release — will retry next cycle',
+      );
       return null;
     }
 
@@ -142,7 +142,9 @@ export class UpdateChecker {
       releaseNotesUrl: release.html_url,
     });
 
-    console.log(`[updater] update available: ${currentVersion} → ${tagVersion}`);
+    console.log(
+      `[updater] update available: ${currentVersion} → ${tagVersion}`,
+    );
     return info;
   }
 }

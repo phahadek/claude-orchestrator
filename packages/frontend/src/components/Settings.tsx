@@ -73,7 +73,9 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
   const [loading, setLoading] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
-  const [updateCheckResult, setUpdateCheckResult] = useState<string | null>(null);
+  const [updateCheckResult, setUpdateCheckResult] = useState<string | null>(
+    null,
+  );
   const [fieldErrors, setFieldErrors] = useState<
     Partial<Record<keyof SettingsValues, string>>
   >({});
@@ -176,7 +178,10 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
     setUpdateCheckResult(null);
     try {
       const res = await fetch('/api/update/check', { method: 'POST' });
-      const body = (await res.json()) as { updateAvailable?: boolean; info?: { version: string } };
+      const body = (await res.json()) as {
+        updateAvailable?: boolean;
+        info?: { version: string };
+      };
       if (body.updateAvailable && body.info) {
         setUpdateCheckResult(`Update available: ${body.info.version}`);
       } else {

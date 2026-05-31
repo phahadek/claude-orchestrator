@@ -1,6 +1,11 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { UpdateChecker, downloadAsset, selectAsset, cleanUpdatesDir } from '../updater/index.js';
+import {
+  UpdateChecker,
+  downloadAsset,
+  selectAsset,
+  cleanUpdatesDir,
+} from '../updater/index.js';
 import { launchInstallerAndExit } from '../updater/UpdateInstaller.js';
 import type { ServerMessage } from '../ws/types.js';
 
@@ -68,7 +73,9 @@ router.post('/update/install', async (req: Request, res: Response) => {
 
     const asset = selectAsset(info);
     if (!asset) {
-      res.status(422).json({ error: 'no suitable installer asset found for this platform' });
+      res
+        .status(422)
+        .json({ error: 'no suitable installer asset found for this platform' });
       return;
     }
 
@@ -84,7 +91,10 @@ router.post('/update/install', async (req: Request, res: Response) => {
         console.error('[updater] install failed:', (err as Error).message);
         // Clean up partial download
         cleanUpdatesDir();
-        _broadcast?.({ type: 'error', message: `Update install failed: ${(err as Error).message}` });
+        _broadcast?.({
+          type: 'error',
+          message: `Update install failed: ${(err as Error).message}`,
+        });
       }
     });
   } catch (err) {

@@ -128,7 +128,10 @@ export default function App() {
     'sessions' | 'history' | 'denials'
   >('sessions');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [updateInfo, setUpdateInfo] = useState<{ version: string; releaseNotesUrl: string } | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<{
+    version: string;
+    releaseNotesUrl: string;
+  } | null>(null);
   const notifiedRef = useRef<Set<string>>(new Set());
   const [showReconnected, setShowReconnected] = useState(false);
   const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
@@ -150,7 +153,10 @@ export default function App() {
         return;
       }
       if (msg.type === 'update_available') {
-        setUpdateInfo({ version: msg.version, releaseNotesUrl: msg.releaseNotesUrl });
+        setUpdateInfo({
+          version: msg.version,
+          releaseNotesUrl: msg.releaseNotesUrl,
+        });
         return;
       }
       dispatch(msg);

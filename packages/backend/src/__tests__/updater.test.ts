@@ -19,8 +19,10 @@ import type { GitHubAsset, UpdateInfo } from '../updater/types.js';
 import type { ServerMessage } from '../ws/types.js';
 
 // Read the actual version from package.json so tests stay correct as version bumps.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const CURRENT_VERSION: string = (require('../../package.json') as { version: string }).version;
+ 
+const CURRENT_VERSION: string = (
+  require('../../package.json') as { version: string }
+).version;
 const [major, minor, patch] = CURRENT_VERSION.split('.').map(Number);
 // Build version strings relative to the current version
 const NEWER_MINOR = `v${major}.${minor + 1}.${patch}`;
@@ -62,7 +64,9 @@ function mockHttpsGet(responseBody: object | null, statusCode = 200) {
       };
       callback(res);
       if (responseBody !== null) {
-        events['data']?.forEach((h) => h(Buffer.from(JSON.stringify(responseBody))));
+        events['data']?.forEach((h) =>
+          h(Buffer.from(JSON.stringify(responseBody))),
+        );
       }
       events['end']?.forEach((h) => h());
       return { on: vi.fn(), setTimeout: vi.fn() };
@@ -110,7 +114,10 @@ describe('UpdateChecker', () => {
     expect(info).not.toBeNull();
     expect(info?.version).toBe(NEWER_MINOR);
     expect(broadcast).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'update_available', version: NEWER_MINOR }),
+      expect.objectContaining({
+        type: 'update_available',
+        version: NEWER_MINOR,
+      }),
     );
   });
 
@@ -191,7 +198,8 @@ describe('selectAsset', () => {
     releaseNotesUrl: 'https://example.com',
     assets: assets.map((a) => ({
       name: a.name ?? 'file',
-      browser_download_url: a.browser_download_url ?? 'https://example.com/file',
+      browser_download_url:
+        a.browser_download_url ?? 'https://example.com/file',
       size: a.size ?? 1024,
       content_type: a.content_type ?? 'application/octet-stream',
     })),
@@ -199,49 +207,79 @@ describe('selectAsset', () => {
 
   it('selects .exe on win32', () => {
     const origPlatform = process.platform;
-    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    Object.defineProperty(process, 'platform', {
+      value: 'win32',
+      configurable: true,
+    });
     const info = makeInfo([
       { name: 'ClaudeOrchestrator-Setup.exe' },
       { name: 'ClaudeOrchestrator.dmg' },
     ]);
     const asset = selectAsset(info);
     expect(asset?.name).toBe('ClaudeOrchestrator-Setup.exe');
-    Object.defineProperty(process, 'platform', { value: origPlatform, configurable: true });
+    Object.defineProperty(process, 'platform', {
+      value: origPlatform,
+      configurable: true,
+    });
   });
 
   it('selects .dmg on darwin', () => {
     const origPlatform = process.platform;
-    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    Object.defineProperty(process, 'platform', {
+      value: 'darwin',
+      configurable: true,
+    });
     const info = makeInfo([
       { name: 'ClaudeOrchestrator-Setup.exe' },
       { name: 'ClaudeOrchestrator.dmg' },
     ]);
     const asset = selectAsset(info);
     expect(asset?.name).toBe('ClaudeOrchestrator.dmg');
-    Object.defineProperty(process, 'platform', { value: origPlatform, configurable: true });
+    Object.defineProperty(process, 'platform', {
+      value: origPlatform,
+      configurable: true,
+    });
   });
 
   it('selects amd64 .deb on linux x64', () => {
     const origPlatform = process.platform;
     const origArch = process.arch;
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
-    Object.defineProperty(process, 'arch', { value: 'x64', configurable: true });
+    Object.defineProperty(process, 'platform', {
+      value: 'linux',
+      configurable: true,
+    });
+    Object.defineProperty(process, 'arch', {
+      value: 'x64',
+      configurable: true,
+    });
     const info = makeInfo([
       { name: 'ClaudeOrchestrator-arm64.deb' },
       { name: 'ClaudeOrchestrator-amd64.deb' },
     ]);
     const asset = selectAsset(info);
     expect(asset?.name).toBe('ClaudeOrchestrator-amd64.deb');
-    Object.defineProperty(process, 'platform', { value: origPlatform, configurable: true });
-    Object.defineProperty(process, 'arch', { value: origArch, configurable: true });
+    Object.defineProperty(process, 'platform', {
+      value: origPlatform,
+      configurable: true,
+    });
+    Object.defineProperty(process, 'arch', {
+      value: origArch,
+      configurable: true,
+    });
   });
 
   it('returns null when no matching asset found', () => {
     const origPlatform = process.platform;
-    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    Object.defineProperty(process, 'platform', {
+      value: 'linux',
+      configurable: true,
+    });
     const info = makeInfo([{ name: 'README.md' }]);
     const asset = selectAsset(info);
     expect(asset).toBeNull();
-    Object.defineProperty(process, 'platform', { value: origPlatform, configurable: true });
+    Object.defineProperty(process, 'platform', {
+      value: origPlatform,
+      configurable: true,
+    });
   });
 });

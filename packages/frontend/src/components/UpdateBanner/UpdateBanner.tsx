@@ -58,7 +58,11 @@ export function UpdateBanner({ version, releaseNotesUrl, onDismiss }: Props) {
         >
           Release notes
         </a>
-        {error && <span style={{ color: 'var(--color-error, #f38ba8)', marginLeft: 8 }}>{error}</span>}
+        {error && (
+          <span style={{ color: 'var(--color-error, #f38ba8)', marginLeft: 8 }}>
+            {error}
+          </span>
+        )}
       </span>
       <div className={styles.actions}>
         <button
@@ -68,7 +72,10 @@ export function UpdateBanner({ version, releaseNotesUrl, onDismiss }: Props) {
         >
           {installing ? 'Installing…' : 'Install now'}
         </button>
-        <button className={styles.dismissBtn} onClick={() => void handleDismiss()}>
+        <button
+          className={styles.dismissBtn}
+          onClick={() => void handleDismiss()}
+        >
           Dismiss
         </button>
       </div>
