@@ -1,0 +1,12 @@
+Package: claude-orchestrator
+Version: 1.1.0
+Architecture: amd64
+Maintainer: Pedro Hadek <pedrohadek@gmail.com>
+Installed-Size: 150000
+Depends: libc6 (>= 2.17)
+Section: utils
+Priority: optional
+Homepage: https://github.com/phahadek/claude-orchestrator
+Description: Local web dashboard for Claude Code sessions
+ Claude Orchestrator is a local web dashboard for browsing, managing,
+ and orchestrating Claude Code AI agent sessions. Bundles Node.js 20 LTS.

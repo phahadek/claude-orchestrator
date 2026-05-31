@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+BIN_LINK=/usr/local/bin/claude-orchestrator
+
+# Remove symlink
+rm -f "${BIN_LINK}"
+
+# Remove autostart entry for the invoking user (best-effort)
+if [ -n "${SUDO_USER}" ] && [ "${SUDO_USER}" != "root" ]; then
+    AUTOSTART_FILE="$(getent passwd "${SUDO_USER}" | cut -d: -f6)/.config/autostart/claude-orchestrator.desktop"
+    rm -f "${AUTOSTART_FILE}"
+fi
+
+# Data directory is preserved intentionally (XDG_DATA_HOME/claude-orchestrator)
+# Users must manually remove ~/.local/share/claude-orchestrator to wipe all data.
+
+#DEBHELPER#
