@@ -1,7 +1,7 @@
 import https from 'https';
 import type { IncomingMessage } from 'http';
-import type { GitHubRelease, UpdateInfo } from './types.js';
-import type { ServerMessage } from '../ws/types.js';
+import type { GitHubRelease, UpdateInfo } from './types';
+import type { ServerMessage } from '../ws/types';
 
 const REPO = 'phahadek/claude-orchestrator';
 const RELEASES_URL = `https://api.github.com/repos/${REPO}/releases/latest`;

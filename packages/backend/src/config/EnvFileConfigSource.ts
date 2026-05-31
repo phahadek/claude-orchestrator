@@ -1,4 +1,4 @@
-import type { ConfigSource, DeepPartial, OrchestratorConfig } from './types.js';
+import type { ConfigSource, DeepPartial, OrchestratorConfig } from './types';
 
 /**
  * Legacy config source: reads from process.env (populated by dotenv from packages/backend/.env).
