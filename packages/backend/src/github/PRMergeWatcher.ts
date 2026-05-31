@@ -645,25 +645,8 @@ export class PRMergeWatcher {
     updatePRState(pr.pr_number, pr.repo, 'merged');
     deleteAllAutofixShasForPR(pr.pr_number, pr.repo);
 
-    // Delete the origin branch for feature/* branches.
-    if (pr.head_branch?.startsWith('feature/')) {
-      await this.github
-        .deleteBranch(pr.repo, pr.head_branch)
-        .catch((err: unknown) =>
-          console.warn(
-            `[PRMergeWatcher] deleteBranch origin ${pr.head_branch} failed:`,
-            (err as Error).message,
-          ),
-        );
-    }
-
-    // End coding session gracefully (stdin close → clean CLI exit).
-    // Mark it for local branch deletion so cleanupWorktree removes the branch
-    // even though a prUrl is set.
+    // End coding session gracefully (stdin close → clean CLI exit)
     if (pr.session_id) {
-      if (pr.head_branch?.startsWith('feature/')) {
-        this.sessions.markForBranchDeletion(pr.session_id);
-      }
       this.sessions.endSession(pr.session_id);
     }
 
