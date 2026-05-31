@@ -13,6 +13,7 @@ export interface ProjectFormValues {
   autoLaunchEnabled: boolean;
   autoLaunchMilestoneId: string;
   autoMergeEnabled: boolean;
+  nonMilestoneSourceConfigRaw: string;
   dataResidencyConfirmed: boolean;
 }
 
@@ -32,6 +33,7 @@ const EMPTY: ProjectFormValues = {
   autoLaunchEnabled: false,
   autoLaunchMilestoneId: '',
   autoMergeEnabled: false,
+  nonMilestoneSourceConfigRaw: '',
   dataResidencyConfirmed: false,
 };
 
@@ -46,6 +48,9 @@ function fromProject(p: Project): ProjectFormValues {
     autoLaunchEnabled: p.autoLaunchEnabled,
     autoLaunchMilestoneId: p.autoLaunchMilestoneId ?? '',
     autoMergeEnabled: p.autoMergeEnabled,
+    nonMilestoneSourceConfigRaw: p.nonMilestoneSourceConfig
+      ? JSON.stringify(p.nonMilestoneSourceConfig)
+      : '',
     dataResidencyConfirmed: p.dataResidencyConfirmed ?? false,
   };
 }
@@ -58,9 +63,11 @@ export function ProjectFormModal({
   const [values, setValues] = useState<ProjectFormValues>(() =>
     initialProject ? fromProject(initialProject) : EMPTY,
   );
-  const [errors, setErrors] = useState<{ name?: string; projectDir?: string }>(
-    {},
-  );
+  const [errors, setErrors] = useState<{
+    name?: string;
+    projectDir?: string;
+    nonMilestoneSourceConfigRaw?: string;
+  }>({});
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
 
@@ -79,10 +86,34 @@ export function ProjectFormModal({
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    const nextErrors: { name?: string; projectDir?: string } = {};
+    const nextErrors: {
+      name?: string;
+      projectDir?: string;
+      nonMilestoneSourceConfigRaw?: string;
+    } = {};
     if (!values.name.trim()) nextErrors.name = 'Name is required';
     if (!values.projectDir.trim())
       nextErrors.projectDir = 'Project Dir is required';
+    const rawCfg = values.nonMilestoneSourceConfigRaw.trim();
+    if (rawCfg) {
+      try {
+        const parsed = JSON.parse(rawCfg) as unknown;
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+          nextErrors.nonMilestoneSourceConfigRaw = 'Must be a JSON object';
+        } else {
+          const obj = parsed as Record<string, unknown>;
+          if (
+            (obj.notionDatabaseId !== undefined && typeof obj.notionDatabaseId !== 'string') ||
+            (obj.milestoneId !== undefined && typeof obj.milestoneId !== 'string')
+          ) {
+            nextErrors.nonMilestoneSourceConfigRaw =
+              'Must have shape {notionDatabaseId?: string; milestoneId?: string}';
+          }
+        }
+      } catch {
+        nextErrors.nonMilestoneSourceConfigRaw = 'Invalid JSON';
+      }
+    }
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) return;
 
@@ -271,6 +302,33 @@ export function ProjectFormModal({
               </label>
             </div>
           )}
+
+          <div className={styles.formField}>
+            <label htmlFor="proj-nm-source" className={styles.formLabel}>
+              Non-milestone task source (optional)
+            </label>
+            <input
+              id="proj-nm-source"
+              type="text"
+              className={styles.input}
+              value={values.nonMilestoneSourceConfigRaw}
+              onChange={(e) => update('nonMilestoneSourceConfigRaw', e.target.value)}
+              placeholder={
+                values.taskSource === 'yaml'
+                  ? '{"milestoneId":"backlog"}'
+                  : '{"notionDatabaseId":"<database-id>"}'
+              }
+            />
+            <p className={styles.fieldHelp}>
+              JSON config for the non-milestone task pool.
+              {values.taskSource === 'yaml'
+                ? ' For YAML projects: {"milestoneId": "…"}'
+                : ' For Notion projects: {"notionDatabaseId": "…"}'}
+            </p>
+            {errors.nonMilestoneSourceConfigRaw && (
+              <p className={styles.fieldError}>{errors.nonMilestoneSourceConfigRaw}</p>
+            )}
+          </div>
 
           <div className={styles.formField}>
             <label htmlFor="proj-zdr" className={styles.formLabel}>

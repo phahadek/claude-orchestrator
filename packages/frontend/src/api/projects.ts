@@ -41,6 +41,11 @@ export interface ProjectMilestone {
   updatedAt: number;
 }
 
+export interface NonMilestoneSourceConfig {
+  notionDatabaseId?: string;
+  milestoneId?: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -52,6 +57,7 @@ export interface Project {
   autoLaunchEnabled: boolean;
   autoLaunchMilestoneId: string | null;
   autoMergeEnabled: boolean;
+  nonMilestoneSourceConfig: NonMilestoneSourceConfig | null;
   dataResidencyConfirmed: boolean;
   createdAt: number;
   updatedAt: number;
@@ -81,6 +87,7 @@ export interface UpdateProjectInput {
   autoLaunchEnabled?: boolean;
   autoLaunchMilestoneId?: string | null;
   autoMergeEnabled?: boolean;
+  nonMilestoneSourceConfig?: NonMilestoneSourceConfig | null;
   dataResidencyConfirmed?: boolean;
 }
 
