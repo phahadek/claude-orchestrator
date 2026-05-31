@@ -1902,6 +1902,32 @@ export function deleteAllAutofixShasForPR(
   ).run(prNumber, repo);
 }
 
+// ─── pending_review_sync ───────────────────────────────────────────────────────
+
+export interface PendingReviewSyncRow {
+  pr_number: number;
+  repo: string;
+  sync_state: string;
+}
+
+export function insertPendingReviewSync(prNumber: number, repo: string): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO pending_review_sync (pr_number, repo, sync_state) VALUES (?, ?, 'pending')`,
+  ).run(prNumber, repo);
+}
+
+export function deletePendingReviewSync(prNumber: number, repo: string): void {
+  db.prepare(
+    `DELETE FROM pending_review_sync WHERE pr_number = ? AND repo = ?`,
+  ).run(prNumber, repo);
+}
+
+export function getAllPendingReviewSyncs(): PendingReviewSyncRow[] {
+  return db
+    .prepare(`SELECT * FROM pending_review_sync`)
+    .all() as PendingReviewSyncRow[];
+}
+
 // ─── task_no_op_attempts ──────────────────────────────────────────────────────
 
 export interface TaskNoOpAttemptRow {

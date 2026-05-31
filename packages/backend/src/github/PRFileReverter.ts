@@ -126,8 +126,9 @@ export async function revertBannedFiles(opts: {
 /**
  * Fetch the named branch from origin and hard-reset the local HEAD to match it.
  * Returns the resulting HEAD SHA, or null if either step fails.
+ * Exported for use by ReviewOrchestrator boot-retry logic.
  */
-async function syncToOrigin(
+export async function syncToOrigin(
   worktreePath: string,
   branch: string,
 ): Promise<string | null> {

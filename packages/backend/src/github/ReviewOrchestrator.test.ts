@@ -17,6 +17,9 @@ vi.mock('../db/queries.js', () => ({
   addAutofixSha: vi.fn(),
   consumeAutofixSha: vi.fn().mockReturnValue(false),
   deleteAllAutofixShasForPR: vi.fn(),
+  getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
+  insertPendingReviewSync: vi.fn(),
+  deletePendingReviewSync: vi.fn(),
 }));
 
 vi.mock('../session/autofix-runner.js', () => ({
