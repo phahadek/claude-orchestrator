@@ -127,7 +127,11 @@ vi.mock('../session/AgentSession', () => {
     );
   return {
     AgentSession,
-    parseNotionPageId: vi.fn().mockImplementation((url: string) => url),
+    parseNotionPageIdDashed: vi.fn().mockImplementation((url: string) => {
+      const segment = url.split('/').pop() ?? url;
+      const raw = segment.replace(/[^a-f0-9]/gi, '').slice(-32).padEnd(32, '0');
+      return `${raw.slice(0, 8)}-${raw.slice(8, 12)}-${raw.slice(12, 16)}-${raw.slice(16, 20)}-${raw.slice(20)}`;
+    }),
   };
 });
 
