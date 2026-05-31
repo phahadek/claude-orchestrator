@@ -4,13 +4,13 @@ This directory contains scripts to build the Linux `.deb` and `.AppImage` packag
 
 ## Prerequisites
 
-| Tool | Purpose |
-|------|---------|
-| `dpkg-deb` | Build `.deb` packages (Ubuntu/Debian) |
-| `dpkg-sig` | GPG-sign the `.deb` |
-| `appimagetool` | Build `.AppImage` (download from [AppImageKit releases](https://github.com/AppImage/AppImageKit/releases)) |
-| `curl`, `sha256sum` | Download and verify Node.js |
-| `node` | Version detection from `package.json` |
+| Tool                | Purpose                                                                                                    |
+| ------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `dpkg-deb`          | Build `.deb` packages (Ubuntu/Debian)                                                                      |
+| `dpkg-sig`          | GPG-sign the `.deb`                                                                                        |
+| `appimagetool`      | Build `.AppImage` (download from [AppImageKit releases](https://github.com/AppImage/AppImageKit/releases)) |
+| `curl`, `sha256sum` | Download and verify Node.js                                                                                |
+| `node`              | Version detection from `package.json`                                                                      |
 
 Install tools on Ubuntu/Debian:
 
@@ -63,10 +63,10 @@ gpg --export --armor release@claude-orchestrator > installers/linux/release-key.
 
 Add the following secrets in **GitHub → Settings → Secrets and variables → Actions**:
 
-| Secret | Value |
-|--------|-------|
-| `LINUX_GPG_PRIVATE_KEY` | base64-encoded ASCII-armored private key |
-| `LINUX_GPG_PASSPHRASE` | GPG key passphrase (leave blank if key has none) |
+| Secret                  | Value                                            |
+| ----------------------- | ------------------------------------------------ |
+| `LINUX_GPG_PRIVATE_KEY` | base64-encoded ASCII-armored private key         |
+| `LINUX_GPG_PASSPHRASE`  | GPG key passphrase (leave blank if key has none) |
 
 #### User key import (for signature verification)
 
