@@ -174,9 +174,7 @@ async function main() {
         try {
           deleteOriginBranch(repoArg, branch);
         } catch (err) {
-          console.warn(
-            `  [warn] deleteOriginBranch ${branch}: ${err.message}`,
-          );
+          console.warn(`  [warn] deleteOriginBranch ${branch}: ${err.message}`);
         }
       }
       try {
