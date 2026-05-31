@@ -87,7 +87,7 @@ async function getHeadSha(cwd: string): Promise<string> {
 
 export async function runAutofix(
   worktreePath: string,
-  projectDir: string,
+  _projectDir: string,
   commands: string[],
   log: (msg: string) => void,
 ): Promise<AutofixResult> {
