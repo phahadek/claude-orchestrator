@@ -3,6 +3,7 @@ import { ClientMessage } from './types';
 import { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { getProjectById } from '../config';
+import { approveEnrollment } from '../auth/Enrollment';
 
 export function handleMessage(
   ws: WebSocket,
@@ -42,9 +43,22 @@ export function handleMessage(
           sessions.start(t.taskUrl, t.projectContextUrl, {
             taskType: t.taskType,
             projectId: t.projectId,
+            milestoneId: t.milestoneId,
+            taskKind: t.taskKind ?? 'milestone',
+            taskName: t.taskName,
           });
         } catch (e) {
-          ws.send(JSON.stringify({ type: 'error', message: String(e) }));
+          const err = e as Error & { alreadyRunning?: boolean };
+          if (err.alreadyRunning) {
+            ws.send(
+              JSON.stringify({
+                type: 'error',
+                message: `Task already has an active session — no duplicate launched.`,
+              }),
+            );
+          } else {
+            ws.send(JSON.stringify({ type: 'error', message: String(e) }));
+          }
         }
       });
       break;
@@ -125,6 +139,26 @@ export function handleMessage(
         .catch((e) =>
           ws.send(JSON.stringify({ type: 'error', message: String(e) })),
         );
+      break;
+    }
+    case 'enrollment_approve': {
+      const result = approveEnrollment(msg.code);
+      if (!result) {
+        ws.send(
+          JSON.stringify({
+            type: 'error',
+            message: 'invalid or expired enrollment code',
+          }),
+        );
+        break;
+      }
+      ws.send(
+        JSON.stringify({
+          type: 'enrollment_approved',
+          code: msg.code,
+          deviceId: result.deviceId,
+        }),
+      );
       break;
     }
     default: {

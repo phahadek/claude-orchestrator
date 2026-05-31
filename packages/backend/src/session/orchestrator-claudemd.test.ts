@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { buildOrchestratorClaudeMd } from './orchestrator-claudemd';
+import {
+  buildOrchestratorClaudeMd,
+  buildReviewClaudeMd,
+} from './orchestrator-claudemd';
 import { buildSessionContext, stripOrchestratorHeader } from './ContextBuilder';
 import { loadOrchestratorConfig } from './orchestrator-config';
 
@@ -73,6 +76,14 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(result).toContain('mcp__github__create_pull_request');
   });
 
+  it('Bash Rule 3 mandates the fixed `.claude/.commit-msg` path for multi-line commit messages', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    // The fixed gitignored path must be present
+    expect(result).toContain('git commit -F .claude/.commit-msg');
+    // The old free-form instruction must NOT be present (would allow session-invented filenames)
+    expect(result).not.toMatch(/git commit -F <file>/);
+  });
+
   it('lists each verify command in the Pre-PR Gate when verify is non-empty', () => {
     const result = buildOrchestratorClaudeMd({
       ...defaultParams,
@@ -134,6 +145,46 @@ describe('buildOrchestratorClaudeMd', () => {
     const result = buildOrchestratorClaudeMd({ ...defaultParams, verify: [] });
     expect(result).toContain(
       'No local verify step configured — CI is the gate.',
+    );
+  });
+
+  it('Efficiency Rules contain rule preferring Edit over Write for existing files', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    const efficiencySection = result.slice(
+      result.indexOf('## Efficiency Rules'),
+      result.indexOf('---', result.indexOf('## Efficiency Rules')),
+    );
+    expect(efficiencySection).toContain(
+      'Prefer Edit over Write for files that already exist',
+    );
+    expect(efficiencySection).toContain('Never re-emit an unchanged file body');
+  });
+
+  it('Efficiency Rules forbid re-reading a just-written or just-edited file', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    const efficiencySection = result.slice(
+      result.indexOf('## Efficiency Rules'),
+      result.indexOf('---', result.indexOf('## Efficiency Rules')),
+    );
+    expect(efficiencySection).toContain(
+      'Never Read a file you just wrote or edited',
+    );
+  });
+
+  it('Efficiency Rules forbid Read/cat of raw tasks/*.output files and point to TaskOutput', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    const efficiencySection = result.slice(
+      result.indexOf('## Efficiency Rules'),
+      result.indexOf('---', result.indexOf('## Efficiency Rules')),
+    );
+    expect(efficiencySection).toContain('tasks/*.output');
+    expect(efficiencySection).toContain('TaskOutput');
+  });
+
+  it('Rule 4 text is unchanged — pipes/redirects remain forbidden', () => {
+    const result = buildOrchestratorClaudeMd(defaultParams);
+    expect(result).toContain(
+      'Do not write to `/tmp/` or paths outside the worktree.',
     );
   });
 
@@ -480,5 +531,36 @@ describe('loadOrchestratorConfig', () => {
     const config = loadOrchestratorConfig(tmpDir);
     expect(config.verify).toEqual([]);
     expect(config.allowed_tools).toEqual([]);
+  });
+});
+
+describe('buildReviewClaudeMd', () => {
+  it('includes explicit instruction to skip manual verification items', () => {
+    const result = buildReviewClaudeMd('Fix the login bug');
+
+    expect(result).toContain('Manual verification items');
+    expect(result).toContain('Do NOT evaluate them');
+    expect(result).toContain('Do NOT fail the PR');
+    expect(result).toContain('manualItemsForHuman');
+  });
+
+  it('instructs reviewer not to pressure coding session over manual items', () => {
+    const result = buildReviewClaudeMd('Add feature X');
+
+    expect(result).toContain('Do NOT pressure the coding session');
+  });
+
+  it('contains task name in the output', () => {
+    const result = buildReviewClaudeMd('My special task');
+
+    expect(result).toContain('My special task');
+  });
+
+  it('retains the core reviewer identity and no-implementation rules', () => {
+    const result = buildReviewClaudeMd('Some task');
+
+    expect(result).toContain('PR review session');
+    expect(result).toContain('Do NOT implement code');
+    expect(result).toContain('Do NOT fetch Notion pages');
   });
 });

@@ -11,15 +11,15 @@ describe('SessionManager.start() — In Progress status', () => {
   );
 
   it('routes updateStatus through getTaskBackend(projectId) for In Progress', () => {
-    // Must call getTaskBackend(projectId).updateStatus(notionTaskId, In Progress)
+    // Must call getTaskBackend(projectId).updateStatus(notionTaskId, '🔄 In Progress', ...)
     expect(source).toMatch(
-      /getTaskBackend\(projectId\)\.updateStatus\s*\(\s*notionTaskId\s*,\s*'🔄 In Progress'\s*\)/,
+      /getTaskBackend\(projectId\)\s*\.updateStatus\s*\(\s*notionTaskId\s*,\s*'🔄 In Progress'/,
     );
   });
 
   it('In Progress call is fire-and-forget with .catch() error handler', () => {
     expect(source).toMatch(
-      /getTaskBackend\(projectId\)\.updateStatus\s*\(\s*notionTaskId\s*,\s*'🔄 In Progress'\s*\)[\s\S]*?\.catch\b/,
+      /getTaskBackend\(projectId\)\s*\.updateStatus\s*\(\s*notionTaskId\s*,\s*'🔄 In Progress'[\s\S]*?\.catch\b/,
     );
   });
 
@@ -27,7 +27,7 @@ describe('SessionManager.start() — In Progress status', () => {
     expect(source).toMatch(/sessionType\s*===\s*'standard'/);
     const gateIdx = source.indexOf("sessionType === 'standard'");
     const inProgressIdx = source.indexOf(
-      "getTaskBackend(projectId).updateStatus(notionTaskId, '🔄 In Progress')",
+      "updateStatus(notionTaskId, '🔄 In Progress'",
     );
     expect(inProgressIdx).toBeGreaterThan(gateIdx);
   });
@@ -745,7 +745,7 @@ describe('SessionManager — error broadcast and rollback', () => {
   it('broadcasts an error message when updateStatus(In Progress) fails', () => {
     // The .catch() on updateStatus must emit a ServerMessage with type: 'error'
     const inProgressIdx = source.indexOf(
-      "updateStatus(notionTaskId, '🔄 In Progress')",
+      "updateStatus(notionTaskId, '🔄 In Progress'",
     );
     expect(inProgressIdx).toBeGreaterThan(-1);
     const catchBlock = source.slice(inProgressIdx, inProgressIdx + 500);
@@ -761,7 +761,7 @@ describe('SessionManager — error broadcast and rollback', () => {
     const catchBlock = source.slice(launchCatchIdx, launchCatchIdx + 1000);
     expect(catchBlock).toMatch(/'🗂️ Ready'/);
     expect(catchBlock).toMatch(
-      /updateStatus\s*\(\s*notionTaskId\s*,\s*'🗂️ Ready'\s*\)/,
+      /updateStatus\s*\(\s*notionTaskId\s*,\s*'🗂️ Ready'/,
     );
   });
 
@@ -777,5 +777,133 @@ describe('SessionManager — error broadcast and rollback', () => {
     const catchBlock = source.slice(launchCatchIdx, launchCatchIdx + 2000);
     expect(catchBlock).toMatch(/task_status_changed/);
     expect(catchBlock).toMatch(/'🗂️ Ready'/);
+  });
+});
+
+// ── AC: SessionManager.start() writes sessions.task_id in dashed UUID form ───
+describe('SessionManager.start() — dashed task_id', () => {
+  const smSource = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('imports parseNotionPageIdDashed (not parseNotionPageId) from AgentSession', () => {
+    expect(smSource).toMatch(/parseNotionPageIdDashed/);
+    expect(smSource).not.toMatch(/import.*parseNotionPageId[^D]/);
+  });
+
+  it('uses parseNotionPageIdDashed when building notionTaskId', () => {
+    expect(smSource).toMatch(
+      /formatTaskId\s*\(\s*'notion'\s*,\s*parseNotionPageIdDashed\s*\(\s*taskUrl\s*\)\s*\)/,
+    );
+  });
+});
+
+// ── AC: SessionManager.start() requires taskKind for standard sessions ───────
+describe('SessionManager.start() — taskKind required', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('throws when sessionType is standard and taskKind is undefined', () => {
+    expect(source).toMatch(
+      /sessionType\s*!==\s*'review'\s*&&\s*taskKind\s*===\s*undefined/,
+    );
+    expect(source).toMatch(/requires taskKind for standard sessions/);
+  });
+
+  it('does not throw for review sessions without taskKind (gate is conditional)', () => {
+    const gateIdx = source.indexOf(
+      "sessionType !== 'review' && taskKind === undefined",
+    );
+    expect(gateIdx).toBeGreaterThan(-1);
+    const gateBlock = source.slice(gateIdx, gateIdx + 200);
+    expect(gateBlock).toMatch(/sessionType\s*!==\s*'review'/);
+  });
+
+  it('does not use the old heuristic taskKind ?? (milestoneId ? milestone : non_milestone)', () => {
+    expect(source).not.toMatch(
+      /taskKind\s*\?\?\s*\(\s*milestoneId\s*\?\s*'milestone'\s*:\s*'non_milestone'\s*\)/,
+    );
+  });
+});
+
+// ── AC: SessionManager.start() dedup — in-flight session guard ───────────────
+describe('SessionManager.start() — in-flight dedup guard', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('calls hasLiveSessionForTask() before creating a session', () => {
+    expect(source).toMatch(/this\.hasLiveSessionForTask\s*\(/);
+    const dedupIdx = source.indexOf('this.hasLiveSessionForTask(');
+    const sessionIdIdx = source.indexOf(
+      'const sessionId = providedSessionId ??',
+    );
+    expect(dedupIdx).toBeGreaterThan(-1);
+    expect(dedupIdx).toBeLessThan(sessionIdIdx);
+  });
+
+  it('calls hasActiveSessionForTask() from db/queries as second dedup check', () => {
+    expect(source).toMatch(/hasActiveSessionForTask\s*\(/);
+    expect(source).toMatch(/import.*hasActiveSessionForTask.*from.*queries/s);
+  });
+
+  it('throws with alreadyRunning: true when dedup check fires', () => {
+    expect(source).toMatch(/alreadyRunning:\s*true/);
+    expect(source).toMatch(/Session already running for task/);
+  });
+
+  it('dedup guard only applies to non-review sessions', () => {
+    const dedupIdx = source.indexOf('this.hasLiveSessionForTask(');
+    const dedupBlock = source.slice(Math.max(0, dedupIdx - 250), dedupIdx + 50);
+    expect(dedupBlock).toMatch(/sessionType\s*!==\s*'review'/);
+  });
+});
+
+// ── AC: WS router dispatch — forwards milestoneId, taskKind, taskName ────────
+describe('ws/router.ts — dispatch forwards new fields', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'ws', 'router.ts'),
+    'utf-8',
+  );
+
+  it('forwards milestoneId to sessions.start()', () => {
+    expect(source).toMatch(/milestoneId:\s*t\.milestoneId/);
+  });
+
+  it('forwards taskKind to sessions.start()', () => {
+    expect(source).toMatch(/taskKind:\s*t\.taskKind/);
+  });
+
+  it('forwards taskName to sessions.start()', () => {
+    expect(source).toMatch(/taskName:\s*t\.taskName/);
+  });
+
+  it('sends a non-error message when alreadyRunning is true', () => {
+    expect(source).toMatch(/alreadyRunning/);
+    expect(source).toMatch(/already has an active session/);
+  });
+});
+
+// ── AC: ws/types.ts dispatch message — includes new optional fields ───────────
+describe('ws/types.ts — dispatch message shape', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'ws', 'types.ts'),
+    'utf-8',
+  );
+
+  it('dispatch task items include milestoneId optional field', () => {
+    expect(source).toMatch(/milestoneId\?:\s*string\s*\|\s*null/);
+  });
+
+  it('dispatch task items include taskKind optional field', () => {
+    expect(source).toMatch(/taskKind\?:\s*'milestone'\s*\|\s*'non_milestone'/);
+  });
+
+  it('dispatch task items include taskName optional field', () => {
+    expect(source).toMatch(/taskName\?:\s*string/);
   });
 });

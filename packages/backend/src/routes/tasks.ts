@@ -2,10 +2,10 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { getProjectById } from '../config';
 import { ProjectService } from '../projects/ProjectService';
+import { getTaskBackend } from '../tasks/TaskBackend';
 import {
   getTaskCache,
   getActiveTaskAggregates,
-  getLatestNonSystemEventPayload,
   getSetting,
 } from '../db/queries';
 import type { TaskAggregateRow } from '../db/queries';
@@ -77,9 +77,9 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
 
   let codeSession: TaskView['codeSession'] = null;
   if (row.code_session_id) {
-    let lastMessage = '';
-    const eventPayload = getLatestNonSystemEventPayload(row.code_session_id);
-    if (eventPayload) lastMessage = summarizeEvent(eventPayload);
+    const lastMessage = row.code_session_last_event_payload
+      ? summarizeEvent(row.code_session_last_event_payload)
+      : '';
     codeSession = {
       sessionId: row.code_session_id,
       status: row.code_session_status ?? '',
@@ -154,8 +154,8 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
   };
 
   return {
-    taskId: row.notion_task_id,
-    taskName: notionTask?.title ?? row.notion_task_id,
+    taskId: row.task_id,
+    taskName: notionTask?.title ?? row.task_id,
     notionStatus,
     displayStatus,
     pauseReason,
@@ -332,6 +332,63 @@ export function createTasksRouter(): Router {
     res.send(output);
   });
 
+  // ── GET /api/tasks/non-milestone?projectId=<id> ─────────────────────────
+  router.get('/tasks/non-milestone', (req: Request, res: Response) => {
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : '';
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId query param is required' });
+      return;
+    }
+
+    const project = getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: `Project '${projectId}' not found` });
+      return;
+    }
+
+    const cacheKey = `non_milestone:${projectId}`;
+    const cacheRow = getTaskCache(cacheKey);
+    if (!cacheRow) {
+      res.json([]);
+      return;
+    }
+
+    let notionTasks: NotionTask[];
+    try {
+      notionTasks = JSON.parse(cacheRow.raw_json) as NotionTask[];
+    } catch {
+      res.json([]);
+      return;
+    }
+
+    const taskIds = notionTasks.map((t) => t.id);
+    const aggregates = getActiveTaskAggregates(taskIds);
+    const cap = getReviewIterationCap();
+    const views: TaskView[] = aggregates
+      .map((row) => buildTaskViewFromRow(row, cap))
+      .filter((v) => !v.notionStatus.includes('Deferred'));
+
+    // Resolve blocked status from the full non-milestone task list
+    try {
+      const resolver = new DependencyResolver();
+      const resolved = resolver.resolve(notionTasks);
+      const resolvedMap = new Map(resolved.map((r) => [r.task.id, r]));
+      for (const view of views) {
+        const r = resolvedMap.get(view.taskId);
+        if (r) {
+          view.blocked = r.blocked;
+          view.blockerNames = r.blockers.map((b) => b.title);
+          view.wave = r.wave;
+        }
+      }
+    } catch {
+      // ignore — views retain their default blocked: false
+    }
+
+    res.json(views);
+  });
+
   // ── GET /api/tasks/active?projectId=<id>&boardId=<id> ────────────────────
   router.get('/tasks/active', (req: Request, res: Response) => {
     const projectId =
@@ -397,6 +454,35 @@ export function createTasksRouter(): Router {
     }
 
     res.json(views);
+  });
+
+  // ── PATCH /api/tasks/:id/status ──────────────────────────────────────────
+  router.patch('/tasks/:id/status', async (req: Request, res: Response) => {
+    const taskId = String(req.params.id);
+    const body = req.body as { status?: unknown; projectId?: unknown };
+    const status = typeof body.status === 'string' ? body.status : null;
+    const projectId =
+      typeof body.projectId === 'string' ? body.projectId : null;
+
+    if (!status) {
+      res.status(400).json({ error: 'status is required' });
+      return;
+    }
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId is required' });
+      return;
+    }
+
+    try {
+      await getTaskBackend(projectId).updateStatus(taskId, status, {
+        source: 'human',
+      });
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Failed to update status',
+      });
+    }
   });
 
   return router;

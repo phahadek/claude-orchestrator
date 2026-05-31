@@ -210,7 +210,7 @@ export type ServerMessage =
       sessionId: string;
       prOpened: boolean;
       prTargetsBranch: string | null;
-      violations: string[];
+      violations: (string | import('../db/types').WorktreeEscapeViolation)[];
       specMismatch: string | null;
       auditedAt: string;
     }
@@ -247,6 +247,19 @@ export type ServerMessage =
       sessionId: string;
       branchName: string;
       commitSha: string | null;
+    }
+  | {
+      type: 'enrollment_request';
+      code: string;
+      deviceName: string;
+      userAgent: string;
+      ip: string;
+      expiresAt: number;
+    }
+  | {
+      type: 'enrollment_approved';
+      code: string;
+      deviceId: string;
     };
 
 // ── Client → Server ──────────────────────────────────────────────
@@ -258,6 +271,9 @@ export type ClientMessage =
         projectContextUrl: string;
         taskType?: string;
         projectId: string;
+        milestoneId?: string | null;
+        taskKind?: 'milestone' | 'non_milestone';
+        taskName?: string;
       }[];
     }
   | { type: 'approve'; sessionId: string }
@@ -270,4 +286,5 @@ export type ClientMessage =
       projectId: string;
       milestoneId: string;
       skipCache?: boolean;
-    };
+    }
+  | { type: 'enrollment_approve'; code: string };

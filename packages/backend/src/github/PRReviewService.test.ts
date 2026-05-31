@@ -16,6 +16,10 @@ vi.mock('../db/queries.js', () => ({
   getLocalBranchById: vi.fn(),
 }));
 
+vi.mock('../audit/AuditLog.js', () => ({
+  recordEvent: vi.fn(),
+}));
+
 import { PRReviewService, FetchRetryExhaustedError } from './PRReviewService';
 import {
   getPRByNumber,
@@ -67,7 +71,7 @@ const mockPRRow = {
   id: 1,
   pr_number: 42,
   pr_url: 'https://github.com/owner/repo/pull/42',
-  notion_task_id: 'task-abc123',
+  task_id: 'notion:task-abc123',
   session_id: 'session-xyz',
   repo: 'owner/repo',
   title: 'feat: add something cool',
@@ -1079,8 +1083,8 @@ describe('PRReviewService.reviewPR() — approved verdict calls handleApprovedVe
     expect(vi.mocked(updatePRDraftStatus)).not.toHaveBeenCalled();
   });
 
-  it('updates Notion to In Review when approved verdict and PR has notion_task_id', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any); // notion_task_id: 'task-abc123'
+  it('updates Notion to In Review when approved verdict and PR has task_id', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any); // task_id: 'notion:task-abc123'
 
     const mockGH = makeMockGitHub();
     const mockNotion = makeMockNotion();
@@ -1114,7 +1118,7 @@ describe('PRReviewService.reviewPR() — approved verdict calls handleApprovedVe
     );
 
     expect(vi.mocked(mockNotion.updateStatus)).toHaveBeenCalledWith(
-      'task-abc123',
+      'notion:task-abc123',
       '👀 In Review',
     );
   });
@@ -1159,11 +1163,11 @@ describe('PRReviewService.reviewPR() — approved verdict calls handleApprovedVe
     expect(handleSpy).toHaveBeenCalledWith(
       42,
       'owner/repo',
-      'task-abc123',
+      'notion:task-abc123',
       'specific-project-id',
     );
     expect(vi.mocked(mockNotion.updateStatus)).toHaveBeenCalledWith(
-      'task-abc123',
+      'notion:task-abc123',
       '👀 In Review',
     );
   });
@@ -1553,11 +1557,11 @@ describe('PRReviewService.reReviewPR()', () => {
     );
   });
 
-  it('calls handleApprovedVerdict with (prNumber, repo, notion_task_id, projectId) when verdict is approved', async () => {
+  it('calls handleApprovedVerdict with (prNumber, repo, task_id, projectId) when verdict is approved', async () => {
     const prRowWithSession = {
       ...mockPRRow,
       review_session_id: 'review-session-approved',
-      notion_task_id: 'task-abc123',
+      task_id: 'notion:task-abc123',
     };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
 
@@ -1590,7 +1594,7 @@ describe('PRReviewService.reReviewPR()', () => {
     expect(handleSpy).toHaveBeenCalledWith(
       42,
       'owner/repo',
-      'task-abc123',
+      'notion:task-abc123',
       'proj-re-review',
     );
   });
@@ -2723,5 +2727,179 @@ describe('PRReviewService.reviewPR() — transient fetch retry', () => {
 
     expect(diffSource.fetchDiff).toHaveBeenCalledTimes(1);
     expect(noopSleep).not.toHaveBeenCalled();
+  });
+});
+
+// ── Manual verification items ─────────────────────────────────────────────────
+
+describe('PRReviewService — manual verification items excluded from verdict', () => {
+  function makeService() {
+    return new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      makeMockSessionManager() as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+  }
+
+  it('automated items passing + manual items unfulfilled → verdict approved, not needs_changes', () => {
+    const service = makeService();
+
+    // Simulates a reviewer that correctly sets all automated dims to passed:true
+    // and surfaces manual items in manualItemsForHuman rather than failing the verdict.
+    const payload = {
+      verdict: 'approved',
+      dimensions: [
+        {
+          name: 'Title and description vs task Summary',
+          passed: true,
+          notes: 'ok',
+        },
+        { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
+        {
+          name: 'Diff vs Acceptance Criteria',
+          passed: true,
+          notes: 'Automated criteria met. Manual verification items excluded.',
+        },
+        {
+          name: 'Changed files vs Files/paths affected list',
+          passed: true,
+          notes: 'ok',
+        },
+        { name: 'Size proportionality', passed: true, notes: 'ok' },
+      ],
+      summary:
+        'All automated criteria pass. Manual items deferred to human reviewer.',
+      manualItemsForHuman: [
+        'Verify live credentials work end-to-end',
+        'Check dashboard renders correctly in production',
+      ],
+    };
+
+    const events = [makeAssistantEvent(JSON.stringify(payload))];
+    const result = service.parseReviewResult(events, 42, 'owner/repo');
+
+    expect(result.verdict).toBe('approved');
+    expect(result.manualItemsForHuman).toEqual([
+      'Verify live credentials work end-to-end',
+      'Check dashboard renders correctly in production',
+    ]);
+  });
+
+  it('surfaces manualItemsForHuman field for downstream UI consumption', () => {
+    const service = makeService();
+
+    const payload = {
+      verdict: 'needs_changes',
+      dimensions: [
+        {
+          name: 'Diff vs Acceptance Criteria',
+          passed: false,
+          notes: 'Missing unit test.',
+        },
+      ],
+      summary: 'Code changes needed.',
+      manualItemsForHuman: ['Run integration test suite against staging'],
+    };
+
+    const events = [makeAssistantEvent(JSON.stringify(payload))];
+    const result = service.parseReviewResult(events, 42, 'owner/repo');
+
+    expect(result.manualItemsForHuman).toEqual([
+      'Run integration test suite against staging',
+    ]);
+  });
+
+  it('manualItemsForHuman is omitted when the reviewer does not include it', () => {
+    const service = makeService();
+
+    const payload = {
+      verdict: 'approved',
+      dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+      summary: 'All good.',
+    };
+
+    const events = [makeAssistantEvent(JSON.stringify(payload))];
+    const result = service.parseReviewResult(events, 42, 'owner/repo');
+
+    expect(result.manualItemsForHuman).toBeUndefined();
+  });
+
+  it('REVIEW_JSON_SCHEMA_BLOCK prompt instructs reviewer to skip manual verification items', () => {
+    const service = makeService();
+    const prompt = service.buildPrompt(mockPR, mockDiff, mockTaskBody);
+
+    expect(prompt).toContain('Manual verification items');
+    expect(prompt).toContain(
+      'Exclude them entirely from your pass/fail evaluation',
+    );
+    expect(prompt).toContain(
+      'Never fail the verdict solely because manual verification',
+    );
+    expect(prompt).toContain('manualItemsForHuman');
+  });
+});
+
+// ── PRReviewService — toExternalId URL construction ──────────────────────────
+
+describe('PRReviewService — taskUrl strips notion: prefix', () => {
+  const approvedPayload = {
+    verdict: 'approved',
+    dimensions: [
+      {
+        name: 'Title and description vs task Summary',
+        passed: true,
+        notes: '',
+      },
+      { name: 'Diff vs Context spec', passed: true, notes: '' },
+      { name: 'Diff vs Acceptance Criteria', passed: true, notes: '' },
+      {
+        name: 'Changed files vs Files/paths affected list',
+        passed: true,
+        notes: '',
+      },
+      { name: 'Size proportionality', passed: true, notes: '' },
+    ],
+    summary: 'All good.',
+    manualItemsForHuman: [],
+  };
+
+  it('passes https://www.notion.so/task-abc123 (not notion:task-abc123) to sessionManager.start', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any); // task_id: 'notion:task-abc123'
+
+    const mockSM = makeMockSessionManager();
+    let capturedTaskUrl = '';
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        capturedTaskUrl = taskUrl;
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify(approvedPayload),
+            ),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(capturedTaskUrl).toBe('https://www.notion.so/task-abc123');
+    expect(capturedTaskUrl).not.toContain('notion:task-abc123');
   });
 });

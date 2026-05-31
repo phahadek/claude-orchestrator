@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { EnrollmentFlow } from './auth/EnrollmentFlow';
 import type { ConnectionState } from './hooks/useWebSocket';
 import { useSessionStore } from './hooks/useSessionStore';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useNotifications } from './hooks/useNotifications';
 import { useIsMobile } from './hooks/useIsMobile';
+import { useNavigationHistory } from './hooks/useNavigationHistory';
 import { Header } from './components/Header';
 import type { TopView } from './components/Header';
 import { SessionGrid } from './components/SessionGrid';
@@ -52,6 +54,7 @@ const MIN_RIGHT_PANEL_PX = 300;
 
 const ACTIVE_PROJECT_KEY = 'activeProjectId';
 const ACTIVE_MILESTONE_KEY_PREFIX = 'activeMilestone_';
+const NON_MILESTONE_BOARD_ID = '__non_milestone__';
 
 function getMilestoneKey(projectId: string) {
   return `${ACTIVE_MILESTONE_KEY_PREFIX}${projectId}`;
@@ -71,6 +74,14 @@ function resolveActiveBoardId(project: ProjectConfig): string {
 }
 
 export default function App() {
+  const [needsEnrollment, setNeedsEnrollment] = useState(false);
+
+  useEffect(() => {
+    const handler = () => setNeedsEnrollment(true);
+    window.addEventListener('device-unauthorized', handler);
+    return () => window.removeEventListener('device-unauthorized', handler);
+  }, []);
+
   const {
     sessions,
     tasks,
@@ -105,7 +116,6 @@ export default function App() {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const activeProjectIdRef = useRef<string | null>(null);
   const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
-  const activeBoardIdRef = useRef<string | null>(null);
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
@@ -142,16 +152,7 @@ export default function App() {
     [dispatch, dismissNotification],
   );
 
-  const { send, connectionState } = useWebSocket(handleWsMessage, (sendNow) => {
-    // Called each time the WS (re)connects — fetch tasks if projectId+milestoneId are known
-    if (activeProjectIdRef.current && activeBoardIdRef.current) {
-      sendNow({
-        type: 'fetch_tasks',
-        projectId: activeProjectIdRef.current,
-        milestoneId: activeBoardIdRef.current,
-      });
-    }
-  });
+  const { send, connectionState } = useWebSocket(handleWsMessage);
 
   const [cardPreviewLines, setCardPreviewLines] = useState<number>(3);
   const [sessionMode, setSessionMode] = useState<string>('cli');
@@ -172,17 +173,56 @@ export default function App() {
 
   const [topView, setTopView] = useState<TopView>('tasks');
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [sessionOverlayOpen, setSessionOverlayOpen] = useState(false);
   const [taskViews, setTaskViews] = useState<TaskView[]>([]);
+  const [taskViewsLoading, setTaskViewsLoading] = useState(true);
   const settingsInitialTab = 'general' as const;
   const isMobile = useIsMobile();
 
-  useEffect(() => {
-    activeBoardIdRef.current = activeBoardId;
-  }, [activeBoardId]);
+  const { pushView } = useNavigationHistory({
+    setSelectedTaskId,
+    setSelectedId,
+    setSessionOverlayOpen,
+  });
+
+  const handleSelectTask = useCallback(
+    (taskId: string) => {
+      if (taskId === selectedTaskId) return;
+      pushView({ type: 'task', id: taskId });
+      setSelectedTaskId(taskId);
+    },
+    [selectedTaskId, pushView],
+  );
+
+  const handleSelectSession = useCallback(
+    (sessionId: string) => {
+      if (sessionId === selectedId) return;
+      pushView({ type: 'session', id: sessionId });
+      setSelectedId(sessionId);
+    },
+    [selectedId, pushView],
+  );
+
+  const handleOpenSessionOverlay = useCallback(() => {
+    if (!selectedTaskId) return;
+    pushView({ type: 'sessionOverlay', taskId: selectedTaskId });
+    setSessionOverlayOpen(true);
+  }, [selectedTaskId, pushView]);
 
   useEffect(() => {
     detailWidthRef.current = detailWidthPct;
   }, [detailWidthPct]);
+
+  // Send fetch_tasks after React commits state — covers user switches and WS reconnects
+  useEffect(() => {
+    if (connectionState !== 'connected' || !activeProjectId || !activeBoardId)
+      return;
+    send({
+      type: 'fetch_tasks',
+      projectId: activeProjectId,
+      milestoneId: activeBoardId,
+    });
+  }, [connectionState, activeProjectId, activeBoardId, send]);
 
   useEffect(() => {
     if (connectionState === 'connected') {
@@ -259,20 +299,13 @@ export default function App() {
         const boardId = resolveActiveBoardId(project);
 
         activeProjectIdRef.current = validProjectId;
-        activeBoardIdRef.current = boardId;
         setActiveProjectId(validProjectId);
         setActiveBoardId(boardId);
-        if (boardId)
-          send({
-            type: 'fetch_tasks',
-            projectId: validProjectId,
-            milestoneId: boardId,
-          });
       })
       .catch(() => {
         /* leave projects empty — DispatchModal handles the empty case */
       });
-  }, [send]);
+  }, []);
 
   const handleProjectChange = useCallback(
     (id: string) => {
@@ -280,32 +313,17 @@ export default function App() {
       const boardId = project ? resolveActiveBoardId(project) : null;
       localStorage.setItem(ACTIVE_PROJECT_KEY, id);
       activeProjectIdRef.current = id;
-      activeBoardIdRef.current = boardId;
       setActiveProjectId(id);
       setActiveBoardId(boardId);
-      if (boardId)
-        send({ type: 'fetch_tasks', projectId: id, milestoneId: boardId });
     },
-    [send, projects],
+    [projects],
   );
 
-  const handleBoardChange = useCallback(
-    (boardId: string) => {
-      if (!activeProjectIdRef.current) return;
-      localStorage.setItem(
-        getMilestoneKey(activeProjectIdRef.current),
-        boardId,
-      );
-      activeBoardIdRef.current = boardId;
-      setActiveBoardId(boardId);
-      send({
-        type: 'fetch_tasks',
-        projectId: activeProjectIdRef.current,
-        milestoneId: boardId,
-      });
-    },
-    [send],
-  );
+  const handleBoardChange = useCallback((boardId: string) => {
+    if (!activeProjectIdRef.current) return;
+    localStorage.setItem(getMilestoneKey(activeProjectIdRef.current), boardId);
+    setActiveBoardId(boardId);
+  }, []);
 
   const handleAutoLaunchToggle = useCallback(
     (patch: {
@@ -337,18 +355,44 @@ export default function App() {
     [],
   );
 
-  // Fetch TaskView list whenever tasks are ready, project/board changes, or a review session starts
+  const handleProjectsChanged = useCallback(() => {
+    fetch('/api/config')
+      .then((r) => r.json())
+      .then((loaded: ProjectConfig[]) => {
+        setProjects(loaded);
+      })
+      .catch(() => {
+        /* non-critical */
+      });
+  }, []);
+
+  // Fetch TaskView list whenever tasks are ready, project/board changes, or a review session starts.
+  // This is the single source of truth for task data — TaskList reads from taskViews via props.
   useEffect(() => {
-    if (!activeProjectId) return;
-    const params = new URLSearchParams({ projectId: activeProjectId });
-    if (activeBoardId) params.set('boardId', activeBoardId);
-    fetch(`/api/tasks/active?${params}`)
+    if (!activeProjectId) {
+      setTaskViews([]);
+      setTaskViewsLoading(false);
+      return;
+    }
+    setTaskViewsLoading(true);
+    let url: string;
+    if (activeBoardId === NON_MILESTONE_BOARD_ID) {
+      url = `/api/tasks/non-milestone?projectId=${encodeURIComponent(activeProjectId)}`;
+    } else {
+      const params = new URLSearchParams({ projectId: activeProjectId });
+      if (activeBoardId) params.set('boardId', activeBoardId);
+      url = `/api/tasks/active?${params.toString()}`;
+    }
+    fetch(url)
       .then((r) =>
         r.ok ? (r.json() as Promise<TaskView[]>) : Promise.resolve([]),
       )
-      .then(setTaskViews)
+      .then((data) => {
+        setTaskViews(data);
+        setTaskViewsLoading(false);
+      })
       .catch(() => {
-        /* non-critical */
+        setTaskViewsLoading(false);
       });
   }, [activeProjectId, activeBoardId, tasksReady, taskListRefreshTrigger]);
 
@@ -363,6 +407,43 @@ export default function App() {
       return next;
     });
   }, [lastTaskUpdate]);
+
+  // Passed to TaskList so it can apply optimistic status updates without a full re-fetch
+  const handleTaskOptimisticDispatch = useCallback((taskIds: string[]) => {
+    setTaskViews((prev) =>
+      prev.map((t) =>
+        taskIds.includes(t.taskId)
+          ? {
+              ...t,
+              notionStatus: '🔄 In Progress',
+              displayStatus: 'in_progress' as const,
+            }
+          : t,
+      ),
+    );
+  }, []);
+
+  // Used by TaskList's Sync button for non-milestone views (WS sync not supported there)
+  const handleForceRefetch = useCallback(async () => {
+    if (!activeProjectId) return;
+    setTaskViewsLoading(true);
+    try {
+      let url: string;
+      if (activeBoardId === NON_MILESTONE_BOARD_ID) {
+        url = `/api/tasks/non-milestone?projectId=${encodeURIComponent(activeProjectId)}`;
+      } else {
+        const params = new URLSearchParams({ projectId: activeProjectId });
+        if (activeBoardId) params.set('boardId', activeBoardId);
+        url = `/api/tasks/active?${params.toString()}`;
+      }
+      const res = await fetch(url);
+      if (res.ok) setTaskViews((await res.json()) as TaskView[]);
+    } catch {
+      /* ignore */
+    } finally {
+      setTaskViewsLoading(false);
+    }
+  }, [activeProjectId, activeBoardId]);
 
   useEffect(() => {
     for (const session of sessions) {
@@ -565,8 +646,8 @@ export default function App() {
         dispatch({
           type: 'session_started',
           sessionId: session.session_id,
-          taskName: session.notion_task_url ?? session.session_id.slice(0, 8),
-          notionTaskUrl: session.notion_task_url ?? '',
+          taskName: session.task_url ?? session.session_id.slice(0, 8),
+          notionTaskUrl: session.task_url ?? '',
           started_at: session.started_at,
           ended_at: session.ended_at,
           archived: session.archived === 1,
@@ -621,8 +702,8 @@ export default function App() {
           dispatch({
             type: 'session_started',
             sessionId: session.session_id,
-            taskName: session.notion_task_url ?? session.session_id.slice(0, 8),
-            notionTaskUrl: session.notion_task_url ?? '',
+            taskName: session.task_url ?? session.session_id.slice(0, 8),
+            notionTaskUrl: session.task_url ?? '',
             started_at: session.started_at,
             ended_at: session.ended_at,
             archived: session.archived === 1,
@@ -809,10 +890,8 @@ export default function App() {
     onDismiss: () => {
       if (showModal) {
         setShowModal(false);
-      } else if (selectedTaskId) {
-        setSelectedTaskId(null);
-      } else if (selectedId) {
-        setSelectedId(null);
+      } else if (selectedTaskId || selectedId) {
+        window.history.back();
       } else if (filtersActive) {
         clearFilters();
         searchInputRef.current?.blur();
@@ -889,15 +968,18 @@ export default function App() {
         {topView === 'tasks' && (
           <ErrorBoundary name="TasksView">
             <div
-              className={`${styles.contentArea}${selectedTaskId && taskViews.find((t) => t.taskId === selectedTaskId) ? ` ${styles.contentAreaHasDetail}` : ''}`}
+              className={`${styles.contentArea}${selectedTaskId ? ` ${styles.contentAreaHasDetail}` : ''}`}
             >
               <div className={styles.leftPanel}>
                 <TaskList
                   activeProjectId={activeProjectId}
                   boardId={activeBoardId}
                   selectedTaskId={selectedTaskId}
-                  onSelectTask={setSelectedTaskId}
-                  lastTaskUpdate={lastTaskUpdate}
+                  onSelectTask={handleSelectTask}
+                  tasks={taskViews}
+                  loading={taskViewsLoading}
+                  onOptimisticDispatch={handleTaskOptimisticDispatch}
+                  onForceRefetch={handleForceRefetch}
                   reviewRefreshTrigger={taskListRefreshTrigger}
                   send={send}
                   project={activeProject}
@@ -909,44 +991,70 @@ export default function App() {
                 onMouseDown={handleResizeMouseDown}
               />
 
-              {selectedTaskId &&
-                taskViews.find((t) => t.taskId === selectedTaskId) && (
-                  <div
-                    className={styles.mobileBackdrop}
-                    onClick={() => setSelectedTaskId(null)}
-                    aria-hidden="true"
-                    data-testid="task-mobile-backdrop"
-                  />
-                )}
+              {selectedTaskId && (
+                <div
+                  className={styles.mobileBackdrop}
+                  onClick={() => history.back()}
+                  aria-hidden="true"
+                  data-testid="task-mobile-backdrop"
+                />
+              )}
 
               <div
                 className={styles.rightPanel}
                 style={isMobile ? undefined : { width: `${detailWidthPct}%` }}
               >
-                {selectedTaskId &&
-                taskViews.find((t) => t.taskId === selectedTaskId) ? (
-                  <ErrorBoundary name="TaskDetail">
-                    <TaskDetail
-                      task={taskViews.find((t) => t.taskId === selectedTaskId)!}
-                      send={send}
-                      sessions={sessions}
-                      onClose={() => setSelectedTaskId(null)}
-                      projectId={activeProjectId ?? undefined}
-                      isLocalOnly={
-                        projects.find((p) => p.id === activeProjectId)
-                          ?.gitMode === 'local-only'
-                      }
-                      autoMergeEnabled={
-                        projects.find((p) => p.id === activeProjectId)
-                          ?.autoMergeEnabled ?? false
-                      }
-                    />
-                  </ErrorBoundary>
-                ) : (
-                  <div className={styles.detailPlaceholder}>
-                    <p>Select a task to view details</p>
-                  </div>
-                )}
+                {(() => {
+                  if (!selectedTaskId) {
+                    return (
+                      <div className={styles.detailPlaceholder}>
+                        <p>Select a task to view details</p>
+                      </div>
+                    );
+                  }
+                  const selectedTask = taskViews.find(
+                    (t) => t.taskId === selectedTaskId,
+                  );
+                  if (selectedTask) {
+                    return (
+                      <ErrorBoundary name="TaskDetail">
+                        <TaskDetail
+                          task={selectedTask}
+                          send={send}
+                          sessions={sessions}
+                          onClose={() => history.back()}
+                          sessionOverlayOpen={sessionOverlayOpen}
+                          onOpenSessionOverlay={handleOpenSessionOverlay}
+                          projectId={activeProjectId ?? undefined}
+                          isLocalOnly={
+                            projects.find((p) => p.id === activeProjectId)
+                              ?.gitMode === 'local-only'
+                          }
+                          autoMergeEnabled={
+                            projects.find((p) => p.id === activeProjectId)
+                              ?.autoMergeEnabled ?? false
+                          }
+                        />
+                      </ErrorBoundary>
+                    );
+                  }
+                  if (
+                    process.env.NODE_ENV !== 'production' &&
+                    !taskViewsLoading
+                  ) {
+                    console.warn(
+                      `[TaskDetail] selectedTaskId "${selectedTaskId}" not found in taskViews (${taskViews.length} tasks). Possible state drift.`,
+                    );
+                  }
+                  return (
+                    <div
+                      className={styles.detailPlaceholder}
+                      data-testid="task-detail-loading"
+                    >
+                      <p>Loading task details…</p>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           </ErrorBoundary>
@@ -1023,7 +1131,7 @@ export default function App() {
                       projects={projects}
                       selectedId={selectedId}
                       keyboardSelectedId={keyboardHighlightedId}
-                      onSelect={setSelectedId}
+                      onSelect={handleSelectSession}
                       synced={synced}
                       onArchiveAll={handleArchiveAll}
                       filtersActive={filtersActive}
@@ -1048,7 +1156,7 @@ export default function App() {
               {selectedSession && (
                 <div
                   className={styles.mobileBackdrop}
-                  onClick={() => setSelectedId(null)}
+                  onClick={() => history.back()}
                   aria-hidden="true"
                   data-testid="session-mobile-backdrop"
                 />
@@ -1063,10 +1171,10 @@ export default function App() {
                     <SessionDetail
                       session={selectedSession}
                       send={send}
-                      onClose={() => setSelectedId(null)}
+                      onClose={() => history.back()}
                       onDelete={(sessionId) => {
                         deleteSession(sessionId);
-                        setSelectedId(null);
+                        window.history.back();
                       }}
                       onArchive={(sessionId) =>
                         setSessionArchived(sessionId, true)
@@ -1128,7 +1236,10 @@ export default function App() {
         {topView === 'settings' && (
           <ErrorBoundary name="SettingsView">
             <div className={styles.settingsView}>
-              <Settings initialTab={settingsInitialTab} />
+              <Settings
+                initialTab={settingsInitialTab}
+                onProjectsChanged={handleProjectsChanged}
+              />
             </div>
           </ErrorBoundary>
         )}
@@ -1163,6 +1274,15 @@ export default function App() {
         >
           Reconnected
         </div>
+      )}
+
+      {needsEnrollment && (
+        <EnrollmentFlow
+          onEnrolled={() => {
+            setNeedsEnrollment(false);
+            window.location.reload();
+          }}
+        />
       )}
     </div>
   );

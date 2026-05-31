@@ -34,6 +34,7 @@ export const SILENT_SKIP_TYPES: ReadonlySet<string> = new Set([
   'queue-operation',
   'last-prompt',
   'attachment',
+  'rate_limit_event',
 ]);
 
 /** Map raw Claude CLI event type strings to our internal EventType union. */
@@ -53,8 +54,6 @@ export function toEventType(raw: string): EventType {
       return 'system';
     case 'error':
       return 'error';
-    case 'rate_limit_event':
-      return 'rate_limit';
     default:
       return 'system';
   }

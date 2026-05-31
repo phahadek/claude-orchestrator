@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { scrubSecrets } from '../security/scrubSecrets';
 import {
   getAllSessionIds,
   insertSessionOrIgnore,
@@ -63,8 +64,8 @@ export class JsonlReader {
 
       const session: NewSession = {
         session_id: sessionId,
-        notion_task_id: null,
-        notion_task_url: null,
+        task_id: null,
+        task_url: null,
         project_context_url: null,
         status: 'done',
         started_at: startedAt,
@@ -140,7 +141,7 @@ export class JsonlReader {
 
       events.push({
         type: toEventType(obj.type),
-        content: obj.content ?? obj.message ?? obj,
+        content: scrubSecrets(obj.content ?? obj.message ?? obj),
         timestamp:
           typeof obj.timestamp === 'number' ? obj.timestamp : undefined,
       });

@@ -42,6 +42,8 @@ const PROJECT: Project = {
   autoLaunchEnabled: false,
   autoLaunchMilestoneId: null,
   autoMergeEnabled: false,
+  nonMilestoneSourceConfig: null,
+  dataResidencyConfirmed: false,
   createdAt: 1,
   updatedAt: 1,
   milestones: [],

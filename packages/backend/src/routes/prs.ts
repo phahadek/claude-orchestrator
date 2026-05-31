@@ -92,15 +92,15 @@ export function createPrsRouter(
         (s) => s.session_type === 'review',
       );
 
-      // Build map of notion_task_id -> latest review session result
+      // Build map of task_id -> latest review session result
       const reviewResultByTask = new Map<string, PRReviewResult>();
       for (const rs of reviewSessions) {
-        if (!rs.notion_task_id || !rs.review_result) continue;
-        const existing = reviewResultByTask.get(rs.notion_task_id);
+        if (!rs.task_id || !rs.review_result) continue;
+        const existing = reviewResultByTask.get(rs.task_id);
         if (!existing) {
           try {
             reviewResultByTask.set(
-              rs.notion_task_id,
+              rs.task_id,
               JSON.parse(rs.review_result) as PRReviewResult,
             );
           } catch {
@@ -115,15 +115,13 @@ export function createPrsRouter(
         branchName: `session/${s.session_id}`,
         baseBranch: 'dev',
         status: s.status,
-        reviewResult: s.notion_task_id
-          ? (reviewResultByTask.get(s.notion_task_id) ?? null)
+        reviewResult: s.task_id
+          ? (reviewResultByTask.get(s.task_id) ?? null)
           : null,
         createdAt: new Date(s.started_at).toISOString(),
         autoMergeEnabled,
-        notionTaskId: s.notion_task_id,
-        notionTaskTitle: s.notion_task_id
-          ? getTaskTitleFromCache(s.notion_task_id)
-          : null,
+        notionTaskId: s.task_id,
+        notionTaskTitle: s.task_id ? getTaskTitleFromCache(s.task_id) : null,
       }));
       res.json(localItems);
       return;
@@ -146,7 +144,8 @@ export function createPrsRouter(
         (r) => r.state === 'open' && !openNumbers.has(r.pr_number),
       );
       for (const pr of stale) {
-        const state = await github.getPRState(pr.pr_number, repo);
+        const prStateResult = await github.getPRState(pr.pr_number, repo);
+        const state = prStateResult.state;
         if (state === 'merged' && mergeWatcher) {
           await mergeWatcher.handleMerged(pr, null);
         } else {
@@ -167,10 +166,8 @@ export function createPrsRouter(
       branchName: pr.head_branch ?? '',
       baseBranch: pr.base_branch ?? '',
       state: reconciledStates.get(pr.pr_number) ?? pr.state,
-      notionTaskId: pr.notion_task_id,
-      notionTaskTitle: pr.notion_task_id
-        ? getTaskTitleFromCache(pr.notion_task_id)
-        : null,
+      notionTaskId: pr.task_id,
+      notionTaskTitle: pr.task_id ? getTaskTitleFromCache(pr.task_id) : null,
       sessionId: pr.session_id ?? null,
       reviewSessionId: pr.review_session_id ?? null,
       repo: pr.repo,
@@ -214,7 +211,7 @@ export function createPrsRouter(
         upsertPullRequest({
           pr_number: pr.id,
           pr_url: pr.url,
-          notion_task_id: null,
+          task_id: null,
           session_id: null,
           repo,
           title: pr.title,
@@ -323,7 +320,7 @@ export function createPrsRouter(
             mergeState: category.mergeState,
             failingChecks: failingNamesOrNull,
           });
-          if (prRow.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
+          if (prRow.task_id) emitTaskUpdated(prRow.task_id);
         }
         res.json({
           mergeable,
@@ -369,7 +366,7 @@ export function createPrsRouter(
             mergeable: false,
             mergeState: mergeableState ?? 'dirty',
           });
-          if (prRow?.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
+          if (prRow?.task_id) emitTaskUpdated(prRow.task_id);
           if (prRow?.session_id) {
             const baseBranch = prRow.base_branch ?? 'dev';
             const msg = `PR #${prNumber} has merge conflicts with the base branch. Rebase onto \`${baseBranch}\`, resolve the conflicts, and push the fixed branch.`;
@@ -413,12 +410,14 @@ export function createPrsRouter(
         }
 
         // Update task to Done via the project-scoped task backend and broadcast task_updated
-        if (prRow?.notion_task_id) {
-          const taskId = prRow.notion_task_id;
+        if (prRow?.task_id) {
+          const taskId = prRow.task_id;
           const backend = resolveBackendForRepo(repo);
           if (backend) {
             try {
-              await backend.updateStatus(taskId, '✅ Done');
+              await backend.updateStatus(taskId, '✅ Done', {
+                source: 'orchestrator',
+              });
               _broadcast({
                 type: 'task_status_changed',
                 notionTaskId: taskId,
@@ -474,6 +473,7 @@ export function createPrsRouter(
               mergeState: 'dirty',
               rawMergeableState: null,
               failingChecks: [],
+              headSha: null,
             };
           }
           // GitHub may briefly still report 'clean' while the merge is failing
@@ -484,6 +484,7 @@ export function createPrsRouter(
               mergeState: 'unknown',
               rawMergeableState: category.rawMergeableState,
               failingChecks: [],
+              headSha: null,
             };
           }
 
@@ -505,7 +506,7 @@ export function createPrsRouter(
             mergeState: category.mergeState,
             failingChecks: failingNamesOrNull,
           });
-          if (prRow?.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
+          if (prRow?.task_id) emitTaskUpdated(prRow.task_id);
 
           let errorMessage: string;
           switch (category.category) {
@@ -653,11 +654,13 @@ export function createPrsRouter(
       }
 
       // Update task status to In Review via the project-scoped task backend
-      if (prRow.notion_task_id) {
+      if (prRow.task_id) {
         const backend = resolveBackendForRepo(repo);
         if (backend) {
           await backend
-            .updateStatus(prRow.notion_task_id, '👀 In Review')
+            .updateStatus(prRow.task_id, '👀 In Review', {
+              source: 'orchestrator',
+            })
             .catch((e: unknown) =>
               console.warn(
                 '[prs] task backend updateStatus failed:',
@@ -794,7 +797,7 @@ export function createPrsRouter(
         mergeable: null,
         mergeState: null,
       });
-      if (prRow.notion_task_id) emitTaskUpdated(prRow.notion_task_id);
+      if (prRow.task_id) emitTaskUpdated(prRow.task_id);
       res.json({ sessionId });
     },
   );

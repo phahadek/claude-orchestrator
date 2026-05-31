@@ -134,6 +134,12 @@ vi.mock('../routes/tasks', () => ({
   emitTaskUpdated: vi.fn(),
 }));
 
+// recordEvent() is called unconditionally in SessionManager.start(); mock it
+// so the test doesn't try to hit a real SQLite DB.
+vi.mock('../audit/AuditLog', () => ({
+  recordEvent: vi.fn(),
+}));
+
 vi.mock('../tasks/TaskStatusEngine', () => ({
   deriveDisplayStatusFromDb: vi.fn(() => 'Running'),
 }));
@@ -157,6 +163,10 @@ vi.mock('../db/queries', () => ({
   setSessionModel: vi.fn(),
   getPRBySessionId: vi.fn(() => null),
   setHeadSha: vi.fn(),
+  // Required by getCorporateMode() which is called unconditionally in resumeOrphanSessions().
+  // Returning null makes it fall through to the default personal-mode config (no dockerMandatory).
+  getSetting: vi.fn(() => null),
+  hasActiveSessionForTask: vi.fn(() => false),
 }));
 
 // Now import the modules under test (after all mocks are in place).
@@ -174,8 +184,8 @@ import { backfillStuckResultSessions } from '../db/queries';
 function makeRunningSession(overrides: Partial<Session> = {}): Session {
   return {
     session_id: 'session-uuid-default',
-    notion_task_id: 'notion-task-id',
-    notion_task_url: 'https://notion.so/task',
+    task_id: 'notion-task-id',
+    task_url: 'https://notion.so/task',
     project_context_url: 'https://notion.so/ctx',
     project_id: 'test-project',
     status: 'running',
@@ -304,6 +314,15 @@ describe('resumeOrphanSessions() — healthy-worktree resume (integration)', () 
       expect(sm.isAlive('healthy-session')).toBe(true);
       expect(spawn).toHaveBeenCalledTimes(1);
 
+      // Regression guard: resume spawn must pass '--resume <row.session_id>' so
+      // the CLI restores the correct conversation. A wrong or fresh UUID here
+      // would silently start a blank session instead of resuming.
+      const resumeSpawnArgs = vi.mocked(spawn).mock.calls[0][1] as string[];
+      const resumeIdx = resumeSpawnArgs.indexOf('--resume');
+      expect(resumeIdx).toBeGreaterThan(-1);
+      expect(resumeSpawnArgs[resumeIdx + 1]).toBe('healthy-session');
+      expect(resumeSpawnArgs).not.toContain('--session-id');
+
       // session_status: running was broadcast on the WS bus.
       const statusMsgs = messages.filter(
         (m) =>
@@ -430,5 +449,66 @@ describe('resumeOrphanSessions() — pr_url carry-forward (integration)', () => 
       ([cmd]) => typeof cmd === 'string' && /git\s+branch\s+-D/.test(cmd),
     );
     expect(branchDeletions).toHaveLength(0);
+  });
+});
+
+// ── Test 5: spawn arg contract ───────────────────────────────────────────────
+// Dedicated regression test for the session_id/--resume contract.
+// Ensures resumeOrphanSessions() always passes the DB row's session_id as the
+// --resume value, not a fresh UUID. If the fix is reverted, this test fails.
+describe('resumeOrphanSessions() — spawn arg contract: --resume <session_id>', () => {
+  it('resume spawn uses the DB row session_id as the --resume value, not a fresh UUID', async () => {
+    const SESSION_UUID = 'cafebabe-dead-beef-cafe-deadbeef1234';
+    const orphan = makeRunningSession({
+      session_id: SESSION_UUID,
+      worktree_path: `/fake/project/.claude/worktrees/${SESSION_UUID}`,
+    });
+    vi.mocked(queries.getSessionsByStatus).mockReturnValue([orphan]);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(execSync).mockReturnValue(`session/${SESSION_UUID}`);
+
+    const sm = new SessionManager();
+    await sm.resumeOrphanSessions();
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    const spawnArgs = vi.mocked(spawn).mock.calls[0][1] as string[];
+
+    // '--resume' must be present and immediately followed by the exact UUID
+    // stored in the DB row — this is the CLI conversation_id the CLI uses to
+    // restore history.
+    const resumeIdx = spawnArgs.indexOf('--resume');
+    expect(resumeIdx).toBeGreaterThan(-1);
+    expect(spawnArgs[resumeIdx + 1]).toBe(SESSION_UUID);
+
+    // '--session-id' is only for initial spawns, never for resume.
+    expect(spawnArgs).not.toContain('--session-id');
+  });
+
+  it('initial spawn includes --session-id <sessionId> not --resume', async () => {
+    const SESSION_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(execSync).mockReturnValue('');
+
+    const sm = new SessionManager();
+    sm.start('https://notion.so/task', 'https://notion.so/ctx', {
+      projectId: 'test-project',
+      sessionId: SESSION_UUID,
+      taskKind: 'milestone',
+    });
+
+    // launchSession() is async — it awaits fetchTaskPage() before calling
+    // wireSession(). A single setImmediate drains all pending microtasks so
+    // the spawn happens before we assert.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    const spawnArgs = vi.mocked(spawn).mock.calls[0][1] as string[];
+
+    // Initial spawn must use '--session-id' followed by the exact UUID, never '--resume'.
+    const sessionIdIdx = spawnArgs.indexOf('--session-id');
+    expect(sessionIdIdx).toBeGreaterThan(-1);
+    expect(spawnArgs[sessionIdIdx + 1]).toBe(SESSION_UUID);
+    expect(spawnArgs).not.toContain('--resume');
   });
 });

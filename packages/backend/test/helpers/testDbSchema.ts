@@ -10,8 +10,8 @@ export function applyTestSchema(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       session_id          TEXT    PRIMARY KEY,
-      notion_task_id      TEXT,
-      notion_task_url     TEXT,
+      task_id             TEXT,
+      task_url            TEXT,
       project_context_url TEXT,
       status              TEXT    NOT NULL DEFAULT 'running',
       started_at          INTEGER NOT NULL DEFAULT 0,
@@ -27,7 +27,9 @@ export function applyTestSchema(db: Database.Database): void {
       task_name           TEXT,
       model               TEXT,
       total_input_tokens  INTEGER NOT NULL DEFAULT 0,
-      total_output_tokens INTEGER NOT NULL DEFAULT 0
+      total_output_tokens INTEGER NOT NULL DEFAULT 0,
+      metadata            TEXT,
+      review_result       TEXT
     );
     CREATE TABLE IF NOT EXISTS session_events (
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,9 +66,9 @@ export function applyTestSchema(db: Database.Database): void {
       timestamp   INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS task_cache (
-      notion_task_id TEXT    PRIMARY KEY,
-      fetched_at     INTEGER NOT NULL,
-      raw_json       TEXT    NOT NULL
+      task_id    TEXT    PRIMARY KEY,
+      fetched_at INTEGER NOT NULL,
+      raw_json   TEXT    NOT NULL
     );
     CREATE TABLE IF NOT EXISTS settings (
       key   TEXT PRIMARY KEY,
@@ -86,7 +88,7 @@ export function applyTestSchema(db: Database.Database): void {
       id                     INTEGER PRIMARY KEY AUTOINCREMENT,
       pr_number              INTEGER NOT NULL,
       pr_url                 TEXT    NOT NULL UNIQUE,
-      notion_task_id         TEXT,
+      task_id                TEXT,
       session_id             TEXT,
       repo                   TEXT    NOT NULL,
       title                  TEXT,
@@ -109,7 +111,8 @@ export function applyTestSchema(db: Database.Database): void {
       merge_state            TEXT,
       merge_state_checked_at TEXT,
       pending_push           INTEGER NOT NULL DEFAULT 0,
-      pause_reason           TEXT
+      pause_reason           TEXT,
+      failing_checks         TEXT
     );
     CREATE TABLE IF NOT EXISTS projects (
       id                       TEXT    PRIMARY KEY,
@@ -121,6 +124,10 @@ export function applyTestSchema(db: Database.Database): void {
       auto_launch_enabled      INTEGER NOT NULL DEFAULT 0,
       auto_launch_milestone_id TEXT,
       auto_merge_enabled       INTEGER NOT NULL DEFAULT 0,
+      git_mode                 TEXT    NOT NULL DEFAULT 'github',
+      milestone_branching          TEXT,
+      task_source_config           TEXT,
+      non_milestone_source_config  TEXT,
       created_at               INTEGER NOT NULL,
       updated_at               INTEGER NOT NULL
     );
@@ -133,6 +140,39 @@ export function applyTestSchema(db: Database.Database): void {
       created_at    INTEGER NOT NULL,
       updated_at    INTEGER NOT NULL,
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts         INTEGER NOT NULL,
+      event_type TEXT    NOT NULL,
+      actor_type TEXT    NOT NULL,
+      actor_id   TEXT,
+      project_id TEXT,
+      task_id    TEXT,
+      payload    TEXT    NOT NULL DEFAULT '{}'
+    );
+    CREATE TABLE IF NOT EXISTS devices (
+      id          TEXT    PRIMARY KEY,
+      name        TEXT    NOT NULL,
+      user_agent  TEXT,
+      last_ip     TEXT,
+      last_seen   INTEGER,
+      enrolled_at INTEGER NOT NULL,
+      token       TEXT    NOT NULL,
+      revoked     INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS local_branches (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id    TEXT NOT NULL,
+      session_id    TEXT NOT NULL,
+      branch_name   TEXT NOT NULL,
+      base_branch   TEXT NOT NULL DEFAULT 'dev',
+      status        TEXT NOT NULL DEFAULT 'open',
+      review_result TEXT,
+      pause_reason  TEXT,
+      merge_commit_sha TEXT,
+      created_at    TEXT NOT NULL,
+      updated_at    TEXT NOT NULL
     );
   `);
 }

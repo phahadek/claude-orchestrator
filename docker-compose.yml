@@ -36,4 +36,10 @@ services:
       # Example (uncomment and adjust for each project):
       # - "/path/to/your/project:/path/to/your/project"
 
+      # ── Docker mode: session container management ───────────────────────────
+      # Required when ORCHESTRATOR_MODE=corporate (gates.dockerMandatory=true).
+      # Gives the backend access to the Docker daemon so it can spawn and reap
+      # per-session containers. Remove this mount when running in personal mode.
+      - '/var/run/docker.sock:/var/run/docker.sock'
+
     restart: unless-stopped

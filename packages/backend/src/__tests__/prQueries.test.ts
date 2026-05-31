@@ -11,8 +11,8 @@ vi.mock('../db/db.js', async () => {
   memDb.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       session_id          TEXT    PRIMARY KEY,
-      notion_task_id      TEXT,
-      notion_task_url     TEXT,
+      task_id             TEXT,
+      task_url            TEXT,
       project_context_url TEXT,
       status              TEXT    NOT NULL DEFAULT 'running',
       started_at          INTEGER NOT NULL DEFAULT 0,
@@ -65,15 +65,15 @@ vi.mock('../db/db.js', async () => {
       timestamp   INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS task_cache (
-      notion_task_id TEXT    PRIMARY KEY,
-      fetched_at     INTEGER NOT NULL,
-      raw_json       TEXT    NOT NULL
+      task_id    TEXT    PRIMARY KEY,
+      fetched_at INTEGER NOT NULL,
+      raw_json   TEXT    NOT NULL
     );
     CREATE TABLE IF NOT EXISTS pull_requests (
       id                     INTEGER PRIMARY KEY AUTOINCREMENT,
       pr_number              INTEGER NOT NULL,
       pr_url                 TEXT    NOT NULL UNIQUE,
-      notion_task_id         TEXT,
+      task_id                TEXT,
       session_id             TEXT,
       repo                   TEXT    NOT NULL,
       title                  TEXT,
@@ -98,6 +98,11 @@ vi.mock('../db/db.js', async () => {
       pending_push           INTEGER NOT NULL DEFAULT 0,
       pause_reason           TEXT,
       failing_checks         TEXT
+    );
+    CREATE TABLE IF NOT EXISTS devices (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, user_agent TEXT, last_ip TEXT,
+      last_seen INTEGER, enrolled_at INTEGER NOT NULL,
+      token TEXT NOT NULL UNIQUE, revoked INTEGER NOT NULL DEFAULT 0
     );
   `);
   return { db: memDb };
@@ -126,7 +131,7 @@ function makePR(
   return {
     pr_number,
     pr_url: overrides.pr_url ?? `https://github.com/${repo}/pull/${pr_number}`,
-    notion_task_id: null,
+    task_id: null,
     session_id: null,
     repo,
     title: `PR ${pr_number}`,

@@ -1,4 +1,6 @@
 import { EventEmitter } from 'events';
+import fs from 'fs';
+import path from 'path';
 import { ALLOWED_TOOLS, runtimeSettings } from '../config';
 import {
   upsertSessionEvent,
@@ -17,7 +19,10 @@ import {
   setPauseReason,
   getProjectRowById,
   insertLocalBranch,
+  getSession,
 } from '../db/queries';
+import { NoOpInvestigator } from '../github/NoOpInvestigator';
+import type { INoOpSessionManager } from '../github/NoOpInvestigator';
 import {
   getCurrentBranch,
   hasNonEmptyDiff,
@@ -27,6 +32,13 @@ import { emitTaskUpdated } from '../routes/tasks';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { GitHubClient } from '../github/GitHubClient';
+import {
+  validatePRBody,
+  buildValidationComment,
+} from '../github/PRBodyValidator';
+import { runFilePollutionCheck as filePollutionCheckFn } from './filePollutionCheck';
+import { checkCommitAttribution } from '../github/CommitAttributionWatcher';
+import { recordEvent } from '../audit/AuditLog';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import { SessionAuditor } from './SessionAuditor';
 import type { ISessionManager } from './SessionAuditor';
@@ -66,6 +78,18 @@ export function parseNotionPageId(url: string): string {
   const uuidMatch = url.match(/([0-9a-f-]{36})$/i);
   if (uuidMatch) return uuidMatch[1].replace(/-/g, '');
   return url;
+}
+
+/**
+ * Like parseNotionPageId, but always returns the dashed UUID form (Notion's native).
+ * Converts a 32-hex dashless ID to dashed; passes through already-dashed or non-UUID inputs unchanged.
+ */
+export function parseNotionPageIdDashed(url: string): string {
+  const raw = parseNotionPageId(url);
+  if (/^[0-9a-f]{32}$/i.test(raw)) {
+    return `${raw.slice(0, 8)}-${raw.slice(8, 12)}-${raw.slice(12, 16)}-${raw.slice(16, 20)}-${raw.slice(20)}`;
+  }
+  return raw;
 }
 
 /**
@@ -127,6 +151,14 @@ export class AgentSession extends EventEmitter {
   private retryCount = 0;
   /** Guard: fires at most once per session to avoid duplicate pause broadcasts. */
   private inSessionApiErrorFired = false;
+  /** One-cycle injection skip lock set by PRFileReverter.
+   *  Each entry is consumed (deleted) the first time injectContextFile checks it,
+   *  blocking exactly one injection attempt per reverted file before resetting. */
+  private readonly _revertLock = new Set<string>();
+  /** SHA of the last orchestrator-revert commit pushed by runFilePollutionCheck.
+   *  Used as a loop guard: if the PR's HEAD equals this SHA, the check is skipped
+   *  so we don't re-revert our own revert commit. */
+  private lastFilePollutionRevertSha: string | null = null;
 
   /** The underlying I/O adapter (CLI subprocess or Agent SDK). */
   private runner: ISessionRunner;
@@ -140,7 +172,7 @@ export class AgentSession extends EventEmitter {
      * and the backend is resolved per-call via `getTaskBackend(projectId)`.
      */
     private readonly taskBackendOverride: TaskBackend | undefined,
-    private readonly worktreePath: string,
+    public readonly worktreePath: string,
     public readonly taskId: string,
     private readonly resumeSessionId?: string,
     private readonly customPrompt?: string,
@@ -452,17 +484,17 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         const content = event.content as
           | Array<Record<string, unknown>>
           | undefined;
-        this.handlePRCreatedFromContent(content ?? []);
+        void this.handlePRCreatedFromContent(content ?? []);
       }
       if (toolUseId && this.pendingPushFileToolUseIds.has(toolUseId)) {
         this.pendingPushFileToolUseIds.delete(toolUseId);
-        this.handlePushDetected();
+        void this.handlePushDetected();
       }
       if (toolUseId && this.pendingBashCommands.has(toolUseId)) {
         const cmd = this.pendingBashCommands.get(toolUseId)!;
         this.pendingBashCommands.delete(toolUseId);
         if (isPushCommand('Bash', cmd)) {
-          this.handlePushDetected();
+          void this.handlePushDetected();
         }
       }
     }
@@ -482,7 +514,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               const innerContent = block.content as
                 | Array<Record<string, unknown>>
                 | undefined;
-              this.handlePRCreatedFromContent(innerContent ?? []);
+              void this.handlePRCreatedFromContent(innerContent ?? []);
             }
           }
         }
@@ -498,7 +530,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           this.sessionId,
           `turn complete — PR #${pr.pr_number} has review session, signalling push_detected`,
         );
-        this.handlePushDetected();
+        void this.handlePushDetected();
       }
 
       const denials = event.permission_denials as
@@ -628,9 +660,9 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
    * Parse PR data from the content blocks of a mcp__github__create_pull_request tool_result,
    * upsert the PR to SQLite with full metadata, and broadcast pr_created.
    */
-  private handlePRCreatedFromContent(
+  private async handlePRCreatedFromContent(
     contentBlocks: Array<Record<string, unknown>>,
-  ): void {
+  ): Promise<void> {
     if (this.prDetectedLive) return;
 
     // Extract text from content blocks
@@ -686,7 +718,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       upsertPullRequest({
         pr_number: prNumber,
         pr_url: prUrl,
-        notion_task_id: this.taskId,
+        task_id: this.taskId,
         session_id: this.sessionId,
         repo,
         title: prShape.title ?? null,
@@ -722,6 +754,68 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           }
         })();
       }
+
+      // Validate PR body against required template.
+      const bodyValidation = validatePRBody(prShape.body);
+      if (!bodyValidation.valid) {
+        const isCorporate = runtimeSettings.corporate_mode_enabled;
+        recordEvent({
+          event_type: isCorporate
+            ? 'pr_body_invalid'
+            : 'pr_body_invalid_warning',
+          actor_type: 'ai',
+          actor_id: this.sessionId,
+          project_id: this.projectId || null,
+          task_id: this.taskId || null,
+          payload: {
+            pr_number: prNumber,
+            repo,
+            missing_sections: bodyValidation.missingSections,
+          },
+        });
+        if (isCorporate) {
+          setPauseReason(prNumber, repo, 'pr_body_invalid');
+          if (this.githubClient) {
+            const ghClient = this.githubClient;
+            const comment = buildValidationComment(
+              bodyValidation.missingSections,
+            );
+            void ghClient
+              .createIssueComment(repo, prNumber, comment)
+              .catch((e) =>
+                console.warn(`[AgentSession] createIssueComment failed: ${e}`),
+              );
+          }
+        }
+      }
+
+      // File pollution check + auto-revert runs inline so AutoMerger never
+      // sees a contaminated diff (must complete before pr_created WS broadcast).
+      if (this.githubClient) {
+        await this.runFilePollutionCheck(
+          repo,
+          prNumber,
+          prShape.base?.ref ?? 'dev',
+        );
+      }
+
+      // Apply ai-authored label server-side after PR creation.
+      if (this.githubClient) {
+        const ghClient = this.githubClient;
+        void (async () => {
+          try {
+            await ghClient.ensureLabelExists(
+              repo,
+              'ai-authored',
+              '0075ca',
+              'Opened by an AI coding session',
+            );
+            await ghClient.addLabelToPR(repo, prNumber, 'ai-authored');
+          } catch (e) {
+            console.warn(`[AgentSession] ai-authored label failed: ${e}`);
+          }
+        })();
+      }
     }
 
     this.broadcast({ type: 'pr_created', sessionId: this.sessionId, prUrl });
@@ -732,6 +826,14 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       taskUrl: this.taskUrl,
       contextUrl: this.projectContextUrl,
     });
+    recordEvent({
+      event_type: 'pr_opened',
+      actor_type: 'ai',
+      actor_id: this.sessionId,
+      project_id: this.projectId || null,
+      task_id: this.taskId || null,
+      payload: { pr_number: prNumber, repo, pr_url: prUrl },
+    });
     sessionLog(this.sessionId, `PR detected live: ${prUrl}`);
   }
 
@@ -740,7 +842,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
    * if a PR row exists for this session, also broadcast the WS push_detected message
    * with prNumber and repo included.
    */
-  private handlePushDetected(): void {
+  private async handlePushDetected(): Promise<void> {
     this.emit('push_detected', { sessionId: this.sessionId });
     const pr = getPRBySessionId(this.sessionId);
     if (pr) {
@@ -750,6 +852,59 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         prNumber: pr.pr_number,
         repo: pr.repo,
       });
+
+      // File pollution check + auto-revert runs inline on every push.
+      if (this.githubClient) {
+        await this.runFilePollutionCheck(
+          pr.repo,
+          pr.pr_number,
+          pr.base_branch ?? 'dev',
+        );
+      }
+
+      // Fire-and-forget: verify commit attribution trailers.
+      if (this.githubClient) {
+        const ghClient = this.githubClient;
+        void checkCommitAttribution(
+          ghClient,
+          pr.repo,
+          pr.pr_number,
+          this.sessionId,
+          this.projectId || null,
+          this.taskId || null,
+          runtimeSettings.corporate_mode_enabled,
+        ).catch((e) =>
+          console.warn(`[AgentSession] checkCommitAttribution failed: ${e}`),
+        );
+      }
+    }
+  }
+
+  /** Fetch the PR's changed files, validate for banned/gitignored paths, and revert if needed. */
+  private async runFilePollutionCheck(
+    repo: string,
+    prNumber: number,
+    baseBranch: string,
+  ): Promise<void> {
+    if (!this.githubClient) return;
+    const { revertCommitSha } = await filePollutionCheckFn({
+      github: this.githubClient,
+      worktreePath: this.worktreePath,
+      repo,
+      prNumber,
+      baseBranch,
+      sessionId: this.sessionId,
+      projectId: this.projectId || null,
+      taskId: this.taskId || null,
+      onReverted: (files) => {
+        for (const f of files) this._revertLock.add(f);
+      },
+      registerRevertSync: (pr, r, p) =>
+        this.sessionManager?.registerRevertSync?.(pr, r, p),
+      lastRevertSha: this.lastFilePollutionRevertSha,
+    });
+    if (revertCommitSha) {
+      this.lastFilePollutionRevertSha = revertCommitSha;
     }
   }
 
@@ -778,6 +933,65 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       // Wrap in try-catch so review-pipeline errors (e.g. fetch failures) can
       // never abort handleCleanExit and leave the session stuck at 'running'.
       try {
+        // Compute hasDiff once at the top of the standard-session block so it
+        // can be used for both local-only submission and no-op detection.
+        let hasDiff = false;
+        let featureBranchName: string | undefined;
+        const baseBranch = 'dev';
+        try {
+          const branchName = await getCurrentBranch(this.worktreePath);
+          featureBranchName = branchName ?? undefined;
+          if (branchName && branchName !== baseBranch) {
+            hasDiff = await hasNonEmptyDiff(
+              this.worktreePath,
+              baseBranch,
+              branchName,
+            );
+          }
+        } catch (e) {
+          console.error(`[AgentSession] hasDiff computation failed: ${e}`);
+        }
+
+        // No-op detection: clean exit with no PR and no diff → spawn investigator.
+        if (
+          !prUrl &&
+          !hasDiff &&
+          this.taskId &&
+          this.sessionManager &&
+          'start' in this.sessionManager
+        ) {
+          const project = this.projectId
+            ? getProjectRowById(this.projectId)
+            : undefined;
+          const repo = project?.github_repo ?? '';
+          const sessionRow = getSession(this.sessionId);
+          const taskCreatedAt = sessionRow
+            ? new Date(sessionRow.started_at).toISOString()
+            : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+          const investigator = new NoOpInvestigator(
+            this.sessionManager as unknown as INoOpSessionManager,
+            this.taskBackend(),
+            this.githubClient,
+          );
+          investigator
+            .investigate({
+              taskId: this.taskId,
+              taskUrl: this.taskUrl,
+              projectContextUrl: this.projectContextUrl,
+              projectId: this.projectId,
+              noOpSessionId: this.sessionId,
+              baseBranch,
+              featureBranchName,
+              repo,
+              taskCreatedAt,
+            })
+            .catch((e) => {
+              console.error(
+                `[AgentSession] NoOpInvestigator.investigate failed for ${this.sessionId}: ${e}`,
+              );
+            });
+        }
+
         if (prUrl && !this.prDetectedLive) {
           // Fallback: live detection didn't fire (e.g. gh pr create via Bash).
           this.taskBackend()
@@ -787,7 +1001,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             );
         }
 
-        // Always upsert notion_task_id and session_id onto the PR row when a
+        // Always upsert task_id and session_id onto the PR row when a
         // PR URL is known at session end. This ensures the link is set even if
         // PRSyncJob ran before handleCleanExit and created the row with null values.
         // Capture existing PR state BEFORE the upsert overwrites it so the
@@ -818,7 +1032,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               upsertPullRequest({
                 pr_number: prNumber,
                 pr_url: prUrl,
-                notion_task_id: this.taskId || null,
+                task_id: this.taskId || null,
                 session_id: this.sessionId,
                 repo,
                 title: null,
@@ -872,51 +1086,47 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         }
 
         // Local-only project: detect a non-empty diff and emit submission event.
+        // Reuses hasDiff and featureBranchName computed at the top of this block.
         if (this.projectId) {
           const project = getProjectRowById(this.projectId);
           if (project?.git_mode === 'local-only') {
             try {
-              const branchName = await getCurrentBranch(this.worktreePath);
-              const baseBranch = 'dev';
-              if (branchName && branchName !== baseBranch) {
-                const hasDiff = await hasNonEmptyDiff(
-                  this.worktreePath,
+              if (
+                featureBranchName &&
+                featureBranchName !== baseBranch &&
+                hasDiff
+              ) {
+                const now = new Date().toISOString();
+                insertLocalBranch({
+                  project_id: this.projectId,
+                  session_id: this.sessionId,
+                  branch_name: featureBranchName,
+                  base_branch: baseBranch,
+                  status: 'open',
+                  review_result: null,
+                  created_at: now,
+                  updated_at: now,
+                });
+                this.broadcast({
+                  type: 'local_branch_submitted',
+                  projectId: this.projectId,
+                  sessionId: this.sessionId,
+                  branchName: featureBranchName,
                   baseBranch,
-                  branchName,
-                );
-                if (hasDiff) {
-                  const now = new Date().toISOString();
-                  insertLocalBranch({
-                    project_id: this.projectId,
-                    session_id: this.sessionId,
-                    branch_name: branchName,
-                    base_branch: baseBranch,
-                    status: 'open',
-                    review_result: null,
-                    created_at: now,
-                    updated_at: now,
-                  });
-                  this.broadcast({
-                    type: 'local_branch_submitted',
-                    projectId: this.projectId,
-                    sessionId: this.sessionId,
-                    branchName,
-                    baseBranch,
-                  });
-                  this.taskBackend()
-                    .updateStatus(this.taskId, '👀 In Review')
-                    .then(() => {
-                      this.broadcast({
-                        type: 'task_status_changed',
-                        notionTaskId: this.taskId,
-                        newStatus: '👀 In Review',
-                      });
-                      emitTaskUpdated(this.taskId);
-                    })
-                    .catch((e) =>
-                      console.error(`[AgentSession] updateStatus failed: ${e}`),
-                    );
-                }
+                });
+                this.taskBackend()
+                  .updateStatus(this.taskId, '👀 In Review')
+                  .then(() => {
+                    this.broadcast({
+                      type: 'task_status_changed',
+                      notionTaskId: this.taskId,
+                      newStatus: '👀 In Review',
+                    });
+                    emitTaskUpdated(this.taskId);
+                  })
+                  .catch((e) =>
+                    console.error(`[AgentSession] updateStatus failed: ${e}`),
+                  );
               }
             } catch (e) {
               console.error(
@@ -983,6 +1193,47 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           `[AgentSession] audit failed for ${this.sessionId}: ${err}`,
         );
       });
+  }
+
+  /** Files reverted during this session that the injector must not overwrite (one cycle). */
+  get revertedFiles(): ReadonlySet<string> {
+    return this._revertLock;
+  }
+
+  /** Add a file to the one-cycle injection skip lock (called by the autofix path). */
+  lockFileForNextInjection(filename: string): void {
+    this._revertLock.add(filename);
+  }
+
+  /**
+   * Write orchestrator context content to a file in the worktree.
+   * If the file is in the revert lock, the write is suppressed for one cycle:
+   * the lock entry is consumed so subsequent injections are allowed.
+   */
+  injectContextFile(filename: string, content: string): void {
+    if (this._revertLock.has(filename)) {
+      this._revertLock.delete(filename); // consume — one cycle only
+      recordEvent({
+        event_type: 'file_pollution_re_injected_blocked',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: this.projectId || null,
+        task_id: this.taskId || null,
+        payload: { filename, session_id: this.sessionId },
+      });
+      return;
+    }
+    try {
+      fs.writeFileSync(
+        path.join(this.worktreePath, filename),
+        content,
+        'utf-8',
+      );
+    } catch (err) {
+      console.error(
+        `[AgentSession] injectContextFile: failed to write ${filename}: ${err}`,
+      );
+    }
   }
 
   /** No-op — CLI does not support mid-session permission approval. */

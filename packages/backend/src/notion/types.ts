@@ -9,13 +9,9 @@ export interface NotionTask {
   priority?: string; // '🔴 High' | '🟡 Medium' | '🟢 Low'
 }
 
-export interface ResolvedTask {
-  task: NotionTask;
-  blocked: boolean;
-  blockers: NotionTask[]; // direct + transitive blockers still not Done
-  nonCode: boolean; // true if type is Planning or Testing
-  wave: number; // dispatch wave: 1 = immediately launchable, 2+ = blocked by lower waves
-}
+// ResolvedTask has been moved to packages/backend/src/tasks/types.ts.
+// Re-exported here for backward compatibility.
+export type { ResolvedTask } from '../tasks/types';
 
 export class NotionApiError extends Error {
   constructor(

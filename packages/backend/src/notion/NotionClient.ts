@@ -7,6 +7,7 @@ import {
 } from '../db/queries';
 import { NotionTask, NotionApiError, ResolvedTask } from './types';
 import { DependencyResolver } from './DependencyResolver';
+import { toExternalId } from '../tasks/taskId';
 
 // ─── Board validation types ─────────────────────────────────────────────────
 
@@ -131,7 +132,19 @@ function readBoardCache(boardId: string): NotionTask[] | null {
   const row = getTaskCache(boardCacheKey(boardId));
   if (!row) return null;
   try {
-    return JSON.parse(row.raw_json) as NotionTask[];
+    const tasks = JSON.parse(row.raw_json) as NotionTask[];
+    // Strip notion: prefix if present — cache stores prefixed-everywhere IDs (post-PR #411
+    // convention extended to dependsOn). The contract of fetchReadyTasks is to return raw
+    // Notion page IDs so NotionTaskBackend's formatTaskId call is the single point of prefixing.
+    return tasks.map((t) => ({
+      ...t,
+      id: t.id.startsWith('notion:') ? t.id.slice('notion:'.length) : t.id,
+      dependsOn: t.dependsOn
+        ? t.dependsOn.map((dep) =>
+            dep.startsWith('notion:') ? dep.slice('notion:'.length) : dep,
+          )
+        : t.dependsOn,
+    }));
   } catch {
     return null;
   }
@@ -139,10 +152,6 @@ function readBoardCache(boardId: string): NotionTask[] | null {
 
 function writeBoardCache(boardId: string, tasks: NotionTask[]): void {
   upsertTaskCache(boardCacheKey(boardId), JSON.stringify(tasks));
-  // Also cache individual tasks by their own ID
-  for (const task of tasks) {
-    upsertTaskCache(task.id, JSON.stringify(task));
-  }
 }
 
 // ─── Notion API helpers ─────────────────────────────────────────────────────
@@ -333,7 +342,10 @@ export function parseExpectedSize(markdown: string): number | undefined {
 }
 
 function taskPageCacheKey(taskId: string): string {
-  return `task:${taskId}`;
+  // Strip source prefix (e.g., 'notion:') so the key is always task:notion:<raw-uuid>.
+  const colonIdx = taskId.indexOf(':');
+  const rawId = colonIdx >= 0 ? taskId.slice(colonIdx + 1) : taskId;
+  return `task:notion:${rawId}`;
 }
 
 // ─── NotionClient ───────────────────────────────────────────────────────────
@@ -451,12 +463,13 @@ export class NotionClient {
 
   /** Update the Status select property on a Notion task page. */
   async updateStatus(taskId: string, status: string): Promise<void> {
-    await notionRequest('PATCH', `/pages/${taskId}`, {
+    const externalId = toExternalId(taskId);
+    await notionRequest('PATCH', `/pages/${externalId}`, {
       properties: {
         Status: { select: { name: status } },
       },
     });
-    // Update the cache row in-place so emitTaskUpdated() can still find the row
+    // Use the canonical prefixed taskId for the cache so the key matches
     updateTaskCacheStatus(taskId, status);
   }
 
@@ -465,6 +478,7 @@ export class NotionClient {
    * cache the result for 10 minutes using key `task:{taskId}`.
    */
   async fetchTaskPage(taskId: string): Promise<NotionTaskPage> {
+    const externalId = toExternalId(taskId);
     const cacheKey = taskPageCacheKey(taskId);
     if (getCacheAge(cacheKey) < TASK_PAGE_CACHE_TTL_MS) {
       const row = getTaskCache(cacheKey);
@@ -478,7 +492,7 @@ export class NotionClient {
     }
 
     // Fetch page metadata for the name
-    const page = await notionRequest<NotionPage>('GET', `/pages/${taskId}`);
+    const page = await notionRequest<NotionPage>('GET', `/pages/${externalId}`);
     const titleItems = page.properties['Task Name']?.title ?? [];
     const name = titleItems.map((t) => t.text.content).join('');
     const expectedSizeProp = page.properties['Expected size'];
@@ -491,7 +505,7 @@ export class NotionClient {
     const lines: string[] = [];
     let startCursor: string | undefined;
     do {
-      const path = `/blocks/${taskId}/children?page_size=100${startCursor ? `&start_cursor=${startCursor}` : ''}`;
+      const path = `/blocks/${externalId}/children?page_size=100${startCursor ? `&start_cursor=${startCursor}` : ''}`;
       const resp = await notionRequest<NotionBlocksResponse>('GET', path);
       for (const block of resp.results) {
         const line = blockToLine(block);
@@ -529,16 +543,93 @@ export class NotionClient {
    * Fetches the current Notes content first so existing text is preserved.
    */
   async attachPR(taskId: string, prUrl: string): Promise<void> {
-    const page = await notionRequest<NotionPage>('GET', `/pages/${taskId}`);
+    const externalId = toExternalId(taskId);
+    const page = await notionRequest<NotionPage>('GET', `/pages/${externalId}`);
     const existing = page.properties.Notes?.rich_text?.[0]?.text?.content ?? '';
     const updated = existing ? `${existing}\n${prUrl}` : prUrl;
 
-    await notionRequest('PATCH', `/pages/${taskId}`, {
+    await notionRequest('PATCH', `/pages/${externalId}`, {
       properties: {
         Notes: {
           rich_text: [{ text: { content: updated } }],
         },
       },
     });
+  }
+
+  /** Overwrite the Notes rich_text property on a Notion task page. */
+  async updateNotes(taskId: string, notes: string): Promise<void> {
+    const externalId = toExternalId(taskId);
+    await notionRequest('PATCH', `/pages/${externalId}`, {
+      properties: {
+        Notes: {
+          rich_text: [{ text: { content: notes } }],
+        },
+      },
+    });
+  }
+
+  /**
+   * Append a line to the "Implementation Notes" section in the page body.
+   * Finds the heading block for "Implementation Notes" then appends a paragraph
+   * after the last block in that section. Falls back to appending at the page end.
+   */
+  async appendImplementationNote(taskId: string, note: string): Promise<void> {
+    const externalId = toExternalId(taskId);
+
+    // Fetch all page blocks to find the Implementation Notes section.
+    const blocks: NotionBlock[] = [];
+    let startCursor: string | undefined;
+    do {
+      const path = `/blocks/${externalId}/children?page_size=100${startCursor ? `&start_cursor=${startCursor}` : ''}`;
+      const resp = await notionRequest<NotionBlocksResponse>('GET', path);
+      blocks.push(...resp.results);
+      startCursor =
+        resp.has_more && resp.next_cursor ? resp.next_cursor : undefined;
+    } while (startCursor);
+
+    // Find the "Implementation Notes" heading block.
+    let afterBlockId: string | undefined;
+    let inSection = false;
+    for (const block of blocks) {
+      const type = block.type as string;
+      if (type.startsWith('heading_')) {
+        const inner = block[type] as
+          | { rich_text?: NotionRichText[] }
+          | undefined;
+        const text = inner?.rich_text ? richTextToString(inner.rich_text) : '';
+        if (text.toLowerCase().includes('implementation notes')) {
+          inSection = true;
+          afterBlockId = block.id as string;
+          continue;
+        }
+        if (inSection) {
+          // Next heading ends the section — stop scanning.
+          break;
+        }
+      }
+      if (inSection) {
+        afterBlockId = block.id as string;
+      }
+    }
+
+    const newParagraph = {
+      object: 'block',
+      type: 'paragraph',
+      paragraph: {
+        rich_text: [{ type: 'text', text: { content: note } }],
+      },
+    };
+
+    if (afterBlockId) {
+      await notionRequest('PATCH', `/blocks/${externalId}/children`, {
+        children: [newParagraph],
+        after: afterBlockId,
+      });
+    } else {
+      await notionRequest('PATCH', `/blocks/${externalId}/children`, {
+        children: [newParagraph],
+      });
+    }
   }
 }

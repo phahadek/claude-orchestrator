@@ -89,7 +89,12 @@ export function DispatchModal({
   const launch = () => {
     const toDispatch = ready
       .filter((t) => selected.has(t.task.id))
-      .map((t) => ({ taskId: t.task.id, taskType: t.task.type }));
+      .map((t) => ({
+        notionUrl: t.task.notionUrl,
+        taskType: t.task.type,
+        taskName: t.task.title,
+        milestoneId,
+      }));
     if (toDispatch.length > 0) {
       dispatchTasks(toDispatch);
       onClose();

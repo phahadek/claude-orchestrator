@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import yaml from 'js-yaml';
+import { isHardBanned } from '../github/PRFileValidator';
+import { recordEvent } from '../audit/AuditLog';
 
 interface OrchestratorYml {
   autofix?: string[];
@@ -10,14 +12,20 @@ interface OrchestratorYml {
 export interface AutofixResult {
   success: boolean;
   commitSha?: string;
+  /** HEAD SHA after the local branch was synced to origin via fetch + reset --hard. */
+  syncedTo?: string;
+  /** Files included in the autofix commit (from git diff --name-only HEAD~1 HEAD). */
+  touchedFiles?: string[];
   summary: string;
 }
 
+export const ORCHESTRATOR_BOT_EMAIL = 'bot@claude-code.internal';
+
 const BOT_GIT_ENV = {
   GIT_AUTHOR_NAME: 'claude-orchestrator',
-  GIT_AUTHOR_EMAIL: 'bot@claude-code.internal',
+  GIT_AUTHOR_EMAIL: ORCHESTRATOR_BOT_EMAIL,
   GIT_COMMITTER_NAME: 'claude-orchestrator',
-  GIT_COMMITTER_EMAIL: 'bot@claude-code.internal',
+  GIT_COMMITTER_EMAIL: ORCHESTRATOR_BOT_EMAIL,
 };
 
 export function loadAutofixCommands(projectDir: string): string[] {
@@ -121,6 +129,45 @@ export async function runAutofix(
     failures.push(msg);
   }
 
+  // Proactively un-stage hard-banned files so they never appear in the commit.
+  const stagedListResult = await spawnCmd(
+    'git',
+    ['diff', '--cached', '--name-only'],
+    { cwd: worktreePath },
+  );
+  const stagedFiles = stagedListResult.stdout.split('\n').filter(Boolean);
+  for (const stagedFile of stagedFiles) {
+    if (isHardBanned(stagedFile)) {
+      log(`[autofix] un-staging banned file: ${stagedFile}\n`);
+      await spawnCmd('git', ['restore', '--staged', '--', stagedFile], {
+        cwd: worktreePath,
+        env,
+      });
+      recordEvent({
+        event_type: 'autofix_banned_file_unstaged',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: null,
+        task_id: null,
+        payload: { file: stagedFile, worktree_path: worktreePath },
+      });
+    }
+  }
+
+  // If un-staging banned files left nothing staged, skip the commit entirely.
+  const remainingResult = await spawnCmd(
+    'git',
+    ['diff', '--cached', '--name-only'],
+    { cwd: worktreePath },
+  );
+  if (!remainingResult.stdout.trim()) {
+    const summary =
+      failures.length > 0
+        ? `autofix: only banned files were staged; skipped commit (failures: ${failures.join('; ')})`
+        : 'autofix: only banned files were staged; skipped commit';
+    return { success: failures.length === 0, summary };
+  }
+
   const commitResult = await spawnCmd(
     'git',
     ['commit', '-m', 'chore: apply autofix [orchestrator]'],
@@ -137,6 +184,27 @@ export async function runAutofix(
 
   const sha = await getHeadSha(worktreePath);
   log(`[autofix] committed ${sha}\n`);
+
+  // Collect the files included in the commit so callers can populate _revertLock
+  let touchedFiles: string[] | undefined;
+  try {
+    const diffResult = await spawnCmd(
+      'git',
+      ['diff', '--name-only', 'HEAD~1', 'HEAD'],
+      { cwd: worktreePath },
+    );
+    touchedFiles = diffResult.stdout.split('\n').filter(Boolean);
+  } catch {
+    // best-effort
+  }
+
+  // Capture current branch before pushing so we can sync to it afterward
+  const { stdout: branchRaw } = await spawnCmd(
+    'git',
+    ['rev-parse', '--abbrev-ref', 'HEAD'],
+    { cwd: worktreePath },
+  );
+  const branch = branchRaw.trim();
 
   const pushResult = await spawnCmd('git', ['push', 'origin', 'HEAD'], {
     cwd: worktreePath,
@@ -160,10 +228,33 @@ export async function runAutofix(
     log(`[autofix] WARN: failed to append to .git-blame-ignore-revs: ${err}\n`);
   }
 
+  // Sync local branch to origin after push so subsequent git operations see
+  // a consistent state (no local/origin divergence).
+  let syncedTo: string | undefined;
+  if (failures.length === 0 && branch && branch !== 'HEAD') {
+    const fetchResult = await spawnCmd('git', ['fetch', 'origin', branch], {
+      cwd: worktreePath,
+    });
+    if (fetchResult.exitCode === 0) {
+      const resetResult = await spawnCmd(
+        'git',
+        ['reset', '--hard', `origin/${branch}`],
+        { cwd: worktreePath },
+      );
+      if (resetResult.exitCode === 0) {
+        const headResult = await spawnCmd('git', ['rev-parse', 'HEAD'], {
+          cwd: worktreePath,
+        });
+        syncedTo = headResult.stdout.trim() || undefined;
+        log(`[autofix] synced to origin/${branch} at ${syncedTo}\n`);
+      }
+    }
+  }
+
   const success = failures.length === 0;
   const summary = success
     ? `autofix committed ${sha}`
     : `autofix committed ${sha} with failures: ${failures.join('; ')}`;
 
-  return { success, commitSha: sha, summary };
+  return { success, commitSha: sha, syncedTo, touchedFiles, summary };
 }

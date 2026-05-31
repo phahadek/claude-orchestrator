@@ -6,8 +6,8 @@ vi.mock('../db/db.js', async () => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       session_id          TEXT    PRIMARY KEY,
-      notion_task_id      TEXT,
-      notion_task_url     TEXT,
+      task_id             TEXT,
+      task_url            TEXT,
       project_context_url TEXT,
       status              TEXT    NOT NULL,
       started_at          INTEGER NOT NULL,
@@ -61,15 +61,15 @@ vi.mock('../db/db.js', async () => {
       timestamp   INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS task_cache (
-      notion_task_id TEXT    PRIMARY KEY,
-      fetched_at     INTEGER NOT NULL,
-      raw_json       TEXT    NOT NULL
+      task_id    TEXT    PRIMARY KEY,
+      fetched_at INTEGER NOT NULL,
+      raw_json   TEXT    NOT NULL
     );
     CREATE TABLE IF NOT EXISTS pull_requests (
       id                INTEGER PRIMARY KEY AUTOINCREMENT,
       pr_number         INTEGER NOT NULL,
       pr_url            TEXT    NOT NULL UNIQUE,
-      notion_task_id    TEXT,
+      task_id           TEXT,
       session_id        TEXT,
       repo              TEXT    NOT NULL,
       title             TEXT,
@@ -109,8 +109,8 @@ const reader = new JsonlReader('/nonexistent');
 function makeSession(id: string) {
   insertSession({
     session_id: id,
-    notion_task_id: null,
-    notion_task_url: null,
+    task_id: null,
+    task_url: null,
     project_context_url: null,
     project_id: null,
     status: 'done' as const,

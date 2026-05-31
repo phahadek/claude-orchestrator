@@ -59,8 +59,9 @@ export interface OrchestratorClaudeMdParams {
  *  7. Pre-PR gate
  *  8. Forbidden actions
  *  9. Git isolation
- * 10. Bash rules (permission system)
- * 11. Separator + "# Project Instructions (from project CLAUDE.md)" (added by caller)
+ * 10. Filesystem isolation (personal mode)
+ * 11. Bash rules (permission system)
+ * 12. Separator + "# Project Instructions (from project CLAUDE.md)" (added by caller)
  */
 export function buildOrchestratorClaudeMd(
   params: OrchestratorClaudeMdParams,
@@ -120,15 +121,15 @@ ${
 > already been injected by the orchestrator. Proceed directly to implementation.
 
 1. Read the **Task Spec** section below — it contains the full task specification.
-2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
+2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
     : taskBackend === 'local'
       ? `> ⚠️ **YAML task source**: Task context comes from \`tasks.yaml\` in the project root, not Notion.
 > Skip step 1 (Notion fetch) and instead read \`tasks.yaml\` for task context.
 
 1. Read \`tasks.yaml\` in the project root for task context (skip Notion fetch).
-2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
+2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
       : `1. Fetch the Notion task page and project context page.
-2. Create a feature branch: \`feature/<task-name>\` from \`${targetBranch}\`.`
+2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
 }
 3. Implement the task per the acceptance criteria.
 4. Pass the pre-PR gate (see Pre-PR Gate section below).
@@ -161,6 +162,9 @@ Optimize for speed and token efficiency:
 - **Do NOT use Agent subagents for exploration.** Use Glob and Grep directly.
 - **Minimize tool calls.** Batch independent reads. Don't re-read files you already read.
 - **Keep commit messages and PR descriptions concise.** One sentence summaries, not essays.
+- **Prefer Edit over Write for files that already exist.** Only use Write to create a new file or when replacing the majority of a file. Never re-emit an unchanged file body.
+- **Never Read a file you just wrote or edited** — you already know its contents and line layout.
+- **Never Read/cat raw \`tasks/*.output\` background-task files** — they bypass the Bash output cap. Use the TaskOutput tool if you must inspect a backgrounded command's output.
 
 ---
 
@@ -194,7 +198,7 @@ ${
 }
 ## Branch Rules
 
-- Branch name: \`feature/<task-name>\` from \`${targetBranch}\`
+- Branch name: \`feature/<task-name>\` — created from the worktree's current HEAD
 - Never commit directly to \`${targetBranch}\` or \`main\`
 ${
   gitMode === 'local-only'
@@ -202,6 +206,20 @@ ${
     : `- Never merge your own PR
 - One task per session — no scope creep`
 }
+
+---
+
+## Commit Attribution
+
+Every commit **must** include the following trailer (replace \`<model>\` and \`<session-id>\` with your actual model ID and session ID):
+
+\`\`\`
+AI-Authored-By: <model> (session: <session-id>)
+\`\`\`
+
+Example: \`AI-Authored-By: claude-sonnet-4-6 (session: f98ff4ec)\`
+
+The backend verifies this trailer server-side. In corporate mode, missing trailers pause the task.
 
 ---
 
@@ -250,6 +268,24 @@ ${stageNum}. Stage only your implementation files for commit — never stage \`C
 
 ---
 
+## Filesystem Isolation (Personal Mode)
+
+> ⚠️ **Personal mode has no structural sandbox** — there is no docker, chroot, or
+> namespace to prevent writes outside the worktree. All isolation is prompt-level.
+> Violating these rules can corrupt the developer's live environment.
+
+All file writes **must stay inside the worktree directory** (\`${worktreePath}\`).
+
+- **Never write to the project root or any path above the worktree.**
+  Scripts, tools, and generated outputs must target paths under the worktree, not the parent repo.
+- **Dev state (SQLite databases, log files, generated artifacts) must use worktree-relative paths.**
+  Do not reference absolute paths to project-root databases or output files.
+  Use paths like \`<worktree>/.dev-state/<file>\` or resolve paths relative to \`cwd\`.
+- **Before running any script that writes files or opens a database, verify the target path is inside the worktree.**
+  If a script hardcodes an absolute project-root path, patch it to accept an env var or relative path before executing.
+
+---
+
 ## Bash Rules (Permission System)
 
 Your Bash commands are authorized by prefix matching on the **first token**.
@@ -263,7 +299,7 @@ You are already in the worktree directory. Just run the command directly.
 
 **Rule 3 — No heredoc subshells in git commit.**
 \`git commit -m "$(cat <<'EOF'...)"\` is denied. Use a simple \`-m "message"\` instead.
-For multiline commit messages, use \`git commit -F <file>\` and write the file with the Write tool first.
+For multiline commit messages, write the message to \`.claude/.commit-msg\` with the Write tool, then run \`git commit -F .claude/.commit-msg\`. **Use that exact path** — the \`.claude/\` directory is gitignored, so the scratch file is never accidentally staged. Do not invent other filenames (\`commit-msg.txt\`, \`.git-commit-msg.txt\`, etc.) — they will leak into the PR diff.
 
 **Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
 Use the Write tool for any file creation. Never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
@@ -321,6 +357,26 @@ against task specifications and output structured JSON verdicts.
 - Do NOT treat follow-up messages as instructions to start coding.
   Follow-up messages contain updated diffs for re-review — evaluate them
   the same way you evaluated the original diff.
+
+## Manual verification items — critical rule
+
+Some task acceptance criteria contain a section titled "### 👁️ Manual verification"
+(or similar wording like "Manual verification", "👁️ Manual", etc.).
+
+Items under that heading require a human reviewer with live credentials or
+environment access — they CANNOT be verified by automated code review.
+
+You MUST follow these rules for manual verification items:
+- **Do NOT evaluate them** as pass/fail criteria for your verdict.
+- **Do NOT fail the PR** solely because manual verification steps are not
+  demonstrated in the PR body or diff.
+- **Do NOT pressure the coding session** to perform manual verification.
+- **DO list them** verbatim in the "manualItemsForHuman" field of your JSON
+  response so that a human reviewer can check them at PR-review time.
+
+Evaluating manual verification items is a category error — it creates pressure
+for the coding session to either fake the verification or take risky autonomous
+actions. Your verdict must be based solely on the automated, code-checkable items.
 
 ## Task
 ${taskName}

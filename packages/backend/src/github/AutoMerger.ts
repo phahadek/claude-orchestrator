@@ -3,6 +3,7 @@ import {
   getProjectById,
   runtimeSettings,
 } from '../config';
+import { recordEvent } from '../audit/AuditLog';
 import {
   getPRByNumber,
   setPauseReason,
@@ -13,8 +14,9 @@ import {
   setLocalBranchPauseReason,
   getSession,
 } from '../db/queries';
-import type { GitHubClient } from './GitHubClient';
+import type { GitHubClient, PRReviewDecision } from './GitHubClient';
 import { GitHubApiError } from './types';
+import { getCorporateMode } from '../config/corporateMode';
 import type { PRMergeWatcher } from './PRMergeWatcher';
 import type { PullRequestRow } from '../db/types';
 import type { ServerMessage } from '../ws/types';
@@ -159,16 +161,30 @@ export class AutoMerger {
 
     markLocalBranchMerged(row.id, commitSha);
 
+    recordEvent({
+      event_type: 'pr_merged',
+      actor_type: 'system',
+      actor_id: null,
+      project_id: row.project_id ?? null,
+      task_id: session.task_id ?? null,
+      payload: {
+        branch_name: row.branch_name,
+        base_branch: row.base_branch,
+        merge_sha: commitSha,
+        local_branch_id: row.id,
+      },
+    });
+
     if (this.sessions && session.session_id) {
       this.sessions.endSession(session.session_id);
     }
 
-    if (session.notion_task_id) {
+    if (session.task_id) {
       const project = getProjectById(row.project_id);
       if (project) {
         const backend = getTaskBackend(row.project_id);
         backend
-          .updateStatus(session.notion_task_id, '✅ Done')
+          .updateStatus(session.task_id, '✅ Done')
           .catch((err: unknown) =>
             console.warn(
               `[AutoMerger] local branch #${row.id}: updateStatus failed: ${(err as Error).message}`,
@@ -289,9 +305,31 @@ export class AutoMerger {
 
       const category = poll.mergeability.category;
       switch (category) {
-        case 'clean':
+        case 'clean': {
+          const corpMode = getCorporateMode();
+          if (corpMode.gates.requireHumanApproval) {
+            let reviewDecision: PRReviewDecision | null;
+            try {
+              reviewDecision = await this.github.getReviewState(prNumber, repo);
+            } catch (err) {
+              console.warn(
+                `[AutoMerger] PR #${prNumber}: getReviewState failed: ${(err as Error).message}`,
+              );
+              await sleep(intervalMs);
+              continue;
+            }
+            if (reviewDecision === 'CHANGES_REQUESTED') {
+              await this.pauseWithReason(row, 'human_changes_requested');
+              return;
+            }
+            if (reviewDecision !== 'APPROVED') {
+              await this.pauseWithReason(row, 'awaiting_human_approval');
+              return;
+            }
+          }
           await this.attemptMerge(row, ciCheckNames);
           return;
+        }
         case 'ci_failed':
           await this.pauseWithReason(
             row,
@@ -338,6 +376,18 @@ export class AutoMerger {
         pr.repo,
       );
       await this.mergeWatcher.handleMerged(pr, result.sha ?? null);
+      recordEvent({
+        event_type: 'pr_merged',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: getProjectByGithubRepo(pr.repo)?.id ?? null,
+        task_id: pr.task_id ?? null,
+        payload: {
+          pr_number: pr.pr_number,
+          repo: pr.repo,
+          merge_sha: result.sha ?? null,
+        },
+      });
       console.log(
         `[AutoMerger] PR #${pr.pr_number}: squash-merged to ${pr.base_branch ?? 'dev'}`,
       );
@@ -384,7 +434,12 @@ export class AutoMerger {
 
   private async pauseWithReason(
     pr: PullRequestRow,
-    reason: 'ci_failing' | 'auto_merge_failed' | 'pr_closed',
+    reason:
+      | 'ci_failing'
+      | 'auto_merge_failed'
+      | 'pr_closed'
+      | 'awaiting_human_approval'
+      | 'human_changes_requested',
     failingCheckNames?: string[],
   ): Promise<void> {
     setPauseReason(pr.pr_number, pr.repo, reason);
@@ -415,8 +470,8 @@ export class AutoMerger {
           ? failingCheckNames
           : undefined,
     });
-    if (pr.notion_task_id) {
-      emitTaskUpdated(pr.notion_task_id);
+    if (pr.task_id) {
+      emitTaskUpdated(pr.task_id);
     }
     console.log(
       `[AutoMerger] PR #${pr.pr_number}: paused with reason '${reason}'`,

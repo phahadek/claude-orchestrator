@@ -101,6 +101,10 @@ export class AutoLauncher {
     const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
     const backend = resolveBackend(project.id);
 
+    if (backend.type === 'local') {
+      return;
+    }
+
     let milestoneId: string | null = null;
     if (backend.type === 'notion') {
       milestoneId = this.resolveMilestoneId(project);
@@ -112,20 +116,43 @@ export class AutoLauncher {
       }
     }
 
-    const tasks = await backend.fetchReadyTasks(
+    const milestoneTasks = await backend.fetchReadyTasks(
       milestoneId,
       backend.type === 'notion' ? true : undefined,
     );
-    const candidates = tasks.filter((t) => this.isLaunchCandidate(t));
+
+    // Also fetch non-milestone tasks and merge into the eligible pool.
+    let nonMilestoneTasks: ResolvedTask[] = [];
+    const nmConfig = project.nonMilestoneSourceConfig ?? null;
+    if (nmConfig) {
+      try {
+        nonMilestoneTasks = await backend.fetchNonMilestoneReadyTasks(
+          nmConfig,
+          project.id,
+        );
+      } catch (err) {
+        console.warn(
+          `[AutoLauncher] project ${project.id}: fetchNonMilestoneReadyTasks failed: ${err}`,
+        );
+      }
+    }
+
+    const allTasks = [...milestoneTasks, ...nonMilestoneTasks];
+    const candidates = allTasks.filter((t) => this.isLaunchCandidate(t));
     if (candidates.length === 0) return;
 
     for (const candidate of candidates) {
       if (!this.hasCapacity()) {
-        // Save a log line for the first task we'd otherwise launch; further
-        // tasks in this cycle are silently deferred to the next poll.
         return;
       }
-      this.launchTask(project, candidate);
+      // Non-milestone tasks have no milestoneId — they branch off dev directly.
+      const isNonMilestone = nonMilestoneTasks.includes(candidate);
+      this.launchTask(
+        project,
+        candidate,
+        isNonMilestone ? null : milestoneId,
+        isNonMilestone ? 'non_milestone' : 'milestone',
+      );
     }
   }
 
@@ -180,7 +207,12 @@ export class AutoLauncher {
     return this.sessionManager.getLiveCodeSessionCount();
   }
 
-  private launchTask(project: ProjectConfig, resolved: ResolvedTask): void {
+  private launchTask(
+    project: ProjectConfig,
+    resolved: ResolvedTask,
+    milestoneId: string | null = null,
+    taskKind: 'milestone' | 'non_milestone' = 'milestone',
+  ): void {
     const task = resolved.task;
     const taskUrl =
       task.notionUrl || `https://www.notion.so/${task.id.replace(/-/g, '')}`;
@@ -196,6 +228,8 @@ export class AutoLauncher {
       const sessionId = this.sessionManager.start(taskUrl, project.contextUrl, {
         projectId: project.id,
         taskName: task.title || taskUrl,
+        milestoneId,
+        taskKind,
       });
       console.log(
         `[AutoLauncher] launched session ${sessionId.slice(0, 8)} for task ${task.title || task.id} in project ${project.id}`,

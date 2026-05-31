@@ -8,6 +8,8 @@ import {
   getLocalBranchBySession,
   setLocalBranchPauseReason,
   getSession,
+  addAutofixSha,
+  consumeAutofixSha as dbConsumeAutofixSha,
 } from '../db/queries';
 import type {
   PRReviewService,
@@ -23,6 +25,8 @@ import { formatReviewFeedback, formatCIFailureFeedback } from './reviewUtils';
 import { runVerifyAsGate } from '../orchestration/verifyRunner';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
+import { runFilePollutionCheck } from '../session/filePollutionCheck';
+import { recordEvent } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
 
 const REVIEW_TIMEOUT_MS = 120_000;
@@ -54,8 +58,8 @@ type QueuedJob = (ReviewJob & { type?: 'pr' }) | LocalBranchJob;
 export class ReviewOrchestrator {
   private queue: QueuedJob[] = [];
   private running = 0;
-  /** SHA of the last autofix commit per PR, keyed by "prNumber:repo". */
-  private lastAutofixShas = new Map<string, string>();
+  /** In-flight post-revert worktree sync promises, keyed by "prNumber:repo". */
+  private pendingSyncs = new Map<string, Promise<void>>();
 
   constructor(
     private reviewService: PRReviewService,
@@ -66,6 +70,30 @@ export class ReviewOrchestrator {
   ) {
     sessionManager.on('pr_opened', (job: ReviewJob) => this.onPrOpened(job));
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
+    sessionManager.on(
+      'revert_sync_registered',
+      (payload: {
+        prNumber: number;
+        repo: string;
+        syncPromise: Promise<void>;
+      }) => {
+        this.registerRevertSync(
+          payload.prNumber,
+          payload.repo,
+          payload.syncPromise,
+        );
+      },
+    );
+  }
+
+  /** Store a pending sync promise so executeReview can await it before fetching the diff. */
+  registerRevertSync(
+    prNumber: number,
+    repo: string,
+    syncPromise: Promise<void>,
+  ): void {
+    const key = `${prNumber}:${repo}`;
+    this.pendingSyncs.set(key, syncPromise);
   }
 
   private onPrOpened(job: ReviewJob): void {
@@ -113,7 +141,7 @@ export class ReviewOrchestrator {
       branchName,
       baseBranch,
       worktreePath: sessionRow.worktree_path,
-      taskId: sessionRow.notion_task_id,
+      taskId: sessionRow.task_id,
       contextUrl,
     });
     void this.drain();
@@ -150,18 +178,108 @@ export class ReviewOrchestrator {
   }
 
   /**
+   * Runs the autofix + file-pollution-check pipeline for a PR.
+   * Called from both executeReview (first review) and the server.ts
+   * push_detected re-review path so every push goes through the same pipeline.
+   */
+  async runAutofixPipeline(
+    prNumber: number,
+    repo: string,
+    taskId: string | null,
+  ): Promise<void> {
+    const project = getProjectByGithubRepo(repo);
+    if (!project) return;
+
+    const autofixCommands = loadAutofixCommands(project.projectDir);
+    if (autofixCommands.length === 0) return;
+
+    this.sessionManager.emit('message', {
+      type: 'autofix_started',
+      prNumber,
+      repo,
+    });
+
+    const prRow = getPRByNumber(prNumber, repo);
+    const worktreePath = prRow?.session_id
+      ? (getSession(prRow.session_id)?.worktree_path ?? '')
+      : '';
+
+    let autofixSuccess = true;
+    let autofixSummary = 'no worktree available — autofix skipped';
+
+    if (worktreePath) {
+      try {
+        const result = await runAutofix(
+          worktreePath,
+          project.projectDir,
+          autofixCommands,
+          (msg) =>
+            console.log(`[ReviewOrchestrator] autofix PR #${prNumber}: ${msg}`),
+        );
+        autofixSuccess = result.success;
+        autofixSummary = result.summary;
+        if (result.commitSha) {
+          addAutofixSha(prNumber, repo, result.commitSha);
+          if (prRow?.session_id && result.touchedFiles?.length) {
+            this.sessionManager.addToRevertLock(
+              prRow.session_id,
+              result.touchedFiles,
+            );
+          }
+          if (this.github) {
+            const pollutionResult = await runFilePollutionCheck({
+              github: this.github,
+              worktreePath,
+              repo,
+              prNumber,
+              baseBranch: prRow?.base_branch ?? 'dev',
+              sessionId: prRow?.session_id ?? null,
+              projectId: project.id,
+              taskId,
+              onReverted: (files) => {
+                if (prRow?.session_id) {
+                  this.sessionManager.addToRevertLock(prRow.session_id, files);
+                }
+              },
+            });
+            if (pollutionResult.revertCommitSha) {
+              addAutofixSha(prNumber, repo, pollutionResult.revertCommitSha);
+            }
+          }
+        }
+      } catch (err) {
+        autofixSuccess = false;
+        autofixSummary = `autofix threw: ${String(err)}`;
+        console.error(
+          `[ReviewOrchestrator] autofix error for PR #${prNumber}:`,
+          err,
+        );
+      }
+    }
+
+    this.sessionManager.emit('message', {
+      type: 'autofix_complete',
+      prNumber,
+      repo,
+      success: autofixSuccess,
+      summary: autofixSummary,
+    });
+
+    if (!autofixSuccess) {
+      console.warn(
+        `[ReviewOrchestrator] autofix failed for PR #${prNumber} (fail open): ${autofixSummary}`,
+      );
+    }
+  }
+
+  /**
    * Returns true (and consumes the entry) when the given SHA is the autofix
-   * commit that was pushed during the last executeReview() for this PR.
+   * commit that was pushed during the last runAutofixPipeline() for this PR.
    * Used by the push_detected handler to skip re-reviews for autofix-only pushes
    * so they do not count against the iteration cap.
    */
   consumeAutofixSha(prNumber: number, repo: string, sha: string): boolean {
-    const key = `${prNumber}:${repo}`;
-    if (this.lastAutofixShas.get(key) === sha) {
-      this.lastAutofixShas.delete(key);
-      return true;
-    }
-    return false;
+    return dbConsumeAutofixSha(prNumber, repo, sha);
   }
 
   private async executeLocalBranchReview(job: LocalBranchJob): Promise<void> {
@@ -173,16 +291,91 @@ export class ReviewOrchestrator {
         config.verify,
       );
       if (!verifyResult.passed) {
-        setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
-        this.sessionManager.send(
-          job.sessionId,
-          formatCIFailureFeedback({
-            source: 'verify',
-            failedCommand: verifyResult.failedCommand,
-            truncatedOutput: verifyResult.truncatedOutput,
-          }),
-        );
-        return;
+        const autofixCommands = loadAutofixCommands(project.projectDir);
+        if (autofixCommands.length > 0) {
+          try {
+            const autofixResult = await runAutofix(
+              job.worktreePath,
+              project.projectDir,
+              autofixCommands,
+              (msg) =>
+                console.log(
+                  `[ReviewOrchestrator] autofix local branch ${job.branchName}: ${msg}`,
+                ),
+            );
+            if (autofixResult.commitSha) {
+              recordEvent({
+                event_type: 'autofix_for_ci_failure',
+                actor_type: 'system',
+                task_id: job.taskId ?? null,
+                payload: {
+                  pr_number: job.localBranchId,
+                  commit_sha: autofixResult.commitSha,
+                  failing_checks: verifyResult.failedCommand
+                    ? [verifyResult.failedCommand]
+                    : [],
+                  source: 'verify',
+                },
+              });
+              // Re-run verify to see if autofix resolved it
+              const retryResult = await runVerifyAsGate(
+                job.worktreePath,
+                config.verify,
+              );
+              if (retryResult.passed) {
+                // Autofix fixed the gate — fall through to AI review
+              } else {
+                setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
+                this.sessionManager.send(
+                  job.sessionId,
+                  formatCIFailureFeedback({
+                    source: 'verify',
+                    failedCommand: retryResult.failedCommand,
+                    truncatedOutput: retryResult.truncatedOutput,
+                  }),
+                );
+                return;
+              }
+            } else {
+              setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
+              this.sessionManager.send(
+                job.sessionId,
+                formatCIFailureFeedback({
+                  source: 'verify',
+                  failedCommand: verifyResult.failedCommand,
+                  truncatedOutput: verifyResult.truncatedOutput,
+                }),
+              );
+              return;
+            }
+          } catch (err) {
+            console.warn(
+              `[ReviewOrchestrator] autofix error for local branch ${job.branchName}:`,
+              err,
+            );
+            setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
+            this.sessionManager.send(
+              job.sessionId,
+              formatCIFailureFeedback({
+                source: 'verify',
+                failedCommand: verifyResult.failedCommand,
+                truncatedOutput: verifyResult.truncatedOutput,
+              }),
+            );
+            return;
+          }
+        } else {
+          setLocalBranchPauseReason(job.localBranchId, 'ci_failing');
+          this.sessionManager.send(
+            job.sessionId,
+            formatCIFailureFeedback({
+              source: 'verify',
+              failedCommand: verifyResult.failedCommand,
+              truncatedOutput: verifyResult.truncatedOutput,
+            }),
+          );
+          return;
+        }
       }
     }
 
@@ -246,6 +439,15 @@ export class ReviewOrchestrator {
   }
 
   private async executeReview(job: ReviewJob): Promise<void> {
+    // Await any in-flight post-revert worktree sync before fetching the diff,
+    // so the review sees the canonical file state, not the contaminated version.
+    const syncKey = `${job.prNumber}:${job.repo}`;
+    const pendingSync = this.pendingSyncs.get(syncKey);
+    if (pendingSync) {
+      this.pendingSyncs.delete(syncKey);
+      await pendingSync;
+    }
+
     const project = getProjectByGithubRepo(job.repo);
     if (!project) {
       console.warn(
@@ -270,65 +472,8 @@ export class ReviewOrchestrator {
       return;
     }
 
-    // ── Autofix step ──────────────────────────────────────────────────────────
-    const autofixCommands = loadAutofixCommands(project.projectDir);
-    if (autofixCommands.length > 0) {
-      this.sessionManager.emit('message', {
-        type: 'autofix_started',
-        prNumber: job.prNumber,
-        repo: job.repo,
-      });
-
-      const worktreePath = prRow?.session_id
-        ? (getSession(prRow.session_id)?.worktree_path ?? '')
-        : '';
-
-      let autofixSuccess = true;
-      let autofixSummary = 'no worktree available — autofix skipped';
-
-      if (worktreePath) {
-        try {
-          const result = await runAutofix(
-            worktreePath,
-            project.projectDir,
-            autofixCommands,
-            (msg) =>
-              console.log(
-                `[ReviewOrchestrator] autofix PR #${job.prNumber}: ${msg}`,
-              ),
-          );
-          autofixSuccess = result.success;
-          autofixSummary = result.summary;
-          if (result.commitSha) {
-            this.lastAutofixShas.set(
-              `${job.prNumber}:${job.repo}`,
-              result.commitSha,
-            );
-          }
-        } catch (err) {
-          autofixSuccess = false;
-          autofixSummary = `autofix threw: ${String(err)}`;
-          console.error(
-            `[ReviewOrchestrator] autofix error for PR #${job.prNumber}:`,
-            err,
-          );
-        }
-      }
-
-      this.sessionManager.emit('message', {
-        type: 'autofix_complete',
-        prNumber: job.prNumber,
-        repo: job.repo,
-        success: autofixSuccess,
-        summary: autofixSummary,
-      });
-
-      if (!autofixSuccess) {
-        console.warn(
-          `[ReviewOrchestrator] autofix failed for PR #${job.prNumber} (fail open): ${autofixSummary}`,
-        );
-      }
-    }
+    // ── Autofix + file-pollution-check step ──────────────────────────────────
+    await this.runAutofixPipeline(job.prNumber, job.repo, job.taskId ?? null);
     // ─────────────────────────────────────────────────────────────────────────
 
     this.sessionManager.emit('message', {

@@ -9,6 +9,7 @@ import {
   setLocalBranchReviewResult,
   getLocalBranchById,
 } from '../db/queries';
+import { recordEvent } from '../audit/AuditLog';
 import type { GitHubClient } from './GitHubClient';
 import type { DiffSource } from './DiffSource';
 import { GitHubDiffSource } from './DiffSource';
@@ -22,6 +23,7 @@ import {
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { parseSection, parseExpectedSize } from '../notion/NotionClient';
+import { toExternalId } from '../tasks/taskId';
 import type { SessionManager } from '../session/SessionManager';
 import { GitHubApiError } from './types';
 import type { PullRequest, PRDiff } from './types';
@@ -65,6 +67,8 @@ export interface PRReviewResult {
   dimensions?: ReviewDimension[];
   summary: string;
   reviewedAt: string;
+  /** Manual-verification items extracted from the task spec — for human review, not AI evaluation. */
+  manualItemsForHuman?: string[];
 }
 
 export type WorkItem =
@@ -85,6 +89,15 @@ export type WorkItem =
  */
 const REVIEW_JSON_SCHEMA_BLOCK = `Respond ONLY with a JSON object — no preamble, no markdown fences.
 
+## Manual verification items — DO NOT evaluate
+
+The task spec may contain a section titled "### 👁️ Manual verification" (or similar).
+Items under that heading require a human reviewer — they CANNOT be verified by automated
+code review. You MUST:
+- Exclude them entirely from your pass/fail evaluation of the "Diff vs Acceptance Criteria" dimension.
+- Never fail the verdict solely because manual verification items are not demonstrated in the PR.
+- List them verbatim in the "manualItemsForHuman" array so downstream tooling can surface them to a human.
+
 Evaluate the PR across exactly these 5 dimensions and respond with this JSON schema:
 {
   "verdict": "approved" | "needs_changes" | "incomplete",
@@ -95,7 +108,8 @@ Evaluate the PR across exactly these 5 dimensions and respond with this JSON sch
     { "name": "Changed files vs Files/paths affected list",   "passed": bool, "notes": "..." },
     { "name": "${SIZE_DIMENSION_NAME}",                          "passed": bool, "notes": "..." }
   ],
-  "summary": "2–4 sentence overall assessment"
+  "summary": "2–4 sentence overall assessment",
+  "manualItemsForHuman": ["verbatim item text", ...]
 }
 verdict rules: "approved" = all 5 passed. "needs_changes" = 1–4 passed. "incomplete" = 0 passed.
 
@@ -235,7 +249,7 @@ export class PRReviewService {
         // Recompute size signal against the FULL refreshed diff each iteration.
         const { filesSection, expectedSize } = await this.fetchSizeSignalInputs(
           projectId,
-          prRow.notion_task_id,
+          prRow.task_id,
         );
         const sizeSignal = computeSizeSignal(diff, filesSection, expectedSize);
         const followUp = [
@@ -264,7 +278,7 @@ export class PRReviewService {
           await this.handleApprovedVerdict(
             prNumber,
             repo,
-            prRow.notion_task_id,
+            prRow.task_id,
             projectId,
           );
         }
@@ -281,14 +295,14 @@ export class PRReviewService {
       );
       const diffData = { prId: prNumber, diff, filesChanged: [] };
 
-      if (!prRow.notion_task_id) {
-        throw new Error(`PR #${prNumber} has no linked Notion task`);
+      if (!prRow.task_id) {
+        throw new Error(`PR #${prNumber} has no linked task`);
       }
 
       const taskBody = await this.resolveBackend(projectId).fetchTaskPage(
-        prRow.notion_task_id,
+        prRow.task_id,
       );
-      const taskUrl = `https://www.notion.so/${prRow.notion_task_id}`;
+      const taskUrl = `https://www.notion.so/${toExternalId(prRow.task_id)}`;
       const prompt = this.buildPrompt(prData, diffData, taskBody);
       const sizeSignal = computeSizeSignal(
         diff,
@@ -319,7 +333,7 @@ export class PRReviewService {
           await this.handleApprovedVerdict(
             prNumber,
             repo,
-            prRow.notion_task_id,
+            prRow.task_id,
             projectId,
           );
         }
@@ -353,6 +367,18 @@ export class PRReviewService {
       // the review sees headSha === last_reviewed_sha and is correctly skipped.
       setReviewSessionId(prNumber, repo, sessionId);
       setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
+      recordEvent({
+        event_type: 'pr_opened',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: projectId || null,
+        task_id: prRow.task_id ?? null,
+        payload: {
+          pr_number: prNumber,
+          repo,
+          head_sha: prData.headSha ?? null,
+        },
+      });
 
       const aiResult = await verdictPromise;
       const finalResult = this.appendSizeProportionalityDimension(
@@ -364,7 +390,7 @@ export class PRReviewService {
         await this.handleApprovedVerdict(
           prNumber,
           repo,
-          prRow.notion_task_id,
+          prRow.task_id,
           projectId,
         );
       }
@@ -434,7 +460,7 @@ export class PRReviewService {
     );
 
     const taskUrl = taskId
-      ? `https://www.notion.so/${taskId}`
+      ? `https://www.notion.so/${toExternalId(taskId)}`
       : projectContextUrl;
     this.sessionManager.start(taskUrl, projectContextUrl, {
       sessionId,
@@ -596,7 +622,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     const diffData = await this.github.fetchDiff(prNumber, repo, branches);
     const { filesSection, expectedSize } = await this.fetchSizeSignalInputs(
       projectId,
-      pr.notion_task_id,
+      pr.task_id,
     );
     const sizeSignal = computeSizeSignal(
       diffData.diff,
@@ -644,12 +670,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
     setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
     if (finalResult.verdict === 'approved') {
-      await this.handleApprovedVerdict(
-        prNumber,
-        repo,
-        pr.notion_task_id,
-        projectId,
-      );
+      await this.handleApprovedVerdict(prNumber, repo, pr.task_id, projectId);
     }
     return finalResult;
   }
@@ -727,6 +748,9 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
               dimensions: parsed.dimensions,
               summary: parsed.summary,
               reviewedAt: new Date().toISOString(),
+              ...(parsed.manualItemsForHuman
+                ? { manualItemsForHuman: parsed.manualItemsForHuman }
+                : {}),
             };
           }
         }
@@ -742,6 +766,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     verdict: PRReviewResult['verdict'];
     dimensions: ReviewDimension[];
     summary: string;
+    manualItemsForHuman?: string[];
   } | null {
     const candidate = this.extractJsonCandidate(text.trim());
     if (!candidate) {
@@ -754,10 +779,18 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         Array.isArray(parsed.dimensions) &&
         typeof parsed.summary === 'string'
       ) {
+        const manualItems = Array.isArray(parsed.manualItemsForHuman)
+          ? (parsed.manualItemsForHuman as string[]).filter(
+              (item) => typeof item === 'string',
+            )
+          : undefined;
         return {
           verdict: parsed.verdict as PRReviewResult['verdict'],
           dimensions: parsed.dimensions as ReviewDimension[],
           summary: parsed.summary,
+          ...(manualItems && manualItems.length > 0
+            ? { manualItemsForHuman: manualItems }
+            : {}),
         };
       }
     } catch {
@@ -975,6 +1008,9 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         dimensions: parsed.dimensions,
         summary: parsed.summary,
         reviewedAt: new Date().toISOString(),
+        ...(parsed.manualItemsForHuman
+          ? { manualItemsForHuman: parsed.manualItemsForHuman }
+          : {}),
       };
     }
 

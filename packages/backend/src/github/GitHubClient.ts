@@ -42,14 +42,19 @@ export class GitHubClient {
   async getPRState(
     prNumber: number,
     repo?: string,
-  ): Promise<'open' | 'merged' | 'closed'> {
+  ): Promise<{ state: 'open' | 'merged' | 'closed'; headSha: string | null }> {
     const r = repo ?? GITHUB_REPO;
-    const data = await this.request<{ state: string; merged: boolean }>(
-      `/repos/${r}/pulls/${prNumber}`,
-    );
-    if (data.merged) return 'merged';
-    if (data.state === 'closed') return 'closed';
-    return 'open';
+    const data = await this.request<{
+      state: string;
+      merged?: boolean;
+      head?: { sha: string };
+    }>(`/repos/${r}/pulls/${prNumber}`);
+    const state: 'open' | 'merged' | 'closed' = data.merged
+      ? 'merged'
+      : data.state === 'closed'
+        ? 'closed'
+        : 'open';
+    return { state, headSha: data.head?.sha ?? null };
   }
 
   async fetchPR(repo: string, prNumber: number): Promise<PullRequest> {
@@ -126,6 +131,56 @@ export class GitHubClient {
       return;
     }
     await this.markPRReadyByNodeId(prRow.node_id);
+  }
+
+  /**
+   * Fetch the GitHub-computed review decision for a PR via GraphQL.
+   * Returns 'APPROVED', 'CHANGES_REQUESTED', 'REVIEW_REQUIRED', or null when
+   * the repository has no review requirements configured.
+   */
+  async getReviewState(
+    prNumber: number,
+    repo?: string,
+  ): Promise<PRReviewDecision | null> {
+    const r = repo ?? GITHUB_REPO;
+    const [owner, name] = r.split('/');
+    const query = `query($owner: String!, $name: String!, $number: Int!) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) {
+          reviewDecision
+        }
+      }
+    }`;
+    const res = await fetch('https://api.github.com/graphql', {
+      method: 'POST',
+      headers: {
+        ...this.headers,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query,
+        variables: { owner, name, number: prNumber },
+      }),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new GitHubApiError(res.status, text);
+    }
+    const body = (await res.json()) as {
+      errors?: Array<{ message: string }>;
+      data?: {
+        repository?: { pullRequest?: { reviewDecision: string | null } };
+      };
+    };
+    if (body.errors?.length) {
+      throw new GitHubApiError(
+        422,
+        body.errors.map((e) => e.message).join('; '),
+      );
+    }
+    const decision = body.data?.repository?.pullRequest?.reviewDecision;
+    if (!decision) return null;
+    return decision as PRReviewDecision;
   }
 
   private async markPRReadyByNodeId(nodeId: string): Promise<void> {
@@ -280,6 +335,7 @@ export class GitHubClient {
         mergeState: 'dirty',
         rawMergeableState,
         failingChecks: [],
+        headSha,
       };
     }
     if (rawMergeableState === 'unstable') {
@@ -293,6 +349,7 @@ export class GitHubClient {
           mergeState: 'ci_failed',
           rawMergeableState,
           failingChecks,
+          headSha,
         };
       }
       return {
@@ -300,6 +357,7 @@ export class GitHubClient {
         mergeState: 'unstable',
         rawMergeableState,
         failingChecks: [],
+        headSha,
       };
     }
     if (rawMergeableState === 'blocked') {
@@ -312,6 +370,7 @@ export class GitHubClient {
           mergeState: 'ci_failed',
           rawMergeableState,
           failingChecks,
+          headSha,
         };
       }
       // A named check that hasn't reported yet is treated as pending, not passing.
@@ -321,6 +380,7 @@ export class GitHubClient {
           mergeState: 'blocked',
           rawMergeableState,
           failingChecks: [],
+          headSha,
         };
       }
       return {
@@ -328,6 +388,7 @@ export class GitHubClient {
         mergeState: 'blocked',
         rawMergeableState,
         failingChecks: [],
+        headSha,
       };
     }
     if (rawMergeableState === 'clean') {
@@ -336,6 +397,7 @@ export class GitHubClient {
         mergeState: 'clean',
         rawMergeableState,
         failingChecks: [],
+        headSha,
       };
     }
     return {
@@ -343,6 +405,7 @@ export class GitHubClient {
       mergeState: rawMergeableState ?? 'unknown',
       rawMergeableState,
       failingChecks: [],
+      headSha,
     };
   }
 
@@ -399,6 +462,212 @@ export class GitHubClient {
       (name) => !reportedNames.has(name),
     );
     return { failingChecks, hasMissingNamedCheck };
+  }
+
+  /** Fetch the full list of changed files for a pull request (paginated). */
+  async getPRFiles(repo: string, prNumber: number): Promise<string[]> {
+    const files: string[] = [];
+    let page = 1;
+    while (true) {
+      const data = await this.request<Array<{ filename: string }>>(
+        `/repos/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`,
+      );
+      for (const f of data) files.push(f.filename);
+      if (data.length < 100) break;
+      page++;
+    }
+    return files;
+  }
+
+  /** Fetch the list of commits for a pull request. */
+  async getCommitsForPR(
+    repo: string,
+    prNumber: number,
+  ): Promise<Array<{ sha: string; message: string; author?: string | null }>> {
+    const data = await this.request<
+      Array<{
+        sha: string;
+        commit: { message: string; author?: { email?: string } };
+      }>
+    >(`/repos/${repo}/pulls/${prNumber}/commits?per_page=100`);
+    return data.map((c) => ({
+      sha: c.sha,
+      message: c.commit.message,
+      author: c.commit.author?.email ?? null,
+    }));
+  }
+
+  /**
+   * Ensure a label exists on the repo, creating it if absent.
+   * Silently ignores 422 (already exists) from a race condition.
+   */
+  async ensureLabelExists(
+    repo: string,
+    name: string,
+    color: string,
+    description: string,
+  ): Promise<void> {
+    try {
+      await this.request(`/repos/${repo}/labels`, {
+        method: 'POST',
+        headers: { ...this.headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, color, description }),
+      });
+    } catch (err) {
+      if (err instanceof GitHubApiError && err.status === 422) return;
+      throw err;
+    }
+  }
+
+  /** Apply a label to a pull request (issues endpoint works for PRs too). */
+  async addLabelToPR(
+    repo: string,
+    prNumber: number,
+    label: string,
+  ): Promise<void> {
+    await this.request(`/repos/${repo}/issues/${prNumber}/labels`, {
+      method: 'POST',
+      headers: { ...this.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ labels: [label] }),
+    });
+  }
+
+  /** Post a comment on a pull request. */
+  async createIssueComment(
+    repo: string,
+    prNumber: number,
+    body: string,
+  ): Promise<void> {
+    await this.request(`/repos/${repo}/issues/${prNumber}/comments`, {
+      method: 'POST',
+      headers: { ...this.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body }),
+    });
+  }
+
+  async listPRReviews(
+    prNumber: number,
+    repo?: string,
+  ): Promise<PRReviewSummary[]> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<
+      Array<{
+        id: number;
+        state: string;
+        user: { login: string };
+        body: string | null;
+        submitted_at: string;
+      }>
+    >(`/repos/${r}/pulls/${prNumber}/reviews?per_page=100`);
+    return data.map((review) => ({
+      id: review.id,
+      state: review.state as PRReviewSummary['state'],
+      author: review.user.login,
+      body: review.body,
+      submittedAt: review.submitted_at,
+    }));
+  }
+
+  async listPRReviewComments(
+    prNumber: number,
+    repo?: string,
+  ): Promise<PRCommentSummary[]> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<
+      Array<{
+        id: number;
+        user: { login: string };
+        body: string;
+        created_at: string;
+        path: string;
+        line: number | null;
+        original_line: number | null;
+      }>
+    >(`/repos/${r}/pulls/${prNumber}/comments?per_page=100`);
+    return data.map((c) => ({
+      id: c.id,
+      author: c.user.login,
+      body: c.body,
+      createdAt: c.created_at,
+      path: c.path,
+      line: c.line ?? c.original_line ?? null,
+    }));
+  }
+
+  async listPRIssueComments(
+    prNumber: number,
+    repo?: string,
+  ): Promise<PRCommentSummary[]> {
+    const r = repo ?? GITHUB_REPO;
+    const data = await this.request<
+      Array<{
+        id: number;
+        user: { login: string };
+        body: string;
+        created_at: string;
+      }>
+    >(`/repos/${r}/issues/${prNumber}/comments?per_page=100`);
+    return data.map((c) => ({
+      id: c.id,
+      author: c.user.login,
+      body: c.body,
+      createdAt: c.created_at,
+    }));
+  }
+
+  async deleteBranch(repo: string, branchName: string): Promise<void> {
+    await this.request(`/repos/${repo}/git/refs/heads/${branchName}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async listMergedPRsSince(
+    repo: string,
+    baseBranch: string,
+    since: string,
+  ): Promise<
+    Array<{ number: number; title: string; url: string; mergedAt: string }>
+  > {
+    const data = await this.request<GitHubRawPR[]>(
+      `/repos/${repo}/pulls?state=closed&base=${encodeURIComponent(baseBranch)}&sort=updated&direction=desc&per_page=50`,
+    );
+    return data
+      .filter((pr) => {
+        const raw = pr as GitHubRawPR & { merged_at?: string | null };
+        return raw.merged_at && raw.merged_at >= since;
+      })
+      .map((pr) => {
+        const raw = pr as GitHubRawPR & { merged_at: string };
+        return {
+          number: pr.number,
+          title: pr.title,
+          url: pr.html_url,
+          mergedAt: raw.merged_at,
+        };
+      });
+  }
+
+  async listCommitsSince(
+    repo: string,
+    branch: string,
+    since: string,
+  ): Promise<
+    Array<{ sha: string; message: string; author: string; date: string }>
+  > {
+    const data = await this.request<
+      Array<{
+        sha: string;
+        commit: { message: string; author: { name: string; date: string } };
+      }>
+    >(
+      `/repos/${repo}/commits?sha=${encodeURIComponent(branch)}&since=${encodeURIComponent(since)}&per_page=30`,
+    );
+    return data.map((c) => ({
+      sha: c.sha.slice(0, 8),
+      message: c.commit.message.split('\n')[0],
+      author: c.commit.author.name,
+      date: c.commit.author.date,
+    }));
   }
 
   async mergePR(
@@ -488,6 +757,28 @@ function parseDiffFiles(diff: string): string[] {
     }
   }
   return files;
+}
+
+export type PRReviewDecision =
+  | 'APPROVED'
+  | 'CHANGES_REQUESTED'
+  | 'REVIEW_REQUIRED';
+
+export interface PRReviewSummary {
+  id: number;
+  state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED';
+  author: string;
+  body: string | null;
+  submittedAt: string;
+}
+
+export interface PRCommentSummary {
+  id: number;
+  author: string;
+  body: string;
+  createdAt: string;
+  path?: string | null;
+  line?: number | null;
 }
 
 export interface SizeSignal {

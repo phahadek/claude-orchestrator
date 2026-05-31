@@ -3,6 +3,7 @@ import type {
   ServerMessage,
   ClientMessage,
 } from '@claude-orchestrator/backend/src/ws/types';
+import { getDeviceToken } from '../auth/deviceToken';
 
 export type ConnectionState = 'connected' | 'disconnected' | 'reconnecting';
 
@@ -43,7 +44,11 @@ export function useWebSocket(
       ws.current = null;
     }
 
-    const socket = new WebSocket(`ws://${window.location.host}/ws`);
+    const token = getDeviceToken();
+    const wsUrl = token
+      ? `ws://${window.location.host}/ws?token=${encodeURIComponent(token)}`
+      : `ws://${window.location.host}/ws`;
+    const socket = new WebSocket(wsUrl);
     ws.current = socket;
 
     socket.onmessage = (e) => {
@@ -54,8 +59,13 @@ export function useWebSocket(
       }
     };
 
-    socket.onclose = () => {
+    socket.onclose = (e) => {
       if (disposed.current) return;
+      // 4001 = device not authorized — trigger enrollment flow instead of reconnecting
+      if (e.code === 4001) {
+        window.dispatchEvent(new CustomEvent('device-unauthorized'));
+        return;
+      }
       setConnectionState('reconnecting');
       reconnectTimer.current = setTimeout(() => {
         reconnectDelay.current = Math.min(reconnectDelay.current * 2, 30_000);

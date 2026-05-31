@@ -9,8 +9,8 @@ vi.mock('../db/db.js', async () => {
   db.exec(`
     CREATE TABLE sessions (
       session_id          TEXT    PRIMARY KEY,
-      notion_task_id      TEXT,
-      notion_task_url     TEXT,
+      task_id             TEXT,
+      task_url            TEXT,
       project_context_url TEXT,
       project_id          TEXT,
       status              TEXT    NOT NULL,

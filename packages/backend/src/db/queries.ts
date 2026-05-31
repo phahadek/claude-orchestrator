@@ -19,16 +19,18 @@ import type {
   NewMilestoneRow,
   LocalBranchRow,
   NewLocalBranchRow,
+  DeviceRow,
+  NewDeviceRow,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
 
 const stmtInsertSession = db.prepare<NewSession>(`
   INSERT INTO sessions
-    (session_id, notion_task_id, notion_task_url, project_context_url,
+    (session_id, task_id, task_url, project_context_url,
      project_id, status, started_at, ended_at, pr_url, worktree_path, session_type, task_name)
   VALUES
-    (@session_id, @notion_task_id, @notion_task_url, @project_context_url,
+    (@session_id, @task_id, @task_url, @project_context_url,
      @project_id, @status, @started_at, @ended_at, @pr_url, @worktree_path, @session_type, @task_name)
 `);
 
@@ -64,10 +66,10 @@ const stmtDeleteSession = db.prepare<{ session_id: string }>(`
 
 const stmtInsertSessionOrIgnore = db.prepare<NewSession>(`
   INSERT OR IGNORE INTO sessions
-    (session_id, notion_task_id, notion_task_url, project_context_url,
+    (session_id, task_id, task_url, project_context_url,
      project_id, status, started_at, ended_at, pr_url, worktree_path, session_type, task_name)
   VALUES
-    (@session_id, @notion_task_id, @notion_task_url, @project_context_url,
+    (@session_id, @task_id, @task_url, @project_context_url,
      @project_id, @status, @started_at, @ended_at, @pr_url, @worktree_path, @session_type, @task_name)
 `);
 
@@ -223,23 +225,24 @@ export function getSessionsByStatus(statuses: string[]): Session[] {
 
 /**
  * Returns true when a standard (non-review) session is currently active for the
- * given Notion task id. "Active" means not in a terminal status (done, error,
- * killed). Used by AutoLauncher to avoid re-launching a task whose status hasn't
- * yet propagated back from Notion.
+ * given task id. "Active" means not in a terminal status (done, error, killed).
+ * Used by AutoLauncher to avoid re-launching a task whose status hasn't yet
+ * propagated back from the task backend.
+ * Strips hyphens from both sides to normalize UUID format differences.
  */
-export function hasActiveSessionForTask(notionTaskId: string): boolean {
-  const norm = notionTaskId.replace(/-/g, '');
+export function hasActiveSessionForTask(taskId: string): boolean {
+  const norm = taskId.replace(/-/g, '');
   const row = db
-    .prepare<{ notion_task_id: string }>(
+    .prepare<{ task_id: string }>(
       `
     SELECT 1 FROM sessions
-    WHERE REPLACE(COALESCE(notion_task_id, ''), '-', '') = @notion_task_id
+    WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
       AND status NOT IN ('done', 'error', 'killed')
       AND (session_type = 'standard' OR session_type IS NULL)
     LIMIT 1
   `,
     )
-    .get({ notion_task_id: norm });
+    .get({ task_id: norm });
   return !!row;
 }
 
@@ -250,7 +253,7 @@ export function getActiveSessions(): Session[] {
     .prepare(
       `
     SELECT
-      s.session_id, s.notion_task_id, s.notion_task_url, s.project_context_url,
+      s.session_id, s.task_id, s.task_url, s.project_context_url,
       s.project_id, s.status, s.started_at, s.ended_at, s.worktree_path,
       s.archived, s.favorited, s.session_type, s.note, s.tags,
       s.total_input_tokens, s.total_output_tokens, s.model, s.task_name,
@@ -465,14 +468,14 @@ export function insertPermissionEvent(e: NewPermissionEvent): void {
 
 export function getRecentPermissionEvents(
   limit: number,
-): Array<PermissionEvent & { notion_task_url: string | null }> {
+): Array<PermissionEvent & { task_url: string | null }> {
   return db
     .prepare(
-      `SELECT pe.*, s.notion_task_url FROM permission_events pe
+      `SELECT pe.*, s.task_url FROM permission_events pe
        LEFT JOIN sessions s ON pe.session_id = s.session_id
        ORDER BY pe.decided_at DESC LIMIT ?`,
     )
-    .all(limit) as Array<PermissionEvent & { notion_task_url: string | null }>;
+    .all(limit) as Array<PermissionEvent & { task_url: string | null }>;
 }
 
 const stmtClearPermissionEvents = db.prepare(`DELETE FROM permission_events`);
@@ -601,42 +604,40 @@ export function deleteDenialsBySession(sessionId: string): void {
 
 export function getRecentPermissionDenials(
   limit: number,
-): Array<PermissionDenialRow & { notion_task_url: string | null }> {
+): Array<PermissionDenialRow & { task_url: string | null }> {
   return db
     .prepare(
-      `SELECT d.*, s.notion_task_url FROM permission_denials d
+      `SELECT d.*, s.task_url FROM permission_denials d
        LEFT JOIN sessions s ON d.session_id = s.session_id
        ORDER BY d.id DESC LIMIT ?`,
     )
-    .all(limit) as Array<
-    PermissionDenialRow & { notion_task_url: string | null }
-  >;
+    .all(limit) as Array<PermissionDenialRow & { task_url: string | null }>;
 }
 
 // ─── task_cache ────────────────────────────────────────────────────────────
 
 const stmtUpsertTaskCache = db.prepare<{
-  notion_task_id: string;
+  task_id: string;
   fetched_at: number;
   raw_json: string;
 }>(`
-  INSERT INTO task_cache (notion_task_id, fetched_at, raw_json)
-  VALUES (@notion_task_id, @fetched_at, @raw_json)
-  ON CONFLICT(notion_task_id) DO UPDATE SET
+  INSERT INTO task_cache (task_id, fetched_at, raw_json)
+  VALUES (@task_id, @fetched_at, @raw_json)
+  ON CONFLICT(task_id) DO UPDATE SET
     fetched_at = excluded.fetched_at,
     raw_json   = excluded.raw_json
 `);
 
-const stmtGetTaskCache = db.prepare<{ notion_task_id: string }>(`
-  SELECT * FROM task_cache WHERE notion_task_id = @notion_task_id
+const stmtGetTaskCache = db.prepare<{ task_id: string }>(`
+  SELECT * FROM task_cache WHERE task_id = @task_id
 `);
 
-const stmtDeleteTaskCache = db.prepare<{ notion_task_id: string }>(`
-  DELETE FROM task_cache WHERE notion_task_id = @notion_task_id
+const stmtDeleteTaskCache = db.prepare<{ task_id: string }>(`
+  DELETE FROM task_cache WHERE task_id = @task_id
 `);
 
 export function deleteTaskCache(taskId: string): void {
-  stmtDeleteTaskCache.run({ notion_task_id: taskId });
+  stmtDeleteTaskCache.run({ task_id: taskId });
 }
 
 export function updateTaskCacheStatus(taskId: string, status: string): void {
@@ -651,7 +652,7 @@ export function updateTaskCacheStatus(taskId: string, status: string): void {
       parsed.properties.Status.select.name = status;
     }
     stmtUpsertTaskCache.run({
-      notion_task_id: row.notion_task_id,
+      task_id: row.task_id,
       fetched_at: row.fetched_at,
       raw_json: JSON.stringify(parsed),
     });
@@ -662,23 +663,14 @@ export function updateTaskCacheStatus(taskId: string, status: string): void {
 
 export function upsertTaskCache(taskId: string, rawJson: string): void {
   stmtUpsertTaskCache.run({
-    notion_task_id: taskId,
+    task_id: taskId,
     fetched_at: Date.now(),
     raw_json: rawJson,
   });
 }
 
 export function getTaskCache(taskId: string): TaskCache | undefined {
-  const row = stmtGetTaskCache.get({ notion_task_id: taskId }) as
-    | TaskCache
-    | undefined;
-  if (row) return row;
-  // Sessions store IDs without hyphens; cache stores UUID format — try the other form
-  const alt = taskId.includes('-')
-    ? taskId.replace(/-/g, '')
-    : taskId.replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5');
-  if (alt === taskId) return undefined;
-  return stmtGetTaskCache.get({ notion_task_id: alt }) as TaskCache | undefined;
+  return stmtGetTaskCache.get({ task_id: taskId }) as TaskCache | undefined;
 }
 
 export function getCacheAge(taskId: string): number {
@@ -742,6 +734,7 @@ export function upsertPullRequest(
     | 'failing_checks'
     | 'pending_push'
     | 'pause_reason'
+    | 'ci_remediation_attempted_sha'
   > & {
     review_session_id?: string | null;
     review_iteration?: number;
@@ -757,12 +750,12 @@ export function upsertPullRequest(
   db.prepare(
     `
     INSERT INTO pull_requests
-      (pr_number, pr_url, notion_task_id, session_id, repo, title, body,
+      (pr_number, pr_url, task_id, session_id, repo, title, body,
        head_branch, base_branch, state, draft, review_result, review_at,
        created_at, updated_at, synced_at, node_id, head_sha,
        mergeable, merge_state, merge_state_checked_at)
     VALUES
-      (@pr_number, @pr_url, @notion_task_id, @session_id, @repo, @title, @body,
+      (@pr_number, @pr_url, @task_id, @session_id, @repo, @title, @body,
        @head_branch, @base_branch, @state, @draft, @review_result, @review_at,
        @created_at, @updated_at, @synced_at, @node_id, @head_sha,
        @mergeable, @merge_state, @merge_state_checked_at)
@@ -774,7 +767,7 @@ export function upsertPullRequest(
       body                   = COALESCE(excluded.body, body),
       head_branch            = COALESCE(excluded.head_branch, head_branch),
       base_branch            = COALESCE(excluded.base_branch, base_branch),
-      notion_task_id         = COALESCE(excluded.notion_task_id, notion_task_id),
+      task_id                = COALESCE(excluded.task_id, task_id),
       session_id             = COALESCE(excluded.session_id, session_id),
       updated_at             = excluded.updated_at,
       node_id                = COALESCE(excluded.node_id, node_id),
@@ -889,17 +882,18 @@ export function getPRBySessionId(sessionId: string): PullRequestRow | null {
     .get({ session_id: sessionId }) as PullRequestRow | null;
 }
 
-export function getPRByNotionTaskId(
-  notionTaskId: string,
-): PullRequestRow | null {
+export function getPRByTaskId(taskId: string): PullRequestRow | null {
   return db
-    .prepare<{ notion_task_id: string }>(
+    .prepare<{ task_id: string }>(
       `
-    SELECT * FROM pull_requests WHERE notion_task_id = @notion_task_id ORDER BY pr_number DESC LIMIT 1
+    SELECT * FROM pull_requests WHERE task_id = @task_id ORDER BY pr_number DESC LIMIT 1
   `,
     )
-    .get({ notion_task_id: notionTaskId }) as PullRequestRow | null;
+    .get({ task_id: taskId }) as PullRequestRow | null;
 }
+
+/** @deprecated Use getPRByTaskId instead */
+export const getPRByNotionTaskId = getPRByTaskId;
 
 export function getOpenPRs(repo: string): PullRequestRow[] {
   return db
@@ -1130,6 +1124,16 @@ export function resetReviewIteration(prNumber: number, repo: string): void {
   ).run({ pr_number: prNumber, repo });
 }
 
+export function setCiRemediationAttemptedSha(
+  prNumber: number,
+  repo: string,
+  sha: string | null,
+): void {
+  db.prepare(
+    `UPDATE pull_requests SET ci_remediation_attempted_sha = ? WHERE pr_number = ? AND repo = ?`,
+  ).run(sha, prNumber, repo);
+}
+
 export function setPauseReason(
   prNumber: number,
   repo: string,
@@ -1143,27 +1147,22 @@ export function setPauseReason(
 }
 
 /**
- * Returns the pause_reason of the most recent PR for the given Notion task id,
+ * Returns the pause_reason of the most recent PR for the given task id,
  * or null if no PR exists or the PR is not paused. Used by auto-runner
  * components to skip tasks paused by stuck_timeout (or any other reason).
  */
-export function getPausedPrReasonForTask(
-  notionTaskId: string,
-): PauseReason | null {
-  const norm = notionTaskId.replace(/-/g, '');
+export function getPausedPrReasonForTask(taskId: string): PauseReason | null {
   const row = db
-    .prepare<{ notion_task_id: string }>(
+    .prepare<{ task_id: string }>(
       `
     SELECT pause_reason FROM pull_requests
-    WHERE REPLACE(COALESCE(notion_task_id, ''), '-', '') = @notion_task_id
+    WHERE task_id = @task_id
       AND pause_reason IS NOT NULL
     ORDER BY pr_number DESC
     LIMIT 1
   `,
     )
-    .get({ notion_task_id: norm }) as
-    | { pause_reason: string | null }
-    | undefined;
+    .get({ task_id: taskId }) as { pause_reason: string | null } | undefined;
   return (row?.pause_reason as PauseReason | null) ?? null;
 }
 
@@ -1222,16 +1221,16 @@ export function getMergeReadyPRs(
 
   const boardCache = db
     .prepare<{
-      notion_task_id: string;
-    }>(`SELECT raw_json FROM task_cache WHERE notion_task_id = @notion_task_id`)
-    .get({ notion_task_id: cacheKey }) as { raw_json: string } | undefined;
+      task_id: string;
+    }>(`SELECT raw_json FROM task_cache WHERE task_id = @task_id`)
+    .get({ task_id: cacheKey }) as { raw_json: string } | undefined;
 
   if (!boardCache) return [];
 
   let taskIds: string[];
   try {
     const tasks = JSON.parse(boardCache.raw_json) as { id: string }[];
-    taskIds = tasks.map((t) => t.id.replace(/-/g, ''));
+    taskIds = tasks.map((t) => `notion:${t.id}`);
   } catch {
     return [];
   }
@@ -1247,7 +1246,7 @@ export function getMergeReadyPRs(
       AND pause_reason IS NULL
       AND mergeable = 1
       AND JSON_EXTRACT(review_result, '$.verdict') = 'approved'
-      AND REPLACE(COALESCE(notion_task_id, ''), '-', '') IN (${placeholders})
+      AND task_id IN (${placeholders})
   `,
     )
     .all(...taskIds) as PullRequestRow[];
@@ -1256,7 +1255,7 @@ export function getMergeReadyPRs(
 // ─── task aggregation ─────────────────────────────────────────────────────────
 
 export interface TaskAggregateRow {
-  notion_task_id: string;
+  task_id: string;
   raw_json: string;
   // code session (session_type = 'standard')
   code_session_id: string | null;
@@ -1265,6 +1264,7 @@ export interface TaskAggregateRow {
   code_session_ended_at: number | null;
   code_session_input_tokens: number | null;
   code_session_output_tokens: number | null;
+  code_session_last_event_payload: string | null;
   // review session (session_type = 'review')
   review_session_id: string | null;
   review_session_status: string | null;
@@ -1288,11 +1288,44 @@ export interface TaskAggregateRow {
 export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
   if (taskIds.length === 0) return [];
   const placeholders = taskIds.map(() => '?').join(', ');
+  // Single query using window functions (ROW_NUMBER) to pick the latest code session,
+  // review session, and PR per task — avoids N×3 correlated subqueries.
+  // The inline event-payload subquery runs once per matched code session and is
+  // O(1) with idx_session_events_session_id_id covering (session_id, id DESC).
+  // Direct task_id comparison allows idx_sessions_notion_task_id_session_type and
+  // idx_pull_requests_task_id_pr_number to be used by the query planner.
   return db
     .prepare(
       `
+    WITH
+      ranked_code AS (
+        SELECT *,
+          ROW_NUMBER() OVER (
+            PARTITION BY task_id
+            ORDER BY started_at DESC
+          ) AS rn
+        FROM sessions
+        WHERE session_type = 'standard' OR session_type IS NULL
+      ),
+      ranked_review AS (
+        SELECT *,
+          ROW_NUMBER() OVER (
+            PARTITION BY task_id
+            ORDER BY started_at DESC
+          ) AS rn
+        FROM sessions
+        WHERE session_type = 'review'
+      ),
+      ranked_pr AS (
+        SELECT *,
+          ROW_NUMBER() OVER (
+            PARTITION BY task_id
+            ORDER BY pr_number DESC
+          ) AS rn
+        FROM pull_requests
+      )
     SELECT
-      tc.notion_task_id,
+      tc.task_id,
       tc.raw_json,
       cs.session_id          AS code_session_id,
       cs.status              AS code_session_status,
@@ -1300,6 +1333,12 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       cs.ended_at            AS code_session_ended_at,
       cs.total_input_tokens  AS code_session_input_tokens,
       cs.total_output_tokens AS code_session_output_tokens,
+      (
+        SELECT payload FROM session_events
+        WHERE session_id = cs.session_id
+          AND event_type NOT IN ('system', 'user_message')
+        ORDER BY id DESC LIMIT 1
+      )                      AS code_session_last_event_payload,
       rs.session_id          AS review_session_id,
       rs.status              AS review_session_status,
       rs.total_input_tokens  AS review_session_input_tokens,
@@ -1317,22 +1356,10 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       pr.merge_state         AS pr_merge_state,
       pr.pause_reason        AS pr_pause_reason
     FROM task_cache tc
-    LEFT JOIN sessions cs ON cs.session_id = (
-      SELECT session_id FROM sessions
-      WHERE REPLACE(notion_task_id, '-', '') = REPLACE(tc.notion_task_id, '-', '') AND session_type = 'standard'
-      ORDER BY started_at DESC LIMIT 1
-    )
-    LEFT JOIN sessions rs ON rs.session_id = (
-      SELECT session_id FROM sessions
-      WHERE REPLACE(notion_task_id, '-', '') = REPLACE(tc.notion_task_id, '-', '') AND session_type = 'review'
-      ORDER BY started_at DESC LIMIT 1
-    )
-    LEFT JOIN pull_requests pr ON pr.id = (
-      SELECT id FROM pull_requests
-      WHERE REPLACE(notion_task_id, '-', '') = REPLACE(tc.notion_task_id, '-', '')
-      ORDER BY pr_number DESC LIMIT 1
-    )
-    WHERE tc.notion_task_id IN (${placeholders})
+    LEFT JOIN ranked_code cs ON cs.task_id = tc.task_id AND cs.rn = 1
+    LEFT JOIN ranked_review rs ON rs.task_id = tc.task_id AND rs.rn = 1
+    LEFT JOIN ranked_pr pr ON pr.task_id = tc.task_id AND pr.rn = 1
+    WHERE tc.task_id IN (${placeholders})
     ORDER BY tc.fetched_at DESC
   `,
     )
@@ -1365,20 +1392,20 @@ export function setSessionReviewResult(
   ).run({ session_id: sessionId, review_result: result });
 }
 
-/** Returns the most recent standard (non-review) session for a given Notion task ID. */
+/** Returns the most recent standard (non-review) session for a given task ID. */
 export function getLatestCodeSessionByNotionTaskId(
-  notionTaskId: string,
+  taskId: string,
 ): Session | undefined {
   return db
-    .prepare<{ notion_task_id: string }>(
+    .prepare<{ task_id: string }>(
       `
     SELECT * FROM sessions
-    WHERE notion_task_id = @notion_task_id AND (session_type = 'standard' OR session_type IS NULL)
+    WHERE task_id = @task_id AND (session_type = 'standard' OR session_type IS NULL)
     ORDER BY started_at DESC
     LIMIT 1
   `,
     )
-    .get({ notion_task_id: notionTaskId }) as Session | undefined;
+    .get({ task_id: taskId }) as Session | undefined;
 }
 
 // ─── projects ──────────────────────────────────────────────────────────────
@@ -1432,11 +1459,15 @@ export interface ProjectPatch {
   project_dir?: string;
   context_url?: string | null;
   github_repo?: string | null;
-  task_source?: 'notion' | 'yaml';
+  task_source?: 'notion' | 'yaml' | 'jira';
   git_mode?: 'github' | 'local-only';
   auto_launch_enabled?: number;
   auto_launch_milestone_id?: string | null;
   auto_merge_enabled?: number;
+  milestone_branching?: 'two_tier' | 'flat' | null;
+  non_milestone_source_config?: string | null;
+  task_source_config?: string | null;
+  data_residency_confirmed?: number;
 }
 
 export function updateProject(
@@ -1457,6 +1488,10 @@ export function updateProject(
     auto_launch_enabled: number;
     auto_launch_milestone_id: string | null;
     auto_merge_enabled: number;
+    milestone_branching: string | null;
+    non_milestone_source_config: string | null;
+    task_source_config: string | null;
+    data_residency_confirmed: number;
     updated_at: number;
   }>(
     `
@@ -1470,6 +1505,10 @@ export function updateProject(
         auto_launch_enabled = @auto_launch_enabled,
         auto_launch_milestone_id = @auto_launch_milestone_id,
         auto_merge_enabled = @auto_merge_enabled,
+        milestone_branching = @milestone_branching,
+        non_milestone_source_config = @non_milestone_source_config,
+        task_source_config = @task_source_config,
+        data_residency_confirmed = @data_residency_confirmed,
         updated_at = @updated_at
     WHERE id = @id
   `,
@@ -1499,6 +1538,22 @@ export function updateProject(
       patch.auto_merge_enabled !== undefined
         ? patch.auto_merge_enabled
         : existing.auto_merge_enabled,
+    milestone_branching:
+      'milestone_branching' in patch
+        ? (patch.milestone_branching ?? null)
+        : (existing.milestone_branching ?? null),
+    non_milestone_source_config:
+      'non_milestone_source_config' in patch
+        ? (patch.non_milestone_source_config ?? null)
+        : (existing.non_milestone_source_config ?? null),
+    task_source_config:
+      'task_source_config' in patch
+        ? (patch.task_source_config ?? null)
+        : (existing.task_source_config ?? null),
+    data_residency_confirmed:
+      patch.data_residency_confirmed !== undefined
+        ? patch.data_residency_confirmed
+        : (existing.data_residency_confirmed ?? 0),
     updated_at: now,
   });
   return getProjectRowById(id);
@@ -1692,4 +1747,188 @@ export function markLocalBranchMerged(
   db.prepare(
     `UPDATE local_branches SET status = 'merged', merge_commit_sha = ?, updated_at = ? WHERE id = ?`,
   ).run(commitSha ?? null, now, id);
+}
+
+// ─── pr_review_comments_routed ────────────────────────────────────────────────
+
+export function getRoutedCommentIds(
+  prNumber: number,
+  repo: string,
+): Set<string> {
+  const rows = db
+    .prepare<{
+      pr_number: number;
+      repo: string;
+    }>(
+      `SELECT comment_id FROM pr_review_comments_routed WHERE pr_number = @pr_number AND repo = @repo`,
+    )
+    .all({ pr_number: prNumber, repo }) as { comment_id: string }[];
+  return new Set(rows.map((r) => r.comment_id));
+}
+
+export function markCommentsRouted(
+  prNumber: number,
+  repo: string,
+  commentIds: string[],
+): void {
+  if (commentIds.length === 0) return;
+  const now = Date.now();
+  const stmt = db.prepare<{
+    pr_number: number;
+    repo: string;
+    comment_id: string;
+    routed_at: number;
+  }>(
+    `INSERT OR IGNORE INTO pr_review_comments_routed (pr_number, repo, comment_id, routed_at)
+     VALUES (@pr_number, @repo, @comment_id, @routed_at)`,
+  );
+  for (const comment_id of commentIds) {
+    stmt.run({ pr_number: prNumber, repo, comment_id, routed_at: now });
+  }
+}
+
+// ─── devices ────────────────────────────────────────────────────────────────
+
+const stmtInsertDevice = db.prepare<NewDeviceRow>(`
+  INSERT INTO devices (id, name, user_agent, last_ip, last_seen, enrolled_at, token, revoked)
+  VALUES (@id, @name, @user_agent, @last_ip, @last_seen, @enrolled_at, @token, @revoked)
+`);
+
+const stmtGetDeviceByToken = db.prepare<{ token: string }>(`
+  SELECT * FROM devices WHERE token = @token AND revoked = 0
+`);
+
+const stmtGetDeviceById = db.prepare<{ id: string }>(`
+  SELECT * FROM devices WHERE id = @id
+`);
+
+const stmtListDevices = db.prepare(`
+  SELECT * FROM devices ORDER BY enrolled_at DESC
+`);
+
+const stmtUpdateDeviceName = db.prepare<{ id: string; name: string }>(`
+  UPDATE devices SET name = @name WHERE id = @id
+`);
+
+const stmtRevokeDevice = db.prepare<{ id: string }>(`
+  UPDATE devices SET revoked = 1 WHERE id = @id
+`);
+
+const stmtUpdateDeviceLastSeen = db.prepare<{
+  id: string;
+  last_ip: string | null;
+  last_seen: number;
+}>(`
+  UPDATE devices SET last_ip = @last_ip, last_seen = @last_seen WHERE id = @id
+`);
+
+const stmtCountActiveDevices = db.prepare(`
+  SELECT COUNT(*) as count FROM devices WHERE revoked = 0
+`);
+
+export function insertDevice(device: NewDeviceRow): void {
+  stmtInsertDevice.run({
+    last_seen: null,
+    revoked: 0,
+    ...device,
+  });
+}
+
+export function getDeviceByToken(token: string): DeviceRow | null {
+  return (stmtGetDeviceByToken.get({ token }) as DeviceRow | undefined) ?? null;
+}
+
+export function getDeviceById(id: string): DeviceRow | null {
+  return (stmtGetDeviceById.get({ id }) as DeviceRow | undefined) ?? null;
+}
+
+export function listDevices(): DeviceRow[] {
+  return stmtListDevices.all() as DeviceRow[];
+}
+
+export function updateDeviceName(id: string, name: string): void {
+  stmtUpdateDeviceName.run({ id, name });
+}
+
+export function revokeDevice(id: string): void {
+  stmtRevokeDevice.run({ id });
+}
+
+export function updateDeviceLastSeen(
+  id: string,
+  lastIp: string | null,
+  lastSeen: number,
+): void {
+  stmtUpdateDeviceLastSeen.run({ id, last_ip: lastIp, last_seen: lastSeen });
+}
+
+export function getActiveDeviceCount(): number {
+  const row = stmtCountActiveDevices.get() as { count: number };
+  return row.count;
+}
+
+// ─── orchestrator_autofix_shas ────────────────────────────────────────────────
+
+export function addAutofixSha(
+  prNumber: number,
+  repo: string,
+  sha: string,
+): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO orchestrator_autofix_shas (pr_number, repo, sha, created_at)
+     VALUES (?, ?, ?, ?)`,
+  ).run(prNumber, repo, sha, new Date().toISOString());
+}
+
+export function consumeAutofixSha(
+  prNumber: number,
+  repo: string,
+  sha: string,
+): boolean {
+  const result = db
+    .prepare(
+      `DELETE FROM orchestrator_autofix_shas WHERE pr_number = ? AND repo = ? AND sha = ?`,
+    )
+    .run(prNumber, repo, sha);
+  return result.changes > 0;
+}
+
+export function deleteAllAutofixShasForPR(
+  prNumber: number,
+  repo: string,
+): void {
+  db.prepare(
+    `DELETE FROM orchestrator_autofix_shas WHERE pr_number = ? AND repo = ?`,
+  ).run(prNumber, repo);
+}
+
+// ─── task_no_op_attempts ──────────────────────────────────────────────────────
+
+export interface TaskNoOpAttemptRow {
+  task_id: string;
+  retry_count: number;
+  last_attempt_at: string;
+}
+
+export function getTaskNoOpAttempts(
+  taskId: string,
+): TaskNoOpAttemptRow | undefined {
+  return db
+    .prepare<{
+      task_id: string;
+    }>(
+      `SELECT task_id, retry_count, last_attempt_at FROM task_no_op_attempts WHERE task_id = @task_id`,
+    )
+    .get({ task_id: taskId }) as TaskNoOpAttemptRow | undefined;
+}
+
+export function bumpTaskNoOpAttempts(taskId: string): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO task_no_op_attempts (task_id, retry_count, last_attempt_at)
+     VALUES (?, 1, ?)
+     ON CONFLICT(task_id) DO UPDATE SET
+       retry_count = retry_count + 1,
+       last_attempt_at = excluded.last_attempt_at`,
+  ).run(taskId, now);
 }

@@ -281,6 +281,46 @@ describe('TaskCard', () => {
     expect(screen.queryByText('⚠ Conflict')).toBeNull();
   });
 
+  it('renders ❌ CI failing badge when pr.mergeState is ci_failed', () => {
+    render(
+      <TaskCard
+        task={makeTask({ pr: makePr({ mergeState: 'ci_failed' }) })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('❌ CI failing')).toBeDefined();
+  });
+
+  it('renders ⚠ CI unstable badge when pr.mergeState is unstable', () => {
+    render(
+      <TaskCard
+        task={makeTask({ pr: makePr({ mergeState: 'unstable' }) })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('⚠ CI unstable')).toBeDefined();
+  });
+
+  it('renders no CI badges when pr is null', () => {
+    render(
+      <TaskCard
+        task={makeTask({ pr: null })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.queryByText('❌ CI failing')).toBeNull();
+    expect(screen.queryByText('⚠ CI unstable')).toBeNull();
+  });
+
   it('renders Notion link when notionUrl is set', () => {
     render(
       <TaskCard

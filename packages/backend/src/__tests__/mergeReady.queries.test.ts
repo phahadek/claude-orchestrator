@@ -7,8 +7,8 @@ vi.mock('../db/db.js', async () => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       session_id          TEXT    PRIMARY KEY,
-      notion_task_id      TEXT,
-      notion_task_url     TEXT,
+      task_id             TEXT,
+      task_url            TEXT,
       project_context_url TEXT,
       status              TEXT    NOT NULL,
       started_at          INTEGER NOT NULL,
@@ -47,15 +47,15 @@ vi.mock('../db/db.js', async () => {
       match_type TEXT NOT NULL, decision TEXT NOT NULL, label TEXT, enabled INTEGER NOT NULL DEFAULT 1
     );
     CREATE TABLE IF NOT EXISTS task_cache (
-      notion_task_id TEXT    PRIMARY KEY,
-      fetched_at     INTEGER NOT NULL,
-      raw_json       TEXT    NOT NULL
+      task_id    TEXT    PRIMARY KEY,
+      fetched_at INTEGER NOT NULL,
+      raw_json   TEXT    NOT NULL
     );
     CREATE TABLE IF NOT EXISTS pull_requests (
       id                     INTEGER PRIMARY KEY AUTOINCREMENT,
       pr_number              INTEGER NOT NULL,
       pr_url                 TEXT    NOT NULL UNIQUE,
-      notion_task_id         TEXT,
+      task_id                TEXT,
       session_id             TEXT,
       repo                   TEXT    NOT NULL,
       title                  TEXT,
@@ -93,6 +93,11 @@ vi.mock('../db/db.js', async () => {
       source_id TEXT, display_order INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS devices (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, user_agent TEXT, last_ip TEXT,
+      last_seen INTEGER, enrolled_at INTEGER NOT NULL,
+      token TEXT NOT NULL UNIQUE, revoked INTEGER NOT NULL DEFAULT 0
+    );
   `);
   return { db };
 });
@@ -119,7 +124,7 @@ function insertMilestone(id: string, pId: string, sId: string | null) {
 function insertBoardCache(key: string, taskIds: string[]) {
   (db as import('better-sqlite3').Database)
     .prepare(
-      `INSERT OR REPLACE INTO task_cache (notion_task_id, fetched_at, raw_json) VALUES (?, ?, ?)`,
+      `INSERT OR REPLACE INTO task_cache (task_id, fetched_at, raw_json) VALUES (?, ?, ?)`,
     )
     .run(key, Date.now(), JSON.stringify(taskIds.map((id) => ({ id }))));
 }
@@ -146,7 +151,7 @@ function insertPR(
   (db as import('better-sqlite3').Database)
     .prepare(
       `INSERT INTO pull_requests
-         (pr_number, pr_url, notion_task_id, repo, state, draft,
+         (pr_number, pr_url, task_id, repo, state, draft,
           review_result, mergeable, pause_reason, created_at, updated_at, synced_at)
        VALUES (?, ?, ?, 'owner/repo', ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
@@ -188,30 +193,30 @@ describe('getMergeReadyPRs', () => {
   });
 
   it('returns eligible PRs satisfying all filters', () => {
-    insertPR(10, 'task-aaa');
+    insertPR(10, 'notion:task-aaa');
     const result = getMergeReadyPRs(projectId, milestoneId);
     expect(result).toHaveLength(1);
     expect(result[0].pr_number).toBe(10);
   });
 
   it('excludes PRs with pause_reason set', () => {
-    insertPR(10, 'task-aaa', { pause_reason: 'stuck_timeout' });
+    insertPR(10, 'notion:task-aaa', { pause_reason: 'stuck_timeout' });
     expect(getMergeReadyPRs(projectId, milestoneId)).toHaveLength(0);
   });
 
   it('excludes PRs with mergeable !== 1', () => {
-    insertPR(10, 'task-aaa', { mergeable: 0 });
-    insertPR(11, 'task-bbb', { mergeable: null });
+    insertPR(10, 'notion:task-aaa', { mergeable: 0 });
+    insertPR(11, 'notion:task-bbb', { mergeable: null });
     expect(getMergeReadyPRs(projectId, milestoneId)).toHaveLength(0);
   });
 
   it('excludes PRs with state !== open', () => {
-    insertPR(10, 'task-aaa', { state: 'closed' });
+    insertPR(10, 'notion:task-aaa', { state: 'closed' });
     expect(getMergeReadyPRs(projectId, milestoneId)).toHaveLength(0);
   });
 
   it('excludes PRs with non-approved verdict', () => {
-    insertPR(10, 'task-aaa', {
+    insertPR(10, 'notion:task-aaa', {
       review_result: JSON.stringify({
         verdict: 'changes_requested',
         summary: '',
@@ -221,12 +226,12 @@ describe('getMergeReadyPRs', () => {
   });
 
   it('excludes PRs belonging to a different milestone', () => {
-    insertPR(10, 'task-zzz');
+    insertPR(10, 'notion:task-zzz');
     expect(getMergeReadyPRs(projectId, milestoneId)).toHaveLength(0);
   });
 
   it('includes draft PRs (no draft filter)', () => {
-    insertPR(10, 'task-aaa', { draft: 1 });
+    insertPR(10, 'notion:task-aaa', { draft: 1 });
     const result = getMergeReadyPRs(projectId, milestoneId);
     expect(result).toHaveLength(1);
     expect(result[0].draft).toBe(1);
@@ -240,23 +245,23 @@ describe('getMergeReadyPRs', () => {
     cleanDb();
     insertMilestone(milestoneId, projectId, sourceId);
     // no board cache entry
-    insertPR(10, 'task-aaa');
+    insertPR(10, 'notion:task-aaa');
     expect(getMergeReadyPRs(projectId, milestoneId)).toHaveLength(0);
   });
 
-  it('matches notion_task_id with or without hyphens', () => {
+  it('matches prefixed task_id when board cache has hyphenated raw id', () => {
     cleanDb();
     insertMilestone(milestoneId, projectId, sourceId);
     insertBoardCache(`board:${sourceId}`, [
       'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
     ]);
-    insertPR(10, 'aaaaaaaabbbbccccddddeeeeeeeeeeee');
+    insertPR(10, 'notion:aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
     expect(getMergeReadyPRs(projectId, milestoneId)).toHaveLength(1);
   });
 
   it('returns multiple eligible PRs', () => {
-    insertPR(10, 'task-aaa');
-    insertPR(11, 'task-bbb');
+    insertPR(10, 'notion:task-aaa');
+    insertPR(11, 'notion:task-bbb');
     expect(getMergeReadyPRs(projectId, milestoneId)).toHaveLength(2);
   });
 });

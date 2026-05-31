@@ -39,6 +39,7 @@ let mockProc: ReturnType<typeof createMockProc>;
 vi.mock('child_process', () => ({
   spawn: vi.fn(() => mockProc.proc),
   execSync: vi.fn(() => 'dev'),
+  execFile: vi.fn(),
 }));
 
 // ── Mock fs ────────────────────────────────────────────────────────────────
@@ -141,6 +142,12 @@ vi.mock('../db/queries', () => ({
   setSessionModel: vi.fn(),
   getPRBySessionId: vi.fn(() => null),
   setHeadSha: vi.fn(),
+  hasActiveSessionForTask: vi.fn(() => false),
+  getSetting: vi.fn().mockReturnValue(null),
+}));
+
+vi.mock('../audit/AuditLog', () => ({
+  recordEvent: vi.fn(),
 }));
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────

@@ -305,8 +305,8 @@ describe('POST /api/sessions/:id/mark-merged', () => {
     } as ReturnType<typeof TaskBackend.getTaskBackend>);
     vi.mocked(queries.getSession).mockReturnValue({
       session_id: 'sess-1',
-      notion_task_id: 'task-abc',
-      notion_task_url: 'https://notion.so/task-abc',
+      task_id: 'task-abc',
+      task_url: 'https://notion.so/task-abc',
       project_context_url: null,
       project_id: 'proj-local',
       status: 'done',
@@ -336,8 +336,8 @@ describe('POST /api/sessions/:id/mark-merged', () => {
   it('rejects mark-merged for github project', async () => {
     vi.mocked(queries.getSession).mockReturnValue({
       session_id: 'sess-2',
-      notion_task_id: 'task-xyz',
-      notion_task_url: 'https://notion.so/task-xyz',
+      task_id: 'task-xyz',
+      task_url: 'https://notion.so/task-xyz',
       project_context_url: null,
       project_id: 'proj-github',
       status: 'done',
@@ -396,10 +396,8 @@ describe('SessionManager source — local-only skips git fetch', () => {
     // Must check gitMode and branch on it
     expect(source).toContain('isLocalOnly');
     expect(source).toContain("gitMode === 'local-only'");
-    // Must use local dev branch when local-only
-    expect(source).toContain(
-      "worktreeBase = isLocalOnly ? 'dev' : 'origin/dev'",
-    );
+    // Must use local dev branch when local-only (isLocalOnly causes worktreeBase = startingPoint, not origin/dev)
+    expect(source).toContain('isLocalOnly || startingPoint !== ');
     // Must skip fetch for local-only
     expect(source).toContain('if (!isLocalOnly)');
   });

@@ -1,3 +1,5 @@
+import { getDeviceToken } from '../auth/deviceToken';
+
 export type TaskSource = 'notion' | 'yaml';
 export type GitMode = 'github' | 'local-only';
 
@@ -39,6 +41,11 @@ export interface ProjectMilestone {
   updatedAt: number;
 }
 
+export interface NonMilestoneSourceConfig {
+  notionDatabaseId?: string;
+  milestoneId?: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -50,6 +57,8 @@ export interface Project {
   autoLaunchEnabled: boolean;
   autoLaunchMilestoneId: string | null;
   autoMergeEnabled: boolean;
+  nonMilestoneSourceConfig: NonMilestoneSourceConfig | null;
+  dataResidencyConfirmed: boolean;
   createdAt: number;
   updatedAt: number;
   milestones: ProjectMilestone[];
@@ -78,6 +87,8 @@ export interface UpdateProjectInput {
   autoLaunchEnabled?: boolean;
   autoLaunchMilestoneId?: string | null;
   autoMergeEnabled?: boolean;
+  nonMilestoneSourceConfig?: NonMilestoneSourceConfig | null;
+  dataResidencyConfirmed?: boolean;
 }
 
 export interface CreateMilestoneInput {
@@ -94,7 +105,21 @@ export interface UpdateMilestoneInput {
 }
 
 async function request<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
-  const res = await fetch(input, init);
+  const token = getDeviceToken(); // may be null before enrollment
+  const headers: Record<string, string> = {
+    ...(init?.headers as Record<string, string> | undefined),
+  };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(input, { ...init, headers });
+
+  if (res.status === 401) {
+    window.dispatchEvent(new CustomEvent('device-unauthorized'));
+    throw new Error('Unauthorized');
+  }
+
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
     try {

@@ -3,6 +3,7 @@ import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { useDispatch } from '../hooks/useDispatch';
 import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
+import { CIBadges } from './CIBadges';
 import styles from './TaskCard.module.css';
 
 interface Props {
@@ -34,6 +35,14 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'API overloaded (529) — session paused. Resume when the API recovers.',
   merge_conflict:
     'Merge conflict detected — rebase onto the base branch and resolve conflicts.',
+  awaiting_human_approval:
+    'Awaiting human approval — approve the PR to proceed with auto-merge.',
+  human_changes_requested:
+    'Human reviewer requested changes — address the feedback and push.',
+  pr_body_invalid:
+    'PR body missing required sections — update the PR description and resume.',
+  attribution_missing:
+    'Commit attribution trailer missing — add AI-Authored-By to commits and push.',
 };
 
 function verdictLabel(verdict: string): string {
@@ -67,7 +76,13 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
   const handleLaunch = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!isLaunchable) return;
-    dispatchTask([{ taskId: task.taskId, taskType: task.taskType }]);
+    dispatchTask([
+      {
+        notionUrl: task.notionUrl,
+        taskType: task.taskType,
+        taskName: task.taskName,
+      },
+    ]);
   };
 
   return (
@@ -138,6 +153,11 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
                   {verdictLabel(review.verdict)}
                 </span>
               )}
+              <CIBadges
+                mergeState={pr.mergeState}
+                pauseReason={task.pauseReason}
+                prState={pr.state}
+              />
             </div>
           ) : (
             <span className={styles.placeholder}>—</span>

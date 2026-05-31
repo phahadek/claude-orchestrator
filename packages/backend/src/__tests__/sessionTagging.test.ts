@@ -64,8 +64,8 @@ function buildApp() {
 
 const mockSession = {
   session_id: 'test-session-1',
-  notion_task_id: null,
-  notion_task_url: null,
+  task_id: null,
+  task_url: null,
   project_context_url: null,
   project_id: null,
   status: 'done',

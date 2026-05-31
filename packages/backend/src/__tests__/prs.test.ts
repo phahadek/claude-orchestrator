@@ -117,7 +117,7 @@ const mockPRRow: PullRequestRow = {
   id: 1,
   pr_number: 42,
   pr_url: 'https://github.com/owner/repo/pull/42',
-  notion_task_id: 'notion-task-abc',
+  task_id: 'notion:notion-task-abc',
   session_id: 'session-xyz',
   repo: 'owner/repo',
   title: 'feat: add something',
@@ -148,7 +148,7 @@ const mockPRRowNoTask: PullRequestRow = {
   ...mockPRRow,
   id: 2,
   pr_number: 43,
-  notion_task_id: null,
+  task_id: null,
   session_id: null,
 };
 
@@ -185,7 +185,7 @@ const mockGitHubPR = {
 function makeMockGitHub(): GitHubClient {
   return {
     listOpenPRs: vi.fn().mockResolvedValue([]),
-    getPRState: vi.fn().mockResolvedValue('merged'),
+    getPRState: vi.fn().mockResolvedValue({ state: 'merged', headSha: null }),
     fetchDiff: vi.fn(),
     fetchPR: vi.fn().mockResolvedValue(mockGitHubPR),
     mergePR: vi
@@ -335,7 +335,10 @@ describe('GET /api/prs', () => {
     const github = makeMockGitHub();
     // GitHub returns no open PRs → PR 99 is stale
     vi.mocked(github.listOpenPRs).mockResolvedValue([]);
-    vi.mocked(github.getPRState).mockResolvedValue('merged');
+    vi.mocked(github.getPRState).mockResolvedValue({
+      state: 'merged',
+      headSha: null,
+    });
 
     const res = await supertest(buildApp(github)).get(
       '/api/prs?projectId=proj-1',
@@ -394,8 +397,8 @@ describe('GET /api/prs — local-only project returns local_branch items', () =>
     vi.mocked(queries.getSessionsByProject).mockReturnValue([
       {
         session_id: 'sess-1',
-        notion_task_id: 'task-abc',
-        notion_task_url: null,
+        task_id: 'task-abc',
+        task_url: null,
         project_context_url: null,
         project_id: 'proj-local',
         status: 'done',
@@ -436,8 +439,8 @@ describe('GET /api/prs — local-only project returns local_branch items', () =>
     vi.mocked(queries.getSessionsByProject).mockReturnValue([
       {
         session_id: 'sess-1',
-        notion_task_id: 'task-abc',
-        notion_task_url: null,
+        task_id: 'task-abc',
+        task_url: null,
         project_context_url: null,
         project_id: 'proj-local',
         status: 'done',
@@ -459,8 +462,8 @@ describe('GET /api/prs — local-only project returns local_branch items', () =>
       },
       {
         session_id: 'review-1',
-        notion_task_id: 'task-abc',
-        notion_task_url: null,
+        task_id: 'task-abc',
+        task_url: null,
         project_context_url: null,
         project_id: 'proj-local',
         status: 'done',
@@ -492,8 +495,8 @@ describe('GET /api/prs — local-only project returns local_branch items', () =>
     vi.mocked(queries.getSessionsByProject).mockReturnValue([
       {
         session_id: 'sess-archived',
-        notion_task_id: null,
-        notion_task_url: null,
+        task_id: null,
+        task_url: null,
         project_context_url: null,
         project_id: 'proj-local',
         status: 'done',
@@ -525,8 +528,8 @@ describe('GET /api/prs — local-only project returns local_branch items', () =>
     vi.mocked(queries.getSessionsByProject).mockReturnValue([
       {
         session_id: 'sess-2',
-        notion_task_id: null,
-        notion_task_url: null,
+        task_id: null,
+        task_url: null,
         project_context_url: null,
         project_id: 'proj-local-automerge',
         status: 'done',
@@ -568,7 +571,7 @@ describe('POST /api/prs/:prNumber/review', () => {
     expect(res.body.summary).toBe('Looks good');
   });
 
-  it('calls reviewPR even when PR has no notion_task_id (service handles error)', async () => {
+  it('calls reviewPR even when PR has no task_id (service handles error)', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRowNoTask);
     const res = await supertest(buildApp()).post(
       '/api/prs/43/review?projectId=proj-1',
@@ -719,8 +722,9 @@ describe('POST /api/prs/:prNumber/merge', () => {
       .send({});
     expect(res.status).toBe(200);
     expect(vi.mocked(notionClient.updateStatus)).toHaveBeenCalledWith(
-      'notion-task-abc',
+      'notion:notion-task-abc',
       '✅ Done',
+      { source: 'orchestrator' },
     );
   });
 
@@ -739,7 +743,7 @@ describe('POST /api/prs/:prNumber/merge', () => {
       .send({});
     expect(res.status).toBe(200);
     expect(vi.mocked(tasksRoute.emitTaskUpdated)).toHaveBeenCalledWith(
-      'notion-task-abc',
+      'notion:notion-task-abc',
     );
   });
 
@@ -752,14 +756,14 @@ describe('POST /api/prs/:prNumber/merge', () => {
 
     expect(broadcastedMessages).toContainEqual({
       type: 'task_status_changed',
-      notionTaskId: 'notion-task-abc',
+      notionTaskId: 'notion:notion-task-abc',
       newStatus: '✅ Done',
     });
 
     setPRBroadcast(() => {});
   });
 
-  it('does NOT call emitTaskUpdated when PR has no notion_task_id', async () => {
+  it('does NOT call emitTaskUpdated when PR has no task_id', async () => {
     vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRowNoTask);
     const res = await supertest(buildApp())
       .post('/api/prs/owner/repo/43/merge')
@@ -1190,8 +1194,8 @@ describe('POST /api/prs/:owner/:repo/:prNumber/approve', () => {
     );
   });
 
-  it('calls notionClient.updateStatus with In Review when PR has notion_task_id', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow); // notion_task_id: 'notion-task-abc'
+  it('calls notionClient.updateStatus with In Review when PR has task_id', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow); // task_id: 'notion:notion-task-abc'
     const notionClient = makeMockNotionClient();
     const res = await supertest(
       buildApp(
@@ -1203,13 +1207,14 @@ describe('POST /api/prs/:owner/:repo/:prNumber/approve', () => {
     ).post('/api/prs/owner/repo/42/approve');
     expect(res.status).toBe(200);
     expect(vi.mocked(notionClient.updateStatus)).toHaveBeenCalledWith(
-      'notion-task-abc',
+      'notion:notion-task-abc',
       '👀 In Review',
+      { source: 'orchestrator' },
     );
   });
 
-  it('does NOT call notionClient.updateStatus when PR has no notion_task_id', async () => {
-    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRowNoTask); // notion_task_id: null
+  it('does NOT call notionClient.updateStatus when PR has no task_id', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRowNoTask); // task_id: null
     const notionClient = makeMockNotionClient();
     const res = await supertest(
       buildApp(

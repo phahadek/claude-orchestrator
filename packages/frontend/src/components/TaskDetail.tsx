@@ -136,6 +136,10 @@ interface Props {
   isLocalOnly?: boolean;
   /** When true, hides the "Mark Merged" button — AutoMerger handles merging. */
   autoMergeEnabled?: boolean;
+  /** Whether the mobile session overlay is open (controlled by App). */
+  sessionOverlayOpen?: boolean;
+  /** Called when the user wants to open the mobile session overlay. */
+  onOpenSessionOverlay?: () => void;
 }
 
 // ── TaskDetail ────────────────────────────────────────────────────
@@ -143,11 +147,14 @@ interface Props {
 export function TaskDetail({
   task,
   send,
-  onClose,
+  // onClose is kept in Props for API compatibility; close button calls window.history.back() directly
+  onClose: _onClose,
   sessions = [],
   projectId,
   isLocalOnly = false,
   autoMergeEnabled = false,
+  sessionOverlayOpen = false,
+  onOpenSessionOverlay,
 }: Props) {
   const isMobile = useIsMobile();
   const [showReviewSection, setShowReviewSection] = useState(true);
@@ -163,7 +170,6 @@ export function TaskDetail({
   const [optimisticDisplayStatus, setOptimisticDisplayStatus] =
     useState<DisplayStatus | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'diff'>('overview');
-  const [sessionOverlayOpen, setSessionOverlayOpen] = useState(false);
 
   // Reset state when task changes
   useEffect(() => {
@@ -174,7 +180,6 @@ export function TaskDetail({
     setFixConflictsInFlight(false);
     setOptimisticDisplayStatus(null);
     setActiveTab('overview');
-    setSessionOverlayOpen(false);
   }, [task.taskId]);
 
   // Look up live session state for event transcripts
@@ -332,7 +337,7 @@ export function TaskDetail({
         <>
           <div
             className={styles.sessionOverlayBackdrop}
-            onClick={() => setSessionOverlayOpen(false)}
+            onClick={() => window.history.back()}
             aria-hidden="true"
             data-testid="session-overlay-backdrop"
           />
@@ -340,10 +345,10 @@ export function TaskDetail({
             <SessionDetail
               session={codeSession}
               send={send}
-              onClose={() => setSessionOverlayOpen(false)}
-              onDelete={() => setSessionOverlayOpen(false)}
-              onArchive={() => setSessionOverlayOpen(false)}
-              onUnarchive={() => setSessionOverlayOpen(false)}
+              onClose={() => window.history.back()}
+              onDelete={() => window.history.back()}
+              onArchive={() => window.history.back()}
+              onUnarchive={() => window.history.back()}
             />
           </div>
         </>
@@ -355,7 +360,7 @@ export function TaskDetail({
           <span className={styles.taskName}>{task.taskName}</span>
           <button
             className={styles.closeButton}
-            onClick={onClose}
+            onClick={() => window.history.back()}
             aria-label="Close panel"
           >
             ✕
@@ -445,7 +450,7 @@ export function TaskDetail({
                     )}
                     <button
                       className={styles.viewSessionButton}
-                      onClick={() => setSessionOverlayOpen(true)}
+                      onClick={onOpenSessionOverlay}
                     >
                       View full session
                     </button>

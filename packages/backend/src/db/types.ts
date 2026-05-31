@@ -10,8 +10,8 @@ export type SessionStatus =
 
 export interface Session {
   session_id: string;
-  notion_task_id: string | null;
-  notion_task_url: string | null;
+  task_id: string | null;
+  task_url: string | null;
   project_context_url: string | null;
   project_id: string | null;
   status: SessionStatus;
@@ -140,14 +140,14 @@ export type NewPermissionDenialRow = Omit<PermissionDenialRow, 'id'>;
 // ─── task_cache ────────────────────────────────────────────────────────────
 
 export interface TaskCache {
-  notion_task_id: string;
+  task_id: string;
   fetched_at: number;
   raw_json: string;
 }
 
 // ─── projects ──────────────────────────────────────────────────────────────
 
-export type TaskSource = 'notion' | 'yaml';
+export type TaskSource = 'notion' | 'yaml' | 'jira';
 export type GitMode = 'github' | 'local-only';
 
 export interface ProjectRow {
@@ -161,6 +161,11 @@ export interface ProjectRow {
   auto_launch_enabled: number; // 0 | 1 (SQLite boolean)
   auto_launch_milestone_id: string | null;
   auto_merge_enabled: number; // 0 | 1 (SQLite boolean)
+  milestone_branching: 'two_tier' | 'flat' | null;
+  non_milestone_source_config: string | null;
+  /** JSON blob: { host, project_key, default_jql, status_mapping, ... } */
+  task_source_config: string | null;
+  data_residency_confirmed: number; // 0 | 1 (SQLite boolean)
   created_at: number;
   updated_at: number;
 }
@@ -172,12 +177,20 @@ export type NewProjectRow = Omit<
   | 'auto_launch_enabled'
   | 'auto_launch_milestone_id'
   | 'auto_merge_enabled'
+  | 'data_residency_confirmed'
   | 'git_mode'
+  | 'milestone_branching'
+  | 'non_milestone_source_config'
+  | 'task_source_config'
 > & {
   auto_launch_enabled?: number;
   auto_launch_milestone_id?: string | null;
   auto_merge_enabled?: number;
+  data_residency_confirmed?: number;
   git_mode?: GitMode;
+  milestone_branching?: 'two_tier' | 'flat' | null;
+  non_milestone_source_config?: string | null;
+  task_source_config?: string | null;
   created_at?: number;
   updated_at?: number;
 };
@@ -229,6 +242,36 @@ export type NewLocalBranchRow = Omit<
   merge_commit_sha?: string | null;
 };
 
+// ─── session_audits violations ───────────────────────────────────────────────
+
+export interface WorktreeEscapeViolation {
+  type: 'worktree_escape';
+  tool: string;
+  path: string;
+  escapedTo: string;
+}
+
+/** Discriminated union of structured violation types stored in session_audits. */
+export type AuditViolation = WorktreeEscapeViolation;
+
+// ─── devices ────────────────────────────────────────────────────────────────
+
+export interface DeviceRow {
+  id: string;
+  name: string;
+  user_agent: string | null;
+  last_ip: string | null;
+  last_seen: number | null;
+  enrolled_at: number;
+  token: string;
+  revoked: number; // 0 | 1 (SQLite boolean)
+}
+
+export type NewDeviceRow = Omit<DeviceRow, 'last_seen' | 'revoked'> & {
+  last_seen?: number | null;
+  revoked?: number;
+};
+
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
 /**
@@ -243,13 +286,17 @@ export type PauseReason =
   | 'pr_closed'
   | 'review_failed'
   | 'api_overloaded'
-  | 'merge_conflict';
+  | 'merge_conflict'
+  | 'awaiting_human_approval'
+  | 'human_changes_requested'
+  | 'pr_body_invalid'
+  | 'attribution_missing';
 
 export interface PullRequestRow {
   id: number;
   pr_number: number;
   pr_url: string;
-  notion_task_id: string | null;
+  task_id: string | null;
   session_id: string | null;
   repo: string;
   title: string | null;
@@ -281,4 +328,5 @@ export interface PullRequestRow {
   failing_checks: string | null;
   pending_push: number; // 0 | 1 — push arrived before initial review completed
   pause_reason: PauseReason | null; // non-null marks the task as needs_attention
+  ci_remediation_attempted_sha: string | null; // last head_sha for which CI remediation was attempted
 }

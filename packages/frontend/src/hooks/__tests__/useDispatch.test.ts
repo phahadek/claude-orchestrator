@@ -15,45 +15,85 @@ function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
 }
 
 describe('useDispatch', () => {
-  it('sends a dispatch WS message with taskId mapped to taskUrl for a single task', () => {
+  it('sends taskUrl = task.notionUrl (not taskId) for a single task', () => {
     const send = vi.fn();
     const project = makeProject();
 
     const { result } = renderHook(() => useDispatch(send, project));
-    result.current([{ taskId: 'notion-page-id-123', taskType: '💻 Code' }]);
+    result.current([
+      {
+        notionUrl: 'https://www.notion.so/Add-task-abc123',
+        taskType: '💻 Code',
+        taskName: 'Add task abc',
+        taskKind: 'milestone',
+      },
+    ]);
 
     expect(send).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenCalledWith({
       type: 'dispatch',
       tasks: [
         {
-          taskUrl: 'notion-page-id-123',
+          taskUrl: 'https://www.notion.so/Add-task-abc123',
           projectContextUrl: 'https://notion.so/context',
           taskType: '💻 Code',
+          taskName: 'Add task abc',
+          taskKind: 'milestone',
           projectId: 'proj-1',
         },
       ],
     });
   });
 
-  it('passes YAML task id as taskUrl (not a URL)', () => {
+  it('includes milestoneId in dispatch payload when provided', () => {
     const send = vi.fn();
     const project = makeProject();
 
     const { result } = renderHook(() => useDispatch(send, project));
-    result.current([{ taskId: 't2-ready-unblocked', taskType: '💻 Code' }]);
+    result.current([
+      {
+        notionUrl: 'https://www.notion.so/task-xyz',
+        taskType: '💻 Code',
+        taskName: 'Fix something',
+        milestoneId: 'milestone-row-id-123',
+        taskKind: 'milestone',
+      },
+    ]);
 
     expect(send).toHaveBeenCalledWith({
       type: 'dispatch',
       tasks: [
         {
-          taskUrl: 't2-ready-unblocked',
+          taskUrl: 'https://www.notion.so/task-xyz',
           projectContextUrl: 'https://notion.so/context',
           taskType: '💻 Code',
+          taskName: 'Fix something',
+          milestoneId: 'milestone-row-id-123',
+          taskKind: 'milestone',
           projectId: 'proj-1',
         },
       ],
     });
+  });
+
+  it('sends taskKind: non_milestone when provided', () => {
+    const send = vi.fn();
+    const project = makeProject();
+
+    const { result } = renderHook(() => useDispatch(send, project));
+    result.current([
+      {
+        notionUrl: 'https://www.notion.so/non-milestone-task',
+        taskType: '💻 Code',
+        taskName: 'Non-milestone task',
+        taskKind: 'non_milestone',
+      },
+    ]);
+
+    const payload = send.mock.calls[0][0] as {
+      tasks: { taskKind: string }[];
+    };
+    expect(payload.tasks[0].taskKind).toBe('non_milestone');
   });
 
   it('does not call send when tasks array is empty', () => {
@@ -70,7 +110,7 @@ describe('useDispatch', () => {
     const send = vi.fn();
 
     const { result } = renderHook(() => useDispatch(send, null));
-    result.current([{ taskId: 'some-task-id' }]);
+    result.current([{ notionUrl: 'https://www.notion.so/some-task' }]);
 
     expect(send).not.toHaveBeenCalled();
   });
@@ -81,26 +121,55 @@ describe('useDispatch', () => {
 
     const { result } = renderHook(() => useDispatch(send, project));
     result.current([
-      { taskId: 'task-id-1', taskType: '💻 Code' },
-      { taskId: 'task-id-2', taskType: '💻 Code' },
+      {
+        notionUrl: 'https://www.notion.so/task-1',
+        taskType: '💻 Code',
+        taskName: 'Task 1',
+        taskKind: 'milestone',
+      },
+      {
+        notionUrl: 'https://www.notion.so/task-2',
+        taskType: '💻 Code',
+        taskName: 'Task 2',
+        taskKind: 'milestone',
+      },
     ]);
 
     expect(send).toHaveBeenCalledWith({
       type: 'dispatch',
       tasks: [
         {
-          taskUrl: 'task-id-1',
+          taskUrl: 'https://www.notion.so/task-1',
           projectContextUrl: 'https://notion.so/context',
           taskType: '💻 Code',
+          taskName: 'Task 1',
+          taskKind: 'milestone',
           projectId: 'proj-1',
         },
         {
-          taskUrl: 'task-id-2',
+          taskUrl: 'https://www.notion.so/task-2',
           projectContextUrl: 'https://notion.so/context',
           taskType: '💻 Code',
+          taskName: 'Task 2',
+          taskKind: 'milestone',
           projectId: 'proj-1',
         },
       ],
     });
+  });
+
+  it('omits optional fields from payload when not provided', () => {
+    const send = vi.fn();
+    const project = makeProject();
+
+    const { result } = renderHook(() => useDispatch(send, project));
+    result.current([{ notionUrl: 'https://www.notion.so/minimal-task' }]);
+
+    const payload = send.mock.calls[0][0] as {
+      tasks: Record<string, unknown>[];
+    };
+    expect(payload.tasks[0]).not.toHaveProperty('milestoneId');
+    expect(payload.tasks[0]).not.toHaveProperty('taskKind');
+    expect(payload.tasks[0]).not.toHaveProperty('taskName');
   });
 });

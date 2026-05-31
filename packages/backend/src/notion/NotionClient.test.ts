@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -9,15 +9,22 @@ vi.mock('../config', () => ({
 }));
 vi.mock('../db/queries', () => ({
   upsertTaskCache: vi.fn(),
-  getCacheAge: vi.fn(() => null),
+  getCacheAge: vi.fn(() => Infinity),
   getTaskCache: vi.fn(() => null),
+  updateTaskCacheStatus: vi.fn(),
 }));
 
 import {
   parseSection,
   parseDependsOn,
   parseExpectedSize,
+  NotionClient,
 } from './NotionClient';
+import {
+  updateTaskCacheStatus,
+  getCacheAge,
+  getTaskCache,
+} from '../db/queries';
 
 const source = fs.readFileSync(
   path.join(__dirname, 'NotionClient.ts'),
@@ -173,5 +180,205 @@ describe('parseExpectedSize()', () => {
       parseExpectedSize(`## Expected size\n\n## Summary\nx`),
     ).toBeUndefined();
     expect(parseExpectedSize(`## Expected size\nlarge\n`)).toBeUndefined();
+  });
+});
+
+// ─── NotionClient prefix-stripping tests ─────────────────────────────────────
+
+describe('NotionClient — prefix stripping in public methods', () => {
+  let client: NotionClient;
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.mocked(updateTaskCacheStatus).mockReset();
+    fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    client = new NotionClient();
+  });
+
+  it('updateStatus calls Notion API at /pages/abc (not /pages/notion:abc)', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({}),
+    });
+
+    await client.updateStatus('notion:abc', '✅ Done');
+
+    const [url] = fetchSpy.mock.calls[0] as [string, unknown];
+    expect(url).toContain('/pages/abc');
+    expect(url).not.toContain('notion:abc');
+  });
+
+  it('updateStatus updates task_cache keyed notion:abc (not abc)', async () => {
+    fetchSpy.mockResolvedValue({
+      ok: true,
+      json: async () => ({}),
+    });
+
+    await client.updateStatus('notion:abc', '✅ Done');
+
+    expect(vi.mocked(updateTaskCacheStatus)).toHaveBeenCalledWith(
+      'notion:abc',
+      '✅ Done',
+    );
+    expect(vi.mocked(updateTaskCacheStatus)).not.toHaveBeenCalledWith(
+      'abc',
+      expect.anything(),
+    );
+  });
+
+  it('fetchTaskPage calls Notion API at /pages/abc (not /pages/notion:abc)', async () => {
+    const mockPage = {
+      id: 'abc',
+      url: 'https://notion.so/abc',
+      properties: {
+        'Task Name': { type: 'title', title: [{ text: { content: 'Test' } }] },
+        Status: { type: 'select', select: null },
+        Type: { type: 'select', select: null },
+        'Depends On': { type: 'rich_text', rich_text: [] },
+        Notes: { type: 'rich_text', rich_text: [] },
+      },
+    };
+    fetchSpy
+      .mockResolvedValueOnce({ ok: true, json: async () => mockPage })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ results: [], has_more: false, next_cursor: null }),
+      });
+
+    await client.fetchTaskPage('notion:abc');
+
+    const firstUrl = fetchSpy.mock.calls[0][0] as string;
+    expect(firstUrl).toContain('/pages/abc');
+    expect(firstUrl).not.toContain('notion:abc');
+  });
+});
+
+// ─── NotionClient.readBoardCache — prefix-stripping on cache-hit ──────────────
+
+describe('NotionClient.fetchReadyTasks — readBoardCache strips notion: prefix', () => {
+  const BOARD_ID_STRIP = 'strip-test-board-id';
+  const RAW_TASK_ID = 'aaaa1111-bbbb-2222-cccc-ddddeeeeeeee';
+  const PREFIXED_TASK_ID = `notion:${RAW_TASK_ID}`;
+
+  let client: NotionClient;
+  let fetchSpy: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.mocked(getCacheAge).mockReset();
+    vi.mocked(getTaskCache).mockReset();
+    fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    client = new NotionClient();
+  });
+
+  it('returns raw IDs when board cache contains notion:-prefixed IDs', async () => {
+    vi.mocked(getCacheAge).mockReturnValue(0);
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: `board:${BOARD_ID_STRIP}`,
+      fetched_at: Date.now(),
+      raw_json: JSON.stringify([
+        {
+          id: PREFIXED_TASK_ID,
+          title: 'Task A',
+          status: '🗂️ Ready',
+          type: '💻 Code',
+          dependsOn: [],
+          notionUrl: 'https://notion.so/x',
+          priority: '',
+        },
+      ]),
+    });
+
+    const tasks = await client.fetchReadyTasks(BOARD_ID_STRIP);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].task.id).toBe(RAW_TASK_ID);
+    expect(tasks[0].task.id).not.toContain('notion:');
+  });
+
+  it('leaves raw IDs unchanged when board cache has no prefix', async () => {
+    vi.mocked(getCacheAge).mockReturnValue(0);
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: `board:${BOARD_ID_STRIP}`,
+      fetched_at: Date.now(),
+      raw_json: JSON.stringify([
+        {
+          id: RAW_TASK_ID,
+          title: 'Task A',
+          status: '🗂️ Ready',
+          type: '💻 Code',
+          dependsOn: [],
+          notionUrl: 'https://notion.so/x',
+          priority: '',
+        },
+      ]),
+    });
+
+    const tasks = await client.fetchReadyTasks(BOARD_ID_STRIP);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(tasks[0].task.id).toBe(RAW_TASK_ID);
+  });
+
+  it('strips notion: prefix from dependsOn entries when board cache has prefixed-everywhere shape', async () => {
+    const DEP_RAW = 'bbbb2222-cccc-3333-dddd-eeeeffffffff';
+    const DEP_PREFIXED = `notion:${DEP_RAW}`;
+    vi.mocked(getCacheAge).mockReturnValue(0);
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: `board:${BOARD_ID_STRIP}`,
+      fetched_at: Date.now(),
+      raw_json: JSON.stringify([
+        {
+          id: PREFIXED_TASK_ID,
+          title: 'Task A',
+          status: '🗂️ Ready',
+          type: '💻 Code',
+          dependsOn: [DEP_PREFIXED],
+          notionUrl: 'https://notion.so/x',
+          priority: '',
+        },
+        {
+          id: DEP_PREFIXED,
+          title: 'Task B',
+          status: '🗂️ Ready',
+          type: '💻 Code',
+          dependsOn: [],
+          notionUrl: 'https://notion.so/y',
+          priority: '',
+        },
+      ]),
+    });
+
+    const tasks = await client.fetchReadyTasks(BOARD_ID_STRIP);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(tasks[0].task.dependsOn).toEqual([DEP_RAW]);
+    expect(tasks[0].task.dependsOn[0]).not.toContain('notion:');
+  });
+
+  it('leaves raw dependsOn entries unchanged when board cache has no prefix', async () => {
+    const DEP_RAW = 'bbbb2222-cccc-3333-dddd-eeeeffffffff';
+    vi.mocked(getCacheAge).mockReturnValue(0);
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: `board:${BOARD_ID_STRIP}`,
+      fetched_at: Date.now(),
+      raw_json: JSON.stringify([
+        {
+          id: RAW_TASK_ID,
+          title: 'Task A',
+          status: '🗂️ Ready',
+          type: '💻 Code',
+          dependsOn: [DEP_RAW],
+          notionUrl: 'https://notion.so/x',
+          priority: '',
+        },
+      ]),
+    });
+
+    const tasks = await client.fetchReadyTasks(BOARD_ID_STRIP);
+
+    expect(tasks[0].task.dependsOn).toEqual([DEP_RAW]);
   });
 });

@@ -51,6 +51,23 @@ vi.mock('../db/queries', () => ({
   getPRByNumber: vi.fn(() => null),
   setHeadSha: vi.fn(),
   setPauseReason: vi.fn(),
+  getSession: vi.fn(() => null),
+  getProjectRowById: vi.fn(() => null),
+  insertLocalBranch: vi.fn(),
+  setSessionMetadata: vi.fn(),
+}));
+
+// Mock local branch helpers to avoid real git calls in tests
+vi.mock('../orchestration/localBranchHelpers', () => ({
+  getCurrentBranch: vi.fn(async () => 'feature/some-task'),
+  hasNonEmptyDiff: vi.fn(async () => false),
+}));
+
+// Mock NoOpInvestigator so we can verify dispatch without real sessions
+vi.mock('../github/NoOpInvestigator', () => ({
+  NoOpInvestigator: vi.fn().mockImplementation(() => ({
+    investigate: vi.fn(async () => {}),
+  })),
 }));
 
 import { AgentSession } from '../session/AgentSession';
@@ -66,6 +83,9 @@ import {
   getPRByNumber,
   setPauseReason,
 } from '../db/queries';
+import { parseNotionPageIdDashed } from '../session/AgentSession';
+import { NoOpInvestigator } from '../github/NoOpInvestigator';
+import { hasNonEmptyDiff } from '../orchestration/localBranchHelpers';
 
 function fakeNotionClient(): NotionClient {
   return {
@@ -1258,7 +1278,7 @@ describe('AgentSession', () => {
       id: 1,
       pr_number: 77,
       pr_url: 'https://github.com/owner/repo/pull/77',
-      notion_task_id: null,
+      task_id: null,
       session_id: 'sess-with-pr',
       repo: 'owner/repo',
       title: 'Test PR',
@@ -1599,5 +1619,179 @@ describe('AgentSession', () => {
     await new Promise((r) => setTimeout(r, 0));
     mockProc.proc.emit('exit', 0);
     await runPromise;
+  });
+
+  // ── AC: NoOpInvestigator dispatched on clean exit with no PR and no diff ────
+
+  it('spawns NoOpInvestigator when session exits cleanly with no PR and no diff', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockReturnValue([]);
+    vi.mocked(hasNonEmptyDiff).mockResolvedValue(false);
+
+    const mockInvestigate = vi.fn(async () => {});
+    vi.mocked(NoOpInvestigator).mockImplementation(
+      () =>
+        ({ investigate: mockInvestigate }) as unknown as InstanceType<
+          typeof NoOpInvestigator
+        >,
+    );
+
+    // sessionManager with start() so the 'start' in sessionManager guard passes
+    const sessionManager = { send: vi.fn(), start: vi.fn(() => 'inv-session') };
+
+    const session = new AgentSession(
+      'no-op-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+      undefined,
+      undefined,
+      'standard',
+      sessionManager as never,
+    );
+
+    const runPromise = session.run();
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    // Allow fire-and-forget investigator to start
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(NoOpInvestigator)).toHaveBeenCalled();
+    expect(mockInvestigate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: 'task-id',
+        noOpSessionId: 'no-op-session',
+      }),
+    );
+  });
+
+  it('does NOT spawn NoOpInvestigator when a PR URL is present at exit', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockReturnValue([
+      {
+        id: 1,
+        session_id: 'pr-present-session',
+        event_type: 'text',
+        payload: JSON.stringify({
+          type: 'assistant',
+          message: {
+            content: [
+              {
+                type: 'text',
+                text: 'PR: https://github.com/owner/repo/pull/99',
+              },
+            ],
+          },
+        }),
+        timestamp: Date.now(),
+        message_id: null,
+      },
+    ]);
+
+    const mockInvestigate = vi.fn(async () => {});
+    vi.mocked(NoOpInvestigator).mockImplementation(
+      () =>
+        ({ investigate: mockInvestigate }) as unknown as InstanceType<
+          typeof NoOpInvestigator
+        >,
+    );
+
+    const sessionManager = { send: vi.fn(), start: vi.fn(() => 'inv-session') };
+
+    const session = new AgentSession(
+      'pr-present-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+      undefined,
+      undefined,
+      'standard',
+      sessionManager as never,
+    );
+
+    const runPromise = session.run();
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(mockInvestigate).not.toHaveBeenCalled();
+  });
+
+  it('does NOT spawn NoOpInvestigator when hasNonEmptyDiff returns true', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockReturnValue([]);
+    vi.mocked(hasNonEmptyDiff).mockResolvedValue(true);
+
+    const mockInvestigate = vi.fn(async () => {});
+    vi.mocked(NoOpInvestigator).mockImplementation(
+      () =>
+        ({ investigate: mockInvestigate }) as unknown as InstanceType<
+          typeof NoOpInvestigator
+        >,
+    );
+
+    const sessionManager = { send: vi.fn(), start: vi.fn(() => 'inv-session') };
+
+    const session = new AgentSession(
+      'has-diff-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+      undefined,
+      undefined,
+      'standard',
+      sessionManager as never,
+    );
+
+    const runPromise = session.run();
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(mockInvestigate).not.toHaveBeenCalled();
+  });
+});
+
+// ── AC: parseNotionPageIdDashed ───────────────────────────────────────────────
+describe('parseNotionPageIdDashed', () => {
+  it('converts a 32-hex dashless ID to dashed UUID', () => {
+    expect(parseNotionPageIdDashed('36e22f9152f381018dd2f6f7c0b402e9')).toBe(
+      '36e22f91-52f3-8101-8dd2-f6f7c0b402e9',
+    );
+  });
+
+  it('returns a dashed UUID input unchanged', () => {
+    expect(
+      parseNotionPageIdDashed('36e22f91-52f3-8101-8dd2-f6f7c0b402e9'),
+    ).toBe('36e22f91-52f3-8101-8dd2-f6f7c0b402e9');
+  });
+
+  it('passes through non-UUID inputs unchanged', () => {
+    expect(parseNotionPageIdDashed('not-a-uuid')).toBe('not-a-uuid');
+    expect(parseNotionPageIdDashed('yaml:some-id')).toBe('yaml:some-id');
+  });
+
+  it('extracts dashless ID from a Notion URL and converts to dashed', () => {
+    expect(
+      parseNotionPageIdDashed(
+        'https://www.notion.so/My-Task-36e22f9152f381018dd2f6f7c0b402e9',
+      ),
+    ).toBe('36e22f91-52f3-8101-8dd2-f6f7c0b402e9');
   });
 });

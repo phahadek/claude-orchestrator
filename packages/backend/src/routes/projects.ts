@@ -134,10 +134,108 @@ projectsRouter.patch('/projects/:id', (req: Request, res: Response) => {
   if ('autoMergeEnabled' in body) {
     patch.auto_merge_enabled = body.autoMergeEnabled === true ? 1 : 0;
   }
+  if ('milestoneBranching' in body) {
+    if (
+      body.milestoneBranching === 'two_tier' ||
+      body.milestoneBranching === 'flat' ||
+      body.milestoneBranching === null
+    ) {
+      patch.milestone_branching = body.milestoneBranching as
+        | 'two_tier'
+        | 'flat'
+        | null;
+    } else if (body.milestoneBranching !== undefined) {
+      res.status(400).json({
+        error: `milestoneBranching must be 'two_tier', 'flat', or null`,
+      });
+      return;
+    }
+  }
+  if ('nonMilestoneSourceConfig' in body) {
+    if (body.nonMilestoneSourceConfig === null) {
+      patch.non_milestone_source_config = null;
+    } else if (typeof body.nonMilestoneSourceConfig === 'string') {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(body.nonMilestoneSourceConfig);
+      } catch {
+        res
+          .status(400)
+          .json({ error: 'nonMilestoneSourceConfig is not valid JSON' });
+        return;
+      }
+      if (
+        typeof parsed !== 'object' ||
+        parsed === null ||
+        Array.isArray(parsed)
+      ) {
+        res
+          .status(400)
+          .json({ error: 'nonMilestoneSourceConfig must be a JSON object' });
+        return;
+      }
+      const obj = parsed as Record<string, unknown>;
+      if (
+        (obj.notionDatabaseId !== undefined &&
+          typeof obj.notionDatabaseId !== 'string') ||
+        (obj.milestoneId !== undefined && typeof obj.milestoneId !== 'string')
+      ) {
+        res.status(400).json({
+          error:
+            'nonMilestoneSourceConfig must have shape {notionDatabaseId?: string; milestoneId?: string}',
+        });
+        return;
+      }
+      patch.non_milestone_source_config = body.nonMilestoneSourceConfig;
+    } else if (typeof body.nonMilestoneSourceConfig === 'object') {
+      const obj = body.nonMilestoneSourceConfig as Record<string, unknown>;
+      if (
+        (obj.notionDatabaseId !== undefined &&
+          typeof obj.notionDatabaseId !== 'string') ||
+        (obj.milestoneId !== undefined && typeof obj.milestoneId !== 'string')
+      ) {
+        res.status(400).json({
+          error:
+            'nonMilestoneSourceConfig must have shape {notionDatabaseId?: string; milestoneId?: string}',
+        });
+        return;
+      }
+      patch.non_milestone_source_config = JSON.stringify(
+        body.nonMilestoneSourceConfig,
+      );
+    } else {
+      res.status(400).json({
+        error:
+          'nonMilestoneSourceConfig must be a JSON object, JSON string, or null',
+      });
+      return;
+    }
+  }
   if (body.gitMode === 'github' || body.gitMode === 'local-only') {
     patch.git_mode = body.gitMode;
   } else if ('gitMode' in body && body.gitMode !== undefined) {
     res.status(400).json({ error: `gitMode must be 'github' or 'local-only'` });
+    return;
+  }
+
+  // dataResidencyConfirmed triggers audit logging via the dedicated service method.
+  if ('dataResidencyConfirmed' in body) {
+    const updated = ProjectService.setDataResidencyConfirmed(
+      id,
+      body.dataResidencyConfirmed === true,
+    );
+    if (!updated) {
+      res.status(404).json({ error: `Project '${id}' not found` });
+      return;
+    }
+    // Apply any remaining patch fields on top.
+    delete (patch as Record<string, unknown>).data_residency_confirmed;
+    if (Object.keys(patch).length === 0) {
+      res.json(updated);
+      return;
+    }
+    const final = ProjectService.update(id, patch);
+    res.json(final ?? updated);
     return;
   }
 

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import styles from './WorkItemCard.module.css';
+import { CIBadges } from './CIBadges';
 
 export interface PRReviewDimension {
   name: string;
@@ -234,9 +235,6 @@ function PRWorkItemCard({
   const canMerge =
     pr.state === 'open' && verdict === 'approved' && !mergeBlocked;
   const failingChecks = pr.failingChecks ?? [];
-  const showCiBadge =
-    !isFinished &&
-    (pr.mergeState === 'ci_failed' || pr.pauseReason === 'ci_failing');
   const ciChecksUrl = `https://github.com/${pr.repo}/pull/${pr.prNumber}/checks`;
   const sessionAlive = pr.sessionId !== null;
   const reviewAction: 'run-review' | 're-review' | 'fix-conflicts' | null =
@@ -339,36 +337,19 @@ function PRWorkItemCard({
         <span className={`${styles.verdictBadge} ${verdictClass}`}>
           {verdictLabel}
         </span>
-        {showCiBadge && (
-          <a
-            href={ciChecksUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={styles.ciBadge}
-            title={
-              failingChecks.length > 0
-                ? `Failing checks: ${failingChecks.join(', ')}`
-                : 'CI checks are failing'
-            }
-          >
-            ❌ CI failing
-            {failingChecks.length > 0 ? `: ${failingChecks.join(', ')}` : ''}
-          </a>
-        )}
+        <CIBadges
+          mergeState={pr.mergeState}
+          pauseReason={pr.pauseReason}
+          prState={pr.state}
+          ciChecksUrl={ciChecksUrl}
+          failingChecks={failingChecks}
+        />
         {hasConflicts && (
           <span
             className={styles.conflictBadge}
             title={`Merge conflicts on ${pr.headBranch} — rebase onto ${pr.baseBranch} and resolve.`}
           >
             ⚠ Merge Conflicts
-          </span>
-        )}
-        {isUnstable && (
-          <span
-            className={styles.conflictBadge}
-            title="CI is unstable — checks may be failing"
-          >
-            ⚠ CI unstable
           </span>
         )}
         {isBlocked && (

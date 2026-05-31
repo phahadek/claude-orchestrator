@@ -138,6 +138,191 @@ export function formatReviewFeedback(
   );
 }
 
+export interface HumanComment {
+  id: string;
+  author: string;
+  body: string;
+  path?: string | null;
+  line?: number | null;
+}
+
+/**
+ * Format human reviewer comments into a message for the coding session.
+ * Mirrors the structure of formatReviewFeedback() so the session doesn't
+ * care whether feedback originated from AI or human review.
+ */
+export function formatHumanReviewFeedback(
+  prNumber: number,
+  comments: HumanComment[],
+  hasChangesRequested: boolean,
+): string {
+  const header = hasChangesRequested
+    ? `## Human Reviewer — Changes Requested on PR #${prNumber}`
+    : `## Human Reviewer Comments — PR #${prNumber}`;
+
+  const verdict = hasChangesRequested
+    ? `**The reviewer has requested changes. Please address all feedback below and push your changes.**`
+    : `**The reviewer has left comments. Please review and address them as appropriate, then push your changes.**`;
+
+  const commentBlocks = comments.map((c) => {
+    const location =
+      c.path != null
+        ? ` (\`${c.path}${c.line != null ? `:${c.line}` : ''}\`)`
+        : '';
+    return `### @${c.author}${location}\n${c.body.trim()}`;
+  });
+
+  return (
+    `${header}\n\n` +
+    `${verdict}\n\n` +
+    commentBlocks.join('\n\n') +
+    `\n\nThe orchestrator will automatically resume the merge process once you push.\n\n` +
+    `**Important:** Do NOT rebase onto dev or merge dev into your branch. ` +
+    `Just commit your fixes and push directly to your feature branch. ` +
+    `Rebasing or merging would pull in unrelated changes from other merged PRs ` +
+    `and pollute the PR diff.`
+  );
+}
+
+export interface NoOpInvestigationArgs {
+  taskTitle: string;
+  taskMarkdown: string;
+  noOpSessionEvents: Array<{
+    event_type: string;
+    payload: string;
+    timestamp: number;
+  }>;
+  mergedPRs: Array<{
+    number: number;
+    title: string;
+    url: string;
+    mergedAt: string;
+  }>;
+  recentCommits: Array<{
+    sha: string;
+    message: string;
+    author: string;
+    date: string;
+  }>;
+  sessionId: string;
+  taskId: string;
+}
+
+/**
+ * Render the investigator prompt for a no-op coding session.
+ * The investigator is asked to emit exactly one JSON NoOpVerdict object.
+ */
+export function renderNoOpInvestigationPrompt(
+  args: NoOpInvestigationArgs,
+): string {
+  const {
+    taskTitle,
+    taskMarkdown,
+    noOpSessionEvents,
+    mergedPRs,
+    recentCommits,
+    sessionId,
+    taskId,
+  } = args;
+
+  const eventsBlock = noOpSessionEvents
+    .slice(-50)
+    .map((e) => {
+      const ts = new Date(e.timestamp).toISOString();
+      let payload = e.payload;
+      try {
+        const parsed = JSON.parse(e.payload) as Record<string, unknown>;
+        // Extract readable text from assistant/tool events
+        if (parsed.type === 'assistant') {
+          const content = parsed.message as
+            | { content?: Array<{ type: string; text?: string }> }
+            | undefined;
+          const texts =
+            content?.content
+              ?.filter((b) => b.type === 'text')
+              .map((b) => b.text ?? '')
+              .join('') ?? '';
+          if (texts) payload = texts.slice(0, 500);
+        } else if (
+          parsed.type === 'tool_result' ||
+          parsed.type === 'tool_use'
+        ) {
+          payload = JSON.stringify(parsed).slice(0, 300);
+        }
+      } catch {
+        // not JSON, use raw
+      }
+      return `[${ts}] ${e.event_type}: ${payload.slice(0, 400)}`;
+    })
+    .join('\n');
+
+  const mergedPRsBlock =
+    mergedPRs.length > 0
+      ? mergedPRs
+          .map(
+            (pr) =>
+              `- PR #${pr.number}: ${pr.title} (${pr.url}) merged at ${pr.mergedAt}`,
+          )
+          .join('\n')
+      : '(none)';
+
+  const commitsBlock =
+    recentCommits.length > 0
+      ? recentCommits
+          .map((c) => `- ${c.sha} ${c.message} by ${c.author} at ${c.date}`)
+          .join('\n')
+      : '(none)';
+
+  return `You are an investigator reviewing a no-op coding session.
+
+## Background
+A coding session for the following task exited cleanly (exit code 0) without opening a pull request and without producing any git diff. Your job is to determine what happened and emit a verdict.
+
+## Task
+Title: ${taskTitle}
+Task ID: ${taskId}
+Session ID: ${sessionId}
+
+### Task Spec
+${taskMarkdown.slice(0, 4000)}
+
+## No-Op Session Events (last 50)
+${eventsBlock || '(no events)'}
+
+## Recent Merged PRs on the base branch since this task was created
+${mergedPRsBlock}
+
+## Recent Commits on the base branch since this task was created
+${commitsBlock}
+
+## Your Job
+Analyze the session events and recent activity to determine one of:
+1. **resolved** — The task's work was already done by a sibling/duplicate PR that was merged. You must identify the specific PR URL.
+2. **retry** — The session made a reasonable attempt but was confused or hit a transient issue. A one-shot retry is warranted.
+3. **human** — The situation is genuinely ambiguous, the task is blocked on something outside the session's control, or a retry would just loop. A human needs to look at this.
+
+## Output Format
+Emit ONLY a single JSON object matching this TypeScript type and nothing else:
+
+\`\`\`
+type NoOpVerdict =
+  | { kind: "resolved"; resolvedByPrUrl: string; reason: string }
+  | { kind: "retry"; reason: string }
+  | { kind: "human"; reason: string };
+\`\`\`
+
+Example for resolved:
+{"kind":"resolved","resolvedByPrUrl":"https://github.com/owner/repo/pull/42","reason":"Task was already implemented in PR #42 which merged the required changes."}
+
+Example for retry:
+{"kind":"retry","reason":"The session could not find the CLAUDE.md file and exited without attempting the task."}
+
+Example for human:
+{"kind":"human","reason":"The session reported a fatal environment error that a retry cannot fix."}
+
+Output ONLY the JSON object. No markdown, no explanation, no preamble.`;
+}
+
 /**
  * Format a merge conflict notification for a local branch coding session.
  * Asks the session to rebase onto the base branch and resolve conflicts.

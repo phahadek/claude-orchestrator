@@ -22,3 +22,14 @@ packages/frontend/.env
 
 # Local task backend file (per-project, copied from tasks.yaml.example)
 /tasks.yaml
+
+# Scratch commit message files — never tracked
+.commit-msg
+*.commit_msg
+commit-msg.txt
+commit_msg.txt
+commit-msg.*
+commit_msg.*
+
+# Local-only baseline / analysis output (raw telemetry, never committed)
+/session-efficiency-baseline-output/

@@ -22,31 +22,33 @@ import { createPrsRouter, setPRBroadcast } from './routes/prs';
 import { createTasksRouter, setTaskBroadcast } from './routes/tasks';
 import { analyticsRouter } from './routes/analytics';
 import { projectsRouter, setAutoMerger } from './routes/projects';
+import { requireDeviceAuth, validateWsToken } from './auth/DeviceAuth';
+import {
+  createEnrollmentRouter,
+  setEnrollmentBroadcast,
+} from './auth/Enrollment';
+import { getActiveDeviceCount } from './db/queries';
 import { importProjectsFromEnv } from './projects/projectImport';
 import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
 import { ReviewOrchestrator } from './github/ReviewOrchestrator';
 import { PRMergeWatcher } from './github/PRMergeWatcher';
 import { AutoMerger } from './github/AutoMerger';
+import { ReviewerCommentsWatcher } from './github/ReviewerCommentsWatcher';
 import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
+import { getCorporateMode } from './config/corporateMode';
 import { AutoLauncher } from './orchestration/AutoLauncher';
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
-import {
-  deleteGhostSessions,
-  getPRBySessionId,
-  setPRReviewResult,
-  setLastReviewedSha,
-  setHeadSha,
-  getSetting,
-  setPendingPush,
-  setPauseReason,
-} from './db/queries';
-import { shouldAutoReview, formatReviewFeedback } from './github/reviewUtils';
-import type { PRReviewResult } from './github/PRReviewService';
+import { deleteGhostSessions, getPRBySessionId } from './db/queries';
 
 runMigrations();
 loadRuntimeSettingsFromDb();
 importProjectsFromEnv(process.env.PROJECTS);
+
+const _cm = getCorporateMode();
+console.log(
+  `[corporateMode] mode=${_cm.enabled ? 'corporate' : 'personal'} envLocked=${_cm.envLocked} gates=${JSON.stringify(_cm.gates)}`,
+);
 
 const ghostsRemoved = deleteGhostSessions();
 if (ghostsRemoved > 0) {
@@ -88,6 +90,9 @@ const PORT = parseInt(process.env.PORT ?? '3000');
 
 const app = express();
 app.use(express.json());
+// Enrollment endpoints are public — mount before the device auth middleware
+app.use('/api/enrollment', createEnrollmentRouter());
+app.use(requireDeviceAuth);
 app.use('/api/permission-events', permissionEventsRouter);
 app.use('/api/permission-denials', permissionDenialsRouter);
 app.use('/api/settings', settingsRouter);
@@ -110,8 +115,14 @@ const autoMerger = new AutoMerger(
   sessionManager,
 );
 prMergeWatcher.setAutoMerger(autoMerger);
+prMergeWatcher.setPRReviewService(prReviewService);
+prMergeWatcher.setReviewOrchestrator(reviewOrchestrator);
 prReviewService.setAutoMerger(autoMerger);
 setAutoMerger(autoMerger);
+const reviewerCommentsWatcher = new ReviewerCommentsWatcher(
+  githubClient,
+  sessionManager,
+);
 app.use(
   '/api',
   createPrsRouter(
@@ -148,40 +159,22 @@ setBroadcast(broadcast);
 setPRBroadcast(broadcast);
 // Wire broadcast into the tasks route (for task_updated WS messages)
 setTaskBroadcast(broadcast);
+// Wire broadcast into enrollment (for enrollment_request events)
+setEnrollmentBroadcast(broadcast);
 
 // Broadcast all session events to every connected WS client
 sessionManager.on('message', broadcast);
 
 // ── Push-detected re-review loop ─────────────────────────────────────────────
 
-const PUSH_REVIEW_TIMEOUT_MS = 120_000;
-const DEFAULT_MAX_REVIEW_ITERATIONS = 3;
-const pendingReReviews = new Set<string>();
-
-function getMaxReviewIterations(): number {
-  const raw = getSetting('max_review_iterations');
-  if (!raw) return DEFAULT_MAX_REVIEW_ITERATIONS;
-  const parsed = parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0
-    ? parsed
-    : DEFAULT_MAX_REVIEW_ITERATIONS;
-}
-
+// All push pipeline logic lives in PRMergeWatcher.handlePushDetected.
+// This thin wrapper resolves the coding session → PR row and delegates.
 sessionManager.on(
   'push_detected',
   ({ sessionId: codingSessionId }: { sessionId: string }) => {
     console.log(
       `[server] push_detected from session ${codingSessionId.slice(0, 8)}`,
     );
-    if (!AUTO_REVIEW_ENABLED) {
-      console.log('[server] push_detected: auto-review disabled');
-      return;
-    }
-    if (pendingReReviews.has(codingSessionId)) {
-      console.log('[server] push_detected: already pending for this session');
-      return;
-    }
-
     const prRow = getPRBySessionId(codingSessionId);
     if (!prRow || prRow.state !== 'open') {
       console.log(
@@ -189,186 +182,25 @@ sessionManager.on(
       );
       return;
     }
-    if (!prRow.review_session_id) {
-      // Initial review hasn't started yet — queue the push so it triggers
-      // re-review after the initial review session is established.
-      setPendingPush(prRow.pr_number, prRow.repo, 1);
-      console.log(
-        `[server] push_detected for PR #${prRow.pr_number} before review session established — queued as pending_push`,
-      );
-      return;
-    }
-
-    pendingReReviews.add(codingSessionId);
-
-    void (async () => {
-      let headSha = prRow.head_sha;
-      let fetchError: unknown;
-      for (let attempt = 0; attempt < 2; attempt++) {
-        try {
-          const freshPR = await githubClient.fetchPR(
-            prRow.repo,
-            prRow.pr_number,
-          );
-          headSha = freshPR.headSha;
-          fetchError = undefined;
-          if (headSha !== prRow.head_sha) {
-            setHeadSha(prRow.pr_number, prRow.repo, headSha);
-          }
-          break;
-        } catch (e) {
-          fetchError = e;
-          if (attempt === 0) {
-            console.warn(
-              `[server] fetch PR #${prRow.pr_number} failed (attempt 1), retrying...`,
-            );
-            await new Promise<void>((resolve) => setTimeout(resolve, 2000));
-          }
-        }
-      }
-      if (fetchError) {
-        console.warn(
-          `[server] failed to fetch latest PR state for #${prRow.pr_number} after retry:`,
-          fetchError,
-        );
-      }
-
-      // Skip re-review when the only push since the last review was the autofix
-      // commit — the code at that SHA was already reviewed in executeReview().
-      // This prevents autofix-only iterations from counting against the cap.
-      if (
-        headSha &&
-        reviewOrchestrator.consumeAutofixSha(
-          prRow.pr_number,
-          prRow.repo,
-          headSha,
-        )
-      ) {
-        console.log(
-          `[server] push_detected: autofix-only push for PR #${prRow.pr_number} — skipping re-review`,
-        );
-        pendingReReviews.delete(codingSessionId);
-        return;
-      }
-
-      const maxIter = getMaxReviewIterations();
-
-      // Escalation cap reached — emit review_escalated before bailing out.
-      // shouldAutoReview() also catches this, but it returns a plain boolean
-      // with no way to distinguish cap-reached vs same-SHA, so we check explicitly.
-      if (prRow.review_iteration >= maxIter) {
-        const message = `Review loop for PR #${prRow.pr_number} reached ${maxIter} iterations without approval. Manual intervention needed.`;
-        console.warn(`[server] ${message}`);
-        setPauseReason(prRow.pr_number, prRow.repo, 'max_reviews');
-        sessionManager.emit('message', {
-          type: 'review_escalated',
-          prNumber: prRow.pr_number,
-          repo: prRow.repo,
-          message,
-        });
-        pendingReReviews.delete(codingSessionId);
-        return;
-      }
-
-      const autoReviewOk = shouldAutoReview(
-        {
-          reviewIteration: prRow.review_iteration,
-          headSha,
-          lastReviewedSha: prRow.last_reviewed_sha,
-        },
-        maxIter,
-      );
-      console.log(
-        `[server] shouldAutoReview: iter=${prRow.review_iteration}/${maxIter} head=${headSha?.slice(0, 7)} lastReviewed=${prRow.last_reviewed_sha?.slice(0, 7)} → ${autoReviewOk}`,
-      );
-      if (!autoReviewOk) {
-        pendingReReviews.delete(codingSessionId);
-        return;
-      }
-
-      const iteration = prRow.review_iteration + 1;
-      try {
-        let result: PRReviewResult;
-        try {
-          result = await Promise.race([
-            prReviewService.reReviewPR(prRow.pr_number, prRow.repo),
-            new Promise<never>((_, reject) =>
-              setTimeout(
-                () => reject(new Error('Re-review timed out')),
-                PUSH_REVIEW_TIMEOUT_MS,
-              ),
-            ),
-          ]);
-        } catch (e) {
-          const summary = e instanceof Error ? e.message : String(e);
-          console.error(
-            `[server] re-review failed for PR #${prRow.pr_number}:`,
-            e,
-          );
-          setPauseReason(prRow.pr_number, prRow.repo, 'review_failed');
-          const failMessage = `Re-review for PR #${prRow.pr_number} failed: ${summary}`;
-          sessionManager.emit('message', {
-            type: 'review_failed',
-            prNumber: prRow.pr_number,
-            repo: prRow.repo,
-            message: failMessage,
-          });
-          setPRReviewResult(
-            prRow.pr_number,
-            prRow.repo,
-            JSON.stringify({ verdict: 'error', summary, dimensions: [] }),
-          );
-          sessionManager.emit('message', {
-            type: 'review_verdict',
-            prNumber: prRow.pr_number,
-            repo: prRow.repo,
-            verdict: 'error',
-            summary,
-            iteration,
-          });
-          return;
-        }
-
-        setLastReviewedSha(prRow.pr_number, prRow.repo, headSha);
-        sessionManager.emit('message', {
-          type: 'review_verdict',
-          prNumber: prRow.pr_number,
-          repo: prRow.repo,
-          verdict: result.verdict,
-          summary: result.summary,
-          iteration,
-        });
-
-        if (result.verdict === 'needs_changes') {
-          try {
-            await sessionManager.sendOrResume(
-              codingSessionId,
-              formatReviewFeedback(result, iteration),
-            );
-          } catch (e) {
-            console.warn(
-              `[server] Failed to deliver review feedback to session ${codingSessionId}:`,
-              e,
-            );
-          }
-        } else if (result.verdict === 'incomplete') {
-          const message = `Review for PR #${prRow.pr_number} returned an incomplete verdict — the reviewer could not assess the PR. Manual intervention needed.`;
-          console.warn(`[server] ${message}`);
-          sessionManager.emit('message', {
-            type: 'review_incomplete',
-            prNumber: prRow.pr_number,
-            repo: prRow.repo,
-            message,
-          });
-        }
-      } finally {
-        pendingReReviews.delete(codingSessionId);
-      }
-    })();
+    void prMergeWatcher.handlePushDetected(prRow);
   },
 );
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+  const urlStr = req.url ?? '/ws';
+  const url = new URL(urlStr, `http://${req.headers.host ?? 'localhost'}`);
+  const token = url.searchParams.get('token');
+  const device = validateWsToken(token);
+
+  if (!device) {
+    // Bootstrap: allow connection when no devices are enrolled yet
+    const deviceCount = getActiveDeviceCount();
+    if (deviceCount > 0) {
+      ws.close(4001, 'Unauthorized');
+      return;
+    }
+  }
+
   console.log('[WS] client connected');
 
   // Send existing active (non-archived) sessions to the new client so the UI populates on load.
@@ -407,6 +239,7 @@ jsonlReader
       );
 
     prMergeWatcher.start();
+    reviewerCommentsWatcher.start();
 
     await autoLauncher
       .start()
@@ -419,7 +252,7 @@ jsonlReader
 
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`[server] listening on port ${PORT}`);
-      console.log('[server] LAN access enabled — no authentication');
+      console.log('[server] LAN access enabled — device auth required');
     });
   })
   .catch((err: unknown) => {
@@ -431,6 +264,7 @@ async function gracefulShutdown(signal: string) {
   console.log(`[server] ${signal} received — shutting down`);
   autoLauncher.stop();
   stuckSessionMonitor.stop();
+  reviewerCommentsWatcher.stop();
   wss.close();
   await sessionManager.shutdownAll();
   server.close();

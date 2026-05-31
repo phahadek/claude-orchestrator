@@ -22,6 +22,7 @@ const makeTask = (
   blockers: [],
   nonCode: false,
   wave: 1,
+  source: 'notion' as const,
   ...overrides,
 });
 
@@ -37,6 +38,7 @@ const TEST_PROJECT: ProjectConfig = {
   autoLaunchEnabled: false,
   autoLaunchMilestoneId: null,
   autoMergeEnabled: false,
+  dataResidencyConfirmed: false,
 };
 
 function renderModal(

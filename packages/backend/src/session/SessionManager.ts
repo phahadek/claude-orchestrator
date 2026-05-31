@@ -2,12 +2,21 @@ import path from 'path';
 import fs from 'fs';
 import { execSync } from 'child_process';
 import { EventEmitter } from 'events';
-import { AgentSession, parseNotionPageId } from './AgentSession';
+import { recordEvent } from '../audit/AuditLog';
+import { scrubSecrets } from '../security/scrubSecrets';
+import { AgentSession, parseNotionPageIdDashed } from './AgentSession';
+import { formatTaskId } from '../tasks/taskId';
 import { buildSessionContext } from './ContextBuilder';
 import { buildReviewClaudeMd } from './orchestrator-claudemd';
+import { resolveStartingPoint, ensureMilestoneBranch } from './branchModel';
 import { loadOrchestratorConfig } from './orchestrator-config';
 import { CliSessionRunner } from './CliSessionRunner';
 import { ApiSessionRunner } from './ApiSessionRunner';
+import {
+  DockerSessionRunner,
+  reapOrphanContainers,
+} from './DockerSessionRunner';
+import { getCorporateMode } from '../config/corporateMode';
 import {
   config,
   getProjectById,
@@ -24,6 +33,7 @@ import {
   getEventsBySession,
   getPRByNumber,
   backfillStuckResultSessions,
+  hasActiveSessionForTask,
 } from '../db/queries';
 import type { Session } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -110,6 +120,10 @@ export interface StartOptions {
   taskName?: string;
   /** Pre-generated session ID. If omitted, a new UUID is generated internally. */
   sessionId?: string;
+  /** Milestone row id used for starting-point resolution in two_tier branch mode. */
+  milestoneId?: string | null;
+  /** Whether this is a milestone task or a non-milestone task; recorded in the audit log. */
+  taskKind?: 'milestone' | 'non_milestone';
 }
 
 /** How long to suppress lastMessage-only task_updated broadcasts per task (ms). */
@@ -146,11 +160,21 @@ export class SessionManager extends EventEmitter {
    * calls so the task_updated broadcast itself never triggers another one.
    */
   override emit(event: string | symbol, ...args: unknown[]): boolean {
-    const result = super.emit(event, ...args);
+    let emitArgs = args;
+    if (event === 'message') {
+      const msg = args[0] as ServerMessage;
+      if (msg.type === 'session_event' && typeof msg.content === 'string') {
+        const scrubbed = scrubSecrets(msg.content);
+        if (scrubbed !== msg.content) {
+          emitArgs = [{ ...msg, content: scrubbed }, ...args.slice(1)];
+        }
+      }
+    }
+    const result = super.emit(event, ...emitArgs);
     if (event === 'message' && !this._inTaskUpdate) {
       this._inTaskUpdate = true;
       try {
-        this._handleTaskUpdated(args[0] as ServerMessage);
+        this._handleTaskUpdated(emitArgs[0] as ServerMessage);
       } catch (err) {
         console.error('[SessionManager] task_updated handler error:', err);
       } finally {
@@ -204,19 +228,19 @@ export class SessionManager extends EventEmitter {
       case 'pr_created': {
         const sessionId = (msg as { sessionId: string }).sessionId;
         const row = getSession(sessionId);
-        return row?.notion_task_id ?? null;
+        return row?.task_id ?? null;
       }
       case 'pr_review_complete':
       case 'review_verdict': {
         const { prNumber, repo } = msg as { prNumber: number; repo: string };
         const prRow = getPRByNumber(prNumber, repo);
-        return prRow?.notion_task_id ?? null;
+        return prRow?.task_id ?? null;
       }
       case 'pr_merged':
       case 'pr_closed': {
         const { prNumber, repo } = msg as { prNumber: number; repo: string };
         const prRow = getPRByNumber(prNumber, repo);
-        return prRow?.notion_task_id ?? null;
+        return prRow?.task_id ?? null;
       }
       default:
         return null;
@@ -235,7 +259,15 @@ export class SessionManager extends EventEmitter {
       projectId = '',
       taskName,
       sessionId: providedSessionId,
+      milestoneId = null,
+      taskKind,
     } = options ?? {};
+
+    if (sessionType !== 'review' && taskKind === undefined) {
+      throw new Error(
+        `sessionManager.start() requires taskKind for standard sessions`,
+      );
+    }
 
     if (sessionType !== 'review') {
       const codeSessionCount = [...this.sessions.values()].filter(
@@ -253,6 +285,46 @@ export class SessionManager extends EventEmitter {
       throw new Error(`Project not found: ${projectId}`);
     }
 
+    const corporateMode = getCorporateMode();
+    if (corporateMode.gates.requireZDR && !project.dataResidencyConfirmed) {
+      recordEvent({
+        event_type: 'session_launch_refused_zdr',
+        actor_type: 'system',
+        project_id: projectId,
+        payload: {
+          projectId,
+          reason:
+            'data_residency_confirmed is false; corporate mode requireZDR gate blocked session launch',
+        },
+      });
+      throw new Error(
+        `Session launch refused: project "${project.name}" has not confirmed Zero Data Retention (ZDR). ` +
+          `Enable the Data Residency attestation in project Settings before launching sessions in corporate mode.`,
+      );
+    }
+
+    // Dedup: if a live or DB-active session already exists for this task, return early.
+    // This lifts the AutoLauncher guard into SessionManager so every caller benefits.
+    if (sessionType !== 'review') {
+      const earlyNotionTaskId = formatTaskId(
+        'notion',
+        parseNotionPageIdDashed(taskUrl),
+      );
+      if (
+        this.hasLiveSessionForTask(earlyNotionTaskId) ||
+        hasActiveSessionForTask(earlyNotionTaskId)
+      ) {
+        const existing = [...this.sessions.values()].find((s) => {
+          const tid = s.taskId?.replace(/-/g, '');
+          return tid && tid === earlyNotionTaskId.replace(/-/g, '');
+        });
+        throw Object.assign(
+          new Error(`Session already running for task ${earlyNotionTaskId}`),
+          { alreadyRunning: true, sessionId: existing?.sessionId ?? '' },
+        );
+      }
+    }
+
     const sessionId = providedSessionId ?? crypto.randomUUID();
     this.pendingStarts.set(sessionId, { sessionType });
     console.log(
@@ -266,7 +338,6 @@ export class SessionManager extends EventEmitter {
       'worktrees',
       sessionId,
     );
-    const branchName = `session/${sessionId}`;
 
     // Record the main repo's current branch before creating the worktree so we
     // can detect and restore it if the session accidentally changes it.
@@ -283,28 +354,46 @@ export class SessionManager extends EventEmitter {
 
     const isLocalOnly = project.gitMode === 'local-only';
 
+    // Resolve the starting point for the detached worktree.
+    const { startingPoint, milestoneSlug } = resolveStartingPoint(
+      project,
+      milestoneId,
+    );
+
     if (!isLocalOnly) {
-      try {
-        // Fetch latest dev so sessions don't branch from a stale local ref.
-        // Uses `git fetch origin dev` (not dev:dev) because dev:dev fails when
-        // the local dev branch is checked out in the main repo or any worktree.
-        // The worktree is then based on origin/dev which is always up-to-date.
-        execSync('git fetch origin dev', { cwd: projectDir, timeout: 30_000 });
-      } catch (err) {
-        console.warn(
-          `[SessionManager] git fetch origin dev failed (continuing with local ref): ${err}`,
-        );
+      if (milestoneSlug) {
+        // ensureMilestoneBranch fetches origin/dev internally when needed.
+        try {
+          ensureMilestoneBranch(milestoneSlug, projectDir);
+        } catch (err) {
+          console.warn(
+            `[SessionManager] ensureMilestoneBranch failed (continuing): ${err}`,
+          );
+        }
+      } else {
+        try {
+          // Fetch latest dev so sessions don't start from a stale local ref.
+          execSync('git fetch origin dev', {
+            cwd: projectDir,
+            timeout: 30_000,
+          });
+        } catch (err) {
+          console.warn(
+            `[SessionManager] git fetch origin dev failed (continuing with local ref): ${err}`,
+          );
+        }
       }
     }
 
-    const worktreeBase = isLocalOnly ? 'dev' : 'origin/dev';
+    // For github projects: use origin/dev when starting from dev, or the local
+    // milestone branch ref (guaranteed to exist after ensureMilestoneBranch).
+    const worktreeBase =
+      isLocalOnly || startingPoint !== 'dev' ? startingPoint : 'origin/dev';
+
     try {
-      execSync(
-        `git worktree add "${worktreePath}" -b "${branchName}" ${worktreeBase}`,
-        {
-          cwd: projectDir,
-        },
-      );
+      execSync(`git worktree add --detach "${worktreePath}" ${worktreeBase}`, {
+        cwd: projectDir,
+      });
     } catch (err) {
       console.error(
         `[SessionManager] failed to create worktree for ${sessionId}: ${err}`,
@@ -315,7 +404,7 @@ export class SessionManager extends EventEmitter {
     const isUnixStylePath =
       worktreePath.startsWith('/c/') || worktreePath.startsWith('/C/');
     console.log(
-      `[SessionManager] worktree created: path=${worktreePath} branch=${branchName}` +
+      `[SessionManager] worktree created: path=${worktreePath} startingPoint=${startingPoint}` +
         (isUnixStylePath
           ? ' [WARNING: Unix-style path detected — may not resolve correctly on Windows]'
           : ''),
@@ -344,12 +433,21 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    const notionTaskId = parseNotionPageId(taskUrl);
+    // SessionManager.start() must store prefixed task IDs in sessions.task_id so
+    // downstream parseTaskId() callers (NotionTaskBackend.updateStatus, attachPR,
+    // etc.) succeed. parseNotionPageIdDashed converts URL-embedded dashless IDs to
+    // dashed UUID form (Notion's native) so the JOIN with task_cache matches.
+    const notionTaskId = formatTaskId(
+      'notion',
+      parseNotionPageIdDashed(taskUrl),
+    );
     const sessionMode = runtimeSettings.session_mode;
     const runner =
       sessionMode === 'api'
         ? new ApiSessionRunner(sessionId)
-        : new CliSessionRunner(sessionId);
+        : getCorporateMode().gates.dockerMandatory
+          ? new DockerSessionRunner(sessionId)
+          : new CliSessionRunner(sessionId);
 
     // Pre-fetch task content from Notion so sessions skip Notion calls entirely.
     // This is async — the session card is shown immediately, context is written
@@ -397,7 +495,7 @@ export class SessionManager extends EventEmitter {
             taskName: taskName ?? taskUrl,
             taskUrl,
             projectContextUrl,
-            targetBranch: 'dev',
+            targetBranch: startingPoint,
             projectDir,
             worktreePath,
             verify:
@@ -413,28 +511,6 @@ export class SessionManager extends EventEmitter {
         } catch (err) {
           console.error(
             `[SessionManager] failed to build session context for ${sessionId}: ${err}`,
-          );
-        }
-      }
-
-      if (sessionMode === 'cli' && sessionContextContent) {
-        // Write orchestrator content to root CLAUDE.md in the worktree.
-        // No assume-unchanged (blocked rebase/checkout). No .claude/CLAUDE.md
-        // (worktrees don't resolve project-level CLAUDE.md correctly).
-        // The modified file is unstaged — git checkout -b works fine.
-        // For rebase, the pre-PR gate tells sessions to stash first.
-        try {
-          fs.writeFileSync(
-            path.join(worktreePath, 'CLAUDE.md'),
-            sessionContextContent,
-            'utf-8',
-          );
-          console.log(
-            `[SessionManager] orchestrator CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`,
-          );
-        } catch (err) {
-          console.error(
-            `[SessionManager] failed to write orchestrator CLAUDE.md for ${sessionId}: ${err}`,
           );
         }
       }
@@ -457,13 +533,24 @@ export class SessionManager extends EventEmitter {
         projectId,
       );
 
+      if (sessionMode === 'cli' && sessionContextContent) {
+        // Write orchestrator content to root CLAUDE.md in the worktree via injectContextFile
+        // so that the per-session revert lock is honoured (new sessions always have an empty
+        // lock, so this always proceeds on first launch).
+        // No assume-unchanged (blocked rebase/checkout). No .claude/CLAUDE.md
+        // (worktrees don't resolve project-level CLAUDE.md correctly).
+        session.injectContextFile('CLAUDE.md', sessionContextContent);
+        console.log(
+          `[SessionManager] orchestrator CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`,
+        );
+      }
+
       this.pendingStarts.delete(sessionId);
       this.sessions.set(sessionId, session);
       this.wireSession(
         sessionId,
         session,
         projectDir,
-        branchName,
         worktreePath,
         mainBranch,
       );
@@ -476,8 +563,8 @@ export class SessionManager extends EventEmitter {
     const startedAt = Date.now();
     insertSession({
       session_id: sessionId,
-      notion_task_id: notionTaskId,
-      notion_task_url: taskUrl,
+      task_id: notionTaskId,
+      task_url: taskUrl,
       project_context_url: projectContextUrl,
       project_id: projectId,
       status: 'starting',
@@ -487,6 +574,19 @@ export class SessionManager extends EventEmitter {
       worktree_path: worktreePath,
       session_type: sessionType,
       task_name: taskName ?? null,
+    });
+
+    recordEvent({
+      event_type: 'session_launched',
+      actor_type: 'ai',
+      actor_id: sessionId,
+      project_id: projectId || null,
+      task_id: notionTaskId || null,
+      payload: {
+        session_type: sessionType,
+        task_url: taskUrl,
+        task_kind: taskKind,
+      },
     });
 
     // Launch async — session card is already visible to the frontend via the broadcast below.
@@ -504,7 +604,10 @@ export class SessionManager extends EventEmitter {
       // Roll back task status to Ready so the card doesn't stay stuck In Progress.
       if (sessionType === 'standard' && notionTaskId) {
         getTaskBackend(projectId)
-          .updateStatus(notionTaskId, '🗂️ Ready')
+          .updateStatus(notionTaskId, '🗂️ Ready', {
+            source: 'orchestrator',
+            sessionId,
+          })
           .then(() => {
             this.emit('message', {
               type: 'task_status_changed',
@@ -525,7 +628,10 @@ export class SessionManager extends EventEmitter {
 
     if (sessionType === 'standard') {
       getTaskBackend(projectId)
-        .updateStatus(notionTaskId, '🔄 In Progress')
+        .updateStatus(notionTaskId, '🔄 In Progress', {
+          source: 'orchestrator',
+          sessionId,
+        })
         .then(() => {
           this.emit('message', {
             type: 'task_status_changed',
@@ -580,7 +686,6 @@ export class SessionManager extends EventEmitter {
     sessionId: string,
     session: AgentSession,
     projectDir: string,
-    branchName: string,
     worktreePath: string,
     mainBranch?: string,
   ): void {
@@ -600,7 +705,6 @@ export class SessionManager extends EventEmitter {
         this.cleanupWorktree(
           sessionId,
           worktreePath,
-          branchName,
           session.prUrl,
           projectDir,
           mainBranch,
@@ -621,7 +725,6 @@ export class SessionManager extends EventEmitter {
         return this.cleanupWorktree(
           sessionId,
           worktreePath,
-          branchName,
           undefined,
           projectDir,
           mainBranch,
@@ -665,18 +768,8 @@ export class SessionManager extends EventEmitter {
       return;
     }
 
-    // Derive the branch from the worktree's HEAD so cleanupWorktree can delete it.
-    let branchName: string;
-    try {
-      branchName = execSync('git rev-parse --abbrev-ref HEAD', {
-        cwd: worktreePath,
-        encoding: 'utf8',
-      }).trim();
-    } catch {
-      branchName = `session/${row.session_id}`;
-    }
     console.log(
-      `[SessionManager] resumeSession ${row.session_id}: re-using worktree ${worktreePath} (branch=${branchName})`,
+      `[SessionManager] resumeSession ${row.session_id}: re-using worktree ${worktreePath}`,
     );
 
     // Load per-project orchestrator config so resumed sessions get the same
@@ -687,15 +780,17 @@ export class SessionManager extends EventEmitter {
     const resumeRunner =
       resumeSessionMode === 'api'
         ? new ApiSessionRunner(row.session_id)
-        : new CliSessionRunner(row.session_id);
+        : getCorporateMode().gates.dockerMandatory
+          ? new DockerSessionRunner(row.session_id)
+          : new CliSessionRunner(row.session_id);
 
     const session = new AgentSession(
       row.session_id, // keep original ID — same card, same transcript
-      row.notion_task_url ?? '',
+      row.task_url ?? '',
       row.project_context_url ?? '',
       undefined, // taskBackendOverride — production resolves via getTaskBackend
       worktreePath,
-      row.notion_task_id ?? '',
+      row.task_id ?? '',
       row.session_id, // resumeSessionId — passes --resume to CLI / SDK
       undefined,
       row.session_type ?? 'standard',
@@ -771,13 +866,7 @@ export class SessionManager extends EventEmitter {
       clearTimeout(errorTimer);
     });
 
-    this.wireSession(
-      row.session_id,
-      session,
-      projectDir,
-      branchName,
-      worktreePath,
-    );
+    this.wireSession(row.session_id, session, projectDir, worktreePath);
 
     // Send the nudge after a short delay so the CLI process is ready to receive
     // stdin before we write to it. Review sessions should not receive the
@@ -803,6 +892,12 @@ export class SessionManager extends EventEmitter {
       console.log(
         `[SessionManager] backfilled ${backfilled} stuck session(s) from running→done`,
       );
+    }
+
+    // Reap orphaned Docker containers/networks from sessions no longer active.
+    if (getCorporateMode().gates.dockerMandatory) {
+      const liveIds = new Set(this.sessions.keys());
+      reapOrphanContainers(liveIds);
     }
 
     const orphans = getSessionsByStatus(['running']);
@@ -845,12 +940,24 @@ export class SessionManager extends EventEmitter {
   private cleanupWorktree(
     sessionId: string,
     worktreePath: string,
-    branchName: string,
     prUrl: string | undefined,
     projectDir: string,
     mainBranch?: string,
   ): void {
     this.sessions.delete(sessionId);
+
+    // Derive the task branch the session created from the worktree's HEAD.
+    let branchName: string | undefined;
+    try {
+      const head = execSync('git rev-parse --abbrev-ref HEAD', {
+        cwd: worktreePath,
+        encoding: 'utf8',
+      }).trim();
+      // Only treat it as a task branch if it's not a detached HEAD.
+      if (head !== 'HEAD') branchName = head;
+    } catch {
+      // worktree may already be gone — skip branch deletion
+    }
 
     // Check if the main repo has unexpected modifications after session ends.
     // This catches worktree-escape bugs where a session edited the main repo
@@ -906,7 +1013,7 @@ export class SessionManager extends EventEmitter {
       );
     }
 
-    if (!prUrl) {
+    if (!prUrl && branchName) {
       try {
         execSync(`git branch -D "${branchName}"`, {
           cwd: projectDir,
@@ -966,6 +1073,33 @@ export class SessionManager extends EventEmitter {
 
   deny(sessionId: string, reason?: string): void {
     this.sessions.get(sessionId)?.deny(reason);
+  }
+
+  /**
+   * Register a Promise that resolves when the post-revert worktree sync completes.
+   * Emits a 'revert_sync_registered' event so ReviewOrchestrator can await it
+   * before fetching the PR diff for a re-review.
+   */
+  registerRevertSync(
+    prNumber: number,
+    repo: string,
+    syncPromise: Promise<void>,
+  ): void {
+    this.emit('revert_sync_registered', { prNumber, repo, syncPromise });
+  }
+
+  /**
+   * Add files to the per-session one-cycle injection skip lock.
+   * Called by the autofix path so that files committed by autofix are not
+   * immediately re-injected by the orchestrator context writer.
+   */
+  addToRevertLock(sessionId: string, files: string[]): void {
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      for (const f of files) {
+        session.lockFileForNextInjection(f);
+      }
+    }
   }
 
   /** Send a follow-up user message to a running session via stdin. */
@@ -1033,7 +1167,6 @@ export class SessionManager extends EventEmitter {
       'worktrees',
       newSessionId,
     );
-    const branchName = `session/${newSessionId}`;
 
     // Record the main repo's current branch before creating the worktree.
     let mainBranchResume: string | undefined;
@@ -1051,20 +1184,45 @@ export class SessionManager extends EventEmitter {
       );
     }
 
-    try {
-      execSync('git fetch origin dev', { cwd: projectDir, timeout: 30_000 });
-    } catch (err) {
-      console.warn(
-        `[SessionManager] sendOrResume: git fetch origin dev failed (continuing with local ref): ${err}`,
-      );
+    // Resolve the starting point using dev as the base (no milestoneId available for resumed sessions).
+    const {
+      startingPoint: resumeStartingPoint,
+      milestoneSlug: resumeMilestoneSlug,
+    } = resolveStartingPoint(project, null);
+
+    const isLocalOnlyResume = project.gitMode === 'local-only';
+    if (!isLocalOnlyResume) {
+      if (resumeMilestoneSlug) {
+        try {
+          ensureMilestoneBranch(resumeMilestoneSlug, projectDir);
+        } catch (err) {
+          console.warn(
+            `[SessionManager] sendOrResume: ensureMilestoneBranch failed (continuing): ${err}`,
+          );
+        }
+      } else {
+        try {
+          execSync('git fetch origin dev', {
+            cwd: projectDir,
+            timeout: 30_000,
+          });
+        } catch (err) {
+          console.warn(
+            `[SessionManager] sendOrResume: git fetch origin dev failed (continuing with local ref): ${err}`,
+          );
+        }
+      }
     }
+
+    const resumeWorktreeBase =
+      isLocalOnlyResume || resumeStartingPoint !== 'dev'
+        ? resumeStartingPoint
+        : 'origin/dev';
 
     try {
       execSync(
-        `git worktree add "${worktreePath}" -b "${branchName}" origin/dev`,
-        {
-          cwd: projectDir,
-        },
+        `git worktree add --detach "${worktreePath}" ${resumeWorktreeBase}`,
+        { cwd: projectDir },
       );
     } catch (err) {
       console.error(
@@ -1076,15 +1234,15 @@ export class SessionManager extends EventEmitter {
     const isUnixStylePathResume =
       worktreePath.startsWith('/c/') || worktreePath.startsWith('/C/');
     console.log(
-      `[SessionManager] sendOrResume worktree created: path=${worktreePath} branch=${branchName}` +
+      `[SessionManager] sendOrResume worktree created: path=${worktreePath} startingPoint=${resumeStartingPoint}` +
         (isUnixStylePathResume
           ? ' [WARNING: Unix-style path detected — may not resolve correctly on Windows]'
           : ''),
     );
 
-    const taskUrl = row.notion_task_url ?? '';
+    const taskUrl = row.task_url ?? '';
     const projectContextUrl = row.project_context_url ?? '';
-    const taskId = row.notion_task_id ?? '';
+    const taskId = row.task_id ?? '';
 
     // Load per-project orchestrator config so resumed sessions get the same
     // extra allowed tools (e.g. Bash(dotnet:*)) as freshly spawned ones.
@@ -1123,8 +1281,8 @@ export class SessionManager extends EventEmitter {
     const startedAt = Date.now();
     insertSession({
       session_id: newSessionId,
-      notion_task_id: taskId,
-      notion_task_url: taskUrl,
+      task_id: taskId,
+      task_url: taskUrl,
       project_context_url: projectContextUrl,
       project_id: row.project_id,
       status: 'starting',
@@ -1159,7 +1317,6 @@ export class SessionManager extends EventEmitter {
         this.cleanupWorktree(
           newSessionId,
           worktreePath,
-          branchName,
           session.prUrl,
           projectDir,
           mainBranchResume,
@@ -1180,7 +1337,6 @@ export class SessionManager extends EventEmitter {
         return this.cleanupWorktree(
           newSessionId,
           worktreePath,
-          branchName,
           undefined,
           projectDir,
           mainBranchResume,

@@ -5,7 +5,7 @@ import styles from './HistoryGrid.module.css';
 
 interface ArchivedSession {
   session_id: string;
-  notion_task_url: string | null;
+  task_url: string | null;
   status: string;
   started_at: number;
   ended_at: number | null;
@@ -56,8 +56,8 @@ export function HistoryGrid({ onSelect }: HistoryGridProps) {
   return (
     <div className={styles.list}>
       {sessions.map((s) => {
-        const taskName = s.notion_task_url
-          ? taskNameFromNotionUrl(s.notion_task_url)
+        const taskName = s.task_url
+          ? taskNameFromNotionUrl(s.task_url)
           : s.session_id.slice(0, 8);
         const duration =
           s.started_at != null
