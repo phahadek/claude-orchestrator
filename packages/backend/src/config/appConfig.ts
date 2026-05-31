@@ -1,13 +1,13 @@
 import path from 'path';
-import { DataDirConfigSource } from './DataDirConfigSource.js';
-import { EnvFileConfigSource } from './EnvFileConfigSource.js';
-import { getDataDir } from './dataDir.js';
+import { DataDirConfigSource } from './DataDirConfigSource';
+import { EnvFileConfigSource } from './EnvFileConfigSource';
+import { getDataDir } from './dataDir';
 import {
   ConfigValidationError,
   type ConfigSource,
   type DeepPartial,
   type OrchestratorConfig,
-} from './types.js';
+} from './types';
 
 let cached: OrchestratorConfig | null = null;
 let sourceOverride: ConfigSource | null = null;

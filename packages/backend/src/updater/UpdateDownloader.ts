@@ -4,8 +4,8 @@ import fs from 'fs';
 import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import type { GitHubAsset, UpdateInfo } from './types.js';
-import { getDataDir } from '../config/dataDir.js';
+import type { GitHubAsset, UpdateInfo } from './types';
+import { getDataDir } from '../config/dataDir';
 
 const execFileAsync = promisify(execFile);
 

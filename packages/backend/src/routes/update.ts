@@ -5,9 +5,9 @@ import {
   downloadAsset,
   selectAsset,
   cleanUpdatesDir,
-} from '../updater/index.js';
-import { launchInstallerAndExit } from '../updater/UpdateInstaller.js';
-import type { ServerMessage } from '../ws/types.js';
+} from '../updater/index';
+import { launchInstallerAndExit } from '../updater/UpdateInstaller';
+import type { ServerMessage } from '../ws/types';
 
 let _checker: UpdateChecker | null = null;
 let _broadcast: ((msg: ServerMessage) => void) | null = null;

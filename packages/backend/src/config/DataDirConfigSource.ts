@@ -1,12 +1,12 @@
 import fs from 'fs';
 import path from 'path';
-import { getDataDir } from './dataDir.js';
+import { getDataDir } from './dataDir';
 import {
   ConfigValidationError,
   type ConfigSource,
   type DeepPartial,
   type OrchestratorConfig,
-} from './types.js';
+} from './types';
 
 const KNOWN_KEYS = new Set([
   'notion',
