@@ -410,6 +410,87 @@ describe('SessionDetail', () => {
     expect(screen.getByText('compacted 2×')).toBeTruthy();
   });
 
+  it('renders context occupancy at 0% when context_occupancy_tokens is 0', () => {
+    render(
+      <SessionDetail
+        session={makeSession({ context_occupancy_tokens: 0 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('0% ctx')).toBeTruthy();
+  });
+
+  it('renders context occupancy at mid percentage', () => {
+    render(
+      <SessionDetail
+        session={makeSession({ context_occupancy_tokens: 124_000 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('62% ctx')).toBeTruthy();
+  });
+
+  it('renders context occupancy ≥100% without clamping the label', () => {
+    render(
+      <SessionDetail
+        session={makeSession({ context_occupancy_tokens: 210_000 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('105% ctx')).toBeTruthy();
+  });
+
+  it('does not render context occupancy badge when context_occupancy_tokens is absent', () => {
+    render(
+      <SessionDetail
+        session={makeSession()}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/% ctx/)).toBeNull();
+  });
+
+  it('updates context occupancy live when session prop changes', () => {
+    const { rerender } = render(
+      <SessionDetail
+        session={makeSession({ context_occupancy_tokens: 40_000 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('20% ctx')).toBeTruthy();
+    rerender(
+      <SessionDetail
+        session={makeSession({ context_occupancy_tokens: 100_000 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('50% ctx')).toBeTruthy();
+  });
+
   it('close button calls history.back() (not onClose directly)', () => {
     const backSpy = vi
       .spyOn(window.history, 'back')
