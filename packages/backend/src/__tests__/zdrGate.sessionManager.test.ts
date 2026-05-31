@@ -7,9 +7,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Prevent real git/fs operations ──────────────────────────────────────────
 
-vi.mock('child_process', () => ({
-  execSync: vi.fn().mockReturnValue('dev\n'),
-}));
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>();
+  return {
+    ...actual,
+    execSync: vi.fn().mockReturnValue('dev\n'),
+  };
+});
 
 vi.mock('fs', async () => {
   const actual = await vi.importActual<typeof import('fs')>('fs');
@@ -102,7 +106,8 @@ vi.mock('../session/ApiSessionRunner', () => ({
   })),
 }));
 
-vi.mock('../session/AgentSession', () => {
+vi.mock(import('../session/AgentSession'), async (importOriginal) => {
+  const actual = await importOriginal();
   const AgentSession = vi
     .fn()
     .mockImplementation(
@@ -126,8 +131,8 @@ vi.mock('../session/AgentSession', () => {
       }),
     );
   return {
+    ...actual,
     AgentSession,
-    parseNotionPageId: vi.fn().mockImplementation((url: string) => url),
   };
 });
 
