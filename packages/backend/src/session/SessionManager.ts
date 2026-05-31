@@ -137,7 +137,11 @@ const ALWAYS_GUARDED_BRANCHES = new Set(['dev', 'main']);
  * Error causes that indicate the runner crashed and the task needs human attention
  * before it can be retried → Blocked. All other causes map to Ready (can retry).
  */
-const BLOCKED_REASONS = new Set(['runner_non_zero', 'run_error', 'sendOrResume_run_error']);
+const BLOCKED_REASONS = new Set([
+  'runner_non_zero',
+  'run_error',
+  'sendOrResume_run_error',
+]);
 
 /**
  * Delete the local session/<sessionId> branch if it exists and conditions are met:
@@ -356,7 +360,9 @@ export class SessionManager extends EventEmitter {
     const row = getSession(sessionId);
     if (!row || row.session_type !== 'standard' || !row.task_id) return;
 
-    const notionStatus = BLOCKED_REASONS.has(reason) ? '🔴 Blocked' : '🗂️ Ready';
+    const notionStatus = BLOCKED_REASONS.has(reason)
+      ? '🔴 Blocked'
+      : '🗂️ Ready';
     const taskId = row.task_id;
     const projectId = row.project_id ?? '';
 
@@ -372,7 +378,9 @@ export class SessionManager extends EventEmitter {
         emitTaskUpdated(taskId);
       })
       .catch((e) =>
-        console.error(`[SessionManager] markSessionErrored updateStatus failed: ${e}`),
+        console.error(
+          `[SessionManager] markSessionErrored updateStatus failed: ${e}`,
+        ),
       );
   }
 
@@ -843,7 +851,11 @@ export class SessionManager extends EventEmitter {
       console.warn(
         `[SessionManager] orphan ${row.session_id}: project not found, marking error`,
       );
-      this.markSessionErrored(row.session_id, 'error', 'orphan_project_not_found');
+      this.markSessionErrored(
+        row.session_id,
+        'error',
+        'orphan_project_not_found',
+      );
       return;
     }
 
@@ -1428,7 +1440,11 @@ export class SessionManager extends EventEmitter {
           `[SessionManager] resumed session ${newSessionId} error: ${err}`,
         );
         if (!session.hasEnded) {
-          this.markSessionErrored(newSessionId, 'error', 'sendOrResume_run_error');
+          this.markSessionErrored(
+            newSessionId,
+            'error',
+            'sendOrResume_run_error',
+          );
         }
         return this.cleanupWorktree(
           newSessionId,

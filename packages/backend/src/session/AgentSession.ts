@@ -337,9 +337,14 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         });
       } else {
         const status = exitCode === null ? 'killed' : 'error';
-        const reason = exitCode === null ? 'runner_killed_unexpected' : 'runner_non_zero';
+        const reason =
+          exitCode === null ? 'runner_killed_unexpected' : 'runner_non_zero';
         if (!this.hasEnded) {
-          this.sessionManager?.markSessionErrored?.(this.sessionId, status, reason);
+          this.sessionManager?.markSessionErrored?.(
+            this.sessionId,
+            status,
+            reason,
+          );
           if (!this.hasEnded) {
             // Fallback when sessionManager is absent (e.g. unit tests without a manager)
             updateSessionStatus(this.sessionId, status, Date.now());
@@ -1333,7 +1338,11 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     this.isKilling = true;
     await this.runner.kill();
     if (!this.hasEnded) {
-      this.sessionManager?.markSessionErrored?.(this.sessionId, 'killed', 'user_kill');
+      this.sessionManager?.markSessionErrored?.(
+        this.sessionId,
+        'killed',
+        'user_kill',
+      );
       if (!this.hasEnded) {
         // Fallback when sessionManager is absent (e.g. unit tests without a manager)
         updateSessionStatus(this.sessionId, 'killed', Date.now());

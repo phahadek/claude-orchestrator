@@ -170,7 +170,9 @@ function makeSessionRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function setupFakeBackend(updateStatusImpl = vi.fn().mockResolvedValue(undefined)) {
+function setupFakeBackend(
+  updateStatusImpl = vi.fn().mockResolvedValue(undefined),
+) {
   vi.mocked(getTaskBackend).mockReturnValue({
     updateStatus: updateStatusImpl,
     fetchTaskPage: vi.fn().mockResolvedValue(''),
