@@ -132,7 +132,6 @@ describe('GithubTaskSourceProvider.fetchReadyTasks', () => {
       expect(dep.startsWith('github:')).toBe(true);
     }
   });
-
 });
 
 // ── fetchNonMilestoneReadyTasks ─────────────────────────────────────────────
