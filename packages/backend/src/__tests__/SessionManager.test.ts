@@ -291,7 +291,7 @@ describe('SessionManager.resumeOrphanSessions()', () => {
 
   it('marks sessions as error when resume fails (catch block)', () => {
     expect(source).toMatch(
-      /updateSessionStatus\s*\(.*'error'.*Date\.now\(\)\)/s,
+      /markSessionErrored\s*\(\s*row\.session_id\s*,\s*'error'\s*,\s*'resume_failed'\s*\)/,
     );
   });
 
@@ -421,9 +421,8 @@ describe('SessionManager.resumeSession() — nudge, timeout, mid-turn detection'
     expect(source).toMatch(/RESUME_TIMEOUT_MS\s*=\s*30[_]?000/);
     expect(source).toMatch(/setTimeout\s*\(/);
     expect(source).toMatch(
-      /updateSessionStatus\s*\(.*'error'.*Date\.now\(\)\)/s,
+      /markSessionErrored\s*\(\s*row\.session_id\s*,\s*'error'\s*,\s*'resume_timeout'\s*\)/,
     );
-    expect(source).toMatch(/session_ended/);
     // Timer is cleared on first message — the variable is errorTimer
     expect(source).toMatch(/clearTimeout\s*\(\s*errorTimer\s*\)/);
   });
@@ -516,8 +515,7 @@ describe('SessionManager.resumeSession() — resumability pre-check', () => {
   });
 
   it('marks the session as error when the worktree is missing', () => {
-    // The pre-check failure path must call updateSessionStatus(..., 'error', ...)
-    // and emit session_ended. It must also return early (skip spawn).
+    // The pre-check failure path must call markSessionErrored(...) and return early (skip spawn).
     const resumeSessionIdx = source.indexOf('private async resumeSession(');
     const preCheckIdx = source.indexOf(
       'resumability pre-check failed',
@@ -530,9 +528,8 @@ describe('SessionManager.resumeSession() — resumability pre-check', () => {
     );
     const preCheckBlock = source.slice(preCheckIdx, newAgentSessionIdx);
     expect(preCheckBlock).toMatch(
-      /updateSessionStatus\s*\(\s*row\.session_id\s*,\s*'error'/,
+      /markSessionErrored\s*\(\s*row\.session_id\s*,\s*'error'\s*,\s*'worktree_missing'\s*\)/,
     );
-    expect(preCheckBlock).toMatch(/session_ended/);
     expect(preCheckBlock).toMatch(/return\s*;/);
   });
 
@@ -754,14 +751,13 @@ describe('SessionManager — error broadcast and rollback', () => {
     expect(catchBlock).toMatch(/type:\s*'error'/);
   });
 
-  it('launchSession().catch() rolls back task status to Ready when session type is standard', () => {
+  it('launchSession().catch() delegates status rollback to markSessionErrored with launch_failed cause', () => {
     const launchCatchIdx = source.indexOf('launchSession().catch');
     expect(launchCatchIdx).toBeGreaterThan(-1);
-    // After the catch block, the source must contain a rollback to Ready
+    // markSessionErrored maps 'launch_failed' → '🗂️ Ready' internally
     const catchBlock = source.slice(launchCatchIdx, launchCatchIdx + 1000);
-    expect(catchBlock).toMatch(/'🗂️ Ready'/);
     expect(catchBlock).toMatch(
-      /updateStatus\s*\(\s*notionTaskId\s*,\s*'🗂️ Ready'/,
+      /markSessionErrored\s*\(\s*sessionId\s*,\s*'error'\s*,\s*'launch_failed'\s*\)/,
     );
   });
 
@@ -772,11 +768,15 @@ describe('SessionManager — error broadcast and rollback', () => {
     expect(catchBlock).toMatch(/type:\s*'error'/);
   });
 
-  it('launchSession rollback emits task_status_changed with Ready status', () => {
+  it('launchSession rollback: markSessionErrored is responsible for task_status_changed and Ready status', () => {
+    // markSessionErrored emits task_status_changed with '🗂️ Ready' for 'launch_failed' cause.
+    // Verified structurally: the helper is called from the catch block.
     const launchCatchIdx = source.indexOf('launchSession().catch');
-    const catchBlock = source.slice(launchCatchIdx, launchCatchIdx + 2000);
-    expect(catchBlock).toMatch(/task_status_changed/);
-    expect(catchBlock).toMatch(/'🗂️ Ready'/);
+    const catchBlock = source.slice(launchCatchIdx, launchCatchIdx + 1000);
+    expect(catchBlock).toMatch(
+      /markSessionErrored\s*\(\s*sessionId\s*,\s*'error'\s*,\s*'launch_failed'\s*\)/,
+    );
+    // markSessionErrored.test.ts verifies the task_status_changed + '🗂️ Ready' emission.
   });
 });
 

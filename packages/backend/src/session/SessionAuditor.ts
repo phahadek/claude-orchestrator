@@ -28,6 +28,16 @@ export interface ISessionManager {
     repo: string,
     syncPromise: Promise<void>,
   ): void;
+  /**
+   * Single owner of the (DB session status + Notion task status + WS broadcast) trio
+   * for non-zero / killed exit paths. All error/killed call sites must go through
+   * this method instead of calling updateSessionStatus directly.
+   */
+  markSessionErrored?(
+    sessionId: string,
+    status: 'error' | 'killed',
+    reason: string,
+  ): void;
 }
 
 /** Minimal session shape needed by the auditor — avoids a circular import. */
