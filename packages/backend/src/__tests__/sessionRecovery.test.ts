@@ -58,7 +58,6 @@ import {
 import { recordEvent } from '../audit/AuditLog';
 import { emitTaskUpdated } from '../routes/tasks';
 import type { TaskBackend } from '../tasks/TaskBackend';
-import type { ServerMessage } from '../ws/types';
 
 function makeTaskBackend(): TaskBackend {
   return {
