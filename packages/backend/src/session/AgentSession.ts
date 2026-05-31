@@ -909,6 +909,14 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
   }
 
   private async handleCleanExit(): Promise<void> {
+    recordEvent({
+      event_type: 'handle_clean_exit_entered',
+      actor_type: 'system',
+      actor_id: this.sessionId,
+      project_id: this.projectId ?? null,
+      task_id: this.taskId || null,
+      payload: { session_id: this.sessionId },
+    });
     const endedAt = Date.now();
     let prUrl: string | undefined;
 
@@ -937,6 +945,14 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     // calls. This ensures the session is terminal in the DB even if the
     // downstream review pipeline throws or the process dies mid-handleCleanExit.
     markSessionDone(this.sessionId, endedAt, prUrl ?? null);
+    recordEvent({
+      event_type: 'handle_clean_exit_session_marked_done',
+      actor_type: 'system',
+      actor_id: this.sessionId,
+      project_id: this.projectId ?? null,
+      task_id: this.taskId || null,
+      payload: { session_id: this.sessionId, pr_url: prUrl ?? null },
+    });
 
     if (this.sessionType === 'standard') {
       // Wrap in try-catch so review-pipeline errors (e.g. fetch failures) can
