@@ -6,6 +6,9 @@ import {
   MergeResult,
   FailingCheck,
   MergeabilityCategory,
+  Issue,
+  IssueComment,
+  Milestone,
 } from './types';
 import { getPRByNumber } from '../db/queries';
 
@@ -691,6 +694,180 @@ export class GitHubClient {
     return { merged: data.merged, message: data.message, sha: data.sha };
   }
 
+  // ---- Issues -----------------------------------------------------------------
+
+  async listIssues(
+    repo: string,
+    opts: {
+      labels?: string[];
+      milestone?: number | '*' | 'none';
+      state?: 'open' | 'closed' | 'all';
+      since?: string;
+    } = {},
+  ): Promise<Issue[]> {
+    const params = new URLSearchParams();
+    params.set('per_page', '100');
+    if (opts.labels?.length) params.set('labels', opts.labels.join(','));
+    if (opts.milestone !== undefined)
+      params.set('milestone', String(opts.milestone));
+    if (opts.state) params.set('state', opts.state);
+    if (opts.since) params.set('since', opts.since);
+    const data = await this.request<GitHubRawIssue[]>(
+      `/repos/${repo}/issues?${params.toString()}`,
+    );
+    return data.map(mapIssue);
+  }
+
+  async getIssue(repo: string, number: number): Promise<Issue> {
+    const data = await this.request<GitHubRawIssue>(
+      `/repos/${repo}/issues/${number}`,
+    );
+    return mapIssue(data);
+  }
+
+  async createIssue(
+    repo: string,
+    input: {
+      title: string;
+      body?: string;
+      labels?: string[];
+      milestone?: number;
+    },
+  ): Promise<Issue> {
+    const data = await this.request<GitHubRawIssue>(`/repos/${repo}/issues`, {
+      method: 'POST',
+      headers: { ...this.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    return mapIssue(data);
+  }
+
+  async updateIssue(
+    repo: string,
+    number: number,
+    patch: {
+      title?: string;
+      body?: string;
+      labels?: string[];
+      milestone?: number | null;
+      state?: 'open' | 'closed';
+    },
+  ): Promise<Issue> {
+    const data = await this.request<GitHubRawIssue>(
+      `/repos/${repo}/issues/${number}`,
+      {
+        method: 'PATCH',
+        headers: { ...this.headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      },
+    );
+    return mapIssue(data);
+  }
+
+  async addIssueComment(
+    repo: string,
+    number: number,
+    body: string,
+  ): Promise<IssueComment> {
+    const data = await this.request<GitHubRawIssueComment>(
+      `/repos/${repo}/issues/${number}/comments`,
+      {
+        method: 'POST',
+        headers: { ...this.headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body }),
+      },
+    );
+    return mapIssueComment(data);
+  }
+
+  async listIssueComments(
+    repo: string,
+    number: number,
+  ): Promise<IssueComment[]> {
+    const data = await this.request<GitHubRawIssueComment[]>(
+      `/repos/${repo}/issues/${number}/comments?per_page=100`,
+    );
+    return data.map(mapIssueComment);
+  }
+
+  // ---- Milestones -------------------------------------------------------------
+
+  async listMilestones(
+    repo: string,
+    opts: { state?: 'open' | 'closed' | 'all' } = {},
+  ): Promise<Milestone[]> {
+    const params = new URLSearchParams({ per_page: '100' });
+    if (opts.state) params.set('state', opts.state);
+    const data = await this.request<GitHubRawMilestone[]>(
+      `/repos/${repo}/milestones?${params.toString()}`,
+    );
+    return data.map(mapMilestone);
+  }
+
+  async createMilestone(
+    repo: string,
+    input: { title: string; description?: string },
+  ): Promise<Milestone> {
+    const data = await this.request<GitHubRawMilestone>(
+      `/repos/${repo}/milestones`,
+      {
+        method: 'POST',
+        headers: { ...this.headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+    );
+    return mapMilestone(data);
+  }
+
+  async updateMilestone(
+    repo: string,
+    number: number,
+    patch: { title?: string; description?: string; state?: 'open' | 'closed' },
+  ): Promise<Milestone> {
+    const data = await this.request<GitHubRawMilestone>(
+      `/repos/${repo}/milestones/${number}`,
+      {
+        method: 'PATCH',
+        headers: { ...this.headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      },
+    );
+    return mapMilestone(data);
+  }
+
+  // ---- Conditional issue fetch ------------------------------------------------
+
+  async fetchIssuesConditional(
+    repo: string,
+    etag: string | null,
+    opts: { labels?: string[]; since?: string } = {},
+  ): Promise<
+    | { status: 'not_modified'; etag: string | null }
+    | { status: 'ok'; etag: string | null; issues: Issue[] }
+  > {
+    const params = new URLSearchParams({ per_page: '100' });
+    if (opts.labels?.length) params.set('labels', opts.labels.join(','));
+    if (opts.since) params.set('since', opts.since);
+    const url = `${this.base}/repos/${repo}/issues?${params.toString()}`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    };
+    if (etag) headers['If-None-Match'] = etag;
+    const res = await fetch(url, { headers });
+    if (res.status === 304) {
+      return { status: 'not_modified', etag: etag ?? null };
+    }
+    if (!res.ok) {
+      const text = await res.text();
+      throw new GitHubApiError(res.status, text);
+    }
+    const newEtag = res.headers.get('etag');
+    const data = (await res.json()) as GitHubRawIssue[];
+    return { status: 'ok', etag: newEtag, issues: data.map(mapIssue) };
+  }
+
   private async request<T>(path: string, options?: RequestInit): Promise<T> {
     const url = path.startsWith('http') ? path : `${this.base}${path}`;
     const res = await fetch(url, { headers: this.headers, ...options });
@@ -744,6 +921,78 @@ function mapPR(pr: GitHubRawPR): PullRequest {
     updatedAt: pr.updated_at,
     mergeableState: pr.mergeable_state ?? null,
     draft: pr.draft,
+  };
+}
+
+interface GitHubRawIssue {
+  number: number;
+  node_id: string;
+  title: string;
+  body: string | null;
+  state: string;
+  labels: Array<{ name: string }>;
+  milestone: { number: number } | null;
+  created_at: string;
+  updated_at: string;
+  html_url: string;
+}
+
+interface GitHubRawIssueComment {
+  id: number;
+  body: string;
+  created_at: string;
+  updated_at: string;
+  html_url: string;
+}
+
+interface GitHubRawMilestone {
+  number: number;
+  node_id: string;
+  title: string;
+  description: string | null;
+  state: string;
+  open_issues: number;
+  closed_issues: number;
+  created_at: string;
+  updated_at: string;
+}
+
+function mapIssue(raw: GitHubRawIssue): Issue {
+  return {
+    id: raw.number,
+    nodeId: raw.node_id,
+    title: raw.title,
+    body: raw.body,
+    state: raw.state as Issue['state'],
+    labels: raw.labels.map((l) => l.name),
+    milestone: raw.milestone?.number ?? null,
+    createdAt: raw.created_at,
+    updatedAt: raw.updated_at,
+    url: raw.html_url,
+  };
+}
+
+function mapIssueComment(raw: GitHubRawIssueComment): IssueComment {
+  return {
+    id: raw.id,
+    body: raw.body,
+    createdAt: raw.created_at,
+    updatedAt: raw.updated_at,
+    url: raw.html_url,
+  };
+}
+
+function mapMilestone(raw: GitHubRawMilestone): Milestone {
+  return {
+    id: raw.number,
+    nodeId: raw.node_id,
+    title: raw.title,
+    description: raw.description,
+    state: raw.state as Milestone['state'],
+    openIssues: raw.open_issues,
+    closedIssues: raw.closed_issues,
+    createdAt: raw.created_at,
+    updatedAt: raw.updated_at,
   };
 }
 

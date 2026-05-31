@@ -933,3 +933,537 @@ describe('computeSizeSignal()', () => {
     });
   });
 });
+
+// ── Issues API ────────────────────────────────────────────────────────────────
+
+function makeRawIssue(
+  overrides: Partial<{
+    number: number;
+    node_id: string;
+    title: string;
+    body: string | null;
+    state: string;
+    labels: Array<{ name: string }>;
+    milestone: { number: number } | null;
+    created_at: string;
+    updated_at: string;
+    html_url: string;
+  }> = {},
+) {
+  return {
+    number: 1,
+    node_id: 'I_kwDOTest',
+    title: 'Test issue',
+    body: 'Body text',
+    state: 'open',
+    labels: [{ name: 'bug' }],
+    milestone: null,
+    created_at: '2024-01-01T00:00:00Z',
+    updated_at: '2024-01-02T00:00:00Z',
+    html_url: 'https://github.com/owner/repo/issues/1',
+    ...overrides,
+  };
+}
+
+function makeRawMilestone(
+  overrides: Partial<{
+    number: number;
+    node_id: string;
+    title: string;
+    description: string | null;
+    state: string;
+    open_issues: number;
+    closed_issues: number;
+    created_at: string;
+    updated_at: string;
+  }> = {},
+) {
+  return {
+    number: 1,
+    node_id: 'MI_kwDOTest',
+    title: 'v1.0',
+    description: 'First release',
+    state: 'open',
+    open_issues: 3,
+    closed_issues: 5,
+    created_at: '2024-01-01T00:00:00Z',
+    updated_at: '2024-01-02T00:00:00Z',
+    ...overrides,
+  };
+}
+
+describe('GitHubClient.listIssues()', () => {
+  it('round-trips labels, milestone, state, and since into query string', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'application/json' },
+      json: async () => [makeRawIssue()],
+      text: async () => '',
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const client = new GitHubClient();
+    await client.listIssues('owner/repo', {
+      labels: ['bug', 'enhancement'],
+      milestone: 2,
+      state: 'all',
+      since: '2024-01-01T00:00:00Z',
+    });
+
+    const url = fetchSpy.mock.calls[0][0] as string;
+    expect(url).toContain('labels=bug%2Cenhancement');
+    expect(url).toContain('milestone=2');
+    expect(url).toContain('state=all');
+    expect(url).toContain('since=2024-01-01T00%3A00%3A00Z');
+  });
+
+  it('maps raw API shape to Issue interface', async () => {
+    mockFetch({
+      ok: true,
+      headers: { get: () => 'application/json' } as unknown as Headers,
+      json: async () => [
+        makeRawIssue({ labels: [{ name: 'bug' }], milestone: { number: 3 } }),
+      ],
+    } as unknown as Response);
+
+    const client = new GitHubClient();
+    const issues = await client.listIssues('owner/repo');
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0].id).toBe(1);
+    expect(issues[0].title).toBe('Test issue');
+    expect(issues[0].labels).toEqual(['bug']);
+    expect(issues[0].milestone).toBe(3);
+  });
+
+  it('throws GitHubApiError on non-2xx', async () => {
+    mockFetch({
+      ok: false,
+      status: 403,
+      headers: { get: () => 'application/json' } as unknown as Headers,
+      text: async () => 'Forbidden',
+    } as unknown as Response);
+
+    const client = new GitHubClient();
+    await expect(client.listIssues('owner/repo')).rejects.toMatchObject({
+      status: 403,
+    });
+  });
+});
+
+describe('GitHubClient.createIssue() + getIssue()', () => {
+  it('round-trips title, body, labels, and milestone', async () => {
+    const raw = makeRawIssue({
+      number: 7,
+      title: 'My issue',
+      body: 'Description',
+      labels: [{ name: 'feature' }],
+      milestone: { number: 2 },
+    });
+
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'application/json' },
+        json: async () => raw,
+        text: async () => '',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'application/json' },
+        json: async () => raw,
+        text: async () => '',
+      });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const client = new GitHubClient();
+    const created = await client.createIssue('owner/repo', {
+      title: 'My issue',
+      body: 'Description',
+      labels: ['feature'],
+      milestone: 2,
+    });
+
+    expect(created.id).toBe(7);
+    expect(created.title).toBe('My issue');
+    expect(created.body).toBe('Description');
+    expect(created.labels).toEqual(['feature']);
+    expect(created.milestone).toBe(2);
+
+    const fetched = await client.getIssue('owner/repo', 7);
+    expect(fetched.id).toBe(7);
+    expect(fetched.title).toBe('My issue');
+  });
+
+  it('createIssue sends POST to correct endpoint', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'application/json' },
+      json: async () => makeRawIssue({ number: 10 }),
+      text: async () => '',
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const client = new GitHubClient();
+    await client.createIssue('owner/repo', { title: 'New issue' });
+
+    const [url, opts] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/repos/owner/repo/issues');
+    expect(opts.method).toBe('POST');
+    expect(JSON.parse(opts.body as string)).toMatchObject({
+      title: 'New issue',
+    });
+  });
+
+  it('throws GitHubApiError on non-2xx for createIssue', async () => {
+    mockFetch({
+      ok: false,
+      status: 422,
+      headers: { get: () => 'application/json' } as unknown as Headers,
+      text: async () => 'Validation failed',
+    } as unknown as Response);
+
+    const client = new GitHubClient();
+    await expect(
+      client.createIssue('owner/repo', { title: 'x' }),
+    ).rejects.toMatchObject({ status: 422 });
+  });
+});
+
+describe('GitHubClient.updateIssue()', () => {
+  it('patches labels without dropping unrelated fields', async () => {
+    const after = makeRawIssue({
+      title: 'Updated',
+      labels: [{ name: 'bug' }, { name: 'p1' }],
+      state: 'open',
+    });
+
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'application/json' },
+      json: async () => after,
+      text: async () => '',
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const client = new GitHubClient();
+    const result = await client.updateIssue('owner/repo', 1, {
+      labels: ['bug', 'p1'],
+    });
+
+    expect(result.labels).toEqual(['bug', 'p1']);
+    expect(result.title).toBe('Updated');
+
+    const [url, opts] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/repos/owner/repo/issues/1');
+    expect(opts.method).toBe('PATCH');
+    expect(JSON.parse(opts.body as string)).toEqual({ labels: ['bug', 'p1'] });
+  });
+
+  it('throws GitHubApiError on non-2xx for updateIssue', async () => {
+    mockFetch({
+      ok: false,
+      status: 404,
+      headers: { get: () => 'application/json' } as unknown as Headers,
+      text: async () => 'Not Found',
+    } as unknown as Response);
+
+    const client = new GitHubClient();
+    await expect(
+      client.updateIssue('owner/repo', 999, { state: 'closed' }),
+    ).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+describe('GitHubClient.addIssueComment() + listIssueComments()', () => {
+  const rawComment = {
+    id: 101,
+    body: 'Great point!',
+    created_at: '2024-01-03T00:00:00Z',
+    updated_at: '2024-01-03T00:00:00Z',
+    html_url: 'https://github.com/owner/repo/issues/1#issuecomment-101',
+  };
+
+  it('round-trips addIssueComment + listIssueComments', async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'application/json' },
+        json: async () => rawComment,
+        text: async () => '',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'application/json' },
+        json: async () => [rawComment],
+        text: async () => '',
+      });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const client = new GitHubClient();
+    const created = await client.addIssueComment(
+      'owner/repo',
+      1,
+      'Great point!',
+    );
+    expect(created.id).toBe(101);
+    expect(created.body).toBe('Great point!');
+
+    const list = await client.listIssueComments('owner/repo', 1);
+    expect(list).toHaveLength(1);
+    expect(list[0].id).toBe(101);
+    expect(list[0].body).toBe('Great point!');
+  });
+
+  it('addIssueComment sends POST to correct endpoint', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'application/json' },
+      json: async () => rawComment,
+      text: async () => '',
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const client = new GitHubClient();
+    await client.addIssueComment('owner/repo', 5, 'hello');
+
+    const [url, opts] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/repos/owner/repo/issues/5/comments');
+    expect(opts.method).toBe('POST');
+    expect(JSON.parse(opts.body as string)).toEqual({ body: 'hello' });
+  });
+
+  it('throws GitHubApiError on non-2xx for addIssueComment', async () => {
+    mockFetch({
+      ok: false,
+      status: 404,
+      headers: { get: () => 'application/json' } as unknown as Headers,
+      text: async () => 'Not Found',
+    } as unknown as Response);
+
+    const client = new GitHubClient();
+    await expect(
+      client.addIssueComment('owner/repo', 999, 'x'),
+    ).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+// ── Milestones API ────────────────────────────────────────────────────────────
+
+describe('GitHubClient milestones round-trip', () => {
+  it('createMilestone + listMilestones + updateMilestone round-trip', async () => {
+    const rawMs = makeRawMilestone({ number: 2, title: 'v2.0' });
+    const rawMsClosed = { ...rawMs, state: 'closed' };
+
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'application/json' },
+        json: async () => rawMs,
+        text: async () => '',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'application/json' },
+        json: async () => [rawMs],
+        text: async () => '',
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => 'application/json' },
+        json: async () => rawMsClosed,
+        text: async () => '',
+      });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const client = new GitHubClient();
+
+    const created = await client.createMilestone('owner/repo', {
+      title: 'v2.0',
+      description: 'Second release',
+    });
+    expect(created.id).toBe(2);
+    expect(created.title).toBe('v2.0');
+
+    const list = await client.listMilestones('owner/repo');
+    expect(list).toHaveLength(1);
+    expect(list[0].id).toBe(2);
+
+    const updated = await client.updateMilestone('owner/repo', 2, {
+      state: 'closed',
+    });
+    expect(updated.state).toBe('closed');
+  });
+
+  it('createMilestone sends POST with correct payload', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'application/json' },
+      json: async () => makeRawMilestone(),
+      text: async () => '',
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const client = new GitHubClient();
+    await client.createMilestone('owner/repo', {
+      title: 'v1.0',
+      description: 'First',
+    });
+
+    const [url, opts] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/repos/owner/repo/milestones');
+    expect(opts.method).toBe('POST');
+    expect(JSON.parse(opts.body as string)).toEqual({
+      title: 'v1.0',
+      description: 'First',
+    });
+  });
+
+  it('throws GitHubApiError on non-2xx for createMilestone', async () => {
+    mockFetch({
+      ok: false,
+      status: 422,
+      headers: { get: () => 'application/json' } as unknown as Headers,
+      text: async () => 'Validation failed',
+    } as unknown as Response);
+
+    const client = new GitHubClient();
+    await expect(
+      client.createMilestone('owner/repo', { title: 'dup' }),
+    ).rejects.toMatchObject({ status: 422 });
+  });
+});
+
+// ── fetchIssuesConditional() ──────────────────────────────────────────────────
+
+describe('GitHubClient.fetchIssuesConditional()', () => {
+  it('returns not_modified with 304', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        status: 304,
+        ok: false,
+        headers: { get: () => null },
+        text: async () => '',
+      }),
+    );
+
+    const client = new GitHubClient();
+    const result = await client.fetchIssuesConditional(
+      'owner/repo',
+      '"abc123"',
+      {},
+    );
+
+    expect(result.status).toBe('not_modified');
+    expect(result.etag).toBe('"abc123"');
+  });
+
+  it('returns ok with issues and new etag on 200', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        status: 200,
+        ok: true,
+        headers: {
+          get: (h: string) => (h === 'etag' ? '"newetag"' : 'application/json'),
+        },
+        json: async () => [makeRawIssue({ number: 42, title: 'Fetched' })],
+        text: async () => '',
+      }),
+    );
+
+    const client = new GitHubClient();
+    const result = await client.fetchIssuesConditional('owner/repo', null, {});
+
+    expect(result.status).toBe('ok');
+    if (result.status === 'ok') {
+      expect(result.etag).toBe('"newetag"');
+      expect(result.issues).toHaveLength(1);
+      expect(result.issues[0].id).toBe(42);
+      expect(result.issues[0].title).toBe('Fetched');
+    }
+  });
+
+  it('sends If-None-Match header when etag is provided', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      status: 304,
+      ok: false,
+      headers: { get: () => null },
+      text: async () => '',
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const client = new GitHubClient();
+    await client.fetchIssuesConditional('owner/repo', '"W/etag"', {});
+
+    const [, opts] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect((opts.headers as Record<string, string>)['If-None-Match']).toBe(
+      '"W/etag"',
+    );
+  });
+
+  it('does not send If-None-Match when etag is null', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      status: 200,
+      ok: true,
+      headers: {
+        get: (h: string) => (h === 'etag' ? '"fresh"' : 'application/json'),
+      },
+      json: async () => [],
+      text: async () => '',
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const client = new GitHubClient();
+    await client.fetchIssuesConditional('owner/repo', null, {});
+
+    const [, opts] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(
+      (opts.headers as Record<string, string>)['If-None-Match'],
+    ).toBeUndefined();
+  });
+
+  it('passes labels and since into the query string', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue({
+      status: 200,
+      ok: true,
+      headers: {
+        get: (h: string) => (h === 'etag' ? '"e"' : 'application/json'),
+      },
+      json: async () => [],
+      text: async () => '',
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const client = new GitHubClient();
+    await client.fetchIssuesConditional('owner/repo', null, {
+      labels: ['bug', 'p1'],
+      since: '2024-06-01T00:00:00Z',
+    });
+
+    const url = fetchSpy.mock.calls[0][0] as string;
+    expect(url).toContain('labels=bug%2Cp1');
+    expect(url).toContain('since=2024-06-01T00%3A00%3A00Z');
+  });
+
+  it('throws GitHubApiError on non-2xx non-304', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        status: 401,
+        ok: false,
+        headers: { get: () => null },
+        text: async () => 'Unauthorized',
+      }),
+    );
+
+    const client = new GitHubClient();
+    await expect(
+      client.fetchIssuesConditional('owner/repo', null, {}),
+    ).rejects.toMatchObject({ status: 401 });
+  });
+});

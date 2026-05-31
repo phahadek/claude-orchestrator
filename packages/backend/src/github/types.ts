@@ -72,6 +72,39 @@ export interface MergeabilityCategory {
   headSha: string | null;
 }
 
+export interface Issue {
+  id: number; // GitHub issue number
+  nodeId: string;
+  title: string;
+  body: string | null;
+  state: 'open' | 'closed';
+  labels: string[]; // label names
+  milestone: number | null; // milestone number, null if unset
+  createdAt: string;
+  updatedAt: string;
+  url: string; // html_url
+}
+
+export interface IssueComment {
+  id: number;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  url: string; // html_url
+}
+
+export interface Milestone {
+  id: number; // milestone number
+  nodeId: string;
+  title: string;
+  description: string | null;
+  state: 'open' | 'closed';
+  openIssues: number;
+  closedIssues: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ReviewJob {
   prNumber: number;
   repo: string;
