@@ -368,6 +368,12 @@ export function runMigrations(): void {
     /* already exists */
   }
 
+  try {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN pause_reason_set_at INTEGER`);
+  } catch {
+    /* already exists */
+  }
+
   // ── Double-prefix cleanup (notion:notion: contamination from pre-fix-release) ──
   // Per-task rows with double-prefixed keys are deleted; they re-populate on next fetch.
   // Board-cache JSON is repaired in-place so the route doesn't serve stale IDs.

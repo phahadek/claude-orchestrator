@@ -209,6 +209,8 @@ export interface RuntimeSettings {
   ci_poll_max_minutes: number;
   /** Max review iterations before escalating to manual. */
   max_review_iterations: number;
+  /** Auto-merger: minutes after which a stale auto_merge_failed pause is cleared and retried. */
+  auto_merge_failed_clear_minutes: number;
   /** When true, projects with no explicit milestone_branching default to two_tier mode.
    *  Also blocks non-conforming PRs rather than warning. */
   corporate_mode_enabled: boolean;
@@ -241,5 +243,8 @@ export const runtimeSettings: RuntimeSettings = {
   ci_poll_interval_seconds: Number(process.env.CI_POLL_INTERVAL_SECONDS ?? 30),
   ci_poll_max_minutes: Number(process.env.CI_POLL_MAX_MINUTES ?? 30),
   max_review_iterations: 3,
+  auto_merge_failed_clear_minutes: Number(
+    process.env.AUTO_MERGE_FAILED_CLEAR_MINUTES ?? 10,
+  ),
   corporate_mode_enabled: process.env.CORPORATE_MODE === 'true',
 };

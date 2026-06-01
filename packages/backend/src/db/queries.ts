@@ -783,6 +783,7 @@ export function upsertPullRequest(
     | 'failing_checks'
     | 'pending_push'
     | 'pause_reason'
+    | 'pause_reason_set_at'
     | 'ci_remediation_attempted_sha'
   > & {
     review_session_id?: string | null;
@@ -1188,11 +1189,71 @@ export function setPauseReason(
   repo: string,
   reason: PauseReason | null,
 ): void {
-  db.prepare<{ pr_number: number; repo: string; pause_reason: string | null }>(
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    pause_reason: string | null;
+    pause_reason_set_at: number | null;
+  }>(
     `
-    UPDATE pull_requests SET pause_reason = @pause_reason WHERE pr_number = @pr_number AND repo = @repo
+    UPDATE pull_requests
+    SET pause_reason = @pause_reason,
+        pause_reason_set_at = @pause_reason_set_at
+    WHERE pr_number = @pr_number AND repo = @repo
   `,
-  ).run({ pr_number: prNumber, repo, pause_reason: reason });
+  ).run({
+    pr_number: prNumber,
+    repo,
+    pause_reason: reason,
+    pause_reason_set_at: reason !== null ? Date.now() : null,
+  });
+}
+
+/**
+ * PRs that are open, approved, mergeable=1, merge_state='clean', and have no
+ * pause_reason — i.e. orphaned merge-ready rows that AutoMerger missed because
+ * they were already in this state before the backend started.
+ */
+export function getOrphanMergeablePRs(): Array<{
+  pr_number: number;
+  repo: string;
+}> {
+  return db
+    .prepare(
+      `
+    SELECT pr_number, repo FROM pull_requests
+    WHERE state = 'open'
+      AND mergeable = 1
+      AND merge_state = 'clean'
+      AND pause_reason IS NULL
+      AND review_result IS NOT NULL
+      AND json_extract(review_result, '$.verdict') = 'approved'
+  `,
+    )
+    .all() as Array<{ pr_number: number; repo: string }>;
+}
+
+/**
+ * PRs with pause_reason='auto_merge_failed' whose pause_reason_set_at is older
+ * than thresholdMs milliseconds ago. These are stale transient failures eligible
+ * for automatic retry.
+ */
+export function getStaleAutoMergeFailedPRs(thresholdMs: number): Array<{
+  pr_number: number;
+  repo: string;
+}> {
+  const cutoff = Date.now() - thresholdMs;
+  return db
+    .prepare(
+      `
+    SELECT pr_number, repo FROM pull_requests
+    WHERE state = 'open'
+      AND pause_reason = 'auto_merge_failed'
+      AND pause_reason_set_at IS NOT NULL
+      AND pause_reason_set_at < @cutoff
+  `,
+    )
+    .all({ cutoff }) as Array<{ pr_number: number; repo: string }>;
 }
 
 /**
