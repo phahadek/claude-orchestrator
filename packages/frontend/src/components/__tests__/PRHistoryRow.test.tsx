@@ -116,7 +116,10 @@ describe('PRHistoryRow', () => {
   });
 
   it('does not render Coder/Reviewer buttons when onViewSession is not provided', () => {
-    const pr = makePR({ sessionId: 'session-abc', reviewSessionId: 'session-xyz' });
+    const pr = makePR({
+      sessionId: 'session-abc',
+      reviewSessionId: 'session-xyz',
+    });
     render(<PRHistoryRow pr={pr} />);
     expect(screen.queryByRole('button', { name: 'Coder' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Reviewer' })).toBeNull();
