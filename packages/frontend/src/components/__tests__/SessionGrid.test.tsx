@@ -4,7 +4,12 @@ import { SessionGrid } from '../SessionGrid';
 import type { SessionState } from '../../hooks/useSessionStore';
 
 // ── Routing helpers ──────────────────────────────────────────────────────────
-const ACTIVE_STATUSES = ['running', 'starting', 'needs_permission', 'retrying'] as const;
+const ACTIVE_STATUSES = [
+  'running',
+  'starting',
+  'needs_permission',
+  'retrying',
+] as const;
 const CONCLUDED_STATUSES = ['done', 'error', 'killed'] as const;
 
 function makeSession(
@@ -352,7 +357,11 @@ describe('SessionGrid — differential rendering routing', () => {
   it('clicking a ConcludedSessionRow calls onSelect with the correct sessionId', () => {
     const onSelect = vi.fn();
     const sessions = [
-      makeSession({ sessionId: 'fin-123', taskName: 'Finished Task', status: 'done' }),
+      makeSession({
+        sessionId: 'fin-123',
+        taskName: 'Finished Task',
+        status: 'done',
+      }),
     ];
     render(
       <SessionGrid
@@ -373,10 +382,18 @@ describe('SessionGrid — differential rendering routing', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const sessions = [
       ...Array.from({ length: 50 }, (_, i) =>
-        makeSession({ sessionId: `c${i}`, taskName: `Done ${i}`, status: 'done' }),
+        makeSession({
+          sessionId: `c${i}`,
+          taskName: `Done ${i}`,
+          status: 'done',
+        }),
       ),
       ...Array.from({ length: 5 }, (_, i) =>
-        makeSession({ sessionId: `a${i}`, taskName: `Active ${i}`, status: 'running' }),
+        makeSession({
+          sessionId: `a${i}`,
+          taskName: `Active ${i}`,
+          status: 'running',
+        }),
       ),
     ];
     render(
