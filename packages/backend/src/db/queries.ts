@@ -945,6 +945,21 @@ export function getPRByTaskId(taskId: string): PullRequestRow | null {
 /** @deprecated Use getPRByTaskId instead */
 export const getPRByNotionTaskId = getPRByTaskId;
 
+/**
+ * Returns the most recent merged PR for a task, or null if none exists.
+ * Used by AutoLauncher to skip tasks whose PR was already merged but whose
+ * Notion status wasn't updated (e.g. the merge-handler fired silently).
+ */
+export function getMergedPRForTask(taskId: string): PullRequestRow | null {
+  return db
+    .prepare<{
+      task_id: string;
+    }>(
+      `SELECT * FROM pull_requests WHERE task_id = @task_id AND state = 'merged' ORDER BY pr_number DESC LIMIT 1`,
+    )
+    .get({ task_id: taskId }) as PullRequestRow | null;
+}
+
 export function getOpenPRs(repo: string): PullRequestRow[] {
   return db
     .prepare<{ repo: string }>(
