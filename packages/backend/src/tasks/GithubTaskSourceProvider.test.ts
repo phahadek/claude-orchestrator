@@ -483,7 +483,9 @@ describe('GithubTaskSourceProvider.listTasksByStatus', () => {
     const client = makeClient({
       listIssues: vi
         .fn()
-        .mockResolvedValue([makeIssue(10, { labels: ['status:in-progress', 'type:code'] })]),
+        .mockResolvedValue([
+          makeIssue(10, { labels: ['status:in-progress', 'type:code'] }),
+        ]),
     });
     const provider = new GithubTaskSourceProvider(
       client as never,
@@ -504,7 +506,9 @@ describe('GithubTaskSourceProvider.listTasksByStatus', () => {
     const client = makeClient({
       listIssues: vi
         .fn()
-        .mockResolvedValue([makeIssue(20, { state: 'closed', labels: ['status:done'] })]),
+        .mockResolvedValue([
+          makeIssue(20, { state: 'closed', labels: ['status:done'] }),
+        ]),
     });
     const provider = new GithubTaskSourceProvider(
       client as never,
