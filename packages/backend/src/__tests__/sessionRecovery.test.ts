@@ -264,7 +264,10 @@ describe('recoverSession', () => {
 
   it('consumes opts.baseBranch when computing diff against base', async () => {
     const broadcast = vi.fn();
-    await recoverSession('sess-13', baseOpts({ broadcast, baseBranch: 'main' }));
+    await recoverSession(
+      'sess-13',
+      baseOpts({ broadcast, baseBranch: 'main' }),
+    );
     // hasNonEmptyDiff should be called with 'main' as the base branch
     expect(vi.mocked(hasNonEmptyDiff)).toHaveBeenCalledWith(
       '/worktree',
