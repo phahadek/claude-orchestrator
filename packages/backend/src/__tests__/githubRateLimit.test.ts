@@ -23,10 +23,7 @@ vi.mock('../config.js', () => ({
 }));
 
 import { GitHubClient } from '../github/GitHubClient.js';
-import {
-  GitHubApiError,
-  GitHubRateLimitError,
-} from '../github/types.js';
+import { GitHubApiError, GitHubRateLimitError } from '../github/types.js';
 import { PRMergeWatcher } from '../github/PRMergeWatcher.js';
 import { ReviewerCommentsWatcher } from '../github/ReviewerCommentsWatcher.js';
 import { getAllOpenPRs } from '../db/queries.js';
