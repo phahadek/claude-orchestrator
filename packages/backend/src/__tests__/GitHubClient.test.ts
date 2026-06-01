@@ -11,7 +11,9 @@ vi.mock('../db/queries.js', () => ({
 
 import { GitHubClient } from '../github/GitHubClient.js';
 
-function makeRawPR(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function makeRawPR(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     node_id: 'PR_node1',
     number: 10,

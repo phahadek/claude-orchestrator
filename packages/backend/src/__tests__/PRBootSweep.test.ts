@@ -347,7 +347,11 @@ describe('runPRBootSweep', () => {
         typeof getAllProjects
       >[number],
     ]);
-    insertTestSession('sess-bbbbbbbb', '/worktrees/w1/feature/was-merged', 'task-y');
+    insertTestSession(
+      'sess-bbbbbbbb',
+      '/worktrees/w1/feature/was-merged',
+      'task-y',
+    );
     const mergedPR = makePR({
       id: 88,
       url: 'https://github.com/owner/repo/pull/88',

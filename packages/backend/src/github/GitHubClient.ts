@@ -62,7 +62,9 @@ export class GitHubClient {
       .filter(
         (pr) =>
           (pr.merged_at != null && pr.merged_at >= cutoff) ||
-          (pr.merged_at == null && pr.closed_at != null && pr.closed_at >= cutoff),
+          (pr.merged_at == null &&
+            pr.closed_at != null &&
+            pr.closed_at >= cutoff),
       )
       .map((pr) => mapClosedPR(pr));
   }
