@@ -233,9 +233,12 @@ ${
     : `## PR Format Standards
 
 - **Title**: \`feat: <task-name>\` — no scope prefix like \`(backend)\`, no milestone tags.
-- **How to create the PR**: Use the \`mcp__github__create_pull_request\` MCP tool.
-  Do NOT use \`gh pr create\` — the \`gh\` CLI is not on PATH.
-  Pass \`draft: true\`, \`base: "${targetBranch}"\`, and the full body as the \`body\` parameter.
+- **How to create the PR**: write the body to a temp file first (avoids shell-escaping issues
+  with multi-line markdown), then run \`gh pr create --draft --base "${targetBranch}" --body-file <path>\`.
+  Use a single-quoted HEREDOC for the body so \`$\`/backticks/quotes don't get expanded, e.g.
+  \`cat > /tmp/pr-body.md <<'EOF' ... EOF\`. Do NOT use the MCP \`mcp__github__create_pull_request\` tool —
+  its token authentication scope does not always match the repo, and \`gh\` is already authenticated
+  for the orchestrator's session.
 - **Required body sections** (no omissions, no reordering):
 
 \`\`\`
