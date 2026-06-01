@@ -683,34 +683,26 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 
     // After each result event (one per turn), update token counters and broadcast
     // session_updated so the frontend receives live totals during execution.
+    // NOTE: do NOT call setContextOccupancy here — result.usage.cache_read_input_tokens
+    // is the SUM across every API call in the turn (cumulative), not a single-call
+    // prompt size, so it would produce wildly inflated occupancy values. The
+    // assistant-event handler above keeps context_occupancy_tokens correct.
     if (rawType === 'result') {
       const usageData = event.usage as
-        | {
-            input_tokens?: number;
-            output_tokens?: number;
-            cache_read_input_tokens?: number;
-            cache_creation_input_tokens?: number;
-          }
+        | { input_tokens?: number; output_tokens?: number }
         | undefined;
       const inputTokens = usageData?.input_tokens ?? 0;
       const outputTokens = usageData?.output_tokens ?? 0;
-      const cacheRead = usageData?.cache_read_input_tokens ?? 0;
-      const cacheCreate = usageData?.cache_creation_input_tokens ?? 0;
       if (inputTokens > 0 || outputTokens > 0) {
         this.totalInputTokens += inputTokens;
         this.totalOutputTokens += outputTokens;
         incrementTokens(this.sessionId, inputTokens, outputTokens);
       }
-      // Occupancy = this turn's full prompt token count (not cumulative).
-      const occupancy = inputTokens + cacheRead + cacheCreate;
-      setContextOccupancy(this.sessionId, occupancy);
       this.broadcast({
         type: 'session_updated',
         sessionId: this.sessionId,
         totalInputTokens: this.totalInputTokens,
         totalOutputTokens: this.totalOutputTokens,
-        contextOccupancyTokens: occupancy,
-        contextOccupancyFraction: occupancy / AgentSession.CONTEXT_WINDOW_LIMIT,
       });
     }
 
