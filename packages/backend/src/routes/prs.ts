@@ -709,7 +709,7 @@ export function createPrsRouter(
     const deviceId = (req as Request & { device?: DeviceRow }).device?.id ?? null;
     recordEvent({
       event_type: 'manual_pr_clear',
-      actor_type: 'user',
+      actor_type: 'human',
       actor_id: deviceId,
       project_id: projectId,
       task_id: null,

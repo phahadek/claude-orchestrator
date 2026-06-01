@@ -1125,7 +1125,7 @@ describe('DELETE /api/prs/clear', () => {
     expect(vi.mocked(auditLog.recordEvent)).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'manual_pr_clear',
-        actor_type: 'user',
+        actor_type: 'human',
         project_id: 'proj-1',
         task_id: null,
         payload: { repo: 'owner/repo', deleted_count: 5 },
