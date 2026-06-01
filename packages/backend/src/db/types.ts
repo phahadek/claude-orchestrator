@@ -153,7 +153,7 @@ export interface TaskCache {
 
 // ─── projects ──────────────────────────────────────────────────────────────
 
-export type TaskSource = 'notion' | 'yaml' | 'jira';
+export type TaskSource = 'notion' | 'yaml' | 'jira' | 'github';
 export type GitMode = 'github' | 'local-only';
 
 export interface ProjectRow {

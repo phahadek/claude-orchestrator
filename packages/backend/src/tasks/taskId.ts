@@ -1,11 +1,11 @@
-export type TaskSource = 'notion' | 'yaml' | 'jira';
+export type TaskSource = 'notion' | 'yaml' | 'jira' | 'github';
 
 export interface ParsedTaskId {
   source: TaskSource;
   externalId: string;
 }
 
-const VALID_SOURCES = new Set<string>(['notion', 'yaml', 'jira']);
+const VALID_SOURCES = new Set<string>(['notion', 'yaml', 'jira', 'github']);
 
 export function parseTaskId(taskId: string): ParsedTaskId {
   const colonIndex = taskId.indexOf(':');
