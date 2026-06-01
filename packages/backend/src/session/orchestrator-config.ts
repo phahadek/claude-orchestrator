@@ -15,6 +15,13 @@ export interface OrchestratorConfig {
   bash_rules: string[];
   /** Path to a script run after worktree creation, relative to the project root. */
   bootstrap_script: string;
+  /**
+   * MCP server definitions to restrict sessions to. When defined, sessions only
+   * see the listed MCP servers instead of inheriting all user-level servers.
+   * Each key is the server name; value is the server config object.
+   * Undefined = no override (all user-level servers are inherited).
+   */
+  mcp_servers?: Record<string, unknown>;
 }
 
 const DEFAULTS: OrchestratorConfig = {
@@ -60,6 +67,12 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
         typeof parsed.bootstrap_script === 'string'
           ? parsed.bootstrap_script
           : DEFAULTS.bootstrap_script,
+      mcp_servers:
+        parsed.mcp_servers !== null &&
+        typeof parsed.mcp_servers === 'object' &&
+        !Array.isArray(parsed.mcp_servers)
+          ? (parsed.mcp_servers as Record<string, unknown>)
+          : undefined,
     };
   } catch (err) {
     console.warn(
