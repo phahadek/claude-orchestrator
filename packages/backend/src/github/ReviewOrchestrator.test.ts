@@ -402,7 +402,13 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
       prNumber: 1,
       repo: 'owner/repo',
       verdict: 'needs_changes',
-      dimensions: [{ name: 'Diff vs Context spec', passed: false, notes: 'Missing export.' }],
+      dimensions: [
+        {
+          name: 'Diff vs Context spec',
+          passed: false,
+          notes: 'Missing export.',
+        },
+      ],
       summary: 'One dimension failed.',
       reviewedAt: new Date().toISOString(),
     });
@@ -434,7 +440,9 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
       prNumber: 1,
       repo: 'owner/repo',
       verdict: 'needs_changes',
-      dimensions: [{ name: 'Diff vs Context spec', passed: false, notes: 'ok' }],
+      dimensions: [
+        { name: 'Diff vs Context spec', passed: false, notes: 'ok' },
+      ],
       summary: 'Needs changes.',
       reviewedAt: new Date().toISOString(),
     });
@@ -450,14 +458,19 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
   });
 
   it('skips routing and records no verdict_routing_failed when session_id is null', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow, session_id: null } as any);
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      session_id: null,
+    } as any);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService({
       prNumber: 1,
       repo: 'owner/repo',
       verdict: 'needs_changes',
-      dimensions: [{ name: 'Diff vs Context spec', passed: false, notes: 'ok' }],
+      dimensions: [
+        { name: 'Diff vs Context spec', passed: false, notes: 'ok' },
+      ],
       summary: 'Needs changes.',
       reviewedAt: new Date().toISOString(),
     });
@@ -2418,7 +2431,13 @@ describe('ReviewOrchestrator — reviewLocalBranch: sendOrResume + audit logging
       prNumber: 30,
       repo: 'local/feature/audit-test',
       verdict: 'needs_changes',
-      dimensions: [{ name: 'Diff vs Context spec', passed: false, notes: 'Missing implementation.' }],
+      dimensions: [
+        {
+          name: 'Diff vs Context spec',
+          passed: false,
+          notes: 'Missing implementation.',
+        },
+      ],
       summary: 'Needs work.',
       reviewedAt: new Date().toISOString(),
     });
@@ -2446,7 +2465,9 @@ describe('ReviewOrchestrator — reviewLocalBranch: sendOrResume + audit logging
       prNumber: 30,
       repo: 'local/feature/audit-test',
       verdict: 'needs_changes',
-      dimensions: [{ name: 'Diff vs Context spec', passed: false, notes: 'ok' }],
+      dimensions: [
+        { name: 'Diff vs Context spec', passed: false, notes: 'ok' },
+      ],
       summary: 'Needs work.',
       reviewedAt: new Date().toISOString(),
     });
@@ -2479,7 +2500,9 @@ describe('ReviewOrchestrator — reviewLocalBranch: sendOrResume + audit logging
       prNumber: 30,
       repo: 'local/feature/audit-test',
       verdict: 'needs_changes',
-      dimensions: [{ name: 'Diff vs Context spec', passed: false, notes: 'ok' }],
+      dimensions: [
+        { name: 'Diff vs Context spec', passed: false, notes: 'ok' },
+      ],
       summary: 'Needs work.',
       reviewedAt: new Date().toISOString(),
     });
@@ -2500,7 +2523,9 @@ describe('ReviewOrchestrator — reviewLocalBranch: sendOrResume + audit logging
     vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
 
     const sm = makeMockSessionManager();
-    vi.mocked(sm.sendOrResume).mockRejectedValue(new Error('fatal spawn error'));
+    vi.mocked(sm.sendOrResume).mockRejectedValue(
+      new Error('fatal spawn error'),
+    );
 
     const rs = makeMockReviewService({
       prNumber: 30,
