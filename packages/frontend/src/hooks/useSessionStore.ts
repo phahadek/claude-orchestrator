@@ -348,6 +348,10 @@ export function useSessionStore() {
           if (s) next.set(msg.sessionId, { ...s, prUrl: msg.prUrl });
           break;
         }
+        case 'session_archived': {
+          next.delete(msg.sessionId);
+          break;
+        }
         default:
           return prev;
       }

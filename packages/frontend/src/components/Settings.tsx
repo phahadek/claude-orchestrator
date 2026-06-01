@@ -23,6 +23,9 @@ interface SettingsValues {
   ci_poll_interval_seconds: string;
   ci_poll_max_minutes: string;
   max_review_iterations: string;
+  auto_archive_enabled: string;
+  auto_archive_grace_minutes: string;
+  auto_archive_sweep_interval_minutes: string;
 }
 
 const MIN_POLL_INTERVAL_MS = 5000;
@@ -399,6 +402,45 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                   1,
                   240,
                   1,
+                )}
+
+                <h3 className={styles.sectionTitle}>Auto-archive</h3>
+                <p className={styles.hint}>
+                  Concluded sessions (done/error/killed) are automatically
+                  archived after the grace period expires.
+                </p>
+                <div className={styles.field}>
+                  <label className={styles.label}>Enable auto-archive</label>
+                  <button
+                    type="button"
+                    className={`${styles.toggle}${settings?.auto_archive_enabled === 'true' ? ` ${styles.toggleOn}` : ''}`}
+                    onClick={() =>
+                      handleChange(
+                        'auto_archive_enabled',
+                        settings?.auto_archive_enabled === 'true'
+                          ? 'false'
+                          : 'true',
+                      )
+                    }
+                  >
+                    {settings?.auto_archive_enabled === 'true' ? 'On' : 'Off'}
+                  </button>
+                </div>
+                {numInput(
+                  'auto_archive_grace_minutes',
+                  'Grace period (minutes)',
+                  1,
+                  1440,
+                  1,
+                  'How long after a session concludes before it is archived',
+                )}
+                {numInput(
+                  'auto_archive_sweep_interval_minutes',
+                  'Sweep interval (minutes)',
+                  1,
+                  60,
+                  1,
+                  'How often the archiver checks for eligible sessions',
                 )}
 
                 <h3 className={styles.sectionTitle}>About</h3>
