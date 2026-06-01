@@ -134,23 +134,30 @@ export class GithubTaskSourceProvider implements TaskBackend {
     let milestone: number | undefined;
     if (milestoneId !== null) {
       const row = ProjectService.getMilestone(milestoneId);
-      if (!row) {
-        throw new Error(
-          `[GithubTaskSourceProvider] milestone not found: ${milestoneId}`,
-        );
+      if (row) {
+        // milestoneId was a dashboard UUID; resolve to GitHub milestone number via source_id
+        if (!row.sourceId) {
+          throw new Error(
+            `[GithubTaskSourceProvider] milestone ${milestoneId} has no source_id — set the GitHub milestone number`,
+          );
+        }
+        const n = parseInt(row.sourceId, 10);
+        if (isNaN(n)) {
+          throw new Error(
+            `[GithubTaskSourceProvider] milestone source_id is not a valid integer: "${row.sourceId}"`,
+          );
+        }
+        milestone = n;
+      } else {
+        // milestoneId may have already been resolved to source_id by the caller (e.g. ws/router.ts)
+        const n = parseInt(milestoneId, 10);
+        if (isNaN(n)) {
+          throw new Error(
+            `[GithubTaskSourceProvider] milestone not found: ${milestoneId}`,
+          );
+        }
+        milestone = n;
       }
-      if (!row.sourceId) {
-        throw new Error(
-          `[GithubTaskSourceProvider] milestone ${milestoneId} has no source_id — set the GitHub milestone number`,
-        );
-      }
-      const n = parseInt(row.sourceId, 10);
-      if (isNaN(n)) {
-        throw new Error(
-          `[GithubTaskSourceProvider] milestone source_id is not a valid integer: "${row.sourceId}"`,
-        );
-      }
-      milestone = n;
     }
 
     const issues = await this.client.listIssues(this.repo, {
