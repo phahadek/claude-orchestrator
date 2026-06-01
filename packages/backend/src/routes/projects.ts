@@ -187,7 +187,10 @@ projectsRouter.post('/projects', async (req: Request, res: Response) => {
   let githubRepo: string | null =
     typeof body.githubRepo === 'string' ? body.githubRepo : null;
   if (taskSource === 'github' && taskSourceConfig) {
-    const cfg = JSON.parse(taskSourceConfig) as { owner?: string; repo?: string };
+    const cfg = JSON.parse(taskSourceConfig) as {
+      owner?: string;
+      repo?: string;
+    };
     if (cfg.owner && cfg.repo) {
       githubRepo = `${cfg.owner}/${cfg.repo}`;
     }

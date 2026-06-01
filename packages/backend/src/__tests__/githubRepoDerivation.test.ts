@@ -136,14 +136,12 @@ describe('POST /api/projects — github_repo derivation from GitHub task source'
   });
 
   it('preserves explicit githubRepo for non-github task source (notion)', async () => {
-    const res = await supertest(buildApp())
-      .post('/api/projects')
-      .send({
-        name: 'Notion Proj',
-        projectDir: REAL_DIR,
-        taskSource: 'notion',
-        githubRepo: 'org/legacy-repo',
-      });
+    const res = await supertest(buildApp()).post('/api/projects').send({
+      name: 'Notion Proj',
+      projectDir: REAL_DIR,
+      taskSource: 'notion',
+      githubRepo: 'org/legacy-repo',
+    });
 
     expect(res.status).toBe(201);
     expect(mockCreate).toHaveBeenCalledWith(
@@ -152,14 +150,12 @@ describe('POST /api/projects — github_repo derivation from GitHub task source'
   });
 
   it('preserves explicit githubRepo for yaml task source', async () => {
-    const res = await supertest(buildApp())
-      .post('/api/projects')
-      .send({
-        name: 'YAML Proj',
-        projectDir: REAL_DIR,
-        taskSource: 'yaml',
-        githubRepo: 'org/yaml-repo',
-      });
+    const res = await supertest(buildApp()).post('/api/projects').send({
+      name: 'YAML Proj',
+      projectDir: REAL_DIR,
+      taskSource: 'yaml',
+      githubRepo: 'org/yaml-repo',
+    });
 
     expect(res.status).toBe(201);
     expect(mockCreate).toHaveBeenCalledWith(
@@ -174,10 +170,14 @@ describe('PATCH /api/projects/:id — github_repo derivation from GitHub task so
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetById.mockReturnValue(
-      makeProject({ taskSource: 'github', taskSourceConfig: '{"owner":"old","repo":"old-repo"}' }),
+      makeProject({
+        taskSource: 'github',
+        taskSourceConfig: '{"owner":"old","repo":"old-repo"}',
+      }),
     );
-    mockUpdate.mockImplementation((_id: string, patch: Record<string, unknown>) =>
-      makeProject({ ...patch }),
+    mockUpdate.mockImplementation(
+      (_id: string, patch: Record<string, unknown>) =>
+        makeProject({ ...patch }),
     );
   });
 
