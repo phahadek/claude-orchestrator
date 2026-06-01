@@ -721,4 +721,30 @@ describe('useSessionStore', () => {
       expect(result.current.lastSessionEndedEvent).toBeNull();
     });
   });
+
+  describe('session_started hydrates compaction_count and context_occupancy_tokens', () => {
+    it('maps compaction_count and context_occupancy_tokens from session_started message', () => {
+      const { result } = renderHook(() => useSessionStore());
+      const startMsg: ServerMessage = {
+        type: 'session_started',
+        sessionId: SESSION_ID,
+        taskName: 'Test Task',
+        notionTaskUrl: 'https://notion.so/task',
+        compaction_count: 3,
+        context_occupancy_tokens: 95_000,
+      };
+      act(() => result.current.dispatch(startMsg));
+      const session = result.current.sessions[0];
+      expect(session.compaction_count).toBe(3);
+      expect(session.context_occupancy_tokens).toBe(95_000);
+    });
+
+    it('defaults compaction_count and context_occupancy_tokens to 0 when absent', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.session_started()));
+      const session = result.current.sessions[0];
+      expect(session.compaction_count).toBe(0);
+      expect(session.context_occupancy_tokens).toBe(0);
+    });
+  });
 });

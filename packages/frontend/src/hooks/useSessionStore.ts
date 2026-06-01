@@ -212,6 +212,8 @@ export function useSessionStore() {
             tags: msg.tags,
             totalInputTokens: msg.totalInputTokens ?? 0,
             totalOutputTokens: msg.totalOutputTokens ?? 0,
+            compaction_count: msg.compaction_count ?? 0,
+            context_occupancy_tokens: msg.context_occupancy_tokens ?? 0,
             prNumber: msg.prNumber,
             codeSessionId: msg.codeSessionId,
             model: msg.model ?? null,

@@ -890,3 +890,61 @@ describe('EventRow', () => {
     expect(screen.getByText(/Glob/)).toBeTruthy();
   });
 });
+
+describe('context-occupancy gauge and compaction badge', () => {
+  it('renders context-occupancy gauge when context_occupancy_tokens is set', () => {
+    render(
+      <SessionDetail
+        session={makeSession({ context_occupancy_tokens: 50_000 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/% ctx/)).toBeTruthy();
+  });
+
+  it('does not render gauge when context_occupancy_tokens is absent', () => {
+    render(
+      <SessionDetail
+        session={makeSession()}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/% ctx/)).toBeNull();
+  });
+
+  it('renders compaction badge when compaction_count > 0', () => {
+    render(
+      <SessionDetail
+        session={makeSession({ compaction_count: 2 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('compacted 2×')).toBeTruthy();
+  });
+
+  it('does not render compaction badge when compaction_count is 0', () => {
+    render(
+      <SessionDetail
+        session={makeSession({ compaction_count: 0 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/compacted/)).toBeNull();
+  });
+});

@@ -31,6 +31,8 @@ export interface SessionState {
   tags?: string[];
   totalInputTokens?: number;
   totalOutputTokens?: number;
+  compaction_count?: number;
+  context_occupancy_tokens?: number;
   model?: string | null;
   /** PR URL linked to this session, resolved from the pull_requests join. */
   prUrl?: string;
