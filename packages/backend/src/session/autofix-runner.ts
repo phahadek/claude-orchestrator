@@ -170,7 +170,7 @@ export async function runAutofix(
 
   const commitResult = await spawnCmd(
     'git',
-    ['commit', '-m', 'chore: apply autofix [orchestrator]'],
+    ['commit', '-m', 'chore: apply autofix [orchestrator] [skip ci]'],
     { cwd: worktreePath, env },
   );
   if (commitResult.exitCode !== 0) {

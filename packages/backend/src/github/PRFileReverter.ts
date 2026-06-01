@@ -89,7 +89,7 @@ export async function revertBannedFiles(opts: {
   }
 
   const fileList = reverted.join(', ');
-  const message = `chore: orchestrator-revert: restore ${fileList} [auto-revert]`;
+  const message = `chore: orchestrator-revert: restore ${fileList} [auto-revert] [skip ci]`;
 
   await git(
     [
