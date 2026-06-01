@@ -92,9 +92,7 @@ function makePR(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
 
 function makeGitHubClient(overrides: Record<string, unknown> = {}) {
   return {
-    getPRState: vi
-      .fn()
-      .mockResolvedValue({ state: 'open', headSha: 'abc123' }),
+    getPRState: vi.fn().mockResolvedValue({ state: 'open', headSha: 'abc123' }),
     listOpenPRStates: vi.fn().mockResolvedValue(new Map()),
     categorizeMergeability: vi.fn().mockResolvedValue({
       category: 'clean',
@@ -488,7 +486,9 @@ describe('integration: only non-skipped PRs trigger API calls in one cycle', () 
       batchMap.set(pr.pr_number, { headSha: pr.head_sha });
     }
 
-    const getPRState = vi.fn().mockResolvedValue({ state: 'open', headSha: 'abc' });
+    const getPRState = vi
+      .fn()
+      .mockResolvedValue({ state: 'open', headSha: 'abc' });
     const listOpenPRStates = vi.fn().mockResolvedValue(batchMap);
     const categorizeMergeability = vi.fn().mockResolvedValue({
       category: 'clean',
