@@ -8,9 +8,11 @@ import type { ServerMessage } from '../ws/types';
 import {
   hasActiveSessionForTask,
   getPausedPrReasonForTask,
+  getMergedPRForTask,
 } from '../db/queries';
 
 const READY_STATUS = '🗂️ Ready';
+const DONE_STATUS = '✅ Done';
 const CODE_TYPE = '💻 Code';
 const MIN_POLL_INTERVAL_MS = 5_000;
 
@@ -138,6 +140,25 @@ export class AutoLauncher {
     }
 
     const allTasks = [...milestoneTasks, ...nonMilestoneTasks];
+
+    // Catch-up pass: if a task is still Ready in Notion but its PR was already
+    // merged (the merge-handler fired silently), mark it Done now and skip launch.
+    for (const resolved of allTasks) {
+      const mergedPR = getMergedPRForTask(resolved.task.id);
+      if (mergedPR) {
+        console.warn(
+          `[AutoLauncher] task "${resolved.task.title}" (${resolved.task.id}) skipped — PR #${mergedPR.pr_number} (${mergedPR.pr_url}) is already merged; updating task status to Done`,
+        );
+        try {
+          await backend.updateStatus(resolved.task.id, DONE_STATUS);
+        } catch (err) {
+          console.warn(
+            `[AutoLauncher] failed to update task ${resolved.task.id} to Done: ${err}`,
+          );
+        }
+      }
+    }
+
     const candidates = allTasks.filter((t) => this.isLaunchCandidate(t));
     if (candidates.length === 0) return;
 
@@ -182,6 +203,10 @@ export class AutoLauncher {
     // Also skip if the task's most recent PR is paused (e.g. stuck_timeout)
     // so we don't relaunch a session that was force-paused.
     if (getPausedPrReasonForTask(task.id) != null) return false;
+    // Skip if a merged PR already exists — the task is complete even if Notion
+    // status wasn't updated yet. The Notion catch-up update is handled in
+    // processProject so we have access to the backend.
+    if (getMergedPRForTask(task.id) != null) return false;
     return true;
   }
 

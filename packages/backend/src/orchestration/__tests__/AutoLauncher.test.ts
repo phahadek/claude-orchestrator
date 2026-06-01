@@ -19,12 +19,14 @@ vi.mock('../../tasks/TaskBackend.js', () => ({
 vi.mock('../../db/queries.js', () => ({
   hasActiveSessionForTask: vi.fn().mockReturnValue(false),
   getPausedPrReasonForTask: vi.fn().mockReturnValue(null),
+  getMergedPRForTask: vi.fn().mockReturnValue(null),
 }));
 
 import { runtimeSettings } from '../../config.js';
 import {
   hasActiveSessionForTask,
   getPausedPrReasonForTask,
+  getMergedPRForTask,
 } from '../../db/queries.js';
 import { AutoLauncher } from '../AutoLauncher.js';
 
@@ -79,6 +81,7 @@ describe('AutoLauncher — project-driven polling', () => {
     vi.clearAllMocks();
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
     vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
+    vi.mocked(getMergedPRForTask).mockReturnValue(null);
     (
       runtimeSettings as { auto_launch_concurrency: number }
     ).auto_launch_concurrency = 2;
@@ -404,6 +407,137 @@ describe('AutoLauncher — project-driven polling', () => {
 
     await launcher.pollOnce();
 
+    expect(sessionManager.start).not.toHaveBeenCalled();
+  });
+
+  // ── Merged PR skip tests ───────────────────────────────────────────────────
+
+  it('skips task with merged PR and updates Notion status to Done', async () => {
+    const mergedPR = {
+      id: 1,
+      pr_number: 117,
+      pr_url: 'https://github.com/owner/repo/pull/117',
+      task_id: 'task-1',
+      state: 'merged',
+      repo: 'owner/repo',
+    };
+    vi.mocked(getMergedPRForTask).mockReturnValue(mergedPR as never);
+
+    const updateStatus = vi.fn().mockResolvedValue(undefined);
+    const notionBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([makeResolvedTask()]),
+      updateStatus,
+    };
+    const resolveBackend = vi.fn().mockReturnValue(notionBackend);
+    const sessionManager = makeSessionManager(0);
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    expect(sessionManager.start).not.toHaveBeenCalled();
+    expect(updateStatus).toHaveBeenCalledWith('task-1', '✅ Done');
+  });
+
+  it('launches task when PR exists but is open (not merged)', async () => {
+    // getMergedPRForTask returns null for open PRs (already the default mock,
+    // but explicitly set here for clarity)
+    vi.mocked(getMergedPRForTask).mockReturnValue(null);
+
+    const notionBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([makeResolvedTask()]),
+    };
+    const resolveBackend = vi.fn().mockReturnValue(notionBackend);
+    const sessionManager = makeSessionManager(0);
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    expect(sessionManager.start).toHaveBeenCalledOnce();
+  });
+
+  it('launches task when no PR exists', async () => {
+    vi.mocked(getMergedPRForTask).mockReturnValue(null);
+
+    const notionBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([makeResolvedTask()]),
+    };
+    const resolveBackend = vi.fn().mockReturnValue(notionBackend);
+    const sessionManager = makeSessionManager(0);
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    expect(sessionManager.start).toHaveBeenCalledOnce();
+  });
+
+  it('launches task when PR is closed (not merged) — treat as failed previous attempt', async () => {
+    // getMergedPRForTask queries for state='merged' only, so closed returns null
+    vi.mocked(getMergedPRForTask).mockReturnValue(null);
+
+    const notionBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([makeResolvedTask()]),
+    };
+    const resolveBackend = vi.fn().mockReturnValue(notionBackend);
+    const sessionManager = makeSessionManager(0);
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    expect(sessionManager.start).toHaveBeenCalledOnce();
+  });
+
+  it('catches task-backend update failure gracefully — does not throw, still skips launch', async () => {
+    const mergedPR = {
+      id: 1,
+      pr_number: 117,
+      pr_url: 'https://github.com/owner/repo/pull/117',
+      task_id: 'task-1',
+      state: 'merged',
+      repo: 'owner/repo',
+    };
+    vi.mocked(getMergedPRForTask).mockReturnValue(mergedPR as never);
+
+    const updateStatus = vi.fn().mockRejectedValue(new Error('Notion API down'));
+    const notionBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([makeResolvedTask()]),
+      updateStatus,
+    };
+    const resolveBackend = vi.fn().mockReturnValue(notionBackend);
+    const sessionManager = makeSessionManager(0);
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend,
+      pollOnStart: false,
+    });
+
+    // Should not throw even when updateStatus fails
+    await expect(launcher.pollOnce()).resolves.toBeUndefined();
     expect(sessionManager.start).not.toHaveBeenCalled();
   });
 });
