@@ -481,10 +481,7 @@ export default function App() {
         codeSession: task.codeSession
           ? { ...task.codeSession, status, endedAt: Date.now() }
           : null,
-        pr:
-          prUrl && task.pr
-            ? { ...task.pr, prUrl }
-            : task.pr,
+        pr: prUrl && task.pr ? { ...task.pr, prUrl } : task.pr,
       };
       return next;
     });

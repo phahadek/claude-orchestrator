@@ -398,7 +398,10 @@ export class SessionManager extends EventEmitter {
 
     // Update Notion task status (fire-and-forget; failures logged, not thrown)
     getTaskBackend(projectId)
-      .updateStatus(notionTaskId, notionStatus, { source: 'orchestrator', sessionId })
+      .updateStatus(notionTaskId, notionStatus, {
+        source: 'orchestrator',
+        sessionId,
+      })
       .then(() => {
         this.emit('message', {
           type: 'task_status_changed',

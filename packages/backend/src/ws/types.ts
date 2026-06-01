@@ -121,7 +121,13 @@ export type ServerMessage =
       sessionId: string;
       denials: PermissionDenial[];
     }
-  | { type: 'session_ended'; sessionId: string; status: string; prUrl?: string; taskId?: string }
+  | {
+      type: 'session_ended';
+      sessionId: string;
+      status: string;
+      prUrl?: string;
+      taskId?: string;
+    }
   | { type: 'pr_created'; sessionId: string; prUrl: string; taskId?: string }
   | {
       type: 'session_updated';

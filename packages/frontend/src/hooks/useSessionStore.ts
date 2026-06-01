@@ -381,10 +381,18 @@ export function useSessionStore() {
       setTaskListRefreshTrigger((n) => n + 1);
     }
     if (msg.type === 'session_started' && msg.taskId) {
-      setLastSessionStartedEvent({ taskId: msg.taskId, sessionId: msg.sessionId });
+      setLastSessionStartedEvent({
+        taskId: msg.taskId,
+        sessionId: msg.sessionId,
+      });
     }
     if (msg.type === 'session_ended' && msg.taskId) {
-      setLastSessionEndedEvent({ taskId: msg.taskId, sessionId: msg.sessionId, status: msg.status, prUrl: msg.prUrl });
+      setLastSessionEndedEvent({
+        taskId: msg.taskId,
+        sessionId: msg.sessionId,
+        status: msg.status,
+        prUrl: msg.prUrl,
+      });
     }
     if (msg.type === 'task_updated') {
       setLastTaskUpdate(msg.task);
