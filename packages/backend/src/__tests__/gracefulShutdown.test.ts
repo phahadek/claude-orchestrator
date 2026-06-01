@@ -161,7 +161,7 @@ vi.mock('../db/queries', () => ({
   getPRByNumber: vi.fn(() => null),
   updateSessionStatus: vi.fn(),
   markSessionDone: vi.fn(),
-  backfillStuckResultSessions: vi.fn(() => 0),
+  getStuckResultSessionRows: vi.fn(() => []),
   insertSession: vi.fn(),
   insertEvent: vi.fn(),
   upsertSessionEvent: vi.fn(() => 1),
