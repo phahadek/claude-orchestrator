@@ -338,10 +338,7 @@ export class AutoMerger {
               repo,
             );
             if (billingBlock.blocked) {
-              await this.pauseAsBillingBlocked(
-                row,
-                billingBlock.message ?? '',
-              );
+              await this.pauseAsBillingBlocked(row, billingBlock.message ?? '');
               return;
             }
           }

@@ -236,7 +236,11 @@ export class GitHubClient {
     repo?: string,
   ): Promise<{ blocked: boolean; message: string | null }> {
     const r = repo ?? GITHUB_REPO;
-    let checkRuns: Array<{ id: number; status: string; conclusion: string | null }>;
+    let checkRuns: Array<{
+      id: number;
+      status: string;
+      conclusion: string | null;
+    }>;
     try {
       const data = await this.request<{
         check_runs: Array<{

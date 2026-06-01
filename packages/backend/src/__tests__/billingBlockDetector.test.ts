@@ -109,7 +109,7 @@ describe('isBillingBlockedAnnotation', () => {
       isBillingBlockedAnnotation({
         ...BILLING_ANNOTATION,
         message:
-          "The job was not started because your spending limit needs to be increased.",
+          'The job was not started because your spending limit needs to be increased.',
       }),
     ).toBe(true);
   });
@@ -215,9 +215,7 @@ describe('GitHubClient.detectBillingBlock', () => {
       ok: true,
       headers: { get: () => 'application/json' },
       json: async () => ({
-        check_runs: [
-          { id: 111, status: 'completed', conclusion: 'failure' },
-        ],
+        check_runs: [{ id: 111, status: 'completed', conclusion: 'failure' }],
       }),
     });
     // Second call: annotations for check run 111
