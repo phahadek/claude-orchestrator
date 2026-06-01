@@ -37,13 +37,11 @@ vi.mock('../session/orchestrator-config.js', () => ({
 
 vi.mock('../audit/AuditLog.js', () => ({ recordEvent: vi.fn() }));
 vi.mock('../config/corporateMode.js', () => ({
-  getCorporateMode: vi
-    .fn()
-    .mockReturnValue({
-      enabled: false,
-      envLocked: false,
-      gates: { requireHumanApproval: false },
-    }),
+  getCorporateMode: vi.fn().mockReturnValue({
+    enabled: false,
+    envLocked: false,
+    gates: { requireHumanApproval: false },
+  }),
 }));
 vi.mock('../routes/tasks.js', () => ({ emitTaskUpdated: vi.fn() }));
 vi.mock('../tasks/TaskBackend.js', () => ({ getTaskBackend: vi.fn() }));
