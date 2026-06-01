@@ -233,13 +233,24 @@ function buildJiraBackend(
 function buildGithubBackend(
   taskSourceConfigJson: string | null,
 ): GithubTaskSourceProvider {
+  if (!taskSourceConfigJson) {
+    throw new Error(
+      '[buildGithubBackend] task_source_config is required for github projects',
+    );
+  }
   let projectConfig: GithubProjectConfig;
   try {
-    projectConfig = taskSourceConfigJson
-      ? (JSON.parse(taskSourceConfigJson) as GithubProjectConfig)
-      : { owner: '', repo: '' };
+    projectConfig = JSON.parse(taskSourceConfigJson) as GithubProjectConfig;
   } catch {
-    projectConfig = { owner: '', repo: '' };
+    throw new Error(
+      `[buildGithubBackend] malformed task_source_config JSON: ${taskSourceConfigJson}`,
+    );
+  }
+  if (!projectConfig.owner) {
+    throw new Error('[buildGithubBackend] task_source_config missing "owner"');
+  }
+  if (!projectConfig.repo) {
+    throw new Error('[buildGithubBackend] task_source_config missing "repo"');
   }
   const client = new GitHubClient();
   return new GithubTaskSourceProvider(client, projectConfig);
