@@ -19,7 +19,8 @@ export type EventType =
   | 'handle_clean_exit_session_marked_done'
   | 'task_orphan_reverted'
   | 'session_errored'
-  | 'session_backfilled';
+  | 'session_backfilled'
+  | 'verdict_routing_failed';
 
 export type ActorType = 'ai' | 'human' | 'system';
 
