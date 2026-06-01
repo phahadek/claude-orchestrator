@@ -41,6 +41,7 @@ import { getOrchestratorConfig } from './config/appConfig';
 import { AutoLauncher } from './orchestration/AutoLauncher';
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
 import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
+import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiver';
 import { deleteGhostSessions, getPRBySessionId } from './db/queries';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
@@ -245,6 +246,10 @@ const stuckSessionMonitor = new StuckSessionMonitor(
 // at In Progress with no live session and reverts them to Ready.
 const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast);
 
+// Concluded-session archiver: periodically archives sessions that have been
+// in a terminal state longer than the configured grace period.
+const concludedSessionArchiver = new ConcludedSessionArchiver(broadcast);
+
 jsonlReader
   .importAll()
   .then(async () => {
@@ -279,6 +284,7 @@ jsonlReader
       );
 
     orphanedTaskSweeper.start();
+    concludedSessionArchiver.start();
     updateChecker.start();
 
     server.listen(PORT, '0.0.0.0', () => {
@@ -296,6 +302,7 @@ async function gracefulShutdown(signal: string) {
   autoLauncher.stop();
   stuckSessionMonitor.stop();
   orphanedTaskSweeper.stop();
+  concludedSessionArchiver.stop();
   updateChecker.stop();
   reviewerCommentsWatcher.stop();
   wss.close();

@@ -216,6 +216,12 @@ export interface RuntimeSettings {
   corporate_mode_enabled: boolean;
   /** PRBootSweep: how many days back to look for recently-merged/closed PRs to backfill. */
   pr_boot_sweep_merged_lookback_days: number;
+  /** ConcludedSessionArchiver: when true, the periodic sweep runs. */
+  auto_archive_enabled: boolean;
+  /** ConcludedSessionArchiver: grace period in minutes before archiving concluded sessions. */
+  auto_archive_grace_minutes: number;
+  /** ConcludedSessionArchiver: interval in minutes between archiver sweeps. */
+  auto_archive_sweep_interval_minutes: number;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -251,5 +257,12 @@ export const runtimeSettings: RuntimeSettings = {
   corporate_mode_enabled: process.env.CORPORATE_MODE === 'true',
   pr_boot_sweep_merged_lookback_days: Number(
     process.env.PR_BOOT_SWEEP_MERGED_LOOKBACK_DAYS ?? 30,
+  ),
+  auto_archive_enabled: process.env.AUTO_ARCHIVE_ENABLED !== 'false',
+  auto_archive_grace_minutes: Number(
+    process.env.AUTO_ARCHIVE_GRACE_MINUTES ?? 30,
+  ),
+  auto_archive_sweep_interval_minutes: Number(
+    process.env.AUTO_ARCHIVE_SWEEP_INTERVAL_MINUTES ?? 5,
   ),
 };

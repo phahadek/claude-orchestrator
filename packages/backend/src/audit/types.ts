@@ -21,7 +21,8 @@ export type EventType =
   | 'session_errored'
   | 'session_backfilled'
   | 'verdict_routing_failed'
-  | 'manual_pr_clear';
+  | 'manual_pr_clear'
+  | 'sessions_auto_archived';
 
 export type ActorType = 'ai' | 'human' | 'system';
 

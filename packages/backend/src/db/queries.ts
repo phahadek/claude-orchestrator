@@ -332,6 +332,33 @@ export function archiveFinishedSessions(): number {
   return result.changes;
 }
 
+/**
+ * Archive concluded sessions (status IN ('done','error','killed'), archived=0)
+ * whose ended_at is older than the given cutoff timestamp (ms).
+ * Returns the session_ids of archived sessions.
+ */
+export function archiveConcludedSessionsOlderThan(cutoffMs: number): string[] {
+  const rows = db
+    .prepare(
+      `SELECT session_id FROM sessions
+       WHERE status IN ('done', 'error', 'killed')
+         AND archived = 0
+         AND ended_at IS NOT NULL
+         AND ended_at < @cutoff`,
+    )
+    .all({ cutoff: cutoffMs }) as { session_id: string }[];
+
+  if (rows.length === 0) return [];
+
+  const ids = rows.map((r) => r.session_id);
+  const placeholders = ids.map(() => '?').join(', ');
+  db.prepare(
+    `UPDATE sessions SET archived = 1 WHERE session_id IN (${placeholders})`,
+  ).run(...ids);
+
+  return ids;
+}
+
 export function getSessionsByProject(projectId: string): Session[] {
   return db
     .prepare(

@@ -291,7 +291,8 @@ export type ServerMessage =
       prNumber: number;
       repo: string;
       message: string;
-    };
+    }
+  | { type: 'session_archived'; sessionId: string };
 
 // ── Client → Server ──────────────────────────────────────────────
 export type ClientMessage =

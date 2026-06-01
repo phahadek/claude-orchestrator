@@ -747,4 +747,32 @@ describe('useSessionStore', () => {
       expect(session.context_occupancy_tokens).toBe(0);
     });
   });
+
+  describe('session_archived handling', () => {
+    it('removes the session from the in-memory map on session_archived', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.session_started()));
+      expect(result.current.sessions).toHaveLength(1);
+
+      const archivedMsg: ServerMessage = {
+        type: 'session_archived',
+        sessionId: SESSION_ID,
+      };
+      act(() => result.current.dispatch(archivedMsg));
+      expect(result.current.sessions).toHaveLength(0);
+    });
+
+    it('session_archived for unknown id is a no-op', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.session_started()));
+      const before = result.current.sessions.length;
+
+      const archivedMsg: ServerMessage = {
+        type: 'session_archived',
+        sessionId: 'unknown-session',
+      };
+      act(() => result.current.dispatch(archivedMsg));
+      expect(result.current.sessions).toHaveLength(before);
+    });
+  });
 });
