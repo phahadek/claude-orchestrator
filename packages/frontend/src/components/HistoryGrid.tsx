@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { taskNameFromNotionUrl } from '../utils/notionUrl';
-import { StatusBadge } from './StatusBadge';
+import { ConcludedSessionRow } from './ConcludedSessionRow';
 import styles from './HistoryGrid.module.css';
 
 interface ArchivedSession {
@@ -59,7 +59,7 @@ export function HistoryGrid({ onSelect }: HistoryGridProps) {
         const taskName = s.task_url
           ? taskNameFromNotionUrl(s.task_url)
           : s.session_id.slice(0, 8);
-        const duration =
+        const elapsed =
           s.started_at != null
             ? formatDuration((s.ended_at ?? s.started_at) - s.started_at)
             : null;
@@ -67,30 +67,15 @@ export function HistoryGrid({ onSelect }: HistoryGridProps) {
           s.ended_at != null ? new Date(s.ended_at).toLocaleDateString() : null;
 
         return (
-          <div
+          <ConcludedSessionRow
             key={s.session_id}
-            className={styles.row}
+            taskName={taskName}
+            status={s.status}
+            elapsed={elapsed}
+            endDate={endDate}
+            prUrl={s.pr_url}
             onClick={() => onSelect(s.session_id)}
-          >
-            <div className={styles.rowMain}>
-              <span className={styles.taskName}>{taskName}</span>
-              <StatusBadge status={s.status} />
-            </div>
-            <div className={styles.rowMeta}>
-              {endDate && <span>{endDate}</span>}
-              {duration && <span>{duration}</span>}
-              {s.pr_url && (
-                <a
-                  href={s.pr_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className={styles.prLink}
-                >
-                  PR ↗
-                </a>
-              )}
-            </div>
-          </div>
+          />
         );
       })}
     </div>
