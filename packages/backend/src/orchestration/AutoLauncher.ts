@@ -108,7 +108,7 @@ export class AutoLauncher {
     }
 
     let milestoneId: string | null = null;
-    if (backend.type === 'notion') {
+    if (backend.type === 'notion' || backend.type === 'github') {
       milestoneId = this.resolveMilestoneId(project);
       if (!milestoneId) {
         console.warn(
