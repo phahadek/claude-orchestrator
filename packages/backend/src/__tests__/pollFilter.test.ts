@@ -47,7 +47,6 @@ import {
   getApprovedOpenPRs,
   getApprovedLocalBranches,
   getRoutedCommentIds,
-  markCommentsRouted,
 } from '../db/queries.js';
 import { getProjectByGithubRepo } from '../config.js';
 import { PRMergeWatcher } from '../github/PRMergeWatcher.js';
