@@ -183,12 +183,25 @@ projectsRouter.post('/projects', async (req: Request, res: Response) => {
     return;
   }
 
+  // derive github_repo from GitHub task source config when applicable
+  let githubRepo: string | null =
+    typeof body.githubRepo === 'string' ? body.githubRepo : null;
+  if (taskSource === 'github' && taskSourceConfig) {
+    const cfg = JSON.parse(taskSourceConfig) as {
+      owner?: string;
+      repo?: string;
+    };
+    if (cfg.owner && cfg.repo) {
+      githubRepo = `${cfg.owner}/${cfg.repo}`;
+    }
+  }
+
   const project = ProjectService.create({
     id,
     name,
     projectDir,
     contextUrl: typeof body.contextUrl === 'string' ? body.contextUrl : null,
-    githubRepo: typeof body.githubRepo === 'string' ? body.githubRepo : null,
+    githubRepo,
     taskSource,
     taskSourceConfig,
     gitMode,
@@ -340,6 +353,8 @@ projectsRouter.patch('/projects/:id', async (req: Request, res: Response) => {
         return;
       }
       patch.task_source_config = JSON.stringify(parsed.config);
+      // derive github_repo from the validated GitHub task source config
+      patch.github_repo = `${parsed.config.owner}/${parsed.config.repo}`;
     }
   }
 

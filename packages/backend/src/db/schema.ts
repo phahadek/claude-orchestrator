@@ -427,6 +427,18 @@ export function runMigrations(): void {
     /* already exists */
   }
 
+  // ── Backfill github_repo for GitHub-task-source projects ─────────────────────
+  // Idempotent: guarded by github_repo IS NULL, re-running is a no-op.
+  db.exec(`
+    UPDATE projects
+    SET github_repo = json_extract(task_source_config, '$.owner') || '/' || json_extract(task_source_config, '$.repo')
+    WHERE task_source = 'github'
+      AND github_repo IS NULL
+      AND task_source_config IS NOT NULL
+      AND json_extract(task_source_config, '$.owner') IS NOT NULL
+      AND json_extract(task_source_config, '$.repo') IS NOT NULL;
+  `);
+
   // ── pull_requests: notion_task_id → task_id ──────────────────────────────────
   try {
     db.exec(
