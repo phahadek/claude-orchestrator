@@ -11,9 +11,10 @@ function humanizedAgo(dateStr: string): string {
 
 interface Props {
   pr: PRWorkItem;
+  onViewSession?: (sessionId: string) => void;
 }
 
-export function PRHistoryRow({ pr }: Props) {
+export function PRHistoryRow({ pr, onViewSession }: Props) {
   const stateLabel = pr.state === 'merged' ? 'Merged' : 'Closed';
   const ago = humanizedAgo(pr.updatedAt);
 
@@ -37,6 +38,24 @@ export function PRHistoryRow({ pr }: Props) {
           >
             Task
           </a>
+        )}
+        {pr.sessionId && onViewSession && (
+          <button
+            type="button"
+            className={styles.sessionLink}
+            onClick={() => onViewSession(pr.sessionId!)}
+          >
+            Coder
+          </button>
+        )}
+        {pr.reviewSessionId && onViewSession && (
+          <button
+            type="button"
+            className={styles.reviewerLink}
+            onClick={() => onViewSession(pr.reviewSessionId!)}
+          >
+            Reviewer
+          </button>
         )}
         <span className={styles.date}>
           {stateLabel} {ago}
