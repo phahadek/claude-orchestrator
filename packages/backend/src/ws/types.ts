@@ -62,6 +62,8 @@ export interface TaskView {
     lastMessage: string;
     inputTokens: number;
     outputTokens: number;
+    context_occupancy_tokens?: number;
+    compaction_count?: number;
   } | null;
   pr: {
     prNumber: number;

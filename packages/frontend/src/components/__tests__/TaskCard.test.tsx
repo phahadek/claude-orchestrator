@@ -569,4 +569,90 @@ describe('TaskCard', () => {
     );
     expect(screen.queryByText('—')).toBeNull();
   });
+
+  // ── Context-occupancy gauge ───────────────────────────────────────────────
+
+  it('renders context gauge with correct percentage for active session with occupancy tokens', () => {
+    const session = makeCodeSession({
+      status: 'running',
+      context_occupancy_tokens: 50_000,
+      compaction_count: 0,
+    });
+    render(
+      <TaskCard
+        task={makeTask({ codeSession: session })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('25% ctx')).toBeDefined();
+  });
+
+  it('renders compacted badge when compaction_count > 0 for active session', () => {
+    const session = makeCodeSession({
+      status: 'running',
+      context_occupancy_tokens: 50_000,
+      compaction_count: 2,
+    });
+    render(
+      <TaskCard
+        task={makeTask({ codeSession: session })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('compacted 2×')).toBeDefined();
+  });
+
+  it('does not render context gauge when codeSession is null', () => {
+    render(
+      <TaskCard
+        task={makeTask({ codeSession: null })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.queryByText(/% ctx/)).toBeNull();
+  });
+
+  it('does not render context gauge when codeSession is concluded (done)', () => {
+    const session = makeCodeSession({
+      status: 'done',
+      context_occupancy_tokens: 50_000,
+      compaction_count: 0,
+    });
+    render(
+      <TaskCard
+        task={makeTask({ codeSession: session })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.queryByText(/% ctx/)).toBeNull();
+  });
+
+  it('renders context gauge for needs_permission session status', () => {
+    const session = makeCodeSession({
+      status: 'needs_permission',
+      context_occupancy_tokens: 100_000,
+    });
+    render(
+      <TaskCard
+        task={makeTask({ codeSession: session })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('50% ctx')).toBeDefined();
+  });
 });

@@ -4,6 +4,7 @@ import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { useDispatch } from '../hooks/useDispatch';
 import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
 import { CIBadges } from './CIBadges';
+import { ContextBadge } from './ContextBadge';
 import styles from './TaskCard.module.css';
 
 interface Props {
@@ -123,6 +124,18 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
               )}
             </div>
           )}
+
+          {codeSession &&
+            ['running', 'needs_permission', 'retrying', 'starting'].includes(
+              codeSession.status,
+            ) && (
+              <div className={styles.contextRow}>
+                <ContextBadge
+                  contextOccupancyTokens={codeSession.context_occupancy_tokens}
+                  compactionCount={codeSession.compaction_count}
+                />
+              </div>
+            )}
 
           {!codeSession && <span className={styles.placeholder}>—</span>}
 

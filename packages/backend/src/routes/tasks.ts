@@ -88,6 +88,8 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
       lastMessage,
       inputTokens: row.code_session_input_tokens ?? 0,
       outputTokens: row.code_session_output_tokens ?? 0,
+      context_occupancy_tokens: row.code_session_context_occupancy_tokens ?? undefined,
+      compaction_count: row.code_session_compaction_count ?? undefined,
     };
   }
 
