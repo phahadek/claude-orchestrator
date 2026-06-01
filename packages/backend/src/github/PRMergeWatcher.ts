@@ -19,6 +19,7 @@ import {
   shouldAutoReview,
   formatReviewFeedback,
 } from './reviewUtils';
+import { isTerminalStalePR } from './pollUtils';
 import {
   getAllOpenPRs,
   updatePRState,
@@ -167,6 +168,12 @@ export class PRMergeWatcher {
       if (!getProjectByGithubRepo(pr.repo)) {
         console.warn(
           `[PRMergeWatcher] PR #${pr.pr_number}: no project for repo ${pr.repo} — skipping poll`,
+        );
+        continue;
+      }
+      if (isTerminalStalePR(pr)) {
+        console.log(
+          `[PRMergeWatcher] PR #${pr.pr_number}: verdict=incomplete with no new push — skipping poll`,
         );
         continue;
       }

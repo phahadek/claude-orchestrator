@@ -51,6 +51,7 @@ import { getProjectByGithubRepo } from '../config.js';
 import { PRMergeWatcher } from '../github/PRMergeWatcher.js';
 import { ReviewerCommentsWatcher } from '../github/ReviewerCommentsWatcher.js';
 import { AutoMerger } from '../github/AutoMerger.js';
+import { isTerminalStalePR } from '../github/pollUtils.js';
 import type { PullRequestRow } from '../db/types.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -436,10 +437,172 @@ describe('AutoMerger pollOnce paused PR skip', () => {
   });
 });
 
+// ── isTerminalStalePR unit tests ─────────────────────────────────────────────
+
+describe('isTerminalStalePR predicate', () => {
+  it('returns true when verdict=incomplete and head_sha matches last_reviewed_sha', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'incomplete' }),
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-abc',
+    });
+    expect(isTerminalStalePR(pr)).toBe(true);
+  });
+
+  it('returns false when verdict=incomplete but head_sha differs (new push arrived)', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'incomplete' }),
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-old',
+    });
+    expect(isTerminalStalePR(pr)).toBe(false);
+  });
+
+  it('returns false when verdict=approved (not an incomplete review)', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'approved' }),
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-abc',
+    });
+    expect(isTerminalStalePR(pr)).toBe(false);
+  });
+
+  it('returns false when verdict=needs_changes (session is actively working on a fix)', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'needs_changes' }),
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-abc',
+    });
+    expect(isTerminalStalePR(pr)).toBe(false);
+  });
+
+  it('returns false when review_result is null (no review yet)', () => {
+    const pr = makePR({ review_result: null, head_sha: 'sha-abc', last_reviewed_sha: 'sha-abc' });
+    expect(isTerminalStalePR(pr)).toBe(false);
+  });
+
+  it('returns false when head_sha is null', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'incomplete' }),
+      head_sha: null,
+      last_reviewed_sha: null,
+    });
+    expect(isTerminalStalePR(pr)).toBe(false);
+  });
+
+  it('returns false when last_reviewed_sha is null (review incomplete before SHA was recorded)', () => {
+    const pr = makePR({
+      review_result: JSON.stringify({ verdict: 'incomplete' }),
+      head_sha: 'sha-abc',
+      last_reviewed_sha: null,
+    });
+    expect(isTerminalStalePR(pr)).toBe(false);
+  });
+});
+
+// ── PRMergeWatcher: terminal-stale skip ──────────────────────────────────────
+
+describe('PRMergeWatcher terminal-stale skip', () => {
+  it('skips a PR with verdict=incomplete and no new push', async () => {
+    const stalePR = makePR({
+      review_result: JSON.stringify({ verdict: 'incomplete' }),
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-abc',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([stalePR]);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue(makeProject() as never);
+
+    const github = makeGitHubClient();
+    const sessions = makeSessionManager();
+    const watcher = new PRMergeWatcher(
+      github as never,
+      sessions as never,
+      undefined,
+      vi.fn(),
+    );
+
+    await watcher.poll();
+
+    expect(github.getPRState).not.toHaveBeenCalled();
+    expect(github.listOpenPRStates).not.toHaveBeenCalled();
+  });
+
+  it('does NOT skip a PR with verdict=incomplete when a new push arrived', async () => {
+    const activePR = makePR({
+      review_result: JSON.stringify({ verdict: 'incomplete' }),
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-old',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([activePR]);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue(makeProject() as never);
+
+    const github = makeGitHubClient({
+      getPRState: vi.fn().mockResolvedValue({ state: 'open', headSha: 'sha-new' }),
+    });
+    const sessions = makeSessionManager();
+    const watcher = new PRMergeWatcher(
+      github as never,
+      sessions as never,
+      undefined,
+      vi.fn(),
+    );
+
+    await watcher.poll();
+
+    expect(github.getPRState).toHaveBeenCalledOnce();
+  });
+});
+
+// ── ReviewerCommentsWatcher: terminal-stale skip ─────────────────────────────
+
+describe('ReviewerCommentsWatcher terminal-stale skip', () => {
+  it('skips a PR with verdict=incomplete and no new push', async () => {
+    const stalePR = makePR({
+      review_result: JSON.stringify({ verdict: 'incomplete' }),
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-abc',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([stalePR]);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue(makeProject() as never);
+
+    const github = makeGitHubClient();
+    const sessions = makeSessionManager();
+    const watcher = new ReviewerCommentsWatcher(
+      github as never,
+      sessions as never,
+    );
+
+    await watcher.pollAll();
+
+    expect(github.listPRReviews).not.toHaveBeenCalled();
+  });
+
+  it('does NOT skip a PR with verdict=incomplete when a new push arrived', async () => {
+    const activePR = makePR({
+      review_result: JSON.stringify({ verdict: 'incomplete' }),
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-old',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([activePR]);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue(makeProject() as never);
+
+    const github = makeGitHubClient();
+    const sessions = makeSessionManager();
+    const watcher = new ReviewerCommentsWatcher(
+      github as never,
+      sessions as never,
+    );
+
+    await watcher.pollAll();
+
+    expect(github.listPRReviews).toHaveBeenCalledOnce();
+  });
+});
+
 // ── Integration: 20 PRs, 5 paused/stale → only active PRs trigger API calls ──
 
 describe('integration: only non-skipped PRs trigger API calls in one cycle', () => {
-  it('with 20 PRs (5 paused/orphan), only the 15 active ones trigger GitHub calls', async () => {
+  it('with 20 PRs (5 paused/stale/orphan), only the 15 active ones trigger GitHub calls', async () => {
     const activePRs = Array.from({ length: 15 }, (_, i) =>
       makePR({
         pr_number: 100 + i,
@@ -461,10 +624,14 @@ describe('integration: only non-skipped PRs trigger API calls in one cycle', () 
         repo: 'active/repo',
         pause_reason: 'max_reviews',
       }),
+      // Terminal-stale: verdict=incomplete, no new push
       makePR({
         pr_number: 202,
         repo: 'active/repo',
-        pause_reason: 'review_failed',
+        pause_reason: null,
+        review_result: JSON.stringify({ verdict: 'incomplete' }),
+        head_sha: 'stale-sha',
+        last_reviewed_sha: 'stale-sha',
       }),
       // Orphan repos (no project mapping)
       makePR({ pr_number: 203, repo: 'orphan/repo-1', pause_reason: null }),
@@ -477,14 +644,15 @@ describe('integration: only non-skipped PRs trigger API calls in one cycle', () 
       return makeProject() as never;
     });
 
-    // Build batch map for active PRs (all still open with same headSha)
+    // Build batch map for active PRs (all still open with same headSha).
+    // Paused PRs on active/repo (200, 201) are still in byRepo and get a batch
+    // entry; the stale PR (202) is excluded from byRepo before batch fetch.
     const batchMap = new Map(
       activePRs.map((pr) => [pr.pr_number, { headSha: pr.head_sha }]),
     );
-    // Also include paused PRs in the batch (they're still open on GitHub)
-    for (const pr of pausedPRs.filter((p) => p.repo === 'active/repo')) {
-      batchMap.set(pr.pr_number, { headSha: pr.head_sha });
-    }
+    // Include the two paused PRs (not the stale one — it's excluded before batching)
+    batchMap.set(200, { headSha: 'abc123' });
+    batchMap.set(201, { headSha: 'abc123' });
 
     const getPRState = vi
       .fn()
@@ -513,15 +681,14 @@ describe('integration: only non-skipped PRs trigger API calls in one cycle', () 
 
     await watcher.poll();
 
-    // One batch call for 'active/repo' (has 18 PRs: 15 active + 3 paused)
+    // One batch call for 'active/repo' (15 active + 2 paused; stale/orphan excluded before grouping)
     expect(listOpenPRStates).toHaveBeenCalledOnce();
     expect(listOpenPRStates).toHaveBeenCalledWith('active/repo');
 
-    // Orphan repos never trigger any GitHub calls
+    // Orphan and terminal-stale repos never trigger any individual GitHub calls
     expect(getPRState).not.toHaveBeenCalled();
 
-    // Only active PRs (pause_reason=null) trigger mergeability checks
-    // Paused PRs are found in batch but skipped by terminal pause filter
+    // Only active PRs (pause_reason=null, not stale) trigger mergeability checks
     expect(categorizeMergeability).toHaveBeenCalledTimes(15);
   });
 });

@@ -10,6 +10,7 @@ import {
   getSetting,
 } from '../db/queries';
 import { getProjectByGithubRepo } from '../config';
+import { isTerminalStalePR } from './pollUtils';
 import { formatHumanReviewFeedback, type HumanComment } from './reviewUtils';
 import type { PullRequestRow } from '../db/types';
 import type { ServerMessage } from '../ws/types';
@@ -100,7 +101,8 @@ export class ReviewerCommentsWatcher {
       (pr) =>
         pr.session_id !== null &&
         WATCHABLE_PAUSE_REASONS.has(pr.pause_reason) &&
-        getProjectByGithubRepo(pr.repo) !== null,
+        getProjectByGithubRepo(pr.repo) !== null &&
+        !isTerminalStalePR(pr),
     );
     for (const pr of watchable) {
       try {

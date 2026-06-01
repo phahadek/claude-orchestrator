@@ -54,6 +54,8 @@ export class GitHubClient {
     const prs = await this.listOpenPRs(repo);
     const map = new Map<number, { headSha: string | null }>();
     for (const pr of prs) {
+      // PullRequest.id is mapped from GitHub's `number` field (the PR number
+      // visible in URLs), not the internal GitHub database `id`. Safe to key by.
       map.set(pr.id, { headSha: pr.headSha });
     }
     return map;
