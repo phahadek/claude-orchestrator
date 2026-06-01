@@ -230,9 +230,9 @@ export class SessionManager extends EventEmitter {
     { sessionType: 'standard' | 'review' }
   >();
 
-  /** Last known DisplayStatus per notionTaskId — used to skip no-op broadcasts. */
+  /** Last known DisplayStatus per taskId — used to skip no-op broadcasts. */
   private _lastDisplayStatus = new Map<string, DisplayStatus>();
-  /** Timestamp of last lastMessage-only task_updated per notionTaskId. */
+  /** Timestamp of last lastMessage-only task_updated per taskId. */
   private _lastMessageThrottle = new Map<string, number>();
   /** Guards against re-entrant task_updated emission inside the emit override. */
   private _inTaskUpdate = false;
@@ -278,20 +278,20 @@ export class SessionManager extends EventEmitter {
    * display status, re-derive and broadcast task_updated (de-duped by last known status).
    */
   private _handleTaskUpdated(msg: ServerMessage): void {
-    const notionTaskId = this._notionTaskIdForMessage(msg);
-    if (!notionTaskId) return;
+    const taskId = this._taskIdForMessage(msg);
+    if (!taskId) return;
 
     const isLastMessageOnly = msg.type === 'session_event';
 
     if (isLastMessageOnly) {
-      const last = this._lastMessageThrottle.get(notionTaskId) ?? 0;
+      const last = this._lastMessageThrottle.get(taskId) ?? 0;
       const now = Date.now();
       if (now - last < LAST_MESSAGE_THROTTLE_MS) return;
-      this._lastMessageThrottle.set(notionTaskId, now);
+      this._lastMessageThrottle.set(taskId, now);
     }
 
-    const displayStatus = deriveDisplayStatusFromDb(notionTaskId);
-    const prev = this._lastDisplayStatus.get(notionTaskId);
+    const displayStatus = deriveDisplayStatusFromDb(taskId);
+    const prev = this._lastDisplayStatus.get(taskId);
 
     if (!isLastMessageOnly && displayStatus === prev) return;
     if (isLastMessageOnly && displayStatus === prev) {
@@ -300,15 +300,15 @@ export class SessionManager extends EventEmitter {
       return;
     }
 
-    this._lastDisplayStatus.set(notionTaskId, displayStatus);
-    emitTaskUpdated(notionTaskId);
+    this._lastDisplayStatus.set(taskId, displayStatus);
+    emitTaskUpdated(taskId);
   }
 
   /**
-   * Determine the notionTaskId affected by a ServerMessage, if any.
+   * Determine the task ID affected by a ServerMessage, if any.
    * Returns null for messages that cannot change task display status.
    */
-  private _notionTaskIdForMessage(msg: ServerMessage): string | null {
+  private _taskIdForMessage(msg: ServerMessage): string | null {
     switch (msg.type) {
       case 'session_started':
       case 'session_ended':
@@ -598,7 +598,7 @@ export class SessionManager extends EventEmitter {
     // task ID (AutoLauncher, PRReviewService) pass it via options.taskId to avoid
     // URL-based re-parsing. Other callers (WS dispatch) provide only taskUrl and
     // rely on the project's task_source to derive the correct format.
-    const notionTaskId =
+    const sessionTaskId =
       precomputedTaskId ??
       deriveTaskId(project.taskSource ?? 'notion', taskUrl);
     const sessionMode = runtimeSettings.session_mode;
@@ -614,10 +614,10 @@ export class SessionManager extends EventEmitter {
     // before the AgentSession is created and run() is called.
     const launchSession = async () => {
       let taskContent: string | undefined;
-      if (sessionType !== 'review' && notionTaskId) {
+      if (sessionType !== 'review' && sessionTaskId) {
         try {
           taskContent =
-            await getTaskBackend(projectId).fetchTaskPage(notionTaskId);
+            await getTaskBackend(projectId).fetchTaskPage(sessionTaskId);
           console.log(
             `[SessionManager] pre-fetched task content for ${sessionId.slice(0, 8)} (${taskContent.length} chars)`,
           );
@@ -686,7 +686,7 @@ export class SessionManager extends EventEmitter {
         projectContextUrl,
         undefined, // taskBackendOverride — production resolves via getTaskBackend(projectId)
         worktreePath,
-        notionTaskId,
+        sessionTaskId,
         undefined,
         customPrompt,
         sessionType,
@@ -728,7 +728,7 @@ export class SessionManager extends EventEmitter {
     const startedAt = Date.now();
     insertSession({
       session_id: sessionId,
-      task_id: notionTaskId,
+      task_id: sessionTaskId,
       task_url: taskUrl,
       project_context_url: projectContextUrl,
       project_id: projectId,
@@ -746,7 +746,7 @@ export class SessionManager extends EventEmitter {
       actor_type: 'ai',
       actor_id: sessionId,
       project_id: projectId || null,
-      task_id: notionTaskId || null,
+      task_id: sessionTaskId || null,
       payload: {
         session_type: sessionType,
         task_url: taskUrl,
@@ -769,17 +769,17 @@ export class SessionManager extends EventEmitter {
 
     if (sessionType === 'standard') {
       getTaskBackend(projectId)
-        .updateStatus(notionTaskId, '🔄 In Progress', {
+        .updateStatus(sessionTaskId, '🔄 In Progress', {
           source: 'orchestrator',
           sessionId,
         })
         .then(() => {
           this.emit('message', {
             type: 'task_status_changed',
-            notionTaskId,
+            notionTaskId: sessionTaskId,
             newStatus: '🔄 In Progress',
           } satisfies ServerMessage);
-          emitTaskUpdated(notionTaskId);
+          emitTaskUpdated(sessionTaskId);
         })
         .catch((e) => {
           console.error(`[SessionManager] failed to set In Progress: ${e}`);
@@ -792,8 +792,8 @@ export class SessionManager extends EventEmitter {
 
     // Look up the PR for review sessions so the card can display "Review of #N" and link to code session
     const reviewPr =
-      sessionType === 'review' && notionTaskId
-        ? (getPRByNotionTaskId(notionTaskId) ?? undefined)
+      sessionType === 'review' && sessionTaskId
+        ? (getPRByNotionTaskId(sessionTaskId) ?? undefined)
         : undefined;
     const reviewPrNumber = reviewPr?.pr_number;
     const reviewCodeSessionId = reviewPr?.session_id ?? undefined;
@@ -1179,9 +1179,9 @@ export class SessionManager extends EventEmitter {
     return n;
   }
 
-  /** Returns true if a live session exists for the given Notion task id. */
-  hasLiveSessionForTask(notionTaskId: string): boolean {
-    const norm = notionTaskId.replace(/-/g, '');
+  /** Returns true if a live session exists for the given task id. */
+  hasLiveSessionForTask(taskId: string): boolean {
+    const norm = taskId.replace(/-/g, '');
     for (const s of this.sessions.values()) {
       if (s.sessionType === 'review') continue;
       const tid = s.taskId?.replace(/-/g, '');
