@@ -43,6 +43,22 @@ export class GitHubClient {
     return data.map((pr) => mapPR(pr));
   }
 
+  /**
+   * Batch-fetch open PRs for a repo and return a map of PR number → headSha.
+   * PRs absent from the map have been closed or merged since the DB was last synced.
+   * Used by PRMergeWatcher to replace N individual getPRState calls with one list call.
+   */
+  async listOpenPRStates(
+    repo: string,
+  ): Promise<Map<number, { headSha: string | null }>> {
+    const prs = await this.listOpenPRs(repo);
+    const map = new Map<number, { headSha: string | null }>();
+    for (const pr of prs) {
+      map.set(pr.id, { headSha: pr.headSha });
+    }
+    return map;
+  }
+
   async getPRState(
     prNumber: number,
     repo?: string,

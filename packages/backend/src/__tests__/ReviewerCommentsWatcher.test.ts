@@ -11,6 +11,10 @@ vi.mock('../db/queries.js', () => ({
   getSetting: vi.fn().mockReturnValue(undefined),
 }));
 
+vi.mock('../config.js', () => ({
+  getProjectByGithubRepo: vi.fn().mockReturnValue({ id: 'proj-1' }),
+}));
+
 import {
   getAllOpenPRs,
   getRoutedCommentIds,
