@@ -8,8 +8,13 @@ import {
   upsertStuckSessionTimer,
   deleteStuckSessionTimer,
   getAllStuckSessionTimers,
+  getStuckResultSessionRows,
+  markSessionDone,
 } from '../db/queries';
 import type { ServerMessage } from '../ws/types';
+import type { GitHubClient } from '../github/GitHubClient';
+import { getTaskBackend } from '../tasks/TaskBackend';
+import { recoverSession } from '../session/sessionRecovery';
 
 interface TimerState {
   taskName: string;
@@ -50,20 +55,97 @@ const PAUSE_MESSAGE =
  * Timer state is persisted to the stuck_session_timers DB table on every state
  * change. rehydrate() restores in-memory state from the DB on backend restart.
  */
+/** Age guard for periodic scan: only recover sessions older than 5 minutes. */
+const PERIODIC_MIN_AGE_MS = 5 * 60 * 1000;
+/** Default cadence for the periodic stuck-session scan. */
+const DEFAULT_SCAN_INTERVAL_MS = 60 * 1000;
+
 export class StuckSessionMonitor {
   private timers = new Map<string, TimerState>();
+  private scanTimer: NodeJS.Timeout | null = null;
+  private scanStopped = true;
+  private scanRunning = false;
 
   constructor(
     private readonly sessionManager: SessionManager,
     private readonly broadcast: (msg: ServerMessage) => void,
+    private readonly githubClient?: GitHubClient,
   ) {
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
   }
 
+  /**
+   * Start the periodic stuck-session scan. Runs at the given interval (or
+   * DEFAULT_SCAN_INTERVAL_MS) and calls recoverSession() for any session
+   * still at status='running' whose last event is 'result'.
+   */
+  startScan(intervalMs?: number): void {
+    if (!this.scanStopped) return;
+    this.scanStopped = false;
+    this.scheduleNextScan(intervalMs ?? DEFAULT_SCAN_INTERVAL_MS);
+  }
+
   /** Cancel all in-flight timers. Used on shutdown and from tests. */
   stop(): void {
+    this.scanStopped = true;
+    if (this.scanTimer) {
+      clearTimeout(this.scanTimer);
+      this.scanTimer = null;
+    }
     for (const sessionId of [...this.timers.keys()]) {
       this.clear(sessionId);
+    }
+  }
+
+  private scheduleNextScan(intervalMs: number): void {
+    if (this.scanStopped) return;
+    this.scanTimer = setTimeout(() => {
+      void this.scanForStuckSessions().finally(() =>
+        this.scheduleNextScan(intervalMs),
+      );
+    }, intervalMs);
+    this.scanTimer.unref?.();
+  }
+
+  async scanForStuckSessions(): Promise<void> {
+    if (this.scanRunning) return;
+    this.scanRunning = true;
+    try {
+      const rows = getStuckResultSessionRows(PERIODIC_MIN_AGE_MS);
+      for (const row of rows) {
+        markSessionDone(row.session_id, row.last_ts, row.pr_url ?? null);
+        let taskBackend;
+        try {
+          taskBackend = row.project_id ? getTaskBackend(row.project_id) : null;
+        } catch {
+          taskBackend = null;
+        }
+        if (!taskBackend) continue;
+        await recoverSession(row.session_id, {
+          scope: 'periodic',
+          prUrl: row.pr_url ?? undefined,
+          prDetectedLive: false,
+          sessionType: row.session_type || 'standard',
+          taskId: row.task_id || '',
+          projectId: row.project_id || '',
+          worktreePath: row.worktree_path || '',
+          taskUrl: row.task_url || '',
+          projectContextUrl: row.project_context_url || '',
+          githubClient: this.githubClient,
+          taskBackend,
+          sessionManager: this.sessionManager,
+          broadcast: this.broadcast,
+          emitPrOpened: () => {},
+        }).catch((e) =>
+          console.error(
+            `[StuckSessionMonitor] recoverSession failed for ${row.session_id}: ${e}`,
+          ),
+        );
+      }
+    } catch (e) {
+      console.error(`[StuckSessionMonitor] scanForStuckSessions error: ${e}`);
+    } finally {
+      this.scanRunning = false;
     }
   }
 

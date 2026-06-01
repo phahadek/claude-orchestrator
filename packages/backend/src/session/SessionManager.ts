@@ -26,6 +26,7 @@ import {
 import {
   insertSession,
   updateSessionStatus,
+  markSessionDone,
   insertEvent,
   getSession,
   getSessionsByStatus,
@@ -33,9 +34,10 @@ import {
   getEventsBySession,
   getPRByNumber,
   getPRBySessionId,
-  backfillStuckResultSessions,
+  getStuckResultSessionRows,
   hasActiveSessionForTask,
 } from '../db/queries';
+import { recoverSession } from './sessionRecovery';
 import type { Session } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { GitHubClient } from '../github/GitHubClient';
@@ -987,13 +989,43 @@ export class SessionManager extends EventEmitter {
    * as unkillable ghosts. Called from server.ts after migrations and imports.
    */
   async resumeOrphanSessions(): Promise<void> {
-    // Backfill sessions that completed (last event = result) but got stuck at
+    // Recover sessions that completed (last event = result) but got stuck at
     // 'running' because the review pipeline threw mid-handleCleanExit.
-    const backfilled = backfillStuckResultSessions();
-    if (backfilled > 0) {
+    const stuckRows = getStuckResultSessionRows();
+    if (stuckRows.length > 0) {
       console.log(
-        `[SessionManager] backfilled ${backfilled} stuck session(s) from running→done`,
+        `[SessionManager] recovering ${stuckRows.length} stuck session(s) from running→done`,
       );
+      for (const row of stuckRows) {
+        markSessionDone(row.session_id, row.last_ts, row.pr_url ?? null);
+        let taskBackend;
+        try {
+          taskBackend = row.project_id ? getTaskBackend(row.project_id) : null;
+        } catch {
+          taskBackend = null;
+        }
+        if (taskBackend) {
+          await recoverSession(row.session_id, {
+            scope: 'boot',
+            prUrl: row.pr_url ?? undefined,
+            prDetectedLive: false,
+            sessionType: row.session_type || 'standard',
+            taskId: row.task_id || '',
+            projectId: row.project_id || '',
+            worktreePath: row.worktree_path || '',
+            taskUrl: row.task_url || '',
+            projectContextUrl: row.project_context_url || '',
+            taskBackend,
+            sessionManager: this,
+            broadcast: (msg) => this.emit('message', msg),
+            emitPrOpened: (data) => this.emit('pr_opened', data),
+          }).catch((e) =>
+            console.error(
+              `[SessionManager] recoverSession failed for ${row.session_id}: ${e}`,
+            ),
+          );
+        }
+      }
     }
 
     // Reap orphaned Docker containers/networks from sessions no longer active.

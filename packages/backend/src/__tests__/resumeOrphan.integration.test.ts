@@ -152,7 +152,7 @@ vi.mock('../db/queries', () => ({
   getPRByNumber: vi.fn(() => null),
   updateSessionStatus: vi.fn(),
   markSessionDone: vi.fn(),
-  backfillStuckResultSessions: vi.fn(() => 0),
+  getStuckResultSessionRows: vi.fn(() => []),
   insertSession: vi.fn(),
   insertEvent: vi.fn(),
   upsertSessionEvent: vi.fn(() => 1),
@@ -170,6 +170,10 @@ vi.mock('../db/queries', () => ({
   hasActiveSessionForTask: vi.fn(() => false),
 }));
 
+vi.mock('../session/sessionRecovery', () => ({
+  recoverSession: vi.fn(async () => {}),
+}));
+
 // Now import the modules under test (after all mocks are in place).
 import fs from 'fs';
 import { spawn, execSync } from 'child_process';
@@ -180,7 +184,7 @@ import {
 import * as queries from '../db/queries';
 import type { ServerMessage } from '../ws/types';
 import type { Session } from '../db/types';
-import { backfillStuckResultSessions } from '../db/queries';
+import { recoverSession } from '../session/sessionRecovery';
 
 function makeRunningSession(overrides: Partial<Session> = {}): Session {
   return {
@@ -357,21 +361,35 @@ describe('resumeOrphanSessions() — healthy-worktree resume (integration)', () 
   });
 });
 
-// ── Test 3: startup backfill for stuck sessions ───────────────────────────
-describe('resumeOrphanSessions() — stuck session backfill', () => {
-  it('calls backfillStuckResultSessions before resuming orphans', async () => {
+// ── Test 3: startup boot recovery for stuck sessions ─────────────────────
+describe('resumeOrphanSessions() — stuck session boot recovery', () => {
+  it('calls getStuckResultSessionRows before resuming orphans', async () => {
     vi.mocked(queries.getSessionsByStatus).mockReturnValue([]);
-    vi.mocked(backfillStuckResultSessions).mockReturnValue(0);
+    vi.mocked(queries.getStuckResultSessionRows).mockReturnValue([]);
 
     const sm = new SessionManager();
     await sm.resumeOrphanSessions();
 
-    expect(backfillStuckResultSessions).toHaveBeenCalledTimes(1);
+    expect(queries.getStuckResultSessionRows).toHaveBeenCalledTimes(1);
   });
 
-  it('logs a message when backfill finds stuck sessions', async () => {
+  it('logs a message and calls recoverSession for each stuck session', async () => {
+    const stuckRow = {
+      session_id: 'stuck-sess',
+      task_id: 'task-1',
+      task_url: 'https://notion.so/task',
+      project_context_url: 'https://notion.so/ctx',
+      project_id: 'test-project',
+      pr_url: null,
+      worktree_path: '/fake/wt',
+      session_type: 'standard',
+      last_ts: 1_000_000,
+    };
     vi.mocked(queries.getSessionsByStatus).mockReturnValue([]);
-    vi.mocked(backfillStuckResultSessions).mockReturnValue(2);
+    vi.mocked(queries.getStuckResultSessionRows).mockReturnValue([
+      stuckRow,
+      stuckRow,
+    ]);
 
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
@@ -383,20 +401,26 @@ describe('resumeOrphanSessions() — stuck session backfill', () => {
         args.some(
           (a) =>
             typeof a === 'string' &&
-            a.includes('backfilled') &&
+            a.includes('recovering') &&
             a.includes('2'),
         ),
       ),
     ).toBe(true);
+    expect(recoverSession).toHaveBeenCalledTimes(2);
+    expect(recoverSession).toHaveBeenCalledWith(
+      'stuck-sess',
+      expect.objectContaining({ scope: 'boot' }),
+    );
 
     consoleSpy.mockRestore();
+    vi.mocked(recoverSession).mockClear();
   });
 
-  it('backfill runs before getSessionsByStatus so already-done sessions are not resumed', async () => {
+  it('getStuckResultSessionRows runs before getSessionsByStatus', async () => {
     const callOrder: string[] = [];
-    vi.mocked(backfillStuckResultSessions).mockImplementation(() => {
-      callOrder.push('backfill');
-      return 1;
+    vi.mocked(queries.getStuckResultSessionRows).mockImplementation(() => {
+      callOrder.push('getStuckResultSessionRows');
+      return [];
     });
     vi.mocked(queries.getSessionsByStatus).mockImplementation(() => {
       callOrder.push('getSessionsByStatus');
@@ -406,7 +430,7 @@ describe('resumeOrphanSessions() — stuck session backfill', () => {
     const sm = new SessionManager();
     await sm.resumeOrphanSessions();
 
-    expect(callOrder[0]).toBe('backfill');
+    expect(callOrder[0]).toBe('getStuckResultSessionRows');
     expect(callOrder[1]).toBe('getSessionsByStatus');
   });
 });

@@ -127,42 +127,59 @@ export function markSessionDone(
   });
 }
 
+export interface StuckResultSessionRow {
+  session_id: string;
+  task_id: string | null;
+  task_url: string | null;
+  project_context_url: string | null;
+  project_id: string | null;
+  pr_url: string | null;
+  worktree_path: string | null;
+  session_type: string;
+  last_ts: number;
+}
+
 /**
- * Backfill sessions that are stuck at status='running' but whose last recorded
- * event is a 'result' event (the CLI's clean-exit signal). These sessions
- * completed normally but the done transition was missed — most likely because
- * the downstream review pipeline threw before handleCleanExit could persist it.
- * Returns the number of sessions updated.
+ * Query sessions stuck at status='running' whose last recorded event is a
+ * 'result' event (the CLI's clean-exit signal). Does NOT update the DB.
+ * If minAgeMs is provided, only returns sessions older than that threshold.
  */
-export function backfillStuckResultSessions(): number {
-  const stuckRows = db
+export function getStuckResultSessionRows(
+  minAgeMs?: number,
+): StuckResultSessionRow[] {
+  if (minAgeMs !== undefined) {
+    return db
+      .prepare(
+        `
+      SELECT s.session_id, s.task_id, s.task_url, s.project_context_url,
+             s.project_id, s.pr_url, s.worktree_path, s.session_type,
+             e.timestamp AS last_ts
+      FROM sessions s
+      JOIN session_events e ON e.session_id = s.session_id
+      WHERE s.status = 'running'
+        AND e.id = (SELECT MAX(id) FROM session_events WHERE session_id = s.session_id)
+        AND e.event_type = 'result'
+        AND s.started_at < (unixepoch('now') - @min_age_seconds) * 1000
+    `,
+      )
+      .all({
+        min_age_seconds: Math.floor(minAgeMs / 1000),
+      }) as StuckResultSessionRow[];
+  }
+  return db
     .prepare(
       `
-    SELECT s.session_id, e.timestamp AS last_ts
+    SELECT s.session_id, s.task_id, s.task_url, s.project_context_url,
+           s.project_id, s.pr_url, s.worktree_path, s.session_type,
+           e.timestamp AS last_ts
     FROM sessions s
     JOIN session_events e ON e.session_id = s.session_id
     WHERE s.status = 'running'
-      AND e.id = (
-        SELECT MAX(id) FROM session_events WHERE session_id = s.session_id
-      )
+      AND e.id = (SELECT MAX(id) FROM session_events WHERE session_id = s.session_id)
       AND e.event_type = 'result'
   `,
     )
-    .all() as Array<{ session_id: string; last_ts: number }>;
-
-  if (stuckRows.length === 0) return 0;
-
-  const updateStmt = db.prepare(
-    `UPDATE sessions SET status = 'done', ended_at = ? WHERE session_id = ? AND status = 'running'`,
-  );
-
-  for (const row of stuckRows) {
-    updateStmt.run(row.last_ts, row.session_id);
-    console.log(
-      `[backfill] session ${row.session_id.slice(0, 8)} running→done (last_event=result at ${new Date(row.last_ts).toISOString()})`,
-    );
-  }
-  return stuckRows.length;
+    .all() as StuckResultSessionRow[];
 }
 
 export function getSession(sessionId: string): Session | undefined {

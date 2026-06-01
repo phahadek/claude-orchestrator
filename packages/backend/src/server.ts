@@ -233,7 +233,11 @@ cleanUpdatesDir();
 
 // Stuck-session timer: notify → pause → hard-stop. Wires itself to SessionManager
 // events on construction; lifetime tied to the process.
-const stuckSessionMonitor = new StuckSessionMonitor(sessionManager, broadcast);
+const stuckSessionMonitor = new StuckSessionMonitor(
+  sessionManager,
+  broadcast,
+  githubClient,
+);
 
 // Orphaned-task sweep: runs at the auto-launch poll interval, finds tasks stuck
 // at In Progress with no live session and reverts them to Ready.
@@ -254,6 +258,7 @@ jsonlReader
       );
 
     stuckSessionMonitor.rehydrate();
+    stuckSessionMonitor.startScan();
 
     prMergeWatcher.start();
     reviewerCommentsWatcher.start();
