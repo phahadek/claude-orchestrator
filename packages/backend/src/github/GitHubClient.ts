@@ -44,6 +44,32 @@ export class GitHubClient {
   }
 
   /**
+   * Fetch recently closed PRs (merged + closed-not-merged) updated within sinceDays.
+   * Returns PRs with state='merged' when merged_at is set, 'closed' otherwise.
+   * Used by PRBootSweep to backfill missing rows after a deletion event.
+   */
+  async listClosedPullRequests(
+    repo: string,
+    sinceDays: number,
+  ): Promise<PullRequest[]> {
+    const cutoff = new Date(
+      Date.now() - sinceDays * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const data = await this.request<GitHubRawPR[]>(
+      `/repos/${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100`,
+    );
+    return data
+      .filter(
+        (pr) =>
+          (pr.merged_at != null && pr.merged_at >= cutoff) ||
+          (pr.merged_at == null &&
+            pr.closed_at != null &&
+            pr.closed_at >= cutoff),
+      )
+      .map((pr) => mapClosedPR(pr));
+  }
+
+  /**
    * Batch-fetch open PRs for a repo and return a map of PR number → headSha.
    * PRs absent from the map have been closed or merged since the DB was last synced.
    * Used by PRMergeWatcher to replace N individual getPRState calls with one list call.
@@ -1035,6 +1061,8 @@ interface GitHubRawPR {
   state: string;
   created_at: string;
   updated_at: string;
+  merged_at?: string | null;
+  closed_at?: string | null;
   mergeable?: boolean | null;
   mergeable_state?: string | null;
   draft: boolean;
@@ -1056,6 +1084,13 @@ function mapPR(pr: GitHubRawPR): PullRequest {
     updatedAt: pr.updated_at,
     mergeableState: pr.mergeable_state ?? null,
     draft: pr.draft,
+  };
+}
+
+function mapClosedPR(pr: GitHubRawPR): PullRequest {
+  return {
+    ...mapPR(pr),
+    state: pr.merged_at != null ? 'merged' : 'closed',
   };
 }
 
