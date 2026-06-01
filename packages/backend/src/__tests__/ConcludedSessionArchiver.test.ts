@@ -20,7 +20,6 @@ import { archiveConcludedSessionsOlderThan } from '../db/queries.js';
 import { recordEvent } from '../audit/AuditLog.js';
 import { runtimeSettings } from '../config.js';
 import { ConcludedSessionArchiver } from '../orchestration/ConcludedSessionArchiver.js';
-import type { ServerMessage } from '../ws/types.js';
 
 const mockArchive = vi.mocked(archiveConcludedSessionsOlderThan);
 const mockRecord = vi.mocked(recordEvent);
