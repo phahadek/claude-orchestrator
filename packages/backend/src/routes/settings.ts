@@ -21,6 +21,7 @@ const SETTING_KEYS = [
   'ci_poll_interval_seconds',
   'ci_poll_max_minutes',
   'max_review_iterations',
+  'pr_boot_sweep_merged_lookback_days',
 ] as const;
 
 type SettingKey = (typeof SETTING_KEYS)[number];
@@ -56,6 +57,8 @@ function applyToRuntime(key: SettingKey, value: string): void {
     runtimeSettings.ci_poll_max_minutes = Number(value);
   } else if (key === 'max_review_iterations') {
     runtimeSettings.max_review_iterations = Number(value);
+  } else if (key === 'pr_boot_sweep_merged_lookback_days') {
+    runtimeSettings.pr_boot_sweep_merged_lookback_days = Number(value);
   }
 }
 
@@ -111,6 +114,9 @@ function runtimeSettingsAsRecord(): Record<SettingKey, string> {
     ci_poll_interval_seconds: String(runtimeSettings.ci_poll_interval_seconds),
     ci_poll_max_minutes: String(runtimeSettings.ci_poll_max_minutes),
     max_review_iterations: String(runtimeSettings.max_review_iterations),
+    pr_boot_sweep_merged_lookback_days: String(
+      runtimeSettings.pr_boot_sweep_merged_lookback_days,
+    ),
   };
 }
 

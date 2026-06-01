@@ -214,6 +214,8 @@ export interface RuntimeSettings {
   /** When true, projects with no explicit milestone_branching default to two_tier mode.
    *  Also blocks non-conforming PRs rather than warning. */
   corporate_mode_enabled: boolean;
+  /** PRBootSweep: how many days back to look for recently-merged/closed PRs to backfill. */
+  pr_boot_sweep_merged_lookback_days: number;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -247,4 +249,7 @@ export const runtimeSettings: RuntimeSettings = {
     process.env.AUTO_MERGE_FAILED_CLEAR_MINUTES ?? 10,
   ),
   corporate_mode_enabled: process.env.CORPORATE_MODE === 'true',
+  pr_boot_sweep_merged_lookback_days: Number(
+    process.env.PR_BOOT_SWEEP_MERGED_LOOKBACK_DAYS ?? 30,
+  ),
 };
