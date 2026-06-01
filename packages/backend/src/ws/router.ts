@@ -4,7 +4,6 @@ import { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { getProjectById } from '../config';
 import { approveEnrollment } from '../auth/Enrollment';
-import { getMilestoneById } from '../db/queries';
 
 export function handleMessage(
   ws: WebSocket,
@@ -132,15 +131,8 @@ export function handleMessage(
         ws.send(JSON.stringify({ type: 'error', message: String(e) }));
         break;
       }
-      // Resolve dashboard milestone UUID to source_id before calling provider.
-      let resolvedMilestoneId: string | null = msg.milestoneId;
-      if (msg.milestoneId) {
-        const milestoneRow = getMilestoneById(msg.milestoneId);
-        if (milestoneRow?.source_id)
-          resolvedMilestoneId = milestoneRow.source_id;
-      }
       backend
-        .fetchReadyTasks(resolvedMilestoneId, msg.skipCache)
+        .fetchReadyTasks(msg.milestoneId, msg.skipCache)
         .then((tasks) =>
           ws.send(JSON.stringify({ type: 'tasks_ready', tasks })),
         )
