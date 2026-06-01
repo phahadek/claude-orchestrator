@@ -123,14 +123,6 @@ function insertProject(id: string, githubRepo: string) {
   ).run(id, `Project ${id}`, githubRepo);
 }
 
-function insertRawPR(prUrl: string, repo: string, prNumber: number): void {
-  db.prepare(
-    `INSERT OR IGNORE INTO pull_requests
-       (pr_number, pr_url, repo, state, draft, created_at, updated_at, synced_at)
-     VALUES (?, ?, ?, 'open', 0, ?, ?, ?)`,
-  ).run(prNumber, prUrl, repo, NOW, NOW, NOW);
-}
-
 function makePRInput(prNumber: number, repo: string) {
   const prUrl = `https://github.com/${repo}/pull/${prNumber}`;
   return {
