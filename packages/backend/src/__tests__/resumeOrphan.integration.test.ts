@@ -386,7 +386,10 @@ describe('resumeOrphanSessions() — stuck session boot recovery', () => {
       last_ts: 1_000_000,
     };
     vi.mocked(queries.getSessionsByStatus).mockReturnValue([]);
-    vi.mocked(queries.getStuckResultSessionRows).mockReturnValue([stuckRow, stuckRow]);
+    vi.mocked(queries.getStuckResultSessionRows).mockReturnValue([
+      stuckRow,
+      stuckRow,
+    ]);
 
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 

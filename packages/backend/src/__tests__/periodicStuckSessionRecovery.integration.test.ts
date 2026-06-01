@@ -31,9 +31,8 @@ vi.mock('../audit/AuditLog', () => ({
 
 // Stub DB ops that StuckSessionMonitor calls through its event handlers
 vi.mock('../db/queries', async () => {
-  const actual = await vi.importActual<typeof import('../db/queries')>(
-    '../db/queries',
-  );
+  const actual =
+    await vi.importActual<typeof import('../db/queries')>('../db/queries');
   return {
     ...actual,
     getPRBySessionId: vi.fn(() => null),

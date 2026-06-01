@@ -162,7 +162,9 @@ export function getStuckResultSessionRows(
         AND s.started_at < (unixepoch('now') - @min_age_seconds) * 1000
     `,
       )
-      .all({ min_age_seconds: Math.floor(minAgeMs / 1000) }) as StuckResultSessionRow[];
+      .all({
+        min_age_seconds: Math.floor(minAgeMs / 1000),
+      }) as StuckResultSessionRow[];
   }
   return db
     .prepare(
