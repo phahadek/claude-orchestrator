@@ -89,10 +89,7 @@ vi.mock('../config', () => ({
 }));
 
 import { ProjectService } from '../projects/ProjectService';
-import {
-  getTaskBackend,
-  _resetTaskBackendCacheForTests,
-} from './TaskBackend';
+import { getTaskBackend, _resetTaskBackendCacheForTests } from './TaskBackend';
 import { GithubTaskSourceProvider } from './GithubTaskSourceProvider';
 import { NotionTaskBackend } from './NotionTaskBackend';
 import { LocalTaskBackend } from './LocalTaskBackend';
@@ -124,7 +121,10 @@ beforeEach(() => {
 describe('getTaskBackend — github source', () => {
   it('returns a GithubTaskSourceProvider when taskSource is github', () => {
     vi.mocked(ProjectService.getById).mockReturnValue(
-      makeProject('github', JSON.stringify({ owner: 'acme', repo: 'core' })) as never,
+      makeProject(
+        'github',
+        JSON.stringify({ owner: 'acme', repo: 'core' }),
+      ) as never,
     );
     const backend = getTaskBackend('proj-1');
     expect(backend.type).toBe('github');
@@ -165,18 +165,14 @@ describe('getTaskBackend — github source', () => {
     vi.mocked(ProjectService.getById).mockReturnValue(
       makeProject('github', JSON.stringify({ repo: 'core' })) as never,
     );
-    expect(() => getTaskBackend('proj-1')).toThrowError(
-      /missing "owner"/,
-    );
+    expect(() => getTaskBackend('proj-1')).toThrowError(/missing "owner"/);
   });
 
   it('throws a clear error when repo is missing', () => {
     vi.mocked(ProjectService.getById).mockReturnValue(
       makeProject('github', JSON.stringify({ owner: 'acme' })) as never,
     );
-    expect(() => getTaskBackend('proj-1')).toThrowError(
-      /missing "repo"/,
-    );
+    expect(() => getTaskBackend('proj-1')).toThrowError(/missing "repo"/);
   });
 });
 
@@ -201,7 +197,13 @@ describe('getTaskBackend — regression: existing source types', () => {
 
   it('resolves jira source', () => {
     vi.mocked(ProjectService.getById).mockReturnValue(
-      makeProject('jira', JSON.stringify({ host: 'https://jira.example.com', project_key: 'TEST' })) as never,
+      makeProject(
+        'jira',
+        JSON.stringify({
+          host: 'https://jira.example.com',
+          project_key: 'TEST',
+        }),
+      ) as never,
     );
     const backend = getTaskBackend('proj-1');
     expect(backend.type).toBe('jira');
