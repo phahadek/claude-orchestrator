@@ -14,6 +14,7 @@ import type { AutoMerger } from '../github/AutoMerger';
 import { getMergeReadyPRs } from '../db/queries';
 import { NotionClient, normalizeNotionId } from '../notion/NotionClient';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
+import { GitHubClient } from '../github/GitHubClient';
 
 let _autoMerger: AutoMerger | null = null;
 export function setAutoMerger(merger: AutoMerger): void {
@@ -30,13 +31,84 @@ function isExistingDirectory(p: string): boolean {
   }
 }
 
+const OWNER_REPO_RE = /^[^/]+\/[^/]+$/;
+
+interface GithubTaskSourceConfig {
+  owner: string;
+  repo: string;
+  defaultMilestone?: number | null;
+}
+
+function parseGithubTaskSourceConfig(
+  raw: unknown,
+): { ok: true; config: GithubTaskSourceConfig } | { ok: false; error: string } {
+  if (typeof raw === 'string') {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return { ok: false, error: 'task_source_config is not valid JSON' };
+    }
+    return parseGithubTaskSourceConfig(parsed);
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return { ok: false, error: 'task_source_config must be a JSON object' };
+  }
+  const obj = raw as Record<string, unknown>;
+  const ownerRepo =
+    typeof obj.owner === 'string' && typeof obj.repo === 'string'
+      ? `${obj.owner}/${obj.repo}`
+      : typeof obj.ownerRepo === 'string'
+        ? obj.ownerRepo
+        : null;
+  if (!ownerRepo) {
+    return {
+      ok: false,
+      error: 'task_source_config must have owner and repo fields',
+    };
+  }
+  if (!OWNER_REPO_RE.test(ownerRepo)) {
+    return {
+      ok: false,
+      error: 'owner/repo must be in the format "owner/repo"',
+    };
+  }
+  const [owner, repo] = ownerRepo.split('/');
+  const defaultMilestone =
+    typeof obj.defaultMilestone === 'number'
+      ? obj.defaultMilestone
+      : obj.defaultMilestone == null
+        ? null
+        : undefined;
+  if (defaultMilestone === undefined && obj.defaultMilestone !== undefined) {
+    return {
+      ok: false,
+      error: 'task_source_config.defaultMilestone must be a number or null',
+    };
+  }
+  return { ok: true, config: { owner, repo, defaultMilestone } };
+}
+
+async function verifyGithubRepoAccess(
+  ownerRepo: string,
+): Promise<string | null> {
+  try {
+    const client = new GitHubClient();
+    await client.getRepo(ownerRepo);
+    return null;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `GitHub repo '${ownerRepo}' is not accessible: ${msg}`;
+  }
+}
+
 // ── Projects ─────────────────────────────────────────────────────────────────
 
 projectsRouter.get('/projects', (_req: Request, res: Response) => {
   res.json(ProjectService.list());
 });
 
-projectsRouter.post('/projects', (req: Request, res: Response) => {
+projectsRouter.post('/projects', async (req: Request, res: Response) => {
   const body = req.body as Record<string, unknown> | undefined;
   if (!body) {
     res.status(400).json({ error: 'Request body is required' });
@@ -57,7 +129,42 @@ projectsRouter.post('/projects', (req: Request, res: Response) => {
     return;
   }
 
-  const taskSource = body.taskSource === 'yaml' ? 'yaml' : 'notion';
+  const rawTaskSource = body.taskSource;
+  if (
+    rawTaskSource !== undefined &&
+    rawTaskSource !== 'notion' &&
+    rawTaskSource !== 'yaml' &&
+    rawTaskSource !== 'github'
+  ) {
+    res.status(400).json({
+      error: `taskSource must be 'notion', 'yaml', or 'github'`,
+    });
+    return;
+  }
+  const taskSource =
+    rawTaskSource === 'yaml'
+      ? 'yaml'
+      : rawTaskSource === 'github'
+        ? 'github'
+        : 'notion';
+
+  let taskSourceConfig: string | null = null;
+  if (taskSource === 'github') {
+    const parsed = parseGithubTaskSourceConfig(body.taskSourceConfig);
+    if (!parsed.ok) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    const repoError = await verifyGithubRepoAccess(
+      `${parsed.config.owner}/${parsed.config.repo}`,
+    );
+    if (repoError) {
+      res.status(400).json({ error: repoError });
+      return;
+    }
+    taskSourceConfig = JSON.stringify(parsed.config);
+  }
+
   const rawGitMode = body.gitMode;
   if (
     rawGitMode !== undefined &&
@@ -83,6 +190,7 @@ projectsRouter.post('/projects', (req: Request, res: Response) => {
     contextUrl: typeof body.contextUrl === 'string' ? body.contextUrl : null,
     githubRepo: typeof body.githubRepo === 'string' ? body.githubRepo : null,
     taskSource,
+    taskSourceConfig,
     gitMode,
     autoLaunchEnabled: body.autoLaunchEnabled === true,
     autoLaunchMilestoneId:
@@ -94,7 +202,7 @@ projectsRouter.post('/projects', (req: Request, res: Response) => {
   res.status(201).json(project);
 });
 
-projectsRouter.patch('/projects/:id', (req: Request, res: Response) => {
+projectsRouter.patch('/projects/:id', async (req: Request, res: Response) => {
   const id = String(req.params.id);
   const body = (req.body as Record<string, unknown>) ?? {};
 
@@ -119,7 +227,11 @@ projectsRouter.patch('/projects/:id', (req: Request, res: Response) => {
     patch.github_repo =
       typeof body.githubRepo === 'string' ? body.githubRepo : null;
   }
-  if (body.taskSource === 'notion' || body.taskSource === 'yaml') {
+  if (
+    body.taskSource === 'notion' ||
+    body.taskSource === 'yaml' ||
+    body.taskSource === 'github'
+  ) {
     patch.task_source = body.taskSource;
   }
   if ('autoLaunchEnabled' in body) {
@@ -211,6 +323,26 @@ projectsRouter.patch('/projects/:id', (req: Request, res: Response) => {
       return;
     }
   }
+  if ('taskSourceConfig' in body) {
+    if (body.taskSourceConfig === null) {
+      patch.task_source_config = null;
+    } else {
+      const parsed = parseGithubTaskSourceConfig(body.taskSourceConfig);
+      if (!parsed.ok) {
+        res.status(400).json({ error: parsed.error });
+        return;
+      }
+      const repoError = await verifyGithubRepoAccess(
+        `${parsed.config.owner}/${parsed.config.repo}`,
+      );
+      if (repoError) {
+        res.status(400).json({ error: repoError });
+        return;
+      }
+      patch.task_source_config = JSON.stringify(parsed.config);
+    }
+  }
+
   if (body.gitMode === 'github' || body.gitMode === 'local-only') {
     patch.git_mode = body.gitMode;
   } else if ('gitMode' in body && body.gitMode !== undefined) {
@@ -435,6 +567,55 @@ projectsRouter.get(
     const present = fs.existsSync(configFile);
     const config = loadOrchestratorConfig(dir);
     res.json({ present, config });
+  },
+);
+
+// ── GitHub milestones (for GitHub task source) ──────────────────────────────
+
+projectsRouter.get(
+  '/projects/:id/github-milestones',
+  async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const project = ProjectService.getById(id);
+    if (!project) {
+      res.status(404).json({ error: `Project '${id}' not found` });
+      return;
+    }
+    if (project.taskSource !== 'github') {
+      res.status(400).json({
+        error: `Project '${id}' is not configured for GitHub task source`,
+      });
+      return;
+    }
+    let ownerRepo: string;
+    try {
+      const cfg = project.taskSourceConfig
+        ? (JSON.parse(project.taskSourceConfig) as GithubTaskSourceConfig)
+        : null;
+      if (!cfg?.owner || !cfg?.repo) {
+        res
+          .status(400)
+          .json({ error: 'GitHub task source config is missing owner/repo' });
+        return;
+      }
+      ownerRepo = `${cfg.owner}/${cfg.repo}`;
+    } catch {
+      res.status(400).json({ error: 'GitHub task source config is malformed' });
+      return;
+    }
+    try {
+      const client = new GitHubClient();
+      const milestones = await client.listMilestones(ownerRepo, {
+        state: 'open',
+      });
+      res.json(milestones);
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'Failed to fetch GitHub milestones';
+      res.status(400).json({ error: message });
+    }
   },
 );
 

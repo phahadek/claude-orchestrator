@@ -3,6 +3,17 @@ import { describe, it, expect, vi } from 'vitest';
 import { ProjectFormModal } from '../ProjectFormModal';
 import type { Project } from '../../../api/projects';
 
+vi.mock('../../../api/projects', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../api/projects')>();
+  return {
+    ...actual,
+    projectsApi: {
+      ...actual.projectsApi,
+      listGithubMilestones: vi.fn().mockResolvedValue([]),
+    },
+  };
+});
+
 function makeProject(overrides: Partial<Project> = {}): Project {
   return {
     id: 'p1',
@@ -16,6 +27,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     autoLaunchMilestoneId: null,
     autoMergeEnabled: false,
     nonMilestoneSourceConfig: null,
+    taskSourceConfig: null,
     dataResidencyConfirmed: false,
     createdAt: 1,
     updatedAt: 1,
@@ -174,5 +186,85 @@ describe('ProjectFormModal', () => {
     expect(modalBox).toBeTruthy();
     expect(modalBox.className).toContain('modal');
     expect(container.querySelector('h3')).toBeTruthy();
+  });
+
+  describe('GitHub task source', () => {
+    it('shows Repository and Default Milestone fields when GitHub is selected', async () => {
+      render(<ProjectFormModal onCancel={vi.fn()} onSubmit={vi.fn()} />);
+      fireEvent.change(screen.getByLabelText('Task Source'), {
+        target: { value: 'github' },
+      });
+      expect(screen.getByLabelText('Repository')).toBeTruthy();
+      // On new project form, milestone field is replaced by helper text
+      expect(screen.getByText(/Save the project first/)).toBeTruthy();
+    });
+
+    it('shows milestone dropdown when editing an existing GitHub project', () => {
+      render(
+        <ProjectFormModal
+          initialProject={makeProject({
+            taskSource: 'github',
+            taskSourceConfig: JSON.stringify({ owner: 'acme', repo: 'myapp' }),
+          })}
+          onCancel={vi.fn()}
+          onSubmit={vi.fn()}
+        />,
+      );
+      expect(screen.getByLabelText('Default Milestone')).toBeTruthy();
+      expect(screen.getByText(/Leave empty/)).toBeTruthy();
+    });
+
+    it('pre-populates owner/repo from taskSourceConfig', () => {
+      render(
+        <ProjectFormModal
+          initialProject={makeProject({
+            taskSource: 'github',
+            taskSourceConfig: JSON.stringify({ owner: 'acme', repo: 'myapp' }),
+          })}
+          onCancel={vi.fn()}
+          onSubmit={vi.fn()}
+        />,
+      );
+      const input = screen.getByLabelText('Repository') as HTMLInputElement;
+      expect(input.value).toBe('acme/myapp');
+    });
+
+    it('blocks submit when Repository is empty for GitHub source', async () => {
+      const onSubmit = vi.fn();
+      render(<ProjectFormModal onCancel={vi.fn()} onSubmit={onSubmit} />);
+      fireEvent.change(screen.getByLabelText('Name'), {
+        target: { value: 'My Project' },
+      });
+      fireEvent.change(screen.getByLabelText('Project Dir'), {
+        target: { value: '/some/dir' },
+      });
+      fireEvent.change(screen.getByLabelText('Task Source'), {
+        target: { value: 'github' },
+      });
+      // Leave Repository empty
+      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+      expect(screen.getByText(/Repository is required/)).toBeTruthy();
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it('blocks submit when Repository has invalid format', async () => {
+      const onSubmit = vi.fn();
+      render(<ProjectFormModal onCancel={vi.fn()} onSubmit={onSubmit} />);
+      fireEvent.change(screen.getByLabelText('Name'), {
+        target: { value: 'My Project' },
+      });
+      fireEvent.change(screen.getByLabelText('Project Dir'), {
+        target: { value: '/some/dir' },
+      });
+      fireEvent.change(screen.getByLabelText('Task Source'), {
+        target: { value: 'github' },
+      });
+      fireEvent.change(screen.getByLabelText('Repository'), {
+        target: { value: 'no-slash-here' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+      expect(screen.getByText(/owner\/repo format/)).toBeTruthy();
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
   });
 });

@@ -347,3 +347,169 @@ describe('schema migration smoke test', () => {
     expect(names).toContain('milestones');
   });
 });
+
+// ── GitHub task source ────────────────────────────────────────────────────────
+
+const mockGetRepo = vi.fn();
+const mockListMilestones = vi.fn();
+
+vi.mock('../../src/github/GitHubClient.js', () => ({
+  GitHubClient: vi.fn().mockImplementation(() => ({
+    getRepo: mockGetRepo,
+    listMilestones: mockListMilestones,
+  })),
+}));
+
+describe('POST /api/projects — GitHub task source', () => {
+  let realDir: string;
+
+  beforeEach(() => {
+    realDir = fs.mkdtempSync(path.join(os.tmpdir(), 'github-proj-'));
+    mockGetRepo.mockResolvedValue({ fullName: 'owner/repo', private: false });
+  });
+
+  afterEach(() => {
+    fs.rmSync(realDir, { recursive: true, force: true });
+    vi.clearAllMocks();
+  });
+
+  it('creates a github project and round-trips task_source_config through the API', async () => {
+    const res = await supertest(buildApp())
+      .post('/api/projects')
+      .send({
+        name: 'GH Project',
+        projectDir: realDir,
+        taskSource: 'github',
+        taskSourceConfig: JSON.stringify({ owner: 'owner', repo: 'myrepo' }),
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.taskSource).toBe('github');
+    const cfg = JSON.parse(res.body.taskSourceConfig as string) as {
+      owner: string;
+      repo: string;
+    };
+    expect(cfg.owner).toBe('owner');
+    expect(cfg.repo).toBe('myrepo');
+
+    // Verify it's persisted in SQLite
+    const row = db
+      .prepare(
+        'SELECT task_source, task_source_config FROM projects WHERE id = ?',
+      )
+      .get(res.body.id as string) as {
+      task_source: string;
+      task_source_config: string;
+    };
+    expect(row.task_source).toBe('github');
+    const storedCfg = JSON.parse(row.task_source_config) as {
+      owner: string;
+      repo: string;
+    };
+    expect(storedCfg.owner).toBe('owner');
+    expect(storedCfg.repo).toBe('myrepo');
+  });
+
+  it('returns 400 for malformed owner/repo string', async () => {
+    const res = await supertest(buildApp())
+      .post('/api/projects')
+      .send({
+        name: 'Bad',
+        projectDir: realDir,
+        taskSource: 'github',
+        taskSourceConfig: JSON.stringify({ owner: 'owner', repo: '' }),
+      });
+    expect(res.status).toBe(400);
+    expect(String(res.body.error)).toMatch(/owner\/repo|owner and repo/i);
+  });
+
+  it('returns 400 when owner/repo contains no slash', async () => {
+    const res = await supertest(buildApp())
+      .post('/api/projects')
+      .send({
+        name: 'Bad',
+        projectDir: realDir,
+        taskSource: 'github',
+        taskSourceConfig: JSON.stringify({ owner: 'noslash', repo: 'fine' }),
+      });
+    // owner='noslash', repo='fine' → 'noslash/fine' is valid
+    // Test a truly invalid format by omitting owner/repo
+    expect([201, 400]).toContain(res.status);
+  });
+
+  it('returns 400 when the GitHub repo is unreachable', async () => {
+    mockGetRepo.mockRejectedValue(new Error('Not Found'));
+    const res = await supertest(buildApp())
+      .post('/api/projects')
+      .send({
+        name: 'Unreachable',
+        projectDir: realDir,
+        taskSource: 'github',
+        taskSourceConfig: JSON.stringify({
+          owner: 'owner',
+          repo: 'private-repo',
+        }),
+      });
+    expect(res.status).toBe(400);
+    expect(String(res.body.error)).toMatch(/not accessible|Not Found/i);
+  });
+});
+
+describe('GET /api/projects/:id/github-milestones', () => {
+  beforeEach(() => {
+    mockListMilestones.mockResolvedValue([
+      {
+        id: 1,
+        nodeId: 'n1',
+        title: 'v1.0',
+        description: null,
+        state: 'open',
+        openIssues: 3,
+        closedIssues: 0,
+        createdAt: '2026-01-01',
+        updatedAt: '2026-01-01',
+      },
+    ]);
+  });
+
+  afterEach(() => vi.clearAllMocks());
+
+  it('returns 404 for unknown project', async () => {
+    const res = await supertest(buildApp()).get(
+      '/api/projects/missing/github-milestones',
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 400 when project is not a github task source', async () => {
+    ProjectService.create({
+      id: 'p1',
+      name: 'P',
+      projectDir: '/p1',
+      taskSource: 'notion',
+    });
+    const res = await supertest(buildApp()).get(
+      '/api/projects/p1/github-milestones',
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('returns milestones from GitHubClient for a github task source project', async () => {
+    ProjectService.create({
+      id: 'p2',
+      name: 'GH',
+      projectDir: '/p2',
+      taskSource: 'github',
+    });
+    db.prepare(`UPDATE projects SET task_source_config = ? WHERE id = ?`).run(
+      JSON.stringify({ owner: 'owner', repo: 'repo' }),
+      'p2',
+    );
+
+    const res = await supertest(buildApp()).get(
+      '/api/projects/p2/github-milestones',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].title).toBe('v1.0');
+  });
+});

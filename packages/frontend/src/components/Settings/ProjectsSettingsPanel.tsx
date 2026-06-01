@@ -50,6 +50,19 @@ function toCreatePayload(values: ProjectFormValues) {
         rawCfg,
       ) as import('../../api/projects').NonMilestoneSourceConfig)
     : null;
+
+  let taskSourceConfig: string | null = null;
+  if (values.taskSource === 'github') {
+    const ownerRepo = values.githubOwnerRepo.trim();
+    const [owner, repo] = ownerRepo.split('/');
+    const cfg: import('../../api/projects').GithubTaskSourceConfig = {
+      owner,
+      repo,
+      defaultMilestone: values.githubDefaultMilestone ?? null,
+    };
+    taskSourceConfig = JSON.stringify(cfg);
+  }
+
   return {
     name: values.name.trim(),
     projectDir: values.projectDir.trim(),
@@ -57,6 +70,7 @@ function toCreatePayload(values: ProjectFormValues) {
     githubRepo:
       values.gitMode !== 'local-only' ? values.githubRepo.trim() || null : null,
     taskSource: values.taskSource,
+    taskSourceConfig,
     gitMode: values.gitMode,
     autoLaunchEnabled: values.autoLaunchEnabled,
     autoLaunchMilestoneId: values.autoLaunchMilestoneId.trim() || null,

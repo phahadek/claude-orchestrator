@@ -59,6 +59,7 @@ export interface CreateProjectInput {
   contextUrl?: string | null;
   githubRepo?: string | null;
   taskSource?: TaskSource;
+  taskSourceConfig?: string | null;
   gitMode?: GitMode;
   autoLaunchEnabled?: boolean;
   autoLaunchMilestoneId?: string | null;
@@ -148,6 +149,7 @@ export const ProjectService = {
       context_url: input.contextUrl ?? null,
       github_repo: input.githubRepo ?? null,
       task_source: input.taskSource ?? 'notion',
+      task_source_config: input.taskSourceConfig ?? null,
       git_mode: input.gitMode ?? 'github',
       auto_launch_enabled: input.autoLaunchEnabled ? 1 : 0,
       auto_launch_milestone_id: input.autoLaunchMilestoneId ?? null,
