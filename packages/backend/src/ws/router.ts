@@ -136,7 +136,8 @@ export function handleMessage(
       let resolvedMilestoneId: string | null = msg.milestoneId;
       if (msg.milestoneId) {
         const milestoneRow = getMilestoneById(msg.milestoneId);
-        if (milestoneRow?.source_id) resolvedMilestoneId = milestoneRow.source_id;
+        if (milestoneRow?.source_id)
+          resolvedMilestoneId = milestoneRow.source_id;
       }
       backend
         .fetchReadyTasks(resolvedMilestoneId, msg.skipCache)
