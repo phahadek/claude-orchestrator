@@ -1,6 +1,10 @@
 import type { GitHubClient } from './GitHubClient';
 import { getAllProjects } from '../config';
-import { getPRByNumber, upsertPullRequest, lookupSessionByBranch } from '../db/queries';
+import {
+  getPRByNumber,
+  upsertPullRequest,
+  lookupSessionByBranch,
+} from '../db/queries';
 
 /**
  * Boot-time sweep that ensures every open GitHub PR has a row in pull_requests.
@@ -11,7 +15,9 @@ export async function runPRBootSweep(github: GitHubClient): Promise<void> {
   const projects = getAllProjects().filter((p) => p.githubRepo);
   if (projects.length === 0) return;
 
-  console.log(`[PRBootSweep] scanning ${projects.length} project(s) for missing PR rows`);
+  console.log(
+    `[PRBootSweep] scanning ${projects.length} project(s) for missing PR rows`,
+  );
 
   let inserted = 0;
   for (const project of projects) {
@@ -20,7 +26,10 @@ export async function runPRBootSweep(github: GitHubClient): Promise<void> {
     try {
       openPRs = await github.listOpenPRs(repo);
     } catch (err) {
-      console.warn(`[PRBootSweep] failed to list open PRs for ${repo}:`, (err as Error).message);
+      console.warn(
+        `[PRBootSweep] failed to list open PRs for ${repo}:`,
+        (err as Error).message,
+      );
       continue;
     }
 
@@ -62,7 +71,9 @@ export async function runPRBootSweep(github: GitHubClient): Promise<void> {
           `[PRBootSweep] inserted PR #${pr.id} (${repo}) and linked session ${sessionMatch.session_id.slice(0, 8)} via head_branch "${pr.headBranch}"`,
         );
       } else {
-        console.log(`[PRBootSweep] inserted missing PR #${pr.id} (${repo}) — no session match for head_branch "${pr.headBranch}"`);
+        console.log(
+          `[PRBootSweep] inserted missing PR #${pr.id} (${repo}) — no session match for head_branch "${pr.headBranch}"`,
+        );
       }
     }
   }

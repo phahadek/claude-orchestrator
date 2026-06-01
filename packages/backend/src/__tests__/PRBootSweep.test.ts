@@ -14,7 +14,11 @@ vi.mock('../config.js', () => ({
 
 import { db } from '../db/db.js';
 import { getAllProjects } from '../config.js';
-import { insertSession, getPRByNumber, upsertPullRequest } from '../db/queries.js';
+import {
+  insertSession,
+  getPRByNumber,
+  upsertPullRequest,
+} from '../db/queries.js';
 import { runPRBootSweep } from '../github/PRBootSweep.js';
 import type { GitHubClient } from '../github/GitHubClient.js';
 import type { PullRequest } from '../github/types.js';
@@ -77,9 +81,15 @@ beforeEach(() => {
 describe('runPRBootSweep', () => {
   it('inserts a missing PR row with session_id when head_branch matches', async () => {
     mockGetAllProjects.mockReturnValue([
-      { githubRepo: 'owner/repo', id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      { githubRepo: 'owner/repo', id: 'proj-1' } as ReturnType<
+        typeof getAllProjects
+      >[number],
     ]);
-    insertTestSession('sess-aaaaaaaa', '/worktrees/w1/feature/something', 'task-x');
+    insertTestSession(
+      'sess-aaaaaaaa',
+      '/worktrees/w1/feature/something',
+      'task-x',
+    );
     const pr = makePR();
     const github = makeGithubClient([pr]);
 
@@ -93,7 +103,9 @@ describe('runPRBootSweep', () => {
 
   it('inserts a missing PR row with null session_id when no session matches', async () => {
     mockGetAllProjects.mockReturnValue([
-      { githubRepo: 'owner/repo', id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      { githubRepo: 'owner/repo', id: 'proj-1' } as ReturnType<
+        typeof getAllProjects
+      >[number],
     ]);
     // No sessions inserted
     const pr = makePR({ headBranch: 'feature/unknown-branch' });
@@ -108,7 +120,9 @@ describe('runPRBootSweep', () => {
 
   it('does not overwrite an existing PR row', async () => {
     mockGetAllProjects.mockReturnValue([
-      { githubRepo: 'owner/repo', id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      { githubRepo: 'owner/repo', id: 'proj-1' } as ReturnType<
+        typeof getAllProjects
+      >[number],
     ]);
     const now = '2026-01-01T00:00:00Z';
     upsertPullRequest({
@@ -150,18 +164,24 @@ describe('runPRBootSweep', () => {
 
   it('skips projects with no githubRepo', async () => {
     mockGetAllProjects.mockReturnValue([
-      { githubRepo: null, id: 'proj-local' } as unknown as ReturnType<typeof getAllProjects>[number],
+      { githubRepo: null, id: 'proj-local' } as unknown as ReturnType<
+        typeof getAllProjects
+      >[number],
     ]);
     const github = makeGithubClient([makePR()]);
 
     await runPRBootSweep(github);
 
-    expect((github.listOpenPRs as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
+    expect(
+      (github.listOpenPRs as ReturnType<typeof vi.fn>).mock.calls.length,
+    ).toBe(0);
   });
 
   it('handles null session_id when multiple sessions match (ambiguous)', async () => {
     mockGetAllProjects.mockReturnValue([
-      { githubRepo: 'owner/repo', id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      { githubRepo: 'owner/repo', id: 'proj-1' } as ReturnType<
+        typeof getAllProjects
+      >[number],
     ]);
     insertTestSession('sess-11111111', '/worktrees/w1/feature/ambiguous');
     insertTestSession('sess-22222222', '/worktrees/w2/feature/ambiguous');
@@ -177,14 +197,23 @@ describe('runPRBootSweep', () => {
 
   it('continues to next project if GitHub API throws for one repo', async () => {
     mockGetAllProjects.mockReturnValue([
-      { githubRepo: 'owner/broken', id: 'proj-broken' } as ReturnType<typeof getAllProjects>[number],
-      { githubRepo: 'owner/good', id: 'proj-good' } as ReturnType<typeof getAllProjects>[number],
+      { githubRepo: 'owner/broken', id: 'proj-broken' } as ReturnType<
+        typeof getAllProjects
+      >[number],
+      { githubRepo: 'owner/good', id: 'proj-good' } as ReturnType<
+        typeof getAllProjects
+      >[number],
     ]);
     const github = {
       listOpenPRs: vi
         .fn()
         .mockRejectedValueOnce(new Error('API error'))
-        .mockResolvedValueOnce([makePR({ url: 'https://github.com/owner/good/pull/42', repo: 'owner/good' })]),
+        .mockResolvedValueOnce([
+          makePR({
+            url: 'https://github.com/owner/good/pull/42',
+            repo: 'owner/good',
+          }),
+        ]),
     } as unknown as GitHubClient;
 
     await expect(runPRBootSweep(github)).resolves.not.toThrow();

@@ -9,7 +9,12 @@ vi.mock('../db/db.js', async () => {
 });
 
 import { db } from '../db/db.js';
-import { lookupSessionByBranch, insertSession, upsertPullRequest, getPRByNumber } from '../db/queries.js';
+import {
+  lookupSessionByBranch,
+  insertSession,
+  upsertPullRequest,
+  getPRByNumber,
+} from '../db/queries.js';
 
 function insertTestSession(
   sessionId: string,
@@ -39,7 +44,11 @@ beforeEach(() => {
 
 describe('lookupSessionByBranch', () => {
   it('returns session when exactly one worktree_path matches', () => {
-    insertTestSession('sess-aabbccdd', '/worktrees/abc123/feature/my-task', 'task-001');
+    insertTestSession(
+      'sess-aabbccdd',
+      '/worktrees/abc123/feature/my-task',
+      'task-001',
+    );
     const match = lookupSessionByBranch('feature/my-task');
     expect(match).not.toBeNull();
     expect(match!.session_id).toBe('sess-aabbccdd');
