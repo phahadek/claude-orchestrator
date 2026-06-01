@@ -130,6 +130,9 @@ export class AutoMerger {
     }
     const approvedPRs = getApprovedOpenPRs();
     for (const pr of approvedPRs) {
+      // run() checks pause_reason too, but filtering here avoids spawning the
+      // active-set entry for a goroutine that would exit immediately.
+      if (pr.pause_reason !== null) continue;
       this.attempt(pr.pr_number, pr.repo);
     }
 
