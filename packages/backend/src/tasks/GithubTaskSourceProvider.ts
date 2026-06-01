@@ -149,14 +149,9 @@ export class GithubTaskSourceProvider implements TaskBackend {
         }
         milestone = n;
       } else {
-        // milestoneId may have already been resolved to source_id by the caller (e.g. ws/router.ts)
-        const n = parseInt(milestoneId, 10);
-        if (isNaN(n)) {
-          throw new Error(
-            `[GithubTaskSourceProvider] milestone not found: ${milestoneId}`,
-          );
-        }
-        milestone = n;
+        throw new Error(
+          `[GithubTaskSourceProvider] milestone not found: ${milestoneId}`,
+        );
       }
     }
 

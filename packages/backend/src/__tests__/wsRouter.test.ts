@@ -20,6 +20,11 @@ describe('ws/router.ts — fetch_tasks milestone-based routing', () => {
   it('forwards milestoneId (not boardId) to backend.fetchReadyTasks()', () => {
     expect(routerSource).toMatch(/\.fetchReadyTasks\(msg\.milestoneId/);
   });
+
+  it('does not pre-translate milestoneId to source_id (no getMilestoneById call)', () => {
+    expect(routerSource).not.toMatch(/getMilestoneById/);
+    expect(routerSource).not.toMatch(/resolvedMilestoneId/);
+  });
 });
 
 describe('ws/router.ts — dispatch empty taskUrl rejection', () => {
