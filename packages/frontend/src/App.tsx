@@ -114,6 +114,8 @@ export default function App() {
     lastAutofixEvent,
     lastReviewStartedEvent,
     lastCiBillingBlockedEvent,
+    lastSessionStartedEvent,
+    lastSessionEndedEvent,
   } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -435,6 +437,55 @@ export default function App() {
       return next;
     });
   }, [lastTaskUpdate]);
+
+  // In-place update when a session starts: mark the matching task's codeSession as starting.
+  // This runs in addition to the task_updated path so the panel reflects the change immediately
+  // even when task_updated is suppressed (display-status dedup).
+  useEffect(() => {
+    if (!lastSessionStartedEvent) return;
+    const { taskId, sessionId } = lastSessionStartedEvent;
+    setTaskViews((prev) => {
+      const idx = prev.findIndex((t) => t.taskId === taskId);
+      if (idx < 0) return prev;
+      const task = prev[idx];
+      if (task.codeSession?.sessionId === sessionId) return prev;
+      const next = [...prev];
+      next[idx] = {
+        ...task,
+        codeSession: task.codeSession ?? {
+          sessionId,
+          status: 'starting',
+          startedAt: Date.now(),
+          endedAt: null,
+          lastMessage: '',
+          inputTokens: 0,
+          outputTokens: 0,
+        },
+      };
+      return next;
+    });
+  }, [lastSessionStartedEvent]);
+
+  // In-place update when a session ends: mark codeSession as ended and carry prUrl.
+  useEffect(() => {
+    if (!lastSessionEndedEvent) return;
+    const { taskId, status, prUrl } = lastSessionEndedEvent;
+    setTaskViews((prev) => {
+      const idx = prev.findIndex((t) => t.taskId === taskId);
+      if (idx < 0) return prev;
+      const task = prev[idx];
+      if (task.codeSession?.endedAt != null) return prev;
+      const next = [...prev];
+      next[idx] = {
+        ...task,
+        codeSession: task.codeSession
+          ? { ...task.codeSession, status, endedAt: Date.now() }
+          : null,
+        pr: prUrl && task.pr ? { ...task.pr, prUrl } : task.pr,
+      };
+      return next;
+    });
+  }, [lastSessionEndedEvent]);
 
   // Passed to TaskList so it can apply optimistic status updates without a full re-fetch
   const handleTaskOptimisticDispatch = useCallback((taskIds: string[]) => {

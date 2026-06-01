@@ -53,6 +53,7 @@ export function sendInitialStateBurst(
       totalOutputTokens: s.total_output_tokens ?? 0,
       model: s.model ?? null,
       ...(s.pr_url != null && { prUrl: s.pr_url }),
+      ...(s.task_id != null && { taskId: s.task_id }),
     });
     send({
       type: 'session_status',
