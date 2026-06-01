@@ -45,6 +45,24 @@
   text-decoration: underline;
 }
 
+.sessionLink,
+.reviewerLink {
+  font-size: 0.78rem;
+  color: #89b4fa;
+  opacity: 0.8;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.sessionLink:hover,
+.reviewerLink:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
+
 .date {
   font-size: 0.78rem;
   color: #6c7086;

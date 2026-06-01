@@ -110,6 +110,30 @@ describe('PRPanel', () => {
       expect(screen.queryByText(/clear merged\/closed/i)).toBeNull();
     });
   });
+
+  it('renders merged PR with mergeState=ci_running as compact PRHistoryRow, not WorkItemCard', async () => {
+    const pr = makePR({
+      prNumber: 468,
+      title: 'feat: stabilization',
+      state: 'merged',
+      mergeState: 'ci_running',
+      pauseReason: null,
+    });
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [pr],
+    });
+
+    render(<PRPanel activeProjectId="proj-1" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('feat: stabilization')).toBeDefined();
+      // Compact row does not show Merge or Run Review buttons
+      expect(screen.queryByRole('button', { name: /merge/i })).toBeNull();
+      expect(screen.queryByRole('button', { name: /run review/i })).toBeNull();
+    });
+  });
 });
 
 describe('PRPanel — inflight state cleared by WS events', () => {
@@ -619,7 +643,7 @@ describe('PRPanel — differential routing (WorkItemCard vs PRHistoryRow)', () =
     });
   });
 
-  it('routes a merged PR with pauseReason set to WorkItemCard (not compact)', async () => {
+  it('routes a merged PR with pauseReason set to PRHistoryRow (compact)', async () => {
     const pausedMergedPR = makePR({
       prNumber: 13,
       title: 'Paused Merged PR',
@@ -629,15 +653,13 @@ describe('PRPanel — differential routing (WorkItemCard vs PRHistoryRow)', () =
     setupFetchWithPRs([pausedMergedPR]);
     render(<PRPanel activeProjectId="proj-1" />);
     await waitFor(() => {
-      // WorkItemCard is rendered — no link-only compact row
-      expect(screen.getByText('Paused Merged PR')).toBeDefined();
-      // Should not have a link (PRHistoryRow uses <a>) as the primary title element
+      // Terminal PRs render compact regardless of pauseReason
       const titleEl = screen.getByText('Paused Merged PR');
-      expect(titleEl.tagName.toLowerCase()).not.toBe('a');
+      expect(titleEl.tagName.toLowerCase()).toBe('a');
     });
   });
 
-  it('routes a merged PR with ci_failed mergeState to WorkItemCard (not compact)', async () => {
+  it('routes a merged PR with ci_failed mergeState to PRHistoryRow (compact)', async () => {
     const ciFailedMergedPR = makePR({
       prNumber: 14,
       title: 'CI Failed PR',
@@ -648,9 +670,9 @@ describe('PRPanel — differential routing (WorkItemCard vs PRHistoryRow)', () =
     setupFetchWithPRs([ciFailedMergedPR]);
     render(<PRPanel activeProjectId="proj-1" />);
     await waitFor(() => {
-      expect(screen.getByText('CI Failed PR')).toBeDefined();
+      // Terminal PRs render compact regardless of mergeState
       const titleEl = screen.getByText('CI Failed PR');
-      expect(titleEl.tagName.toLowerCase()).not.toBe('a');
+      expect(titleEl.tagName.toLowerCase()).toBe('a');
     });
   });
 

@@ -535,21 +535,19 @@ export function PRPanel({
                   : `local-${item.sessionId}`;
               const prNumber = item.type === 'pr' ? item.prNumber : 0;
 
-              // Concluded PRs with no active flags render as compact rows
+              // Terminal PRs always render as compact rows
               const useCompact =
                 item.type === 'pr' &&
-                (item.state === 'merged' || item.state === 'closed') &&
-                !item.pauseReason &&
-                !(
-                  item.mergeState &&
-                  ['ci_failed', 'unstable', 'ci_running'].includes(
-                    item.mergeState,
-                  )
-                ) &&
-                !reviewInFlight.has(item.prNumber);
+                (item.state === 'merged' || item.state === 'closed');
 
               if (useCompact) {
-                return <PRHistoryRow key={itemKey} pr={item as PRWorkItem} />;
+                return (
+                  <PRHistoryRow
+                    key={itemKey}
+                    pr={item as PRWorkItem}
+                    onViewSession={onViewSession}
+                  />
+                );
               }
 
               return (

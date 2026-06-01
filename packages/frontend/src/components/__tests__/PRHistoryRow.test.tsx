@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react';
-import { describe, it, expect } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
 import { PRHistoryRow } from '../PRHistoryRow';
 import type { PRWorkItem } from '../WorkItemCard';
 
@@ -79,5 +79,62 @@ describe('PRHistoryRow', () => {
     const pr = makePR({ state: 'merged', updatedAt: oneHourAgo });
     render(<PRHistoryRow pr={pr} />);
     expect(screen.getByText(/Merged today/)).toBeDefined();
+  });
+
+  it('renders Coder button when sessionId is present and calls onViewSession', () => {
+    const onViewSession = vi.fn();
+    const pr = makePR({ sessionId: 'session-abc' });
+    render(<PRHistoryRow pr={pr} onViewSession={onViewSession} />);
+    const btn = screen.getByRole('button', { name: 'Coder' });
+    expect(btn).toBeDefined();
+    fireEvent.click(btn);
+    expect(onViewSession).toHaveBeenCalledWith('session-abc');
+  });
+
+  it('renders Reviewer button when reviewSessionId is present and calls onViewSession', () => {
+    const onViewSession = vi.fn();
+    const pr = makePR({ reviewSessionId: 'session-xyz' });
+    render(<PRHistoryRow pr={pr} onViewSession={onViewSession} />);
+    const btn = screen.getByRole('button', { name: 'Reviewer' });
+    expect(btn).toBeDefined();
+    fireEvent.click(btn);
+    expect(onViewSession).toHaveBeenCalledWith('session-xyz');
+  });
+
+  it('does not render Coder button when sessionId is null', () => {
+    const onViewSession = vi.fn();
+    const pr = makePR({ sessionId: null });
+    render(<PRHistoryRow pr={pr} onViewSession={onViewSession} />);
+    expect(screen.queryByRole('button', { name: 'Coder' })).toBeNull();
+  });
+
+  it('does not render Reviewer button when reviewSessionId is null', () => {
+    const onViewSession = vi.fn();
+    const pr = makePR({ reviewSessionId: null });
+    render(<PRHistoryRow pr={pr} onViewSession={onViewSession} />);
+    expect(screen.queryByRole('button', { name: 'Reviewer' })).toBeNull();
+  });
+
+  it('does not render Coder/Reviewer buttons when onViewSession is not provided', () => {
+    const pr = makePR({
+      sessionId: 'session-abc',
+      reviewSessionId: 'session-xyz',
+    });
+    render(<PRHistoryRow pr={pr} />);
+    expect(screen.queryByRole('button', { name: 'Coder' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reviewer' })).toBeNull();
+  });
+
+  it('still renders Notion task link alongside session links (regression guard)', () => {
+    const onViewSession = vi.fn();
+    const pr = makePR({
+      notionTaskId: 'abc-123',
+      sessionId: 'session-abc',
+      reviewSessionId: 'session-xyz',
+    });
+    render(<PRHistoryRow pr={pr} onViewSession={onViewSession} />);
+    expect(screen.getByRole('link', { name: 'Task' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Coder' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Reviewer' })).toBeDefined();
   });
 });
