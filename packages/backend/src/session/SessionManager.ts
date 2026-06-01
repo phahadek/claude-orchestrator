@@ -706,7 +706,10 @@ export class SessionManager extends EventEmitter {
         }
       }
 
-      const mcpConfigPath = writeMcpConfig(worktreePath, orchConfig.mcp_servers);
+      const mcpConfigPath = writeMcpConfig(
+        worktreePath,
+        orchConfig.mcp_servers,
+      );
       if (mcpConfigPath) {
         console.log(
           `[SessionManager] wrote MCP config to ${mcpConfigPath} for ${sessionId.slice(0, 8)}`,
@@ -1205,7 +1208,11 @@ export class SessionManager extends EventEmitter {
     }
 
     // Remove the per-session MCP config before removing the worktree.
-    const mcpConfigFile = path.join(worktreePath, '.claude', 'orchestrator-mcp.json');
+    const mcpConfigFile = path.join(
+      worktreePath,
+      '.claude',
+      'orchestrator-mcp.json',
+    );
     try {
       if (fs.existsSync(mcpConfigFile)) {
         fs.unlinkSync(mcpConfigFile);

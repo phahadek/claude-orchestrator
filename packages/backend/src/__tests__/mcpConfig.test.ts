@@ -91,7 +91,9 @@ describe('writeMcpConfig', () => {
       github: { type: 'http', url: 'https://api.githubcopilot.com/mcp/' },
     };
     const filePath = writeMcpConfig(tmpDir, mcpServers);
-    expect(filePath).toBe(path.join(tmpDir, '.claude', 'orchestrator-mcp.json'));
+    expect(filePath).toBe(
+      path.join(tmpDir, '.claude', 'orchestrator-mcp.json'),
+    );
     const written = JSON.parse(fs.readFileSync(filePath!, 'utf-8'));
     expect(written).toEqual({ mcpServers });
   });
