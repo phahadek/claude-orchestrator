@@ -90,6 +90,8 @@ function baseStoreReturn(sessions: object[] = []) {
     lastAutofixEvent: null,
     lastReviewStartedEvent: null,
     lastCiBillingBlockedEvent: null,
+    lastSessionStartedEvent: null,
+    lastSessionEndedEvent: null,
   };
 }
 

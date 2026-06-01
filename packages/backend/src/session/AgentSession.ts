@@ -340,6 +340,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               type: 'session_ended',
               sessionId: this.sessionId,
               status,
+              ...(this.taskId && { taskId: this.taskId }),
             });
           }
         }
@@ -857,7 +858,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       }
     }
 
-    this.broadcast({ type: 'pr_created', sessionId: this.sessionId, prUrl });
+    this.broadcast({ type: 'pr_created', sessionId: this.sessionId, prUrl, ...(this.taskId && { taskId: this.taskId }) });
     this.emit('pr_opened', {
       prNumber,
       repo,
@@ -1090,6 +1091,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           type: 'session_ended',
           sessionId: this.sessionId,
           status: 'killed',
+          ...(this.taskId && { taskId: this.taskId }),
         });
       }
     }

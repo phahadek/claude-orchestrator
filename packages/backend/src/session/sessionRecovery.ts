@@ -270,6 +270,7 @@ export async function recoverSession(
     sessionId,
     status: 'done',
     ...(prUrl ? { prUrl } : {}),
+    ...(taskId && { taskId }),
   });
 
   if (sessionType !== 'review') {

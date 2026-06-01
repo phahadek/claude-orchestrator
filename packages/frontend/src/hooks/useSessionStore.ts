@@ -178,6 +178,16 @@ export function useSessionStore() {
     message: string;
     receivedAt: number;
   } | null>(null);
+  const [lastSessionStartedEvent, setLastSessionStartedEvent] = useState<{
+    taskId: string;
+    sessionId: string;
+  } | null>(null);
+  const [lastSessionEndedEvent, setLastSessionEndedEvent] = useState<{
+    taskId: string;
+    sessionId: string;
+    status: string;
+    prUrl?: string;
+  } | null>(null);
 
   const dispatch = useCallback((msg: ServerMessage) => {
     setSynced(true);
@@ -370,14 +380,11 @@ export function useSessionStore() {
       });
       setTaskListRefreshTrigger((n) => n + 1);
     }
-    if (msg.type === 'session_started') {
-      setTaskListRefreshTrigger((n) => n + 1);
+    if (msg.type === 'session_started' && msg.taskId) {
+      setLastSessionStartedEvent({ taskId: msg.taskId, sessionId: msg.sessionId });
     }
-    if (msg.type === 'session_ended') {
-      setTaskListRefreshTrigger((n) => n + 1);
-    }
-    if (msg.type === 'task_status_changed') {
-      setTaskListRefreshTrigger((n) => n + 1);
+    if (msg.type === 'session_ended' && msg.taskId) {
+      setLastSessionEndedEvent({ taskId: msg.taskId, sessionId: msg.sessionId, status: msg.status, prUrl: msg.prUrl });
     }
     if (msg.type === 'task_updated') {
       setLastTaskUpdate(msg.task);
@@ -632,5 +639,7 @@ export function useSessionStore() {
     lastAutofixEvent,
     lastReviewStartedEvent,
     lastCiBillingBlockedEvent,
+    lastSessionStartedEvent,
+    lastSessionEndedEvent,
   };
 }

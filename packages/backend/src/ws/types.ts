@@ -34,6 +34,8 @@ export interface SessionState {
   model?: string | null;
   /** PR URL linked to this session, resolved from the pull_requests join. */
   prUrl?: string;
+  /** Notion task ID this session belongs to — enables targeted in-place task updates. */
+  taskId?: string;
 }
 
 /** Full live-state snapshot of a task, sent in task_updated WS messages. */
@@ -119,8 +121,8 @@ export type ServerMessage =
       sessionId: string;
       denials: PermissionDenial[];
     }
-  | { type: 'session_ended'; sessionId: string; status: string; prUrl?: string }
-  | { type: 'pr_created'; sessionId: string; prUrl: string }
+  | { type: 'session_ended'; sessionId: string; status: string; prUrl?: string; taskId?: string }
+  | { type: 'pr_created'; sessionId: string; prUrl: string; taskId?: string }
   | {
       type: 'session_updated';
       sessionId: string;

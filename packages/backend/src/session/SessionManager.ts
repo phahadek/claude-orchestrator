@@ -365,14 +365,19 @@ export class SessionManager extends EventEmitter {
     const liveSession = this.sessions.get(sessionId);
     if (liveSession) liveSession.hasEnded = true;
 
-    // 3. Emit session_ended WS broadcast
+    // 3. Look up session row for taskId (already written by step 1)
+    const row = getSession(sessionId);
+    const taskId = row?.task_id ?? undefined;
+
+    // 4. Emit session_ended WS broadcast
     this.emit('message', {
       type: 'session_ended',
       sessionId,
       status,
+      ...(taskId && { taskId }),
     } satisfies ServerMessage);
 
-    // 4. Record audit_log event capturing the cause
+    // 5. Record audit_log event capturing the cause
     recordEvent({
       event_type: 'session_errored',
       actor_type: 'system',
@@ -382,26 +387,25 @@ export class SessionManager extends EventEmitter {
       payload: { sessionId, status, reason },
     });
 
-    // 5. Look up session to determine task and project
-    const row = getSession(sessionId);
+    // 7. Update Notion task status for standard sessions
     if (!row || row.session_type !== 'standard' || !row.task_id) return;
 
     const notionStatus = BLOCKED_REASONS.has(reason)
       ? '🔴 Blocked'
       : '🗂️ Ready';
-    const taskId = row.task_id;
+    const notionTaskId = row.task_id;
     const projectId = row.project_id ?? '';
 
-    // 6. Update Notion task status (fire-and-forget; failures logged, not thrown)
+    // Update Notion task status (fire-and-forget; failures logged, not thrown)
     getTaskBackend(projectId)
-      .updateStatus(taskId, notionStatus, { source: 'orchestrator', sessionId })
+      .updateStatus(notionTaskId, notionStatus, { source: 'orchestrator', sessionId })
       .then(() => {
         this.emit('message', {
           type: 'task_status_changed',
-          notionTaskId: taskId,
+          notionTaskId,
           newStatus: notionStatus,
         } satisfies ServerMessage);
-        emitTaskUpdated(taskId);
+        emitTaskUpdated(notionTaskId);
       })
       .catch((e) =>
         console.error(
@@ -816,6 +820,7 @@ export class SessionManager extends EventEmitter {
       project_id: projectId,
       totalInputTokens: 0,
       totalOutputTokens: 0,
+      ...(sessionTaskId && { taskId: sessionTaskId }),
     } satisfies ServerMessage);
 
     return sessionId;
@@ -1471,6 +1476,7 @@ export class SessionManager extends EventEmitter {
       taskName: taskUrl,
       notionTaskUrl: taskUrl,
       started_at: startedAt,
+      ...(taskId && { taskId }),
     } satisfies ServerMessage);
 
     this.sessions.set(newSessionId, session);
