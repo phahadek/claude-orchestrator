@@ -196,9 +196,7 @@ describe('ProjectFormModal', () => {
       });
       expect(screen.getByLabelText('Repository')).toBeTruthy();
       // On new project form, milestone field is replaced by helper text
-      expect(
-        screen.getByText(/Save the project first/),
-      ).toBeTruthy();
+      expect(screen.getByText(/Save the project first/)).toBeTruthy();
     });
 
     it('shows milestone dropdown when editing an existing GitHub project', () => {

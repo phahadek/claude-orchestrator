@@ -254,7 +254,11 @@ export function ProjectFormModal({
                 const val = e.target.value;
                 update(
                   'taskSource',
-                  val === 'yaml' ? 'yaml' : val === 'github' ? 'github' : 'notion',
+                  val === 'yaml'
+                    ? 'yaml'
+                    : val === 'github'
+                      ? 'github'
+                      : 'notion',
                 );
               }}
             >
@@ -267,7 +271,10 @@ export function ProjectFormModal({
           {values.taskSource === 'github' && (
             <>
               <div className={styles.formField}>
-                <label htmlFor="proj-github-owner-repo" className={styles.formLabel}>
+                <label
+                  htmlFor="proj-github-owner-repo"
+                  className={styles.formLabel}
+                >
                   Repository
                 </label>
                 <input

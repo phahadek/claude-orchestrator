@@ -89,7 +89,9 @@ function parseGithubTaskSourceConfig(
   return { ok: true, config: { owner, repo, defaultMilestone } };
 }
 
-async function verifyGithubRepoAccess(ownerRepo: string): Promise<string | null> {
+async function verifyGithubRepoAccess(
+  ownerRepo: string,
+): Promise<string | null> {
   try {
     const client = new GitHubClient();
     await client.getRepo(ownerRepo);
@@ -591,7 +593,9 @@ projectsRouter.get(
         ? (JSON.parse(project.taskSourceConfig) as GithubTaskSourceConfig)
         : null;
       if (!cfg?.owner || !cfg?.repo) {
-        res.status(400).json({ error: 'GitHub task source config is missing owner/repo' });
+        res
+          .status(400)
+          .json({ error: 'GitHub task source config is missing owner/repo' });
         return;
       }
       ownerRepo = `${cfg.owner}/${cfg.repo}`;
@@ -601,11 +605,15 @@ projectsRouter.get(
     }
     try {
       const client = new GitHubClient();
-      const milestones = await client.listMilestones(ownerRepo, { state: 'open' });
+      const milestones = await client.listMilestones(ownerRepo, {
+        state: 'open',
+      });
       res.json(milestones);
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : 'Failed to fetch GitHub milestones';
+        err instanceof Error
+          ? err.message
+          : 'Failed to fetch GitHub milestones';
       res.status(400).json({ error: message });
     }
   },

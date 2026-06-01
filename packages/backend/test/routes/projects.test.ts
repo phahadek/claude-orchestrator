@@ -393,7 +393,9 @@ describe('POST /api/projects — GitHub task source', () => {
 
     // Verify it's persisted in SQLite
     const row = db
-      .prepare('SELECT task_source, task_source_config FROM projects WHERE id = ?')
+      .prepare(
+        'SELECT task_source, task_source_config FROM projects WHERE id = ?',
+      )
       .get(res.body.id as string) as {
       task_source: string;
       task_source_config: string;
@@ -442,7 +444,10 @@ describe('POST /api/projects — GitHub task source', () => {
         name: 'Unreachable',
         projectDir: realDir,
         taskSource: 'github',
-        taskSourceConfig: JSON.stringify({ owner: 'owner', repo: 'private-repo' }),
+        taskSourceConfig: JSON.stringify({
+          owner: 'owner',
+          repo: 'private-repo',
+        }),
       });
     expect(res.status).toBe(400);
     expect(String(res.body.error)).toMatch(/not accessible|Not Found/i);
@@ -452,8 +457,17 @@ describe('POST /api/projects — GitHub task source', () => {
 describe('GET /api/projects/:id/github-milestones', () => {
   beforeEach(() => {
     mockListMilestones.mockResolvedValue([
-      { id: 1, nodeId: 'n1', title: 'v1.0', description: null, state: 'open',
-        openIssues: 3, closedIssues: 0, createdAt: '2026-01-01', updatedAt: '2026-01-01' },
+      {
+        id: 1,
+        nodeId: 'n1',
+        title: 'v1.0',
+        description: null,
+        state: 'open',
+        openIssues: 3,
+        closedIssues: 0,
+        createdAt: '2026-01-01',
+        updatedAt: '2026-01-01',
+      },
     ]);
   });
 
@@ -467,7 +481,12 @@ describe('GET /api/projects/:id/github-milestones', () => {
   });
 
   it('returns 400 when project is not a github task source', async () => {
-    ProjectService.create({ id: 'p1', name: 'P', projectDir: '/p1', taskSource: 'notion' });
+    ProjectService.create({
+      id: 'p1',
+      name: 'P',
+      projectDir: '/p1',
+      taskSource: 'notion',
+    });
     const res = await supertest(buildApp()).get(
       '/api/projects/p1/github-milestones',
     );
@@ -475,10 +494,16 @@ describe('GET /api/projects/:id/github-milestones', () => {
   });
 
   it('returns milestones from GitHubClient for a github task source project', async () => {
-    ProjectService.create({ id: 'p2', name: 'GH', projectDir: '/p2', taskSource: 'github' });
-    db.prepare(
-      `UPDATE projects SET task_source_config = ? WHERE id = ?`,
-    ).run(JSON.stringify({ owner: 'owner', repo: 'repo' }), 'p2');
+    ProjectService.create({
+      id: 'p2',
+      name: 'GH',
+      projectDir: '/p2',
+      taskSource: 'github',
+    });
+    db.prepare(`UPDATE projects SET task_source_config = ? WHERE id = ?`).run(
+      JSON.stringify({ owner: 'owner', repo: 'repo' }),
+      'p2',
+    );
 
     const res = await supertest(buildApp()).get(
       '/api/projects/p2/github-milestones',
