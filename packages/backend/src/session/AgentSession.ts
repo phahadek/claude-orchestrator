@@ -640,6 +640,40 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       this.messageIdMap.set(messageId, rowId);
     }
 
+    // On each assistant text event, update live context occupancy so the
+    // frontend can display it during long single-turn sessions that emit no
+    // result events until the very end.
+    if (rawType === 'assistant' || rawType === 'message') {
+      const msg = event.message as
+        | {
+            usage?: {
+              input_tokens?: number;
+              cache_read_input_tokens?: number;
+              cache_creation_input_tokens?: number;
+            };
+          }
+        | undefined;
+      const usage = msg?.usage;
+      if (usage) {
+        const occupancy =
+          (usage.input_tokens ?? 0) +
+          (usage.cache_read_input_tokens ?? 0) +
+          (usage.cache_creation_input_tokens ?? 0);
+        if (occupancy > 0) {
+          setContextOccupancy(this.sessionId, occupancy);
+          this.broadcast({
+            type: 'session_updated',
+            sessionId: this.sessionId,
+            totalInputTokens: this.totalInputTokens,
+            totalOutputTokens: this.totalOutputTokens,
+            contextOccupancyTokens: occupancy,
+            contextOccupancyFraction:
+              occupancy / AgentSession.CONTEXT_WINDOW_LIMIT,
+          });
+        }
+      }
+    }
+
     // After each result event (one per turn), update token counters and broadcast
     // session_updated so the frontend receives live totals during execution.
     if (rawType === 'result') {
