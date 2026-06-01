@@ -129,119 +129,29 @@ describe('context-window occupancy tracking', () => {
     vi.clearAllMocks();
   });
 
-  it('computes occupancy as input + cache_read + cache_creation (not cumulative)', async () => {
-    const session = makeSession();
-    const messages = await runWithEvents(session, [
+  it('result event does not call setContextOccupancy (prevents cumulative cache_read overwrite)', async () => {
+    // result.usage.cache_read_input_tokens is the SUM across all API calls in the
+    // turn — not a single-call prompt size. Storing it would produce values in the
+    // millions, making the context-occupancy gauge wildly wrong.
+    const session = makeSession('occ-no-result-write');
+    await runWithEvents(session, [
       {
         type: 'result',
         subtype: 'success',
         usage: {
           input_tokens: 100,
           output_tokens: 20,
-          cache_read_input_tokens: 50,
-          cache_creation_input_tokens: 30,
-        },
-      },
-    ]);
-
-    const updated = messages.find(
-      (m) =>
-        m.type === 'session_updated' &&
-        (m as { contextOccupancyTokens?: number }).contextOccupancyTokens !=
-          null,
-    ) as { contextOccupancyTokens?: number } | undefined;
-    expect(updated).toBeDefined();
-    // 100 + 50 + 30 = 180
-    expect(updated!.contextOccupancyTokens).toBe(180);
-  });
-
-  it('exposes occupancy as a fraction of 200 000 tokens', async () => {
-    const session = makeSession('occ-frac');
-    const messages = await runWithEvents(session, [
-      {
-        type: 'result',
-        subtype: 'success',
-        usage: {
-          input_tokens: 20000,
-          output_tokens: 500,
-          cache_read_input_tokens: 0,
+          cache_read_input_tokens: 10_000_000,
           cache_creation_input_tokens: 0,
         },
       },
     ]);
 
-    const msg = messages.find(
-      (m) =>
-        m.type === 'session_updated' &&
-        (m as { contextOccupancyFraction?: number }).contextOccupancyFraction !=
-          null,
-    ) as { contextOccupancyFraction?: number } | undefined;
-    expect(msg).toBeDefined();
-    // 20000 / 200000 = 0.1
-    expect(msg!.contextOccupancyFraction).toBeCloseTo(0.1);
+    expect(vi.mocked(setContextOccupancy)).not.toHaveBeenCalled();
   });
 
-  it('occupancy is not cumulative — second result replaces the first', async () => {
-    const session = makeSession('occ-replace');
-    const messages = await runWithEvents(session, [
-      {
-        type: 'result',
-        subtype: 'success',
-        usage: {
-          input_tokens: 50000,
-          output_tokens: 100,
-          cache_read_input_tokens: 0,
-          cache_creation_input_tokens: 0,
-        },
-      },
-      {
-        type: 'result',
-        subtype: 'success',
-        usage: {
-          input_tokens: 30000,
-          output_tokens: 100,
-          cache_read_input_tokens: 5000,
-          cache_creation_input_tokens: 0,
-        },
-      },
-    ]);
-
-    const updatedMsgs = messages.filter(
-      (m) =>
-        m.type === 'session_updated' &&
-        (m as { contextOccupancyTokens?: number }).contextOccupancyTokens !=
-          null,
-    ) as Array<{ contextOccupancyTokens?: number }>;
-    expect(updatedMsgs.length).toBeGreaterThanOrEqual(2);
-    const last = updatedMsgs[updatedMsgs.length - 1];
-    // Second turn: 30000 + 5000 = 35000, not 50000 + 30000 + 5000
-    expect(last.contextOccupancyTokens).toBe(35000);
-  });
-
-  it('persists occupancy to SQLite via setContextOccupancy', async () => {
-    const session = makeSession('occ-persist');
-    await runWithEvents(session, [
-      {
-        type: 'result',
-        subtype: 'success',
-        usage: {
-          input_tokens: 1000,
-          output_tokens: 200,
-          cache_read_input_tokens: 500,
-          cache_creation_input_tokens: 200,
-        },
-      },
-    ]);
-
-    // 1000 + 500 + 200 = 1700
-    expect(vi.mocked(setContextOccupancy)).toHaveBeenCalledWith(
-      'occ-persist',
-      1700,
-    );
-  });
-
-  it('includes contextOccupancyTokens and contextOccupancyFraction in session_updated broadcast', async () => {
-    const session = makeSession('occ-broadcast');
+  it('result event does not include contextOccupancyTokens or contextOccupancyFraction in broadcast', async () => {
+    const session = makeSession('occ-no-result-broadcast');
     const messages = await runWithEvents(session, [
       {
         type: 'result',
@@ -259,8 +169,52 @@ describe('context-window occupancy tracking', () => {
       | Record<string, unknown>
       | undefined;
     expect(msg).toBeDefined();
-    expect(msg!['contextOccupancyTokens']).toBe(100);
-    expect(msg!['contextOccupancyFraction']).toBeCloseTo(100 / 200_000);
+    expect(msg!['contextOccupancyTokens']).toBeUndefined();
+    expect(msg!['contextOccupancyFraction']).toBeUndefined();
+  });
+
+  it('occupancy after result event reflects last assistant event, not cumulative cache_read', async () => {
+    // 3 assistant events each reading ~150k tokens from cache; result reports
+    // the cumulative sum (450k). After the result fires, stored occupancy must
+    // still be 150k (from the last assistant event), NOT 450k or any larger value.
+    const session = makeSession('occ-no-cumulative');
+    const assistantEvent = (cacheRead: number) => ({
+      type: 'assistant',
+      message: {
+        id: `msg-${cacheRead}`,
+        type: 'message',
+        usage: {
+          input_tokens: 1,
+          output_tokens: 5,
+          cache_read_input_tokens: cacheRead,
+          cache_creation_input_tokens: 0,
+        },
+        content: [{ type: 'text', text: 'hi' }],
+      },
+    });
+
+    await runWithEvents(session, [
+      assistantEvent(150_000),
+      assistantEvent(150_000),
+      assistantEvent(150_000),
+      {
+        type: 'result',
+        subtype: 'success',
+        usage: {
+          input_tokens: 50,
+          output_tokens: 15,
+          cache_read_input_tokens: 450_000, // cumulative — must NOT be stored as occupancy
+          cache_creation_input_tokens: 0,
+        },
+      },
+    ]);
+
+    const calls = vi.mocked(setContextOccupancy).mock.calls;
+    // Exactly 3 calls — one per assistant event, none from result
+    expect(calls).toHaveLength(3);
+    // Last stored value is from the final assistant event: 1 + 150000 = 150001
+    const lastValue = calls.at(-1)![1];
+    expect(lastValue).toBe(150_001);
   });
 
   it('updates occupancy on each assistant text event (no result event)', async () => {
@@ -363,15 +317,13 @@ describe('context-window occupancy tracking', () => {
 
     await runWithEvents(session, events);
 
-    // setContextOccupancy called at least 4 times (3 assistant + 1 result)
-    expect(
-      vi.mocked(setContextOccupancy).mock.calls.length,
-    ).toBeGreaterThanOrEqual(4);
+    // setContextOccupancy called exactly 3 times — one per assistant event, never from result
+    expect(vi.mocked(setContextOccupancy)).toHaveBeenCalledTimes(3);
     // incrementTokens called exactly once from the result event
     expect(vi.mocked(incrementTokens)).toHaveBeenCalledTimes(1);
-    // Final occupancy from result: 50 + 300 = 350
+    // Final occupancy is from the last assistant event (msg-c): 10 + 300 = 310
     const lastCall = vi.mocked(setContextOccupancy).mock.calls.at(-1)!;
-    expect(lastCall[1]).toBe(350);
+    expect(lastCall[1]).toBe(310);
   });
 
   it('takes no automatic action when occupancy is high', async () => {
