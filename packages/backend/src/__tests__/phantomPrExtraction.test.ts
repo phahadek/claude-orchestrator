@@ -127,11 +127,7 @@ function insertProject(id: string, githubRepo: string) {
   ).run(id, `Project ${id}`, githubRepo);
 }
 
-function insertRawPR(
-  prUrl: string,
-  repo: string,
-  prNumber: number,
-): void {
+function insertRawPR(prUrl: string, repo: string, prNumber: number): void {
   db.prepare(
     `INSERT OR IGNORE INTO pull_requests
        (pr_number, pr_url, repo, state, draft, created_at, updated_at, synced_at)
@@ -227,7 +223,11 @@ describe('deletePhantomPullRequests — startup sweep', () => {
     const removed = deletePhantomPullRequests();
     expect(removed).toBe(2);
     expect(
-      (db.prepare('SELECT COUNT(*) AS n FROM pull_requests').get() as { n: number }).n,
+      (
+        db.prepare('SELECT COUNT(*) AS n FROM pull_requests').get() as {
+          n: number;
+        }
+      ).n,
     ).toBe(0);
   });
 

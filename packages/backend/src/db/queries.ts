@@ -1638,9 +1638,9 @@ export function getProjectByGithubRepo(
   githubRepo: string,
 ): ProjectRow | undefined {
   return db
-    .prepare<{ github_repo: string }>(
-      `SELECT * FROM projects WHERE github_repo = @github_repo LIMIT 1`,
-    )
+    .prepare<{
+      github_repo: string;
+    }>(`SELECT * FROM projects WHERE github_repo = @github_repo LIMIT 1`)
     .get({ github_repo: githubRepo }) as ProjectRow | undefined;
 }
 
