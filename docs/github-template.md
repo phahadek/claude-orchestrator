@@ -23,33 +23,33 @@ The orchestrator drives task status through labels. Three label axes are require
 
 ### Status labels
 
-| Label name      | Recommended color | Meaning                                    |
-| --------------- | ----------------- | ------------------------------------------ |
-| `status:backlog`     | `#d4d4d4` (grey)  | Defined but not yet validated              |
-| `status:ready`       | `#0075ca` (blue)  | Scoped, reviewed, ready to be picked up    |
-| `status:in-progress` | `#e4e669` (yellow)| Actively being worked on                   |
-| `status:in-review`   | `#fbca04` (gold)  | PR open, awaiting review or merge          |
-| `status:done`        | `#0e8a16` (green) | Merged, verified, closed                   |
-| `status:blocked`     | `#b60205` (red)   | Cannot proceed (document blocker in body)  |
-| `status:deferred`    | `#e4e4e4` (light grey) | Moved out of scope                    |
+| Label name           | Recommended color      | Meaning                                   |
+| -------------------- | ---------------------- | ----------------------------------------- |
+| `status:backlog`     | `#d4d4d4` (grey)       | Defined but not yet validated             |
+| `status:ready`       | `#0075ca` (blue)       | Scoped, reviewed, ready to be picked up   |
+| `status:in-progress` | `#e4e669` (yellow)     | Actively being worked on                  |
+| `status:in-review`   | `#fbca04` (gold)       | PR open, awaiting review or merge         |
+| `status:done`        | `#0e8a16` (green)      | Merged, verified, closed                  |
+| `status:blocked`     | `#b60205` (red)        | Cannot proceed (document blocker in body) |
+| `status:deferred`    | `#e4e4e4` (light grey) | Moved out of scope                        |
 
 > **Important:** The dashboard matches these exact label names when deriving task display status. Use them exactly as shown — prefix included.
 
 ### Type labels
 
-| Label name       | Recommended color | Meaning                                     |
-| ---------------- | ----------------- | ------------------------------------------- |
-| `type:code`      | `#5319e7` (purple)| Has a PR. Default for implementation tasks. |
-| `type:planning`  | `#0075ca` (blue)  | Design or research task — not dispatchable. |
-| `type:testing`   | `#f9d0c4` (peach) | Manual test task — not dispatchable.        |
+| Label name      | Recommended color  | Meaning                                     |
+| --------------- | ------------------ | ------------------------------------------- |
+| `type:code`     | `#5319e7` (purple) | Has a PR. Default for implementation tasks. |
+| `type:planning` | `#0075ca` (blue)   | Design or research task — not dispatchable. |
+| `type:testing`  | `#f9d0c4` (peach)  | Manual test task — not dispatchable.        |
 
 ### Priority labels
 
-| Label name         | Recommended color | Meaning                                        |
-| ------------------ | ----------------- | ---------------------------------------------- |
-| `priority:high`    | `#b60205` (red)   | Blocks other tasks or is on the critical path  |
-| `priority:medium`  | `#e4e669` (yellow)| Important but not blocking                     |
-| `priority:low`     | `#0e8a16` (green) | Nice to have in this milestone                 |
+| Label name        | Recommended color  | Meaning                                       |
+| ----------------- | ------------------ | --------------------------------------------- |
+| `priority:high`   | `#b60205` (red)    | Blocks other tasks or is on the critical path |
+| `priority:medium` | `#e4e669` (yellow) | Important but not blocking                    |
+| `priority:low`    | `#0e8a16` (green)  | Nice to have in this milestone                |
 
 ---
 
@@ -193,6 +193,7 @@ The orchestrator needs read/write access to issues and labels for the repository
 Set the token as `GITHUB_TOKEN` in `packages/backend/.env`. PATs expire — set a reminder to rotate before the expiry date.
 
 **Tradeoffs:**
+
 - ✅ Simple: one token, no app registration
 - ✅ Works immediately with no callback URL
 - ❌ Tied to a personal account — if the account loses access, the integration breaks
@@ -211,6 +212,7 @@ Set the token as `GITHUB_TOKEN` in `packages/backend/.env`. PATs expire — set 
 The orchestrator uses the app's private key to mint short-lived installation tokens automatically — no manual rotation needed.
 
 **Tradeoffs:**
+
 - ✅ No expiry: tokens are auto-refreshed
 - ✅ Not tied to a personal account
 - ❌ More setup: app registration, private key file, installation ID
