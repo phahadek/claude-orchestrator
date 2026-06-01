@@ -13,6 +13,7 @@ import {
 import { ReviewDetailView } from './ReviewDetailView';
 import { EventTranscript } from './EventTranscript';
 import { DiffViewer } from './DiffViewer';
+import { ContextBadge } from './ContextBadge';
 import styles from './SessionDetail.module.css';
 
 // Re-export EventRow and groupSessionEvents for consumers (e.g. tests) that import
@@ -73,11 +74,6 @@ export function SessionDetail({
 
   const isActive =
     session.status === 'running' || session.status === 'needs_permission';
-
-  const ctxPct =
-    session.context_occupancy_tokens != null
-      ? Math.round((session.context_occupancy_tokens / 200_000) * 100)
-      : null;
 
   function handleKill() {
     if (!session) return;
@@ -219,24 +215,10 @@ export function SessionDetail({
               {formatModelName(session.model)}
             </span>
           )}
-          {(session.compaction_count ?? 0) > 0 && (
-            <span className={styles.compactionBadge}>
-              compacted {session.compaction_count}×
-            </span>
-          )}
-          {ctxPct != null && (
-            <span
-              className={styles.contextBadge}
-              title={`${(session.context_occupancy_tokens ?? 0).toLocaleString()} of 200,000 tokens`}
-            >
-              <span
-                className={styles.contextBarFill}
-                style={{ width: `${Math.min(ctxPct, 100)}%` }}
-                aria-hidden="true"
-              />
-              <span className={styles.contextText}>{ctxPct}% ctx</span>
-            </span>
-          )}
+          <ContextBadge
+            contextOccupancyTokens={session.context_occupancy_tokens}
+            compactionCount={session.compaction_count}
+          />
           {(session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0) >
             0 && (
             <span className={styles.tokenCount}>
