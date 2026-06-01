@@ -4,29 +4,68 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('../db/queries.js', () => ({
   getAllOpenPRs: vi.fn().mockReturnValue([]),
+  getApprovedOpenPRs: vi.fn().mockReturnValue([]),
+  getApprovedLocalBranches: vi.fn().mockReturnValue([]),
   getPRByNumber: vi.fn().mockReturnValue(null),
   getRoutedCommentIds: vi.fn().mockReturnValue(new Set()),
   markCommentsRouted: vi.fn(),
   setPauseReason: vi.fn(),
+  updateMergeState: vi.fn(),
   getSession: vi.fn().mockReturnValue(null),
   getSetting: vi.fn().mockReturnValue(undefined),
   updatePRState: vi.fn(),
-  updateMergeState: vi.fn(),
   deleteAllAutofixShasForPR: vi.fn(),
   setHeadSha: vi.fn(),
+  markLocalBranchMerged: vi.fn(),
+  setLocalBranchPauseReason: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
   GITHUB_TOKEN: 'test-token',
   GITHUB_REPO: 'owner/repo',
   getProjectByGithubRepo: vi.fn().mockReturnValue(null),
+  getProjectById: vi.fn().mockReturnValue(null),
+  runtimeSettings: {
+    ci_poll_interval_seconds: 5,
+    ci_poll_max_minutes: 1,
+  },
+}));
+
+vi.mock('../session/orchestrator-config.js', () => ({
+  loadOrchestratorConfig: vi.fn().mockReturnValue({ ci_check_name: [] }),
+}));
+
+vi.mock('../audit/AuditLog.js', () => ({ recordEvent: vi.fn() }));
+vi.mock('../config/corporateMode.js', () => ({
+  getCorporateMode: vi.fn().mockReturnValue({ enabled: false, envLocked: false, gates: { requireHumanApproval: false } }),
+}));
+vi.mock('../routes/tasks.js', () => ({ emitTaskUpdated: vi.fn() }));
+vi.mock('../tasks/TaskBackend.js', () => ({ getTaskBackend: vi.fn() }));
+vi.mock('../orchestration/localMergeRunner.js', () => ({ squashMergeLocal: vi.fn() }));
+vi.mock('../orchestration/localBranchHelpers.js', () => ({ detectMergeConflict: vi.fn() }));
+vi.mock('../github/reviewUtils.js', () => ({
+  formatMergeConflictFeedback: vi.fn().mockReturnValue('conflict feedback'),
+  formatCIFailureFeedback: vi.fn().mockReturnValue('ci feedback'),
+  shouldAutoReview: vi.fn().mockReturnValue(false),
+  formatReviewFeedback: vi.fn().mockReturnValue('review feedback'),
+  formatHumanReviewFeedback: vi.fn().mockReturnValue('human feedback'),
 }));
 
 import { GitHubClient } from '../github/GitHubClient.js';
-import { GitHubApiError, GitHubRateLimitError } from '../github/types.js';
+import {
+  GitHubApiError,
+  GitHubRateLimitError,
+} from '../github/types.js';
 import { PRMergeWatcher } from '../github/PRMergeWatcher.js';
 import { ReviewerCommentsWatcher } from '../github/ReviewerCommentsWatcher.js';
-import { getAllOpenPRs } from '../db/queries.js';
+import { AutoMerger } from '../github/AutoMerger.js';
+import {
+  getAllOpenPRs,
+  getApprovedOpenPRs,
+  getApprovedLocalBranches,
+  getPRByNumber,
+} from '../db/queries.js';
+import { getProjectByGithubRepo } from '../config.js';
 import type { PullRequestRow } from '../db/types.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -100,6 +139,10 @@ function makePR(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
     pause_reason: null,
     ...overrides,
   };
+}
+
+function flushMicrotasks(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
 }
 
 // ── GitHubClient rate-limit detection ─────────────────────────────────────────
@@ -360,6 +403,102 @@ describe('ReviewerCommentsWatcher backoff on rate-limit', () => {
 
     await watcher.pollAll();
     await watcher.pollAll();
+
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'github_rate_limit_cleared' }),
+    );
+  });
+});
+
+// ── AutoMerger backoff ────────────────────────────────────────────────────────
+
+describe('AutoMerger backoff on rate-limit', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default: getApprovedLocalBranches returns empty (not testing local branches here)
+    vi.mocked(getApprovedLocalBranches).mockReturnValue([]);
+  });
+
+  it('skips GitHub API calls for the backoff window (5 min in the future)', async () => {
+    const rateLimitErr = new GitHubRateLimitError(
+      'API rate limit exceeded',
+      new Date(Date.now() + 300_000),
+      5000,
+      5000,
+    );
+    const mockGitHub = {
+      fetchPRStatusConditional: vi.fn().mockRejectedValue(rateLimitErr),
+    };
+    const broadcast = vi.fn();
+
+    // Set up project so run() proceeds past the early-return guard
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/test',
+      autoMergeEnabled: true,
+    } as never);
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePR({ pause_reason: null, state: 'open' }),
+    );
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([makePR()]);
+
+    const watcher = new AutoMerger(
+      mockGitHub as never,
+      {} as never,
+      broadcast,
+    );
+
+    // First pollOnce — triggers attempt() → run() → hits rate limit
+    await watcher.pollOnce();
+    await flushMicrotasks(); // let run() complete
+
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'github_rate_limit_hit' }),
+    );
+
+    // Reset mocks to detect if getApprovedOpenPRs is called on second pollOnce
+    vi.mocked(getApprovedOpenPRs).mockClear();
+
+    // Second pollOnce — should skip entirely (pausedUntil is 5 min in the future)
+    await watcher.pollOnce();
+    expect(getApprovedOpenPRs).not.toHaveBeenCalled();
+  });
+
+  it('broadcasts github_rate_limit_cleared after reset window passes', async () => {
+    const pastReset = new Date(Date.now() - 1000); // already expired
+    const rateLimitErr = new GitHubRateLimitError(
+      'API rate limit exceeded',
+      pastReset,
+      5000,
+      5000,
+    );
+    const mockGitHub = {
+      fetchPRStatusConditional: vi.fn().mockRejectedValue(rateLimitErr),
+    };
+    const broadcast = vi.fn();
+
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/test',
+      autoMergeEnabled: true,
+    } as never);
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePR({ pause_reason: null, state: 'open' }),
+    );
+    vi.mocked(getApprovedOpenPRs).mockReturnValue([makePR()]);
+
+    const watcher = new AutoMerger(
+      mockGitHub as never,
+      {} as never,
+      broadcast,
+    );
+
+    // First pollOnce — triggers run(), hits rate limit with pastReset
+    await watcher.pollOnce();
+    await flushMicrotasks();
+
+    // Second pollOnce — pastReset already expired, backoff clears
+    await watcher.pollOnce();
 
     expect(broadcast).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'github_rate_limit_cleared' }),
