@@ -48,6 +48,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     autoLaunchMilestoneId: null,
     autoMergeEnabled: false,
     nonMilestoneSourceConfig: null,
+    taskSourceConfig: null,
     dataResidencyConfirmed: false,
     createdAt: 1,
     updatedAt: 1,

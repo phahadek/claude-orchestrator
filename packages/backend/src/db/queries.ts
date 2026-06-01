@@ -1466,10 +1466,12 @@ export function insertProject(p: NewProjectRow): ProjectRow {
     INSERT INTO projects
       (id, name, project_dir, context_url, github_repo, task_source, git_mode,
        auto_launch_enabled, auto_launch_milestone_id, auto_merge_enabled,
+       task_source_config,
        created_at, updated_at)
     VALUES
       (@id, @name, @project_dir, @context_url, @github_repo, @task_source, @git_mode,
        @auto_launch_enabled, @auto_launch_milestone_id, @auto_merge_enabled,
+       @task_source_config,
        @created_at, @updated_at)
   `,
   ).run({
@@ -1478,6 +1480,7 @@ export function insertProject(p: NewProjectRow): ProjectRow {
     auto_launch_enabled: p.auto_launch_enabled ?? 0,
     auto_launch_milestone_id: p.auto_launch_milestone_id ?? null,
     auto_merge_enabled: p.auto_merge_enabled ?? 0,
+    task_source_config: p.task_source_config ?? null,
     created_at: p.created_at ?? now,
     updated_at: p.updated_at ?? now,
   });
@@ -1508,7 +1511,7 @@ export interface ProjectPatch {
   project_dir?: string;
   context_url?: string | null;
   github_repo?: string | null;
-  task_source?: 'notion' | 'yaml' | 'jira';
+  task_source?: 'notion' | 'yaml' | 'jira' | 'github';
   git_mode?: 'github' | 'local-only';
   auto_launch_enabled?: number;
   auto_launch_milestone_id?: string | null;

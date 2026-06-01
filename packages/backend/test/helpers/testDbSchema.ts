@@ -128,6 +128,7 @@ export function applyTestSchema(db: Database.Database): void {
       milestone_branching          TEXT,
       task_source_config           TEXT,
       non_milestone_source_config  TEXT,
+      data_residency_confirmed INTEGER NOT NULL DEFAULT 0,
       created_at               INTEGER NOT NULL,
       updated_at               INTEGER NOT NULL
     );

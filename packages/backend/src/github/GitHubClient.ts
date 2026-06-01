@@ -817,6 +817,15 @@ export class GitHubClient {
     return data.map(mapIssueComment);
   }
 
+  // ---- Repository -------------------------------------------------------------
+
+  async getRepo(repo: string): Promise<{ fullName: string; private: boolean }> {
+    const data = await this.request<{ full_name: string; private: boolean }>(
+      `/repos/${repo}`,
+    );
+    return { fullName: data.full_name, private: data.private };
+  }
+
   // ---- Milestones -------------------------------------------------------------
 
   async listMilestones(
