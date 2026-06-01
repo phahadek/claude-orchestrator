@@ -132,6 +132,7 @@ vi.mock('../db/queries.js', () => ({
   incrementReviewIteration: vi.fn(),
   hasActiveSessionForTask: vi.fn().mockReturnValue(false),
   getPausedPrReasonForTask: vi.fn().mockReturnValue(null),
+  getMergedPRForTask: vi.fn().mockReturnValue(null),
   getLocalBranchById: vi.fn(),
   setLocalBranchReviewResult: vi.fn(),
   getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
@@ -139,6 +140,12 @@ vi.mock('../db/queries.js', () => ({
   deletePendingReviewSync: vi.fn(),
   getSetting: vi.fn().mockReturnValue(null),
   getSession: vi.fn(),
+}));
+
+vi.mock('../projects/ProjectService.js', () => ({
+  ProjectService: {
+    getMilestone: vi.fn(),
+  },
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -157,6 +164,7 @@ vi.mock('../config.js', () => ({
 import { GithubTaskSourceProvider } from '../tasks/GithubTaskSourceProvider.js';
 import { AutoLauncher } from '../orchestration/AutoLauncher.js';
 import { PRReviewService } from '../github/PRReviewService.js';
+import { ProjectService } from '../projects/ProjectService.js';
 import type { GitHubClient } from '../github/GitHubClient.js';
 import type { Issue } from '../github/types.js';
 import type { DiffSource } from '../github/DiffSource.js';
@@ -168,6 +176,21 @@ import { getPRByNumber, getEventsBySession } from '../db/queries.js';
 const REPO = 'owner/repo';
 const ISSUE_NUMBER = 42;
 const TASK_ID = 'github:42';
+const MILESTONE_UUID = 'c55eca1b-ac2e-4821-a07e-a7190fe447fe';
+const MILESTONE_SOURCE_ID = '1';
+
+function makeMilestoneRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: MILESTONE_UUID,
+    projectId: 'proj-github',
+    name: 'M7',
+    sourceId: MILESTONE_SOURCE_ID,
+    displayOrder: 0,
+    createdAt: 0,
+    updatedAt: 0,
+    ...overrides,
+  };
+}
 
 function makeIssue(overrides: Partial<Issue> = {}): Issue {
   return {
@@ -284,6 +307,8 @@ describe('GitHub dispatch — AutoLauncher + GithubTaskSourceProvider', () => {
       repo: 'repo',
     });
 
+    vi.mocked(ProjectService.getMilestone).mockReturnValue(makeMilestoneRow());
+
     const sessionManager = makeSessionManager();
     sessionManager.start.mockReturnValue('session-abc');
     vi.mocked(getPRByNumber);
@@ -297,7 +322,7 @@ describe('GitHub dispatch — AutoLauncher + GithubTaskSourceProvider', () => {
       taskSource: 'github' as const,
       gitMode: 'github' as const,
       autoLaunchEnabled: true,
-      autoLaunchMilestoneId: null,
+      autoLaunchMilestoneId: MILESTONE_UUID,
       autoMergeEnabled: false,
     };
 
@@ -322,8 +347,138 @@ describe('GitHub dispatch — AutoLauncher + GithubTaskSourceProvider', () => {
       repo: 'repo',
     });
 
+    vi.mocked(ProjectService.getMilestone).mockReturnValue(makeMilestoneRow());
+
     const sessionManager = makeSessionManager();
     sessionManager.start.mockReturnValue('session-abc');
+
+    const project = {
+      id: 'proj-github',
+      name: 'GitHub Project',
+      projectDir: '/fake',
+      contextUrl: 'https://github.com/owner/repo',
+      boardId: null,
+      taskSource: 'github' as const,
+      gitMode: 'github' as const,
+      autoLaunchEnabled: true,
+      autoLaunchMilestoneId: MILESTONE_UUID,
+      autoMergeEnabled: false,
+    };
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [project],
+      resolveBackend: () => provider,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    const startCall = sessionManager.start.mock.calls[0];
+    const taskUrl = startCall[0] as string;
+    expect(taskUrl).toContain('github.com');
+    expect(taskUrl).not.toContain('notion.so');
+  });
+});
+
+// ── Milestone resolution ───────────────────────────────────────────────────────
+
+describe('GithubTaskSourceProvider — milestone resolution', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('fetchReadyTasks(null) passes milestone:undefined to listIssues (no filtering)', async () => {
+    const client = makeMockGitHubClient();
+    const provider = new GithubTaskSourceProvider(client, {
+      owner: 'owner',
+      repo: 'repo',
+    });
+
+    await provider.fetchReadyTasks(null);
+
+    expect(client.listIssues).toHaveBeenCalledWith(REPO, {
+      labels: ['status:ready'],
+      milestone: undefined,
+      state: 'open',
+    });
+    expect(ProjectService.getMilestone).not.toHaveBeenCalled();
+  });
+
+  it('fetchReadyTasks(<dashboard-uuid>) looks up milestone row and passes integer to listIssues', async () => {
+    vi.mocked(ProjectService.getMilestone).mockReturnValue(makeMilestoneRow());
+
+    const client = makeMockGitHubClient();
+    const provider = new GithubTaskSourceProvider(client, {
+      owner: 'owner',
+      repo: 'repo',
+    });
+
+    await provider.fetchReadyTasks(MILESTONE_UUID);
+
+    expect(ProjectService.getMilestone).toHaveBeenCalledWith(MILESTONE_UUID);
+    expect(client.listIssues).toHaveBeenCalledWith(REPO, {
+      labels: ['status:ready'],
+      milestone: 1,
+      state: 'open',
+    });
+  });
+
+  it('throws when milestone row is not found', async () => {
+    vi.mocked(ProjectService.getMilestone).mockReturnValue(undefined);
+
+    const client = makeMockGitHubClient();
+    const provider = new GithubTaskSourceProvider(client, {
+      owner: 'owner',
+      repo: 'repo',
+    });
+
+    await expect(provider.fetchReadyTasks(MILESTONE_UUID)).rejects.toThrow(
+      `milestone not found: ${MILESTONE_UUID}`,
+    );
+  });
+
+  it('throws with hint when row exists but sourceId is null', async () => {
+    vi.mocked(ProjectService.getMilestone).mockReturnValue(
+      makeMilestoneRow({ sourceId: null }),
+    );
+
+    const client = makeMockGitHubClient();
+    const provider = new GithubTaskSourceProvider(client, {
+      owner: 'owner',
+      repo: 'repo',
+    });
+
+    await expect(provider.fetchReadyTasks(MILESTONE_UUID)).rejects.toThrow(
+      'set the GitHub milestone number',
+    );
+  });
+
+  it('throws when sourceId exists but is not an integer', async () => {
+    vi.mocked(ProjectService.getMilestone).mockReturnValue(
+      makeMilestoneRow({ sourceId: 'not-a-number' }),
+    );
+
+    const client = makeMockGitHubClient();
+    const provider = new GithubTaskSourceProvider(client, {
+      owner: 'owner',
+      repo: 'repo',
+    });
+
+    await expect(provider.fetchReadyTasks(MILESTONE_UUID)).rejects.toThrow(
+      'not a valid integer',
+    );
+  });
+});
+
+describe('AutoLauncher — github milestone gating', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('skips a github project with no milestone configured', async () => {
+    const client = makeMockGitHubClient();
+    const provider = new GithubTaskSourceProvider(client, {
+      owner: 'owner',
+      repo: 'repo',
+    });
+
+    const sessionManager = makeSessionManager();
 
     const project = {
       id: 'proj-github',
@@ -346,10 +501,49 @@ describe('GitHub dispatch — AutoLauncher + GithubTaskSourceProvider', () => {
 
     await launcher.pollOnce();
 
-    const startCall = sessionManager.start.mock.calls[0];
-    const taskUrl = startCall[0] as string;
-    expect(taskUrl).toContain('github.com');
-    expect(taskUrl).not.toContain('notion.so');
+    expect(sessionManager.start).not.toHaveBeenCalled();
+    expect(client.listIssues).not.toHaveBeenCalled();
+  });
+
+  it('passes dashboard milestone id to provider which resolves to integer', async () => {
+    vi.mocked(ProjectService.getMilestone).mockReturnValue(makeMilestoneRow());
+
+    const client = makeMockGitHubClient();
+    const provider = new GithubTaskSourceProvider(client, {
+      owner: 'owner',
+      repo: 'repo',
+    });
+
+    const sessionManager = makeSessionManager();
+    sessionManager.start.mockReturnValue('session-abc');
+
+    const project = {
+      id: 'proj-github',
+      name: 'GitHub Project',
+      projectDir: '/fake',
+      contextUrl: 'https://github.com/owner/repo',
+      boardId: null,
+      taskSource: 'github' as const,
+      gitMode: 'github' as const,
+      autoLaunchEnabled: true,
+      autoLaunchMilestoneId: MILESTONE_UUID,
+      autoMergeEnabled: false,
+    };
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [project],
+      resolveBackend: () => provider,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    expect(client.listIssues).toHaveBeenCalledWith(REPO, {
+      labels: ['status:ready'],
+      milestone: 1,
+      state: 'open',
+    });
+    expect(sessionManager.start).toHaveBeenCalledOnce();
   });
 });
 
