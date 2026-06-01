@@ -8,6 +8,10 @@ vi.mock('../routes/tasks.js', () => ({
   emitTaskUpdated: vi.fn(),
 }));
 
+vi.mock('../audit/AuditLog.js', () => ({
+  recordEvent: vi.fn(),
+}));
+
 vi.mock('../db/queries.js', () => ({
   getPRs: vi.fn(),
   getPRByNumber: vi.fn(),
@@ -103,6 +107,7 @@ vi.mock('../config.js', () => ({
 import { createPrsRouter, setPRBroadcast } from '../routes/prs.js';
 import * as queries from '../db/queries.js';
 import * as tasksRoute from '../routes/tasks.js';
+import * as auditLog from '../audit/AuditLog.js';
 import type { PullRequest } from '../github/types.js';
 import { GitHubApiError } from '../github/types.js';
 import type { GitHubClient } from '../github/GitHubClient.js';
@@ -1108,6 +1113,23 @@ describe('DELETE /api/prs/clear', () => {
     expect(res.body.deleted).toBe(3);
     expect(vi.mocked(queries.deleteMergedAndClosedPRs)).toHaveBeenCalledWith(
       'owner/repo',
+    );
+  });
+
+  it('records a manual_pr_clear audit event with correct fields', async () => {
+    vi.mocked(queries.deleteMergedAndClosedPRs).mockReturnValue(5);
+    const res = await supertest(buildApp()).delete(
+      '/api/prs/clear?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    expect(vi.mocked(auditLog.recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'manual_pr_clear',
+        actor_type: 'human',
+        project_id: 'proj-1',
+        task_id: null,
+        payload: { repo: 'owner/repo', deleted_count: 5 },
+      }),
     );
   });
 

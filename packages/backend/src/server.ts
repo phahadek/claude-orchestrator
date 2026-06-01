@@ -41,11 +41,7 @@ import { getOrchestratorConfig } from './config/appConfig';
 import { AutoLauncher } from './orchestration/AutoLauncher';
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
 import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
-import {
-  deleteGhostSessions,
-  deletePhantomPullRequests,
-  getPRBySessionId,
-} from './db/queries';
+import { deleteGhostSessions, getPRBySessionId } from './db/queries';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
 import { runPRBootSweep } from './github/PRBootSweep';
@@ -63,13 +59,6 @@ const ghostsRemoved = deleteGhostSessions();
 if (ghostsRemoved > 0) {
   console.log(
     `[server] cleaned up ${ghostsRemoved} ghost session(s) with no events`,
-  );
-}
-
-const phantomsRemoved = deletePhantomPullRequests();
-if (phantomsRemoved > 0) {
-  console.log(
-    `[server] swept ${phantomsRemoved} phantom pull_requests row(s) with no matching project`,
   );
 }
 

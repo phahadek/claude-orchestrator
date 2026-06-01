@@ -31,6 +31,8 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { ServerMessage } from '../ws/types';
 import { emitTaskUpdated } from './tasks';
+import { recordEvent } from '../audit/AuditLog';
+import type { DeviceRow } from '../db/types';
 
 let _broadcast: (msg: ServerMessage) => void = () => {};
 export function setPRBroadcast(fn: (msg: ServerMessage) => void): void {
@@ -704,6 +706,16 @@ export function createPrsRouter(
       return;
     }
     const count = deleteMergedAndClosedPRs(project.githubRepo);
+    const deviceId =
+      (req as Request & { device?: DeviceRow }).device?.id ?? null;
+    recordEvent({
+      event_type: 'manual_pr_clear',
+      actor_type: 'human',
+      actor_id: deviceId,
+      project_id: projectId,
+      task_id: null,
+      payload: { repo: project.githubRepo, deleted_count: count },
+    });
     res.json({ deleted: count });
   });
 

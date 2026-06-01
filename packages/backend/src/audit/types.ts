@@ -20,7 +20,8 @@ export type EventType =
   | 'task_orphan_reverted'
   | 'session_errored'
   | 'session_backfilled'
-  | 'verdict_routing_failed';
+  | 'verdict_routing_failed'
+  | 'manual_pr_clear';
 
 export type ActorType = 'ai' | 'human' | 'system';
 
