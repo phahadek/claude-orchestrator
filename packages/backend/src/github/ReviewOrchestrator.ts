@@ -485,7 +485,28 @@ export class ReviewOrchestrator {
     });
 
     if (result.verdict === 'needs_changes') {
-      this.sessionManager.send(job.sessionId, formatReviewFeedback(result, 0));
+      try {
+        await this.sessionManager.sendOrResume(
+          job.sessionId,
+          formatReviewFeedback(result, 0),
+        );
+      } catch (e) {
+        recordEvent({
+          event_type: 'verdict_routing_failed',
+          actor_type: 'system',
+          actor_id: job.sessionId,
+          project_id: job.projectId ?? null,
+          task_id: job.taskId ?? null,
+          payload: {
+            pr_number: job.localBranchId,
+            repo: `local/${job.branchName}`,
+            error: String(e),
+          },
+        });
+        console.warn(
+          `[ReviewOrchestrator] verdict routing failed for local branch ${job.branchName}: ${e}`,
+        );
+      }
     }
   }
 
@@ -606,10 +627,28 @@ export class ReviewOrchestrator {
     if (result.verdict === 'needs_changes') {
       const prRow = getPRByNumber(job.prNumber, job.repo);
       if (prRow?.session_id) {
-        this.sessionManager.send(
-          prRow.session_id,
-          formatReviewFeedback(result, 0),
-        );
+        try {
+          await this.sessionManager.sendOrResume(
+            prRow.session_id,
+            formatReviewFeedback(result, 0),
+          );
+        } catch (e) {
+          recordEvent({
+            event_type: 'verdict_routing_failed',
+            actor_type: 'system',
+            actor_id: prRow.session_id,
+            project_id: project.id ?? null,
+            task_id: prRow.task_id ?? null,
+            payload: {
+              pr_number: job.prNumber,
+              repo: job.repo,
+              error: String(e),
+            },
+          });
+          console.warn(
+            `[ReviewOrchestrator] verdict routing failed for PR #${job.prNumber}: ${e}`,
+          );
+        }
       }
     } else if (result.verdict === 'incomplete') {
       const message = `Review for PR #${job.prNumber} returned an incomplete verdict — the reviewer could not assess the PR. Manual intervention needed.`;
