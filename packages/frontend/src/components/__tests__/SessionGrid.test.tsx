@@ -3,6 +3,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SessionGrid } from '../SessionGrid';
 import type { SessionState } from '../../hooks/useSessionStore';
 
+// ── Routing helpers ──────────────────────────────────────────────────────────
+const ACTIVE_STATUSES = ['running', 'starting', 'needs_permission', 'retrying'] as const;
+const CONCLUDED_STATUSES = ['done', 'error', 'killed'] as const;
+
 function makeSession(
   overrides: Partial<SessionState> & { sessionId: string },
 ): SessionState {
@@ -159,11 +163,14 @@ describe('SessionGrid', () => {
         onArchiveAll={vi.fn()}
       />,
     );
+    // Favorited Done is a concluded session → renders as ConcludedSessionRow (not SessionCard)
+    const concludedRow = screen.getByTestId('concluded-session-row');
+    expect(concludedRow.textContent).toContain('Favorited Done');
+    // Non-favorited active sessions render as SessionCards
     const cards = screen
       .getAllByRole('generic')
       .filter((el) => el.className?.includes('session-card'));
-    // Favorited session should come first regardless of its status rank
-    expect(cards[0].textContent).toContain('Favorited Done');
+    expect(cards).toHaveLength(2);
   });
 
   it('archive button has title attribute and both full and short label spans', () => {
@@ -268,6 +275,124 @@ describe('SessionGrid', () => {
     );
     fireEvent.click(screen.getByText('Clickable Task'));
     expect(onSelect).toHaveBeenCalledWith('abc123');
+  });
+});
+
+describe('SessionGrid — differential rendering routing', () => {
+  it('routes concluded sessions (done/error/killed) to ConcludedSessionRow', () => {
+    const sessions = CONCLUDED_STATUSES.map((status, i) =>
+      makeSession({ sessionId: `c${i}`, taskName: `Task ${status}`, status }),
+    );
+    render(
+      <SessionGrid
+        sessions={sessions}
+        projects={[]}
+        onSelect={vi.fn()}
+        selectedId={null}
+        keyboardSelectedId={null}
+        synced={true}
+        onArchiveAll={vi.fn()}
+      />,
+    );
+    expect(screen.getAllByTestId('concluded-session-row')).toHaveLength(3);
+    // No rich session-card rendered for concluded sessions
+    const richCards = screen
+      .getAllByRole('generic')
+      .filter((el) => el.className?.includes('session-card'));
+    expect(richCards).toHaveLength(0);
+  });
+
+  it('routes active sessions (running/starting/needs_permission/retrying) to SessionCard', () => {
+    const sessions = ACTIVE_STATUSES.map((status, i) =>
+      makeSession({ sessionId: `a${i}`, taskName: `Task ${status}`, status }),
+    );
+    render(
+      <SessionGrid
+        sessions={sessions}
+        projects={[]}
+        onSelect={vi.fn()}
+        selectedId={null}
+        keyboardSelectedId={null}
+        synced={true}
+        onArchiveAll={vi.fn()}
+      />,
+    );
+    const richCards = screen
+      .getAllByRole('generic')
+      .filter((el) => el.className?.includes('session-card'));
+    expect(richCards).toHaveLength(ACTIVE_STATUSES.length);
+    // No compact row rendered for active sessions
+    expect(screen.queryAllByTestId('concluded-session-row')).toHaveLength(0);
+  });
+
+  it('mixed panel: active sessions use SessionCard, concluded use ConcludedSessionRow', () => {
+    const sessions = [
+      makeSession({ sessionId: 's1', taskName: 'Running', status: 'running' }),
+      makeSession({ sessionId: 's2', taskName: 'Done', status: 'done' }),
+      makeSession({ sessionId: 's3', taskName: 'Error', status: 'error' }),
+    ];
+    render(
+      <SessionGrid
+        sessions={sessions}
+        projects={[]}
+        onSelect={vi.fn()}
+        selectedId={null}
+        keyboardSelectedId={null}
+        synced={true}
+        onArchiveAll={vi.fn()}
+      />,
+    );
+    const richCards = screen
+      .getAllByRole('generic')
+      .filter((el) => el.className?.includes('session-card'));
+    expect(richCards).toHaveLength(1);
+    expect(screen.getAllByTestId('concluded-session-row')).toHaveLength(2);
+  });
+
+  it('clicking a ConcludedSessionRow calls onSelect with the correct sessionId', () => {
+    const onSelect = vi.fn();
+    const sessions = [
+      makeSession({ sessionId: 'fin-123', taskName: 'Finished Task', status: 'done' }),
+    ];
+    render(
+      <SessionGrid
+        sessions={sessions}
+        projects={[]}
+        onSelect={onSelect}
+        selectedId={null}
+        keyboardSelectedId={null}
+        synced={true}
+        onArchiveAll={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('concluded-session-row'));
+    expect(onSelect).toHaveBeenCalledWith('fin-123');
+  });
+
+  it('performance smoke: 50 concluded + 5 active sessions render without console.warn', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sessions = [
+      ...Array.from({ length: 50 }, (_, i) =>
+        makeSession({ sessionId: `c${i}`, taskName: `Done ${i}`, status: 'done' }),
+      ),
+      ...Array.from({ length: 5 }, (_, i) =>
+        makeSession({ sessionId: `a${i}`, taskName: `Active ${i}`, status: 'running' }),
+      ),
+    ];
+    render(
+      <SessionGrid
+        sessions={sessions}
+        projects={[]}
+        onSelect={vi.fn()}
+        selectedId={null}
+        keyboardSelectedId={null}
+        synced={true}
+        onArchiveAll={vi.fn()}
+      />,
+    );
+    expect(screen.getAllByTestId('concluded-session-row')).toHaveLength(50);
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });
 

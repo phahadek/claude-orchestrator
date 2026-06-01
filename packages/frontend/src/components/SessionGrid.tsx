@@ -2,7 +2,10 @@ import { useState } from 'react';
 import type { SessionState } from '../hooks/useSessionStore';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { SessionCard } from './SessionCard';
+import { ConcludedSessionRow } from './ConcludedSessionRow';
 import { ErrorBoundary } from './ErrorBoundary';
+import { taskNameFromNotionUrl } from '../utils/notionUrl';
+import { formatElapsed } from '../utils/sessionTimer';
 import styles from './SessionGrid.module.css';
 
 const ALL_STATUSES = [
@@ -228,6 +231,7 @@ export function SessionGrid({
             const proj = s.project_id
               ? projectMap.get(s.project_id)
               : undefined;
+            const isConcluded = ['done', 'error', 'killed'].includes(s.status);
             return (
               <div
                 key={s.sessionId}
@@ -248,23 +252,34 @@ export function SessionGrid({
                     </div>
                   )}
                 >
-                  <SessionCard
-                    session={s}
-                    selected={s.sessionId === selectedId}
-                    onClick={() => onSelect(s.sessionId)}
-                    projectColor={proj?.color}
-                    projectName={multiProject ? proj?.name : undefined}
-                    onResume={
-                      onResume ? () => onResume(s.sessionId) : undefined
-                    }
-                    onToggleFavorite={
-                      onToggleFavorite
-                        ? () => onToggleFavorite(s.sessionId, !s.favorited)
-                        : undefined
-                    }
-                    previewLines={cardPreviewLines}
-                    sessionMode={sessionMode}
-                  />
+                  {isConcluded ? (
+                    <ConcludedSessionRow
+                      taskName={taskNameFromNotionUrl(s.taskName)}
+                      status={s.status}
+                      elapsed={formatElapsed(s)}
+                      prUrl={s.prUrl}
+                      projectColor={proj?.color}
+                      onClick={() => onSelect(s.sessionId)}
+                    />
+                  ) : (
+                    <SessionCard
+                      session={s}
+                      selected={s.sessionId === selectedId}
+                      onClick={() => onSelect(s.sessionId)}
+                      projectColor={proj?.color}
+                      projectName={multiProject ? proj?.name : undefined}
+                      onResume={
+                        onResume ? () => onResume(s.sessionId) : undefined
+                      }
+                      onToggleFavorite={
+                        onToggleFavorite
+                          ? () => onToggleFavorite(s.sessionId, !s.favorited)
+                          : undefined
+                      }
+                      previewLines={cardPreviewLines}
+                      sessionMode={sessionMode}
+                    />
+                  )}
                 </ErrorBoundary>
               </div>
             );
