@@ -226,6 +226,13 @@ export type ServerMessage =
       taskTitle: string;
       sessionId: string;
     }
+  | {
+      type: 'github_rate_limit_hit';
+      resetAt: string; // ISO-8601
+      limit: number;
+      used: number;
+    }
+  | { type: 'github_rate_limit_cleared' }
   | { type: 'error'; message: string }
   | { type: 'pr_pause_cleared'; prNumber: number; repo: string }
   | { type: 'autofix_started'; prNumber: number; repo: string }

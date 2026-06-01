@@ -1,5 +1,6 @@
 import type { GitHubClient } from './GitHubClient';
 import type { SessionManager } from '../session/SessionManager';
+import { GitHubRateLimitError } from './types';
 import {
   getAllOpenPRs,
   getRoutedCommentIds,
@@ -10,6 +11,7 @@ import {
 } from '../db/queries';
 import { formatHumanReviewFeedback, type HumanComment } from './reviewUtils';
 import type { PullRequestRow } from '../db/types';
+import type { ServerMessage } from '../ws/types';
 
 const WATCHABLE_PAUSE_REASONS: ReadonlySet<string | null> = new Set([
   null,
@@ -40,10 +42,13 @@ function getAIReviewerUsernames(): Set<string> {
  */
 export class ReviewerCommentsWatcher {
   private timer: ReturnType<typeof setInterval> | null = null;
+  private pausedUntil: Date | null = null;
+  private rateLimitBroadcasted = false;
 
   constructor(
     private github: GitHubClient,
     private sessions: SessionManager,
+    private broadcast: (msg: ServerMessage) => void = () => {},
   ) {}
 
   start(intervalMs = 10_000): void {
@@ -66,7 +71,29 @@ export class ReviewerCommentsWatcher {
     }
   }
 
+  private handleRateLimit(err: GitHubRateLimitError): void {
+    this.pausedUntil = err.resetAt;
+    if (!this.rateLimitBroadcasted) {
+      this.rateLimitBroadcasted = true;
+      console.warn(
+        `[ReviewerCommentsWatcher] GitHub rate-limited; backing off until ${err.resetAt.toISOString()}`,
+      );
+      this.broadcast({
+        type: 'github_rate_limit_hit',
+        resetAt: err.resetAt.toISOString(),
+        limit: err.limit,
+        used: err.used,
+      });
+    }
+  }
+
   async pollAll(): Promise<void> {
+    if (this.pausedUntil !== null) {
+      if (Date.now() < this.pausedUntil.getTime()) return;
+      this.pausedUntil = null;
+      this.rateLimitBroadcasted = false;
+      this.broadcast({ type: 'github_rate_limit_cleared' });
+    }
     const openPRs = getAllOpenPRs();
     const watchable = openPRs.filter(
       (pr) =>
@@ -76,6 +103,10 @@ export class ReviewerCommentsWatcher {
       try {
         await this.pollPR(pr);
       } catch (err) {
+        if (err instanceof GitHubRateLimitError) {
+          this.handleRateLimit(err);
+          return;
+        }
         console.warn(
           `[ReviewerCommentsWatcher] poll failed for PR #${pr.pr_number} in ${pr.repo}:`,
           (err as Error).message,

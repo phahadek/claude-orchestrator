@@ -7,6 +7,18 @@ export class GitHubApiError extends Error {
   }
 }
 
+export class GitHubRateLimitError extends GitHubApiError {
+  constructor(
+    message: string,
+    public readonly resetAt: Date,
+    public readonly limit: number,
+    public readonly used: number,
+  ) {
+    super(403, message);
+    this.name = 'GitHubRateLimitError';
+  }
+}
+
 export interface PullRequest {
   nodeId: string; // GitHub GraphQL global ID
   id: number; // GitHub PR number

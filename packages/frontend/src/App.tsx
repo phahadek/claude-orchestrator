@@ -19,6 +19,7 @@ import { TaskList } from './components/TaskList';
 import { TaskDetail } from './components/TaskDetail';
 import { Settings } from './components/Settings';
 import { UpdateBanner } from './components/UpdateBanner';
+import { RateLimitBanner } from './components/RateLimitBanner';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { Notifications } from './components/Notifications';
 import { ShortcutHint } from './components/ShortcutHint';
@@ -133,6 +134,10 @@ export default function App() {
     version: string;
     releaseNotesUrl: string;
   } | null>(null);
+  const [rateLimitInfo, setRateLimitInfo] = useState<{
+    resetAt: string;
+  } | null>(null);
+  const [rateLimitDismissed, setRateLimitDismissed] = useState(false);
   const notifiedRef = useRef<Set<string>>(new Set());
   const [showReconnected, setShowReconnected] = useState(false);
   const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
@@ -158,6 +163,16 @@ export default function App() {
           version: msg.version,
           releaseNotesUrl: msg.releaseNotesUrl,
         });
+        return;
+      }
+      if (msg.type === 'github_rate_limit_hit') {
+        setRateLimitInfo({ resetAt: msg.resetAt });
+        setRateLimitDismissed(false);
+        return;
+      }
+      if (msg.type === 'github_rate_limit_cleared') {
+        setRateLimitInfo(null);
+        setRateLimitDismissed(false);
         return;
       }
       dispatch(msg);
@@ -983,6 +998,12 @@ export default function App() {
           version={updateInfo.version}
           releaseNotesUrl={updateInfo.releaseNotesUrl}
           onDismiss={() => setUpdateInfo(null)}
+        />
+      )}
+      {rateLimitInfo && !rateLimitDismissed && (
+        <RateLimitBanner
+          resetAt={rateLimitInfo.resetAt}
+          onDismiss={() => setRateLimitDismissed(true)}
         />
       )}
       <div className={styles.mainArea}>
