@@ -115,7 +115,9 @@ describe('WS fetch_tasks → NotionTaskBackend: router passes UUID, backend call
     );
 
     notionFetchReadyTasks = vi.fn().mockResolvedValue([]);
-    const mockNotionClient = { fetchReadyTasks: notionFetchReadyTasks } as never;
+    const mockNotionClient = {
+      fetchReadyTasks: notionFetchReadyTasks,
+    } as never;
 
     const backend = new NotionTaskBackend(mockNotionClient);
     vi.mocked(getTaskBackend).mockReturnValue(backend as never);
@@ -137,10 +139,15 @@ describe('WS fetch_tasks → NotionTaskBackend: router passes UUID, backend call
 
     // Backend receives the UUID and resolves it itself
     expect(ProjectService.getMilestone).toHaveBeenCalledWith(MILESTONE_UUID);
-    expect(ProjectService.getMilestone).not.toHaveBeenCalledWith(NOTION_SOURCE_ID);
+    expect(ProjectService.getMilestone).not.toHaveBeenCalledWith(
+      NOTION_SOURCE_ID,
+    );
 
     // NotionClient ends up with source_id (correct resolution path)
-    expect(notionFetchReadyTasks).toHaveBeenCalledWith(NOTION_SOURCE_ID, undefined);
+    expect(notionFetchReadyTasks).toHaveBeenCalledWith(
+      NOTION_SOURCE_ID,
+      undefined,
+    );
   });
 });
 
