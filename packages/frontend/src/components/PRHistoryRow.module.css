@@ -1,0 +1,52 @@
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #1e1e2e;
+  border: 1px solid #313244;
+  border-radius: 6px;
+  min-width: 0;
+}
+
+.title {
+  color: #a6adc8;
+  font-size: 0.85rem;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
+.title:hover {
+  color: #89b4fa;
+  text-decoration: underline;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.taskLink {
+  font-size: 0.78rem;
+  color: #89b4fa;
+  text-decoration: none;
+  opacity: 0.8;
+}
+
+.taskLink:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
+
+.date {
+  font-size: 0.78rem;
+  color: #6c7086;
+  white-space: nowrap;
+}

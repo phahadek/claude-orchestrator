@@ -121,13 +121,7 @@ vi.mock('../db/db.js', async () => {
   return { db: memDb };
 });
 
-import {
-  upsertPullRequest,
-  deletePR,
-  deleteMergedAndClosedPRs,
-  getPRByNumber,
-  getOpenPRs,
-} from '../db/queries.js';
+import { upsertPullRequest, deletePR, getPRByNumber } from '../db/queries.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -211,76 +205,5 @@ describe('deletePR()', () => {
 
     expect(getPRByNumber(10, 'owner/repo')).toBeFalsy();
     expect(getPRByNumber(10, 'other/repo')).not.toBeNull();
-  });
-});
-
-// ── deleteMergedAndClosedPRs ──────────────────────────────────────────────────
-
-describe('deleteMergedAndClosedPRs()', () => {
-  it('removes only merged and closed PRs, leaves open PRs intact', () => {
-    upsertPullRequest(
-      makePR({
-        pr_number: 1,
-        state: 'open',
-        pr_url: 'https://github.com/owner/repo/pull/1',
-      }),
-    );
-    upsertPullRequest(
-      makePR({
-        pr_number: 2,
-        state: 'merged',
-        pr_url: 'https://github.com/owner/repo/pull/2',
-      }),
-    );
-    upsertPullRequest(
-      makePR({
-        pr_number: 3,
-        state: 'closed',
-        pr_url: 'https://github.com/owner/repo/pull/3',
-      }),
-    );
-
-    const count = deleteMergedAndClosedPRs('owner/repo');
-    expect(count).toBe(2);
-
-    expect(getPRByNumber(1, 'owner/repo')).toBeTruthy();
-    expect(getPRByNumber(2, 'owner/repo')).toBeFalsy();
-    expect(getPRByNumber(3, 'owner/repo')).toBeFalsy();
-  });
-
-  it('returns 0 when there are no merged/closed PRs', () => {
-    upsertPullRequest(
-      makePR({
-        pr_number: 1,
-        state: 'open',
-        pr_url: 'https://github.com/owner/repo/pull/1',
-      }),
-    );
-    expect(deleteMergedAndClosedPRs('owner/repo')).toBe(0);
-    expect(getOpenPRs('owner/repo')).toHaveLength(1);
-  });
-
-  it('only deletes from the specified repo', () => {
-    upsertPullRequest(
-      makePR({
-        pr_number: 1,
-        state: 'merged',
-        repo: 'owner/repo',
-        pr_url: 'https://github.com/owner/repo/pull/1',
-      }),
-    );
-    upsertPullRequest(
-      makePR({
-        pr_number: 1,
-        state: 'merged',
-        repo: 'other/repo',
-        pr_url: 'https://github.com/other/repo/pull/1',
-      }),
-    );
-
-    deleteMergedAndClosedPRs('owner/repo');
-
-    expect(getPRByNumber(1, 'owner/repo')).toBeFalsy();
-    expect(getPRByNumber(1, 'other/repo')).toBeTruthy();
   });
 });

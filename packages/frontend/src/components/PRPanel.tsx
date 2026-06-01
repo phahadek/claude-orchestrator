@@ -1,6 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { WorkItemCard } from './WorkItemCard';
-import type { WorkItemListItem, PRReviewResult } from './WorkItemCard';
+import type {
+  WorkItemListItem,
+  PRWorkItem,
+  PRReviewResult,
+} from './WorkItemCard';
+import { PRHistoryRow } from './PRHistoryRow';
 import { ErrorBoundary } from './ErrorBoundary';
 import styles from './PRPanel.module.css';
 
@@ -74,8 +79,6 @@ export function PRPanel({
     new Set(),
   );
   const [removeInFlight, setRemoveInFlight] = useState<Set<number>>(new Set());
-  const [clearInFlight, setClearInFlight] = useState(false);
-  const [clearableCount, setClearableCount] = useState(0);
   const [cardErrors, setCardErrors] = useState<Map<number, string>>(new Map());
   const [autofixStatus, setAutofixStatus] = useState<
     Map<number, 'running' | 'done' | 'failed'>
@@ -90,12 +93,9 @@ export function PRPanel({
     if (!activeProjectId) return;
     if (isInitialLoad.current) setIsLoading(true);
     try {
-      const [prsRes, countRes] = await Promise.all([
-        fetch(`/api/prs?projectId=${encodeURIComponent(activeProjectId)}`),
-        fetch(
-          `/api/prs/clear/count?projectId=${encodeURIComponent(activeProjectId)}`,
-        ),
-      ]);
+      const prsRes = await fetch(
+        `/api/prs?projectId=${encodeURIComponent(activeProjectId)}`,
+      );
       if (prsRes.status === 422) {
         setNoRepo(true);
         return;
@@ -108,10 +108,6 @@ export function PRPanel({
       setPRs(data);
       setNetworkError(false);
       setNoRepo(false);
-      if (countRes.ok) {
-        const { count } = (await countRes.json()) as { count: number };
-        setClearableCount(count);
-      }
     } catch {
       setNetworkError(true);
     } finally {
@@ -485,40 +481,11 @@ export function PRPanel({
     }
   };
 
-  const handleClearMergedClosed = async () => {
-    if (!activeProjectId) return;
-    setClearInFlight(true);
-    try {
-      const res = await fetch(
-        `/api/prs/clear?projectId=${encodeURIComponent(activeProjectId)}`,
-        { method: 'DELETE' },
-      );
-      if (res.ok) {
-        await fetchPRs();
-      }
-    } finally {
-      setClearInFlight(false);
-    }
-  };
-
   return (
     <div className={styles.panel}>
       <div className={styles.headerBar}>
         <span className={styles.panelTitle}>Open Pull Requests</span>
         <div className={styles.headerButtons}>
-          {clearableCount > 0 && (
-            <button
-              type="button"
-              className={styles.clearButton}
-              onClick={handleClearMergedClosed}
-              disabled={clearInFlight}
-              title={`Remove ${clearableCount} merged/closed PR${clearableCount !== 1 ? 's' : ''}`}
-            >
-              {clearInFlight
-                ? 'Clearing...'
-                : `Clear merged/closed (${clearableCount})`}
-            </button>
-          )}
           <button
             type="button"
             className={styles.refreshButton}
@@ -567,6 +534,24 @@ export function PRPanel({
                   ? `pr-${item.prNumber}`
                   : `local-${item.sessionId}`;
               const prNumber = item.type === 'pr' ? item.prNumber : 0;
+
+              // Concluded PRs with no active flags render as compact rows
+              const useCompact =
+                item.type === 'pr' &&
+                (item.state === 'merged' || item.state === 'closed') &&
+                !item.pauseReason &&
+                !(
+                  item.mergeState &&
+                  ['ci_failed', 'unstable', 'ci_running'].includes(
+                    item.mergeState,
+                  )
+                ) &&
+                !reviewInFlight.has(item.prNumber);
+
+              if (useCompact) {
+                return <PRHistoryRow key={itemKey} pr={item as PRWorkItem} />;
+              }
+
               return (
                 <ErrorBoundary
                   key={itemKey}

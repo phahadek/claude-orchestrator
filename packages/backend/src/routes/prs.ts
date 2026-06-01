@@ -10,8 +10,6 @@ import {
   getTaskTitleFromCache,
   upsertPullRequest,
   deletePR,
-  deleteMergedAndClosedPRs,
-  countMergedAndClosedPRs,
   resetReviewIteration,
   setPRReviewResult,
   updatePRDraftStatus,
@@ -31,8 +29,6 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { ServerMessage } from '../ws/types';
 import { emitTaskUpdated } from './tasks';
-import { recordEvent } from '../audit/AuditLog';
-import type { DeviceRow } from '../db/types';
 
 let _broadcast: (msg: ServerMessage) => void = () => {};
 export function setPRBroadcast(fn: (msg: ServerMessage) => void): void {
@@ -691,50 +687,6 @@ export function createPrsRouter(
       res.json(result);
     },
   );
-
-  // ── DELETE /api/prs/clear?projectId=<id> ────────────────────────────────────
-  router.delete('/prs/clear', (req: Request, res: Response) => {
-    const projectId =
-      typeof req.query.projectId === 'string' ? req.query.projectId : '';
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId query param is required' });
-      return;
-    }
-    const project = getProjectById(projectId);
-    if (!project?.githubRepo) {
-      res.status(422).json({ error: 'Project has no githubRepo configured' });
-      return;
-    }
-    const count = deleteMergedAndClosedPRs(project.githubRepo);
-    const deviceId =
-      (req as Request & { device?: DeviceRow }).device?.id ?? null;
-    recordEvent({
-      event_type: 'manual_pr_clear',
-      actor_type: 'human',
-      actor_id: deviceId,
-      project_id: projectId,
-      task_id: null,
-      payload: { repo: project.githubRepo, deleted_count: count },
-    });
-    res.json({ deleted: count });
-  });
-
-  // ── GET /api/prs/clear/count?projectId=<id> ──────────────────────────────────
-  router.get('/prs/clear/count', (req: Request, res: Response) => {
-    const projectId =
-      typeof req.query.projectId === 'string' ? req.query.projectId : '';
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId query param is required' });
-      return;
-    }
-    const project = getProjectById(projectId);
-    if (!project?.githubRepo) {
-      res.status(422).json({ error: 'Project has no githubRepo configured' });
-      return;
-    }
-    const count = countMergedAndClosedPRs(project.githubRepo);
-    res.json({ count });
-  });
 
   // ── DELETE /api/prs/:prNumber?projectId=<id> ─────────────────────────────────
   router.delete('/prs/:prNumber', (req: Request, res: Response) => {
