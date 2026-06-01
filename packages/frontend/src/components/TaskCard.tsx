@@ -5,6 +5,7 @@ import { useDispatch } from '../hooks/useDispatch';
 import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
 import { CIBadges } from './CIBadges';
 import { ContextBadge } from './ContextBadge';
+import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
 import styles from './TaskCard.module.css';
 
 interface Props {
@@ -189,7 +190,7 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
             className={styles.notionLink}
             onClick={(e) => e.stopPropagation()}
           >
-            Notion ↗
+            {getTaskSourceLinkLabel(project?.taskSource ?? 'notion')}
           </a>
         )}
         {task.totalTokens.input + task.totalTokens.output > 0 && (

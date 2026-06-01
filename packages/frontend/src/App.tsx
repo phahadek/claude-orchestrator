@@ -1119,6 +1119,10 @@ export default function App() {
                           sessionOverlayOpen={sessionOverlayOpen}
                           onOpenSessionOverlay={handleOpenSessionOverlay}
                           projectId={activeProjectId ?? undefined}
+                          project={
+                            projects.find((p) => p.id === activeProjectId) ??
+                            null
+                          }
                           isLocalOnly={
                             projects.find((p) => p.id === activeProjectId)
                               ?.gitMode === 'local-only'
@@ -1283,6 +1287,11 @@ export default function App() {
                       }
                       onResume={handleResume}
                       sessionMode={sessionMode}
+                      project={
+                        projects.find(
+                          (p) => p.id === selectedSession?.project_id,
+                        ) ?? null
+                      }
                     />
                   </ErrorBoundary>
                 ) : (
