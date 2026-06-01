@@ -89,6 +89,7 @@ function baseStoreReturn(sessions: object[] = []) {
     taskListRefreshTrigger: 0,
     lastAutofixEvent: null,
     lastReviewStartedEvent: null,
+    lastCiBillingBlockedEvent: null,
   };
 }
 

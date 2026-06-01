@@ -19,10 +19,12 @@ export function CIBadges({
 
   const showCiFailing =
     mergeState === 'ci_failed' || pauseReason === 'ci_failing';
+  const showBillingBlocked = pauseReason === 'ci_billing_blocked';
   const showUnstable = mergeState === 'unstable';
   const showRunning = mergeState === 'ci_running';
 
-  if (!showCiFailing && !showUnstable && !showRunning) return null;
+  if (!showCiFailing && !showBillingBlocked && !showUnstable && !showRunning)
+    return null;
 
   const ciFailingTitle =
     failingChecks.length > 0
@@ -50,6 +52,14 @@ export function CIBadges({
             {ciFailingText}
           </span>
         ))}
+      {showBillingBlocked && (
+        <span
+          className={styles.ciBadge}
+          title="GitHub Actions billing/spending limit reached — jobs cannot start. Resolve billing in GitHub settings, then re-run failed jobs."
+        >
+          ❌ Billing limit — jobs blocked
+        </span>
+      )}
       {showUnstable && (
         <span
           className={styles.unstableBadge}

@@ -214,6 +214,74 @@ export class GitHubClient {
   }
 
   /**
+   * Fetch annotations for a specific check run.
+   * Used to detect billing-quota failures which are only distinguishable via annotations.
+   */
+  async fetchCheckRunAnnotations(
+    repo: string,
+    checkRunId: number,
+  ): Promise<CheckRunAnnotation[]> {
+    return this.request<CheckRunAnnotation[]>(
+      `/repos/${repo}/check-runs/${checkRunId}/annotations`,
+    );
+  }
+
+  /**
+   * Check whether a failing SHA is blocked by a GitHub billing/spending limit.
+   * Fetches all failing check-run annotations and returns the first billing-blocked
+   * annotation message found, or null if none match.
+   */
+  async detectBillingBlock(
+    sha: string,
+    repo?: string,
+  ): Promise<{ blocked: boolean; message: string | null }> {
+    const r = repo ?? GITHUB_REPO;
+    let checkRuns: Array<{
+      id: number;
+      status: string;
+      conclusion: string | null;
+    }>;
+    try {
+      const data = await this.request<{
+        check_runs: Array<{
+          id: number;
+          status: string;
+          conclusion: string | null;
+        }>;
+      }>(`/repos/${r}/commits/${sha}/check-runs?per_page=100`);
+      checkRuns = data.check_runs;
+    } catch (err) {
+      console.warn(
+        `[GitHubClient] detectBillingBlock: check-runs fetch failed for ${sha}: ${(err as Error).message}`,
+      );
+      return { blocked: false, message: null };
+    }
+
+    const failingRuns = checkRuns.filter(
+      (c) =>
+        c.status === 'completed' &&
+        c.conclusion !== null &&
+        FAILING_CHECK_CONCLUSIONS.has(c.conclusion),
+    );
+
+    for (const run of failingRuns) {
+      let annotations: CheckRunAnnotation[];
+      try {
+        annotations = await this.fetchCheckRunAnnotations(r, run.id);
+      } catch {
+        continue;
+      }
+      for (const ann of annotations) {
+        if (isBillingBlockedAnnotation(ann)) {
+          return { blocked: true, message: ann.message };
+        }
+      }
+    }
+
+    return { blocked: false, message: null };
+  }
+
+  /**
    * Fetch failing check-runs for a given commit SHA. Used to distinguish
    * "blocked by failing CI" from "blocked by branch protection" when a merge
    * attempt fails with 409/405 or when mergeable_state is `unstable`/`blocked`.
@@ -1030,6 +1098,32 @@ function mapMilestone(raw: GitHubRawMilestone): Milestone {
     createdAt: raw.created_at,
     updatedAt: raw.updated_at,
   };
+}
+
+// ---- billing-block detection ------------------------------------------------
+
+export interface CheckRunAnnotation {
+  path: string;
+  annotation_level: string;
+  message: string;
+  raw_details: string | null;
+}
+
+/**
+ * Returns true when a check-run annotation matches the GitHub billing/spending-limit
+ * failure pattern. Verified 2026-05-31 against the live GitHub API.
+ *
+ * Pattern: annotation_level='failure', path='.github', message matches the known
+ * billing-limit message prefix.
+ */
+export function isBillingBlockedAnnotation(ann: CheckRunAnnotation): boolean {
+  return (
+    ann.path === '.github' &&
+    ann.annotation_level === 'failure' &&
+    /^The job was not started because (recent account payments|.*spending limit)/i.test(
+      ann.message,
+    )
+  );
 }
 
 function parseDiffFiles(diff: string): string[] {

@@ -244,6 +244,36 @@ export class PRMergeWatcher {
         // Reserve this SHA atomically before running remediation so a restart
         // can't re-fire for the same SHA.
         setCiRemediationAttemptedSha(pr.pr_number, pr.repo, pr.head_sha);
+
+        // Check for billing/spending-limit block before sending the investigate prompt.
+        if (pr.head_sha) {
+          const billingBlock = await this.github
+            .detectBillingBlock(pr.head_sha, pr.repo)
+            .catch((err: unknown) => {
+              console.warn(
+                `[PRMergeWatcher] detectBillingBlock failed for PR #${pr.pr_number}:`,
+                (err as Error).message,
+              );
+              return { blocked: false, message: null };
+            });
+          if (billingBlock.blocked) {
+            setPauseReason(pr.pr_number, pr.repo, 'ci_billing_blocked');
+            this.broadcast({
+              type: 'ci_billing_blocked',
+              prNumber: pr.pr_number,
+              repo: pr.repo,
+              message: billingBlock.message ?? '',
+            });
+            if (pr.task_id) {
+              emitTaskUpdated(pr.task_id);
+            }
+            console.log(
+              `[PRMergeWatcher] PR #${pr.pr_number}: billing/spending limit blocked — paused as ci_billing_blocked`,
+            );
+            return;
+          }
+        }
+
         await this.runCIFailureRemediation(pr, failingNames);
       }
     }
@@ -384,14 +414,18 @@ export class PRMergeWatcher {
     pr: PullRequestRow,
     category: MergeabilityCategory,
   ): void {
-    if (pr.pause_reason !== 'ci_failing') return;
+    if (
+      pr.pause_reason !== 'ci_failing' &&
+      pr.pause_reason !== 'ci_billing_blocked'
+    )
+      return;
     // Trigger recovery for any non-CI-failing, non-conflict category.
     // AutoMerger will re-categorize and bounce back if not actually mergeable.
     if (category.category === 'ci_failed' || category.category === 'conflict')
       return;
     setPauseReason(pr.pr_number, pr.repo, null);
     console.log(
-      `[PRMergeWatcher] PR #${pr.pr_number} CI recovered (mergeState=${category.mergeState}) — clearing ci_failing pause and retrying AutoMerger`,
+      `[PRMergeWatcher] PR #${pr.pr_number} CI recovered (mergeState=${category.mergeState}) — clearing ${pr.pause_reason} pause and retrying AutoMerger`,
     );
     this.broadcast({
       type: 'pr_pause_cleared',

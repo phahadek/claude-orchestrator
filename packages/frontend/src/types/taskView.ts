@@ -11,6 +11,7 @@ export type PauseReason =
   | 'max_reviews'
   | 'stuck_timeout'
   | 'ci_failing'
+  | 'ci_billing_blocked'
   | 'auto_merge_failed'
   | 'pr_closed'
   | 'review_failed'

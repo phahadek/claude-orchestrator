@@ -172,6 +172,12 @@ export function useSessionStore() {
     sessionId: string;
     receivedAt: number;
   } | null>(null);
+  const [lastCiBillingBlockedEvent, setLastCiBillingBlockedEvent] = useState<{
+    prNumber: number;
+    repo: string;
+    message: string;
+    receivedAt: number;
+  } | null>(null);
 
   const dispatch = useCallback((msg: ServerMessage) => {
     setSynced(true);
@@ -494,6 +500,15 @@ export function useSessionStore() {
         receivedAt: Date.now(),
       });
     }
+    if (msg.type === 'ci_billing_blocked') {
+      setLastCiBillingBlockedEvent({
+        prNumber: msg.prNumber,
+        repo: msg.repo,
+        message: msg.message,
+        receivedAt: Date.now(),
+      });
+      setPrRefreshTrigger((n) => n + 1);
+    }
   }, []);
 
   const resetTasks = useCallback(() => {
@@ -616,5 +631,6 @@ export function useSessionStore() {
     taskListRefreshTrigger,
     lastAutofixEvent,
     lastReviewStartedEvent,
+    lastCiBillingBlockedEvent,
   };
 }
