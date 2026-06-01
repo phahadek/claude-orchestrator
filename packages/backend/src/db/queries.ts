@@ -337,9 +337,7 @@ export function archiveFinishedSessions(): number {
  * whose ended_at is older than the given cutoff timestamp (ms).
  * Returns the session_ids of archived sessions.
  */
-export function archiveConcludedSessionsOlderThan(
-  cutoffMs: number,
-): string[] {
+export function archiveConcludedSessionsOlderThan(cutoffMs: number): string[] {
   const rows = db
     .prepare(
       `SELECT session_id FROM sessions

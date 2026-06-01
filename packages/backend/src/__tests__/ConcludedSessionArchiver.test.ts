@@ -34,13 +34,17 @@ beforeEach(() => {
 
 describe('ConcludedSessionArchiver', () => {
   it('start() / stop() do not throw', () => {
-    const archiver = new ConcludedSessionArchiver(() => {}, { intervalMs: 100000 });
+    const archiver = new ConcludedSessionArchiver(() => {}, {
+      intervalMs: 100000,
+    });
     archiver.start();
     archiver.stop();
   });
 
   it('start() is idempotent — calling twice does not double-schedule', () => {
-    const archiver = new ConcludedSessionArchiver(() => {}, { intervalMs: 100000 });
+    const archiver = new ConcludedSessionArchiver(() => {}, {
+      intervalMs: 100000,
+    });
     archiver.start();
     archiver.start();
     archiver.stop();
@@ -49,7 +53,9 @@ describe('ConcludedSessionArchiver', () => {
   it('sweepOnce() skips when auto_archive_enabled=false', async () => {
     runtimeSettings.auto_archive_enabled = false;
     const broadcast = vi.fn();
-    const archiver = new ConcludedSessionArchiver(broadcast, { intervalMs: 100000 });
+    const archiver = new ConcludedSessionArchiver(broadcast, {
+      intervalMs: 100000,
+    });
     await archiver.sweepOnce();
     expect(mockArchive).not.toHaveBeenCalled();
     expect(broadcast).not.toHaveBeenCalled();
@@ -58,7 +64,9 @@ describe('ConcludedSessionArchiver', () => {
   it('sweepOnce() archives nothing when query returns empty array', async () => {
     mockArchive.mockReturnValue([]);
     const broadcast = vi.fn();
-    const archiver = new ConcludedSessionArchiver(broadcast, { intervalMs: 100000 });
+    const archiver = new ConcludedSessionArchiver(broadcast, {
+      intervalMs: 100000,
+    });
     await archiver.sweepOnce();
     expect(broadcast).not.toHaveBeenCalled();
     expect(mockRecord).not.toHaveBeenCalled();
@@ -80,17 +88,30 @@ describe('ConcludedSessionArchiver', () => {
   it('sweepOnce() broadcasts session_archived for each archived session', async () => {
     mockArchive.mockReturnValue(['s1', 's2', 's3']);
     const broadcast = vi.fn();
-    const archiver = new ConcludedSessionArchiver(broadcast, { intervalMs: 100000 });
+    const archiver = new ConcludedSessionArchiver(broadcast, {
+      intervalMs: 100000,
+    });
     await archiver.sweepOnce();
     expect(broadcast).toHaveBeenCalledTimes(3);
-    expect(broadcast).toHaveBeenCalledWith({ type: 'session_archived', sessionId: 's1' });
-    expect(broadcast).toHaveBeenCalledWith({ type: 'session_archived', sessionId: 's2' });
-    expect(broadcast).toHaveBeenCalledWith({ type: 'session_archived', sessionId: 's3' });
+    expect(broadcast).toHaveBeenCalledWith({
+      type: 'session_archived',
+      sessionId: 's1',
+    });
+    expect(broadcast).toHaveBeenCalledWith({
+      type: 'session_archived',
+      sessionId: 's2',
+    });
+    expect(broadcast).toHaveBeenCalledWith({
+      type: 'session_archived',
+      sessionId: 's3',
+    });
   });
 
   it('sweepOnce() writes one audit_log row with archived_count and session_ids', async () => {
     mockArchive.mockReturnValue(['s1', 's2']);
-    const archiver = new ConcludedSessionArchiver(() => {}, { intervalMs: 100000 });
+    const archiver = new ConcludedSessionArchiver(() => {}, {
+      intervalMs: 100000,
+    });
     await archiver.sweepOnce();
     expect(mockRecord).toHaveBeenCalledTimes(1);
     expect(mockRecord).toHaveBeenCalledWith({
@@ -105,14 +126,18 @@ describe('ConcludedSessionArchiver', () => {
 
   it('sweepOnce() writes NO audit_log row when 0 sessions archived', async () => {
     mockArchive.mockReturnValue([]);
-    const archiver = new ConcludedSessionArchiver(() => {}, { intervalMs: 100000 });
+    const archiver = new ConcludedSessionArchiver(() => {}, {
+      intervalMs: 100000,
+    });
     await archiver.sweepOnce();
     expect(mockRecord).not.toHaveBeenCalled();
   });
 
   it('stop() prevents further sweeps from executing', async () => {
     mockArchive.mockReturnValue([]);
-    const archiver = new ConcludedSessionArchiver(() => {}, { intervalMs: 100000 });
+    const archiver = new ConcludedSessionArchiver(() => {}, {
+      intervalMs: 100000,
+    });
     archiver.start();
     archiver.stop();
     mockArchive.mockClear();

@@ -127,7 +127,9 @@ function runtimeSettingsAsRecord(): Record<SettingKey, string> {
       runtimeSettings.pr_boot_sweep_merged_lookback_days,
     ),
     auto_archive_enabled: String(runtimeSettings.auto_archive_enabled),
-    auto_archive_grace_minutes: String(runtimeSettings.auto_archive_grace_minutes),
+    auto_archive_grace_minutes: String(
+      runtimeSettings.auto_archive_grace_minutes,
+    ),
     auto_archive_sweep_interval_minutes: String(
       runtimeSettings.auto_archive_sweep_interval_minutes,
     ),

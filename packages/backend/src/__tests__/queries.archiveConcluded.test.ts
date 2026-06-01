@@ -37,9 +37,21 @@ beforeEach(() => {
 
 describe('archiveConcludedSessionsOlderThan', () => {
   it('archives concluded sessions older than cutoff', () => {
-    insertSession({ session_id: 'old-done', status: 'done', ended_at: CUTOFF - 1 });
-    insertSession({ session_id: 'old-error', status: 'error', ended_at: CUTOFF - 1 });
-    insertSession({ session_id: 'old-killed', status: 'killed', ended_at: CUTOFF - 1 });
+    insertSession({
+      session_id: 'old-done',
+      status: 'done',
+      ended_at: CUTOFF - 1,
+    });
+    insertSession({
+      session_id: 'old-error',
+      status: 'error',
+      ended_at: CUTOFF - 1,
+    });
+    insertSession({
+      session_id: 'old-killed',
+      status: 'killed',
+      ended_at: CUTOFF - 1,
+    });
 
     const ids = archiveConcludedSessionsOlderThan(CUTOFF);
     expect(ids.sort()).toEqual(['old-done', 'old-error', 'old-killed'].sort());
@@ -54,21 +66,30 @@ describe('archiveConcludedSessionsOlderThan', () => {
 
   it('does not archive sessions within the grace period (ended_at >= cutoff)', () => {
     insertSession({ session_id: 'fresh', status: 'done', ended_at: CUTOFF });
-    insertSession({ session_id: 'newer', status: 'done', ended_at: CUTOFF + 1000 });
+    insertSession({
+      session_id: 'newer',
+      status: 'done',
+      ended_at: CUTOFF + 1000,
+    });
 
     const ids = archiveConcludedSessionsOlderThan(CUTOFF);
     expect(ids).toHaveLength(0);
 
-    const rows = db
-      .prepare(`SELECT archived FROM sessions`)
-      .all() as { archived: number }[];
+    const rows = db.prepare(`SELECT archived FROM sessions`).all() as {
+      archived: number;
+    }[];
     for (const r of rows) {
       expect(r.archived).toBe(0);
     }
   });
 
   it('does not touch already-archived sessions', () => {
-    insertSession({ session_id: 'already-archived', status: 'done', ended_at: CUTOFF - 1, archived: 1 });
+    insertSession({
+      session_id: 'already-archived',
+      status: 'done',
+      ended_at: CUTOFF - 1,
+      archived: 1,
+    });
 
     const ids = archiveConcludedSessionsOlderThan(CUTOFF);
     expect(ids).toHaveLength(0);
