@@ -477,7 +477,11 @@ describe('isTerminalStalePR predicate', () => {
   });
 
   it('returns false when review_result is null (no review yet)', () => {
-    const pr = makePR({ review_result: null, head_sha: 'sha-abc', last_reviewed_sha: 'sha-abc' });
+    const pr = makePR({
+      review_result: null,
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-abc',
+    });
     expect(isTerminalStalePR(pr)).toBe(false);
   });
 
@@ -537,7 +541,9 @@ describe('PRMergeWatcher terminal-stale skip', () => {
     vi.mocked(getProjectByGithubRepo).mockReturnValue(makeProject() as never);
 
     const github = makeGitHubClient({
-      getPRState: vi.fn().mockResolvedValue({ state: 'open', headSha: 'sha-new' }),
+      getPRState: vi
+        .fn()
+        .mockResolvedValue({ state: 'open', headSha: 'sha-new' }),
     });
     const sessions = makeSessionManager();
     const watcher = new PRMergeWatcher(
