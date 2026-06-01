@@ -521,7 +521,9 @@ describe('AutoLauncher — project-driven polling', () => {
     };
     vi.mocked(getMergedPRForTask).mockReturnValue(mergedPR as never);
 
-    const updateStatus = vi.fn().mockRejectedValue(new Error('Notion API down'));
+    const updateStatus = vi
+      .fn()
+      .mockRejectedValue(new Error('Notion API down'));
     const notionBackend = {
       type: 'notion' as const,
       fetchReadyTasks: vi.fn().mockResolvedValue([makeResolvedTask()]),

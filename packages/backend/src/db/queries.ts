@@ -952,9 +952,9 @@ export const getPRByNotionTaskId = getPRByTaskId;
  */
 export function getMergedPRForTask(taskId: string): PullRequestRow | null {
   return db
-    .prepare<{ task_id: string }>(
-      `SELECT * FROM pull_requests WHERE task_id = @task_id AND state = 'merged' ORDER BY pr_number DESC LIMIT 1`,
-    )
+    .prepare<{
+      task_id: string;
+    }>(`SELECT * FROM pull_requests WHERE task_id = @task_id AND state = 'merged' ORDER BY pr_number DESC LIMIT 1`)
     .get({ task_id: taskId }) as PullRequestRow | null;
 }
 
