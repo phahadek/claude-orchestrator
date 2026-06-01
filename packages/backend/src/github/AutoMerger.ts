@@ -330,13 +330,28 @@ export class AutoMerger {
           await this.attemptMerge(row, ciCheckNames);
           return;
         }
-        case 'ci_failed':
+        case 'ci_failed': {
+          const headSha = poll.mergeability.headSha;
+          if (headSha) {
+            const billingBlock = await this.github.detectBillingBlock(
+              headSha,
+              repo,
+            );
+            if (billingBlock.blocked) {
+              await this.pauseAsBillingBlocked(
+                row,
+                billingBlock.message ?? '',
+              );
+              return;
+            }
+          }
           await this.pauseWithReason(
             row,
             'ci_failing',
             poll.mergeability.failingChecks.map((c) => c.name),
           );
           return;
+        }
         case 'conflict':
           // Existing merge-conflict handling owns this case (see PRMergeWatcher
           // and the /merge route) — agent gets a rebase message; we don't pause.
@@ -417,6 +432,17 @@ export class AutoMerger {
           return;
         }
         if (category?.category === 'ci_failed') {
+          const headSha = category.headSha;
+          if (headSha) {
+            const billingBlock = await this.github.detectBillingBlock(
+              headSha,
+              pr.repo,
+            );
+            if (billingBlock.blocked) {
+              await this.pauseAsBillingBlocked(pr, billingBlock.message ?? '');
+              return;
+            }
+          }
           await this.pauseWithReason(
             pr,
             'ci_failing',
@@ -430,6 +456,25 @@ export class AutoMerger {
       );
       await this.pauseWithReason(pr, 'auto_merge_failed');
     }
+  }
+
+  private async pauseAsBillingBlocked(
+    pr: PullRequestRow,
+    message: string,
+  ): Promise<void> {
+    setPauseReason(pr.pr_number, pr.repo, 'ci_billing_blocked');
+    this.broadcast({
+      type: 'ci_billing_blocked',
+      prNumber: pr.pr_number,
+      repo: pr.repo,
+      message,
+    });
+    if (pr.task_id) {
+      emitTaskUpdated(pr.task_id);
+    }
+    console.log(
+      `[AutoMerger] PR #${pr.pr_number}: billing/spending limit blocked — paused as ci_billing_blocked`,
+    );
   }
 
   private async pauseWithReason(

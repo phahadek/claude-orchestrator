@@ -112,6 +112,7 @@ export default function App() {
     taskListRefreshTrigger,
     lastAutofixEvent,
     lastReviewStartedEvent,
+    lastCiBillingBlockedEvent,
   } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -876,6 +877,7 @@ export default function App() {
     lastPrReviewEvent,
     lastReviewFailed,
     lastApiOverloadedPaused,
+    lastCiBillingBlockedEvent,
   );
 
   useEffect(() => {

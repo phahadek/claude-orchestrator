@@ -64,12 +64,19 @@ export function useNotifications(
     repo?: string;
     receivedAt: number;
   } | null,
+  ciBillingBlockedEvent?: {
+    prNumber: number;
+    repo: string;
+    message: string;
+    receivedAt: number;
+  } | null,
 ): void {
   const prevRef = useRef<Map<string, SessionSnapshot>>(new Map());
   const initialSyncDoneRef = useRef(false);
   const prevReviewEventRef = useRef<typeof prReviewEvent>(null);
   const prevReviewFailedRef = useRef<typeof reviewFailedEvent>(null);
   const prevApiOverloadedRef = useRef<typeof apiOverloadedPausedEvent>(null);
+  const prevCiBillingBlockedRef = useRef<typeof ciBillingBlockedEvent>(null);
 
   useEffect(() => {
     requestPermissionOnce();
@@ -224,4 +231,24 @@ export function useNotifications(
       );
     });
   }, [apiOverloadedPausedEvent]);
+
+  useEffect(() => {
+    if (!ciBillingBlockedEvent) return;
+    if (
+      prevCiBillingBlockedRef.current?.receivedAt ===
+      ciBillingBlockedEvent.receivedAt
+    )
+      return;
+    prevCiBillingBlockedRef.current = ciBillingBlockedEvent;
+
+    const { prNumber, repo } = ciBillingBlockedEvent;
+    fireNotification(
+      '❌ GitHub billing limit — CI blocked',
+      `PR #${prNumber} in ${repo}: jobs cannot start. Resolve billing in GitHub settings.`,
+      () => {
+        window.focus();
+        window.dispatchEvent(new CustomEvent('navigateToPRs'));
+      },
+    );
+  }, [ciBillingBlockedEvent]);
 }

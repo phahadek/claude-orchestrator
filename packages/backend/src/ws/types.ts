@@ -268,6 +268,12 @@ export type ServerMessage =
       type: 'update_available';
       version: string;
       releaseNotesUrl: string;
+    }
+  | {
+      type: 'ci_billing_blocked';
+      prNumber: number;
+      repo: string;
+      message: string;
     };
 
 // ── Client → Server ──────────────────────────────────────────────
