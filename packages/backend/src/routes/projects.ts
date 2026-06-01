@@ -211,6 +211,7 @@ projectsRouter.post('/projects', async (req: Request, res: Response) => {
         ? body.autoLaunchMilestoneId
         : null,
     autoMergeEnabled: body.autoMergeEnabled === true,
+    baseBranch: typeof body.baseBranch === 'string' ? body.baseBranch : 'dev',
   });
   res.status(201).json(project);
 });
@@ -363,6 +364,9 @@ projectsRouter.patch('/projects/:id', async (req: Request, res: Response) => {
   } else if ('gitMode' in body && body.gitMode !== undefined) {
     res.status(400).json({ error: `gitMode must be 'github' or 'local-only'` });
     return;
+  }
+  if (typeof body.baseBranch === 'string') {
+    patch.base_branch = body.baseBranch;
   }
 
   // dataResidencyConfirmed triggers audit logging via the dedicated service method.

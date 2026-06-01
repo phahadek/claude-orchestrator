@@ -78,6 +78,7 @@ export interface Project {
   nonMilestoneSourceConfig: NonMilestoneSourceConfig | null;
   taskSourceConfig: string | null;
   dataResidencyConfirmed: boolean;
+  baseBranch: string;
   createdAt: number;
   updatedAt: number;
   milestones: ProjectMilestone[];
@@ -95,6 +96,7 @@ export interface CreateProjectInput {
   autoLaunchEnabled?: boolean;
   autoLaunchMilestoneId?: string | null;
   autoMergeEnabled?: boolean;
+  baseBranch?: string;
 }
 
 export interface UpdateProjectInput {
@@ -110,6 +112,7 @@ export interface UpdateProjectInput {
   autoMergeEnabled?: boolean;
   nonMilestoneSourceConfig?: NonMilestoneSourceConfig | null;
   dataResidencyConfirmed?: boolean;
+  baseBranch?: string;
 }
 
 export interface CreateMilestoneInput {

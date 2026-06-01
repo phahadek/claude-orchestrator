@@ -1596,12 +1596,12 @@ export function insertProject(p: NewProjectRow): ProjectRow {
     INSERT INTO projects
       (id, name, project_dir, context_url, github_repo, task_source, git_mode,
        auto_launch_enabled, auto_launch_milestone_id, auto_merge_enabled,
-       task_source_config,
+       task_source_config, base_branch,
        created_at, updated_at)
     VALUES
       (@id, @name, @project_dir, @context_url, @github_repo, @task_source, @git_mode,
        @auto_launch_enabled, @auto_launch_milestone_id, @auto_merge_enabled,
-       @task_source_config,
+       @task_source_config, @base_branch,
        @created_at, @updated_at)
   `,
   ).run({
@@ -1611,6 +1611,7 @@ export function insertProject(p: NewProjectRow): ProjectRow {
     auto_launch_milestone_id: p.auto_launch_milestone_id ?? null,
     auto_merge_enabled: p.auto_merge_enabled ?? 0,
     task_source_config: p.task_source_config ?? null,
+    base_branch: p.base_branch ?? 'dev',
     created_at: p.created_at ?? now,
     updated_at: p.updated_at ?? now,
   });
@@ -1660,6 +1661,7 @@ export interface ProjectPatch {
   non_milestone_source_config?: string | null;
   task_source_config?: string | null;
   data_residency_confirmed?: number;
+  base_branch?: string;
 }
 
 export function updateProject(
@@ -1684,6 +1686,7 @@ export function updateProject(
     non_milestone_source_config: string | null;
     task_source_config: string | null;
     data_residency_confirmed: number;
+    base_branch: string;
     updated_at: number;
   }>(
     `
@@ -1701,6 +1704,7 @@ export function updateProject(
         non_milestone_source_config = @non_milestone_source_config,
         task_source_config = @task_source_config,
         data_residency_confirmed = @data_residency_confirmed,
+        base_branch = @base_branch,
         updated_at = @updated_at
     WHERE id = @id
   `,
@@ -1746,6 +1750,7 @@ export function updateProject(
       patch.data_residency_confirmed !== undefined
         ? patch.data_residency_confirmed
         : (existing.data_residency_confirmed ?? 0),
+    base_branch: patch.base_branch ?? existing.base_branch ?? 'dev',
     updated_at: now,
   });
   return getProjectRowById(id);

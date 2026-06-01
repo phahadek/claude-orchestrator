@@ -71,6 +71,15 @@ export class SessionAuditor {
     return this.notionClientOrProjectId;
   }
 
+  private resolveBaseBranch(): string {
+    if (typeof this.notionClientOrProjectId === 'string') {
+      const { getProjectById } =
+        require('../config.js') as typeof import('../config');
+      return getProjectById(this.notionClientOrProjectId)?.baseBranch ?? 'dev';
+    }
+    return 'dev';
+  }
+
   /**
    * Run all post-session checks and return a SessionAudit record.
    * Non-blocking: GitHub/Notion failures are caught and skipped, not thrown.
@@ -109,10 +118,13 @@ export class SessionAuditor {
         }
 
         if (pr) {
-          // 2. PR targets correct branch (dev)?
+          // 2. PR targets correct branch?
           prTargetsBranch = pr.baseBranch;
-          if (pr.baseBranch !== 'dev') {
-            violations.push(`PR targets ${pr.baseBranch} instead of dev`);
+          const expectedBaseBranch = this.resolveBaseBranch();
+          if (pr.baseBranch !== expectedBaseBranch) {
+            violations.push(
+              `PR targets ${pr.baseBranch} instead of ${expectedBaseBranch}`,
+            );
           }
 
           // 3. PR title format: must start with "feat: "

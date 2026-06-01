@@ -549,9 +549,9 @@ export class SessionManager extends EventEmitter {
 
     if (!isLocalOnly) {
       if (milestoneSlug) {
-        // ensureMilestoneBranch fetches origin/dev internally when needed.
+        // ensureMilestoneBranch fetches origin/<baseBranch> internally when needed.
         try {
-          ensureMilestoneBranch(milestoneSlug, projectDir);
+          ensureMilestoneBranch(milestoneSlug, projectDir, project.baseBranch);
         } catch (err) {
           console.warn(
             `[SessionManager] ensureMilestoneBranch failed (continuing): ${err}`,
@@ -559,23 +559,25 @@ export class SessionManager extends EventEmitter {
         }
       } else {
         try {
-          // Fetch latest dev so sessions don't start from a stale local ref.
-          execSync('git fetch origin dev', {
+          // Fetch latest base branch so sessions don't start from a stale local ref.
+          execSync(`git fetch origin ${project.baseBranch}`, {
             cwd: projectDir,
             timeout: 30_000,
           });
         } catch (err) {
           console.warn(
-            `[SessionManager] git fetch origin dev failed (continuing with local ref): ${err}`,
+            `[SessionManager] git fetch origin ${project.baseBranch} failed (continuing with local ref): ${err}`,
           );
         }
       }
     }
 
-    // For github projects: use origin/dev when starting from dev, or the local
+    // For github projects: use origin/<baseBranch> when starting from baseBranch, or the local
     // milestone branch ref (guaranteed to exist after ensureMilestoneBranch).
     const worktreeBase =
-      isLocalOnly || startingPoint !== 'dev' ? startingPoint : 'origin/dev';
+      isLocalOnly || startingPoint !== project.baseBranch
+        ? startingPoint
+        : `origin/${project.baseBranch}`;
 
     try {
       execSync(`git worktree add --detach "${worktreePath}" ${worktreeBase}`, {
@@ -1425,7 +1427,11 @@ export class SessionManager extends EventEmitter {
     if (!isLocalOnlyResume) {
       if (resumeMilestoneSlug) {
         try {
-          ensureMilestoneBranch(resumeMilestoneSlug, projectDir);
+          ensureMilestoneBranch(
+            resumeMilestoneSlug,
+            projectDir,
+            project.baseBranch,
+          );
         } catch (err) {
           console.warn(
             `[SessionManager] sendOrResume: ensureMilestoneBranch failed (continuing): ${err}`,
@@ -1433,22 +1439,22 @@ export class SessionManager extends EventEmitter {
         }
       } else {
         try {
-          execSync('git fetch origin dev', {
+          execSync(`git fetch origin ${project.baseBranch}`, {
             cwd: projectDir,
             timeout: 30_000,
           });
         } catch (err) {
           console.warn(
-            `[SessionManager] sendOrResume: git fetch origin dev failed (continuing with local ref): ${err}`,
+            `[SessionManager] sendOrResume: git fetch origin ${project.baseBranch} failed (continuing with local ref): ${err}`,
           );
         }
       }
     }
 
     const resumeWorktreeBase =
-      isLocalOnlyResume || resumeStartingPoint !== 'dev'
+      isLocalOnlyResume || resumeStartingPoint !== project.baseBranch
         ? resumeStartingPoint
-        : 'origin/dev';
+        : `origin/${project.baseBranch}`;
 
     try {
       execSync(

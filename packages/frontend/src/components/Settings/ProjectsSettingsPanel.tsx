@@ -78,6 +78,7 @@ function toCreatePayload(values: ProjectFormValues) {
       values.gitMode !== 'local-only' ? values.autoMergeEnabled : false,
     nonMilestoneSourceConfig,
     dataResidencyConfirmed: values.dataResidencyConfirmed,
+    baseBranch: values.baseBranch || 'dev',
   };
 }
 

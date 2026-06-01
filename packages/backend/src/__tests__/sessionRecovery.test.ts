@@ -57,6 +57,7 @@ import {
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { emitTaskUpdated } from '../routes/tasks';
+import { hasNonEmptyDiff } from '../orchestration/localBranchHelpers';
 import type { TaskBackend } from '../tasks/TaskBackend';
 
 function makeTaskBackend(): TaskBackend {
@@ -259,5 +260,16 @@ describe('recoverSession', () => {
     // Wait for the floating promise from updateStatus.then(...)
     await new Promise((r) => setTimeout(r, 10));
     expect(emitTaskUpdated).toHaveBeenCalledWith('task-abc');
+  });
+
+  it('consumes opts.baseBranch when computing diff against base', async () => {
+    const broadcast = vi.fn();
+    await recoverSession('sess-13', baseOpts({ broadcast, baseBranch: 'main' }));
+    // hasNonEmptyDiff should be called with 'main' as the base branch
+    expect(vi.mocked(hasNonEmptyDiff)).toHaveBeenCalledWith(
+      '/worktree',
+      'main',
+      'feature/my-task',
+    );
   });
 });

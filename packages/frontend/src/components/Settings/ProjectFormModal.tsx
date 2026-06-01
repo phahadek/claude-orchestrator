@@ -24,6 +24,7 @@ export interface ProjectFormValues {
   dataResidencyConfirmed: boolean;
   githubOwnerRepo: string;
   githubDefaultMilestone: number | null;
+  baseBranch: string;
 }
 
 interface Props {
@@ -46,6 +47,7 @@ const EMPTY: ProjectFormValues = {
   dataResidencyConfirmed: false,
   githubOwnerRepo: '',
   githubDefaultMilestone: null,
+  baseBranch: 'dev',
 };
 
 const OWNER_REPO_RE = /^[^/]+\/[^/]+$/;
@@ -79,6 +81,7 @@ function fromProject(p: Project): ProjectFormValues {
     dataResidencyConfirmed: p.dataResidencyConfirmed ?? false,
     githubOwnerRepo: githubCfg ? `${githubCfg.owner}/${githubCfg.repo}` : '',
     githubDefaultMilestone: githubCfg?.defaultMilestone ?? null,
+    baseBranch: p.baseBranch ?? 'dev',
   };
 }
 
@@ -240,6 +243,20 @@ export function ProjectFormModal({
             {errors.projectDir && (
               <p className={styles.fieldError}>{errors.projectDir}</p>
             )}
+          </div>
+
+          <div className={styles.formField}>
+            <label htmlFor="proj-base-branch" className={styles.formLabel}>
+              Base Branch
+            </label>
+            <input
+              id="proj-base-branch"
+              type="text"
+              className={styles.input}
+              value={values.baseBranch}
+              onChange={(e) => update('baseBranch', e.target.value)}
+              placeholder="main"
+            />
           </div>
 
           <div className={styles.formField}>

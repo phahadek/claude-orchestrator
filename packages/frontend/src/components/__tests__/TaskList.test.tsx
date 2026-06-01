@@ -724,6 +724,7 @@ describe('TaskList', () => {
       autoLaunchMilestoneId: null,
       autoMergeEnabled: false,
       dataResidencyConfirmed: false,
+      baseBranch: 'dev',
     };
 
     renderList([task], {
