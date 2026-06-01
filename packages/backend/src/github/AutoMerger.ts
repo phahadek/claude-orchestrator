@@ -13,6 +13,8 @@ import {
   markLocalBranchMerged,
   setLocalBranchPauseReason,
   getSession,
+  getOrphanMergeablePRs,
+  getStaleAutoMergeFailedPRs,
 } from '../db/queries';
 import type { GitHubClient, PRReviewDecision } from './GitHubClient';
 import { GitHubApiError } from './types';
@@ -48,10 +50,52 @@ export class AutoMerger {
     private mergeWatcher: PRMergeWatcher,
     private broadcast: (msg: ServerMessage) => void,
     private sessions?: SessionManager,
-  ) {}
+  ) {
+    this.bootSweep();
+  }
 
   private key(prNumber: number, repo: string): string {
     return `${repo}#${prNumber}`;
+  }
+
+  /**
+   * On boot, trigger AutoMerger for any PR that is already in the approved +
+   * mergeable + clean state but received no event post-restart. These rows are
+   * missed by the event-driven path because AutoMerger only fires on fresh
+   * verdict=approved events or ci_failing → clean transitions.
+   */
+  bootSweep(): void {
+    const orphans = getOrphanMergeablePRs();
+    for (const row of orphans) {
+      console.log(
+        `[AutoMerger] boot sweep: triggering merge for orphan PR #${row.pr_number} in ${row.repo}`,
+      );
+      this.attempt(row.pr_number, row.repo);
+    }
+    if (orphans.length > 0) {
+      console.log(
+        `[AutoMerger] boot sweep complete — triggered ${orphans.length} orphan PR(s)`,
+      );
+    }
+  }
+
+  /**
+   * Clear stale auto_merge_failed pauses and retry merging. Only clears
+   * auto_merge_failed (transient 405 race); never touches human-actionable
+   * pause reasons (max_reviews, ci_failing, ci_billing_blocked, pr_body_invalid).
+   * Threshold is runtimeSettings.auto_merge_failed_clear_minutes.
+   */
+  clearStalePauses(): void {
+    const thresholdMs =
+      Math.max(1, runtimeSettings.auto_merge_failed_clear_minutes) * 60_000;
+    const stale = getStaleAutoMergeFailedPRs(thresholdMs);
+    for (const row of stale) {
+      console.log(
+        `[AutoMerger] clearing stale auto_merge_failed pause for PR #${row.pr_number} in ${row.repo} (>${runtimeSettings.auto_merge_failed_clear_minutes}m old) — retrying`,
+      );
+      setPauseReason(row.pr_number, row.repo, null);
+      this.attempt(row.pr_number, row.repo);
+    }
   }
 
   /**
