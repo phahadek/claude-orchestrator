@@ -20,9 +20,10 @@ export interface OrchestratorClaudeMdParams {
   bashRules?: string[];
   /**
    * Task backend type. When 'local', the lifecycle instructions are adjusted
-   * to skip Notion fetch steps and read tasks.yaml instead.
+   * to skip Notion fetch steps and read tasks.yaml instead. When 'github',
+   * the task assignment label uses "GitHub Issue" and lifecycle skips Notion.
    */
-  taskBackend?: 'notion' | 'local';
+  taskBackend?: 'notion' | 'local' | 'github';
   /**
    * Pre-fetched task spec markdown. When provided, the task content is injected
    * directly into the CLAUDE.md and the session skips Notion fetching entirely.
@@ -35,6 +36,11 @@ export interface OrchestratorClaudeMdParams {
    * Omitted when the file is absent (e.g. fresh clone).
    */
   localContext?: string;
+  /**
+   * Pre-loaded project context content (e.g. from PROJECT.md for GitHub projects).
+   * When present, appended as a "## Project Context" section after the task spec.
+   */
+  projectContextContent?: string;
   /**
    * Git mode for the project. 'local-only' omits PR-related lifecycle steps
    * and GitHub instructions; 'github' (default) keeps the full PR flow.
@@ -51,7 +57,7 @@ export interface OrchestratorClaudeMdParams {
  *
  * Section inventory:
  *  1. Header with override warning
- *  2. Task assignment (task name, Notion URL, project context URL)
+ *  2. Task assignment (task name, task URL, project context URL)
  *  3. Lifecycle steps
  *  4. Status ownership
  *  5. PR format standards
@@ -77,8 +83,12 @@ export function buildOrchestratorClaudeMd(
     taskBackend = 'notion',
     taskContent,
     localContext,
+    projectContextContent,
     gitMode = 'github',
   } = params;
+
+  const taskAssignmentLabel =
+    taskBackend === 'github' ? 'GitHub Issue' : 'Notion task';
 
   const resolvedBashRules = bashRules ?? [
     'Use `npx` instead of bare tool names.\n`tsc` → `npx tsc`. Bare commands may not be on PATH.',
@@ -106,7 +116,7 @@ export function buildOrchestratorClaudeMd(
 ## Task Assignment
 
 - **Task**: ${taskName}
-- **Notion task**: ${taskUrl}
+- **${taskAssignmentLabel}**: ${taskUrl}
 - **Project context**: ${projectContextUrl}
 
 ---
@@ -128,7 +138,13 @@ ${
 
 1. Read \`tasks.yaml\` in the project root for task context (skip Notion fetch).
 2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
-      : `1. Fetch the Notion task page and project context page.
+      : taskBackend === 'github'
+        ? `> ⚠️ **GitHub task source**: Task context comes from the GitHub Issue above.
+> Skip any Notion fetch steps — task content has been pre-loaded by the orchestrator.
+
+1. Read the **Task Spec** section below — it contains the full task specification.
+2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
+        : `1. Fetch the Notion task page and project context page.
 2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
 }
 3. Implement the task per the acceptance criteria.
@@ -316,6 +332,18 @@ ${bashRulesText}${
 > Do NOT re-fetch this from Notion — use the content below as your source of truth.
 
 ${taskContent}`
+      : ''
+  }${
+    projectContextContent
+      ? `
+
+---
+
+## Project Context
+
+> Pre-loaded from PROJECT.md in the project root.
+
+${projectContextContent}`
       : ''
   }${
     localContext

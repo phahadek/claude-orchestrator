@@ -230,6 +230,7 @@ export class AutoLauncher {
         taskName: task.title || taskUrl,
         milestoneId,
         taskKind,
+        taskId: task.id,
       });
       console.log(
         `[AutoLauncher] launched session ${sessionId.slice(0, 8)} for task ${task.title || task.id} in project ${project.id}`,

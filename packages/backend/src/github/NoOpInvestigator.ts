@@ -37,6 +37,7 @@ export interface INoOpSessionManager extends EventEmitter {
       customPrompt: string;
       projectId: string;
       taskName?: string;
+      taskId?: string;
     },
   ): string;
 }
@@ -244,6 +245,7 @@ export class NoOpInvestigator {
         customPrompt: prompt,
         projectId,
         taskName: `[no-op investigation] ${taskTitle}`,
+        taskId: taskId ?? undefined,
       });
     } catch (e) {
       console.error(
