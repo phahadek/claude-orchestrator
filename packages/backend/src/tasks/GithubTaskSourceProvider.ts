@@ -205,6 +205,16 @@ export class GithubTaskSourceProvider implements TaskBackend {
     return issue.body ?? '';
   }
 
+  async listTasksByStatus(status: string): Promise<ResolvedTask[]> {
+    const targetLabel = STATUS_LABELS[status];
+    if (!targetLabel) return [];
+    const issues = await this.client.listIssues(this.repo, {
+      labels: [targetLabel],
+      state: status === '✅ Done' ? 'closed' : 'open',
+    });
+    return this.buildResolvedTasks(issues);
+  }
+
   async updateNotes(_taskId: string, _notes: string): Promise<void> {
     // GitHub Issues backend does not support a separate Notes property
   }

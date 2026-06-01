@@ -475,3 +475,61 @@ describe('GithubTaskSourceProvider.fetchTaskPage', () => {
     expect(result).toBe('');
   });
 });
+
+// ── listTasksByStatus ───────────────────────────────────────────────────────
+
+describe('GithubTaskSourceProvider.listTasksByStatus', () => {
+  it('queries open issues by the mapped status label', async () => {
+    const client = makeClient({
+      listIssues: vi
+        .fn()
+        .mockResolvedValue([makeIssue(10, { labels: ['status:in-progress', 'type:code'] })]),
+    });
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
+
+    const result = await provider.listTasksByStatus('🔄 In Progress');
+
+    expect(client.listIssues).toHaveBeenCalledWith('owner/repo', {
+      labels: ['status:in-progress'],
+      state: 'open',
+    });
+    expect(result).toHaveLength(1);
+    expect(result[0].task.id).toBe('github:10');
+  });
+
+  it('queries closed issues when status is ✅ Done', async () => {
+    const client = makeClient({
+      listIssues: vi
+        .fn()
+        .mockResolvedValue([makeIssue(20, { state: 'closed', labels: ['status:done'] })]),
+    });
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
+
+    const result = await provider.listTasksByStatus('✅ Done');
+
+    expect(client.listIssues).toHaveBeenCalledWith('owner/repo', {
+      labels: ['status:done'],
+      state: 'closed',
+    });
+    expect(result[0].task.id).toBe('github:20');
+  });
+
+  it('returns [] for an unknown status string', async () => {
+    const client = makeClient();
+    const provider = new GithubTaskSourceProvider(
+      client as never,
+      PROJECT_CONFIG,
+    );
+
+    const result = await provider.listTasksByStatus('not a real status');
+
+    expect(client.listIssues).not.toHaveBeenCalled();
+    expect(result).toEqual([]);
+  });
+});
