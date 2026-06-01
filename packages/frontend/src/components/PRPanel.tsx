@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { WorkItemCard } from './WorkItemCard';
-import type { WorkItemListItem, PRWorkItem, PRReviewResult } from './WorkItemCard';
+import type {
+  WorkItemListItem,
+  PRWorkItem,
+  PRReviewResult,
+} from './WorkItemCard';
 import { PRHistoryRow } from './PRHistoryRow';
 import { ErrorBoundary } from './ErrorBoundary';
 import styles from './PRPanel.module.css';
@@ -545,12 +549,7 @@ export function PRPanel({
                 !reviewInFlight.has(item.prNumber);
 
               if (useCompact) {
-                return (
-                  <PRHistoryRow
-                    key={itemKey}
-                    pr={item as PRWorkItem}
-                  />
-                );
+                return <PRHistoryRow key={itemKey} pr={item as PRWorkItem} />;
               }
 
               return (

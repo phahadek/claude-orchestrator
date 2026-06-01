@@ -121,11 +121,7 @@ vi.mock('../db/db.js', async () => {
   return { db: memDb };
 });
 
-import {
-  upsertPullRequest,
-  deletePR,
-  getPRByNumber,
-} from '../db/queries.js';
+import { upsertPullRequest, deletePR, getPRByNumber } from '../db/queries.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -211,4 +207,3 @@ describe('deletePR()', () => {
     expect(getPRByNumber(10, 'other/repo')).not.toBeNull();
   });
 });
-
