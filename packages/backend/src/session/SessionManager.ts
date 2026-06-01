@@ -45,6 +45,24 @@ import type { DisplayStatus } from '../tasks/TaskStatusEngine';
 import { emitTaskUpdated } from '../routes/tasks';
 import { parseSection } from '../notion/NotionClient';
 
+/**
+ * Derive a prefixed task ID from a task URL, using the project's task source
+ * to determine the format.
+ * - notion: formatTaskId('notion', parseNotionPageIdDashed(url)) — existing logic
+ * - github: extracts issue number from https://github.com/.../issues/<N>
+ * - other sources: fall back to notion parsing (safe for YAML/Jira which pass
+ *   explicit taskId via StartOptions.taskId anyway)
+ */
+export function deriveTaskId(taskSource: string, taskUrl: string): string {
+  if (taskSource === 'github') {
+    const m = taskUrl.match(/\/issues\/(\d+)/);
+    if (m) return formatTaskId('github', m[1]);
+    // URL not parseable — store the raw URL under github prefix so lookups still work
+    return formatTaskId('github', taskUrl);
+  }
+  return formatTaskId('notion', parseNotionPageIdDashed(taskUrl));
+}
+
 /** Max chars per file snippet to avoid bloating the CLAUDE.md. */
 const MAX_FILE_CHARS = 8_000;
 /** Max total chars for all file snippets combined. */
@@ -125,6 +143,12 @@ export interface StartOptions {
   milestoneId?: string | null;
   /** Whether this is a milestone task or a non-milestone task; recorded in the audit log. */
   taskKind?: 'milestone' | 'non_milestone';
+  /**
+   * Pre-computed task ID in `source:externalId` format (e.g. `github:123`, `notion:<uuid>`).
+   * When provided, bypasses URL-based task ID derivation so callers with an already-formatted
+   * ID (AutoLauncher, PRReviewService) don't double-parse via Notion-specific logic.
+   */
+  taskId?: string;
 }
 
 /** How long to suppress lastMessage-only task_updated broadcasts per task (ms). */
@@ -398,6 +422,7 @@ export class SessionManager extends EventEmitter {
       sessionId: providedSessionId,
       milestoneId = null,
       taskKind,
+      taskId: precomputedTaskId,
     } = options ?? {};
 
     if (sessionType !== 'review' && taskKind === undefined) {
@@ -443,20 +468,19 @@ export class SessionManager extends EventEmitter {
     // Dedup: if a live or DB-active session already exists for this task, return early.
     // This lifts the AutoLauncher guard into SessionManager so every caller benefits.
     if (sessionType !== 'review') {
-      const earlyNotionTaskId = formatTaskId(
-        'notion',
-        parseNotionPageIdDashed(taskUrl),
-      );
+      const earlyTaskId =
+        precomputedTaskId ??
+        deriveTaskId(project.taskSource ?? 'notion', taskUrl);
       if (
-        this.hasLiveSessionForTask(earlyNotionTaskId) ||
-        hasActiveSessionForTask(earlyNotionTaskId)
+        this.hasLiveSessionForTask(earlyTaskId) ||
+        hasActiveSessionForTask(earlyTaskId)
       ) {
         const existing = [...this.sessions.values()].find((s) => {
           const tid = s.taskId?.replace(/-/g, '');
-          return tid && tid === earlyNotionTaskId.replace(/-/g, '');
+          return tid && tid === earlyTaskId.replace(/-/g, '');
         });
         throw Object.assign(
-          new Error(`Session already running for task ${earlyNotionTaskId}`),
+          new Error(`Session already running for task ${earlyTaskId}`),
           { alreadyRunning: true, sessionId: existing?.sessionId ?? '' },
         );
       }
@@ -570,14 +594,13 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    // SessionManager.start() must store prefixed task IDs in sessions.task_id so
-    // downstream parseTaskId() callers (NotionTaskBackend.updateStatus, attachPR,
-    // etc.) succeed. parseNotionPageIdDashed converts URL-embedded dashless IDs to
-    // dashed UUID form (Notion's native) so the JOIN with task_cache matches.
-    const notionTaskId = formatTaskId(
-      'notion',
-      parseNotionPageIdDashed(taskUrl),
-    );
+    // Resolve the opaque task ID for this session. Callers with a pre-formatted
+    // task ID (AutoLauncher, PRReviewService) pass it via options.taskId to avoid
+    // URL-based re-parsing. Other callers (WS dispatch) provide only taskUrl and
+    // rely on the project's task_source to derive the correct format.
+    const notionTaskId =
+      precomputedTaskId ??
+      deriveTaskId(project.taskSource ?? 'notion', taskUrl);
     const sessionMode = runtimeSettings.session_mode;
     const runner =
       sessionMode === 'api'
@@ -641,7 +664,12 @@ export class SessionManager extends EventEmitter {
               orchConfig.bash_rules.length > 0
                 ? orchConfig.bash_rules
                 : undefined,
-            taskBackend: project.taskSource === 'yaml' ? 'local' : 'notion',
+            taskBackend:
+              project.taskSource === 'yaml'
+                ? 'local'
+                : project.taskSource === 'github'
+                  ? 'github'
+                  : 'notion',
             taskContent,
             gitMode: project.gitMode,
           });

@@ -23,7 +23,6 @@ import {
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { parseSection, parseExpectedSize } from '../notion/NotionClient';
-import { toExternalId } from '../tasks/taskId';
 import type { SessionManager } from '../session/SessionManager';
 import { GitHubApiError } from './types';
 import type { PullRequest, PRDiff } from './types';
@@ -302,7 +301,6 @@ export class PRReviewService {
       const taskBody = await this.resolveBackend(projectId).fetchTaskPage(
         prRow.task_id,
       );
-      const taskUrl = `https://www.notion.so/${toExternalId(prRow.task_id)}`;
       const prompt = this.buildPrompt(prData, diffData, taskBody);
       const sizeSignal = computeSizeSignal(
         diff,
@@ -350,13 +348,16 @@ export class PRReviewService {
       // 1. Attach listener BEFORE start() — ensures no events are missed.
       const verdictPromise = this.waitForVerdict(sessionId, prNumber, repo);
 
-      // 2. Start session with the pre-generated ID.
-      this.sessionManager.start(taskUrl, projectContextUrl, {
+      // 2. Start session with the pre-generated ID. For review sessions, taskUrl
+      // is used only for display/storage; the actual task association is carried
+      // by taskId so it works for any backend (github, notion, etc.).
+      this.sessionManager.start(projectContextUrl, projectContextUrl, {
         sessionId,
         sessionType: 'review',
         customPrompt: prompt,
         projectId,
         taskName: `#${prData.id} ${prData.title}`,
+        taskId: prRow.task_id ?? undefined,
       });
 
       // 3. Persist the review session pairing and record the SHA under review.
@@ -459,15 +460,13 @@ export class PRReviewService {
       syntheticRepo,
     );
 
-    const taskUrl = taskId
-      ? `https://www.notion.so/${toExternalId(taskId)}`
-      : projectContextUrl;
-    this.sessionManager.start(taskUrl, projectContextUrl, {
+    this.sessionManager.start(projectContextUrl, projectContextUrl, {
       sessionId,
       sessionType: 'review',
       customPrompt: prompt,
       projectId,
       taskName: branchName,
+      taskId: taskId ?? undefined,
     });
 
     const aiResult = await verdictPromise;
