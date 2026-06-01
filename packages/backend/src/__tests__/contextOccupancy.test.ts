@@ -291,7 +291,9 @@ describe('context-window occupancy tracking', () => {
     ) as Array<{ contextOccupancyTokens?: number }>;
 
     // setContextOccupancy called once per assistant event (5 times)
-    expect(vi.mocked(setContextOccupancy).mock.calls.length).toBeGreaterThanOrEqual(5);
+    expect(
+      vi.mocked(setContextOccupancy).mock.calls.length,
+    ).toBeGreaterThanOrEqual(5);
     // incrementTokens must NOT have been called (no result event)
     expect(vi.mocked(incrementTokens)).not.toHaveBeenCalled();
 
@@ -362,7 +364,9 @@ describe('context-window occupancy tracking', () => {
     await runWithEvents(session, events);
 
     // setContextOccupancy called at least 4 times (3 assistant + 1 result)
-    expect(vi.mocked(setContextOccupancy).mock.calls.length).toBeGreaterThanOrEqual(4);
+    expect(
+      vi.mocked(setContextOccupancy).mock.calls.length,
+    ).toBeGreaterThanOrEqual(4);
     // incrementTokens called exactly once from the result event
     expect(vi.mocked(incrementTokens)).toHaveBeenCalledTimes(1);
     // Final occupancy from result: 50 + 300 = 350
