@@ -19,11 +19,11 @@ export interface OrchestratorClaudeMdParams {
    */
   bashRules?: string[];
   /**
-   * Task backend type. When 'local', the lifecycle instructions are adjusted
-   * to skip Notion fetch steps and read tasks.yaml instead. When 'github',
-   * the task assignment label uses "GitHub Issue" and lifecycle skips Notion.
+   * Task backend type. Controls wording throughout the generated CLAUDE.md
+   * (task label, fetch instruction, status ownership, PR body section header).
+   * 'notion' is the default; 'local' reads tasks.yaml instead of fetching remotely.
    */
-  taskBackend?: 'notion' | 'local' | 'github';
+  taskBackend?: 'notion' | 'local' | 'jira' | 'github';
   /**
    * Pre-fetched task spec markdown. When provided, the task content is injected
    * directly into the CLAUDE.md and the session skips Notion fetching entirely.
@@ -46,6 +46,58 @@ export interface OrchestratorClaudeMdParams {
    * and GitHub instructions; 'github' (default) keeps the full PR flow.
    */
   gitMode?: 'github' | 'local-only';
+}
+
+type TaskBackend = 'notion' | 'local' | 'jira' | 'github';
+
+function taskAssignmentLabel(backend: TaskBackend): string {
+  switch (backend) {
+    case 'github':
+      return 'GitHub issue';
+    case 'jira':
+      return 'Jira issue';
+    case 'local':
+      return 'Task';
+    default:
+      return 'Notion task';
+  }
+}
+
+function fetchInstruction(backend: TaskBackend): string {
+  switch (backend) {
+    case 'github':
+      return 'Fetch the GitHub issue via the gh CLI.';
+    case 'jira':
+      return 'Fetch the Jira issue.';
+    default:
+      return 'Fetch the Notion task page and project context page.';
+  }
+}
+
+function taskBackendApiName(backend: TaskBackend): string {
+  switch (backend) {
+    case 'github':
+      return 'GitHub API';
+    case 'jira':
+      return 'Jira API';
+    case 'local':
+      return 'task source';
+    default:
+      return 'Notion API';
+  }
+}
+
+function prBodyTaskSectionHeader(backend: TaskBackend): string {
+  switch (backend) {
+    case 'github':
+      return '## GitHub Issue';
+    case 'jira':
+      return '## Jira Issue';
+    case 'local':
+      return '## Task';
+    default:
+      return '## Notion Task';
+  }
 }
 
 /**
@@ -87,9 +139,6 @@ export function buildOrchestratorClaudeMd(
     gitMode = 'github',
   } = params;
 
-  const taskAssignmentLabel =
-    taskBackend === 'github' ? 'GitHub Issue' : 'Notion task';
-
   const resolvedBashRules = bashRules ?? [
     'Use `npx` instead of bare tool names.\n`tsc` → `npx tsc`. Bare commands may not be on PATH.',
   ];
@@ -116,7 +165,7 @@ export function buildOrchestratorClaudeMd(
 ## Task Assignment
 
 - **Task**: ${taskName}
-- **${taskAssignmentLabel}**: ${taskUrl}
+- **${taskAssignmentLabel(taskBackend)}**: ${taskUrl}
 - **Project context**: ${projectContextUrl}
 
 ---
@@ -133,18 +182,12 @@ ${
 1. Read the **Task Spec** section below — it contains the full task specification.
 2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
     : taskBackend === 'local'
-      ? `> ⚠️ **YAML task source**: Task context comes from \`tasks.yaml\` in the project root, not Notion.
-> Skip step 1 (Notion fetch) and instead read \`tasks.yaml\` for task context.
+      ? `> ⚠️ **YAML task source**: Task context comes from \`tasks.yaml\` in the project root.
+> Skip the remote fetch step and instead read \`tasks.yaml\` for task context.
 
-1. Read \`tasks.yaml\` in the project root for task context (skip Notion fetch).
+1. Read \`tasks.yaml\` in the project root for task context (skip remote fetch).
 2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
-      : taskBackend === 'github'
-        ? `> ⚠️ **GitHub task source**: Task context comes from the GitHub Issue above.
-> Skip any Notion fetch steps — task content has been pre-loaded by the orchestrator.
-
-1. Read the **Task Spec** section below — it contains the full task specification.
-2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
-        : `1. Fetch the Notion task page and project context page.
+      : `1. ${fetchInstruction(taskBackend)}
 2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
 }
 3. Implement the task per the acceptance criteria.
@@ -163,8 +206,8 @@ ${
 
 ## Status Ownership
 
-**Do NOT update Notion task status.**
-**Do NOT call any Notion API to change task status.**
+**Do NOT update ${taskAssignmentLabel(taskBackend)} status.**
+**Do NOT call any ${taskBackendApiName(taskBackend)} to change task status.**
 The orchestrator backend handles all status transitions (In Progress → In Review → Done).
 
 ---
@@ -199,8 +242,8 @@ ${
 ## Summary
 <1-3 sentences: what changed and why>
 
-## Notion Task
-<link to the Notion task page>
+${prBodyTaskSectionHeader(taskBackend)}
+<link to the task page>
 
 ## Automated Tests
 <list tests added/modified, or "No test changes">
