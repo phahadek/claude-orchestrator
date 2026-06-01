@@ -113,7 +113,6 @@ import { db } from '../db/db.js';
 import {
   upsertPullRequest,
   getPRByNumber,
-  deletePhantomPullRequests,
 } from '../db/queries.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -208,48 +207,6 @@ describe('upsertPullRequest — repo validation', () => {
       }
     ).n;
     expect(count).toBe(0);
-  });
-});
-
-// ── deletePhantomPullRequests ─────────────────────────────────────────────────
-
-describe('deletePhantomPullRequests — startup sweep', () => {
-  it('removes rows whose repo has no matching project', () => {
-    // Insert two PRs manually (bypassing upsertPullRequest validation)
-    insertRawPR('https://github.com/owner/repo/pull/42', 'owner/repo', 42);
-    insertRawPR('https://github.com/owner/repo/pull/99', 'owner/repo', 99);
-
-    // No project configured — both rows are phantoms
-    const removed = deletePhantomPullRequests();
-    expect(removed).toBe(2);
-    expect(
-      (
-        db.prepare('SELECT COUNT(*) AS n FROM pull_requests').get() as {
-          n: number;
-        }
-      ).n,
-    ).toBe(0);
-  });
-
-  it('keeps rows whose repo matches a configured project', () => {
-    insertProject('proj-1', 'myorg/myrepo');
-    insertRawPR('https://github.com/myorg/myrepo/pull/1', 'myorg/myrepo', 1);
-    insertRawPR('https://github.com/owner/repo/pull/42', 'owner/repo', 42);
-
-    const removed = deletePhantomPullRequests();
-    expect(removed).toBe(1); // only the unconfigured one
-    expect(getPRByNumber(1, 'myorg/myrepo')).toBeTruthy();
-    expect(getPRByNumber(42, 'owner/repo')).toBeFalsy();
-  });
-
-  it('returns 0 when there are no phantom rows', () => {
-    insertProject('proj-1', 'myorg/myrepo');
-    insertRawPR('https://github.com/myorg/myrepo/pull/5', 'myorg/myrepo', 5);
-    expect(deletePhantomPullRequests()).toBe(0);
-  });
-
-  it('returns 0 when pull_requests table is empty', () => {
-    expect(deletePhantomPullRequests()).toBe(0);
   });
 });
 

@@ -847,26 +847,6 @@ export function upsertPullRequest(
     .get({ pr_url: pr.pr_url }) as PullRequestRow;
 }
 
-/**
- * Deletes pull_requests rows whose repo has no matching project in the projects
- * table. These are "phantom" rows created by the regex matching placeholder URLs
- * in test fixtures or code comments. Run once at startup.
- * Returns the number of rows deleted.
- */
-export function deletePhantomPullRequests(): number {
-  const result = db
-    .prepare(
-      `
-    DELETE FROM pull_requests
-    WHERE NOT EXISTS (
-      SELECT 1 FROM projects WHERE projects.github_repo = pull_requests.repo
-    )
-  `,
-    )
-    .run();
-  return result.changes;
-}
-
 export function setReviewSessionId(
   prNumber: number,
   repo: string,
