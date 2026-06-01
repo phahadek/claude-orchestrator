@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { SessionDetail, EventRow } from '../SessionDetail';
 import type { SessionState } from '../../hooks/useSessionStore';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 
 function makeSession(overrides?: Partial<SessionState>): SessionState {
   return {
@@ -13,6 +14,15 @@ function makeSession(overrides?: Partial<SessionState>): SessionState {
     events: [],
     ...overrides,
   };
+}
+
+function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
+  return {
+    id: 'proj-1',
+    name: 'Test Project',
+    taskSource: 'notion',
+    ...overrides,
+  } as ProjectConfig;
 }
 
 function makeEvent(
@@ -38,7 +48,7 @@ describe('SessionDetail', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('renders the task name and Notion link', () => {
+  it('renders the task name and source-aware link for notion project', () => {
     render(
       <SessionDetail
         session={makeSession()}
@@ -47,11 +57,32 @@ describe('SessionDetail', () => {
         onDelete={vi.fn()}
         onArchive={vi.fn()}
         onUnarchive={vi.fn()}
+        project={makeProject({ taskSource: 'notion' })}
       />,
     );
     expect(screen.getByText('Test Task')).toBeTruthy();
     const notionLink = screen.getByText('Notion ↗');
     expect(notionLink.getAttribute('href')).toBe('https://notion.so/task');
+  });
+
+  it('renders Issue ↗ link for github-source project', () => {
+    render(
+      <SessionDetail
+        session={makeSession({
+          notionTaskUrl: 'https://github.com/owner/repo/issues/1',
+        })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+        project={makeProject({ taskSource: 'github' })}
+      />,
+    );
+    const link = screen.getByText('Issue ↗');
+    expect(link.getAttribute('href')).toBe(
+      'https://github.com/owner/repo/issues/1',
+    );
   });
 
   it('renders all events from session.events', () => {

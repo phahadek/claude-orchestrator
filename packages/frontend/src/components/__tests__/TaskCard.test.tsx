@@ -78,6 +78,7 @@ function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
     path: '/repos/test',
     contextUrl: 'https://notion.so/context',
     boardId: 'board-1',
+    taskSource: 'notion',
     ...overrides,
   } as ProjectConfig;
 }
@@ -321,17 +322,30 @@ describe('TaskCard', () => {
     expect(screen.queryByText('⚠ CI unstable')).toBeNull();
   });
 
-  it('renders Notion link when notionUrl is set', () => {
+  it('renders source-aware link label when notionUrl is set', () => {
     render(
       <TaskCard
         task={makeTask({ notionUrl: 'https://notion.so/task-1' })}
         selected={false}
         onClick={vi.fn()}
         send={noop}
-        project={makeProject()}
+        project={makeProject({ taskSource: 'notion' })}
       />,
     );
     expect(screen.getByText('Notion ↗')).toBeDefined();
+  });
+
+  it('renders Issue ↗ label for github-source project', () => {
+    render(
+      <TaskCard
+        task={makeTask({ notionUrl: 'https://github.com/owner/repo/issues/1' })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject({ taskSource: 'github' })}
+      />,
+    );
+    expect(screen.getByText('Issue ↗')).toBeDefined();
   });
 
   it('calls onClick when card is clicked', () => {

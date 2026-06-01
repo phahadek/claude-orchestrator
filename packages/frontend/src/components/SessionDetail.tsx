@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
 import type { SessionState } from '../hooks/useSessionStore';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { taskNameFromNotionUrl } from '../utils/notionUrl';
+import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
 import { calcElapsedMs, formatDuration } from '../utils/sessionTimer';
 import { StatusBadge } from './StatusBadge';
 import { formatModelName } from './SessionCard';
@@ -33,6 +35,7 @@ interface Props {
   onFavorite?: (sessionId: string) => void;
   onUnfavorite?: (sessionId: string) => void;
   sessionMode?: string;
+  project?: ProjectConfig | null;
 }
 
 export function SessionDetail({
@@ -47,6 +50,7 @@ export function SessionDetail({
   onFavorite,
   onUnfavorite,
   sessionMode,
+  project = null,
 }: Props) {
   const [draftMessage, setDraftMessage] = useState('');
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -258,7 +262,7 @@ export function SessionDetail({
               rel="noreferrer"
               className={styles.notionLink}
             >
-              Notion ↗
+              {getTaskSourceLinkLabel(project?.taskSource ?? 'notion')}
             </a>
           )}
           <ElapsedTime session={session} />

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
 import type { DisplayStatus } from '@claude-orchestrator/backend/src/tasks/TaskStatusEngine';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import type { SessionState } from '../hooks/useSessionStore';
 import { StatusBadge } from './StatusBadge';
 import { EventTranscript } from './EventTranscript';
@@ -11,6 +12,7 @@ import { parseReviewResultFromEvents } from './ReviewDetailView';
 import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
 import { sessionsApi } from '../api/projects';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
 import styles from './TaskDetail.module.css';
 
 // ── Display status helpers ─────────────────────────────────────────
@@ -132,6 +134,7 @@ interface Props {
   onClose: () => void;
   sessions?: SessionState[];
   projectId?: string;
+  project?: ProjectConfig | null;
   /** When true, shows the "Mark Merged" button for local-only projects. */
   isLocalOnly?: boolean;
   /** When true, hides the "Mark Merged" button — AutoMerger handles merging. */
@@ -151,6 +154,7 @@ export function TaskDetail({
   onClose: _onClose,
   sessions = [],
   projectId,
+  project = null,
   isLocalOnly = false,
   autoMergeEnabled = false,
   sessionOverlayOpen = false,
@@ -349,6 +353,7 @@ export function TaskDetail({
               onDelete={() => window.history.back()}
               onArchive={() => window.history.back()}
               onUnarchive={() => window.history.back()}
+              project={project}
             />
           </div>
         </>
@@ -390,7 +395,7 @@ export function TaskDetail({
               rel="noreferrer"
               className={styles.notionLink}
             >
-              Notion ↗
+              {getTaskSourceLinkLabel(project?.taskSource ?? 'notion')}
             </a>
           )}
         </div>
