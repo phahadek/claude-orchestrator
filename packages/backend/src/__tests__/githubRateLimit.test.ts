@@ -37,12 +37,22 @@ vi.mock('../session/orchestrator-config.js', () => ({
 
 vi.mock('../audit/AuditLog.js', () => ({ recordEvent: vi.fn() }));
 vi.mock('../config/corporateMode.js', () => ({
-  getCorporateMode: vi.fn().mockReturnValue({ enabled: false, envLocked: false, gates: { requireHumanApproval: false } }),
+  getCorporateMode: vi
+    .fn()
+    .mockReturnValue({
+      enabled: false,
+      envLocked: false,
+      gates: { requireHumanApproval: false },
+    }),
 }));
 vi.mock('../routes/tasks.js', () => ({ emitTaskUpdated: vi.fn() }));
 vi.mock('../tasks/TaskBackend.js', () => ({ getTaskBackend: vi.fn() }));
-vi.mock('../orchestration/localMergeRunner.js', () => ({ squashMergeLocal: vi.fn() }));
-vi.mock('../orchestration/localBranchHelpers.js', () => ({ detectMergeConflict: vi.fn() }));
+vi.mock('../orchestration/localMergeRunner.js', () => ({
+  squashMergeLocal: vi.fn(),
+}));
+vi.mock('../orchestration/localBranchHelpers.js', () => ({
+  detectMergeConflict: vi.fn(),
+}));
 vi.mock('../github/reviewUtils.js', () => ({
   formatMergeConflictFeedback: vi.fn().mockReturnValue('conflict feedback'),
   formatCIFailureFeedback: vi.fn().mockReturnValue('ci feedback'),
@@ -52,10 +62,7 @@ vi.mock('../github/reviewUtils.js', () => ({
 }));
 
 import { GitHubClient } from '../github/GitHubClient.js';
-import {
-  GitHubApiError,
-  GitHubRateLimitError,
-} from '../github/types.js';
+import { GitHubApiError, GitHubRateLimitError } from '../github/types.js';
 import { PRMergeWatcher } from '../github/PRMergeWatcher.js';
 import { ReviewerCommentsWatcher } from '../github/ReviewerCommentsWatcher.js';
 import { AutoMerger } from '../github/AutoMerger.js';
@@ -442,11 +449,7 @@ describe('AutoMerger backoff on rate-limit', () => {
     );
     vi.mocked(getApprovedOpenPRs).mockReturnValue([makePR()]);
 
-    const watcher = new AutoMerger(
-      mockGitHub as never,
-      {} as never,
-      broadcast,
-    );
+    const watcher = new AutoMerger(mockGitHub as never, {} as never, broadcast);
 
     // First pollOnce — triggers attempt() → run() → hits rate limit
     await watcher.pollOnce();
@@ -487,11 +490,7 @@ describe('AutoMerger backoff on rate-limit', () => {
     );
     vi.mocked(getApprovedOpenPRs).mockReturnValue([makePR()]);
 
-    const watcher = new AutoMerger(
-      mockGitHub as never,
-      {} as never,
-      broadcast,
-    );
+    const watcher = new AutoMerger(mockGitHub as never, {} as never, broadcast);
 
     // First pollOnce — triggers run(), hits rate limit with pastReset
     await watcher.pollOnce();
