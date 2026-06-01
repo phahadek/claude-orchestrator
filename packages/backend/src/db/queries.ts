@@ -1036,6 +1036,45 @@ export function deletePR(prNumber: number, repo: string): boolean {
   return result.changes > 0;
 }
 
+// ─── branch → session linkage ───────────────────────────────────────────────
+
+export interface SessionBranchMatch {
+  session_id: string;
+  task_id: string | null;
+}
+
+/**
+ * Attempt to derive a session from a PR's head_branch by matching against
+ * sessions.worktree_path. Returns the match when exactly one session path
+ * contains the branch name. Logs a warning and returns null for zero or
+ * multiple matches.
+ */
+export function lookupSessionByBranch(
+  headBranch: string,
+): SessionBranchMatch | null {
+  const rows = db
+    .prepare<{ pattern: string }>(
+      `SELECT session_id, task_id FROM sessions
+       WHERE worktree_path LIKE @pattern`,
+    )
+    .all({ pattern: `%${headBranch}%` }) as SessionBranchMatch[];
+
+  if (rows.length === 1) {
+    return rows[0];
+  }
+  if (rows.length === 0) {
+    console.warn(
+      `[lookupSessionByBranch] no session found for branch "${headBranch}"`,
+    );
+  } else {
+    const ids = rows.map((r) => r.session_id.slice(0, 8)).join(', ');
+    console.warn(
+      `[lookupSessionByBranch] ambiguous: ${rows.length} sessions match branch "${headBranch}" (${ids}) — leaving session_id null`,
+    );
+  }
+  return null;
+}
+
 // ─── settings ────────────────────────────────────────────────────────────────
 
 export function getSetting(key: string): string | undefined {

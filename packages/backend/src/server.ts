@@ -44,6 +44,7 @@ import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
 import { deleteGhostSessions, getPRBySessionId } from './db/queries';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
+import { runPRBootSweep } from './github/PRBootSweep';
 
 runMigrations();
 loadRuntimeSettingsFromDb();
@@ -259,6 +260,10 @@ jsonlReader
 
     stuckSessionMonitor.rehydrate();
     stuckSessionMonitor.startScan();
+
+    runPRBootSweep(githubClient).catch((err: unknown) =>
+      console.warn('[server] PR boot sweep failed:', (err as Error).message),
+    );
 
     prMergeWatcher.start();
     reviewerCommentsWatcher.start();

@@ -16,6 +16,7 @@ import {
   setPRReviewResult,
   updatePRDraftStatus,
   getSessionsByProject,
+  lookupSessionByBranch,
 } from '../db/queries';
 import { GitHubApiError } from '../github/types';
 import type { MergeabilityCategory } from '../github/types';
@@ -208,11 +209,12 @@ export function createPrsRouter(
       try {
         const pr = await github.fetchPR(repo, prNumber);
         const now = new Date().toISOString();
+        const sessionMatch = lookupSessionByBranch(pr.headBranch);
         upsertPullRequest({
           pr_number: pr.id,
           pr_url: pr.url,
-          task_id: null,
-          session_id: null,
+          task_id: sessionMatch?.task_id ?? null,
+          session_id: sessionMatch?.session_id ?? null,
           repo,
           title: pr.title,
           body: pr.body ?? null,
@@ -233,6 +235,11 @@ export function createPrsRouter(
           merge_state: pr.mergeableState,
           merge_state_checked_at: now,
         });
+        if (sessionMatch) {
+          console.log(
+            `[prs] on-demand sync PR #${prNumber}: linked session ${sessionMatch.session_id.slice(0, 8)} via head_branch "${pr.headBranch}"`,
+          );
+        }
         prRow = getPRByNumber(prNumber, repo);
       } catch {
         // GitHub fetch failed — fall through to 404
