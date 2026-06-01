@@ -177,6 +177,7 @@ describe('Header', () => {
         autoLaunchMilestoneId: null,
         autoMergeEnabled: false,
         dataResidencyConfirmed: false,
+        baseBranch: 'dev',
       };
       render(
         <Header
@@ -204,6 +205,7 @@ describe('Header', () => {
         autoLaunchMilestoneId: null,
         autoMergeEnabled: false,
         dataResidencyConfirmed: false,
+        baseBranch: 'dev',
       };
       render(
         <Header
@@ -239,8 +241,9 @@ describe('Header', () => {
         autoLaunchMilestoneId: null,
         autoMergeEnabled: false,
         dataResidencyConfirmed: false,
+        baseBranch: 'dev',
         ...overrides,
-      };
+      } as ProjectConfig;
     }
 
     it('renders ON when enabled and bound to the current milestone', () => {
@@ -450,8 +453,9 @@ describe('Header', () => {
         autoLaunchMilestoneId: 'm1',
         autoMergeEnabled: false,
         dataResidencyConfirmed: false,
+        baseBranch: 'dev',
         ...overrides,
-      };
+      } as ProjectConfig;
     }
 
     const onProject = makeProject();

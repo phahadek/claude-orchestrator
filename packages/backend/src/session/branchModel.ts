@@ -39,10 +39,13 @@ export function resolveBranchMode(
  *
  * Returns:
  *   - `feature/<milestone-slug>` for two_tier mode with a known milestone
- *   - `dev` for flat mode or when no milestoneId is provided
+ *   - project.baseBranch (default 'dev') for flat mode or when no milestoneId is provided
  */
 export function resolveStartingPoint(
-  project: { milestoneBranching?: 'two_tier' | 'flat' | null },
+  project: {
+    milestoneBranching?: 'two_tier' | 'flat' | null;
+    baseBranch?: string;
+  },
   milestoneId: string | null,
 ): { startingPoint: string; milestoneSlug: string | null } {
   const mode = resolveBranchMode(project.milestoneBranching);
@@ -53,17 +56,18 @@ export function resolveStartingPoint(
       return { startingPoint: `feature/${slug}`, milestoneSlug: slug };
     }
   }
-  return { startingPoint: 'dev', milestoneSlug: null };
+  return { startingPoint: project.baseBranch ?? 'dev', milestoneSlug: null };
 }
 
 /**
  * Ensures `feature/<milestoneSlug>` exists locally and on origin.
- * Creates it from origin/dev when missing; no-ops when it already exists.
+ * Creates it from origin/<baseBranch> when missing; no-ops when it already exists.
  * Only called in two_tier mode.
  */
 export function ensureMilestoneBranch(
   milestoneSlug: string,
   projectDir: string,
+  baseBranch = 'dev',
 ): void {
   const ref = `feature/${milestoneSlug}`;
 
@@ -78,9 +82,12 @@ export function ensureMilestoneBranch(
     // not found locally — fall through
   }
 
-  // Fetch origin to pick up any remote branch and latest dev.
+  // Fetch origin to pick up any remote branch and latest base branch.
   try {
-    execSync('git fetch origin dev', { cwd: projectDir, timeout: 30_000 });
+    execSync(`git fetch origin ${baseBranch}`, {
+      cwd: projectDir,
+      timeout: 30_000,
+    });
   } catch {
     // non-fatal — proceed with local refs
   }
@@ -95,9 +102,9 @@ export function ensureMilestoneBranch(
     execSync(`git branch ${ref} origin/${ref}`, { cwd: projectDir });
     return;
   } catch {
-    // not on origin — create it from origin/dev
+    // not on origin — create it from origin/<baseBranch>
   }
 
-  execSync(`git branch ${ref} origin/dev`, { cwd: projectDir });
+  execSync(`git branch ${ref} origin/${baseBranch}`, { cwd: projectDir });
   execSync(`git push origin ${ref}`, { cwd: projectDir });
 }

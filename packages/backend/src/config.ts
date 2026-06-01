@@ -26,6 +26,7 @@ export interface ProjectConfig {
   milestoneBranching?: 'two_tier' | 'flat' | null; // NULL/undefined = fall back to corporate-mode default
   nonMilestoneSourceConfig?: NonMilestoneSourceConfig | null; // config for the non-milestone task pool
   dataResidencyConfirmed: boolean; // ZDR attestation — user confirms Anthropic ZDR is enabled
+  baseBranch: string; // default branch used when creating worktrees (e.g. 'dev' or 'main')
 }
 
 function resolveClaudePath(): string {
@@ -134,6 +135,7 @@ function hydrateProject(p: {
   milestoneBranching: 'two_tier' | 'flat' | null;
   nonMilestoneSourceConfig: NonMilestoneSourceConfig | null;
   dataResidencyConfirmed: boolean;
+  baseBranch: string;
   milestones: { id: string; sourceId: string | null; name: string }[];
 }): ProjectConfig {
   // boards[].id is now the milestone row id (used as milestoneId for fetch_tasks).
@@ -158,6 +160,7 @@ function hydrateProject(p: {
     milestoneBranching: p.milestoneBranching,
     nonMilestoneSourceConfig: p.nonMilestoneSourceConfig,
     dataResidencyConfirmed: p.dataResidencyConfirmed,
+    baseBranch: p.baseBranch ?? 'dev',
   };
   if (boards.length > 0) config.boards = boards;
   if (p.githubRepo) config.githubRepo = p.githubRepo;

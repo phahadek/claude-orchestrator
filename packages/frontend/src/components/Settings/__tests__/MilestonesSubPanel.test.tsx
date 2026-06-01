@@ -49,6 +49,7 @@ const PROJECT: Project = {
   nonMilestoneSourceConfig: null,
   taskSourceConfig: null,
   dataResidencyConfirmed: false,
+  baseBranch: 'dev',
   createdAt: 1,
   updatedAt: 1,
   milestones: [],

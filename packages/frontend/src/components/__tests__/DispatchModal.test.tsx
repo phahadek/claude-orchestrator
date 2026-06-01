@@ -39,6 +39,7 @@ const TEST_PROJECT: ProjectConfig = {
   autoLaunchMilestoneId: null,
   autoMergeEnabled: false,
   dataResidencyConfirmed: false,
+  baseBranch: 'dev',
 };
 
 function renderModal(

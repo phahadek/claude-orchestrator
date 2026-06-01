@@ -50,11 +50,12 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     nonMilestoneSourceConfig: null,
     taskSourceConfig: null,
     dataResidencyConfirmed: false,
+    baseBranch: 'dev',
     createdAt: 1,
     updatedAt: 1,
     milestones: [],
     ...overrides,
-  };
+  } as Project;
 }
 
 describe('ProjectsSettingsPanel', () => {

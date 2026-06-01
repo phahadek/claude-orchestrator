@@ -510,4 +510,12 @@ export function runMigrations(): void {
     WHERE task_id LIKE 'notion:%'
       AND LENGTH(task_id) = 39;
   `);
+
+  try {
+    db.exec(
+      `ALTER TABLE projects ADD COLUMN base_branch TEXT NOT NULL DEFAULT 'dev'`,
+    );
+  } catch {
+    /* already exists */
+  }
 }

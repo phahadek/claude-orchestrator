@@ -41,6 +41,7 @@ export interface RecoverSessionOpts {
     taskUrl: string;
     contextUrl: string;
   }) => void;
+  baseBranch?: string;
 }
 
 /**
@@ -73,7 +74,8 @@ export async function recoverSession(
     emitPrOpened,
   } = opts;
 
-  const baseBranch = 'dev';
+  const projectRow = getProjectRowById(projectId);
+  const baseBranch = opts.baseBranch ?? projectRow?.base_branch ?? 'dev';
 
   if (sessionType === 'standard') {
     try {
