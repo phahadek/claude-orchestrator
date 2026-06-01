@@ -1,5 +1,6 @@
 import type { GitHubClient } from './GitHubClient';
 import type { MergeabilityCategory } from './types';
+import { GitHubRateLimitError } from './types';
 import type { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
@@ -51,6 +52,8 @@ export class PRMergeWatcher {
    */
   private firstPollPending = true;
   private autoMerger: AutoMerger | undefined;
+  private pausedUntil: Date | null = null;
+  private rateLimitBroadcasted = false;
   private prReviewService: PRReviewService | undefined;
   private reviewOrchestrator: ReviewOrchestrator | undefined;
   private readonly pendingReReviews = new Set<string>();
@@ -117,7 +120,29 @@ export class PRMergeWatcher {
     }
   }
 
+  private handleRateLimit(err: GitHubRateLimitError): void {
+    this.pausedUntil = err.resetAt;
+    if (!this.rateLimitBroadcasted) {
+      this.rateLimitBroadcasted = true;
+      console.warn(
+        `[PRMergeWatcher] GitHub rate-limited; backing off until ${err.resetAt.toISOString()}`,
+      );
+      this.broadcast({
+        type: 'github_rate_limit_hit',
+        resetAt: err.resetAt.toISOString(),
+        limit: err.limit,
+        used: err.used,
+      });
+    }
+  }
+
   async poll(): Promise<void> {
+    if (this.pausedUntil !== null) {
+      if (Date.now() < this.pausedUntil.getTime()) return;
+      this.pausedUntil = null;
+      this.rateLimitBroadcasted = false;
+      this.broadcast({ type: 'github_rate_limit_cleared' });
+    }
     const silentMerges = this.firstPollPending;
     const openPRs = getAllOpenPRs();
     for (const pr of openPRs) {
@@ -134,6 +159,10 @@ export class PRMergeWatcher {
     try {
       prStateResult = await this.github.getPRState(pr.pr_number, pr.repo);
     } catch (err) {
+      if (err instanceof GitHubRateLimitError) {
+        this.handleRateLimit(err);
+        return;
+      }
       console.warn(
         `[PRMergeWatcher] getPRState failed for PR #${pr.pr_number}:`,
         (err as Error).message,
@@ -211,6 +240,10 @@ export class PRMergeWatcher {
         ciCheckNames,
       );
     } catch (err) {
+      if (err instanceof GitHubRateLimitError) {
+        this.handleRateLimit(err);
+        return;
+      }
       console.warn(
         `[PRMergeWatcher] categorizeMergeability failed for PR #${pr.pr_number}:`,
         (err as Error).message,

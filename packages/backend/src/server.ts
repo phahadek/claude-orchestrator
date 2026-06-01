@@ -128,6 +128,7 @@ setAutoMerger(autoMerger);
 const reviewerCommentsWatcher = new ReviewerCommentsWatcher(
   githubClient,
   sessionManager,
+  broadcast,
 );
 app.use(
   '/api',

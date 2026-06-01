@@ -1,6 +1,7 @@
 import { GITHUB_TOKEN, GITHUB_REPO } from '../config';
 import {
   GitHubApiError,
+  GitHubRateLimitError,
   PullRequest,
   PRDiff,
   MergeResult,
@@ -366,6 +367,10 @@ export class GitHubClient {
     }
     if (!res.ok) {
       const text = await res.text();
+      if (res.status === 403) {
+        const err = tryParseRateLimitError(text, res.headers);
+        if (err) throw err;
+      }
       throw new GitHubApiError(res.status, text);
     }
     const newEtag = res.headers.get('etag');
@@ -965,6 +970,10 @@ export class GitHubClient {
     }
     if (!res.ok) {
       const text = await res.text();
+      if (res.status === 403) {
+        const err = tryParseRateLimitError(text, res.headers);
+        if (err) throw err;
+      }
       throw new GitHubApiError(res.status, text);
     }
     const newEtag = res.headers.get('etag');
@@ -978,6 +987,10 @@ export class GitHubClient {
 
     if (!res.ok) {
       const text = await res.text();
+      if (res.status === 403) {
+        const err = tryParseRateLimitError(text, res.headers);
+        if (err) throw err;
+      }
       // 405 = not mergeable, 409 = merge conflict — include descriptive messages
       throw new GitHubApiError(res.status, text);
     }
@@ -1124,6 +1137,37 @@ export function isBillingBlockedAnnotation(ann: CheckRunAnnotation): boolean {
       ann.message,
     )
   );
+}
+
+const RATE_LIMIT_PATTERNS = [
+  /^API rate limit exceeded/i,
+  /^You have exceeded a secondary rate limit/i,
+];
+
+function tryParseRateLimitError(
+  body: string,
+  headers: Headers,
+): GitHubRateLimitError | null {
+  let message: string;
+  try {
+    const parsed = JSON.parse(body) as { message?: string };
+    message = parsed.message ?? '';
+  } catch {
+    return null;
+  }
+  if (!RATE_LIMIT_PATTERNS.some((re) => re.test(message))) return null;
+
+  const resetEpoch =
+    parseInt(headers.get('x-ratelimit-reset') ?? '', 10) ||
+    parseInt(headers.get('retry-after') ?? '', 10) ||
+    0;
+  const resetAt = resetEpoch
+    ? new Date(resetEpoch * 1000)
+    : new Date(Date.now() + 60_000);
+  const limit = parseInt(headers.get('x-ratelimit-limit') ?? '', 10) || 0;
+  const used = parseInt(headers.get('x-ratelimit-used') ?? '', 10) || 0;
+
+  return new GitHubRateLimitError(message, resetAt, limit, used);
 }
 
 function parseDiffFiles(diff: string): string[] {

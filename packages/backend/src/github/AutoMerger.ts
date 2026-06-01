@@ -17,7 +17,7 @@ import {
   getStaleAutoMergeFailedPRs,
 } from '../db/queries';
 import type { GitHubClient, PRReviewDecision } from './GitHubClient';
-import { GitHubApiError } from './types';
+import { GitHubApiError, GitHubRateLimitError } from './types';
 import { getCorporateMode } from '../config/corporateMode';
 import type { PRMergeWatcher } from './PRMergeWatcher';
 import type { PullRequestRow } from '../db/types';
@@ -44,6 +44,8 @@ const MIN_POLL_INTERVAL_MS = 5_000;
 export class AutoMerger {
   /** In-flight auto-merge loops keyed by `${repo}#${prNumber}` to prevent double-runs. */
   private active = new Set<string>();
+  private pausedUntil: Date | null = null;
+  private rateLimitBroadcasted = false;
 
   constructor(
     private github: GitHubClient,
@@ -56,6 +58,22 @@ export class AutoMerger {
 
   private key(prNumber: number, repo: string): string {
     return `${repo}#${prNumber}`;
+  }
+
+  private handleRateLimit(err: GitHubRateLimitError): void {
+    this.pausedUntil = err.resetAt;
+    if (!this.rateLimitBroadcasted) {
+      this.rateLimitBroadcasted = true;
+      console.warn(
+        `[AutoMerger] GitHub rate-limited; backing off until ${err.resetAt.toISOString()}`,
+      );
+      this.broadcast({
+        type: 'github_rate_limit_hit',
+        resetAt: err.resetAt.toISOString(),
+        limit: err.limit,
+        used: err.used,
+      });
+    }
   }
 
   /**
@@ -104,6 +122,12 @@ export class AutoMerger {
    * attempt() loop; local branches are squash-merged immediately.
    */
   async pollOnce(): Promise<void> {
+    if (this.pausedUntil !== null) {
+      if (Date.now() < this.pausedUntil.getTime()) return;
+      this.pausedUntil = null;
+      this.rateLimitBroadcasted = false;
+      this.broadcast({ type: 'github_rate_limit_cleared' });
+    }
     const approvedPRs = getApprovedOpenPRs();
     for (const pr of approvedPRs) {
       this.attempt(pr.pr_number, pr.repo);
@@ -324,6 +348,10 @@ export class AutoMerger {
           ciCheckNames,
         );
       } catch (err) {
+        if (err instanceof GitHubRateLimitError) {
+          this.handleRateLimit(err);
+          return;
+        }
         console.warn(
           `[AutoMerger] PR #${prNumber}: status fetch failed: ${(err as Error).message}`,
         );
@@ -356,6 +384,10 @@ export class AutoMerger {
             try {
               reviewDecision = await this.github.getReviewState(prNumber, repo);
             } catch (err) {
+              if (err instanceof GitHubRateLimitError) {
+                this.handleRateLimit(err);
+                return;
+              }
               console.warn(
                 `[AutoMerger] PR #${prNumber}: getReviewState failed: ${(err as Error).message}`,
               );
