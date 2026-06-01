@@ -43,10 +43,7 @@ describe('ContextBadge', () => {
 
   it('caps displayed percentage at 100% when tokens exceed context window', () => {
     render(
-      <ContextBadge
-        contextOccupancyTokens={250_000}
-        compactionCount={0}
-      />,
+      <ContextBadge contextOccupancyTokens={250_000} compactionCount={0} />,
     );
     expect(screen.getByText('125% ctx')).toBeDefined();
   });

@@ -7,7 +7,10 @@ interface Props {
   compactionCount: number | undefined;
 }
 
-export function ContextBadge({ contextOccupancyTokens, compactionCount }: Props) {
+export function ContextBadge({
+  contextOccupancyTokens,
+  compactionCount,
+}: Props) {
   const ctxPct =
     contextOccupancyTokens != null
       ? Math.round((contextOccupancyTokens / CONTEXT_WINDOW) * 100)
