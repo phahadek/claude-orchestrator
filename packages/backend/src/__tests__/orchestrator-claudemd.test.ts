@@ -73,7 +73,9 @@ describe('buildOrchestratorClaudeMd — taskBackend wording', () => {
 
     it('Lifecycle step 1 fetches Notion pages', () => {
       const output = buildOrchestratorClaudeMd(baseParams);
-      expect(output).toContain('Fetch the Notion task page and project context page.');
+      expect(output).toContain(
+        'Fetch the Notion task page and project context page.',
+      );
     });
 
     it('Status Ownership uses Notion wording', () => {
@@ -83,7 +85,9 @@ describe('buildOrchestratorClaudeMd — taskBackend wording', () => {
         output.indexOf('## Efficiency Rules'),
       );
       expect(statusSection).toContain('Do NOT update Notion task status.');
-      expect(statusSection).toContain('Do NOT call any Notion API to change task status.');
+      expect(statusSection).toContain(
+        'Do NOT call any Notion API to change task status.',
+      );
     });
 
     it('PR body template uses "## Notion Task"', () => {
@@ -120,7 +124,9 @@ describe('buildOrchestratorClaudeMd — taskBackend wording', () => {
         output.indexOf('## Efficiency Rules'),
       );
       expect(statusSection).toContain('Do NOT update GitHub issue status.');
-      expect(statusSection).toContain('Do NOT call any GitHub API to change task status.');
+      expect(statusSection).toContain(
+        'Do NOT call any GitHub API to change task status.',
+      );
     });
 
     it('PR body template uses "## GitHub Issue"', () => {
@@ -162,7 +168,9 @@ describe('buildOrchestratorClaudeMd — taskBackend wording', () => {
         output.indexOf('## Efficiency Rules'),
       );
       expect(statusSection).toContain('Do NOT update Jira issue status.');
-      expect(statusSection).toContain('Do NOT call any Jira API to change task status.');
+      expect(statusSection).toContain(
+        'Do NOT call any Jira API to change task status.',
+      );
     });
 
     it('PR body template uses "## Jira Issue"', () => {
@@ -205,7 +213,9 @@ describe('buildOrchestratorClaudeMd — taskBackend wording', () => {
         output.indexOf('## Efficiency Rules'),
       );
       expect(statusSection).toContain('Do NOT update Task status.');
-      expect(statusSection).toContain('Do NOT call any task source to change task status.');
+      expect(statusSection).toContain(
+        'Do NOT call any task source to change task status.',
+      );
     });
 
     it('PR body template uses "## Task"', () => {

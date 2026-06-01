@@ -52,36 +52,51 @@ type TaskBackend = 'notion' | 'local' | 'jira' | 'github';
 
 function taskAssignmentLabel(backend: TaskBackend): string {
   switch (backend) {
-    case 'github': return 'GitHub issue';
-    case 'jira': return 'Jira issue';
-    case 'local': return 'Task';
-    default: return 'Notion task';
+    case 'github':
+      return 'GitHub issue';
+    case 'jira':
+      return 'Jira issue';
+    case 'local':
+      return 'Task';
+    default:
+      return 'Notion task';
   }
 }
 
 function fetchInstruction(backend: TaskBackend): string {
   switch (backend) {
-    case 'github': return 'Fetch the GitHub issue via the gh CLI.';
-    case 'jira': return 'Fetch the Jira issue.';
-    default: return 'Fetch the Notion task page and project context page.';
+    case 'github':
+      return 'Fetch the GitHub issue via the gh CLI.';
+    case 'jira':
+      return 'Fetch the Jira issue.';
+    default:
+      return 'Fetch the Notion task page and project context page.';
   }
 }
 
 function taskBackendApiName(backend: TaskBackend): string {
   switch (backend) {
-    case 'github': return 'GitHub API';
-    case 'jira': return 'Jira API';
-    case 'local': return 'task source';
-    default: return 'Notion API';
+    case 'github':
+      return 'GitHub API';
+    case 'jira':
+      return 'Jira API';
+    case 'local':
+      return 'task source';
+    default:
+      return 'Notion API';
   }
 }
 
 function prBodyTaskSectionHeader(backend: TaskBackend): string {
   switch (backend) {
-    case 'github': return '## GitHub Issue';
-    case 'jira': return '## Jira Issue';
-    case 'local': return '## Task';
-    default: return '## Notion Task';
+    case 'github':
+      return '## GitHub Issue';
+    case 'jira':
+      return '## Jira Issue';
+    case 'local':
+      return '## Task';
+    default:
+      return '## Notion Task';
   }
 }
 
