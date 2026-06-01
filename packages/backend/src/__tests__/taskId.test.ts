@@ -86,6 +86,8 @@ vi.mock('../db/db.js', async () => {
       created_at   INTEGER NOT NULL,
       updated_at   INTEGER NOT NULL
     );
+    INSERT INTO projects (id, name, project_dir, github_repo, task_source, created_at, updated_at)
+    VALUES ('proj-1', 'Test Project', '/test', 'owner/repo', 'notion', 1000, 1000);
     CREATE TABLE IF NOT EXISTS permission_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, tool_name TEXT NOT NULL,
       proposed_action TEXT, decision TEXT NOT NULL, rule_matched TEXT, decided_at INTEGER NOT NULL

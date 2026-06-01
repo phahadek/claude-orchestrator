@@ -157,7 +157,7 @@ export async function recoverSession(
             }
           }
           if (existingPrState !== 'merged' && existingPrState !== 'closed') {
-            upsertPullRequest({
+            const upserted = upsertPullRequest({
               pr_number: prNumber,
               pr_url: prUrl,
               task_id: taskId || null,
@@ -177,8 +177,8 @@ export async function recoverSession(
               node_id: null,
               head_sha: headSha,
             });
-            // pr_opened emission is skipped for periodic scope.
-            if (!prDetectedLive && scope !== 'periodic') {
+            // pr_opened emission is skipped for periodic scope or phantom URLs.
+            if (upserted && !prDetectedLive && scope !== 'periodic') {
               emitPrOpened({
                 prNumber,
                 repo,
