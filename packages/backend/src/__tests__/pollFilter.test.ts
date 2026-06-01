@@ -6,6 +6,8 @@ vi.mock('../db/queries.js', () => ({
   getAllOpenPRs: vi.fn(),
   getApprovedOpenPRs: vi.fn(),
   getApprovedLocalBranches: vi.fn().mockReturnValue([]),
+  getOrphanMergeablePRs: vi.fn().mockReturnValue([]),
+  getStaleAutoMergeFailedPRs: vi.fn().mockReturnValue([]),
   getRoutedCommentIds: vi.fn().mockReturnValue(new Set()),
   markCommentsRouted: vi.fn(),
   setPauseReason: vi.fn(),
