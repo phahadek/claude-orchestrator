@@ -193,6 +193,12 @@ export class AgentSession extends EventEmitter {
      * positional callers (tests) need not be touched.
      */
     public readonly projectId: string = '',
+    /**
+     * Absolute path to the per-session MCP config JSON file written by
+     * SessionManager when `mcp_servers` is set in the orchestrator config.
+     * Forwarded to the runner as `mcpConfigPath`.
+     */
+    private readonly mcpConfigPath?: string,
   ) {
     super();
     this.runner = runner ?? new CliSessionRunner(sessionId);
@@ -279,6 +285,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           model: modelSetting || undefined,
           allowedTools: [...ALLOWED_TOOLS, ...this.extraAllowedTools],
           systemPrompt: this.systemPromptContent,
+          mcpConfigPath: this.mcpConfigPath,
         },
         (event) => this.handleRawEvent(event),
       );

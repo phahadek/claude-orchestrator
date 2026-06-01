@@ -133,6 +133,23 @@ function readTaskFiles(
   );
 }
 
+/**
+ * Write a per-session MCP config file to `<worktreePath>/.claude/orchestrator-mcp.json`
+ * and return its absolute path. Returns undefined if mcpServers is empty/undefined.
+ * Exported for unit testing.
+ */
+export function writeMcpConfig(
+  worktreePath: string,
+  mcpServers: Record<string, unknown> | undefined,
+): string | undefined {
+  if (!mcpServers || Object.keys(mcpServers).length === 0) return undefined;
+  const dir = path.join(worktreePath, '.claude');
+  fs.mkdirSync(dir, { recursive: true });
+  const filePath = path.join(dir, 'orchestrator-mcp.json');
+  fs.writeFileSync(filePath, JSON.stringify({ mcpServers }, null, 2), 'utf-8');
+  return filePath;
+}
+
 export interface StartOptions {
   taskType?: string;
   sessionType?: 'standard' | 'review';
@@ -689,6 +706,13 @@ export class SessionManager extends EventEmitter {
         }
       }
 
+      const mcpConfigPath = writeMcpConfig(worktreePath, orchConfig.mcp_servers);
+      if (mcpConfigPath) {
+        console.log(
+          `[SessionManager] wrote MCP config to ${mcpConfigPath} for ${sessionId.slice(0, 8)}`,
+        );
+      }
+
       const session = new AgentSession(
         sessionId,
         taskUrl,
@@ -705,6 +729,7 @@ export class SessionManager extends EventEmitter {
         sessionMode === 'api' ? sessionContextContent : undefined,
         runner,
         projectId,
+        mcpConfigPath,
       );
 
       if (sessionMode === 'cli' && sessionContextContent) {
@@ -929,6 +954,11 @@ export class SessionManager extends EventEmitter {
           ? new DockerSessionRunner(row.session_id)
           : new CliSessionRunner(row.session_id);
 
+    const resumeMcpConfigPath = writeMcpConfig(
+      worktreePath,
+      orchConfig.mcp_servers,
+    );
+
     const session = new AgentSession(
       row.session_id, // keep original ID — same card, same transcript
       row.task_url ?? '',
@@ -945,6 +975,7 @@ export class SessionManager extends EventEmitter {
       undefined, // no systemPromptContent for resume (session already has context)
       resumeRunner,
       row.project_id ?? '',
+      resumeMcpConfigPath,
     );
 
     // Carry forward the PR url so cleanupWorktree does NOT delete the branch on
@@ -1171,6 +1202,18 @@ export class SessionManager extends EventEmitter {
           `[SessionManager] failed to check/restore main repo branch after session ${sessionId.slice(0, 8)}: ${err}`,
         );
       }
+    }
+
+    // Remove the per-session MCP config before removing the worktree.
+    const mcpConfigFile = path.join(worktreePath, '.claude', 'orchestrator-mcp.json');
+    try {
+      if (fs.existsSync(mcpConfigFile)) {
+        fs.unlinkSync(mcpConfigFile);
+      }
+    } catch (err) {
+      console.warn(
+        `[SessionManager] failed to remove orchestrator-mcp.json for ${sessionId.slice(0, 8)}: ${err}`,
+      );
     }
 
     try {
@@ -1435,6 +1478,11 @@ export class SessionManager extends EventEmitter {
         ? new ApiSessionRunner(newSessionId)
         : new CliSessionRunner(newSessionId);
 
+    const sendOrResumeMcpConfigPath = writeMcpConfig(
+      worktreePath,
+      orchConfigResume.mcp_servers,
+    );
+
     const session = new AgentSession(
       newSessionId,
       taskUrl,
@@ -1451,6 +1499,7 @@ export class SessionManager extends EventEmitter {
       undefined, // no systemPromptContent for resume
       sendOrResumeRunner,
       row.project_id ?? '',
+      sendOrResumeMcpConfigPath,
     );
 
     // Carry forward the PR url so cleanupWorktree does NOT delete the branch on
