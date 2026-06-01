@@ -180,6 +180,8 @@ vi.mock('../db/db.js', async () => {
       routed_at  INTEGER NOT NULL,
       UNIQUE(pr_number, repo, comment_id)
     );
+    INSERT INTO projects (id, name, project_dir, github_repo, task_source, created_at, updated_at)
+    VALUES ('proj-1', 'Test Project', '/test', 'o/r', 'notion', 1000, 1000);
   `);
   return { db };
 });

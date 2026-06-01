@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ── Mocks (before any imports that pull in module-level side-effects) ─────────
 
 vi.mock('../db/queries', () => ({
-  upsertPullRequest: vi.fn(),
+  upsertPullRequest: vi.fn(() => ({ pr_number: 9, repo: 'owner/repo' })),
   getPRByNumber: vi.fn(() => null),
   getProjectRowById: vi.fn(() => null),
   getSession: vi.fn(() => null),

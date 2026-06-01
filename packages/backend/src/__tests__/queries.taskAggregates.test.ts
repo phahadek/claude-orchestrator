@@ -104,9 +104,14 @@ vi.mock('../db/db.js', async () => {
       id          TEXT PRIMARY KEY,
       name        TEXT NOT NULL,
       project_dir TEXT NOT NULL,
-      board_id    TEXT,
-      repo        TEXT
+      context_url TEXT,
+      github_repo TEXT,
+      task_source TEXT NOT NULL DEFAULT 'notion',
+      created_at  INTEGER NOT NULL DEFAULT 0,
+      updated_at  INTEGER NOT NULL DEFAULT 0
     );
+    INSERT INTO projects (id, name, project_dir, github_repo, task_source, created_at, updated_at)
+    VALUES ('proj-1', 'Test Project', '/test', 'owner/repo', 'notion', 1000, 1000);
     CREATE TABLE IF NOT EXISTS audit_log (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       ts         INTEGER NOT NULL,

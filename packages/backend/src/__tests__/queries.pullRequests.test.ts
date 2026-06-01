@@ -100,6 +100,18 @@ vi.mock('../db/db.js', async () => {
       pause_reason           TEXT,
       failing_checks         TEXT
     );
+    CREATE TABLE IF NOT EXISTS projects (
+      id          TEXT    PRIMARY KEY,
+      name        TEXT    NOT NULL,
+      project_dir TEXT    NOT NULL,
+      context_url TEXT,
+      github_repo TEXT,
+      task_source TEXT    NOT NULL DEFAULT 'notion',
+      created_at  INTEGER NOT NULL,
+      updated_at  INTEGER NOT NULL
+    );
+    INSERT INTO projects (id, name, project_dir, github_repo, task_source, created_at, updated_at)
+    VALUES ('proj-1', 'Test Project', '/test', 'owner/repo', 'notion', 1000, 1000);
   `);
   return { db };
 });

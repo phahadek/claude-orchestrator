@@ -967,7 +967,12 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 
     try {
       const events = getEventsBySession(this.sessionId);
-      const last20 = events.slice(-20);
+      // Only scan text and system events — tool_use events carry tool-call
+      // inputs (Write, Edit, etc.) which may contain placeholder URLs in test
+      // fixtures or code comments, producing phantom pull_requests rows.
+      const last20 = events
+        .filter((ev) => ev.event_type === 'text' || ev.event_type === 'system')
+        .slice(-20);
 
       for (const ev of last20) {
         const match = ev.payload.match(PR_URL_REGEX);
