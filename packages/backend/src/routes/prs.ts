@@ -706,7 +706,8 @@ export function createPrsRouter(
       return;
     }
     const count = deleteMergedAndClosedPRs(project.githubRepo);
-    const deviceId = (req as Request & { device?: DeviceRow }).device?.id ?? null;
+    const deviceId =
+      (req as Request & { device?: DeviceRow }).device?.id ?? null;
     recordEvent({
       event_type: 'manual_pr_clear',
       actor_type: 'human',

@@ -110,10 +110,7 @@ vi.mock('../db/db.js', async () => {
 });
 
 import { db } from '../db/db.js';
-import {
-  upsertPullRequest,
-  getPRByNumber,
-} from '../db/queries.js';
+import { upsertPullRequest, getPRByNumber } from '../db/queries.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
