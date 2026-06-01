@@ -1159,28 +1159,6 @@ export function getSessionAudit(
     .get({ session_id: sessionId }) as SessionAuditRow | undefined;
 }
 
-export function deleteMergedAndClosedPRs(repo: string): number {
-  const result = db
-    .prepare<{ repo: string }>(
-      `
-    DELETE FROM pull_requests WHERE repo = @repo AND state IN ('merged', 'closed')
-  `,
-    )
-    .run({ repo });
-  return result.changes;
-}
-
-export function countMergedAndClosedPRs(repo: string): number {
-  const row = db
-    .prepare<{ repo: string }>(
-      `
-    SELECT COUNT(*) as count FROM pull_requests WHERE repo = @repo AND state IN ('merged', 'closed')
-  `,
-    )
-    .get({ repo }) as { count: number };
-  return row.count;
-}
-
 export function updateMergeState(
   prNumber: number,
   repo: string,
