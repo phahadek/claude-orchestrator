@@ -91,13 +91,18 @@ describe('GithubTaskSourceProvider.fetchReadyTasks', () => {
 
   it('includes issues with all non-deferred status labels', async () => {
     const client = makeClient({
-      listIssues: vi.fn().mockResolvedValue([
-        makeIssue(1, { labels: ['status:ready', 'type:code'] }),
-        makeIssue(2, { labels: ['status:in-progress', 'type:code'] }),
-        makeIssue(3, { labels: ['status:in-review', 'type:code'] }),
-        makeIssue(4, { state: 'closed', labels: ['status:done', 'type:code'] }),
-        makeIssue(5, { labels: ['status:deferred', 'type:code'] }),
-      ]),
+      listIssues: vi
+        .fn()
+        .mockResolvedValue([
+          makeIssue(1, { labels: ['status:ready', 'type:code'] }),
+          makeIssue(2, { labels: ['status:in-progress', 'type:code'] }),
+          makeIssue(3, { labels: ['status:in-review', 'type:code'] }),
+          makeIssue(4, {
+            state: 'closed',
+            labels: ['status:done', 'type:code'],
+          }),
+          makeIssue(5, { labels: ['status:deferred', 'type:code'] }),
+        ]),
     });
     const provider = new GithubTaskSourceProvider(
       client as never,
@@ -117,10 +122,12 @@ describe('GithubTaskSourceProvider.fetchReadyTasks', () => {
 
   it('excludes issues with status:deferred label', async () => {
     const client = makeClient({
-      listIssues: vi.fn().mockResolvedValue([
-        makeIssue(1, { labels: ['status:ready'] }),
-        makeIssue(2, { labels: ['status:deferred'] }),
-      ]),
+      listIssues: vi
+        .fn()
+        .mockResolvedValue([
+          makeIssue(1, { labels: ['status:ready'] }),
+          makeIssue(2, { labels: ['status:deferred'] }),
+        ]),
     });
     const provider = new GithubTaskSourceProvider(
       client as never,
