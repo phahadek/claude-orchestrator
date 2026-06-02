@@ -1021,7 +1021,13 @@ export class SessionManager extends EventEmitter {
     );
 
     // Shared helper: creates session with original ID, registers, updates DB, emits status.
-    const session = this.respawnSession(row, worktreePath, orchConfig, resumeRunner, resumeMcpConfigPath);
+    const session = this.respawnSession(
+      row,
+      worktreePath,
+      orchConfig,
+      resumeRunner,
+      resumeMcpConfigPath,
+    );
 
     // Detect mid-turn state: last event was a tool_result or tool_use with no
     // subsequent assistant/result response. Log a warning to aid diagnosis.
@@ -1436,7 +1442,10 @@ export class SessionManager extends EventEmitter {
     }
   }
 
-  private async _doSendOrResume(sessionId: string, text: string): Promise<string> {
+  private async _doSendOrResume(
+    sessionId: string,
+    text: string,
+  ): Promise<string> {
     // Session not live — look up details from DB and re-launch with --resume
     const row = getSession(sessionId);
     if (!row) {
@@ -1457,7 +1466,12 @@ export class SessionManager extends EventEmitter {
     const projectDir = normalizePath(project.projectDir);
     // Reuse the original session ID for the worktree path — preserves
     // pull_requests.session_id linkage and UI card continuity.
-    const worktreePath = path.join(projectDir, '.claude', 'worktrees', sessionId);
+    const worktreePath = path.join(
+      projectDir,
+      '.claude',
+      'worktrees',
+      sessionId,
+    );
 
     // Record the main repo's current branch before creating the worktree.
     let mainBranch: string | undefined;
@@ -1476,10 +1490,10 @@ export class SessionManager extends EventEmitter {
     }
 
     // Resolve the starting point using dev as the base (no milestoneId available for resumed sessions).
-    const {
-      startingPoint,
-      milestoneSlug,
-    } = resolveStartingPoint(project, null);
+    const { startingPoint, milestoneSlug } = resolveStartingPoint(
+      project,
+      null,
+    );
 
     const isLocalOnly = project.gitMode === 'local-only';
     if (!isLocalOnly) {
@@ -1511,10 +1525,9 @@ export class SessionManager extends EventEmitter {
         : `origin/${project.baseBranch}`;
 
     try {
-      execSync(
-        `git worktree add --detach "${worktreePath}" ${worktreeBase}`,
-        { cwd: projectDir },
-      );
+      execSync(`git worktree add --detach "${worktreePath}" ${worktreeBase}`, {
+        cwd: projectDir,
+      });
     } catch (err) {
       console.error(
         `[SessionManager] sendOrResume: failed to create worktree: ${err}`,
@@ -1547,7 +1560,13 @@ export class SessionManager extends EventEmitter {
 
     // Shared helper: creates session with original ID, registers in map,
     // updates DB row to 'running', emits session_status.
-    const session = this.respawnSession(row, worktreePath, orchConfig, runner, mcpConfigPath);
+    const session = this.respawnSession(
+      row,
+      worktreePath,
+      orchConfig,
+      runner,
+      mcpConfigPath,
+    );
 
     // Register the first-event listener BEFORE wireSession starts run() to
     // avoid a race where the first message arrives before the listener is set.
