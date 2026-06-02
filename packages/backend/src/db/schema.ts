@@ -348,7 +348,9 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
   try {
-    target.exec(`ALTER TABLE projects ADD COLUMN auto_launch_milestone_id TEXT`);
+    target.exec(
+      `ALTER TABLE projects ADD COLUMN auto_launch_milestone_id TEXT`,
+    );
   } catch {
     /* already exists */
   }
@@ -402,7 +404,9 @@ export function runMigrations(target: Database.Database): void {
     /* already exists */
   }
   try {
-    target.exec(`ALTER TABLE projects ADD COLUMN non_milestone_source_config TEXT`);
+    target.exec(
+      `ALTER TABLE projects ADD COLUMN non_milestone_source_config TEXT`,
+    );
   } catch {
     /* already exists */
   }
@@ -421,7 +425,9 @@ export function runMigrations(target: Database.Database): void {
   }
 
   try {
-    target.exec(`ALTER TABLE pull_requests ADD COLUMN pause_reason_set_at INTEGER`);
+    target.exec(
+      `ALTER TABLE pull_requests ADD COLUMN pause_reason_set_at INTEGER`,
+    );
   } catch {
     /* already exists */
   }
@@ -519,7 +525,9 @@ export function runMigrations(target: Database.Database): void {
 
   // Drop old index on notion_task_id (may still exist on pre-D1 databases).
   try {
-    target.exec(`DROP INDEX IF EXISTS idx_pull_requests_notion_task_id_pr_number`);
+    target.exec(
+      `DROP INDEX IF EXISTS idx_pull_requests_notion_task_id_pr_number`,
+    );
   } catch {
     /* ignore */
   }

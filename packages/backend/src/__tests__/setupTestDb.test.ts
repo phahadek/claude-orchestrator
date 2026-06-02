@@ -61,7 +61,9 @@ describe('setupTestDb', () => {
   it('returns an independent :memory: DB each call', () => {
     const db1 = setupTestDb();
     const db2 = setupTestDb();
-    db1.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').run('k', 'v');
+    db1
+      .prepare('INSERT INTO settings (key, value) VALUES (?, ?)')
+      .run('k', 'v');
     const count = (
       db2.prepare('SELECT COUNT(*) as c FROM settings').get() as { c: number }
     ).c;
