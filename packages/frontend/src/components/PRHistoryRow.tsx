@@ -26,7 +26,7 @@ export function PRHistoryRow({ pr, onViewSession }: Props) {
         rel="noopener noreferrer"
         className={styles.title}
       >
-        <span className={styles.prNumber}>#{pr.prNumber}</span> {pr.title}
+        {pr.title}
       </a>
       <div className={styles.meta}>
         {pr.notionTaskId && (

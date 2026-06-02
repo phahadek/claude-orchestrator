@@ -68,9 +68,3 @@
   color: #6c7086;
   white-space: nowrap;
 }
-
-.prNumber {
-  font-size: 0.78rem;
-  color: #6c7086;
-  flex-shrink: 0;
-}

@@ -35,17 +35,11 @@ describe('PRHistoryRow', () => {
       prUrl: 'https://github.com/owner/repo/pull/42',
     });
     render(<PRHistoryRow pr={pr} />);
-    const link = screen.getByRole('link', { name: '#42 feat: add dashboard' });
+    const link = screen.getByRole('link', { name: 'feat: add dashboard' });
     expect(link).toBeDefined();
     expect(link.getAttribute('href')).toBe(
       'https://github.com/owner/repo/pull/42',
     );
-  });
-
-  it('renders PR number #NNN in the title', () => {
-    const pr = makePR({ prNumber: 153, title: 'feat: some feature' });
-    render(<PRHistoryRow pr={pr} />);
-    expect(screen.getByText('#153')).toBeDefined();
   });
 
   it('renders Notion task link when notionTaskId is set', () => {
