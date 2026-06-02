@@ -156,12 +156,13 @@ export class GithubTaskSourceProvider implements TaskBackend {
     }
 
     const issues = await this.client.listIssues(this.repo, {
-      labels: ['status:ready'],
       milestone,
-      state: 'open',
+      state: 'all',
     });
-
-    return this.buildResolvedTasks(issues);
+    const filtered = issues.filter(
+      (i) => !i.labels.some((l) => l === 'status:deferred'),
+    );
+    return this.buildResolvedTasks(filtered);
   }
 
   async fetchNonMilestoneReadyTasks(
