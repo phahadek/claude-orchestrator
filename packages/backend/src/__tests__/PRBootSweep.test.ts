@@ -1,11 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../db/db.js', async () => {
-  const Database = (await import('better-sqlite3')).default;
-  const memDb = new Database(':memory:');
-  const { applyTestSchema } = await import('../../test/helpers/testDbSchema');
-  applyTestSchema(memDb);
-  return { db: memDb };
+  const { setupTestDb } = await import('../../test/helpers/setupTestDb.js');
+  return { db: setupTestDb() };
 });
 
 vi.mock('../config.js', () => ({

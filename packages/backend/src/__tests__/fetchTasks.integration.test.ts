@@ -15,14 +15,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ── DB mock (must hoist before any transitive db import) ──────────────────────
 
 vi.mock('../db/db.js', async () => {
-  const { default: Database } = await import('better-sqlite3');
-  const db = new Database(':memory:');
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS task_cache (
-      task_id TEXT PRIMARY KEY, fetched_at INTEGER NOT NULL, raw_json TEXT NOT NULL
-    );
-  `);
-  return { db };
+  const { setupTestDb } = await import('../../test/helpers/setupTestDb.js');
+  return { db: setupTestDb() };
 });
 
 // ── Module mocks ──────────────────────────────────────────────────────────────

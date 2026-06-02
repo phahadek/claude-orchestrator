@@ -10,21 +10,8 @@ vi.mock('../db/queries.js', () => ({
 }));
 
 vi.mock('../db/db.js', async () => {
-  const { default: Database } = await import('better-sqlite3');
-  const db = new Database(':memory:');
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS audit_log (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      ts         INTEGER NOT NULL,
-      event_type TEXT    NOT NULL,
-      actor_type TEXT    NOT NULL,
-      actor_id   TEXT,
-      project_id TEXT,
-      task_id    TEXT,
-      payload    TEXT    NOT NULL
-    );
-  `);
-  return { db };
+  const { setupTestDb } = await import('../../test/helpers/setupTestDb.js');
+  return { db: setupTestDb() };
 });
 
 const { mockRuntimeSettings, mockGetMilestone } = vi.hoisted(() => ({
