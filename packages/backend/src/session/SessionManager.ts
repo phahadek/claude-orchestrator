@@ -12,6 +12,7 @@ import { resolveStartingPoint, ensureMilestoneBranch } from './branchModel';
 import { loadOrchestratorConfig } from './orchestrator-config';
 import { CliSessionRunner } from './CliSessionRunner';
 import { ApiSessionRunner } from './ApiSessionRunner';
+import type { ISessionRunner } from './SessionRunner';
 import {
   DockerSessionRunner,
   reapOrphanContainers,
@@ -26,6 +27,7 @@ import {
 import {
   insertSession,
   updateSessionStatus,
+  updateSessionWorktreePath,
   markSessionDone,
   insertEvent,
   getSession,
@@ -253,6 +255,8 @@ export class SessionManager extends EventEmitter {
     string,
     { sessionType: 'standard' | 'review' }
   >();
+  /** Concurrency guard: prevents double-spawning when two concurrent sendOrResume calls race. */
+  private resumesInFlight = new Map<string, Promise<string>>();
 
   /** Last known DisplayStatus per taskId — used to skip no-op broadcasts. */
   private _lastDisplayStatus = new Map<string, DisplayStatus>();
@@ -914,6 +918,53 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
+   * Shared respawn helper used by both resumeSession (boot recovery) and
+   * sendOrResume (verdict/feedback routing to a dead session).
+   *
+   * Creates an AgentSession reusing the original session ID, registers it in
+   * the sessions map, updates the DB row to 'running', and emits session_status.
+   * Does NOT call wireSession — callers must register any once-listeners on the
+   * returned session BEFORE calling wireSession so there is no race with run().
+   */
+  private respawnSession(
+    row: Session,
+    worktreePath: string,
+    orchConfig: ReturnType<typeof loadOrchestratorConfig>,
+    runner: ISessionRunner,
+    mcpConfigPath: string | undefined,
+  ): AgentSession {
+    const session = new AgentSession(
+      row.session_id,
+      row.task_url ?? '',
+      row.project_context_url ?? '',
+      undefined,
+      worktreePath,
+      row.task_id ?? '',
+      row.session_id, // resumeSessionId — passes --resume to CLI / SDK
+      undefined,
+      row.session_type ?? 'standard',
+      this,
+      this.githubClient,
+      orchConfig.allowed_tools,
+      undefined,
+      runner,
+      row.project_id ?? '',
+      mcpConfigPath,
+    );
+    if (row.pr_url) session.prUrl = row.pr_url;
+    this.sessions.set(row.session_id, session);
+    // Update (not insert) the existing DB row — the session is resuming in-place.
+    updateSessionStatus(row.session_id, 'running');
+    updateSessionWorktreePath(row.session_id, worktreePath);
+    this.emit('message', {
+      type: 'session_status',
+      sessionId: row.session_id,
+      status: 'running',
+    } satisfies ServerMessage);
+    return session;
+  }
+
+  /**
    * Re-attach to a session that was running when the server last shut down.
    * Unlike sendOrResume(), this keeps the original session_id so the UI shows
    * continuity — same card, same transcript.
@@ -969,42 +1020,14 @@ export class SessionManager extends EventEmitter {
       orchConfig.mcp_servers,
     );
 
-    const session = new AgentSession(
-      row.session_id, // keep original ID — same card, same transcript
-      row.task_url ?? '',
-      row.project_context_url ?? '',
-      undefined, // taskBackendOverride — production resolves via getTaskBackend
+    // Shared helper: creates session with original ID, registers, updates DB, emits status.
+    const session = this.respawnSession(
+      row,
       worktreePath,
-      row.task_id ?? '',
-      row.session_id, // resumeSessionId — passes --resume to CLI / SDK
-      undefined,
-      row.session_type ?? 'standard',
-      this,
-      this.githubClient,
-      orchConfig.allowed_tools,
-      undefined, // no systemPromptContent for resume (session already has context)
+      orchConfig,
       resumeRunner,
-      row.project_id ?? '',
       resumeMcpConfigPath,
     );
-
-    // Carry forward the PR url so cleanupWorktree does NOT delete the branch on
-    // the next clean exit. Without this, a resumed session loses track of the
-    // PR it opened pre-restart and the branch is wiped along with the worktree.
-    if (row.pr_url) {
-      session.prUrl = row.pr_url;
-    }
-
-    this.sessions.set(row.session_id, session);
-
-    // Don't insert a new DB row — one already exists.
-    // Update status to running and broadcast so the frontend sees it come back.
-    updateSessionStatus(row.session_id, 'running');
-    this.emit('message', {
-      type: 'session_status',
-      sessionId: row.session_id,
-      status: 'running',
-    } satisfies ServerMessage);
 
     // Detect mid-turn state: last event was a tool_result or tool_use with no
     // subsequent assistant/result response. Log a warning to aid diagnosis.
@@ -1389,16 +1412,14 @@ export class SessionManager extends EventEmitter {
 
   /**
    * Send a message to a session, resuming it first if it is no longer live.
+   * Reuses the original session ID so pull_requests.session_id linkage stays
+   * valid and the UI card is updated in place (not a new card).
    *
-   * If the session is still in the sessions map (running), the message is
-   * delivered via send() directly. Otherwise, a new AgentSession is spawned
-   * with --resume <sessionId> so the CLI restores the conversation history,
-   * and the message is sent once the session emits its first event.
-   */
-  /**
-   * Send a message to a session, resuming it first if it is no longer live.
-   * Returns the session ID that was used (the original if live, or the new
-   * resumed session ID if the session was restarted with --resume).
+   * If the session is still running, the message is delivered via send() directly.
+   * Otherwise, a new AgentSession is spawned with --resume <sessionId> so the CLI
+   * restores conversation history, full event forwarding (pr_opened, push_detected)
+   * is wired via wireSession, and the message is sent after the first event.
+   * A concurrency guard ensures only one respawn runs per session ID at a time.
    */
   async sendOrResume(sessionId: string, text: string): Promise<string> {
     // Live session — deliver directly
@@ -1407,6 +1428,24 @@ export class SessionManager extends EventEmitter {
       return sessionId;
     }
 
+    // Concurrency guard: if a respawn for this session is already in flight,
+    // wait for it rather than double-spawning.
+    const inflight = this.resumesInFlight.get(sessionId);
+    if (inflight) return inflight;
+
+    const promise = this._doSendOrResume(sessionId, text);
+    this.resumesInFlight.set(sessionId, promise);
+    try {
+      return await promise;
+    } finally {
+      this.resumesInFlight.delete(sessionId);
+    }
+  }
+
+  private async _doSendOrResume(
+    sessionId: string,
+    text: string,
+  ): Promise<string> {
     // Session not live — look up details from DB and re-launch with --resume
     const row = getSession(sessionId);
     if (!row) {
@@ -1424,24 +1463,25 @@ export class SessionManager extends EventEmitter {
       return sessionId;
     }
 
-    const newSessionId = crypto.randomUUID();
     const projectDir = normalizePath(project.projectDir);
+    // Reuse the original session ID for the worktree path — preserves
+    // pull_requests.session_id linkage and UI card continuity.
     const worktreePath = path.join(
       projectDir,
       '.claude',
       'worktrees',
-      newSessionId,
+      sessionId,
     );
 
     // Record the main repo's current branch before creating the worktree.
-    let mainBranchResume: string | undefined;
+    let mainBranch: string | undefined;
     try {
-      mainBranchResume = execSync('git rev-parse --abbrev-ref HEAD', {
+      mainBranch = execSync('git rev-parse --abbrev-ref HEAD', {
         cwd: projectDir,
         encoding: 'utf8',
       }).trim();
       console.log(
-        `[SessionManager] sendOrResume main branch before session: ${mainBranchResume}`,
+        `[SessionManager] sendOrResume main branch before session: ${mainBranch}`,
       );
     } catch (err) {
       console.warn(
@@ -1450,20 +1490,16 @@ export class SessionManager extends EventEmitter {
     }
 
     // Resolve the starting point using dev as the base (no milestoneId available for resumed sessions).
-    const {
-      startingPoint: resumeStartingPoint,
-      milestoneSlug: resumeMilestoneSlug,
-    } = resolveStartingPoint(project, null);
+    const { startingPoint, milestoneSlug } = resolveStartingPoint(
+      project,
+      null,
+    );
 
-    const isLocalOnlyResume = project.gitMode === 'local-only';
-    if (!isLocalOnlyResume) {
-      if (resumeMilestoneSlug) {
+    const isLocalOnly = project.gitMode === 'local-only';
+    if (!isLocalOnly) {
+      if (milestoneSlug) {
         try {
-          ensureMilestoneBranch(
-            resumeMilestoneSlug,
-            projectDir,
-            project.baseBranch,
-          );
+          ensureMilestoneBranch(milestoneSlug, projectDir, project.baseBranch);
         } catch (err) {
           console.warn(
             `[SessionManager] sendOrResume: ensureMilestoneBranch failed (continuing): ${err}`,
@@ -1483,16 +1519,15 @@ export class SessionManager extends EventEmitter {
       }
     }
 
-    const resumeWorktreeBase =
-      isLocalOnlyResume || resumeStartingPoint !== project.baseBranch
-        ? resumeStartingPoint
+    const worktreeBase =
+      isLocalOnly || startingPoint !== project.baseBranch
+        ? startingPoint
         : `origin/${project.baseBranch}`;
 
     try {
-      execSync(
-        `git worktree add --detach "${worktreePath}" ${resumeWorktreeBase}`,
-        { cwd: projectDir },
-      );
+      execSync(`git worktree add --detach "${worktreePath}" ${worktreeBase}`, {
+        cwd: projectDir,
+      });
     } catch (err) {
       console.error(
         `[SessionManager] sendOrResume: failed to create worktree: ${err}`,
@@ -1500,126 +1535,55 @@ export class SessionManager extends EventEmitter {
       throw err;
     }
 
-    const isUnixStylePathResume =
+    const isUnixStylePath =
       worktreePath.startsWith('/c/') || worktreePath.startsWith('/C/');
     console.log(
-      `[SessionManager] sendOrResume worktree created: path=${worktreePath} startingPoint=${resumeStartingPoint}` +
-        (isUnixStylePathResume
+      `[SessionManager] sendOrResume worktree created: path=${worktreePath} startingPoint=${startingPoint}` +
+        (isUnixStylePath
           ? ' [WARNING: Unix-style path detected — may not resolve correctly on Windows]'
           : ''),
     );
 
-    const taskUrl = row.task_url ?? '';
-    const projectContextUrl = row.project_context_url ?? '';
-    const taskId = row.task_id ?? '';
-
     // Load per-project orchestrator config so resumed sessions get the same
     // extra allowed tools (e.g. Bash(dotnet:*)) as freshly spawned ones.
-    const orchConfigResume = loadOrchestratorConfig(projectDir);
+    const orchConfig = loadOrchestratorConfig(projectDir);
 
-    const sendOrResumeMode = runtimeSettings.session_mode;
-    const sendOrResumeRunner =
-      sendOrResumeMode === 'api'
-        ? new ApiSessionRunner(newSessionId)
-        : new CliSessionRunner(newSessionId);
+    const mode = runtimeSettings.session_mode;
+    const runner =
+      mode === 'api'
+        ? new ApiSessionRunner(sessionId)
+        : getCorporateMode().gates.dockerMandatory
+          ? new DockerSessionRunner(sessionId)
+          : new CliSessionRunner(sessionId);
 
-    const sendOrResumeMcpConfigPath = writeMcpConfig(
+    const mcpConfigPath = writeMcpConfig(worktreePath, orchConfig.mcp_servers);
+
+    // Shared helper: creates session with original ID, registers in map,
+    // updates DB row to 'running', emits session_status.
+    const session = this.respawnSession(
+      row,
       worktreePath,
-      orchConfigResume.mcp_servers,
+      orchConfig,
+      runner,
+      mcpConfigPath,
     );
 
-    const session = new AgentSession(
-      newSessionId,
-      taskUrl,
-      projectContextUrl,
-      undefined, // taskBackendOverride — production resolves via getTaskBackend
-      worktreePath,
-      taskId,
-      sessionId, // resumeSessionId — restores conversation history via --resume / SDK resume
-      undefined,
-      row.session_type ?? 'standard',
-      this,
-      this.githubClient,
-      orchConfigResume.allowed_tools,
-      undefined, // no systemPromptContent for resume
-      sendOrResumeRunner,
-      row.project_id ?? '',
-      sendOrResumeMcpConfigPath,
-    );
-
-    // Carry forward the PR url so cleanupWorktree does NOT delete the branch on
-    // the next clean exit.
-    if (row.pr_url) {
-      session.prUrl = row.pr_url;
-    }
-
-    const startedAt = Date.now();
-    insertSession({
-      session_id: newSessionId,
-      task_id: taskId,
-      task_url: taskUrl,
-      project_context_url: projectContextUrl,
-      project_id: row.project_id,
-      status: 'starting',
-      started_at: startedAt,
-      ended_at: null,
-      pr_url: row.pr_url ?? null,
-      worktree_path: worktreePath,
-    });
-
-    this.emit('message', {
-      type: 'session_started',
-      sessionId: newSessionId,
-      taskName: taskUrl,
-      notionTaskUrl: taskUrl,
-      started_at: startedAt,
-      ...(taskId && { taskId }),
-    } satisfies ServerMessage);
-
-    this.sessions.set(newSessionId, session);
-    session.on('message', (msg: ServerMessage) => this.emit('message', msg));
-
-    // Wait for the first event from the resumed session, then deliver the message
+    // Register the first-event listener BEFORE wireSession starts run() to
+    // avoid a race where the first message arrives before the listener is set.
     const firstEvent = new Promise<void>((resolve) => {
       session.once('message', () => {
-        this.send(newSessionId, text);
+        this.send(sessionId, text);
         resolve();
       });
     });
 
-    session
-      .run()
-      .then(() =>
-        this.cleanupWorktree(
-          newSessionId,
-          worktreePath,
-          session.prUrl,
-          projectDir,
-          mainBranchResume,
-        ),
-      )
-      .catch((err) => {
-        console.error(
-          `[SessionManager] resumed session ${newSessionId} error: ${err}`,
-        );
-        if (!session.hasEnded) {
-          this.markSessionErrored(
-            newSessionId,
-            'error',
-            'sendOrResume_run_error',
-          );
-        }
-        return this.cleanupWorktree(
-          newSessionId,
-          worktreePath,
-          undefined,
-          projectDir,
-          mainBranchResume,
-        );
-      });
+    // wireSession wires message + pr_opened + push_detected forwarding and starts
+    // run() fire-and-forget with cleanup. This is the single wiring point for all
+    // resume paths, preventing the divergence that was silently dropping pr_opened.
+    this.wireSession(sessionId, session, projectDir, worktreePath, mainBranch);
 
     await firstEvent;
-    return newSessionId;
+    return sessionId;
   }
 
   async shutdownAll(): Promise<void> {
