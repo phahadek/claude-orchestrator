@@ -39,7 +39,6 @@ describe('getCurrentVersion', () => {
   });
 
   it('matches the package.json version', () => {
-     
     const pkg = require('../../../package.json') as { version: string };
     expect(getCurrentVersion()).toBe(pkg.version);
   });
