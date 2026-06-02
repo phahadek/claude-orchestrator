@@ -18,7 +18,9 @@ vi.mock('../../config', () => ({
   },
 }));
 vi.mock('../../config/corporateMode', () => ({
-  getCorporateMode: vi.fn().mockReturnValue({ gates: { requireHumanApproval: false } }),
+  getCorporateMode: vi
+    .fn()
+    .mockReturnValue({ gates: { requireHumanApproval: false } }),
 }));
 vi.mock('../../db/queries', () => ({
   getPRByNumber: vi.fn(),
@@ -37,8 +39,12 @@ vi.mock('../../db/queries', () => ({
 }));
 vi.mock('../../routes/tasks', () => ({ emitTaskUpdated: vi.fn() }));
 vi.mock('../../tasks/TaskBackend', () => ({ getTaskBackend: vi.fn() }));
-vi.mock('../../orchestration/localMergeRunner', () => ({ squashMergeLocal: vi.fn() }));
-vi.mock('../../orchestration/localBranchHelpers', () => ({ detectMergeConflict: vi.fn() }));
+vi.mock('../../orchestration/localMergeRunner', () => ({
+  squashMergeLocal: vi.fn(),
+}));
+vi.mock('../../orchestration/localBranchHelpers', () => ({
+  detectMergeConflict: vi.fn(),
+}));
 vi.mock('../reviewUtils', () => ({ formatMergeConflictFeedback: vi.fn() }));
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
@@ -62,7 +68,9 @@ const KEY = `${REPO}#${PR_NUMBER}`;
 
 function makeGitHubClient(): GitHubClient {
   return {
-    fetchPRStatusConditional: vi.fn().mockResolvedValue({ status: 'not_modified' }),
+    fetchPRStatusConditional: vi
+      .fn()
+      .mockResolvedValue({ status: 'not_modified' }),
     mergePR: vi.fn(),
     getReviewState: vi.fn(),
     categorizeMergeability: vi.fn(),
@@ -101,13 +109,19 @@ describe('AutoMerger — persistence', () => {
 
     merger.attempt(PR_NUMBER, REPO);
 
-    expect(vi.mocked(upsertActiveMerge)).toHaveBeenCalledWith(KEY, REPO, PR_NUMBER);
+    expect(vi.mocked(upsertActiveMerge)).toHaveBeenCalledWith(
+      KEY,
+      REPO,
+      PR_NUMBER,
+    );
   });
 
   it('does not call upsertActiveMerge for a duplicate attempt', () => {
     const gh = makeGitHubClient();
     // Keep the loop running by never resolving fetchPRStatusConditional
-    vi.mocked(gh.fetchPRStatusConditional).mockReturnValue(new Promise(() => {}));
+    vi.mocked(gh.fetchPRStatusConditional).mockReturnValue(
+      new Promise(() => {}),
+    );
     const merger = new AutoMerger(gh, makeMergeWatcher(), makeBroadcast());
 
     merger.attempt(PR_NUMBER, REPO);
@@ -146,7 +160,12 @@ describe('AutoMerger — rehydrate', () => {
 
   it('restores in-flight keys from the DB and resumes them', () => {
     vi.mocked(getAllActiveMerges).mockReturnValue([
-      { key: KEY, repo: REPO, pr_number: PR_NUMBER, started_at: Date.now() - 1000 },
+      {
+        key: KEY,
+        repo: REPO,
+        pr_number: PR_NUMBER,
+        started_at: Date.now() - 1000,
+      },
     ]);
     const gh = makeGitHubClient();
     // Create merger (bootSweep runs but orphans list is empty)
@@ -156,19 +175,30 @@ describe('AutoMerger — rehydrate', () => {
     vi.mocked(upsertActiveMerge).mockClear();
     merger.rehydrate();
 
-    expect(vi.mocked(upsertActiveMerge)).toHaveBeenCalledWith(KEY, REPO, PR_NUMBER);
+    expect(vi.mocked(upsertActiveMerge)).toHaveBeenCalledWith(
+      KEY,
+      REPO,
+      PR_NUMBER,
+    );
   });
 
   it('does not double-run when rehydrate and bootSweep target the same PR', () => {
     vi.mocked(getAllActiveMerges).mockReturnValue([
-      { key: KEY, repo: REPO, pr_number: PR_NUMBER, started_at: Date.now() - 1000 },
+      {
+        key: KEY,
+        repo: REPO,
+        pr_number: PR_NUMBER,
+        started_at: Date.now() - 1000,
+      },
     ]);
     vi.mocked(getOrphanMergeablePRs).mockReturnValue([
       { pr_number: PR_NUMBER, repo: REPO } as any,
     ]);
     // Keep loop alive so second attempt() is blocked by the active guard
     const gh = makeGitHubClient();
-    vi.mocked(gh.fetchPRStatusConditional).mockReturnValue(new Promise(() => {}));
+    vi.mocked(gh.fetchPRStatusConditional).mockReturnValue(
+      new Promise(() => {}),
+    );
 
     const merger = new AutoMerger(gh, makeMergeWatcher(), makeBroadcast());
     // bootSweep ran during construction — one upsert for the orphan
@@ -178,6 +208,8 @@ describe('AutoMerger — rehydrate', () => {
     merger.rehydrate();
 
     // No additional upsert should have happened
-    expect(vi.mocked(upsertActiveMerge).mock.calls.length).toBe(upsertCallsAfterBoot);
+    expect(vi.mocked(upsertActiveMerge).mock.calls.length).toBe(
+      upsertCallsAfterBoot,
+    );
   });
 });
