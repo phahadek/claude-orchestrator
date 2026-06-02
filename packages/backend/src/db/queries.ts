@@ -46,6 +46,15 @@ const stmtUpdateSessionStatus = db.prepare<{
   WHERE session_id = @session_id
 `);
 
+const stmtUpdateSessionWorktreePath = db.prepare<{
+  session_id: string;
+  worktree_path: string;
+}>(`
+  UPDATE sessions
+  SET worktree_path = @worktree_path
+  WHERE session_id = @session_id
+`);
+
 const stmtGetSession = db.prepare<{ session_id: string }>(`
   SELECT * FROM sessions WHERE session_id = @session_id
 `);
@@ -96,6 +105,16 @@ export function updateSessionStatus(
     session_id: sessionId,
     status,
     ended_at: endedAt ?? null,
+  });
+}
+
+export function updateSessionWorktreePath(
+  sessionId: string,
+  worktreePath: string,
+): void {
+  stmtUpdateSessionWorktreePath.run({
+    session_id: sessionId,
+    worktree_path: worktreePath,
   });
 }
 
