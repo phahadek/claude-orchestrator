@@ -12,7 +12,15 @@ vi.mock('../db/db.js', async () => {
   ).run('proj-1', 'Test Project', '/test', 'owner/repo', 'notion', 1000, 1000);
   db.prepare(
     `INSERT INTO projects (id, name, project_dir, github_repo, task_source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run('proj-2', 'Other Project', '/other', 'other/repo', 'notion', 1000, 1000);
+  ).run(
+    'proj-2',
+    'Other Project',
+    '/other',
+    'other/repo',
+    'notion',
+    1000,
+    1000,
+  );
   return { db };
 });
 
