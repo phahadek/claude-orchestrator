@@ -266,6 +266,7 @@ jsonlReader
 
     stuckSessionMonitor.rehydrate();
     stuckSessionMonitor.startScan();
+    autoMerger.rehydrate();
 
     runPRBootSweep(githubClient).catch((err: unknown) =>
       console.warn('[server] PR boot sweep failed:', (err as Error).message),

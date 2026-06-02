@@ -189,6 +189,12 @@ export function runMigrations(): void {
       hard_stop_remaining_ms INTEGER
     );
 
+    CREATE TABLE IF NOT EXISTS active_merges (
+      key        TEXT    PRIMARY KEY,
+      repo       TEXT    NOT NULL,
+      pr_number  INTEGER NOT NULL,
+      started_at INTEGER NOT NULL
+    );
 
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events(session_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_event_type ON session_events(session_id, event_type);

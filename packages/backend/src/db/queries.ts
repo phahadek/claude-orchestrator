@@ -2298,3 +2298,33 @@ export function getAllStuckSessionTimers(): StuckSessionTimerRow[] {
     .prepare(`SELECT * FROM stuck_session_timers`)
     .all() as StuckSessionTimerRow[];
 }
+
+// ─── active_merges ────────────────────────────────────────────────────────────
+
+export interface ActiveMergeRow {
+  key: string;
+  repo: string;
+  pr_number: number;
+  started_at: number;
+}
+
+export function upsertActiveMerge(
+  key: string,
+  repo: string,
+  prNumber: number,
+): void {
+  db.prepare<{ key: string; repo: string; pr_number: number; started_at: number }>(
+    `INSERT OR REPLACE INTO active_merges (key, repo, pr_number, started_at)
+     VALUES (@key, @repo, @pr_number, @started_at)`,
+  ).run({ key, repo, pr_number: prNumber, started_at: Date.now() });
+}
+
+export function deleteActiveMerge(key: string): void {
+  db.prepare<{ key: string }>(
+    `DELETE FROM active_merges WHERE key = @key`,
+  ).run({ key });
+}
+
+export function getAllActiveMerges(): ActiveMergeRow[] {
+  return db.prepare(`SELECT * FROM active_merges`).all() as ActiveMergeRow[];
+}
