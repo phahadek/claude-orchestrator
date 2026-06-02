@@ -112,6 +112,19 @@ export function shouldAutoReview(
 }
 
 /**
+ * Format an approved review verdict into a resume message for a coding session
+ * that was restarted before the approval routing path could run.
+ */
+export function formatApprovedVerdictMessage(result: PRReviewResult): string {
+  return (
+    `## Review Verdict — ✅ Approved\n\n` +
+    `**Overall:** ${result.summary}\n\n` +
+    `Auto-merge is in progress. No action needed — you can end this turn cleanly. ` +
+    `The orchestrator will close out this session once the PR merges.`
+  );
+}
+
+/**
  * Format failing review dimensions into a human-readable message
  * suitable for sending to the coding session as a fix prompt.
  */
