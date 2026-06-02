@@ -58,6 +58,44 @@ export function isPushCommand(toolName: string, toolInput: string): boolean {
   return false;
 }
 
+/**
+ * Returns true if the tool call represents a `gh pr create` invocation.
+ * Exported for unit testing.
+ */
+export function isPRCreateCommand(toolName: string, toolInput: string): boolean {
+  if (toolName !== 'Bash') return false;
+  return /\bgh\s+pr\s+create\b/.test(toolInput);
+}
+
+export interface GitHubPRShape {
+  number?: number;
+  html_url?: string;
+  url?: string;
+  title?: string;
+  body?: string | null;
+  head?: { ref?: string; sha?: string };
+  base?: { ref?: string };
+  state?: string;
+  created_at?: string;
+  updated_at?: string;
+  draft?: boolean;
+}
+
+/** Extract plain text from a tool_result event's content (string or content blocks). */
+export function extractTextFromToolResultEvent(
+  event: Record<string, unknown>,
+): string {
+  const content = event.content;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return (content as Array<Record<string, unknown>>)
+      .filter((b) => b.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text as string)
+      .join('');
+  }
+  return '';
+}
+
 function sessionLog(sessionId: string, ...args: unknown[]) {
   console.log(`[Session ${sessionId.slice(0, 8)}]`, ...args);
 }
@@ -531,6 +569,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         if (isPushCommand('Bash', cmd)) {
           void this.handlePushDetected();
         }
+        if (isPRCreateCommand('Bash', cmd) && !this.prDetectedLive) {
+          const text = extractTextFromToolResultEvent(event);
+          void this.handlePRCreatedFromBashOutput(text);
+        }
       }
     }
 
@@ -550,6 +592,14 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
                 | Array<Record<string, unknown>>
                 | undefined;
               void this.handlePRCreatedFromContent(innerContent ?? []);
+            }
+            if (toolUseId && this.pendingBashCommands.has(toolUseId)) {
+              const cmd = this.pendingBashCommands.get(toolUseId)!;
+              this.pendingBashCommands.delete(toolUseId);
+              if (isPRCreateCommand('Bash', cmd) && !this.prDetectedLive) {
+                const innerText = extractTextFromToolResultEvent(block);
+                void this.handlePRCreatedFromBashOutput(innerText);
+              }
             }
           }
         }
@@ -738,7 +788,6 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
   ): Promise<void> {
     if (this.prDetectedLive) return;
 
-    // Extract text from content blocks
     let text = '';
     for (const block of contentBlocks) {
       if (block.type === 'text' && typeof block.text === 'string') {
@@ -746,19 +795,6 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       }
     }
 
-    // Try to parse as GitHub PR API JSON response
-    interface GitHubPRShape {
-      number?: number;
-      html_url?: string;
-      title?: string;
-      body?: string | null;
-      head?: { ref?: string; sha?: string };
-      base?: { ref?: string };
-      state?: string;
-      created_at?: string;
-      updated_at?: string;
-      draft?: boolean;
-    }
     let prShape: GitHubPRShape = {};
     try {
       const parsed = JSON.parse(text) as GitHubPRShape;
@@ -769,9 +805,46 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       // Not JSON — fall back to regex extraction of URL only
     }
 
-    // Determine the PR URL (from parsed JSON or regex match)
     const prUrl = prShape.html_url ?? text.match(PR_URL_REGEX)?.[0];
     if (!prUrl) return;
+    await this.handlePRDetected(prUrl, prShape);
+  }
+
+  /**
+   * Extract the PR URL from the stdout of a `gh pr create` Bash invocation
+   * and upsert the PR row (without full GitHub API metadata).
+   */
+  private async handlePRCreatedFromBashOutput(text: string): Promise<void> {
+    if (this.prDetectedLive) return;
+
+    let prShape: GitHubPRShape = {};
+    try {
+      const parsed = JSON.parse(text) as GitHubPRShape;
+      if (parsed && typeof parsed === 'object') {
+        // gh pr create --json url emits {"url":"..."}, MCP shape uses html_url
+        const resolvedUrl = parsed.html_url ?? parsed.url;
+        if (resolvedUrl) {
+          prShape = { ...parsed, html_url: resolvedUrl };
+        }
+      }
+    } catch {
+      // Not JSON — fall back to regex
+    }
+
+    const prUrl = prShape.html_url ?? text.match(PR_URL_REGEX)?.[0];
+    if (!prUrl) return;
+    await this.handlePRDetected(prUrl, prShape);
+  }
+
+  /**
+   * Core PR detection: upsert the pull_requests row, broadcast pr_created,
+   * and emit the pr_opened event. Shared by MCP and Bash detection paths.
+   */
+  private async handlePRDetected(
+    prUrl: string,
+    prShape: GitHubPRShape,
+  ): Promise<void> {
+    if (this.prDetectedLive) return;
 
     const repoMatch = prUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
     if (!repoMatch) return;
@@ -821,7 +894,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             }
           } catch (e) {
             console.warn(
-              `[AgentSession] handlePRCreatedFromContent: failed to fetch head_sha for PR #${prNumber}:`,
+              `[AgentSession] handlePRDetected: failed to fetch head_sha for PR #${prNumber}:`,
               e,
             );
           }
