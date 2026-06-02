@@ -264,7 +264,7 @@ const SESSION_DEFAULTS = {
 
 describe('runMigrations — index idempotency', () => {
   it('creates all six covering indexes on a fresh DB', () => {
-    runMigrations();
+    runMigrations(typedDb);
     const names = indexNames();
     for (const idx of EXPECTED_INDEXES) {
       expect(names, `missing index ${idx}`).toContain(idx);
@@ -272,8 +272,8 @@ describe('runMigrations — index idempotency', () => {
   });
 
   it('is safe to run twice on the same DB (idempotent)', () => {
-    runMigrations();
-    expect(() => runMigrations()).not.toThrow();
+    runMigrations(typedDb);
+    expect(() => runMigrations(typedDb)).not.toThrow();
     const names = indexNames();
     for (const idx of EXPECTED_INDEXES) {
       expect(names).toContain(idx);
@@ -450,7 +450,7 @@ describe('getActiveTaskAggregates — output shape regression guard', () => {
 describe('bench: getActiveTaskAggregates', () => {
   it('completes in <100 ms on 100k events + 50 sessions + 30 tasks', () => {
     clearTables();
-    runMigrations(); // ensure indexes are present for the bench
+    runMigrations(typedDb); // ensure indexes are present for the bench
 
     const TASK_COUNT = 30;
     const SESSION_COUNT = 50;
@@ -515,7 +515,7 @@ describe('bench: getActiveTaskAggregates', () => {
 
 describe('query-plan regression: getActiveTaskAggregates', () => {
   it('planner uses idx_sessions_notion_task_id_session_type and idx_pull_requests_task_id_pr_number', () => {
-    runMigrations();
+    runMigrations(typedDb);
     // Direct SQL matching the body of getActiveTaskAggregates with one placeholder.
     // If SUBSTR/INSTR wrappers are re-introduced, these indexes become unusable and
     // the planner falls back to full-table scans — causing this assertion to fail.

@@ -1,7 +1,6 @@
 import Database from 'better-sqlite3';
-import { db } from './db';
 
-export function runMigrations(target: Database.Database = db): void {
+export function runMigrations(target: Database.Database): void {
   target.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       session_id                TEXT    PRIMARY KEY,

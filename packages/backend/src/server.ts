@@ -47,7 +47,7 @@ import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
 import { runPRBootSweep } from './github/PRBootSweep';
 
-runMigrations();
+runMigrations(db);
 loadRuntimeSettingsFromDb();
 importProjectsFromEnv(process.env.PROJECTS);
 
