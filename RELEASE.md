@@ -17,6 +17,7 @@ node scripts/release.mjs 1.5.0
 ```
 
 This script:
+
 - Bumps the `version` field in `package.json`, `packages/backend/package.json`, and `packages/frontend/package.json`.
 - Asserts the backend `package.json` reflects the target version (exits non-zero if not).
 - Commits `chore(release): bump version to X.Y.Z`.

@@ -34,7 +34,9 @@ if (!rawVersion) {
 const version = rawVersion.replace(/^v/, '');
 
 if (!/^\d+\.\d+\.\d+$/.test(version)) {
-  console.error(`Invalid version: "${rawVersion}". Must be X.Y.Z (e.g. 1.5.0).`);
+  console.error(
+    `Invalid version: "${rawVersion}". Must be X.Y.Z (e.g. 1.5.0).`,
+  );
   process.exit(1);
 }
 
