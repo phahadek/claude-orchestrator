@@ -35,7 +35,9 @@ function fail(msg) {
 
 const rawArg = process.argv[2];
 if (!rawArg) {
-  fail('Missing version argument.\n\nUsage: node scripts/release.mjs <version>\nExample: node scripts/release.mjs 1.5.0');
+  fail(
+    'Missing version argument.\n\nUsage: node scripts/release.mjs <version>\nExample: node scripts/release.mjs 1.5.0',
+  );
 }
 
 const target = rawArg.replace(/^v/, '');
@@ -56,7 +58,9 @@ for (const pkgPath of PACKAGE_PATHS) {
   const prev = pkg.version;
   pkg.version = target;
   writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
-  console.log(`  bumped ${pkgPath.replace(ROOT + '/', '')}  ${prev} → ${target}`);
+  console.log(
+    `  bumped ${pkgPath.replace(ROOT + '/', '')}  ${prev} → ${target}`,
+  );
 }
 
 // ── Verify the auto-updater source of truth ───────────────────────────────────
@@ -73,8 +77,14 @@ if (backendVersion !== target) {
 // ── Commit ────────────────────────────────────────────────────────────────────
 
 try {
-  execSync(`git -C "${ROOT}" add package.json packages/backend/package.json packages/frontend/package.json`, { stdio: 'inherit' });
-  execSync(`git -C "${ROOT}" commit -m "chore(release): bump version to ${target}"`, { stdio: 'inherit' });
+  execSync(
+    `git -C "${ROOT}" add package.json packages/backend/package.json packages/frontend/package.json`,
+    { stdio: 'inherit' },
+  );
+  execSync(
+    `git -C "${ROOT}" commit -m "chore(release): bump version to ${target}"`,
+    { stdio: 'inherit' },
+  );
 } catch {
   fail('git commit failed — resolve the error above and retry.');
 }

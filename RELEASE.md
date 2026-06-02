@@ -12,12 +12,13 @@ node scripts/release.mjs <version>
 ```
 
 The script:
+
 - Bumps `version` in `package.json` (root), `packages/backend/package.json`, and `packages/frontend/package.json` to the target version.
 - Verifies `packages/backend/package.json` was written correctly (the field the auto-updater reads).
 - Commits with message `chore(release): bump version to X.Y.Z`.
 
 > **Why this matters:** `UpdateChecker` reads `packages/backend/package.json` as the
-> *current* version and compares it against the latest GitHub release tag. If the
+> _current_ version and compares it against the latest GitHub release tag. If the
 > field lags behind the tag (as happened before v1.4.0), every installed instance
 > will show a perpetual "update available" banner even when fully up to date.
 
