@@ -15,6 +15,9 @@ import {
   getSession,
   getOrphanMergeablePRs,
   getStaleAutoMergeFailedPRs,
+  upsertActiveMerge,
+  deleteActiveMerge,
+  getAllActiveMerges,
 } from '../db/queries';
 import type { GitHubClient, PRReviewDecision } from './GitHubClient';
 import { GitHubApiError, GitHubRateLimitError } from './types';
@@ -289,7 +292,46 @@ export class AutoMerger {
     const k = this.key(prNumber, repo);
     if (this.active.has(k)) return;
     this.active.add(k);
-    void this.run(prNumber, repo, options).finally(() => this.active.delete(k));
+    upsertActiveMerge(k, repo, prNumber);
+    void this.run(prNumber, repo, options).finally(() => {
+      this.active.delete(k);
+      deleteActiveMerge(k);
+    });
+  }
+
+  /**
+   * Restore in-flight merge loops from the active_merges table after a restart.
+   * Called from server.ts alongside StuckSessionMonitor.rehydrate().
+   *
+   * Persistence pattern (shared with StuckSessionMonitor.timers and
+   * ReviewOrchestrator.pendingSyncs): a SQLite table acts as the durable store;
+   * rehydrate() re-creates the in-memory state on boot.
+   *
+   * Deliberately NOT persisted:
+   * - SessionManager._lastDisplayStatus — broadcast de-dup cache; empty-on-boot
+   *   is correct (status re-derives on the next incoming message).
+   * - AgentSession tool-call Maps (pendingGHToolUseIds, pendingBashCommands,
+   *   pendingPushFileToolUseIds) — per-session, per-message transient state that
+   *   is correctly discarded on session resume.
+   *
+   * bootSweep() remains as belt-and-suspenders for PRs that became mergeable
+   * while the server was down; rehydrate() handles truly in-flight loops.
+   * The attempt() idempotent guard (active.has(k)) prevents double-runs when
+   * both paths target the same PR.
+   */
+  rehydrate(): void {
+    const rows = getAllActiveMerges();
+    for (const row of rows) {
+      console.log(
+        `[AutoMerger] rehydrate: resuming in-flight merge for PR #${row.pr_number} in ${row.repo}`,
+      );
+      this.attempt(row.pr_number, row.repo);
+    }
+    if (rows.length > 0) {
+      console.log(
+        `[AutoMerger] rehydrate complete — resumed ${rows.length} in-flight merge(s)`,
+      );
+    }
   }
 
   private async run(
