@@ -43,15 +43,17 @@ const M4_DONE = Date.parse('2026-05-22T00:00:00Z');
 const M5_DONE = Date.parse('2026-05-26T00:00:00Z');
 const M6_START = M5_DONE;
 const M7_START = Date.parse('2026-05-30T00:00:00Z');
+const M8_START = Date.parse('2026-06-10T00:00:00Z'); // placeholder; update when M7 done-date is confirmed
 
 function eraOf(startedAt) {
   if (startedAt < M4_START) return 'pre-M4';
   if (startedAt < M4_DONE) return 'M4';
   if (startedAt < M5_DONE) return 'M5';
   if (startedAt < M7_START) return 'M6';
-  return 'M7';
+  if (startedAt < M8_START) return 'M7';
+  return 'M8';
 }
-const ERA_ORDER = ['pre-M4', 'M4', 'M5', 'M6', 'M7'];
+const ERA_ORDER = ['pre-M4', 'M4', 'M5', 'M6', 'M7', 'M8'];
 
 // ── Arg parsing ────────────────────────────────────────────────────────────
 const args = argv.slice(2);
@@ -128,8 +130,13 @@ const rows = db
         FROM session_pause_intervals pi
         WHERE pi.session_id = s.session_id
           AND (pi.resumed_at IS NOT NULL OR s.ended_at IS NOT NULL)
-      ) AS total_paused_ms
+      ) AS total_paused_ms,
+      sa.session_id AS audit_session_id,
+      sa.pr_targets,
+      sa.spec_mismatch AS audit_spec_mismatch,
+      sa.violations
     FROM sessions s
+    LEFT JOIN session_audits sa ON sa.session_id = s.session_id
     WHERE s.session_type != 'review' OR s.session_type IS NULL
     ORDER BY s.started_at ASC
   `,
@@ -154,6 +161,34 @@ const records = rows.map((r) => {
   // otherwise: launches minus 1 (the first launch is the original spawn, not a resume).
   const resume_count =
     r.launched_count > 0 ? Math.max(0, r.launched_count - 1) : null;
+  const has_audit =
+    r.audit_session_id !== null && r.audit_session_id !== undefined;
+  const pr_wrong_base = has_audit
+    ? r.pr_targets !== null && r.pr_targets !== undefined
+      ? r.pr_targets !== 'dev'
+        ? 1
+        : 0
+      : null
+    : null;
+  const spec_mismatch = has_audit
+    ? r.audit_spec_mismatch !== null && r.audit_spec_mismatch !== undefined
+      ? r.audit_spec_mismatch
+        ? 1
+        : 0
+      : null
+    : null;
+  let violations_count = null;
+  if (has_audit) {
+    if (r.violations !== null && r.violations !== undefined) {
+      try {
+        violations_count = JSON.parse(r.violations).length;
+      } catch {
+        violations_count = 0;
+      }
+    } else {
+      violations_count = 0;
+    }
+  }
   return {
     session_id: r.session_id,
     era: eraOf(r.started_at),
@@ -170,6 +205,9 @@ const records = rows.map((r) => {
     rate_limit_events: r.rate_limit_events,
     resume_count,
     review_iteration: r.review_iteration ?? null,
+    pr_wrong_base,
+    spec_mismatch,
+    violations_count,
     pr_url: r.pr_url,
     project_id: r.project_id,
   };
@@ -225,6 +263,9 @@ const METRICS = [
   'rate_limit_events',
   'resume_count',
   'review_iteration',
+  'pr_wrong_base',
+  'spec_mismatch',
+  'violations_count',
 ];
 
 function percentile(sorted, p) {
@@ -312,6 +353,9 @@ const perSessionCsv = [
     'rate_limit_events',
     'resume_count',
     'review_iteration',
+    'pr_wrong_base',
+    'spec_mismatch',
+    'violations_count',
     'project_id',
     'task_name',
   ].join(','),
@@ -329,8 +373,11 @@ const perSessionCsv = [
       r.tokens_total,
       r.tool_call_proxy,
       r.rate_limit_events,
-      r.resume_count,
+      r.resume_count ?? '',
       r.review_iteration ?? '',
+      r.pr_wrong_base ?? '',
+      r.spec_mismatch ?? '',
+      r.violations_count ?? '',
       r.project_id ?? '',
       JSON.stringify(r.task_name ?? '').replace(/^"|"$/g, ''),
     ].join(','),
