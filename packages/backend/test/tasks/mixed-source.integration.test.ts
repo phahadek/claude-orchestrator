@@ -5,12 +5,8 @@ import path from 'path';
 import yaml from 'js-yaml';
 
 vi.mock('../../src/db/db.js', async () => {
-  const Database = (await import('better-sqlite3')).default;
-  const memDb = new Database(':memory:');
-  memDb.pragma('foreign_keys = ON');
-  const { applyTestSchema } = await import('../helpers/testDbSchema');
-  applyTestSchema(memDb);
-  return { db: memDb };
+  const { setupTestDb } = await import('../helpers/setupTestDb.js');
+  return { db: setupTestDb() };
 });
 
 vi.mock('../../src/notion/NotionClient', () => {
