@@ -1,18 +1,31 @@
-import { db } from './db';
+import Database from 'better-sqlite3';
 
-export function runMigrations(): void {
-  db.exec(`
+export function runMigrations(target: Database.Database): void {
+  target.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
-      session_id          TEXT    PRIMARY KEY,
-      task_id             TEXT,
-      task_url            TEXT,
-      project_context_url TEXT,
-      status              TEXT    NOT NULL,
-      started_at          INTEGER NOT NULL,
-      ended_at            INTEGER,
-      pr_url              TEXT,
-      worktree_path       TEXT,
-      favorited           INTEGER NOT NULL DEFAULT 0
+      session_id                TEXT    PRIMARY KEY,
+      task_id                   TEXT,
+      task_url                  TEXT,
+      project_context_url       TEXT,
+      status                    TEXT    NOT NULL,
+      started_at                INTEGER NOT NULL,
+      ended_at                  INTEGER,
+      pr_url                    TEXT,
+      worktree_path             TEXT,
+      archived                  INTEGER NOT NULL DEFAULT 0,
+      project_id                TEXT,
+      session_type              TEXT    NOT NULL DEFAULT 'standard',
+      favorited                 INTEGER NOT NULL DEFAULT 0,
+      note                      TEXT,
+      tags                      TEXT,
+      metadata                  TEXT,
+      total_input_tokens        INTEGER NOT NULL DEFAULT 0,
+      total_output_tokens       INTEGER NOT NULL DEFAULT 0,
+      context_occupancy_tokens  INTEGER NOT NULL DEFAULT 0,
+      model                     TEXT,
+      task_name                 TEXT,
+      review_result             TEXT,
+      compaction_count          INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS session_events (
@@ -196,6 +209,39 @@ export function runMigrations(): void {
       started_at INTEGER NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS pull_requests (
+      id                           INTEGER PRIMARY KEY AUTOINCREMENT,
+      pr_number                    INTEGER NOT NULL,
+      pr_url                       TEXT    NOT NULL UNIQUE,
+      task_id                      TEXT,
+      session_id                   TEXT,
+      repo                         TEXT    NOT NULL,
+      title                        TEXT,
+      body                         TEXT,
+      head_branch                  TEXT,
+      base_branch                  TEXT,
+      state                        TEXT    NOT NULL DEFAULT 'open',
+      draft                        INTEGER NOT NULL DEFAULT 0,
+      review_result                TEXT,
+      review_at                    TEXT,
+      created_at                   TEXT    NOT NULL,
+      updated_at                   TEXT    NOT NULL,
+      synced_at                    TEXT    NOT NULL,
+      review_session_id            TEXT,
+      review_iteration             INTEGER NOT NULL DEFAULT 0,
+      head_sha                     TEXT,
+      last_reviewed_sha            TEXT,
+      node_id                      TEXT,
+      mergeable                    INTEGER,
+      merge_state                  TEXT,
+      merge_state_checked_at       TEXT,
+      pending_push                 INTEGER NOT NULL DEFAULT 0,
+      pause_reason                 TEXT,
+      failing_checks               TEXT,
+      ci_remediation_attempted_sha TEXT,
+      pause_reason_set_at          INTEGER
+    );
+
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events(session_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_event_type ON session_events(session_id, event_type);
     CREATE INDEX IF NOT EXISTS idx_session_events_timestamp ON session_events(timestamp DESC);
@@ -206,168 +252,172 @@ export function runMigrations(): void {
 
   // Idempotent column additions for existing databases
   try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN worktree_path TEXT`);
+    target.exec(`ALTER TABLE sessions ADD COLUMN worktree_path TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN project_id TEXT`);
+    target.exec(`ALTER TABLE sessions ADD COLUMN project_id TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'standard'`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN note TEXT`);
+    target.exec(`ALTER TABLE sessions ADD COLUMN note TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN tags TEXT`);
+    target.exec(`ALTER TABLE sessions ADD COLUMN tags TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE session_events ADD COLUMN message_id TEXT`);
+    target.exec(`ALTER TABLE session_events ADD COLUMN message_id TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE sessions ADD COLUMN favorited INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE sessions ADD COLUMN total_input_tokens INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE sessions ADD COLUMN total_output_tokens INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE sessions ADD COLUMN context_occupancy_tokens INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN review_session_id TEXT`);
+    target.exec(`ALTER TABLE pull_requests ADD COLUMN review_session_id TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE pull_requests ADD COLUMN review_iteration INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN head_sha TEXT`);
+    target.exec(`ALTER TABLE pull_requests ADD COLUMN head_sha TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN last_reviewed_sha TEXT`);
+    target.exec(`ALTER TABLE pull_requests ADD COLUMN last_reviewed_sha TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE projects ADD COLUMN auto_launch_enabled INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE projects ADD COLUMN auto_launch_milestone_id TEXT`);
+    target.exec(
+      `ALTER TABLE projects ADD COLUMN auto_launch_milestone_id TEXT`,
+    );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN pause_reason TEXT`);
+    target.exec(`ALTER TABLE pull_requests ADD COLUMN pause_reason TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN failing_checks TEXT`);
+    target.exec(`ALTER TABLE pull_requests ADD COLUMN failing_checks TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE projects ADD COLUMN auto_merge_enabled INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN metadata TEXT`);
+    target.exec(`ALTER TABLE sessions ADD COLUMN metadata TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE projects ADD COLUMN git_mode TEXT NOT NULL DEFAULT 'github'`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN review_result TEXT`);
+    target.exec(`ALTER TABLE sessions ADD COLUMN review_result TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE local_branches ADD COLUMN pause_reason TEXT`);
+    target.exec(`ALTER TABLE local_branches ADD COLUMN pause_reason TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE local_branches ADD COLUMN merge_commit_sha TEXT`);
+    target.exec(`ALTER TABLE local_branches ADD COLUMN merge_commit_sha TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE projects ADD COLUMN milestone_branching TEXT`);
+    target.exec(`ALTER TABLE projects ADD COLUMN milestone_branching TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE projects ADD COLUMN non_milestone_source_config TEXT`);
+    target.exec(
+      `ALTER TABLE projects ADD COLUMN non_milestone_source_config TEXT`,
+    );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE projects ADD COLUMN task_source_config TEXT`);
+    target.exec(`ALTER TABLE projects ADD COLUMN task_source_config TEXT`);
   } catch {
     /* already exists */
   }
 
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE pull_requests ADD COLUMN ci_remediation_attempted_sha TEXT`,
     );
   } catch {
@@ -375,7 +425,9 @@ export function runMigrations(): void {
   }
 
   try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN pause_reason_set_at INTEGER`);
+    target.exec(
+      `ALTER TABLE pull_requests ADD COLUMN pause_reason_set_at INTEGER`,
+    );
   } catch {
     /* already exists */
   }
@@ -383,7 +435,7 @@ export function runMigrations(): void {
   // ── Double-prefix cleanup (notion:notion: contamination from pre-fix-release) ──
   // Per-task rows with double-prefixed keys are deleted; they re-populate on next fetch.
   // Board-cache JSON is repaired in-place so the route doesn't serve stale IDs.
-  db.exec(`
+  target.exec(`
     DELETE FROM task_cache WHERE task_id LIKE 'notion:notion:%';
 
     UPDATE task_cache
@@ -394,7 +446,7 @@ export function runMigrations(): void {
   // ── Source-prefix backfill (idempotent: NOT LIKE '%:%' guard) ──────────────
   // Prefix sessions.task_id with source based on owning project's task_source.
   // Rows with no project_id default to 'notion:' (all pre-M6 sessions were Notion).
-  db.exec(`
+  target.exec(`
     UPDATE sessions
     SET task_id = 'notion:' || task_id
     WHERE task_id IS NOT NULL AND task_id NOT LIKE '%:%'
@@ -419,14 +471,14 @@ export function runMigrations(): void {
     WHERE task_id NOT LIKE '%:%';
   `);
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE projects ADD COLUMN data_residency_confirmed INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE sessions ADD COLUMN compaction_count INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
@@ -435,7 +487,7 @@ export function runMigrations(): void {
 
   // ── Backfill github_repo for GitHub-task-source projects ─────────────────────
   // Idempotent: guarded by github_repo IS NULL, re-running is a no-op.
-  db.exec(`
+  target.exec(`
     UPDATE projects
     SET github_repo = json_extract(task_source_config, '$.owner') || '/' || json_extract(task_source_config, '$.repo')
     WHERE task_source = 'github'
@@ -447,7 +499,7 @@ export function runMigrations(): void {
 
   // ── pull_requests: notion_task_id → task_id ──────────────────────────────────
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE pull_requests RENAME COLUMN notion_task_id TO task_id`,
     );
   } catch {
@@ -455,7 +507,7 @@ export function runMigrations(): void {
   }
   // Backfill: add 'notion:' prefix for legacy unprefixed rows.
   // Delete raw duplicate first to avoid UNIQUE constraint violations.
-  db.exec(`
+  target.exec(`
     DELETE FROM pull_requests
     WHERE task_id IS NOT NULL
       AND task_id NOT LIKE '%:%'
@@ -473,7 +525,9 @@ export function runMigrations(): void {
 
   // Drop old index on notion_task_id (may still exist on pre-D1 databases).
   try {
-    db.exec(`DROP INDEX IF EXISTS idx_pull_requests_notion_task_id_pr_number`);
+    target.exec(
+      `DROP INDEX IF EXISTS idx_pull_requests_notion_task_id_pr_number`,
+    );
   } catch {
     /* ignore */
   }
@@ -485,7 +539,7 @@ export function runMigrations(): void {
   // Guard: LENGTH = 39 means 'notion:' (7) + dashless 32-hex (32) — already-dashed
   // rows are 43 chars and are untouched. Non-notion task_ids (yaml:, jira:) are
   // untouched because they don't match LIKE 'notion:%'.
-  db.exec(`
+  target.exec(`
     UPDATE sessions
     SET task_id = 'notion:' ||
       SUBSTR(task_id, 8, 8) || '-' ||
@@ -518,7 +572,7 @@ export function runMigrations(): void {
   `);
 
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE projects ADD COLUMN base_branch TEXT NOT NULL DEFAULT 'dev'`,
     );
   } catch {
