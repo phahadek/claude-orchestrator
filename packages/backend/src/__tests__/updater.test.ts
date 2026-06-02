@@ -12,6 +12,12 @@ vi.mock('https', () => {
   };
 });
 
+// Stable channel by default for existing tests
+vi.mock('../db/queries', () => ({
+  getSetting: vi.fn(() => 'stable'),
+  setSetting: vi.fn(),
+}));
+
 import https from 'https';
 import { UpdateChecker } from '../updater/UpdateChecker.js';
 import { selectAsset } from '../updater/UpdateDownloader.js';

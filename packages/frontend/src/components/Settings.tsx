@@ -79,6 +79,9 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
   const [updateCheckResult, setUpdateCheckResult] = useState<string | null>(
     null,
   );
+  const [releaseChannel, setReleaseChannel] = useState<'stable' | 'beta'>(
+    'stable',
+  );
   const [fieldErrors, setFieldErrors] = useState<
     Partial<Record<keyof SettingsValues, string>>
   >({});
@@ -98,6 +101,26 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
       .catch(() => setSaveError('Failed to load settings'))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    fetch('/api/update/channel')
+      .then((r) => r.json() as Promise<{ channel: 'stable' | 'beta' }>)
+      .then((body) => setReleaseChannel(body.channel))
+      .catch(() => {});
+  }, []);
+
+  async function handleChannelChange(channel: 'stable' | 'beta') {
+    setReleaseChannel(channel);
+    try {
+      await fetch('/api/update/channel', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel }),
+      });
+    } catch {
+      setSaveError('Failed to save release channel');
+    }
+  }
 
   async function handleChange(key: keyof SettingsValues, value: string) {
     if (!settings) return;
@@ -444,6 +467,21 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                 )}
 
                 <h3 className={styles.sectionTitle}>About</h3>
+                <div className={styles.field}>
+                  <label className={styles.label}>Release channel</label>
+                  <select
+                    className={styles.select}
+                    value={releaseChannel}
+                    onChange={(e) =>
+                      void handleChannelChange(
+                        e.target.value as 'stable' | 'beta',
+                      )
+                    }
+                  >
+                    <option value="stable">Stable</option>
+                    <option value="beta">Beta</option>
+                  </select>
+                </div>
                 <div className={styles.field}>
                   <label className={styles.label}>Check for updates</label>
                   <button
