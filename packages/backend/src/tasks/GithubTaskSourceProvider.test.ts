@@ -2,12 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { GithubTaskSourceProvider } from './GithubTaskSourceProvider';
 import type { Issue, IssueComment } from '../github/types';
 
-vi.mock('../projects/ProjectService', () => ({
-  ProjectService: {
-    getMilestone: vi.fn((id: string) => ({ sourceId: id })),
-  },
-}));
-
 function makeIssue(id: number, overrides: Partial<Issue> = {}): Issue {
   return {
     id,
@@ -64,7 +58,7 @@ beforeEach(() => {
 // ── fetchReadyTasks ─────────────────────────────────────────────────────────
 
 describe('GithubTaskSourceProvider.fetchReadyTasks', () => {
-  it('calls listIssues with state:all and no labels filter', async () => {
+  it('returns only issues with status:ready label', async () => {
     const client = makeClient({
       listIssues: vi
         .fn()
@@ -81,63 +75,13 @@ describe('GithubTaskSourceProvider.fetchReadyTasks', () => {
     const result = await provider.fetchReadyTasks(null);
 
     expect(client.listIssues).toHaveBeenCalledWith('owner/repo', {
+      labels: ['status:ready'],
       milestone: undefined,
-      state: 'all',
+      state: 'open',
     });
     expect(result).toHaveLength(2);
     expect(result[0].task.id).toBe('github:1');
     expect(result[1].task.id).toBe('github:2');
-  });
-
-  it('includes issues with all non-deferred status labels', async () => {
-    const client = makeClient({
-      listIssues: vi
-        .fn()
-        .mockResolvedValue([
-          makeIssue(1, { labels: ['status:ready', 'type:code'] }),
-          makeIssue(2, { labels: ['status:in-progress', 'type:code'] }),
-          makeIssue(3, { labels: ['status:in-review', 'type:code'] }),
-          makeIssue(4, {
-            state: 'closed',
-            labels: ['status:done', 'type:code'],
-          }),
-          makeIssue(5, { labels: ['status:deferred', 'type:code'] }),
-        ]),
-    });
-    const provider = new GithubTaskSourceProvider(
-      client as never,
-      PROJECT_CONFIG,
-    );
-
-    const result = await provider.fetchReadyTasks(null);
-
-    const ids = result.map((r) => r.task.id);
-    expect(ids).toContain('github:1');
-    expect(ids).toContain('github:2');
-    expect(ids).toContain('github:3');
-    expect(ids).toContain('github:4');
-    expect(ids).not.toContain('github:5');
-    expect(result).toHaveLength(4);
-  });
-
-  it('excludes issues with status:deferred label', async () => {
-    const client = makeClient({
-      listIssues: vi
-        .fn()
-        .mockResolvedValue([
-          makeIssue(1, { labels: ['status:ready'] }),
-          makeIssue(2, { labels: ['status:deferred'] }),
-        ]),
-    });
-    const provider = new GithubTaskSourceProvider(
-      client as never,
-      PROJECT_CONFIG,
-    );
-
-    const result = await provider.fetchReadyTasks(null);
-
-    expect(result).toHaveLength(1);
-    expect(result[0].task.id).toBe('github:1');
   });
 
   it('passes numeric milestone when milestoneId is provided', async () => {
@@ -150,8 +94,9 @@ describe('GithubTaskSourceProvider.fetchReadyTasks', () => {
     await provider.fetchReadyTasks('7');
 
     expect(client.listIssues).toHaveBeenCalledWith('owner/repo', {
+      labels: ['status:ready'],
       milestone: 7,
-      state: 'all',
+      state: 'open',
     });
   });
 
@@ -165,8 +110,9 @@ describe('GithubTaskSourceProvider.fetchReadyTasks', () => {
     await provider.fetchReadyTasks(null);
 
     expect(client.listIssues).toHaveBeenCalledWith('owner/repo', {
+      labels: ['status:ready'],
       milestone: undefined,
-      state: 'all',
+      state: 'open',
     });
   });
 
