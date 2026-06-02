@@ -27,6 +27,18 @@ describe('isHardBanned()', () => {
     expect(isHardBanned('some/subdir/CLAUDE.md')).toBe(true);
   });
 
+  it('returns true for pr-body.md', () => {
+    expect(isHardBanned('pr-body.md')).toBe(true);
+  });
+
+  it('returns true for pr_body.txt (pattern match)', () => {
+    expect(isHardBanned('pr_body.txt')).toBe(true);
+  });
+
+  it('returns false for prfoo.md (no over-match)', () => {
+    expect(isHardBanned('prfoo.md')).toBe(false);
+  });
+
   it('returns false for src/index.ts', () => {
     expect(isHardBanned('src/index.ts')).toBe(false);
   });
@@ -41,6 +53,10 @@ describe('HARD_BANNED_FILES', () => {
     expect(HARD_BANNED_FILES).toContain('CLAUDE.md');
     expect(HARD_BANNED_FILES).toContain('.commit-msg');
     expect(HARD_BANNED_FILES).toContain('.commit_msg');
+  });
+
+  it('contains pr-body.md', () => {
+    expect(HARD_BANNED_FILES).toContain('pr-body.md');
   });
 });
 
@@ -71,6 +87,18 @@ describe('HARD_BANNED_PATTERNS', () => {
 
   it('does not match README.txt', () => {
     expect(HARD_BANNED_PATTERNS.some((p) => p.test('README.txt'))).toBe(false);
+  });
+
+  it('matches pr-body.md', () => {
+    expect(HARD_BANNED_PATTERNS.some((p) => p.test('pr-body.md'))).toBe(true);
+  });
+
+  it('matches pr_body.txt', () => {
+    expect(HARD_BANNED_PATTERNS.some((p) => p.test('pr_body.txt'))).toBe(true);
+  });
+
+  it('does not match prfoo.md', () => {
+    expect(HARD_BANNED_PATTERNS.some((p) => p.test('prfoo.md'))).toBe(false);
   });
 });
 
@@ -152,6 +180,20 @@ describe('validatePRFiles()', () => {
     const result = validatePRFiles(['commit_msg.md'], []);
     expect(result.valid).toBe(false);
     expect(result.bannedFiles).toContain('commit_msg.md');
+  });
+
+  it('rejects pr-body.md (exact file match)', () => {
+    const result = validatePRFiles(['src/foo.ts', 'pr-body.md'], []);
+    expect(result.valid).toBe(false);
+    expect(result.bannedFiles).toContain('pr-body.md');
+    expect(result.reason).toBe('hard_banned');
+  });
+
+  it('rejects pr_body.txt (pattern match)', () => {
+    const result = validatePRFiles(['pr_body.txt'], []);
+    expect(result.valid).toBe(false);
+    expect(result.bannedFiles).toContain('pr_body.txt');
+    expect(result.reason).toBe('hard_banned');
   });
 
   it('accepts non-scratch .txt files', () => {

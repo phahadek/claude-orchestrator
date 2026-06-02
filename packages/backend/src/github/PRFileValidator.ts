@@ -5,11 +5,15 @@ export const HARD_BANNED_FILES: readonly string[] = [
   'CLAUDE.md',
   '.commit-msg',
   '.commit_msg',
+  'pr-body.md',
 ];
 
-// Patterns (case-insensitive) that match commit-message scratch files regardless of extension.
-// Catches commit-msg.txt, commit_msg.txt, commit-msg.draft, commit_msg.md, etc.
-export const HARD_BANNED_PATTERNS: readonly RegExp[] = [/^commit[-_]msg\..+$/i];
+// Patterns (case-insensitive) that match commit-message and PR-body scratch files regardless of extension.
+// Catches commit-msg.txt, commit_msg.txt, commit-msg.draft, commit_msg.md, pr-body.txt, pr_body.md, etc.
+export const HARD_BANNED_PATTERNS: readonly RegExp[] = [
+  /^commit[-_]msg\..+$/i,
+  /^pr[-_]body\..+$/i,
+];
 
 export interface PRFileValidationResult {
   valid: boolean;
