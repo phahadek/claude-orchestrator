@@ -330,3 +330,15 @@ status:backlog → status:ready → status:in-progress → status:in-review → 
 - Move to `status:ready` only after human review confirms scope
 - The orchestrator handles `status:in-progress` and `status:in-review` transitions automatically by swapping labels
 - `status:done` is set after PR merge
+
+---
+
+## Repository requirements for orchestrator sessions
+
+Every project repository onboarded as an orchestrator task source must satisfy two invariants so that session scratch files never appear in PR diffs or CI lint runs:
+
+1. **`.claude/` must be gitignored.** Add `.claude/` (or `.claude/*`) to the repository's `.gitignore`. The orchestrator writes session config (`orchestrator-mcp.json`) and scratch files (`pr-body.md`, `.commit-msg`, etc.) under this directory. If it is not gitignored, those files can appear in commits.
+
+2. **`.claude/` must be excluded from lint and format autofix.** Add `.claude/` to `.prettierignore`, `.eslintignore`, or the equivalent for your project's toolchain. A scratch markdown or JSON file there must not trigger format failures in CI.
+
+These invariants are already satisfied in the orchestrator repo itself and have been verified in all active project repos. If you are adding a new project, check both files before dispatching your first session.

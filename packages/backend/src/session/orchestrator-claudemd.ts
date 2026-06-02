@@ -233,10 +233,11 @@ ${
     : `## PR Format Standards
 
 - **Title**: \`feat: <task-name>\` — no scope prefix like \`(backend)\`, no milestone tags.
-- **How to create the PR**: write the body to a temp file first (avoids shell-escaping issues
-  with multi-line markdown), then run \`gh pr create --draft --base "${targetBranch}" --body-file <path>\`.
-  Use a single-quoted HEREDOC for the body so \`$\`/backticks/quotes don't get expanded, e.g.
-  \`cat > /tmp/pr-body.md <<'EOF' ... EOF\`. Do NOT use the MCP \`mcp__github__create_pull_request\` tool —
+- **How to create the PR**: write the body to \`.claude/pr-body.md\` in your worktree
+  (gitignored + lint-excluded; avoids shell-escaping issues with multi-line markdown),
+  then run \`gh pr create --draft --base "${targetBranch}" --body-file .claude/pr-body.md\`.
+  Use the Write tool to create the file — do NOT use shell redirects (\`cat >\`, \`echo >\`).
+  Do NOT use the MCP \`mcp__github__create_pull_request\` tool —
   its token authentication scope does not always match the repo, and \`gh\` is already authenticated
   for the orchestrator's session.
 - **Required body sections** (no omissions, no reordering):
@@ -345,6 +346,9 @@ All file writes **must stay inside the worktree directory** (\`${worktreePath}\`
   Use paths like \`<worktree>/.dev-state/<file>\` or resolve paths relative to \`cwd\`.
 - **Before running any script that writes files or opens a database, verify the target path is inside the worktree.**
   If a script hardcodes an absolute project-root path, patch it to accept an env var or relative path before executing.
+- **Need a scratch/temp file (PR body, notes, intermediate output)? Write it under \`.claude/\` in your worktree** — it's gitignored and excluded from lint/format.
+  NEVER write to \`/tmp/\`, \`$HOME\`, \`$(mktemp)\`, or anywhere outside your worktree:
+  those paths are shared across sessions (collision risk) and violate isolation.
 
 ---
 
