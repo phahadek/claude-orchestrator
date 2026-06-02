@@ -535,19 +535,6 @@ export class SessionManager extends EventEmitter {
       sessionId,
     );
 
-    // Record the main repo's current branch before creating the worktree so we
-    // can detect and restore it if the session accidentally changes it.
-    let mainBranch: string | undefined;
-    try {
-      mainBranch = execSync('git rev-parse --abbrev-ref HEAD', {
-        cwd: projectDir,
-        encoding: 'utf8',
-      }).trim();
-      console.log(`[SessionManager] main branch before session: ${mainBranch}`);
-    } catch (err) {
-      console.warn(`[SessionManager] could not determine main branch: ${err}`);
-    }
-
     const isLocalOnly = project.gitMode === 'local-only';
 
     // Resolve the starting point for the detached worktree.
@@ -760,13 +747,7 @@ export class SessionManager extends EventEmitter {
 
       this.pendingStarts.delete(sessionId);
       this.sessions.set(sessionId, session);
-      this.wireSession(
-        sessionId,
-        session,
-        projectDir,
-        worktreePath,
-        mainBranch,
-      );
+      this.wireSession(sessionId, session, projectDir, worktreePath);
     };
 
     // Insert session into SQLite BEFORE launching the subprocess so FK
@@ -877,7 +858,6 @@ export class SessionManager extends EventEmitter {
     session: AgentSession,
     projectDir: string,
     worktreePath: string,
-    mainBranch?: string,
   ): void {
     // Forward all session events to the WS layer via EventEmitter
     session.on('message', (msg: ServerMessage) => this.emit('message', msg));
@@ -897,7 +877,6 @@ export class SessionManager extends EventEmitter {
           worktreePath,
           session.prUrl,
           projectDir,
-          mainBranch,
         ),
       )
       .catch((err) => {
@@ -912,7 +891,6 @@ export class SessionManager extends EventEmitter {
           worktreePath,
           undefined,
           projectDir,
-          mainBranch,
         );
       });
   }
@@ -1203,7 +1181,6 @@ export class SessionManager extends EventEmitter {
     worktreePath: string,
     prUrl: string | undefined,
     projectDir: string,
-    mainBranch?: string,
   ): void {
     this.sessions.delete(sessionId);
 
@@ -1237,31 +1214,6 @@ export class SessionManager extends EventEmitter {
       console.error(
         `[SessionManager] failed to check main repo status after session ${sessionId.slice(0, 8)}: ${err}`,
       );
-    }
-
-    // Restore the main repo's branch if the session inadvertently changed it.
-    // This guards against the Claude subprocess (or a git worktree edge case)
-    // switching the main directory's checked-out branch during the session.
-    if (mainBranch) {
-      try {
-        const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', {
-          cwd: projectDir,
-          encoding: 'utf8',
-        }).trim();
-        if (currentBranch !== mainBranch) {
-          console.warn(
-            `[SessionManager] [WARNING] Main repo branch changed from "${mainBranch}" to "${currentBranch}" during session ${sessionId.slice(0, 8)} — restoring`,
-          );
-          execSync(`git checkout "${mainBranch}"`, { cwd: projectDir });
-          console.log(
-            `[SessionManager] main repo branch restored to "${mainBranch}"`,
-          );
-        }
-      } catch (err) {
-        console.error(
-          `[SessionManager] failed to check/restore main repo branch after session ${sessionId.slice(0, 8)}: ${err}`,
-        );
-      }
     }
 
     // Remove the per-session MCP config before removing the worktree.
@@ -1473,22 +1425,6 @@ export class SessionManager extends EventEmitter {
       sessionId,
     );
 
-    // Record the main repo's current branch before creating the worktree.
-    let mainBranch: string | undefined;
-    try {
-      mainBranch = execSync('git rev-parse --abbrev-ref HEAD', {
-        cwd: projectDir,
-        encoding: 'utf8',
-      }).trim();
-      console.log(
-        `[SessionManager] sendOrResume main branch before session: ${mainBranch}`,
-      );
-    } catch (err) {
-      console.warn(
-        `[SessionManager] sendOrResume: could not determine main branch: ${err}`,
-      );
-    }
-
     // Resolve the starting point using dev as the base (no milestoneId available for resumed sessions).
     const { startingPoint, milestoneSlug } = resolveStartingPoint(
       project,
@@ -1580,7 +1516,7 @@ export class SessionManager extends EventEmitter {
     // wireSession wires message + pr_opened + push_detected forwarding and starts
     // run() fire-and-forget with cleanup. This is the single wiring point for all
     // resume paths, preventing the divergence that was silently dropping pr_opened.
-    this.wireSession(sessionId, session, projectDir, worktreePath, mainBranch);
+    this.wireSession(sessionId, session, projectDir, worktreePath);
 
     await firstEvent;
     return sessionId;
