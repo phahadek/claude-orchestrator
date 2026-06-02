@@ -872,7 +872,12 @@ export class SessionManager extends EventEmitter {
     session
       .run()
       .then(() =>
-        this.cleanupWorktree(sessionId, worktreePath, session.prUrl, projectDir),
+        this.cleanupWorktree(
+          sessionId,
+          worktreePath,
+          session.prUrl,
+          projectDir,
+        ),
       )
       .catch((err) => {
         console.error(`[SessionManager] session ${sessionId} error: ${err}`);
@@ -881,7 +886,12 @@ export class SessionManager extends EventEmitter {
         if (!session.hasEnded) {
           this.markSessionErrored(sessionId, 'error', 'run_error');
         }
-        return this.cleanupWorktree(sessionId, worktreePath, undefined, projectDir);
+        return this.cleanupWorktree(
+          sessionId,
+          worktreePath,
+          undefined,
+          projectDir,
+        );
       });
   }
 
