@@ -401,10 +401,10 @@ describe('SessionManager.resumeSession() — nudge, timeout, mid-turn detection'
     );
   });
 
-  it('calls this.send() with RESUME_NUDGE_MESSAGE during resume', () => {
-    expect(source).toMatch(
-      /this\.send\s*\(\s*row\.session_id\s*,\s*RESUME_NUDGE_MESSAGE\s*\)/,
-    );
+  it('calls this.send() with the nudge message during resume', () => {
+    // nudgeMessage is built by buildResumeMessage(row) and then passed to send()
+    expect(source).toMatch(/const\s+nudgeMessage\s*=\s*this\.buildResumeMessage\s*\(\s*row\s*\)/);
+    expect(source).toMatch(/this\.send\s*\(\s*row\.session_id\s*,\s*nudgeMessage\s*\)/);
   });
 
   // The continuation message JSON shape is now produced by CliSessionRunner,
@@ -905,5 +905,87 @@ describe('ws/types.ts — dispatch message shape', () => {
 
   it('dispatch task items include taskName optional field', () => {
     expect(source).toMatch(/taskName\?:\s*string/);
+  });
+});
+
+// ── AC: SessionManager.buildResumeMessage() — verdict enrichment ─────────────
+describe('SessionManager.buildResumeMessage() — verdict-enriched resume nudge', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('private buildResumeMessage method exists', () => {
+    expect(source).toMatch(/private\s+buildResumeMessage\s*\(/);
+  });
+
+  it('calls getPRBySessionId to look up the PR for the session', () => {
+    const methodIdx = source.indexOf('private buildResumeMessage(');
+    const nextMethod = source.indexOf('\n  private ', methodIdx + 1);
+    const methodBlock = source.slice(methodIdx, nextMethod);
+    expect(methodBlock).toMatch(/getPRBySessionId\s*\(\s*row\.session_id\s*\)/);
+  });
+
+  it('returns RESUME_NUDGE_MESSAGE when no PR row exists (session never opened a PR)', () => {
+    const methodIdx = source.indexOf('private buildResumeMessage(');
+    const nextMethod = source.indexOf('\n  private ', methodIdx + 1);
+    const methodBlock = source.slice(methodIdx, nextMethod);
+    // Falls back to RESUME_NUDGE_MESSAGE when pr is null/undefined
+    expect(methodBlock).toMatch(/if\s*\(\s*!pr\?\.review_result\s*\)/);
+    expect(methodBlock).toMatch(/return\s+RESUME_NUDGE_MESSAGE/);
+  });
+
+  it('returns formatReviewFeedback for needs_changes verdict', () => {
+    const methodIdx = source.indexOf('private buildResumeMessage(');
+    const nextMethod = source.indexOf('\n  private ', methodIdx + 1);
+    const methodBlock = source.slice(methodIdx, nextMethod);
+    expect(methodBlock).toMatch(/result\.verdict\s*===\s*'needs_changes'/);
+    expect(methodBlock).toMatch(/formatReviewFeedback\s*\(/);
+  });
+
+  it('returns formatReviewFeedback for incomplete verdict', () => {
+    const methodIdx = source.indexOf('private buildResumeMessage(');
+    const nextMethod = source.indexOf('\n  private ', methodIdx + 1);
+    const methodBlock = source.slice(methodIdx, nextMethod);
+    expect(methodBlock).toMatch(/result\.verdict\s*===\s*'incomplete'/);
+  });
+
+  it('returns formatApprovedVerdictMessage for approved verdict', () => {
+    const methodIdx = source.indexOf('private buildResumeMessage(');
+    const nextMethod = source.indexOf('\n  private ', methodIdx + 1);
+    const methodBlock = source.slice(methodIdx, nextMethod);
+    expect(methodBlock).toMatch(/result\.verdict\s*===\s*'approved'/);
+    expect(methodBlock).toMatch(/formatApprovedVerdictMessage\s*\(/);
+  });
+
+  it('falls back to RESUME_NUDGE_MESSAGE when review_result is malformed JSON', () => {
+    const methodIdx = source.indexOf('private buildResumeMessage(');
+    const nextMethod = source.indexOf('\n  private ', methodIdx + 1);
+    const methodBlock = source.slice(methodIdx, nextMethod);
+    // Must have a try/catch that returns RESUME_NUDGE_MESSAGE on parse failure
+    expect(methodBlock).toMatch(/try\s*\{[\s\S]*?\}\s*catch/);
+    // The final return after the catch block returns the plain nudge
+    const catchIdx = methodBlock.indexOf('catch');
+    const afterCatch = methodBlock.slice(catchIdx);
+    expect(afterCatch).toMatch(/return\s+RESUME_NUDGE_MESSAGE/);
+  });
+
+  it('resumeSession calls buildResumeMessage(row) instead of using RESUME_NUDGE_MESSAGE directly', () => {
+    expect(source).toMatch(/this\.buildResumeMessage\s*\(\s*row\s*\)/);
+    // The direct RESUME_NUDGE_MESSAGE reference in the nudge setTimeout must be gone
+    const nudgeDelayIdx = source.indexOf('const nudgeDelay = setTimeout');
+    const nudgeDelayBlock = source.slice(nudgeDelayIdx, nudgeDelayIdx + 300);
+    expect(nudgeDelayBlock).not.toMatch(/RESUME_NUDGE_MESSAGE/);
+  });
+
+  it('imports formatReviewFeedback and formatApprovedVerdictMessage from reviewUtils', () => {
+    expect(source).toMatch(/formatReviewFeedback/);
+    expect(source).toMatch(/formatApprovedVerdictMessage/);
+    expect(source).toMatch(/from\s+['"]\.\.\/github\/reviewUtils['"]/);
+  });
+
+  it('imports PRReviewResult type from PRReviewService', () => {
+    expect(source).toMatch(/PRReviewResult/);
+    expect(source).toMatch(/from\s+['"]\.\.\/github\/PRReviewService['"]/);
   });
 });

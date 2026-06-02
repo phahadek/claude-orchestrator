@@ -46,6 +46,11 @@ import { deriveDisplayStatusFromDb } from '../tasks/TaskStatusEngine';
 import type { DisplayStatus } from '../tasks/TaskStatusEngine';
 import { emitTaskUpdated } from '../routes/tasks';
 import { parseSection } from '../notion/NotionClient';
+import {
+  formatReviewFeedback,
+  formatApprovedVerdictMessage,
+} from '../github/reviewUtils';
+import type { PRReviewResult } from '../github/PRReviewService';
 
 /**
  * Derive a prefixed task ID from a task URL, using the project's task source
@@ -1047,12 +1052,36 @@ export class SessionManager extends EventEmitter {
     // Send the nudge after a short delay so the CLI process is ready to receive
     // stdin before we write to it. Review sessions should not receive the
     // code-session nudge — they wait for a re-review prompt with a diff instead.
+    const nudgeMessage = this.buildResumeMessage(row);
     const nudgeDelay = setTimeout(() => {
       if (!session.hasEnded && row.session_type !== 'review') {
-        this.send(row.session_id, RESUME_NUDGE_MESSAGE);
+        this.send(row.session_id, nudgeMessage);
       }
     }, RESUME_NUDGE_DELAY_MS);
     nudgeDelay.unref();
+  }
+
+  /**
+   * Build the resume nudge message for a session row. When the session's PR
+   * has a stored review verdict, inject that verdict so the coder doesn't need
+   * to query GitHub (where verdicts are never posted). Falls back to the plain
+   * RESUME_NUDGE_MESSAGE when there is no verdict or the stored JSON is malformed.
+   */
+  private buildResumeMessage(row: Session): string {
+    const pr = getPRBySessionId(row.session_id);
+    if (!pr?.review_result) return RESUME_NUDGE_MESSAGE;
+    try {
+      const result = JSON.parse(pr.review_result) as PRReviewResult;
+      if (result.verdict === 'needs_changes' || result.verdict === 'incomplete') {
+        return formatReviewFeedback(result, pr.review_iteration ?? 0);
+      }
+      if (result.verdict === 'approved') {
+        return formatApprovedVerdictMessage(result);
+      }
+    } catch {
+      // Malformed review_result — fall through to plain nudge.
+    }
+    return RESUME_NUDGE_MESSAGE;
   }
 
   /**
