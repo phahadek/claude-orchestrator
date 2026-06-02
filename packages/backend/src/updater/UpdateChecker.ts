@@ -128,7 +128,7 @@ export class UpdateChecker {
   private async runCheck(force: boolean): Promise<UpdateInfo | null> {
     const channel = getChannel();
 
-    let release: GitHubRelease | null = null;
+    let release: GitHubRelease | null;
 
     if (channel === 'beta') {
       const releases = await fetchJson<GitHubRelease[]>(RELEASES_LIST_URL);
