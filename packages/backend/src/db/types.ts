@@ -26,6 +26,8 @@ export interface Session {
   tags: string | null; // JSON array of strings, e.g. '["bugfix","auth"]'
   total_input_tokens: number;
   total_output_tokens: number;
+  compaction_count: number;
+  context_occupancy_tokens: number;
   model?: string | null;
   task_name: string | null;
   metadata: string | null; // JSON blob for small session metadata (e.g. aiTitle)
@@ -45,6 +47,8 @@ export type NewSession = Omit<
   | 'tags'
   | 'total_input_tokens'
   | 'total_output_tokens'
+  | 'compaction_count'
+  | 'context_occupancy_tokens'
   | 'task_name'
   | 'metadata'
   | 'review_result'
@@ -60,6 +64,8 @@ export type NewSession = Omit<
   tags?: string | null;
   total_input_tokens?: number;
   total_output_tokens?: number;
+  compaction_count?: number;
+  context_occupancy_tokens?: number;
   task_name?: string | null;
   metadata?: string | null;
   review_result?: string | null;
@@ -147,7 +153,7 @@ export interface TaskCache {
 
 // ─── projects ──────────────────────────────────────────────────────────────
 
-export type TaskSource = 'notion' | 'yaml' | 'jira';
+export type TaskSource = 'notion' | 'yaml' | 'jira' | 'github';
 export type GitMode = 'github' | 'local-only';
 
 export interface ProjectRow {
@@ -166,6 +172,7 @@ export interface ProjectRow {
   /** JSON blob: { host, project_key, default_jql, status_mapping, ... } */
   task_source_config: string | null;
   data_residency_confirmed: number; // 0 | 1 (SQLite boolean)
+  base_branch: string;
   created_at: number;
   updated_at: number;
 }
@@ -182,6 +189,7 @@ export type NewProjectRow = Omit<
   | 'milestone_branching'
   | 'non_milestone_source_config'
   | 'task_source_config'
+  | 'base_branch'
 > & {
   auto_launch_enabled?: number;
   auto_launch_milestone_id?: string | null;
@@ -191,6 +199,7 @@ export type NewProjectRow = Omit<
   milestone_branching?: 'two_tier' | 'flat' | null;
   non_milestone_source_config?: string | null;
   task_source_config?: string | null;
+  base_branch?: string;
   created_at?: number;
   updated_at?: number;
 };
@@ -272,6 +281,23 @@ export type NewDeviceRow = Omit<DeviceRow, 'last_seen' | 'revoked'> & {
   revoked?: number;
 };
 
+// ─── session_pause_intervals ────────────────────────────────────────────────
+
+export type SessionPauseReason =
+  | 'rate_limit'
+  | 'stuck_timeout'
+  | 'api_overloaded';
+
+export interface SessionPauseInterval {
+  id: number;
+  session_id: string;
+  pause_reason: SessionPauseReason;
+  paused_at: number;
+  resumed_at: number | null;
+}
+
+export type NewSessionPauseInterval = Omit<SessionPauseInterval, 'id'>;
+
 // ─── pull_requests ──────────────────────────────────────────────────────────
 
 /**
@@ -282,6 +308,7 @@ export type PauseReason =
   | 'max_reviews'
   | 'stuck_timeout'
   | 'ci_failing'
+  | 'ci_billing_blocked'
   | 'auto_merge_failed'
   | 'pr_closed'
   | 'review_failed'
@@ -328,5 +355,6 @@ export interface PullRequestRow {
   failing_checks: string | null;
   pending_push: number; // 0 | 1 — push arrived before initial review completed
   pause_reason: PauseReason | null; // non-null marks the task as needs_attention
+  pause_reason_set_at: number | null; // Unix ms timestamp of when pause_reason was last set
   ci_remediation_attempted_sha: string | null; // last head_sha for which CI remediation was attempted
 }

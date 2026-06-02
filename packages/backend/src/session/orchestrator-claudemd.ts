@@ -19,10 +19,11 @@ export interface OrchestratorClaudeMdParams {
    */
   bashRules?: string[];
   /**
-   * Task backend type. When 'local', the lifecycle instructions are adjusted
-   * to skip Notion fetch steps and read tasks.yaml instead.
+   * Task backend type. Controls wording throughout the generated CLAUDE.md
+   * (task label, fetch instruction, status ownership, PR body section header).
+   * 'notion' is the default; 'local' reads tasks.yaml instead of fetching remotely.
    */
-  taskBackend?: 'notion' | 'local';
+  taskBackend?: 'notion' | 'local' | 'jira' | 'github';
   /**
    * Pre-fetched task spec markdown. When provided, the task content is injected
    * directly into the CLAUDE.md and the session skips Notion fetching entirely.
@@ -36,10 +37,67 @@ export interface OrchestratorClaudeMdParams {
    */
   localContext?: string;
   /**
+   * Pre-loaded project context content (e.g. from PROJECT.md for GitHub projects).
+   * When present, appended as a "## Project Context" section after the task spec.
+   */
+  projectContextContent?: string;
+  /**
    * Git mode for the project. 'local-only' omits PR-related lifecycle steps
    * and GitHub instructions; 'github' (default) keeps the full PR flow.
    */
   gitMode?: 'github' | 'local-only';
+}
+
+type TaskBackend = 'notion' | 'local' | 'jira' | 'github';
+
+function taskAssignmentLabel(backend: TaskBackend): string {
+  switch (backend) {
+    case 'github':
+      return 'GitHub issue';
+    case 'jira':
+      return 'Jira issue';
+    case 'local':
+      return 'Task';
+    default:
+      return 'Notion task';
+  }
+}
+
+function fetchInstruction(backend: TaskBackend): string {
+  switch (backend) {
+    case 'github':
+      return 'Fetch the GitHub issue via the gh CLI.';
+    case 'jira':
+      return 'Fetch the Jira issue.';
+    default:
+      return 'Fetch the Notion task page and project context page.';
+  }
+}
+
+function taskBackendApiName(backend: TaskBackend): string {
+  switch (backend) {
+    case 'github':
+      return 'GitHub API';
+    case 'jira':
+      return 'Jira API';
+    case 'local':
+      return 'task source';
+    default:
+      return 'Notion API';
+  }
+}
+
+function prBodyTaskSectionHeader(backend: TaskBackend): string {
+  switch (backend) {
+    case 'github':
+      return '## GitHub Issue';
+    case 'jira':
+      return '## Jira Issue';
+    case 'local':
+      return '## Task';
+    default:
+      return '## Notion Task';
+  }
 }
 
 /**
@@ -51,7 +109,7 @@ export interface OrchestratorClaudeMdParams {
  *
  * Section inventory:
  *  1. Header with override warning
- *  2. Task assignment (task name, Notion URL, project context URL)
+ *  2. Task assignment (task name, task URL, project context URL)
  *  3. Lifecycle steps
  *  4. Status ownership
  *  5. PR format standards
@@ -77,6 +135,7 @@ export function buildOrchestratorClaudeMd(
     taskBackend = 'notion',
     taskContent,
     localContext,
+    projectContextContent,
     gitMode = 'github',
   } = params;
 
@@ -106,7 +165,7 @@ export function buildOrchestratorClaudeMd(
 ## Task Assignment
 
 - **Task**: ${taskName}
-- **Notion task**: ${taskUrl}
+- **${taskAssignmentLabel(taskBackend)}**: ${taskUrl}
 - **Project context**: ${projectContextUrl}
 
 ---
@@ -123,12 +182,12 @@ ${
 1. Read the **Task Spec** section below — it contains the full task specification.
 2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
     : taskBackend === 'local'
-      ? `> ⚠️ **YAML task source**: Task context comes from \`tasks.yaml\` in the project root, not Notion.
-> Skip step 1 (Notion fetch) and instead read \`tasks.yaml\` for task context.
+      ? `> ⚠️ **YAML task source**: Task context comes from \`tasks.yaml\` in the project root.
+> Skip the remote fetch step and instead read \`tasks.yaml\` for task context.
 
-1. Read \`tasks.yaml\` in the project root for task context (skip Notion fetch).
+1. Read \`tasks.yaml\` in the project root for task context (skip remote fetch).
 2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
-      : `1. Fetch the Notion task page and project context page.
+      : `1. ${fetchInstruction(taskBackend)}
 2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
 }
 3. Implement the task per the acceptance criteria.
@@ -147,8 +206,8 @@ ${
 
 ## Status Ownership
 
-**Do NOT update Notion task status.**
-**Do NOT call any Notion API to change task status.**
+**Do NOT update ${taskAssignmentLabel(taskBackend)} status.**
+**Do NOT call any ${taskBackendApiName(taskBackend)} to change task status.**
 The orchestrator backend handles all status transitions (In Progress → In Review → Done).
 
 ---
@@ -174,17 +233,21 @@ ${
     : `## PR Format Standards
 
 - **Title**: \`feat: <task-name>\` — no scope prefix like \`(backend)\`, no milestone tags.
-- **How to create the PR**: Use the \`mcp__github__create_pull_request\` MCP tool.
-  Do NOT use \`gh pr create\` — the \`gh\` CLI is not on PATH.
-  Pass \`draft: true\`, \`base: "${targetBranch}"\`, and the full body as the \`body\` parameter.
+- **How to create the PR**: write the body to \`.claude/pr-body.md\` in your worktree
+  (gitignored + lint-excluded; avoids shell-escaping issues with multi-line markdown),
+  then run \`gh pr create --draft --base "${targetBranch}" --body-file .claude/pr-body.md\`.
+  Use the Write tool to create the file — do NOT use shell redirects (\`cat >\`, \`echo >\`).
+  Do NOT use the MCP \`mcp__github__create_pull_request\` tool —
+  its token authentication scope does not always match the repo, and \`gh\` is already authenticated
+  for the orchestrator's session.
 - **Required body sections** (no omissions, no reordering):
 
 \`\`\`
 ## Summary
 <1-3 sentences: what changed and why>
 
-## Notion Task
-<link to the Notion task page>
+${prBodyTaskSectionHeader(taskBackend)}
+<link to the task page>
 
 ## Automated Tests
 <list tests added/modified, or "No test changes">
@@ -283,6 +346,9 @@ All file writes **must stay inside the worktree directory** (\`${worktreePath}\`
   Use paths like \`<worktree>/.dev-state/<file>\` or resolve paths relative to \`cwd\`.
 - **Before running any script that writes files or opens a database, verify the target path is inside the worktree.**
   If a script hardcodes an absolute project-root path, patch it to accept an env var or relative path before executing.
+- **Need a scratch/temp file (PR body, notes, intermediate output)? Write it under \`.claude/\` in your worktree** — it's gitignored and excluded from lint/format.
+  NEVER write to \`/tmp/\`, \`$HOME\`, \`$(mktemp)\`, or anywhere outside your worktree:
+  those paths are shared across sessions (collision risk) and violate isolation.
 
 ---
 
@@ -316,6 +382,18 @@ ${bashRulesText}${
 > Do NOT re-fetch this from Notion — use the content below as your source of truth.
 
 ${taskContent}`
+      : ''
+  }${
+    projectContextContent
+      ? `
+
+---
+
+## Project Context
+
+> Pre-loaded from PROJECT.md in the project root.
+
+${projectContextContent}`
       : ''
   }${
     localContext

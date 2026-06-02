@@ -1,7 +1,25 @@
 import { getDeviceToken } from '../auth/deviceToken';
 
-export type TaskSource = 'notion' | 'yaml';
+export type TaskSource = 'notion' | 'yaml' | 'github';
 export type GitMode = 'github' | 'local-only';
+
+export interface GithubTaskSourceConfig {
+  owner: string;
+  repo: string;
+  defaultMilestone?: number | null;
+}
+
+export interface GithubMilestone {
+  id: number;
+  nodeId: string;
+  title: string;
+  description: string | null;
+  state: 'open' | 'closed';
+  openIssues: number;
+  closedIssues: number;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface OrchestratorConfig {
   autofix: string[];
@@ -58,7 +76,9 @@ export interface Project {
   autoLaunchMilestoneId: string | null;
   autoMergeEnabled: boolean;
   nonMilestoneSourceConfig: NonMilestoneSourceConfig | null;
+  taskSourceConfig: string | null;
   dataResidencyConfirmed: boolean;
+  baseBranch: string;
   createdAt: number;
   updatedAt: number;
   milestones: ProjectMilestone[];
@@ -71,10 +91,12 @@ export interface CreateProjectInput {
   contextUrl?: string | null;
   githubRepo?: string | null;
   taskSource: TaskSource;
+  taskSourceConfig?: string | null;
   gitMode?: GitMode;
   autoLaunchEnabled?: boolean;
   autoLaunchMilestoneId?: string | null;
   autoMergeEnabled?: boolean;
+  baseBranch?: string;
 }
 
 export interface UpdateProjectInput {
@@ -83,12 +105,14 @@ export interface UpdateProjectInput {
   contextUrl?: string | null;
   githubRepo?: string | null;
   taskSource?: TaskSource;
+  taskSourceConfig?: string | null;
   gitMode?: GitMode;
   autoLaunchEnabled?: boolean;
   autoLaunchMilestoneId?: string | null;
   autoMergeEnabled?: boolean;
   nonMilestoneSourceConfig?: NonMilestoneSourceConfig | null;
   dataResidencyConfirmed?: boolean;
+  baseBranch?: string;
 }
 
 export interface CreateMilestoneInput {
@@ -238,6 +262,12 @@ export const projectsApi = {
   ): Promise<OrchestratorConfigResponse> {
     return request<OrchestratorConfigResponse>(
       `/api/projects/${encodeURIComponent(projectId)}/orchestrator-config`,
+    );
+  },
+
+  listGithubMilestones(projectId: string): Promise<GithubMilestone[]> {
+    return request<GithubMilestone[]>(
+      `/api/projects/${encodeURIComponent(projectId)}/github-milestones`,
     );
   },
 };

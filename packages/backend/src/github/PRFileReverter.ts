@@ -89,7 +89,7 @@ export async function revertBannedFiles(opts: {
   }
 
   const fileList = reverted.join(', ');
-  const message = `chore: orchestrator-revert: restore ${fileList} [auto-revert]`;
+  const message = `chore: orchestrator-revert: restore ${fileList} [auto-revert] [skip ci]`;
 
   await git(
     [
@@ -126,8 +126,9 @@ export async function revertBannedFiles(opts: {
 /**
  * Fetch the named branch from origin and hard-reset the local HEAD to match it.
  * Returns the resulting HEAD SHA, or null if either step fails.
+ * Exported for use by ReviewOrchestrator boot-retry logic.
  */
-async function syncToOrigin(
+export async function syncToOrigin(
   worktreePath: string,
   branch: string,
 ): Promise<string | null> {

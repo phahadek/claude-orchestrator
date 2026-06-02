@@ -21,6 +21,10 @@ const SETTING_KEYS = [
   'ci_poll_interval_seconds',
   'ci_poll_max_minutes',
   'max_review_iterations',
+  'pr_boot_sweep_merged_lookback_days',
+  'auto_archive_enabled',
+  'auto_archive_grace_minutes',
+  'auto_archive_sweep_interval_minutes',
 ] as const;
 
 type SettingKey = (typeof SETTING_KEYS)[number];
@@ -56,6 +60,14 @@ function applyToRuntime(key: SettingKey, value: string): void {
     runtimeSettings.ci_poll_max_minutes = Number(value);
   } else if (key === 'max_review_iterations') {
     runtimeSettings.max_review_iterations = Number(value);
+  } else if (key === 'pr_boot_sweep_merged_lookback_days') {
+    runtimeSettings.pr_boot_sweep_merged_lookback_days = Number(value);
+  } else if (key === 'auto_archive_enabled') {
+    runtimeSettings.auto_archive_enabled = value !== 'false';
+  } else if (key === 'auto_archive_grace_minutes') {
+    runtimeSettings.auto_archive_grace_minutes = Number(value);
+  } else if (key === 'auto_archive_sweep_interval_minutes') {
+    runtimeSettings.auto_archive_sweep_interval_minutes = Number(value);
   }
 }
 
@@ -68,8 +80,8 @@ export function loadRuntimeSettingsFromDb(): void {
     } else {
       // Persist the env-seeded default so future reads are consistent
       let defaultVal: string;
-      if (key === 'auto_review') {
-        defaultVal = String(runtimeSettings.auto_review);
+      if (key === 'auto_review' || key === 'auto_archive_enabled') {
+        defaultVal = String(runtimeSettings[key]);
       } else if (
         key === 'code_session_model' ||
         key === 'review_session_model' ||
@@ -111,6 +123,16 @@ function runtimeSettingsAsRecord(): Record<SettingKey, string> {
     ci_poll_interval_seconds: String(runtimeSettings.ci_poll_interval_seconds),
     ci_poll_max_minutes: String(runtimeSettings.ci_poll_max_minutes),
     max_review_iterations: String(runtimeSettings.max_review_iterations),
+    pr_boot_sweep_merged_lookback_days: String(
+      runtimeSettings.pr_boot_sweep_merged_lookback_days,
+    ),
+    auto_archive_enabled: String(runtimeSettings.auto_archive_enabled),
+    auto_archive_grace_minutes: String(
+      runtimeSettings.auto_archive_grace_minutes,
+    ),
+    auto_archive_sweep_interval_minutes: String(
+      runtimeSettings.auto_archive_sweep_interval_minutes,
+    ),
   };
 }
 

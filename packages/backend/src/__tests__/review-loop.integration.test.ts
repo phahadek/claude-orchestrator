@@ -28,6 +28,10 @@ vi.mock('../db/queries.js', () => ({
   setPauseReason: vi.fn(),
   updatePRDraftStatus: vi.fn(),
   getSetting: vi.fn().mockReturnValue(null),
+  getSession: vi.fn().mockReturnValue(undefined),
+  getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
+  insertPendingReviewSync: vi.fn(),
+  deletePendingReviewSync: vi.fn(),
 }));
 
 const projectFixture = {

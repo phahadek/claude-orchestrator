@@ -4,6 +4,8 @@ import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { useDispatch } from '../hooks/useDispatch';
 import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
 import { CIBadges } from './CIBadges';
+import { ContextBadge } from './ContextBadge';
+import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
 import styles from './TaskCard.module.css';
 
 interface Props {
@@ -28,6 +30,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
   max_reviews: 'Max review iterations reached — re-review or close the PR.',
   stuck_timeout: 'Session stuck — no progress within the timeout window.',
   ci_failing: 'CI is failing — fix the failing checks and push.',
+  ci_billing_blocked:
+    'GitHub billing limit reached — jobs cannot start. Resolve billing in GitHub settings, then re-run failed jobs.',
   auto_merge_failed: 'Auto-merge failed — merge manually or investigate.',
   pr_closed: 'PR was closed during auto-merge — reopen or create a new PR.',
   review_failed: 'Re-review failed unexpectedly — check the backend logs.',
@@ -122,6 +126,18 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
             </div>
           )}
 
+          {codeSession &&
+            ['running', 'needs_permission', 'retrying', 'starting'].includes(
+              codeSession.status,
+            ) && (
+              <div className={styles.contextRow}>
+                <ContextBadge
+                  contextOccupancyTokens={codeSession.context_occupancy_tokens}
+                  compactionCount={codeSession.compaction_count}
+                />
+              </div>
+            )}
+
           {!codeSession && <span className={styles.placeholder}>—</span>}
 
           {pr ? (
@@ -174,7 +190,7 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
             className={styles.notionLink}
             onClick={(e) => e.stopPropagation()}
           >
-            Notion ↗
+            {getTaskSourceLinkLabel(project?.taskSource ?? 'notion')}
           </a>
         )}
         {task.totalTokens.input + task.totalTokens.output > 0 && (

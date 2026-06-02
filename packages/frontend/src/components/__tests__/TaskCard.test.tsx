@@ -78,6 +78,7 @@ function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
     path: '/repos/test',
     contextUrl: 'https://notion.so/context',
     boardId: 'board-1',
+    taskSource: 'notion',
     ...overrides,
   } as ProjectConfig;
 }
@@ -321,17 +322,30 @@ describe('TaskCard', () => {
     expect(screen.queryByText('⚠ CI unstable')).toBeNull();
   });
 
-  it('renders Notion link when notionUrl is set', () => {
+  it('renders source-aware link label when notionUrl is set', () => {
     render(
       <TaskCard
         task={makeTask({ notionUrl: 'https://notion.so/task-1' })}
         selected={false}
         onClick={vi.fn()}
         send={noop}
-        project={makeProject()}
+        project={makeProject({ taskSource: 'notion' })}
       />,
     );
     expect(screen.getByText('Notion ↗')).toBeDefined();
+  });
+
+  it('renders Issue ↗ label for github-source project', () => {
+    render(
+      <TaskCard
+        task={makeTask({ notionUrl: 'https://github.com/owner/repo/issues/1' })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject({ taskSource: 'github' })}
+      />,
+    );
+    expect(screen.getByText('Issue ↗')).toBeDefined();
   });
 
   it('calls onClick when card is clicked', () => {
@@ -568,5 +582,91 @@ describe('TaskCard', () => {
       />,
     );
     expect(screen.queryByText('—')).toBeNull();
+  });
+
+  // ── Context-occupancy gauge ───────────────────────────────────────────────
+
+  it('renders context gauge with correct percentage for active session with occupancy tokens', () => {
+    const session = makeCodeSession({
+      status: 'running',
+      context_occupancy_tokens: 50_000,
+      compaction_count: 0,
+    });
+    render(
+      <TaskCard
+        task={makeTask({ codeSession: session })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('25% ctx')).toBeDefined();
+  });
+
+  it('renders compacted badge when compaction_count > 0 for active session', () => {
+    const session = makeCodeSession({
+      status: 'running',
+      context_occupancy_tokens: 50_000,
+      compaction_count: 2,
+    });
+    render(
+      <TaskCard
+        task={makeTask({ codeSession: session })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('compacted 2×')).toBeDefined();
+  });
+
+  it('does not render context gauge when codeSession is null', () => {
+    render(
+      <TaskCard
+        task={makeTask({ codeSession: null })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.queryByText(/% ctx/)).toBeNull();
+  });
+
+  it('does not render context gauge when codeSession is concluded (done)', () => {
+    const session = makeCodeSession({
+      status: 'done',
+      context_occupancy_tokens: 50_000,
+      compaction_count: 0,
+    });
+    render(
+      <TaskCard
+        task={makeTask({ codeSession: session })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.queryByText(/% ctx/)).toBeNull();
+  });
+
+  it('renders context gauge for needs_permission session status', () => {
+    const session = makeCodeSession({
+      status: 'needs_permission',
+      context_occupancy_tokens: 100_000,
+    });
+    render(
+      <TaskCard
+        task={makeTask({ codeSession: session })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('50% ctx')).toBeDefined();
   });
 });

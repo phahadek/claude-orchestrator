@@ -14,6 +14,13 @@ export interface SessionRunnerOptions {
    * - API mode: this is passed as the `systemPrompt` option to the Agent SDK.
    */
   systemPrompt?: string;
+  /**
+   * Absolute path to a per-session MCP config JSON file (`{ mcpServers: {...} }`).
+   * When set, CLI mode passes `--mcp-config <path> --strict-mcp-config` so only
+   * the listed servers are registered (user-level servers are suppressed).
+   * Undefined = no override (all user-level servers are inherited).
+   */
+  mcpConfigPath?: string;
 }
 
 /**

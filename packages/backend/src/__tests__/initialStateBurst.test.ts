@@ -24,7 +24,11 @@ vi.mock('../utils/eventFilters', () => ({
 import { sendInitialStateBurst } from '../ws/initialStateBurst';
 import * as queries from '../db/queries';
 
-function makeSession(id: string, status: Session['status'] = 'done'): Session {
+function makeSession(
+  id: string,
+  status: Session['status'] = 'done',
+  overrides: Partial<Session> = {},
+): Session {
   return {
     session_id: id,
     task_id: null,
@@ -43,8 +47,13 @@ function makeSession(id: string, status: Session['status'] = 'done'): Session {
     tags: null,
     total_input_tokens: 0,
     total_output_tokens: 0,
+    compaction_count: 0,
+    context_occupancy_tokens: 0,
     model: null,
     task_name: `task-${id}`,
+    metadata: null,
+    review_result: null,
+    ...overrides,
   };
 }
 
@@ -101,5 +110,42 @@ describe('sendInitialStateBurst', () => {
     const started = sent.find((m) => m.type === 'session_started');
     expect(started).toBeDefined();
     expect((started as Record<string, unknown>).replay).toBeUndefined();
+  });
+
+  it('populates compaction_count and context_occupancy_tokens from DB row', () => {
+    vi.mocked(queries.getActiveSessions).mockReturnValue([
+      makeSession('a', 'done', {
+        compaction_count: 2,
+        context_occupancy_tokens: 120_000,
+      }),
+    ]);
+
+    const sent: ServerMessage[] = [];
+    sendInitialStateBurst((msg) => sent.push(msg));
+
+    const started = sent.find((m) => m.type === 'session_started') as Extract<
+      ServerMessage,
+      { type: 'session_started' }
+    >;
+    expect(started).toBeDefined();
+    expect(started.compaction_count).toBe(2);
+    expect(started.context_occupancy_tokens).toBe(120_000);
+  });
+
+  it('defaults compaction_count and context_occupancy_tokens to 0 when not set', () => {
+    vi.mocked(queries.getActiveSessions).mockReturnValue([
+      makeSession('a', 'done'),
+    ]);
+
+    const sent: ServerMessage[] = [];
+    sendInitialStateBurst((msg) => sent.push(msg));
+
+    const started = sent.find((m) => m.type === 'session_started') as Extract<
+      ServerMessage,
+      { type: 'session_started' }
+    >;
+    expect(started).toBeDefined();
+    expect(started.compaction_count).toBe(0);
+    expect(started.context_occupancy_tokens).toBe(0);
   });
 });

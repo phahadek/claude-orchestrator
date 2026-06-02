@@ -28,6 +28,16 @@ export interface ISessionManager {
     repo: string,
     syncPromise: Promise<void>,
   ): void;
+  /**
+   * Single owner of the (DB session status + Notion task status + WS broadcast) trio
+   * for non-zero / killed exit paths. All error/killed call sites must go through
+   * this method instead of calling updateSessionStatus directly.
+   */
+  markSessionErrored?(
+    sessionId: string,
+    status: 'error' | 'killed',
+    reason: string,
+  ): void;
 }
 
 /** Minimal session shape needed by the auditor — avoids a circular import. */
@@ -59,6 +69,15 @@ export class SessionAuditor {
       return getTaskBackend(this.notionClientOrProjectId);
     }
     return this.notionClientOrProjectId;
+  }
+
+  private resolveBaseBranch(): string {
+    if (typeof this.notionClientOrProjectId === 'string') {
+      const { getProjectById } =
+        require('../config.js') as typeof import('../config');
+      return getProjectById(this.notionClientOrProjectId)?.baseBranch ?? 'dev';
+    }
+    return 'dev';
   }
 
   /**
@@ -99,10 +118,13 @@ export class SessionAuditor {
         }
 
         if (pr) {
-          // 2. PR targets correct branch (dev)?
+          // 2. PR targets correct branch?
           prTargetsBranch = pr.baseBranch;
-          if (pr.baseBranch !== 'dev') {
-            violations.push(`PR targets ${pr.baseBranch} instead of dev`);
+          const expectedBaseBranch = this.resolveBaseBranch();
+          if (pr.baseBranch !== expectedBaseBranch) {
+            violations.push(
+              `PR targets ${pr.baseBranch} instead of ${expectedBaseBranch}`,
+            );
           }
 
           // 3. PR title format: must start with "feat: "

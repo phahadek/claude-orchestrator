@@ -26,3 +26,34 @@
   color: #f38ba8;
   border: 1px solid rgba(243, 139, 168, 0.4);
 }
+
+.runningBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  padding: 2px 10px;
+  border-radius: 12px;
+  white-space: nowrap;
+  font-weight: 500;
+  background: rgba(249, 226, 175, 0.15);
+  color: #f9e2af;
+  border: 1px solid rgba(249, 226, 175, 0.4);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spinner {
+  display: inline-block;
+  width: 0.65em;
+  height: 0.65em;
+  border: 1.5px solid rgba(249, 226, 175, 0.4);
+  border-top-color: #f9e2af;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}

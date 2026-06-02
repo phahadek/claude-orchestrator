@@ -63,6 +63,8 @@ export interface SessionState {
   /** Session ID of the code session whose PR this review session is reviewing */
   codeSessionId?: string;
   model?: string | null;
+  compaction_count?: number;
+  context_occupancy_tokens?: number;
   /**
    * True when the most recent session_status message that updated `status`
    * carried `replay: true` (sent during the WS reconnect burst). Set false
@@ -170,6 +172,22 @@ export function useSessionStore() {
     sessionId: string;
     receivedAt: number;
   } | null>(null);
+  const [lastCiBillingBlockedEvent, setLastCiBillingBlockedEvent] = useState<{
+    prNumber: number;
+    repo: string;
+    message: string;
+    receivedAt: number;
+  } | null>(null);
+  const [lastSessionStartedEvent, setLastSessionStartedEvent] = useState<{
+    taskId: string;
+    sessionId: string;
+  } | null>(null);
+  const [lastSessionEndedEvent, setLastSessionEndedEvent] = useState<{
+    taskId: string;
+    sessionId: string;
+    status: string;
+    prUrl?: string;
+  } | null>(null);
 
   const dispatch = useCallback((msg: ServerMessage) => {
     setSynced(true);
@@ -194,6 +212,8 @@ export function useSessionStore() {
             tags: msg.tags,
             totalInputTokens: msg.totalInputTokens ?? 0,
             totalOutputTokens: msg.totalOutputTokens ?? 0,
+            compaction_count: msg.compaction_count ?? 0,
+            context_occupancy_tokens: msg.context_occupancy_tokens ?? 0,
             prNumber: msg.prNumber,
             codeSessionId: msg.codeSessionId,
             model: msg.model ?? null,
@@ -313,6 +333,12 @@ export function useSessionStore() {
                 totalOutputTokens: msg.totalOutputTokens,
               }),
               ...(msg.model != null && { model: msg.model }),
+              ...(msg.compactionCount != null && {
+                compaction_count: msg.compactionCount,
+              }),
+              ...(msg.contextOccupancyTokens != null && {
+                context_occupancy_tokens: msg.contextOccupancyTokens,
+              }),
             });
           }
           break;
@@ -320,6 +346,10 @@ export function useSessionStore() {
         case 'pr_created': {
           const s = next.get(msg.sessionId);
           if (s) next.set(msg.sessionId, { ...s, prUrl: msg.prUrl });
+          break;
+        }
+        case 'session_archived': {
+          next.delete(msg.sessionId);
           break;
         }
         default:
@@ -356,14 +386,19 @@ export function useSessionStore() {
       });
       setTaskListRefreshTrigger((n) => n + 1);
     }
-    if (msg.type === 'session_started') {
-      setTaskListRefreshTrigger((n) => n + 1);
+    if (msg.type === 'session_started' && msg.taskId) {
+      setLastSessionStartedEvent({
+        taskId: msg.taskId,
+        sessionId: msg.sessionId,
+      });
     }
-    if (msg.type === 'session_ended') {
-      setTaskListRefreshTrigger((n) => n + 1);
-    }
-    if (msg.type === 'task_status_changed') {
-      setTaskListRefreshTrigger((n) => n + 1);
+    if (msg.type === 'session_ended' && msg.taskId) {
+      setLastSessionEndedEvent({
+        taskId: msg.taskId,
+        sessionId: msg.sessionId,
+        status: msg.status,
+        prUrl: msg.prUrl,
+      });
     }
     if (msg.type === 'task_updated') {
       setLastTaskUpdate(msg.task);
@@ -485,6 +520,15 @@ export function useSessionStore() {
         repo: msg.repo,
         receivedAt: Date.now(),
       });
+    }
+    if (msg.type === 'ci_billing_blocked') {
+      setLastCiBillingBlockedEvent({
+        prNumber: msg.prNumber,
+        repo: msg.repo,
+        message: msg.message,
+        receivedAt: Date.now(),
+      });
+      setPrRefreshTrigger((n) => n + 1);
     }
   }, []);
 
@@ -608,5 +652,8 @@ export function useSessionStore() {
     taskListRefreshTrigger,
     lastAutofixEvent,
     lastReviewStartedEvent,
+    lastCiBillingBlockedEvent,
+    lastSessionStartedEvent,
+    lastSessionEndedEvent,
   };
 }

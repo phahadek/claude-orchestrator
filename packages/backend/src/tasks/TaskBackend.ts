@@ -8,8 +8,14 @@ import {
   JiraTaskSourceProvider,
   type JiraProjectConfig,
 } from './JiraTaskSourceProvider';
+import {
+  GithubTaskSourceProvider,
+  type GithubProjectConfig,
+} from './GithubTaskSourceProvider';
+import { GitHubClient } from '../github/GitHubClient';
 import { JIRA_HOST, JIRA_TOKEN, JIRA_EMAIL } from '../config';
 import { recordEvent } from '../audit/AuditLog';
+import { upsertTaskCache } from '../db/queries';
 
 /**
  * Per-project configuration that identifies where non-milestone tasks are sourced from.
@@ -33,7 +39,7 @@ export interface UpdateStatusOptions {
  */
 export interface TaskBackend {
   /** Backend identifier; reflects the project's task_source. */
-  readonly type: 'notion' | 'local' | 'jira';
+  readonly type: 'notion' | 'local' | 'jira' | 'github';
 
   /**
    * Fetch tasks that are ready to be dispatched for the given milestone.
@@ -74,6 +80,13 @@ export interface TaskBackend {
 
   /** Append a line to the "Implementation Notes" section in the task page body. */
   appendImplementationNote(taskId: string, note: string): Promise<void>;
+
+  /**
+   * List all tasks currently at the given display status (e.g. '🔄 In Progress').
+   * Used by the orphaned-task sweep to find tasks that need reconciliation.
+   * Implementations may return from cache rather than making live API calls.
+   */
+  listTasksByStatus(status: string): Promise<ResolvedTask[]>;
 }
 
 /**
@@ -94,12 +107,27 @@ export class AuditingTaskBackend implements TaskBackend {
     private readonly projectId: string,
   ) {}
 
-  get type(): 'notion' | 'local' | 'jira' {
+  get type(): 'notion' | 'local' | 'jira' | 'github' {
     return this.inner.type;
   }
 
-  fetchReadyTasks(milestoneId: string | null, skipCache?: boolean) {
-    return this.inner.fetchReadyTasks(milestoneId, skipCache);
+  async fetchReadyTasks(
+    milestoneId: string | null,
+    skipCache?: boolean,
+  ): Promise<ResolvedTask[]> {
+    const results = await this.inner.fetchReadyTasks(milestoneId, skipCache);
+    if (this.inner.type === 'github') {
+      for (const r of results) {
+        upsertTaskCache(r.task.id, JSON.stringify(r.task));
+      }
+      if (milestoneId !== null) {
+        upsertTaskCache(
+          `board:${milestoneId}`,
+          JSON.stringify(results.map((r) => r.task)),
+        );
+      }
+    }
+    return results;
   }
 
   attachPR(taskId: string, prUrl: string) {
@@ -147,6 +175,10 @@ export class AuditingTaskBackend implements TaskBackend {
   appendImplementationNote(taskId: string, note: string) {
     return this.inner.appendImplementationNote(taskId, note);
   }
+
+  listTasksByStatus(status: string) {
+    return this.inner.listTasksByStatus(status);
+  }
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
@@ -172,6 +204,8 @@ export function getTaskBackend(projectId: string): TaskBackend {
     inner = new LocalTaskBackend(project.projectDir);
   } else if (project.taskSource === 'jira') {
     inner = buildJiraBackend(project.taskSourceConfig);
+  } else if (project.taskSource === 'github') {
+    inner = buildGithubBackend(project.taskSourceConfig);
   } else {
     inner = getNotionBackend();
   }
@@ -194,6 +228,32 @@ function buildJiraBackend(
   const email = JIRA_EMAIL || undefined;
   const client = new JiraClient(host, token, email);
   return new JiraTaskSourceProvider(client, { ...projectConfig, host });
+}
+
+function buildGithubBackend(
+  taskSourceConfigJson: string | null,
+): GithubTaskSourceProvider {
+  if (!taskSourceConfigJson) {
+    throw new Error(
+      '[buildGithubBackend] task_source_config is required for github projects',
+    );
+  }
+  let projectConfig: GithubProjectConfig;
+  try {
+    projectConfig = JSON.parse(taskSourceConfigJson) as GithubProjectConfig;
+  } catch {
+    throw new Error(
+      `[buildGithubBackend] malformed task_source_config JSON: ${taskSourceConfigJson}`,
+    );
+  }
+  if (!projectConfig.owner) {
+    throw new Error('[buildGithubBackend] task_source_config missing "owner"');
+  }
+  if (!projectConfig.repo) {
+    throw new Error('[buildGithubBackend] task_source_config missing "repo"');
+  }
+  const client = new GitHubClient();
+  return new GithubTaskSourceProvider(client, projectConfig);
 }
 
 /**

@@ -7,6 +7,7 @@ import {
   type ProjectMilestone,
   type BoardValidation,
 } from '../../api/projects';
+import { getTaskSourceShortLabel } from '../../utils/taskSourceLabel';
 import styles from './ProjectsSettingsPanel.module.css';
 
 interface Props {
@@ -208,7 +209,7 @@ function MilestonesSubPanelInner({
         <div className={styles.subPanelTitleGroup}>
           <h3 className={styles.sectionTitle}>{project.name} — Milestones</h3>
           <p className={styles.hint}>
-            Source: {project.taskSource === 'yaml' ? 'YAML' : 'Notion'}
+            Source: {getTaskSourceShortLabel(project.taskSource)}
           </p>
         </div>
         <button type="button" className={styles.btnPrimary} onClick={openAdd}>

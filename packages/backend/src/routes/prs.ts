@@ -10,12 +10,11 @@ import {
   getTaskTitleFromCache,
   upsertPullRequest,
   deletePR,
-  deleteMergedAndClosedPRs,
-  countMergedAndClosedPRs,
   resetReviewIteration,
   setPRReviewResult,
   updatePRDraftStatus,
   getSessionsByProject,
+  lookupSessionByBranch,
 } from '../db/queries';
 import { GitHubApiError } from '../github/types';
 import type { MergeabilityCategory } from '../github/types';
@@ -208,11 +207,12 @@ export function createPrsRouter(
       try {
         const pr = await github.fetchPR(repo, prNumber);
         const now = new Date().toISOString();
+        const sessionMatch = lookupSessionByBranch(pr.headBranch);
         upsertPullRequest({
           pr_number: pr.id,
           pr_url: pr.url,
-          task_id: null,
-          session_id: null,
+          task_id: sessionMatch?.task_id ?? null,
+          session_id: sessionMatch?.session_id ?? null,
           repo,
           title: pr.title,
           body: pr.body ?? null,
@@ -233,6 +233,11 @@ export function createPrsRouter(
           merge_state: pr.mergeableState,
           merge_state_checked_at: now,
         });
+        if (sessionMatch) {
+          console.log(
+            `[prs] on-demand sync PR #${prNumber}: linked session ${sessionMatch.session_id.slice(0, 8)} via head_branch "${pr.headBranch}"`,
+          );
+        }
         prRow = getPRByNumber(prNumber, repo);
       } catch {
         // GitHub fetch failed — fall through to 404
@@ -682,40 +687,6 @@ export function createPrsRouter(
       res.json(result);
     },
   );
-
-  // ── DELETE /api/prs/clear?projectId=<id> ────────────────────────────────────
-  router.delete('/prs/clear', (req: Request, res: Response) => {
-    const projectId =
-      typeof req.query.projectId === 'string' ? req.query.projectId : '';
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId query param is required' });
-      return;
-    }
-    const project = getProjectById(projectId);
-    if (!project?.githubRepo) {
-      res.status(422).json({ error: 'Project has no githubRepo configured' });
-      return;
-    }
-    const count = deleteMergedAndClosedPRs(project.githubRepo);
-    res.json({ deleted: count });
-  });
-
-  // ── GET /api/prs/clear/count?projectId=<id> ──────────────────────────────────
-  router.get('/prs/clear/count', (req: Request, res: Response) => {
-    const projectId =
-      typeof req.query.projectId === 'string' ? req.query.projectId : '';
-    if (!projectId) {
-      res.status(400).json({ error: 'projectId query param is required' });
-      return;
-    }
-    const project = getProjectById(projectId);
-    if (!project?.githubRepo) {
-      res.status(422).json({ error: 'Project has no githubRepo configured' });
-      return;
-    }
-    const count = countMergedAndClosedPRs(project.githubRepo);
-    res.json({ count });
-  });
 
   // ── DELETE /api/prs/:prNumber?projectId=<id> ─────────────────────────────────
   router.delete('/prs/:prNumber', (req: Request, res: Response) => {

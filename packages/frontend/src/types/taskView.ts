@@ -11,6 +11,7 @@ export type PauseReason =
   | 'max_reviews'
   | 'stuck_timeout'
   | 'ci_failing'
+  | 'ci_billing_blocked'
   | 'auto_merge_failed'
   | 'pr_closed'
   | 'review_failed'
@@ -41,6 +42,8 @@ export interface TaskView {
     lastMessage: string;
     inputTokens: number;
     outputTokens: number;
+    context_occupancy_tokens?: number;
+    compaction_count?: number;
   } | null;
   pr: {
     prNumber: number;

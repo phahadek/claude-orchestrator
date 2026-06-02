@@ -1,6 +1,13 @@
 import { useState, useEffect } from 'react';
 import type { FormEvent } from 'react';
-import type { Project, TaskSource, GitMode } from '../../api/projects';
+import type {
+  Project,
+  TaskSource,
+  GitMode,
+  GithubMilestone,
+  GithubTaskSourceConfig,
+} from '../../api/projects';
+import { projectsApi } from '../../api/projects';
 import styles from './ProjectsSettingsPanel.module.css';
 
 export interface ProjectFormValues {
@@ -15,6 +22,9 @@ export interface ProjectFormValues {
   autoMergeEnabled: boolean;
   nonMilestoneSourceConfigRaw: string;
   dataResidencyConfirmed: boolean;
+  githubOwnerRepo: string;
+  githubDefaultMilestone: number | null;
+  baseBranch: string;
 }
 
 interface Props {
@@ -35,9 +45,26 @@ const EMPTY: ProjectFormValues = {
   autoMergeEnabled: false,
   nonMilestoneSourceConfigRaw: '',
   dataResidencyConfirmed: false,
+  githubOwnerRepo: '',
+  githubDefaultMilestone: null,
+  baseBranch: 'dev',
 };
 
+const OWNER_REPO_RE = /^[^/]+\/[^/]+$/;
+
+function parseGithubConfig(
+  taskSourceConfig: string | null,
+): GithubTaskSourceConfig | null {
+  if (!taskSourceConfig) return null;
+  try {
+    return JSON.parse(taskSourceConfig) as GithubTaskSourceConfig;
+  } catch {
+    return null;
+  }
+}
+
 function fromProject(p: Project): ProjectFormValues {
+  const githubCfg = parseGithubConfig(p.taskSourceConfig ?? null);
   return {
     name: p.name,
     projectDir: p.projectDir,
@@ -52,6 +79,9 @@ function fromProject(p: Project): ProjectFormValues {
       ? JSON.stringify(p.nonMilestoneSourceConfig)
       : '',
     dataResidencyConfirmed: p.dataResidencyConfirmed ?? false,
+    githubOwnerRepo: githubCfg ? `${githubCfg.owner}/${githubCfg.repo}` : '',
+    githubDefaultMilestone: githubCfg?.defaultMilestone ?? null,
+    baseBranch: p.baseBranch ?? 'dev',
   };
 }
 
@@ -67,15 +97,38 @@ export function ProjectFormModal({
     name?: string;
     projectDir?: string;
     nonMilestoneSourceConfigRaw?: string;
+    githubOwnerRepo?: string;
   }>({});
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+  const [githubMilestones, setGithubMilestones] = useState<GithubMilestone[]>(
+    [],
+  );
+  const [milestonesLoading, setMilestonesLoading] = useState(false);
 
   useEffect(() => {
     setValues(initialProject ? fromProject(initialProject) : EMPTY);
     setErrors({});
     setServerError(null);
+    setGithubMilestones([]);
   }, [initialProject]);
+
+  // Lazy-load milestones when editing a github-source project
+  useEffect(() => {
+    if (
+      values.taskSource !== 'github' ||
+      !initialProject ||
+      !initialProject.taskSourceConfig
+    ) {
+      return;
+    }
+    setMilestonesLoading(true);
+    projectsApi
+      .listGithubMilestones(initialProject.id)
+      .then((ms) => setGithubMilestones(ms))
+      .catch(() => setGithubMilestones([]))
+      .finally(() => setMilestonesLoading(false));
+  }, [values.taskSource, initialProject]);
 
   function update<K extends keyof ProjectFormValues>(
     key: K,
@@ -90,6 +143,7 @@ export function ProjectFormModal({
       name?: string;
       projectDir?: string;
       nonMilestoneSourceConfigRaw?: string;
+      githubOwnerRepo?: string;
     } = {};
     if (!values.name.trim()) nextErrors.name = 'Name is required';
     if (!values.projectDir.trim())
@@ -118,6 +172,14 @@ export function ProjectFormModal({
         }
       } catch {
         nextErrors.nonMilestoneSourceConfigRaw = 'Invalid JSON';
+      }
+    }
+    if (values.taskSource === 'github') {
+      const ownerRepo = values.githubOwnerRepo.trim();
+      if (!ownerRepo) {
+        nextErrors.githubOwnerRepo = 'Repository is required (owner/repo)';
+      } else if (!OWNER_REPO_RE.test(ownerRepo)) {
+        nextErrors.githubOwnerRepo = 'Must be in owner/repo format';
       }
     }
     setErrors(nextErrors);
@@ -184,6 +246,20 @@ export function ProjectFormModal({
           </div>
 
           <div className={styles.formField}>
+            <label htmlFor="proj-base-branch" className={styles.formLabel}>
+              Base Branch
+            </label>
+            <input
+              id="proj-base-branch"
+              type="text"
+              className={styles.input}
+              value={values.baseBranch}
+              onChange={(e) => update('baseBranch', e.target.value)}
+              placeholder="main"
+            />
+          </div>
+
+          <div className={styles.formField}>
             <label htmlFor="proj-source" className={styles.formLabel}>
               Task Source
             </label>
@@ -191,17 +267,93 @@ export function ProjectFormModal({
               id="proj-source"
               className={styles.input}
               value={values.taskSource}
-              onChange={(e) =>
+              onChange={(e) => {
+                const val = e.target.value;
                 update(
                   'taskSource',
-                  e.target.value === 'yaml' ? 'yaml' : 'notion',
-                )
-              }
+                  val === 'yaml'
+                    ? 'yaml'
+                    : val === 'github'
+                      ? 'github'
+                      : 'notion',
+                );
+              }}
             >
               <option value="notion">Notion</option>
               <option value="yaml">YAML (tasks.yaml in projectDir)</option>
+              <option value="github">GitHub Issues</option>
             </select>
           </div>
+
+          {values.taskSource === 'github' && (
+            <>
+              <div className={styles.formField}>
+                <label
+                  htmlFor="proj-github-owner-repo"
+                  className={styles.formLabel}
+                >
+                  Repository
+                </label>
+                <input
+                  id="proj-github-owner-repo"
+                  type="text"
+                  className={styles.input}
+                  value={values.githubOwnerRepo}
+                  onChange={(e) => update('githubOwnerRepo', e.target.value)}
+                  placeholder="owner/repo"
+                />
+                {errors.githubOwnerRepo && (
+                  <p className={styles.fieldError}>{errors.githubOwnerRepo}</p>
+                )}
+              </div>
+
+              <div className={styles.formField}>
+                <label
+                  htmlFor="proj-github-milestone"
+                  className={styles.formLabel}
+                >
+                  Default Milestone
+                </label>
+                {!isEdit ? (
+                  <p className={styles.fieldHelp}>
+                    Save the project first, then re-open to select a milestone.
+                  </p>
+                ) : (
+                  <>
+                    <select
+                      id="proj-github-milestone"
+                      className={styles.input}
+                      value={
+                        values.githubDefaultMilestone !== null
+                          ? String(values.githubDefaultMilestone)
+                          : ''
+                      }
+                      onChange={(e) =>
+                        update(
+                          'githubDefaultMilestone',
+                          e.target.value ? Number(e.target.value) : null,
+                        )
+                      }
+                      disabled={milestonesLoading}
+                    >
+                      <option value="">
+                        {milestonesLoading ? 'Loading…' : 'All milestones'}
+                      </option>
+                      {githubMilestones.map((m) => (
+                        <option key={m.id} value={String(m.id)}>
+                          {m.title}
+                        </option>
+                      ))}
+                    </select>
+                    <p className={styles.fieldHelp}>
+                      Leave empty to fetch all Ready issues in the repo,
+                      regardless of milestone.
+                    </p>
+                  </>
+                )}
+              </div>
+            </>
+          )}
 
           <div className={styles.formField}>
             <label htmlFor="proj-git-mode" className={styles.formLabel}>

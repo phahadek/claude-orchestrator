@@ -7,6 +7,18 @@ export class GitHubApiError extends Error {
   }
 }
 
+export class GitHubRateLimitError extends GitHubApiError {
+  constructor(
+    message: string,
+    public readonly resetAt: Date,
+    public readonly limit: number,
+    public readonly used: number,
+  ) {
+    super(403, message);
+    this.name = 'GitHubRateLimitError';
+  }
+}
+
 export interface PullRequest {
   nodeId: string; // GitHub GraphQL global ID
   id: number; // GitHub PR number
@@ -62,7 +74,7 @@ export type MergeCategory =
 
 export interface MergeabilityCategory {
   category: MergeCategory;
-  /** Value persisted in pull_requests.merge_state ('clean' | 'dirty' | 'ci_failed' | 'blocked' | 'unknown'). */
+  /** Value persisted in pull_requests.merge_state ('clean' | 'dirty' | 'ci_failed' | 'ci_running' | 'blocked' | 'unknown'). */
   mergeState: string;
   /** Raw mergeable_state from GitHub (null when GitHub is still computing). */
   rawMergeableState: string | null;
@@ -70,6 +82,39 @@ export interface MergeabilityCategory {
   failingChecks: FailingCheck[];
   /** Current head commit SHA from GitHub. null when not available. */
   headSha: string | null;
+}
+
+export interface Issue {
+  id: number; // GitHub issue number
+  nodeId: string;
+  title: string;
+  body: string | null;
+  state: 'open' | 'closed';
+  labels: string[]; // label names
+  milestone: number | null; // milestone number, null if unset
+  createdAt: string;
+  updatedAt: string;
+  url: string; // html_url
+}
+
+export interface IssueComment {
+  id: number;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  url: string; // html_url
+}
+
+export interface Milestone {
+  id: number; // milestone number
+  nodeId: string;
+  title: string;
+  description: string | null;
+  state: 'open' | 'closed';
+  openIssues: number;
+  closedIssues: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ReviewJob {

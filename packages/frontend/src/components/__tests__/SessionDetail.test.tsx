@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { SessionDetail, EventRow } from '../SessionDetail';
 import type { SessionState } from '../../hooks/useSessionStore';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 
 function makeSession(overrides?: Partial<SessionState>): SessionState {
   return {
@@ -13,6 +14,15 @@ function makeSession(overrides?: Partial<SessionState>): SessionState {
     events: [],
     ...overrides,
   };
+}
+
+function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
+  return {
+    id: 'proj-1',
+    name: 'Test Project',
+    taskSource: 'notion',
+    ...overrides,
+  } as ProjectConfig;
 }
 
 function makeEvent(
@@ -38,7 +48,7 @@ describe('SessionDetail', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('renders the task name and Notion link', () => {
+  it('renders the task name and source-aware link for notion project', () => {
     render(
       <SessionDetail
         session={makeSession()}
@@ -47,11 +57,32 @@ describe('SessionDetail', () => {
         onDelete={vi.fn()}
         onArchive={vi.fn()}
         onUnarchive={vi.fn()}
+        project={makeProject({ taskSource: 'notion' })}
       />,
     );
     expect(screen.getByText('Test Task')).toBeTruthy();
     const notionLink = screen.getByText('Notion ↗');
     expect(notionLink.getAttribute('href')).toBe('https://notion.so/task');
+  });
+
+  it('renders Issue ↗ link for github-source project', () => {
+    render(
+      <SessionDetail
+        session={makeSession({
+          notionTaskUrl: 'https://github.com/owner/repo/issues/1',
+        })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+        project={makeProject({ taskSource: 'github' })}
+      />,
+    );
+    const link = screen.getByText('Issue ↗');
+    expect(link.getAttribute('href')).toBe(
+      'https://github.com/owner/repo/issues/1',
+    );
   });
 
   it('renders all events from session.events', () => {
@@ -341,6 +372,154 @@ describe('SessionDetail', () => {
       />,
     );
     expect(screen.getByText(/1 permission denial(?!s)/)).toBeTruthy();
+  });
+
+  it('renders compaction badge when compaction_count > 0', () => {
+    render(
+      <SessionDetail
+        session={makeSession({ compaction_count: 3 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('compacted 3×')).toBeTruthy();
+  });
+
+  it('hides compaction badge when compaction_count is 0', () => {
+    render(
+      <SessionDetail
+        session={makeSession({ compaction_count: 0 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/compacted/)).toBeNull();
+  });
+
+  it('hides compaction badge when compaction_count is absent', () => {
+    render(
+      <SessionDetail
+        session={makeSession()}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/compacted/)).toBeNull();
+  });
+
+  it('updates compaction badge when session prop changes', () => {
+    const { rerender } = render(
+      <SessionDetail
+        session={makeSession({ compaction_count: 1 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('compacted 1×')).toBeTruthy();
+    rerender(
+      <SessionDetail
+        session={makeSession({ compaction_count: 2 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('compacted 2×')).toBeTruthy();
+  });
+
+  it('renders context occupancy at 0% when context_occupancy_tokens is 0', () => {
+    render(
+      <SessionDetail
+        session={makeSession({ context_occupancy_tokens: 0 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('0% ctx')).toBeTruthy();
+  });
+
+  it('renders context occupancy at mid percentage', () => {
+    render(
+      <SessionDetail
+        session={makeSession({ context_occupancy_tokens: 124_000 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('62% ctx')).toBeTruthy();
+  });
+
+  it('renders context occupancy ≥100% without clamping the label', () => {
+    render(
+      <SessionDetail
+        session={makeSession({ context_occupancy_tokens: 210_000 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('105% ctx')).toBeTruthy();
+  });
+
+  it('does not render context occupancy badge when context_occupancy_tokens is absent', () => {
+    render(
+      <SessionDetail
+        session={makeSession()}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/% ctx/)).toBeNull();
+  });
+
+  it('updates context occupancy live when session prop changes', () => {
+    const { rerender } = render(
+      <SessionDetail
+        session={makeSession({ context_occupancy_tokens: 40_000 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('20% ctx')).toBeTruthy();
+    rerender(
+      <SessionDetail
+        session={makeSession({ context_occupancy_tokens: 100_000 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('50% ctx')).toBeTruthy();
   });
 
   it('close button calls history.back() (not onClose directly)', () => {
@@ -740,5 +919,63 @@ describe('EventRow', () => {
     expect(screen.queryByText(/"type": "tool_use"/)).toBeNull();
     expect(screen.queryByText(/toolu_03/)).toBeNull();
     expect(screen.getByText(/Glob/)).toBeTruthy();
+  });
+});
+
+describe('context-occupancy gauge and compaction badge', () => {
+  it('renders context-occupancy gauge when context_occupancy_tokens is set', () => {
+    render(
+      <SessionDetail
+        session={makeSession({ context_occupancy_tokens: 50_000 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/% ctx/)).toBeTruthy();
+  });
+
+  it('does not render gauge when context_occupancy_tokens is absent', () => {
+    render(
+      <SessionDetail
+        session={makeSession()}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/% ctx/)).toBeNull();
+  });
+
+  it('renders compaction badge when compaction_count > 0', () => {
+    render(
+      <SessionDetail
+        session={makeSession({ compaction_count: 2 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('compacted 2×')).toBeTruthy();
+  });
+
+  it('does not render compaction badge when compaction_count is 0', () => {
+    render(
+      <SessionDetail
+        session={makeSession({ compaction_count: 0 })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/compacted/)).toBeNull();
   });
 });

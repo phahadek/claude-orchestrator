@@ -16,8 +16,6 @@ vi.mock('../db/queries.js', () => ({
   getTaskTitleFromCache: vi.fn().mockReturnValue(null),
   upsertPullRequest: vi.fn(),
   deletePR: vi.fn(),
-  deleteMergedAndClosedPRs: vi.fn(),
-  countMergedAndClosedPRs: vi.fn().mockReturnValue(0),
   resetReviewIteration: vi.fn(),
   setPRReviewResult: vi.fn(),
   updatePRDraftStatus: vi.fn(),
@@ -1093,40 +1091,6 @@ describe('DELETE /api/prs/:prNumber', () => {
   it('returns 400 when projectId is missing', async () => {
     const res = await supertest(buildApp()).delete('/api/prs/42');
     expect(res.status).toBe(400);
-  });
-});
-
-// ── DELETE /api/prs/clear ─────────────────────────────────────────────────────
-
-describe('DELETE /api/prs/clear', () => {
-  it('returns deleted count', async () => {
-    vi.mocked(queries.deleteMergedAndClosedPRs).mockReturnValue(3);
-    const res = await supertest(buildApp()).delete(
-      '/api/prs/clear?projectId=proj-1',
-    );
-    expect(res.status).toBe(200);
-    expect(res.body.deleted).toBe(3);
-    expect(vi.mocked(queries.deleteMergedAndClosedPRs)).toHaveBeenCalledWith(
-      'owner/repo',
-    );
-  });
-
-  it('returns 400 when projectId is missing', async () => {
-    const res = await supertest(buildApp()).delete('/api/prs/clear');
-    expect(res.status).toBe(400);
-  });
-});
-
-// ── GET /api/prs/clear/count ──────────────────────────────────────────────────
-
-describe('GET /api/prs/clear/count', () => {
-  it('returns count of merged/closed PRs', async () => {
-    vi.mocked(queries.countMergedAndClosedPRs).mockReturnValue(2);
-    const res = await supertest(buildApp()).get(
-      '/api/prs/clear/count?projectId=proj-1',
-    );
-    expect(res.status).toBe(200);
-    expect(res.body.count).toBe(2);
   });
 });
 

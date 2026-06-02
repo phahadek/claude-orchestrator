@@ -17,6 +17,9 @@ vi.mock('../db/queries.js', () => ({
   addAutofixSha: vi.fn(),
   consumeAutofixSha: vi.fn().mockReturnValue(false),
   deleteAllAutofixShasForPR: vi.fn(),
+  getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
+  insertPendingReviewSync: vi.fn(),
+  deletePendingReviewSync: vi.fn(),
 }));
 
 vi.mock('../session/autofix-runner.js', () => ({
@@ -142,6 +145,7 @@ function makeMockSessionManager() {
   const emitter = new EventEmitter();
   return Object.assign(emitter, {
     send: vi.fn(),
+    sendOrResume: vi.fn().mockResolvedValue('coding-session-id'),
     addToRevertLock: vi.fn(),
   });
 }
@@ -359,8 +363,8 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(vi.mocked(sm.send)).toHaveBeenCalledOnce();
-    const [sessionId, message] = vi.mocked(sm.send).mock.calls[0];
+    expect(vi.mocked(sm.sendOrResume)).toHaveBeenCalledOnce();
+    const [sessionId, message] = vi.mocked(sm.sendOrResume).mock.calls[0];
     expect(sessionId).toBe('coding-session-id');
     expect(message).toContain('Review Feedback');
     expect(message).toContain('Needs changes');
@@ -385,7 +389,101 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(vi.mocked(sm.send)).not.toHaveBeenCalled();
+    expect(vi.mocked(sm.sendOrResume)).not.toHaveBeenCalled();
+  });
+
+  it('records verdict_routing_failed audit event when sendOrResume throws', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    vi.mocked(sm.sendOrResume).mockRejectedValue(new Error('spawn failed'));
+
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [
+        {
+          name: 'Diff vs Context spec',
+          passed: false,
+          notes: 'Missing export.',
+        },
+      ],
+      summary: 'One dimension failed.',
+      reviewedAt: new Date().toISOString(),
+    });
+
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'verdict_routing_failed',
+        actor_type: 'system',
+        actor_id: 'coding-session-id',
+        payload: expect.objectContaining({
+          pr_number: 1,
+          repo: 'owner/repo',
+          error: expect.stringContaining('spawn failed'),
+        }),
+      }),
+    );
+  });
+
+  it('does not record verdict_routing_failed when sendOrResume resolves normally', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [
+        { name: 'Diff vs Context spec', passed: false, notes: 'ok' },
+      ],
+      summary: 'Needs changes.',
+      reviewedAt: new Date().toISOString(),
+    });
+
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'verdict_routing_failed' }),
+    );
+  });
+
+  it('skips routing and records no verdict_routing_failed when session_id is null', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      session_id: null,
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [
+        { name: 'Diff vs Context spec', passed: false, notes: 'ok' },
+      ],
+      summary: 'Needs changes.',
+      reviewedAt: new Date().toISOString(),
+    });
+
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(sm.sendOrResume)).not.toHaveBeenCalled();
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'verdict_routing_failed' }),
+    );
   });
 });
 
@@ -504,7 +602,7 @@ describe('ReviewOrchestrator — incomplete verdict', () => {
     await new Promise((r) => setTimeout(r, 30));
 
     // Must NOT send feedback to coding session
-    expect(vi.mocked(sm.send)).not.toHaveBeenCalled();
+    expect(vi.mocked(sm.sendOrResume)).not.toHaveBeenCalled();
 
     // Must broadcast review_incomplete
     const incompleteMsg = messages.find(
@@ -632,8 +730,8 @@ describe('ReviewOrchestrator — merge conflict causes needs_changes', () => {
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(vi.mocked(sm.send)).toHaveBeenCalledOnce();
-    const [sessionId, message] = vi.mocked(sm.send).mock.calls[0];
+    expect(vi.mocked(sm.sendOrResume)).toHaveBeenCalledOnce();
+    const [sessionId, message] = vi.mocked(sm.sendOrResume).mock.calls[0];
     expect(sessionId).toBe('coding-session-id');
     expect(message).toContain('Merge conflicts');
   });
@@ -715,8 +813,8 @@ describe('ReviewOrchestrator — draft PR transition on approved verdict', () =>
 // Verifies that after a review with needs_changes, the orchestrator routes
 // formatted findings to the originating coding session via sessionManager.send().
 
-describe('Break 4 (AC) — auto findings routing: sessionManager.send() called on needs_changes', () => {
-  it('calls sessionManager.send() with formatted findings when verdict is needs_changes', async () => {
+describe('Break 4 (AC) — auto findings routing: sessionManager.sendOrResume() called on needs_changes', () => {
+  it('calls sessionManager.sendOrResume() with formatted findings when verdict is needs_changes', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
 
     const sm = makeMockSessionManager();
@@ -739,8 +837,8 @@ describe('Break 4 (AC) — auto findings routing: sessionManager.send() called o
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
-    expect(vi.mocked(sm.send)).toHaveBeenCalledOnce();
-    const [sessionId, message] = vi.mocked(sm.send).mock.calls[0];
+    expect(vi.mocked(sm.sendOrResume)).toHaveBeenCalledOnce();
+    const [sessionId, message] = vi.mocked(sm.sendOrResume).mock.calls[0];
     expect(sessionId).toBe('coding-session-id');
     expect(message).toContain('Review Feedback');
     expect(message).toContain('Unit tests missing.');
@@ -2271,5 +2369,180 @@ describe('ReviewOrchestrator — runAutofixPipeline helper', () => {
     expect(complete).toBeDefined();
     expect(complete.success).toBe(false);
     expect(complete.summary).toContain('disk full');
+  });
+});
+
+// ── reviewLocalBranch: sendOrResume + verdict_routing_failed ─────────────────
+
+describe('ReviewOrchestrator — reviewLocalBranch: sendOrResume + audit logging', () => {
+  const localBranchRow = {
+    id: 30,
+    project_id: 'proj-local',
+    session_id: 'coding-session-local',
+    branch_name: 'feature/audit-test',
+    base_branch: 'dev',
+    status: 'open',
+    review_result: null,
+    pause_reason: null,
+    created_at: '2026-01-01T00:00:00.000Z',
+    updated_at: '2026-01-01T00:00:00.000Z',
+  };
+
+  const localSessionRow = {
+    session_id: 'coding-session-local',
+    task_id: 'yaml:task-local',
+    task_url: null,
+    project_context_url: null,
+    project_id: 'proj-local',
+    status: 'done',
+    started_at: 1000,
+    ended_at: null,
+    pr_url: null,
+    worktree_path: '/repos/local/worktree',
+    archived: 0,
+    favorited: 0,
+    session_type: 'standard',
+    note: null,
+    tags: null,
+    total_input_tokens: 0,
+    total_output_tokens: 0,
+    task_name: null,
+    metadata: null,
+    review_result: null,
+  };
+
+  function emitLocalBranch(sm: ReturnType<typeof makeMockSessionManager>) {
+    sm.emit('message', {
+      type: 'local_branch_submitted',
+      projectId: 'proj-local',
+      sessionId: 'coding-session-local',
+      branchName: 'feature/audit-test',
+      baseBranch: 'dev',
+    });
+  }
+
+  it('calls sendOrResume with session id and feedback when verdict is needs_changes', async () => {
+    vi.mocked(getLocalBranchBySession).mockReturnValue(localBranchRow as any);
+    vi.mocked(getSession).mockReturnValue(localSessionRow as any);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 30,
+      repo: 'local/feature/audit-test',
+      verdict: 'needs_changes',
+      dimensions: [
+        {
+          name: 'Diff vs Context spec',
+          passed: false,
+          notes: 'Missing implementation.',
+        },
+      ],
+      summary: 'Needs work.',
+      reviewedAt: new Date().toISOString(),
+    });
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    emitLocalBranch(sm);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(sm.sendOrResume)).toHaveBeenCalledOnce();
+    const [sessionId, message] = vi.mocked(sm.sendOrResume).mock.calls[0];
+    expect(sessionId).toBe('coding-session-local');
+    expect(message).toContain('Review Feedback');
+    expect(message).toContain('Missing implementation.');
+  });
+
+  it('records verdict_routing_failed when sendOrResume throws in local branch path', async () => {
+    vi.mocked(getLocalBranchBySession).mockReturnValue(localBranchRow as any);
+    vi.mocked(getSession).mockReturnValue(localSessionRow as any);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
+
+    const sm = makeMockSessionManager();
+    vi.mocked(sm.sendOrResume).mockRejectedValue(new Error('network error'));
+
+    const rs = makeMockReviewService({
+      prNumber: 30,
+      repo: 'local/feature/audit-test',
+      verdict: 'needs_changes',
+      dimensions: [
+        { name: 'Diff vs Context spec', passed: false, notes: 'ok' },
+      ],
+      summary: 'Needs work.',
+      reviewedAt: new Date().toISOString(),
+    });
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    emitLocalBranch(sm);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'verdict_routing_failed',
+        actor_type: 'system',
+        actor_id: 'coding-session-local',
+        payload: expect.objectContaining({
+          pr_number: 30,
+          repo: 'local/feature/audit-test',
+          error: expect.stringContaining('network error'),
+        }),
+      }),
+    );
+  });
+
+  it('does not record verdict_routing_failed when sendOrResume resolves in local branch path', async () => {
+    vi.mocked(getLocalBranchBySession).mockReturnValue(localBranchRow as any);
+    vi.mocked(getSession).mockReturnValue(localSessionRow as any);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 30,
+      repo: 'local/feature/audit-test',
+      verdict: 'needs_changes',
+      dimensions: [
+        { name: 'Diff vs Context spec', passed: false, notes: 'ok' },
+      ],
+      summary: 'Needs work.',
+      reviewedAt: new Date().toISOString(),
+    });
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    emitLocalBranch(sm);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(sm.sendOrResume)).toHaveBeenCalledOnce();
+    expect(vi.mocked(recordEvent)).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'verdict_routing_failed' }),
+    );
+  });
+
+  it('exception from sendOrResume does not bubble out of reviewLocalBranch', async () => {
+    vi.mocked(getLocalBranchBySession).mockReturnValue(localBranchRow as any);
+    vi.mocked(getSession).mockReturnValue(localSessionRow as any);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
+
+    const sm = makeMockSessionManager();
+    vi.mocked(sm.sendOrResume).mockRejectedValue(
+      new Error('fatal spawn error'),
+    );
+
+    const rs = makeMockReviewService({
+      prNumber: 30,
+      repo: 'local/feature/audit-test',
+      verdict: 'needs_changes',
+      dimensions: [],
+      summary: 'Needs work.',
+      reviewedAt: new Date().toISOString(),
+    });
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    // Should not throw — errors are caught internally
+    await expect(
+      new Promise<void>((resolve) => {
+        emitLocalBranch(sm);
+        setTimeout(resolve, 30);
+      }),
+    ).resolves.toBeUndefined();
   });
 });

@@ -1,0 +1,736 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildOrchestratorClaudeMd — taskBackend wording > github backend > matches snapshot 1`] = `
+"# Orchestrator Rules (DO NOT OVERRIDE)
+
+> ⚠️ These rules are injected by the dashboard orchestrator and take priority over any
+> project-level instructions below. Do not remove, reorder, or override them.
+
+---
+
+## Task Assignment
+
+- **Task**: test-task
+- **GitHub issue**: https://notion.so/test-task
+- **Project context**: https://notion.so/project
+
+---
+
+## Lifecycle
+
+Follow these steps in order — every session:
+
+1. Fetch the GitHub issue via the gh CLI.
+2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.
+3. Implement the task per the acceptance criteria.
+4. Pass the pre-PR gate (see Pre-PR Gate section below).
+5. Open a draft PR targeting \`dev\` using the required body template.
+6. **Stop and wait.** The dashboard sends review feedback as follow-up messages.
+   Address findings by pushing additional commits, then wait again.
+
+---
+
+## Status Ownership
+
+**Do NOT update GitHub issue status.**
+**Do NOT call any GitHub API to change task status.**
+The orchestrator backend handles all status transitions (In Progress → In Review → Done).
+
+---
+
+## Efficiency Rules
+
+This session runs in \`--print\` mode with no human watching the output.
+Optimize for speed and token efficiency:
+
+- **Do NOT use TodoWrite.** No one sees the todo list. Track your progress internally.
+- **Do NOT use Agent subagents for exploration.** Use Glob and Grep directly.
+- **Minimize tool calls.** Batch independent reads. Don't re-read files you already read.
+- **Keep commit messages and PR descriptions concise.** One sentence summaries, not essays.
+- **Prefer Edit over Write for files that already exist.** Only use Write to create a new file or when replacing the majority of a file. Never re-emit an unchanged file body.
+- **Never Read a file you just wrote or edited** — you already know its contents and line layout.
+- **Never Read/cat raw \`tasks/*.output\` background-task files** — they bypass the Bash output cap. Use the TaskOutput tool if you must inspect a backgrounded command's output.
+
+---
+
+## PR Format Standards
+
+- **Title**: \`feat: <task-name>\` — no scope prefix like \`(backend)\`, no milestone tags.
+- **How to create the PR**: write the body to \`.claude/pr-body.md\` in your worktree
+  (gitignored + lint-excluded; avoids shell-escaping issues with multi-line markdown),
+  then run \`gh pr create --draft --base "dev" --body-file .claude/pr-body.md\`.
+  Use the Write tool to create the file — do NOT use shell redirects (\`cat >\`, \`echo >\`).
+  Do NOT use the MCP \`mcp__github__create_pull_request\` tool —
+  its token authentication scope does not always match the repo, and \`gh\` is already authenticated
+  for the orchestrator's session.
+- **Required body sections** (no omissions, no reordering):
+
+\`\`\`
+## Summary
+<1-3 sentences: what changed and why>
+
+## GitHub Issue
+<link to the task page>
+
+## Automated Tests
+<list tests added/modified, or "No test changes">
+
+## Files Changed
+<bulleted list of files with brief description of each change>
+\`\`\`
+
+---
+
+## Branch Rules
+
+- Branch name: \`feature/<task-name>\` — created from the worktree's current HEAD
+- Never commit directly to \`dev\` or \`main\`
+- Never merge your own PR
+- One task per session — no scope creep
+
+---
+
+## Commit Attribution
+
+Every commit **must** include the following trailer (replace \`<model>\` and \`<session-id>\` with your actual model ID and session ID):
+
+\`\`\`
+AI-Authored-By: <model> (session: <session-id>)
+\`\`\`
+
+Example: \`AI-Authored-By: claude-sonnet-4-6 (session: f98ff4ec)\`
+
+The backend verifies this trailer server-side. In corporate mode, missing trailers pause the task.
+
+---
+
+## Pre-PR Gate
+
+Run in order — all must pass before opening the PR:
+
+1. Stash CLAUDE.md before rebasing: \`git stash push CLAUDE.md\`
+2. Rebase onto \`dev\` and resolve any conflicts.
+3. Restore CLAUDE.md: \`git stash pop\`
+4. No local verify step configured — CI is the gate.
+5. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.
+
+---
+
+## Forbidden Actions
+
+- Never push directly to \`main\`
+- Never force push (\`--force\`)
+- Never delete branches that live outside this worktree
+- Never run \`git reset --hard\` on the main repository directory
+- Never skip pre-commit hooks (\`--no-verify\`)
+- Never stage or commit \`CLAUDE.md\` — it contains orchestrator-injected content that must not appear in PRs. Use \`git add <specific files>\` instead of \`git add .\`.
+
+---
+
+## Git Isolation
+
+> **Your worktree directory is \`/worktrees/abc123\`.**
+> This is your \`cwd\`. All commands run here. Never navigate to or operate on any parent directory.
+
+- All git commands must run inside the worktree directory (your \`cwd\`)
+- Never use \`git -C <path>\` pointing outside this worktree
+- Never use \`--work-tree\` or \`--git-dir\` flags pointing outside this worktree
+- Never run \`git checkout\` or \`git switch\` targeting a branch in the main repo directory
+- The backend records the main repo branch before each session and will warn if it drifts
+
+---
+
+## Filesystem Isolation (Personal Mode)
+
+> ⚠️ **Personal mode has no structural sandbox** — there is no docker, chroot, or
+> namespace to prevent writes outside the worktree. All isolation is prompt-level.
+> Violating these rules can corrupt the developer's live environment.
+
+All file writes **must stay inside the worktree directory** (\`/worktrees/abc123\`).
+
+- **Never write to the project root or any path above the worktree.**
+  Scripts, tools, and generated outputs must target paths under the worktree, not the parent repo.
+- **Dev state (SQLite databases, log files, generated artifacts) must use worktree-relative paths.**
+  Do not reference absolute paths to project-root databases or output files.
+  Use paths like \`<worktree>/.dev-state/<file>\` or resolve paths relative to \`cwd\`.
+- **Before running any script that writes files or opens a database, verify the target path is inside the worktree.**
+  If a script hardcodes an absolute project-root path, patch it to accept an env var or relative path before executing.
+- **Need a scratch/temp file (PR body, notes, intermediate output)? Write it under \`.claude/\` in your worktree** — it's gitignored and excluded from lint/format.
+  NEVER write to \`/tmp/\`, \`$HOME\`, \`$(mktemp)\`, or anywhere outside your worktree:
+  those paths are shared across sessions (collision risk) and violate isolation.
+
+---
+
+## Bash Rules (Permission System)
+
+Your Bash commands are authorized by prefix matching on the **first token**.
+Violating these rules causes **silent denial** — the command fails with no error message.
+
+**Rule 1 — One command per Bash call.**
+Never chain with \`&&\`, \`;\`, or \`||\`. Split into separate Bash calls.
+
+**Rule 2 — Never prefix with \`cd path &&\`.**
+You are already in the worktree directory. Just run the command directly.
+
+**Rule 3 — No heredoc subshells in git commit.**
+\`git commit -m "$(cat <<'EOF'...)"\` is denied. Use a simple \`-m "message"\` instead.
+For multiline commit messages, write the message to \`.claude/.commit-msg\` with the Write tool, then run \`git commit -F .claude/.commit-msg\`. **Use that exact path** — the \`.claude/\` directory is gitignored, so the scratch file is never accidentally staged. Do not invent other filenames (\`commit-msg.txt\`, \`.git-commit-msg.txt\`, etc.) — they will leak into the PR diff.
+
+**Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
+Use the Write tool for any file creation. Never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
+
+**Rule 5 — Use \`npx\` instead of bare tool names.**
+\`tsc\` → \`npx tsc\`. Bare commands may not be on PATH."
+`;
+
+exports[`buildOrchestratorClaudeMd — taskBackend wording > jira backend > matches snapshot 1`] = `
+"# Orchestrator Rules (DO NOT OVERRIDE)
+
+> ⚠️ These rules are injected by the dashboard orchestrator and take priority over any
+> project-level instructions below. Do not remove, reorder, or override them.
+
+---
+
+## Task Assignment
+
+- **Task**: test-task
+- **Jira issue**: https://notion.so/test-task
+- **Project context**: https://notion.so/project
+
+---
+
+## Lifecycle
+
+Follow these steps in order — every session:
+
+1. Fetch the Jira issue.
+2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.
+3. Implement the task per the acceptance criteria.
+4. Pass the pre-PR gate (see Pre-PR Gate section below).
+5. Open a draft PR targeting \`dev\` using the required body template.
+6. **Stop and wait.** The dashboard sends review feedback as follow-up messages.
+   Address findings by pushing additional commits, then wait again.
+
+---
+
+## Status Ownership
+
+**Do NOT update Jira issue status.**
+**Do NOT call any Jira API to change task status.**
+The orchestrator backend handles all status transitions (In Progress → In Review → Done).
+
+---
+
+## Efficiency Rules
+
+This session runs in \`--print\` mode with no human watching the output.
+Optimize for speed and token efficiency:
+
+- **Do NOT use TodoWrite.** No one sees the todo list. Track your progress internally.
+- **Do NOT use Agent subagents for exploration.** Use Glob and Grep directly.
+- **Minimize tool calls.** Batch independent reads. Don't re-read files you already read.
+- **Keep commit messages and PR descriptions concise.** One sentence summaries, not essays.
+- **Prefer Edit over Write for files that already exist.** Only use Write to create a new file or when replacing the majority of a file. Never re-emit an unchanged file body.
+- **Never Read a file you just wrote or edited** — you already know its contents and line layout.
+- **Never Read/cat raw \`tasks/*.output\` background-task files** — they bypass the Bash output cap. Use the TaskOutput tool if you must inspect a backgrounded command's output.
+
+---
+
+## PR Format Standards
+
+- **Title**: \`feat: <task-name>\` — no scope prefix like \`(backend)\`, no milestone tags.
+- **How to create the PR**: write the body to \`.claude/pr-body.md\` in your worktree
+  (gitignored + lint-excluded; avoids shell-escaping issues with multi-line markdown),
+  then run \`gh pr create --draft --base "dev" --body-file .claude/pr-body.md\`.
+  Use the Write tool to create the file — do NOT use shell redirects (\`cat >\`, \`echo >\`).
+  Do NOT use the MCP \`mcp__github__create_pull_request\` tool —
+  its token authentication scope does not always match the repo, and \`gh\` is already authenticated
+  for the orchestrator's session.
+- **Required body sections** (no omissions, no reordering):
+
+\`\`\`
+## Summary
+<1-3 sentences: what changed and why>
+
+## Jira Issue
+<link to the task page>
+
+## Automated Tests
+<list tests added/modified, or "No test changes">
+
+## Files Changed
+<bulleted list of files with brief description of each change>
+\`\`\`
+
+---
+
+## Branch Rules
+
+- Branch name: \`feature/<task-name>\` — created from the worktree's current HEAD
+- Never commit directly to \`dev\` or \`main\`
+- Never merge your own PR
+- One task per session — no scope creep
+
+---
+
+## Commit Attribution
+
+Every commit **must** include the following trailer (replace \`<model>\` and \`<session-id>\` with your actual model ID and session ID):
+
+\`\`\`
+AI-Authored-By: <model> (session: <session-id>)
+\`\`\`
+
+Example: \`AI-Authored-By: claude-sonnet-4-6 (session: f98ff4ec)\`
+
+The backend verifies this trailer server-side. In corporate mode, missing trailers pause the task.
+
+---
+
+## Pre-PR Gate
+
+Run in order — all must pass before opening the PR:
+
+1. Stash CLAUDE.md before rebasing: \`git stash push CLAUDE.md\`
+2. Rebase onto \`dev\` and resolve any conflicts.
+3. Restore CLAUDE.md: \`git stash pop\`
+4. No local verify step configured — CI is the gate.
+5. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.
+
+---
+
+## Forbidden Actions
+
+- Never push directly to \`main\`
+- Never force push (\`--force\`)
+- Never delete branches that live outside this worktree
+- Never run \`git reset --hard\` on the main repository directory
+- Never skip pre-commit hooks (\`--no-verify\`)
+- Never stage or commit \`CLAUDE.md\` — it contains orchestrator-injected content that must not appear in PRs. Use \`git add <specific files>\` instead of \`git add .\`.
+
+---
+
+## Git Isolation
+
+> **Your worktree directory is \`/worktrees/abc123\`.**
+> This is your \`cwd\`. All commands run here. Never navigate to or operate on any parent directory.
+
+- All git commands must run inside the worktree directory (your \`cwd\`)
+- Never use \`git -C <path>\` pointing outside this worktree
+- Never use \`--work-tree\` or \`--git-dir\` flags pointing outside this worktree
+- Never run \`git checkout\` or \`git switch\` targeting a branch in the main repo directory
+- The backend records the main repo branch before each session and will warn if it drifts
+
+---
+
+## Filesystem Isolation (Personal Mode)
+
+> ⚠️ **Personal mode has no structural sandbox** — there is no docker, chroot, or
+> namespace to prevent writes outside the worktree. All isolation is prompt-level.
+> Violating these rules can corrupt the developer's live environment.
+
+All file writes **must stay inside the worktree directory** (\`/worktrees/abc123\`).
+
+- **Never write to the project root or any path above the worktree.**
+  Scripts, tools, and generated outputs must target paths under the worktree, not the parent repo.
+- **Dev state (SQLite databases, log files, generated artifacts) must use worktree-relative paths.**
+  Do not reference absolute paths to project-root databases or output files.
+  Use paths like \`<worktree>/.dev-state/<file>\` or resolve paths relative to \`cwd\`.
+- **Before running any script that writes files or opens a database, verify the target path is inside the worktree.**
+  If a script hardcodes an absolute project-root path, patch it to accept an env var or relative path before executing.
+- **Need a scratch/temp file (PR body, notes, intermediate output)? Write it under \`.claude/\` in your worktree** — it's gitignored and excluded from lint/format.
+  NEVER write to \`/tmp/\`, \`$HOME\`, \`$(mktemp)\`, or anywhere outside your worktree:
+  those paths are shared across sessions (collision risk) and violate isolation.
+
+---
+
+## Bash Rules (Permission System)
+
+Your Bash commands are authorized by prefix matching on the **first token**.
+Violating these rules causes **silent denial** — the command fails with no error message.
+
+**Rule 1 — One command per Bash call.**
+Never chain with \`&&\`, \`;\`, or \`||\`. Split into separate Bash calls.
+
+**Rule 2 — Never prefix with \`cd path &&\`.**
+You are already in the worktree directory. Just run the command directly.
+
+**Rule 3 — No heredoc subshells in git commit.**
+\`git commit -m "$(cat <<'EOF'...)"\` is denied. Use a simple \`-m "message"\` instead.
+For multiline commit messages, write the message to \`.claude/.commit-msg\` with the Write tool, then run \`git commit -F .claude/.commit-msg\`. **Use that exact path** — the \`.claude/\` directory is gitignored, so the scratch file is never accidentally staged. Do not invent other filenames (\`commit-msg.txt\`, \`.git-commit-msg.txt\`, etc.) — they will leak into the PR diff.
+
+**Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
+Use the Write tool for any file creation. Never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
+
+**Rule 5 — Use \`npx\` instead of bare tool names.**
+\`tsc\` → \`npx tsc\`. Bare commands may not be on PATH."
+`;
+
+exports[`buildOrchestratorClaudeMd — taskBackend wording > local backend > matches snapshot 1`] = `
+"# Orchestrator Rules (DO NOT OVERRIDE)
+
+> ⚠️ These rules are injected by the dashboard orchestrator and take priority over any
+> project-level instructions below. Do not remove, reorder, or override them.
+
+---
+
+## Task Assignment
+
+- **Task**: test-task
+- **Task**: https://notion.so/test-task
+- **Project context**: https://notion.so/project
+
+---
+
+## Lifecycle
+
+Follow these steps in order — every session:
+
+> ⚠️ **YAML task source**: Task context comes from \`tasks.yaml\` in the project root.
+> Skip the remote fetch step and instead read \`tasks.yaml\` for task context.
+
+1. Read \`tasks.yaml\` in the project root for task context (skip remote fetch).
+2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.
+3. Implement the task per the acceptance criteria.
+4. Pass the pre-PR gate (see Pre-PR Gate section below).
+5. Open a draft PR targeting \`dev\` using the required body template.
+6. **Stop and wait.** The dashboard sends review feedback as follow-up messages.
+   Address findings by pushing additional commits, then wait again.
+
+---
+
+## Status Ownership
+
+**Do NOT update Task status.**
+**Do NOT call any task source to change task status.**
+The orchestrator backend handles all status transitions (In Progress → In Review → Done).
+
+---
+
+## Efficiency Rules
+
+This session runs in \`--print\` mode with no human watching the output.
+Optimize for speed and token efficiency:
+
+- **Do NOT use TodoWrite.** No one sees the todo list. Track your progress internally.
+- **Do NOT use Agent subagents for exploration.** Use Glob and Grep directly.
+- **Minimize tool calls.** Batch independent reads. Don't re-read files you already read.
+- **Keep commit messages and PR descriptions concise.** One sentence summaries, not essays.
+- **Prefer Edit over Write for files that already exist.** Only use Write to create a new file or when replacing the majority of a file. Never re-emit an unchanged file body.
+- **Never Read a file you just wrote or edited** — you already know its contents and line layout.
+- **Never Read/cat raw \`tasks/*.output\` background-task files** — they bypass the Bash output cap. Use the TaskOutput tool if you must inspect a backgrounded command's output.
+
+---
+
+## PR Format Standards
+
+- **Title**: \`feat: <task-name>\` — no scope prefix like \`(backend)\`, no milestone tags.
+- **How to create the PR**: write the body to \`.claude/pr-body.md\` in your worktree
+  (gitignored + lint-excluded; avoids shell-escaping issues with multi-line markdown),
+  then run \`gh pr create --draft --base "dev" --body-file .claude/pr-body.md\`.
+  Use the Write tool to create the file — do NOT use shell redirects (\`cat >\`, \`echo >\`).
+  Do NOT use the MCP \`mcp__github__create_pull_request\` tool —
+  its token authentication scope does not always match the repo, and \`gh\` is already authenticated
+  for the orchestrator's session.
+- **Required body sections** (no omissions, no reordering):
+
+\`\`\`
+## Summary
+<1-3 sentences: what changed and why>
+
+## Task
+<link to the task page>
+
+## Automated Tests
+<list tests added/modified, or "No test changes">
+
+## Files Changed
+<bulleted list of files with brief description of each change>
+\`\`\`
+
+---
+
+## Branch Rules
+
+- Branch name: \`feature/<task-name>\` — created from the worktree's current HEAD
+- Never commit directly to \`dev\` or \`main\`
+- Never merge your own PR
+- One task per session — no scope creep
+
+---
+
+## Commit Attribution
+
+Every commit **must** include the following trailer (replace \`<model>\` and \`<session-id>\` with your actual model ID and session ID):
+
+\`\`\`
+AI-Authored-By: <model> (session: <session-id>)
+\`\`\`
+
+Example: \`AI-Authored-By: claude-sonnet-4-6 (session: f98ff4ec)\`
+
+The backend verifies this trailer server-side. In corporate mode, missing trailers pause the task.
+
+---
+
+## Pre-PR Gate
+
+Run in order — all must pass before opening the PR:
+
+1. Stash CLAUDE.md before rebasing: \`git stash push CLAUDE.md\`
+2. Rebase onto \`dev\` and resolve any conflicts.
+3. Restore CLAUDE.md: \`git stash pop\`
+4. No local verify step configured — CI is the gate.
+5. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.
+
+---
+
+## Forbidden Actions
+
+- Never push directly to \`main\`
+- Never force push (\`--force\`)
+- Never delete branches that live outside this worktree
+- Never run \`git reset --hard\` on the main repository directory
+- Never skip pre-commit hooks (\`--no-verify\`)
+- Never stage or commit \`CLAUDE.md\` — it contains orchestrator-injected content that must not appear in PRs. Use \`git add <specific files>\` instead of \`git add .\`.
+
+---
+
+## Git Isolation
+
+> **Your worktree directory is \`/worktrees/abc123\`.**
+> This is your \`cwd\`. All commands run here. Never navigate to or operate on any parent directory.
+
+- All git commands must run inside the worktree directory (your \`cwd\`)
+- Never use \`git -C <path>\` pointing outside this worktree
+- Never use \`--work-tree\` or \`--git-dir\` flags pointing outside this worktree
+- Never run \`git checkout\` or \`git switch\` targeting a branch in the main repo directory
+- The backend records the main repo branch before each session and will warn if it drifts
+
+---
+
+## Filesystem Isolation (Personal Mode)
+
+> ⚠️ **Personal mode has no structural sandbox** — there is no docker, chroot, or
+> namespace to prevent writes outside the worktree. All isolation is prompt-level.
+> Violating these rules can corrupt the developer's live environment.
+
+All file writes **must stay inside the worktree directory** (\`/worktrees/abc123\`).
+
+- **Never write to the project root or any path above the worktree.**
+  Scripts, tools, and generated outputs must target paths under the worktree, not the parent repo.
+- **Dev state (SQLite databases, log files, generated artifacts) must use worktree-relative paths.**
+  Do not reference absolute paths to project-root databases or output files.
+  Use paths like \`<worktree>/.dev-state/<file>\` or resolve paths relative to \`cwd\`.
+- **Before running any script that writes files or opens a database, verify the target path is inside the worktree.**
+  If a script hardcodes an absolute project-root path, patch it to accept an env var or relative path before executing.
+- **Need a scratch/temp file (PR body, notes, intermediate output)? Write it under \`.claude/\` in your worktree** — it's gitignored and excluded from lint/format.
+  NEVER write to \`/tmp/\`, \`$HOME\`, \`$(mktemp)\`, or anywhere outside your worktree:
+  those paths are shared across sessions (collision risk) and violate isolation.
+
+---
+
+## Bash Rules (Permission System)
+
+Your Bash commands are authorized by prefix matching on the **first token**.
+Violating these rules causes **silent denial** — the command fails with no error message.
+
+**Rule 1 — One command per Bash call.**
+Never chain with \`&&\`, \`;\`, or \`||\`. Split into separate Bash calls.
+
+**Rule 2 — Never prefix with \`cd path &&\`.**
+You are already in the worktree directory. Just run the command directly.
+
+**Rule 3 — No heredoc subshells in git commit.**
+\`git commit -m "$(cat <<'EOF'...)"\` is denied. Use a simple \`-m "message"\` instead.
+For multiline commit messages, write the message to \`.claude/.commit-msg\` with the Write tool, then run \`git commit -F .claude/.commit-msg\`. **Use that exact path** — the \`.claude/\` directory is gitignored, so the scratch file is never accidentally staged. Do not invent other filenames (\`commit-msg.txt\`, \`.git-commit-msg.txt\`, etc.) — they will leak into the PR diff.
+
+**Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
+Use the Write tool for any file creation. Never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
+
+**Rule 5 — Use \`npx\` instead of bare tool names.**
+\`tsc\` → \`npx tsc\`. Bare commands may not be on PATH."
+`;
+
+exports[`buildOrchestratorClaudeMd — taskBackend wording > notion backend (default) > matches snapshot 1`] = `
+"# Orchestrator Rules (DO NOT OVERRIDE)
+
+> ⚠️ These rules are injected by the dashboard orchestrator and take priority over any
+> project-level instructions below. Do not remove, reorder, or override them.
+
+---
+
+## Task Assignment
+
+- **Task**: test-task
+- **Notion task**: https://notion.so/test-task
+- **Project context**: https://notion.so/project
+
+---
+
+## Lifecycle
+
+Follow these steps in order — every session:
+
+1. Fetch the Notion task page and project context page.
+2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.
+3. Implement the task per the acceptance criteria.
+4. Pass the pre-PR gate (see Pre-PR Gate section below).
+5. Open a draft PR targeting \`dev\` using the required body template.
+6. **Stop and wait.** The dashboard sends review feedback as follow-up messages.
+   Address findings by pushing additional commits, then wait again.
+
+---
+
+## Status Ownership
+
+**Do NOT update Notion task status.**
+**Do NOT call any Notion API to change task status.**
+The orchestrator backend handles all status transitions (In Progress → In Review → Done).
+
+---
+
+## Efficiency Rules
+
+This session runs in \`--print\` mode with no human watching the output.
+Optimize for speed and token efficiency:
+
+- **Do NOT use TodoWrite.** No one sees the todo list. Track your progress internally.
+- **Do NOT use Agent subagents for exploration.** Use Glob and Grep directly.
+- **Minimize tool calls.** Batch independent reads. Don't re-read files you already read.
+- **Keep commit messages and PR descriptions concise.** One sentence summaries, not essays.
+- **Prefer Edit over Write for files that already exist.** Only use Write to create a new file or when replacing the majority of a file. Never re-emit an unchanged file body.
+- **Never Read a file you just wrote or edited** — you already know its contents and line layout.
+- **Never Read/cat raw \`tasks/*.output\` background-task files** — they bypass the Bash output cap. Use the TaskOutput tool if you must inspect a backgrounded command's output.
+
+---
+
+## PR Format Standards
+
+- **Title**: \`feat: <task-name>\` — no scope prefix like \`(backend)\`, no milestone tags.
+- **How to create the PR**: write the body to \`.claude/pr-body.md\` in your worktree
+  (gitignored + lint-excluded; avoids shell-escaping issues with multi-line markdown),
+  then run \`gh pr create --draft --base "dev" --body-file .claude/pr-body.md\`.
+  Use the Write tool to create the file — do NOT use shell redirects (\`cat >\`, \`echo >\`).
+  Do NOT use the MCP \`mcp__github__create_pull_request\` tool —
+  its token authentication scope does not always match the repo, and \`gh\` is already authenticated
+  for the orchestrator's session.
+- **Required body sections** (no omissions, no reordering):
+
+\`\`\`
+## Summary
+<1-3 sentences: what changed and why>
+
+## Notion Task
+<link to the task page>
+
+## Automated Tests
+<list tests added/modified, or "No test changes">
+
+## Files Changed
+<bulleted list of files with brief description of each change>
+\`\`\`
+
+---
+
+## Branch Rules
+
+- Branch name: \`feature/<task-name>\` — created from the worktree's current HEAD
+- Never commit directly to \`dev\` or \`main\`
+- Never merge your own PR
+- One task per session — no scope creep
+
+---
+
+## Commit Attribution
+
+Every commit **must** include the following trailer (replace \`<model>\` and \`<session-id>\` with your actual model ID and session ID):
+
+\`\`\`
+AI-Authored-By: <model> (session: <session-id>)
+\`\`\`
+
+Example: \`AI-Authored-By: claude-sonnet-4-6 (session: f98ff4ec)\`
+
+The backend verifies this trailer server-side. In corporate mode, missing trailers pause the task.
+
+---
+
+## Pre-PR Gate
+
+Run in order — all must pass before opening the PR:
+
+1. Stash CLAUDE.md before rebasing: \`git stash push CLAUDE.md\`
+2. Rebase onto \`dev\` and resolve any conflicts.
+3. Restore CLAUDE.md: \`git stash pop\`
+4. No local verify step configured — CI is the gate.
+5. Stage only your implementation files for commit — never stage \`CLAUDE.md\`.
+
+---
+
+## Forbidden Actions
+
+- Never push directly to \`main\`
+- Never force push (\`--force\`)
+- Never delete branches that live outside this worktree
+- Never run \`git reset --hard\` on the main repository directory
+- Never skip pre-commit hooks (\`--no-verify\`)
+- Never stage or commit \`CLAUDE.md\` — it contains orchestrator-injected content that must not appear in PRs. Use \`git add <specific files>\` instead of \`git add .\`.
+
+---
+
+## Git Isolation
+
+> **Your worktree directory is \`/worktrees/abc123\`.**
+> This is your \`cwd\`. All commands run here. Never navigate to or operate on any parent directory.
+
+- All git commands must run inside the worktree directory (your \`cwd\`)
+- Never use \`git -C <path>\` pointing outside this worktree
+- Never use \`--work-tree\` or \`--git-dir\` flags pointing outside this worktree
+- Never run \`git checkout\` or \`git switch\` targeting a branch in the main repo directory
+- The backend records the main repo branch before each session and will warn if it drifts
+
+---
+
+## Filesystem Isolation (Personal Mode)
+
+> ⚠️ **Personal mode has no structural sandbox** — there is no docker, chroot, or
+> namespace to prevent writes outside the worktree. All isolation is prompt-level.
+> Violating these rules can corrupt the developer's live environment.
+
+All file writes **must stay inside the worktree directory** (\`/worktrees/abc123\`).
+
+- **Never write to the project root or any path above the worktree.**
+  Scripts, tools, and generated outputs must target paths under the worktree, not the parent repo.
+- **Dev state (SQLite databases, log files, generated artifacts) must use worktree-relative paths.**
+  Do not reference absolute paths to project-root databases or output files.
+  Use paths like \`<worktree>/.dev-state/<file>\` or resolve paths relative to \`cwd\`.
+- **Before running any script that writes files or opens a database, verify the target path is inside the worktree.**
+  If a script hardcodes an absolute project-root path, patch it to accept an env var or relative path before executing.
+- **Need a scratch/temp file (PR body, notes, intermediate output)? Write it under \`.claude/\` in your worktree** — it's gitignored and excluded from lint/format.
+  NEVER write to \`/tmp/\`, \`$HOME\`, \`$(mktemp)\`, or anywhere outside your worktree:
+  those paths are shared across sessions (collision risk) and violate isolation.
+
+---
+
+## Bash Rules (Permission System)
+
+Your Bash commands are authorized by prefix matching on the **first token**.
+Violating these rules causes **silent denial** — the command fails with no error message.
+
+**Rule 1 — One command per Bash call.**
+Never chain with \`&&\`, \`;\`, or \`||\`. Split into separate Bash calls.
+
+**Rule 2 — Never prefix with \`cd path &&\`.**
+You are already in the worktree directory. Just run the command directly.
+
+**Rule 3 — No heredoc subshells in git commit.**
+\`git commit -m "$(cat <<'EOF'...)"\` is denied. Use a simple \`-m "message"\` instead.
+For multiline commit messages, write the message to \`.claude/.commit-msg\` with the Write tool, then run \`git commit -F .claude/.commit-msg\`. **Use that exact path** — the \`.claude/\` directory is gitignored, so the scratch file is never accidentally staged. Do not invent other filenames (\`commit-msg.txt\`, \`.git-commit-msg.txt\`, etc.) — they will leak into the PR diff.
+
+**Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
+Use the Write tool for any file creation. Never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
+
+**Rule 5 — Use \`npx\` instead of bare tool names.**
+\`tsc\` → \`npx tsc\`. Bare commands may not be on PATH."
+`;

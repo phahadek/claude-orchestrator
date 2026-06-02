@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { ProjectsSettingsPanel } from './Settings/ProjectsSettingsPanel';
 import { SettingsDevices } from '../pages/SettingsDevices';
 import styles from './Settings.module.css';
@@ -23,6 +23,9 @@ interface SettingsValues {
   ci_poll_interval_seconds: string;
   ci_poll_max_minutes: string;
   max_review_iterations: string;
+  auto_archive_enabled: string;
+  auto_archive_grace_minutes: string;
+  auto_archive_sweep_interval_minutes: string;
 }
 
 const MIN_POLL_INTERVAL_MS = 5000;
@@ -72,6 +75,10 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
   const [settings, setSettings] = useState<SettingsValues | null>(null);
   const [loading, setLoading] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateCheckResult, setUpdateCheckResult] = useState<string | null>(
+    null,
+  );
   const [fieldErrors, setFieldErrors] = useState<
     Partial<Record<keyof SettingsValues, string>>
   >({});
@@ -168,6 +175,27 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
       </div>
     );
   }
+
+  const handleCheckUpdate = useCallback(async () => {
+    setCheckingUpdate(true);
+    setUpdateCheckResult(null);
+    try {
+      const res = await fetch('/api/update/check', { method: 'POST' });
+      const body = (await res.json()) as {
+        updateAvailable?: boolean;
+        info?: { version: string };
+      };
+      if (body.updateAvailable && body.info) {
+        setUpdateCheckResult(`Update available: ${body.info.version}`);
+      } else {
+        setUpdateCheckResult('You are on the latest version.');
+      }
+    } catch {
+      setUpdateCheckResult('Failed to check for updates.');
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }, []);
 
   return (
     <div className={styles.settings}>
@@ -374,6 +402,61 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                   1,
                   240,
                   1,
+                )}
+
+                <h3 className={styles.sectionTitle}>Auto-archive</h3>
+                <p className={styles.hint}>
+                  Concluded sessions (done/error/killed) are automatically
+                  archived after the grace period expires.
+                </p>
+                <div className={styles.field}>
+                  <label className={styles.label}>Enable auto-archive</label>
+                  <button
+                    type="button"
+                    className={`${styles.toggle}${settings?.auto_archive_enabled === 'true' ? ` ${styles.toggleOn}` : ''}`}
+                    onClick={() =>
+                      handleChange(
+                        'auto_archive_enabled',
+                        settings?.auto_archive_enabled === 'true'
+                          ? 'false'
+                          : 'true',
+                      )
+                    }
+                  >
+                    {settings?.auto_archive_enabled === 'true' ? 'On' : 'Off'}
+                  </button>
+                </div>
+                {numInput(
+                  'auto_archive_grace_minutes',
+                  'Grace period (minutes)',
+                  1,
+                  1440,
+                  1,
+                  'How long after a session concludes before it is archived',
+                )}
+                {numInput(
+                  'auto_archive_sweep_interval_minutes',
+                  'Sweep interval (minutes)',
+                  1,
+                  60,
+                  1,
+                  'How often the archiver checks for eligible sessions',
+                )}
+
+                <h3 className={styles.sectionTitle}>About</h3>
+                <div className={styles.field}>
+                  <label className={styles.label}>Check for updates</label>
+                  <button
+                    type="button"
+                    className={styles.toggle}
+                    onClick={() => void handleCheckUpdate()}
+                    disabled={checkingUpdate}
+                  >
+                    {checkingUpdate ? 'Checking…' : 'Check now'}
+                  </button>
+                </div>
+                {updateCheckResult && (
+                  <p className={styles.hint}>{updateCheckResult}</p>
                 )}
 
                 <h3 className={styles.sectionTitle}>Notifications</h3>

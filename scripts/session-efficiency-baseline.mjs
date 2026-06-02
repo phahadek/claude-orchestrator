@@ -19,8 +19,8 @@
  *   - tokens_total           = total_input_tokens + total_output_tokens
  *   - tool_call_proxy        = COUNT(session_events.event_type='system')
  *   - rate_limit_events      = COUNT(session_events.event_type='rate_limit')
- *   - resume_count           = COUNT(audit_log session_launched events with mode='resume')
- *                              fallback: count of distinct 'init' subtypes in payloads
+ *   - resume_count           = COUNT(audit_log session_launched where actor_id=session_id) - 1
+ *                              null ("data gap") if no session_launched events recorded
  *   - review_iteration       = pull_requests.review_iteration for the session's PR
  *   - status                 = done|error|killed|running
  *
@@ -96,7 +96,8 @@ const rows = db
         SELECT MIN(a.ts)
         FROM audit_log a
         WHERE a.event_type = 'pr_opened'
-          AND a.task_id = s.task_id
+          AND a.actor_id = s.session_id
+          AND a.actor_id IS NOT NULL
           AND a.ts >= s.started_at
       ) AS pr_opened_ts,
       (
@@ -113,13 +114,21 @@ const rows = db
         SELECT COUNT(*)
         FROM audit_log a
         WHERE a.event_type = 'session_launched'
-          AND a.payload LIKE '%' || s.session_id || '%'
+          AND a.actor_id = s.session_id
       ) AS launched_count,
       (
         SELECT MAX(p.review_iteration)
         FROM pull_requests p
         WHERE p.session_id = s.session_id OR p.task_id = s.task_id
-      ) AS review_iteration
+      ) AS review_iteration,
+      (
+        SELECT COALESCE(SUM(
+          COALESCE(pi.resumed_at, s.ended_at) - pi.paused_at
+        ), 0)
+        FROM session_pause_intervals pi
+        WHERE pi.session_id = s.session_id
+          AND (pi.resumed_at IS NOT NULL OR s.ended_at IS NOT NULL)
+      ) AS total_paused_ms
     FROM sessions s
     WHERE s.session_type != 'review' OR s.session_type IS NULL
     ORDER BY s.started_at ASC
@@ -133,11 +142,18 @@ console.log(`[baseline] loaded ${rows.length} coding sessions`);
 const records = rows.map((r) => {
   const wall_clock_ms =
     r.ended_at && r.started_at ? r.ended_at - r.started_at : null;
+  const total_paused_ms = r.total_paused_ms ?? 0;
+  const active_wall_clock_ms =
+    wall_clock_ms !== null
+      ? Math.max(0, wall_clock_ms - total_paused_ms)
+      : null;
   const time_to_pr_ms = r.pr_opened_ts ? r.pr_opened_ts - r.started_at : null;
   const tokens_total =
     (r.total_input_tokens ?? 0) + (r.total_output_tokens ?? 0);
-  // resume_count is "launches minus 1" — first launch is the original spawn.
-  const resume_count = Math.max(0, (r.launched_count ?? 1) - 1);
+  // null = no session_launched events found for this session (data gap for old sessions);
+  // otherwise: launches minus 1 (the first launch is the original spawn, not a resume).
+  const resume_count =
+    r.launched_count > 0 ? Math.max(0, r.launched_count - 1) : null;
   return {
     session_id: r.session_id,
     era: eraOf(r.started_at),
@@ -146,6 +162,8 @@ const records = rows.map((r) => {
     model: r.model,
     started_at_iso: new Date(r.started_at).toISOString(),
     wall_clock_ms,
+    active_wall_clock_ms,
+    total_paused_ms,
     time_to_pr_ms,
     tokens_total,
     tool_call_proxy: r.tool_call_proxy,
@@ -157,9 +175,50 @@ const records = rows.map((r) => {
   };
 });
 
+// ── Per-pause-reason breakdown ─────────────────────────────────────────────
+// Keyed by pause_reason, then era → { count, total_paused_ms }.
+const pauseReasonBreakdown = {};
+for (const era of [...ERA_ORDER, 'ALL']) {
+  pauseReasonBreakdown[era] = {};
+}
+if (
+  db
+    .prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='session_pause_intervals'`,
+    )
+    .get()
+) {
+  const pauseRows = db
+    .prepare(
+      `SELECT pi.session_id, pi.pause_reason,
+              COALESCE(pi.resumed_at, s.ended_at) - pi.paused_at AS duration_ms,
+              s.started_at
+       FROM session_pause_intervals pi
+       JOIN sessions s ON s.session_id = pi.session_id
+       WHERE (pi.resumed_at IS NOT NULL OR s.ended_at IS NOT NULL)
+         AND (s.session_type != 'review' OR s.session_type IS NULL)`,
+    )
+    .all();
+  for (const p of pauseRows) {
+    const era = eraOf(p.started_at);
+    for (const bucket of [era, 'ALL']) {
+      if (!pauseReasonBreakdown[bucket][p.pause_reason]) {
+        pauseReasonBreakdown[bucket][p.pause_reason] = {
+          count: 0,
+          total_paused_ms: 0,
+        };
+      }
+      pauseReasonBreakdown[bucket][p.pause_reason].count += 1;
+      pauseReasonBreakdown[bucket][p.pause_reason].total_paused_ms +=
+        p.duration_ms ?? 0;
+    }
+  }
+}
+
 // ── Aggregates per (era, metric) ───────────────────────────────────────────
 const METRICS = [
   'wall_clock_ms',
+  'active_wall_clock_ms',
   'time_to_pr_ms',
   'tokens_total',
   'tool_call_proxy',
@@ -230,7 +289,10 @@ const fmtMs = (ms) => {
 };
 const fmtInt = (n) =>
   n === null ? 'n/a' : Math.round(n).toLocaleString('en-US');
-const isMsMetric = (m) => m === 'wall_clock_ms' || m === 'time_to_pr_ms';
+const isMsMetric = (m) =>
+  m === 'wall_clock_ms' ||
+  m === 'active_wall_clock_ms' ||
+  m === 'time_to_pr_ms';
 const fmtMetric = (m, v) => (isMsMetric(m) ? fmtMs(v) : fmtInt(v));
 
 // ── Write outputs ──────────────────────────────────────────────────────────
@@ -242,6 +304,8 @@ const perSessionCsv = [
     'model',
     'started_at_iso',
     'wall_clock_ms',
+    'active_wall_clock_ms',
+    'total_paused_ms',
     'time_to_pr_ms',
     'tokens_total',
     'tool_call_proxy',
@@ -259,6 +323,8 @@ const perSessionCsv = [
       r.model ?? '',
       r.started_at_iso,
       r.wall_clock_ms ?? '',
+      r.active_wall_clock_ms ?? '',
+      r.total_paused_ms,
       r.time_to_pr_ms ?? '',
       r.tokens_total,
       r.tool_call_proxy,
@@ -274,7 +340,7 @@ const perSessionCsv = [
 writeFileSync(join(outDir, 'per-session.csv'), perSessionCsv);
 writeFileSync(
   join(outDir, 'aggregates.json'),
-  JSON.stringify({ aggregates, topByMetric }, null, 2),
+  JSON.stringify({ aggregates, topByMetric, pauseReasonBreakdown }, null, 2),
 );
 
 // ── Human-readable summary report ──────────────────────────────────────────
@@ -305,9 +371,42 @@ for (const metric of METRICS) {
   lines.push('| --- | --- | --- | --- | --- |');
   for (const era of [...ERA_ORDER, 'ALL']) {
     const a = aggregates[era][metric];
+    if (metric === 'resume_count' && a.n === 0) {
+      lines.push(
+        `| ${era} | (data gap) | (data gap) | (data gap) | (data gap) |`,
+      );
+    } else {
+      lines.push(
+        `| ${era} | ${a.n} | ${fmtMetric(metric, a.p50)} | ${fmtMetric(metric, a.p95)} | ${fmtMetric(metric, a.max)} |`,
+      );
+    }
+  }
+  lines.push('');
+}
+
+lines.push(`## Pause-reason breakdown (ALL eras)\n`);
+const allPauseBreakdown = pauseReasonBreakdown['ALL'] ?? {};
+if (Object.keys(allPauseBreakdown).length === 0) {
+  lines.push('No pause intervals recorded yet.\n');
+} else {
+  lines.push('| Reason | Events | Total paused |');
+  lines.push('| --- | --- | --- |');
+  for (const [reason, data] of Object.entries(allPauseBreakdown)) {
     lines.push(
-      `| ${era} | ${a.n} | ${fmtMetric(metric, a.p50)} | ${fmtMetric(metric, a.p95)} | ${fmtMetric(metric, a.max)} |`,
+      `| ${reason} | ${data.count} | ${fmtMs(data.total_paused_ms)} |`,
     );
+  }
+  lines.push('');
+  lines.push('### Per-era pause breakdown\n');
+  for (const era of ERA_ORDER) {
+    const breakdown = pauseReasonBreakdown[era] ?? {};
+    if (Object.keys(breakdown).length === 0) continue;
+    lines.push(`**${era}**`);
+    for (const [reason, data] of Object.entries(breakdown)) {
+      lines.push(
+        `  - ${reason}: ${data.count} events, ${fmtMs(data.total_paused_ms)} total`,
+      );
+    }
   }
   lines.push('');
 }

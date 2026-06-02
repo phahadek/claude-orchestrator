@@ -24,6 +24,7 @@ function makePR(overrides: Partial<PRWorkItem> = {}): PRWorkItem {
     updatedAt: '2026-01-01T00:00:00Z',
     mergeState: null,
     autoMergeEnabled: false,
+    pauseReason: null,
     ...overrides,
   };
 }
@@ -95,6 +96,44 @@ describe('PRPanel', () => {
       expect(screen.getByText(/could not reach server/i)).toBeDefined();
     });
   });
+
+  it('does not render Clear PRs button', async () => {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [],
+    });
+
+    render(<PRPanel activeProjectId="proj-1" />);
+
+    await waitFor(() => {
+      expect(screen.queryByText(/clear merged\/closed/i)).toBeNull();
+    });
+  });
+
+  it('renders merged PR with mergeState=ci_running as compact PRHistoryRow, not WorkItemCard', async () => {
+    const pr = makePR({
+      prNumber: 468,
+      title: 'feat: stabilization',
+      state: 'merged',
+      mergeState: 'ci_running',
+      pauseReason: null,
+    });
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [pr],
+    });
+
+    render(<PRPanel activeProjectId="proj-1" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('feat: stabilization')).toBeDefined();
+      // Compact row does not show Merge or Run Review buttons
+      expect(screen.queryByRole('button', { name: /merge/i })).toBeNull();
+      expect(screen.queryByRole('button', { name: /run review/i })).toBeNull();
+    });
+  });
 });
 
 describe('PRPanel — inflight state cleared by WS events', () => {
@@ -112,13 +151,6 @@ describe('PRPanel — inflight state cleared by WS events', () => {
             ok: true,
             status: 200,
             json: async () => prs,
-          });
-        }
-        if (typeof url === 'string' && url.includes('clear/count')) {
-          return Promise.resolve({
-            ok: true,
-            status: 200,
-            json: async () => ({ count: 0 }),
           });
         }
         if (actionMatcher(url as string, opts)) {
@@ -202,12 +234,6 @@ describe('PRPanel — inflight state cleared by WS events', () => {
             status: 200,
             json: async () => [pr],
           });
-        if (url.includes('clear/count'))
-          return Promise.resolve({
-            ok: true,
-            status: 200,
-            json: async () => ({ count: 0 }),
-          });
         if (url.endsWith('/mergeability'))
           return Promise.resolve({
             ok: true,
@@ -254,12 +280,6 @@ describe('PRPanel — inflight state cleared by WS events', () => {
             status: 200,
             json: async () => [pr],
           });
-        if (url.includes('clear/count'))
-          return Promise.resolve({
-            ok: true,
-            status: 200,
-            json: async () => ({ count: 0 }),
-          });
         if (opts?.method === 'DELETE') return removePending;
         return Promise.resolve({
           ok: true,
@@ -298,12 +318,6 @@ describe('PRPanel — inflight state cleared by WS events', () => {
             ok: true,
             status: 200,
             json: async () => [pr],
-          });
-        if (url.includes('clear/count'))
-          return Promise.resolve({
-            ok: true,
-            status: 200,
-            json: async () => ({ count: 0 }),
           });
         if (url.includes('/approve') && opts?.method === 'POST')
           return approvePending;
@@ -353,12 +367,6 @@ describe('PRPanel — inflight state cleared by WS events', () => {
             ok: true,
             status: 200,
             json: async () => [pr],
-          });
-        if (url.includes('clear/count'))
-          return Promise.resolve({
-            ok: true,
-            status: 200,
-            json: async () => ({ count: 0 }),
           });
         if (url.includes('/fix-conflicts') && opts?.method === 'POST')
           return fixPending;
@@ -411,12 +419,6 @@ describe('PRPanel — inflight state cleared by WS events', () => {
           status: 200,
           json: async () => [pr],
         });
-      if (url.includes('clear/count'))
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          json: async () => ({ count: 0 }),
-        });
       if (url.endsWith('/mergeability')) return mergeabilityPending;
       return Promise.resolve({
         ok: true,
@@ -459,12 +461,6 @@ describe('PRPanel — header layout', () => {
     (fetch as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
       if (url.includes('/api/prs?'))
         return Promise.resolve({ ok: true, status: 200, json: async () => [] });
-      if (url.includes('clear/count'))
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          json: async () => ({ count: 0 }),
-        });
       return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
     });
   }
@@ -570,5 +566,132 @@ describe('PRPanel — per-card ErrorBoundary isolation', () => {
     expect(screen.queryByTestId('pr-2')).toBeNull();
     expect(screen.getByText(/pr card failed to render/i)).toBeDefined();
     expect(screen.getByRole('button', { name: /retry/i })).toBeDefined();
+  });
+});
+
+describe('PRPanel — differential routing (WorkItemCard vs PRHistoryRow)', () => {
+  type MockFetch = ReturnType<typeof vi.fn>;
+
+  function setupFetchWithPRs(prs: PRWorkItem[]) {
+    (fetch as MockFetch).mockImplementation((url: string) => {
+      if (url.includes('/api/prs?'))
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => prs,
+        });
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({}),
+      });
+    });
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('routes a merged PR with no active flags to PRHistoryRow (compact)', async () => {
+    const mergedPR = makePR({
+      prNumber: 10,
+      title: 'Merged PR',
+      state: 'merged',
+      pauseReason: null,
+      mergeState: null,
+    });
+    setupFetchWithPRs([mergedPR]);
+    render(<PRPanel activeProjectId="proj-1" />);
+    await waitFor(() => {
+      // PRHistoryRow renders the title as a link — no WorkItemCard action buttons
+      expect(screen.getByRole('link', { name: 'Merged PR' })).toBeDefined();
+      expect(screen.queryByRole('button', { name: /run review/i })).toBeNull();
+    });
+  });
+
+  it('routes a closed PR with no active flags to PRHistoryRow (compact)', async () => {
+    const closedPR = makePR({
+      prNumber: 11,
+      title: 'Closed PR',
+      state: 'closed',
+      pauseReason: null,
+      mergeState: null,
+    });
+    setupFetchWithPRs([closedPR]);
+    render(<PRPanel activeProjectId="proj-1" />);
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'Closed PR' })).toBeDefined();
+      expect(screen.queryByRole('button', { name: /run review/i })).toBeNull();
+    });
+  });
+
+  it('routes an open PR to WorkItemCard (full card)', async () => {
+    const openPR = makePR({
+      prNumber: 12,
+      title: 'Open PR',
+      state: 'open',
+    });
+    setupFetchWithPRs([openPR]);
+    render(<PRPanel activeProjectId="proj-1" />);
+    await waitFor(() => {
+      // WorkItemCard renders review button for open PRs
+      expect(screen.getByRole('button', { name: /run review/i })).toBeDefined();
+    });
+  });
+
+  it('routes a merged PR with pauseReason set to PRHistoryRow (compact)', async () => {
+    const pausedMergedPR = makePR({
+      prNumber: 13,
+      title: 'Paused Merged PR',
+      state: 'merged',
+      pauseReason: 'ci_billing_blocked',
+    });
+    setupFetchWithPRs([pausedMergedPR]);
+    render(<PRPanel activeProjectId="proj-1" />);
+    await waitFor(() => {
+      // Terminal PRs render compact regardless of pauseReason
+      const titleEl = screen.getByText('Paused Merged PR');
+      expect(titleEl.tagName.toLowerCase()).toBe('a');
+    });
+  });
+
+  it('routes a merged PR with ci_failed mergeState to PRHistoryRow (compact)', async () => {
+    const ciFailedMergedPR = makePR({
+      prNumber: 14,
+      title: 'CI Failed PR',
+      state: 'merged',
+      mergeState: 'ci_failed',
+      pauseReason: null,
+    });
+    setupFetchWithPRs([ciFailedMergedPR]);
+    render(<PRPanel activeProjectId="proj-1" />);
+    await waitFor(() => {
+      // Terminal PRs render compact regardless of mergeState
+      const titleEl = screen.getByText('CI Failed PR');
+      expect(titleEl.tagName.toLowerCase()).toBe('a');
+    });
+  });
+
+  it('open PR with pause_reason=ci_billing_blocked still renders WorkItemCard', async () => {
+    const billingBlockedPR = makePR({
+      prNumber: 15,
+      title: 'Billing Blocked PR',
+      state: 'open',
+      pauseReason: 'ci_billing_blocked',
+    });
+    setupFetchWithPRs([billingBlockedPR]);
+    render(<PRPanel activeProjectId="proj-1" />);
+    await waitFor(() => {
+      // WorkItemCard is rendered for open PRs regardless of pauseReason
+      expect(screen.getByText('Billing Blocked PR')).toBeDefined();
+      // No compact link
+      expect(
+        screen.queryByRole('link', { name: 'Billing Blocked PR' }),
+      ).toBeNull();
+    });
   });
 });

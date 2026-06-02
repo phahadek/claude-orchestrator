@@ -10,7 +10,11 @@ import {
   getSession,
   addAutofixSha,
   consumeAutofixSha as dbConsumeAutofixSha,
+  insertPendingReviewSync,
+  deletePendingReviewSync,
+  getAllPendingReviewSyncs,
 } from '../db/queries';
+import { syncToOrigin } from './PRFileReverter';
 import type {
   PRReviewService,
   PRReviewResult,
@@ -60,6 +64,8 @@ export class ReviewOrchestrator {
   private running = 0;
   /** In-flight post-revert worktree sync promises, keyed by "prNumber:repo". */
   private pendingSyncs = new Map<string, Promise<void>>();
+  /** Resolves once all incomplete pending_review_sync rows from the previous run are retried. */
+  readonly bootReady: Promise<void>;
 
   constructor(
     private reviewService: PRReviewService,
@@ -84,6 +90,46 @@ export class ReviewOrchestrator {
         );
       },
     );
+    this.bootReady = this.rehydratePendingSyncs();
+  }
+
+  /**
+   * Re-attempt each incomplete pending_review_sync row left over from a previous
+   * run. For each row, performs an idempotent git fetch + reset so the worktree
+   * reflects the remote branch state, then clears the row. If the revert push
+   * had already completed on GitHub before the restart, the fetch/reset is a
+   * no-op. Arms the in-memory pendingSyncs map so executeReview can await the
+   * operations before fetching the diff.
+   */
+  async rehydratePendingSyncs(): Promise<void> {
+    const pending = getAllPendingReviewSyncs();
+    if (pending.length === 0) return;
+
+    await Promise.all(
+      pending.map(async ({ pr_number, repo }) => {
+        const key = `${pr_number}:${repo}`;
+        const syncPromise = (async () => {
+          try {
+            const prRow = getPRByNumber(pr_number, repo);
+            if (prRow?.session_id && prRow.head_branch) {
+              const session = getSession(prRow.session_id);
+              if (session?.worktree_path) {
+                await syncToOrigin(session.worktree_path, prRow.head_branch);
+              }
+            }
+          } catch (e) {
+            console.warn(
+              `[ReviewOrchestrator] boot-retry sync failed for PR #${pr_number} (${repo}): ${e}`,
+            );
+          }
+        })();
+        const tracked = syncPromise.finally(() => {
+          deletePendingReviewSync(pr_number, repo);
+        });
+        this.pendingSyncs.set(key, tracked);
+        await tracked;
+      }),
+    );
   }
 
   /** Store a pending sync promise so executeReview can await it before fetching the diff. */
@@ -93,7 +139,11 @@ export class ReviewOrchestrator {
     syncPromise: Promise<void>,
   ): void {
     const key = `${prNumber}:${repo}`;
-    this.pendingSyncs.set(key, syncPromise);
+    insertPendingReviewSync(prNumber, repo);
+    const tracked = syncPromise.finally(() => {
+      deletePendingReviewSync(prNumber, repo);
+    });
+    this.pendingSyncs.set(key, tracked);
   }
 
   private onPrOpened(job: ReviewJob): void {
@@ -148,6 +198,7 @@ export class ReviewOrchestrator {
   }
 
   private async drain(): Promise<void> {
+    await this.bootReady;
     while (this.running < this.maxConcurrency && this.queue.length > 0) {
       this.running++;
       const job = this.queue.shift()!;
@@ -434,7 +485,28 @@ export class ReviewOrchestrator {
     });
 
     if (result.verdict === 'needs_changes') {
-      this.sessionManager.send(job.sessionId, formatReviewFeedback(result, 0));
+      try {
+        await this.sessionManager.sendOrResume(
+          job.sessionId,
+          formatReviewFeedback(result, 0),
+        );
+      } catch (e) {
+        recordEvent({
+          event_type: 'verdict_routing_failed',
+          actor_type: 'system',
+          actor_id: job.sessionId,
+          project_id: job.projectId ?? null,
+          task_id: job.taskId ?? null,
+          payload: {
+            pr_number: job.localBranchId,
+            repo: `local/${job.branchName}`,
+            error: String(e),
+          },
+        });
+        console.warn(
+          `[ReviewOrchestrator] verdict routing failed for local branch ${job.branchName}: ${e}`,
+        );
+      }
     }
   }
 
@@ -555,10 +627,28 @@ export class ReviewOrchestrator {
     if (result.verdict === 'needs_changes') {
       const prRow = getPRByNumber(job.prNumber, job.repo);
       if (prRow?.session_id) {
-        this.sessionManager.send(
-          prRow.session_id,
-          formatReviewFeedback(result, 0),
-        );
+        try {
+          await this.sessionManager.sendOrResume(
+            prRow.session_id,
+            formatReviewFeedback(result, 0),
+          );
+        } catch (e) {
+          recordEvent({
+            event_type: 'verdict_routing_failed',
+            actor_type: 'system',
+            actor_id: prRow.session_id,
+            project_id: project.id ?? null,
+            task_id: prRow.task_id ?? null,
+            payload: {
+              pr_number: job.prNumber,
+              repo: job.repo,
+              error: String(e),
+            },
+          });
+          console.warn(
+            `[ReviewOrchestrator] verdict routing failed for PR #${job.prNumber}: ${e}`,
+          );
+        }
       }
     } else if (result.verdict === 'incomplete') {
       const message = `Review for PR #${job.prNumber} returned an incomplete verdict — the reviewer could not assess the PR. Manual intervention needed.`;

@@ -11,7 +11,7 @@ export interface BuildSessionContextParams {
   worktreePath: string;
   verify?: string[];
   bashRules?: string[];
-  taskBackend?: 'notion' | 'local';
+  taskBackend?: 'notion' | 'local' | 'github';
   /** Pre-fetched task spec markdown. Passed through to orchestrator CLAUDE.md. */
   taskContent?: string;
   /** Git mode: 'local-only' omits PR instructions; 'github' (default) keeps full PR flow. */
@@ -89,6 +89,21 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     // Ignore — fall through without local context.
   }
 
+  // For GitHub-backed projects, read PROJECT.md from the project root if present.
+  // Provides per-project context equivalent to what Notion project-context pages
+  // provide for Notion-backed projects. No-op when the file is absent.
+  let projectContextContent: string | undefined;
+  if (taskBackend === 'github') {
+    try {
+      const projectMdPath = path.join(projectDir, 'PROJECT.md');
+      if (fs.existsSync(projectMdPath)) {
+        projectContextContent = fs.readFileSync(projectMdPath, 'utf-8');
+      }
+    } catch {
+      // Ignore — fall through without project context.
+    }
+  }
+
   // Return only orchestrator content. Since we now write to .claude/CLAUDE.md
   // (gitignored), the project's own root CLAUDE.md is read independently by
   // Claude Code — no merging needed.
@@ -103,6 +118,7 @@ export function buildSessionContext(params: BuildSessionContextParams): string {
     taskBackend,
     taskContent,
     localContext,
+    projectContextContent,
     gitMode,
   });
 }

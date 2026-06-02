@@ -622,4 +622,157 @@ describe('useSessionStore', () => {
       ).toBe(false);
     });
   });
+
+  describe('taskListRefreshTrigger — no bump on frequent background events', () => {
+    it('session_started does NOT increment taskListRefreshTrigger', () => {
+      const { result } = renderHook(() => useSessionStore());
+      const before = result.current.taskListRefreshTrigger;
+      act(() => result.current.dispatch(msg.session_started()));
+      expect(result.current.taskListRefreshTrigger).toBe(before);
+    });
+
+    it('session_ended does NOT increment taskListRefreshTrigger', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.session_started()));
+      const before = result.current.taskListRefreshTrigger;
+      act(() => result.current.dispatch(msg.session_ended()));
+      expect(result.current.taskListRefreshTrigger).toBe(before);
+    });
+
+    it('task_status_changed does NOT increment taskListRefreshTrigger', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.tasks_ready()));
+      const before = result.current.taskListRefreshTrigger;
+      const changed: ServerMessage = {
+        type: 'task_status_changed',
+        notionTaskId: 't1',
+        newStatus: '🔄 In Progress',
+      };
+      act(() => result.current.dispatch(changed));
+      expect(result.current.taskListRefreshTrigger).toBe(before);
+    });
+
+    it('tasks_ready DOES increment taskListRefreshTrigger (legitimate trigger)', () => {
+      const { result } = renderHook(() => useSessionStore());
+      const before = result.current.taskListRefreshTrigger;
+      act(() => result.current.dispatch(msg.tasks_ready()));
+      expect(result.current.taskListRefreshTrigger).toBe(before + 1);
+    });
+  });
+
+  describe('session_started in-place task update', () => {
+    it('sets lastSessionStartedEvent when session_started carries taskId', () => {
+      const { result } = renderHook(() => useSessionStore());
+      const startedMsg: ServerMessage = {
+        type: 'session_started',
+        sessionId: SESSION_ID,
+        taskName: 'Test Task',
+        notionTaskUrl: 'https://notion.so/task',
+        taskId: 'task-abc',
+      };
+      act(() => result.current.dispatch(startedMsg));
+      expect(result.current.lastSessionStartedEvent).toMatchObject({
+        taskId: 'task-abc',
+        sessionId: SESSION_ID,
+      });
+    });
+
+    it('lastSessionStartedEvent is null initially', () => {
+      const { result } = renderHook(() => useSessionStore());
+      expect(result.current.lastSessionStartedEvent).toBeNull();
+    });
+
+    it('does not set lastSessionStartedEvent when session_started has no taskId', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.session_started()));
+      expect(result.current.lastSessionStartedEvent).toBeNull();
+    });
+  });
+
+  describe('session_ended in-place task update', () => {
+    it('sets lastSessionEndedEvent when session_ended carries taskId', () => {
+      const { result } = renderHook(() => useSessionStore());
+      const endedMsg: ServerMessage = {
+        type: 'session_ended',
+        sessionId: SESSION_ID,
+        status: 'done',
+        prUrl: 'https://github.com/pr/42',
+        taskId: 'task-abc',
+      };
+      act(() => result.current.dispatch(msg.session_started()));
+      act(() => result.current.dispatch(endedMsg));
+      expect(result.current.lastSessionEndedEvent).toMatchObject({
+        taskId: 'task-abc',
+        sessionId: SESSION_ID,
+        status: 'done',
+        prUrl: 'https://github.com/pr/42',
+      });
+    });
+
+    it('lastSessionEndedEvent is null initially', () => {
+      const { result } = renderHook(() => useSessionStore());
+      expect(result.current.lastSessionEndedEvent).toBeNull();
+    });
+
+    it('does not set lastSessionEndedEvent when session_ended has no taskId', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.session_started()));
+      act(() => result.current.dispatch(msg.session_ended()));
+      expect(result.current.lastSessionEndedEvent).toBeNull();
+    });
+  });
+
+  describe('session_started hydrates compaction_count and context_occupancy_tokens', () => {
+    it('maps compaction_count and context_occupancy_tokens from session_started message', () => {
+      const { result } = renderHook(() => useSessionStore());
+      const startMsg: ServerMessage = {
+        type: 'session_started',
+        sessionId: SESSION_ID,
+        taskName: 'Test Task',
+        notionTaskUrl: 'https://notion.so/task',
+        compaction_count: 3,
+        context_occupancy_tokens: 95_000,
+      };
+      act(() => result.current.dispatch(startMsg));
+      const session = result.current.sessions[0];
+      expect(session.compaction_count).toBe(3);
+      expect(session.context_occupancy_tokens).toBe(95_000);
+    });
+
+    it('defaults compaction_count and context_occupancy_tokens to 0 when absent', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.session_started()));
+      const session = result.current.sessions[0];
+      expect(session.compaction_count).toBe(0);
+      expect(session.context_occupancy_tokens).toBe(0);
+    });
+  });
+
+  describe('session_archived handling', () => {
+    it('removes the session from the in-memory map on session_archived', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.session_started()));
+      expect(result.current.sessions).toHaveLength(1);
+
+      const archivedMsg: ServerMessage = {
+        type: 'session_archived',
+        sessionId: SESSION_ID,
+      };
+      act(() => result.current.dispatch(archivedMsg));
+      expect(result.current.sessions).toHaveLength(0);
+    });
+
+    it('session_archived for unknown id is a no-op', () => {
+      const { result } = renderHook(() => useSessionStore());
+      act(() => result.current.dispatch(msg.session_started()));
+      const before = result.current.sessions.length;
+
+      const archivedMsg: ServerMessage = {
+        type: 'session_archived',
+        sessionId: 'unknown-session',
+      };
+      act(() => result.current.dispatch(archivedMsg));
+      expect(result.current.sessions).toHaveLength(before);
+    });
+  });
 });

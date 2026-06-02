@@ -6,9 +6,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // child_process: prevent real git operations
-vi.mock('child_process', () => ({
-  execSync: vi.fn().mockReturnValue('dev\n'),
-}));
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>();
+  return {
+    ...actual,
+    execSync: vi.fn().mockReturnValue('dev\n'),
+  };
+});
 
 // fs: prevent real file writes
 vi.mock('fs', async () => {
@@ -108,7 +112,8 @@ vi.mock('../session/ApiSessionRunner', () => ({
 }));
 
 // Controllable AgentSession mock: default succeeds, can be overridden per-test.
-vi.mock('../session/AgentSession', () => {
+vi.mock(import('../session/AgentSession'), async (importOriginal) => {
+  const actual = await importOriginal();
   const AgentSession = vi
     .fn()
     .mockImplementation(
@@ -133,8 +138,8 @@ vi.mock('../session/AgentSession', () => {
       }),
     );
   return {
+    ...actual,
     AgentSession,
-    parseNotionPageId: vi.fn().mockReturnValue('notion-task-id-abc'),
   };
 });
 

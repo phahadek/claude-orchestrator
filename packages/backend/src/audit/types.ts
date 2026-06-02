@@ -14,7 +14,15 @@ export type EventType =
   | 'file_pollution_re_injected_blocked'
   | 'autofix_for_ci_failure'
   | 'autofix_banned_file_unstaged'
-  | 'file_pollution_check_failed';
+  | 'file_pollution_check_failed'
+  | 'handle_clean_exit_entered'
+  | 'handle_clean_exit_session_marked_done'
+  | 'task_orphan_reverted'
+  | 'session_errored'
+  | 'session_backfilled'
+  | 'verdict_routing_failed'
+  | 'manual_pr_clear'
+  | 'sessions_auto_archived';
 
 export type ActorType = 'ai' | 'human' | 'system';
 

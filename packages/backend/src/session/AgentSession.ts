@@ -10,25 +10,16 @@ import {
   insertPermissionDenial,
   upsertPullRequest,
   incrementTokens,
-  insertSessionAudit,
+  incrementCompactionCount,
+  setContextOccupancy,
   setSessionModel,
   setSessionMetadata,
   getPRBySessionId,
-  getPRByNumber,
   setHeadSha,
   setPauseReason,
-  getProjectRowById,
-  insertLocalBranch,
-  getSession,
+  insertPauseInterval,
 } from '../db/queries';
-import { NoOpInvestigator } from '../github/NoOpInvestigator';
-import type { INoOpSessionManager } from '../github/NoOpInvestigator';
-import {
-  getCurrentBranch,
-  hasNonEmptyDiff,
-} from '../orchestration/localBranchHelpers';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
-import { emitTaskUpdated } from '../routes/tasks';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { GitHubClient } from '../github/GitHubClient';
@@ -40,10 +31,10 @@ import { runFilePollutionCheck as filePollutionCheckFn } from './filePollutionCh
 import { checkCommitAttribution } from '../github/CommitAttributionWatcher';
 import { recordEvent } from '../audit/AuditLog';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
-import { SessionAuditor } from './SessionAuditor';
 import type { ISessionManager } from './SessionAuditor';
 import type { ISessionRunner } from './SessionRunner';
 import { CliSessionRunner } from './CliSessionRunner';
+import { recoverSession } from './sessionRecovery';
 import {
   VALID_EVENT_TYPES,
   SILENT_SKIP_TYPES,
@@ -65,6 +56,47 @@ export function isPushCommand(toolName: string, toolInput: string): boolean {
   )
     return true;
   return false;
+}
+
+/**
+ * Returns true if the tool call represents a `gh pr create` invocation.
+ * Exported for unit testing.
+ */
+export function isPRCreateCommand(
+  toolName: string,
+  toolInput: string,
+): boolean {
+  if (toolName !== 'Bash') return false;
+  return /\bgh\s+pr\s+create\b/.test(toolInput);
+}
+
+export interface GitHubPRShape {
+  number?: number;
+  html_url?: string;
+  url?: string;
+  title?: string;
+  body?: string | null;
+  head?: { ref?: string; sha?: string };
+  base?: { ref?: string };
+  state?: string;
+  created_at?: string;
+  updated_at?: string;
+  draft?: boolean;
+}
+
+/** Extract plain text from a tool_result event's content (string or content blocks). */
+export function extractTextFromToolResultEvent(
+  event: Record<string, unknown>,
+): string {
+  const content = event.content;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return (content as Array<Record<string, unknown>>)
+      .filter((b) => b.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text as string)
+      .join('');
+  }
+  return '';
 }
 
 function sessionLog(sessionId: string, ...args: unknown[]) {
@@ -126,6 +158,8 @@ function mergeAssistantContent(
 
 export class AgentSession extends EventEmitter {
   private isKilling = false;
+  /** Set by gracefulPause() so the run loop exits without updating DB status. */
+  private isPausingForShutdown = false;
   public prUrl: string | undefined;
   /** True once a session_ended message has been broadcast. */
   public hasEnded = false;
@@ -145,6 +179,9 @@ export class AgentSession extends EventEmitter {
   /** Accumulated token counts for this session (in-memory, synced to SQLite). */
   private totalInputTokens = 0;
   private totalOutputTokens = 0;
+  /** Count of compact_boundary events seen this session (in-memory, synced to SQLite). */
+  private compactionCount = 0;
+  private static readonly CONTEXT_WINDOW_LIMIT = 200_000;
   /** Model name extracted from the first assistant event (e.g. 'claude-sonnet-4-6'). */
   public model: string | null = null;
   /** Count of consecutive transient-error retries for this session instance. Resets on clean exit. */
@@ -197,6 +234,12 @@ export class AgentSession extends EventEmitter {
      * positional callers (tests) need not be touched.
      */
     public readonly projectId: string = '',
+    /**
+     * Absolute path to the per-session MCP config JSON file written by
+     * SessionManager when `mcp_servers` is set in the orchestrator config.
+     * Forwarded to the runner as `mcpConfigPath`.
+     */
+    private readonly mcpConfigPath?: string,
   ) {
     super();
     this.runner = runner ?? new CliSessionRunner(sessionId);
@@ -283,11 +326,17 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           model: modelSetting || undefined,
           allowedTools: [...ALLOWED_TOOLS, ...this.extraAllowedTools],
           systemPrompt: this.systemPromptContent,
+          mcpConfigPath: this.mcpConfigPath,
         },
         (event) => this.handleRawEvent(event),
       );
 
-      if (this.runner.hasSpawnError || this.isKilling) return;
+      if (
+        this.runner.hasSpawnError ||
+        this.isKilling ||
+        this.isPausingForShutdown
+      )
+        return;
 
       if (exitCode === 0) {
         this.retryCount = 0;
@@ -315,7 +364,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           status: 'retrying',
         });
         await new Promise<void>((resolve) => setTimeout(resolve, delay));
-        if (this.isKilling) return;
+        if (this.isKilling || this.isPausingForShutdown) return;
         resumeIdForSpawn = this.sessionId;
         this.broadcast({
           type: 'session_status',
@@ -324,12 +373,25 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         });
       } else {
         const status = exitCode === null ? 'killed' : 'error';
-        updateSessionStatus(this.sessionId, status, Date.now());
-        this.broadcast({
-          type: 'session_ended',
-          sessionId: this.sessionId,
-          status,
-        });
+        const reason =
+          exitCode === null ? 'runner_killed_unexpected' : 'runner_non_zero';
+        if (!this.hasEnded) {
+          this.sessionManager?.markSessionErrored?.(
+            this.sessionId,
+            status,
+            reason,
+          );
+          if (!this.hasEnded) {
+            // Fallback when sessionManager is absent (e.g. unit tests without a manager)
+            updateSessionStatus(this.sessionId, status, Date.now());
+            this.broadcast({
+              type: 'session_ended',
+              sessionId: this.sessionId,
+              status,
+              ...(this.taskId && { taskId: this.taskId }),
+            });
+          }
+        }
         return;
       }
     }
@@ -366,6 +428,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     if (pr) {
       setPauseReason(pr.pr_number, pr.repo, 'api_overloaded');
     }
+    insertPauseInterval(this.sessionId, 'api_overloaded');
 
     const pauseMessage =
       'The Anthropic API returned a 529 Overloaded or 500 error mid-session. ' +
@@ -404,6 +467,19 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 
     if (rawType === 'system' && (event.subtype as string) === 'init') {
       sessionLog(this.sessionId, `INIT permissionMode=${event.permissionMode}`);
+    }
+
+    if (
+      rawType === 'system' &&
+      (event.subtype as string) === 'compact_boundary'
+    ) {
+      this.compactionCount++;
+      incrementCompactionCount(this.sessionId);
+      this.broadcast({
+        type: 'session_updated',
+        sessionId: this.sessionId,
+        compactionCount: this.compactionCount,
+      });
     }
 
     // ai-title: persist as session metadata only, no session event
@@ -496,6 +572,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         if (isPushCommand('Bash', cmd)) {
           void this.handlePushDetected();
         }
+        if (isPRCreateCommand('Bash', cmd) && !this.prDetectedLive) {
+          const text = extractTextFromToolResultEvent(event);
+          void this.handlePRCreatedFromBashOutput(text);
+        }
       }
     }
 
@@ -515,6 +595,14 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
                 | Array<Record<string, unknown>>
                 | undefined;
               void this.handlePRCreatedFromContent(innerContent ?? []);
+            }
+            if (toolUseId && this.pendingBashCommands.has(toolUseId)) {
+              const cmd = this.pendingBashCommands.get(toolUseId)!;
+              this.pendingBashCommands.delete(toolUseId);
+              if (isPRCreateCommand('Bash', cmd) && !this.prDetectedLive) {
+                const innerText = extractTextFromToolResultEvent(block);
+                void this.handlePRCreatedFromBashOutput(innerText);
+              }
             }
           }
         }
@@ -612,8 +700,46 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       this.messageIdMap.set(messageId, rowId);
     }
 
-    // After each result event (one per turn), increment token counters and broadcast
+    // On each assistant text event, update live context occupancy so the
+    // frontend can display it during long single-turn sessions that emit no
+    // result events until the very end.
+    if (rawType === 'assistant' || rawType === 'message') {
+      const msg = event.message as
+        | {
+            usage?: {
+              input_tokens?: number;
+              cache_read_input_tokens?: number;
+              cache_creation_input_tokens?: number;
+            };
+          }
+        | undefined;
+      const usage = msg?.usage;
+      if (usage) {
+        const occupancy =
+          (usage.input_tokens ?? 0) +
+          (usage.cache_read_input_tokens ?? 0) +
+          (usage.cache_creation_input_tokens ?? 0);
+        if (occupancy > 0) {
+          setContextOccupancy(this.sessionId, occupancy);
+          this.broadcast({
+            type: 'session_updated',
+            sessionId: this.sessionId,
+            totalInputTokens: this.totalInputTokens,
+            totalOutputTokens: this.totalOutputTokens,
+            contextOccupancyTokens: occupancy,
+            contextOccupancyFraction:
+              occupancy / AgentSession.CONTEXT_WINDOW_LIMIT,
+          });
+        }
+      }
+    }
+
+    // After each result event (one per turn), update token counters and broadcast
     // session_updated so the frontend receives live totals during execution.
+    // NOTE: do NOT call setContextOccupancy here — result.usage.cache_read_input_tokens
+    // is the SUM across every API call in the turn (cumulative), not a single-call
+    // prompt size, so it would produce wildly inflated occupancy values. The
+    // assistant-event handler above keeps context_occupancy_tokens correct.
     if (rawType === 'result') {
       const usageData = event.usage as
         | { input_tokens?: number; output_tokens?: number }
@@ -624,13 +750,13 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         this.totalInputTokens += inputTokens;
         this.totalOutputTokens += outputTokens;
         incrementTokens(this.sessionId, inputTokens, outputTokens);
-        this.broadcast({
-          type: 'session_updated',
-          sessionId: this.sessionId,
-          totalInputTokens: this.totalInputTokens,
-          totalOutputTokens: this.totalOutputTokens,
-        });
       }
+      this.broadcast({
+        type: 'session_updated',
+        sessionId: this.sessionId,
+        totalInputTokens: this.totalInputTokens,
+        totalOutputTokens: this.totalOutputTokens,
+      });
     }
 
     // Skip broadcasting user events that contain only system-injected content
@@ -665,7 +791,6 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
   ): Promise<void> {
     if (this.prDetectedLive) return;
 
-    // Extract text from content blocks
     let text = '';
     for (const block of contentBlocks) {
       if (block.type === 'text' && typeof block.text === 'string') {
@@ -673,19 +798,6 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       }
     }
 
-    // Try to parse as GitHub PR API JSON response
-    interface GitHubPRShape {
-      number?: number;
-      html_url?: string;
-      title?: string;
-      body?: string | null;
-      head?: { ref?: string; sha?: string };
-      base?: { ref?: string };
-      state?: string;
-      created_at?: string;
-      updated_at?: string;
-      draft?: boolean;
-    }
     let prShape: GitHubPRShape = {};
     try {
       const parsed = JSON.parse(text) as GitHubPRShape;
@@ -696,9 +808,46 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       // Not JSON — fall back to regex extraction of URL only
     }
 
-    // Determine the PR URL (from parsed JSON or regex match)
     const prUrl = prShape.html_url ?? text.match(PR_URL_REGEX)?.[0];
     if (!prUrl) return;
+    await this.handlePRDetected(prUrl, prShape);
+  }
+
+  /**
+   * Extract the PR URL from the stdout of a `gh pr create` Bash invocation
+   * and upsert the PR row (without full GitHub API metadata).
+   */
+  private async handlePRCreatedFromBashOutput(text: string): Promise<void> {
+    if (this.prDetectedLive) return;
+
+    let prShape: GitHubPRShape = {};
+    try {
+      const parsed = JSON.parse(text) as GitHubPRShape;
+      if (parsed && typeof parsed === 'object') {
+        // gh pr create --json url emits {"url":"..."}, MCP shape uses html_url
+        const resolvedUrl = parsed.html_url ?? parsed.url;
+        if (resolvedUrl) {
+          prShape = { ...parsed, html_url: resolvedUrl };
+        }
+      }
+    } catch {
+      // Not JSON — fall back to regex
+    }
+
+    const prUrl = prShape.html_url ?? text.match(PR_URL_REGEX)?.[0];
+    if (!prUrl) return;
+    await this.handlePRDetected(prUrl, prShape);
+  }
+
+  /**
+   * Core PR detection: upsert the pull_requests row, broadcast pr_created,
+   * and emit the pr_opened event. Shared by MCP and Bash detection paths.
+   */
+  private async handlePRDetected(
+    prUrl: string,
+    prShape: GitHubPRShape,
+  ): Promise<void> {
+    if (this.prDetectedLive) return;
 
     const repoMatch = prUrl.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
     if (!repoMatch) return;
@@ -748,7 +897,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             }
           } catch (e) {
             console.warn(
-              `[AgentSession] handlePRCreatedFromContent: failed to fetch head_sha for PR #${prNumber}:`,
+              `[AgentSession] handlePRDetected: failed to fetch head_sha for PR #${prNumber}:`,
               e,
             );
           }
@@ -818,7 +967,12 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       }
     }
 
-    this.broadcast({ type: 'pr_created', sessionId: this.sessionId, prUrl });
+    this.broadcast({
+      type: 'pr_created',
+      sessionId: this.sessionId,
+      prUrl,
+      ...(this.taskId && { taskId: this.taskId }),
+    });
     this.emit('pr_opened', {
       prNumber,
       repo,
@@ -909,17 +1063,39 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
   }
 
   private async handleCleanExit(): Promise<void> {
+    recordEvent({
+      event_type: 'handle_clean_exit_entered',
+      actor_type: 'system',
+      actor_id: this.sessionId,
+      project_id: this.projectId ?? null,
+      task_id: this.taskId || null,
+      payload: { session_id: this.sessionId },
+    });
     const endedAt = Date.now();
-    const events = getEventsBySession(this.sessionId);
-    const last20 = events.slice(-20);
     let prUrl: string | undefined;
 
-    for (const ev of last20) {
-      const match = ev.payload.match(PR_URL_REGEX);
-      if (match) {
-        prUrl = match[0];
-        break;
+    try {
+      const events = getEventsBySession(this.sessionId);
+      // Only scan text and system events — tool_use events carry tool-call
+      // inputs (Write, Edit, etc.) which may contain placeholder URLs in test
+      // fixtures or code comments, producing phantom pull_requests rows.
+      const last20 = events
+        .filter((ev) => ev.event_type === 'text' || ev.event_type === 'system')
+        .slice(-20);
+
+      for (const ev of last20) {
+        const match = ev.payload.match(PR_URL_REGEX);
+        if (match) {
+          prUrl = match[0];
+          break;
+        }
       }
+    } catch (e) {
+      console.error(
+        `[AgentSession] handleCleanExit pre-done failed for ${this.sessionId}:`,
+        e,
+      );
+      // Fall through with prUrl=undefined — periodic recovery will retry PR extraction.
     }
 
     this.prUrl = prUrl;
@@ -928,271 +1104,31 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     // calls. This ensures the session is terminal in the DB even if the
     // downstream review pipeline throws or the process dies mid-handleCleanExit.
     markSessionDone(this.sessionId, endedAt, prUrl ?? null);
-
-    if (this.sessionType === 'standard') {
-      // Wrap in try-catch so review-pipeline errors (e.g. fetch failures) can
-      // never abort handleCleanExit and leave the session stuck at 'running'.
-      try {
-        // Compute hasDiff once at the top of the standard-session block so it
-        // can be used for both local-only submission and no-op detection.
-        let hasDiff = false;
-        let featureBranchName: string | undefined;
-        const baseBranch = 'dev';
-        try {
-          const branchName = await getCurrentBranch(this.worktreePath);
-          featureBranchName = branchName ?? undefined;
-          if (branchName && branchName !== baseBranch) {
-            hasDiff = await hasNonEmptyDiff(
-              this.worktreePath,
-              baseBranch,
-              branchName,
-            );
-          }
-        } catch (e) {
-          console.error(`[AgentSession] hasDiff computation failed: ${e}`);
-        }
-
-        // No-op detection: clean exit with no PR and no diff → spawn investigator.
-        if (
-          !prUrl &&
-          !hasDiff &&
-          this.taskId &&
-          this.sessionManager &&
-          'start' in this.sessionManager
-        ) {
-          const project = this.projectId
-            ? getProjectRowById(this.projectId)
-            : undefined;
-          const repo = project?.github_repo ?? '';
-          const sessionRow = getSession(this.sessionId);
-          const taskCreatedAt = sessionRow
-            ? new Date(sessionRow.started_at).toISOString()
-            : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-          const investigator = new NoOpInvestigator(
-            this.sessionManager as unknown as INoOpSessionManager,
-            this.taskBackend(),
-            this.githubClient,
-          );
-          investigator
-            .investigate({
-              taskId: this.taskId,
-              taskUrl: this.taskUrl,
-              projectContextUrl: this.projectContextUrl,
-              projectId: this.projectId,
-              noOpSessionId: this.sessionId,
-              baseBranch,
-              featureBranchName,
-              repo,
-              taskCreatedAt,
-            })
-            .catch((e) => {
-              console.error(
-                `[AgentSession] NoOpInvestigator.investigate failed for ${this.sessionId}: ${e}`,
-              );
-            });
-        }
-
-        if (prUrl && !this.prDetectedLive) {
-          // Fallback: live detection didn't fire (e.g. gh pr create via Bash).
-          this.taskBackend()
-            .attachPR(this.taskId, prUrl)
-            .catch((e) =>
-              console.error(`[AgentSession] attachPR failed: ${e}`),
-            );
-        }
-
-        // Always upsert task_id and session_id onto the PR row when a
-        // PR URL is known at session end. This ensures the link is set even if
-        // PRSyncJob ran before handleCleanExit and created the row with null values.
-        // Capture existing PR state BEFORE the upsert overwrites it so the
-        // status-update step below can tell when the PR has already been merged.
-        let existingPrState: string | undefined;
-        if (prUrl) {
-          const prMatch = prUrl.match(
-            /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/,
-          );
-          if (prMatch) {
-            const repo = prMatch[1];
-            const prNumber = parseInt(prMatch[2], 10);
-            existingPrState = getPRByNumber(prNumber, repo)?.state;
-            const now = new Date().toISOString();
-            let headSha: string | null = null;
-            if (this.githubClient) {
-              try {
-                const freshPR = await this.githubClient.fetchPR(repo, prNumber);
-                headSha = freshPR.headSha ?? null;
-              } catch (e) {
-                console.warn(
-                  `[AgentSession] handleCleanExit: failed to fetch PR #${prNumber} from GitHub for head_sha:`,
-                  e,
-                );
-              }
-            }
-            if (existingPrState !== 'merged' && existingPrState !== 'closed') {
-              upsertPullRequest({
-                pr_number: prNumber,
-                pr_url: prUrl,
-                task_id: this.taskId || null,
-                session_id: this.sessionId,
-                repo,
-                title: null,
-                body: null,
-                head_branch: null,
-                base_branch: null,
-                state: 'open',
-                draft: 0,
-                review_result: null,
-                review_at: null,
-                created_at: now,
-                updated_at: now,
-                synced_at: now,
-                node_id: null,
-                head_sha: headSha,
-              });
-              if (!this.prDetectedLive) {
-                this.emit('pr_opened', {
-                  prNumber,
-                  repo,
-                  taskId: this.taskId,
-                  taskUrl: this.taskUrl,
-                  contextUrl: this.projectContextUrl,
-                });
-              }
-            }
-          }
-        }
-
-        // Skip the "In Review" write when the PR is already merged or closed.
-        // The merge flow ends the session and sets the Notion task to "Done";
-        // without this guard handleCleanExit would race and regress the status.
-        if (
-          prUrl &&
-          existingPrState !== 'merged' &&
-          existingPrState !== 'closed'
-        ) {
-          this.taskBackend()
-            .updateStatus(this.taskId, '👀 In Review')
-            .then(() => {
-              this.broadcast({
-                type: 'task_status_changed',
-                notionTaskId: this.taskId,
-                newStatus: '👀 In Review',
-              });
-              emitTaskUpdated(this.taskId);
-            })
-            .catch((e) =>
-              console.error(`[AgentSession] updateStatus failed: ${e}`),
-            );
-        }
-
-        // Local-only project: detect a non-empty diff and emit submission event.
-        // Reuses hasDiff and featureBranchName computed at the top of this block.
-        if (this.projectId) {
-          const project = getProjectRowById(this.projectId);
-          if (project?.git_mode === 'local-only') {
-            try {
-              if (
-                featureBranchName &&
-                featureBranchName !== baseBranch &&
-                hasDiff
-              ) {
-                const now = new Date().toISOString();
-                insertLocalBranch({
-                  project_id: this.projectId,
-                  session_id: this.sessionId,
-                  branch_name: featureBranchName,
-                  base_branch: baseBranch,
-                  status: 'open',
-                  review_result: null,
-                  created_at: now,
-                  updated_at: now,
-                });
-                this.broadcast({
-                  type: 'local_branch_submitted',
-                  projectId: this.projectId,
-                  sessionId: this.sessionId,
-                  branchName: featureBranchName,
-                  baseBranch,
-                });
-                this.taskBackend()
-                  .updateStatus(this.taskId, '👀 In Review')
-                  .then(() => {
-                    this.broadcast({
-                      type: 'task_status_changed',
-                      notionTaskId: this.taskId,
-                      newStatus: '👀 In Review',
-                    });
-                    emitTaskUpdated(this.taskId);
-                  })
-                  .catch((e) =>
-                    console.error(`[AgentSession] updateStatus failed: ${e}`),
-                  );
-              }
-            } catch (e) {
-              console.error(
-                `[AgentSession] local-only submission check failed: ${e}`,
-              );
-            }
-          }
-        }
-      } catch (e) {
-        console.error(
-          `[AgentSession] handleCleanExit post-done error for ${this.sessionId}:`,
-          e,
-        );
-      }
-    }
-
-    this.broadcast({
-      type: 'session_ended',
-      sessionId: this.sessionId,
-      status: 'done',
-      ...(prUrl ? { prUrl } : {}),
+    recordEvent({
+      event_type: 'handle_clean_exit_session_marked_done',
+      actor_type: 'system',
+      actor_id: this.sessionId,
+      project_id: this.projectId ?? null,
+      task_id: this.taskId || null,
+      payload: { session_id: this.sessionId, pr_url: prUrl ?? null },
     });
 
-    if (this.sessionType !== 'review') {
-      this.runAudit(0);
-    }
-  }
-
-  /**
-   * Run the post-session audit fire-and-forget.
-   * Stores the result in SQLite and broadcasts session_audit.
-   * Errors are logged but never thrown — the audit is always non-blocking.
-   */
-  private runAudit(exitCode: number | null): void {
-    const auditor = new SessionAuditor(
-      this.taskBackendOverride ?? this.projectId,
-      this.githubClient,
-      this.sessionManager,
-    );
-    auditor
-      .audit(this, exitCode)
-      .then((audit) => {
-        insertSessionAudit({
-          session_id: audit.sessionId,
-          pr_opened: audit.prOpened ? 1 : 0,
-          pr_targets: audit.prTargetsBranch,
-          task_status: audit.taskStatusAfter,
-          violations: JSON.stringify(audit.violations),
-          spec_mismatch: audit.specMismatch,
-          audited_at: audit.auditedAt,
-        });
-        this.broadcast({
-          type: 'session_audit',
-          sessionId: audit.sessionId,
-          prOpened: audit.prOpened,
-          prTargetsBranch: audit.prTargetsBranch,
-          violations: audit.violations,
-          specMismatch: audit.specMismatch,
-          auditedAt: audit.auditedAt,
-        });
-      })
-      .catch((err) => {
-        console.error(
-          `[AgentSession] audit failed for ${this.sessionId}: ${err}`,
-        );
-      });
+    await recoverSession(this.sessionId, {
+      scope: 'clean_exit',
+      prUrl,
+      prDetectedLive: this.prDetectedLive,
+      sessionType: this.sessionType,
+      taskId: this.taskId,
+      projectId: this.projectId,
+      worktreePath: this.worktreePath,
+      taskUrl: this.taskUrl,
+      projectContextUrl: this.projectContextUrl,
+      githubClient: this.githubClient,
+      taskBackend: this.taskBackend(),
+      sessionManager: this.sessionManager,
+      broadcast: (msg) => this.broadcast(msg),
+      emitPrOpened: (data) => this.emit('pr_opened', data),
+    });
   }
 
   /** Files reverted during this session that the injector must not overwrite (one cycle). */
@@ -1261,12 +1197,35 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     if (this.isKilling) return;
     this.isKilling = true;
     await this.runner.kill();
-    updateSessionStatus(this.sessionId, 'killed', Date.now());
-    this.broadcast({
-      type: 'session_ended',
-      sessionId: this.sessionId,
-      status: 'killed',
-    });
+    if (!this.hasEnded) {
+      this.sessionManager?.markSessionErrored?.(
+        this.sessionId,
+        'killed',
+        'user_kill',
+      );
+      if (!this.hasEnded) {
+        // Fallback when sessionManager is absent (e.g. unit tests without a manager)
+        updateSessionStatus(this.sessionId, 'killed', Date.now());
+        this.broadcast({
+          type: 'session_ended',
+          sessionId: this.sessionId,
+          status: 'killed',
+          ...(this.taskId && { taskId: this.taskId }),
+        });
+      }
+    }
+  }
+
+  /**
+   * Pause the session for graceful server shutdown.
+   * SIGTERMs the CLI subprocess and awaits exit without touching DB status or
+   * Notion — leaving status='running' so resumeOrphanSessions picks it up on
+   * next boot.
+   */
+  async gracefulPause(): Promise<void> {
+    if (this.isPausingForShutdown || this.isKilling) return;
+    this.isPausingForShutdown = true;
+    await this.runner.kill();
   }
 
   /** Persist to SQLite first, then emit. Caller (SessionManager) listens and broadcasts. */

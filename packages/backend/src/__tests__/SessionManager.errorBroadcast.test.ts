@@ -7,9 +7,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ServerMessage } from '../ws/types';
 
 // child_process: prevent real git operations
-vi.mock('child_process', () => ({
-  execSync: vi.fn().mockReturnValue('dev\n'),
-}));
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>();
+  return {
+    ...actual,
+    execSync: vi.fn().mockReturnValue('dev\n'),
+  };
+});
 
 // fs: prevent real file writes
 vi.mock('fs', async () => {
@@ -108,7 +112,8 @@ vi.mock('../session/ApiSessionRunner', () => ({
   })),
 }));
 
-vi.mock('../session/AgentSession', () => {
+vi.mock(import('../session/AgentSession'), async (importOriginal) => {
+  const actual = await importOriginal();
   const AgentSession = vi
     .fn()
     .mockImplementation(
@@ -132,8 +137,8 @@ vi.mock('../session/AgentSession', () => {
       }),
     );
   return {
+    ...actual,
     AgentSession,
-    parseNotionPageId: vi.fn().mockImplementation((url: string) => url),
   };
 });
 
@@ -144,6 +149,7 @@ vi.mock('../audit/AuditLog', () => ({
 import { SessionManager } from '../session/SessionManager';
 import { AgentSession } from '../session/AgentSession';
 import { getTaskBackend } from '../tasks/TaskBackend';
+import * as queries from '../db/queries';
 
 const YAML_TASK_ID = 't2-ready-unblocked';
 const NOTION_TASK_URL =
@@ -237,6 +243,12 @@ describe('SessionManager — launchSession failure broadcasts error and rolls ba
       updateStatus: vi.fn().mockResolvedValue(undefined),
     };
     vi.mocked(getTaskBackend).mockReturnValue(fakeBackend as never);
+    // markSessionErrored reads the session row to find task_id and project_id for Notion rollback
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_type: 'standard',
+      task_id: 'notion:t2-ready-unblocked',
+      project_id: PROJECT_ID,
+    } as never);
   });
 
   it('emits { type: "error" } with "Session launch failed" when AgentSession throws', async () => {
@@ -317,6 +329,11 @@ describe('SessionManager — launchSession failure broadcasts error and rolls ba
     vi.mocked(AgentSession).mockImplementationOnce(() => {
       throw new Error('worktree failed');
     });
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_type: 'review',
+      task_id: 'notion:t2-ready-unblocked',
+      project_id: PROJECT_ID,
+    } as never);
 
     const sm = new SessionManager();
     sm.start(YAML_TASK_ID, CTX_URL, {

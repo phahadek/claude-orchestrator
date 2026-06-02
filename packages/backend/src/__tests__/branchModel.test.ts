@@ -141,6 +141,20 @@ describe('resolveStartingPoint', () => {
     expect(result.startingPoint).toBe('dev');
     expect(result.milestoneSlug).toBeNull();
   });
+
+  it('uses project.baseBranch instead of dev when configured', () => {
+    const result = resolveStartingPoint(
+      { milestoneBranching: 'flat', baseBranch: 'main' },
+      null,
+    );
+    expect(result.startingPoint).toBe('main');
+    expect(result.milestoneSlug).toBeNull();
+  });
+
+  it('defaults to dev when baseBranch is not provided', () => {
+    const result = resolveStartingPoint({ milestoneBranching: 'flat' }, null);
+    expect(result.startingPoint).toBe('dev');
+  });
 });
 
 // ── ensureMilestoneBranch ─────────────────────────────────────────────────────
@@ -218,6 +232,30 @@ describe('ensureMilestoneBranch', () => {
     expect(execSyncMock).not.toHaveBeenCalledWith(
       expect.stringContaining('git push'),
       expect.anything(),
+    );
+  });
+
+  it('creates feature/<slug> from origin/main when baseBranch is main', () => {
+    execSyncMock
+      .mockImplementationOnce(() => {
+        throw new Error('not found');
+      })
+      .mockReturnValueOnce('') // fetch origin main
+      .mockImplementationOnce(() => {
+        throw new Error('not on origin');
+      })
+      .mockReturnValueOnce('') // git branch from origin/main
+      .mockReturnValueOnce(''); // git push
+
+    ensureMilestoneBranch('m6-readiness', '/repo', 'main');
+
+    expect(execSyncMock).toHaveBeenCalledWith(
+      'git fetch origin main',
+      expect.objectContaining({ cwd: '/repo' }),
+    );
+    expect(execSyncMock).toHaveBeenCalledWith(
+      'git branch feature/m6-readiness origin/main',
+      expect.objectContaining({ cwd: '/repo' }),
     );
   });
 });

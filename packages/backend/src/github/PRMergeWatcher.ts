@@ -1,5 +1,6 @@
 import type { GitHubClient } from './GitHubClient';
 import type { MergeabilityCategory } from './types';
+import { GitHubRateLimitError } from './types';
 import type { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
@@ -18,6 +19,7 @@ import {
   shouldAutoReview,
   formatReviewFeedback,
 } from './reviewUtils';
+import { isTerminalStalePR } from './pollUtils';
 import {
   getAllOpenPRs,
   updatePRState,
@@ -41,6 +43,20 @@ const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const PUSH_REVIEW_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_REVIEW_ITERATIONS = 3;
 
+/**
+ * Pause reasons where mergeability polling is pointless — AutoMerger has given
+ * up or the PR is blocked on human intervention. Checking GitHub's merge state
+ * every cycle wastes quota without any possibility of changing the outcome.
+ */
+const TERMINAL_MERGE_PAUSE_REASONS: ReadonlySet<string> = new Set([
+  'auto_merge_failed',
+  'max_reviews',
+  'review_failed',
+  'pr_body_invalid',
+  'attribution_missing',
+  'merge_conflict',
+]);
+
 export class PRMergeWatcher {
   private timer: ReturnType<typeof setInterval> | null = null;
   /**
@@ -51,6 +67,8 @@ export class PRMergeWatcher {
    */
   private firstPollPending = true;
   private autoMerger: AutoMerger | undefined;
+  private pausedUntil: Date | null = null;
+  private rateLimitBroadcasted = false;
   private prReviewService: PRReviewService | undefined;
   private reviewOrchestrator: ReviewOrchestrator | undefined;
   private readonly pendingReReviews = new Set<string>();
@@ -117,12 +135,88 @@ export class PRMergeWatcher {
     }
   }
 
+  private handleRateLimit(err: GitHubRateLimitError): void {
+    this.pausedUntil = err.resetAt;
+    if (!this.rateLimitBroadcasted) {
+      this.rateLimitBroadcasted = true;
+      console.warn(
+        `[PRMergeWatcher] GitHub rate-limited; backing off until ${err.resetAt.toISOString()}`,
+      );
+      this.broadcast({
+        type: 'github_rate_limit_hit',
+        resetAt: err.resetAt.toISOString(),
+        limit: err.limit,
+        used: err.used,
+      });
+    }
+  }
+
   async poll(): Promise<void> {
+    if (this.pausedUntil !== null) {
+      if (Date.now() < this.pausedUntil.getTime()) return;
+      this.pausedUntil = null;
+      this.rateLimitBroadcasted = false;
+      this.broadcast({ type: 'github_rate_limit_cleared' });
+    }
     const silentMerges = this.firstPollPending;
     const openPRs = getAllOpenPRs();
+
+    // Group PRs by repo, skipping orphan repos that have no project mapping.
+    // Orphan PRs produce 404s on every getPRState call and can never be actioned.
+    const byRepo = new Map<string, PullRequestRow[]>();
     for (const pr of openPRs) {
-      await this.checkPR(pr, silentMerges);
+      if (!getProjectByGithubRepo(pr.repo)) {
+        console.warn(
+          `[PRMergeWatcher] PR #${pr.pr_number}: no project for repo ${pr.repo} — skipping poll`,
+        );
+        continue;
+      }
+      if (isTerminalStalePR(pr)) {
+        console.log(
+          `[PRMergeWatcher] PR #${pr.pr_number}: verdict=incomplete with no new push — skipping poll`,
+        );
+        continue;
+      }
+      const list = byRepo.get(pr.repo) ?? [];
+      list.push(pr);
+      byRepo.set(pr.repo, list);
     }
+
+    for (const [repo, prs] of byRepo) {
+      if (prs.length < 2) {
+        // Single PR for this repo — individual fetch
+        await this.checkPR(prs[0], silentMerges);
+        continue;
+      }
+
+      // Multiple PRs for this repo — one batch list call replaces N getPRState calls.
+      // PRs found in the batch are still open; absent PRs need individual confirmation.
+      let batchStates: Map<number, { headSha: string | null }>;
+      try {
+        batchStates = await this.github.listOpenPRStates(repo);
+      } catch (err) {
+        console.warn(
+          `[PRMergeWatcher] listOpenPRStates failed for ${repo}, falling back to individual:`,
+          (err as Error).message,
+        );
+        for (const pr of prs) {
+          await this.checkPR(pr, silentMerges);
+        }
+        continue;
+      }
+
+      for (const pr of prs) {
+        const batchEntry = batchStates.get(pr.pr_number);
+        if (batchEntry) {
+          // Still open — use batch headSha for push detection, skip getPRState
+          await this.processOpenPR(pr, batchEntry.headSha);
+        } else {
+          // Absent from open list — closed or merged; individual call to confirm
+          await this.checkPR(pr, silentMerges);
+        }
+      }
+    }
+
     this.firstPollPending = false;
   }
 
@@ -134,6 +228,10 @@ export class PRMergeWatcher {
     try {
       prStateResult = await this.github.getPRState(pr.pr_number, pr.repo);
     } catch (err) {
+      if (err instanceof GitHubRateLimitError) {
+        this.handleRateLimit(err);
+        return;
+      }
       console.warn(
         `[PRMergeWatcher] getPRState failed for PR #${pr.pr_number}:`,
         (err as Error).message,
@@ -154,20 +252,27 @@ export class PRMergeWatcher {
         repo: pr.repo,
       });
     } else {
-      // PR is still open — detect out-of-band pushes for any open PR
-      if (githubHeadSha && githubHeadSha !== pr.head_sha) {
-        console.log(
-          `[PRMergeWatcher] PR #${pr.pr_number} head_sha changed: ${pr.head_sha?.slice(0, 7) ?? 'null'} → ${githubHeadSha.slice(0, 7)} — triggering push pipeline`,
-        );
-        setHeadSha(pr.pr_number, pr.repo, githubHeadSha);
-        const refreshedPr = getPRByNumber(pr.pr_number, pr.repo);
-        if (refreshedPr) {
-          void this.handlePushDetected(refreshedPr);
-        }
-      }
-      // Check mergeability for approved PRs
-      await this.checkMergeability(pr);
+      await this.processOpenPR(pr, githubHeadSha);
     }
+  }
+
+  private async processOpenPR(
+    pr: PullRequestRow,
+    githubHeadSha: string | null,
+  ): Promise<void> {
+    // Detect out-of-band pushes for any open PR
+    if (githubHeadSha && githubHeadSha !== pr.head_sha) {
+      console.log(
+        `[PRMergeWatcher] PR #${pr.pr_number} head_sha changed: ${pr.head_sha?.slice(0, 7) ?? 'null'} → ${githubHeadSha.slice(0, 7)} — triggering push pipeline`,
+      );
+      setHeadSha(pr.pr_number, pr.repo, githubHeadSha);
+      const refreshedPr = getPRByNumber(pr.pr_number, pr.repo);
+      if (refreshedPr) {
+        void this.handlePushDetected(refreshedPr);
+      }
+    }
+    // Check mergeability for approved PRs
+    await this.checkMergeability(pr);
   }
 
   private async checkMergeability(pr: PullRequestRow): Promise<void> {
@@ -197,6 +302,13 @@ export class PRMergeWatcher {
 
   private async runMergeabilityCheck(pr: PullRequestRow): Promise<void> {
     if (pr.state === 'merged' || pr.state === 'closed') return;
+    // Skip PRs paused for terminal reasons — AutoMerger has given up or human
+    // intervention is needed. Polling GitHub's merge state can't change the outcome.
+    if (
+      pr.pause_reason !== null &&
+      TERMINAL_MERGE_PAUSE_REASONS.has(pr.pause_reason)
+    )
+      return;
 
     const project = getProjectByGithubRepo(pr.repo);
     const ciCheckNames = project
@@ -211,6 +323,10 @@ export class PRMergeWatcher {
         ciCheckNames,
       );
     } catch (err) {
+      if (err instanceof GitHubRateLimitError) {
+        this.handleRateLimit(err);
+        return;
+      }
       console.warn(
         `[PRMergeWatcher] categorizeMergeability failed for PR #${pr.pr_number}:`,
         (err as Error).message,
@@ -244,6 +360,36 @@ export class PRMergeWatcher {
         // Reserve this SHA atomically before running remediation so a restart
         // can't re-fire for the same SHA.
         setCiRemediationAttemptedSha(pr.pr_number, pr.repo, pr.head_sha);
+
+        // Check for billing/spending-limit block before sending the investigate prompt.
+        if (pr.head_sha) {
+          const billingBlock = await this.github
+            .detectBillingBlock(pr.head_sha, pr.repo)
+            .catch((err: unknown) => {
+              console.warn(
+                `[PRMergeWatcher] detectBillingBlock failed for PR #${pr.pr_number}:`,
+                (err as Error).message,
+              );
+              return { blocked: false, message: null };
+            });
+          if (billingBlock.blocked) {
+            setPauseReason(pr.pr_number, pr.repo, 'ci_billing_blocked');
+            this.broadcast({
+              type: 'ci_billing_blocked',
+              prNumber: pr.pr_number,
+              repo: pr.repo,
+              message: billingBlock.message ?? '',
+            });
+            if (pr.task_id) {
+              emitTaskUpdated(pr.task_id);
+            }
+            console.log(
+              `[PRMergeWatcher] PR #${pr.pr_number}: billing/spending limit blocked — paused as ci_billing_blocked`,
+            );
+            return;
+          }
+        }
+
         await this.runCIFailureRemediation(pr, failingNames);
       }
     }
@@ -384,14 +530,18 @@ export class PRMergeWatcher {
     pr: PullRequestRow,
     category: MergeabilityCategory,
   ): void {
-    if (pr.pause_reason !== 'ci_failing') return;
+    if (
+      pr.pause_reason !== 'ci_failing' &&
+      pr.pause_reason !== 'ci_billing_blocked'
+    )
+      return;
     // Trigger recovery for any non-CI-failing, non-conflict category.
     // AutoMerger will re-categorize and bounce back if not actually mergeable.
     if (category.category === 'ci_failed' || category.category === 'conflict')
       return;
     setPauseReason(pr.pr_number, pr.repo, null);
     console.log(
-      `[PRMergeWatcher] PR #${pr.pr_number} CI recovered (mergeState=${category.mergeState}) — clearing ci_failing pause and retrying AutoMerger`,
+      `[PRMergeWatcher] PR #${pr.pr_number} CI recovered (mergeState=${category.mergeState}) — clearing ${pr.pause_reason} pause and retrying AutoMerger`,
     );
     this.broadcast({
       type: 'pr_pause_cleared',
@@ -645,8 +795,25 @@ export class PRMergeWatcher {
     updatePRState(pr.pr_number, pr.repo, 'merged');
     deleteAllAutofixShasForPR(pr.pr_number, pr.repo);
 
-    // End coding session gracefully (stdin close → clean CLI exit)
+    // Delete the origin branch for feature/* branches.
+    if (pr.head_branch?.startsWith('feature/')) {
+      await this.github
+        .deleteBranch(pr.repo, pr.head_branch)
+        .catch((err: unknown) =>
+          console.warn(
+            `[PRMergeWatcher] deleteBranch origin ${pr.head_branch} failed:`,
+            (err as Error).message,
+          ),
+        );
+    }
+
+    // End coding session gracefully (stdin close → clean CLI exit).
+    // Mark it for local branch deletion so cleanupWorktree removes the branch
+    // even though a prUrl is set.
     if (pr.session_id) {
+      if (pr.head_branch?.startsWith('feature/')) {
+        this.sessions.markForBranchDeletion(pr.session_id);
+      }
       this.sessions.endSession(pr.session_id);
     }
 

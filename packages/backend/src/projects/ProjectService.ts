@@ -47,6 +47,7 @@ export interface Project {
   nonMilestoneSourceConfig: NonMilestoneSourceConfig | null;
   taskSourceConfig: string | null;
   dataResidencyConfirmed: boolean;
+  baseBranch: string;
   createdAt: number;
   updatedAt: number;
   milestones: ProjectMilestone[];
@@ -59,11 +60,13 @@ export interface CreateProjectInput {
   contextUrl?: string | null;
   githubRepo?: string | null;
   taskSource?: TaskSource;
+  taskSourceConfig?: string | null;
   gitMode?: GitMode;
   autoLaunchEnabled?: boolean;
   autoLaunchMilestoneId?: string | null;
   autoMergeEnabled?: boolean;
   dataResidencyConfirmed?: boolean;
+  baseBranch?: string;
 }
 
 export interface CreateMilestoneInput {
@@ -112,6 +115,7 @@ function rowToProject(row: ProjectRow, milestones: MilestoneRow[]): Project {
     nonMilestoneSourceConfig,
     taskSourceConfig: row.task_source_config ?? null,
     dataResidencyConfirmed: (row.data_residency_confirmed ?? 0) === 1,
+    baseBranch: row.base_branch ?? 'dev',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     milestones: milestones.map(rowToMilestone),
@@ -148,11 +152,13 @@ export const ProjectService = {
       context_url: input.contextUrl ?? null,
       github_repo: input.githubRepo ?? null,
       task_source: input.taskSource ?? 'notion',
+      task_source_config: input.taskSourceConfig ?? null,
       git_mode: input.gitMode ?? 'github',
       auto_launch_enabled: input.autoLaunchEnabled ? 1 : 0,
       auto_launch_milestone_id: input.autoLaunchMilestoneId ?? null,
       auto_merge_enabled: input.autoMergeEnabled ? 1 : 0,
       data_residency_confirmed: input.dataResidencyConfirmed ? 1 : 0,
+      base_branch: input.baseBranch ?? 'dev',
     });
     return rowToProject(row, []);
   },

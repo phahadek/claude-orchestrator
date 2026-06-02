@@ -37,9 +37,15 @@ import { AutoMerger } from './github/AutoMerger';
 import { ReviewerCommentsWatcher } from './github/ReviewerCommentsWatcher';
 import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
 import { getCorporateMode } from './config/corporateMode';
+import { getOrchestratorConfig } from './config/appConfig';
 import { AutoLauncher } from './orchestration/AutoLauncher';
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
+import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
+import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiver';
 import { deleteGhostSessions, getPRBySessionId } from './db/queries';
+import { UpdateChecker, cleanUpdatesDir } from './updater/index';
+import { updateRouter, setUpdateChecker } from './routes/update';
+import { runPRBootSweep } from './github/PRBootSweep';
 
 runMigrations();
 loadRuntimeSettingsFromDb();
@@ -57,7 +63,8 @@ if (ghostsRemoved > 0) {
   );
 }
 
-const rawSessionsDir = process.env.SESSIONS_DIR ?? DEFAULT_SESSIONS_DIR;
+const rawSessionsDir =
+  getOrchestratorConfig().sessions.dir || DEFAULT_SESSIONS_DIR;
 const sessionsDir = rawSessionsDir.replace(/^~/, os.homedir());
 const jsonlReader = new JsonlReader(sessionsDir);
 
@@ -86,7 +93,7 @@ const reviewOrchestrator = new ReviewOrchestrator(
   githubClient,
 );
 
-const PORT = parseInt(process.env.PORT ?? '3000');
+const PORT = getOrchestratorConfig().server.port;
 
 const app = express();
 app.use(express.json());
@@ -122,6 +129,7 @@ setAutoMerger(autoMerger);
 const reviewerCommentsWatcher = new ReviewerCommentsWatcher(
   githubClient,
   sessionManager,
+  broadcast,
 );
 app.use(
   '/api',
@@ -138,6 +146,7 @@ app.use('/api', createTasksRouter());
 app.use('/api/analytics', analyticsRouter);
 app.use('/api', projectsRouter);
 app.use('/api', configRouter);
+app.use('/api', updateRouter);
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'index.html')),
@@ -220,9 +229,26 @@ wss.on('connection', (ws, req) => {
 // reservations (orphan resume reserves slots from this.sessions.size).
 const autoLauncher = new AutoLauncher(sessionManager, broadcast);
 
+// Auto-updater: polls GitHub Releases on startup + every 24h
+const updateChecker = new UpdateChecker(broadcast);
+setUpdateChecker(updateChecker, broadcast);
+cleanUpdatesDir();
+
 // Stuck-session timer: notify → pause → hard-stop. Wires itself to SessionManager
 // events on construction; lifetime tied to the process.
-const stuckSessionMonitor = new StuckSessionMonitor(sessionManager, broadcast);
+const stuckSessionMonitor = new StuckSessionMonitor(
+  sessionManager,
+  broadcast,
+  githubClient,
+);
+
+// Orphaned-task sweep: runs at the auto-launch poll interval, finds tasks stuck
+// at In Progress with no live session and reverts them to Ready.
+const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast);
+
+// Concluded-session archiver: periodically archives sessions that have been
+// in a terminal state longer than the configured grace period.
+const concludedSessionArchiver = new ConcludedSessionArchiver(broadcast);
 
 jsonlReader
   .importAll()
@@ -238,6 +264,13 @@ jsonlReader
         ),
       );
 
+    stuckSessionMonitor.rehydrate();
+    stuckSessionMonitor.startScan();
+
+    runPRBootSweep(githubClient).catch((err: unknown) =>
+      console.warn('[server] PR boot sweep failed:', (err as Error).message),
+    );
+
     prMergeWatcher.start();
     reviewerCommentsWatcher.start();
 
@@ -249,6 +282,10 @@ jsonlReader
           (err as Error).message,
         ),
       );
+
+    orphanedTaskSweeper.start();
+    concludedSessionArchiver.start();
+    updateChecker.start();
 
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`[server] listening on port ${PORT}`);
@@ -264,6 +301,9 @@ async function gracefulShutdown(signal: string) {
   console.log(`[server] ${signal} received — shutting down`);
   autoLauncher.stop();
   stuckSessionMonitor.stop();
+  orphanedTaskSweeper.stop();
+  concludedSessionArchiver.stop();
+  updateChecker.stop();
   reviewerCommentsWatcher.stop();
   wss.close();
   await sessionManager.shutdownAll();

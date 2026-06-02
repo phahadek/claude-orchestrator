@@ -9,6 +9,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { MilestonesSubPanel } from '../MilestonesSubPanel';
 import type { Project, ProjectMilestone } from '../../../api/projects';
 
+vi.mock('../../../auth/deviceToken', () => ({
+  getDeviceToken: () => null,
+}));
+
 const fetchMock = vi.fn();
 
 beforeEach(() => {
@@ -43,7 +47,9 @@ const PROJECT: Project = {
   autoLaunchMilestoneId: null,
   autoMergeEnabled: false,
   nonMilestoneSourceConfig: null,
+  taskSourceConfig: null,
   dataResidencyConfirmed: false,
+  baseBranch: 'dev',
   createdAt: 1,
   updatedAt: 1,
   milestones: [],
@@ -90,7 +96,7 @@ describe('MilestonesSubPanel', () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/projects/p1/milestones',
-      undefined,
+      expect.objectContaining({}),
     );
   });
 
@@ -115,7 +121,7 @@ describe('MilestonesSubPanel', () => {
     fireEvent.change(screen.getByLabelText('Name'), {
       target: { value: 'New One' },
     });
-    fireEvent.change(screen.getByLabelText('Notion data source ID'), {
+    fireEvent.change(screen.getByLabelText('Notion database URL or ID'), {
       target: { value: 'data-src-new' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Create' }));

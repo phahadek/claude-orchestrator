@@ -24,6 +24,7 @@ describe('loadOrchestratorConfig', () => {
     expect(config.allowed_tools).toEqual([]);
     expect(config.bash_rules).toEqual([]);
     expect(config.bootstrap_script).toBe('');
+    expect(config.mcp_servers).toBeUndefined();
   });
 
   it('returns parsed values for a well-formed config containing all six fields', () => {
@@ -94,5 +95,35 @@ describe('loadOrchestratorConfig', () => {
     expect(config.ci_check_name).toEqual([]);
     expect(config.bash_rules).toEqual([]);
     expect(config.bootstrap_script).toBe('');
+    expect(config.mcp_servers).toBeUndefined();
+  });
+
+  it('parses mcp_servers as a record when present', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      [
+        'mcp_servers:',
+        '  github:',
+        '    type: http',
+        '    url: https://api.githubcopilot.com/mcp/',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.mcp_servers).toEqual({
+      github: { type: 'http', url: 'https://api.githubcopilot.com/mcp/' },
+    });
+  });
+
+  it('sets mcp_servers to undefined when it is not an object', () => {
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude-orchestrator.yml'),
+      'mcp_servers:\n  - github\n  - notion\n',
+      'utf-8',
+    );
+
+    const config = loadOrchestratorConfig(tmpDir);
+    expect(config.mcp_servers).toBeUndefined();
   });
 });

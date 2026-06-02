@@ -1,11 +1,15 @@
 import { GITHUB_TOKEN, GITHUB_REPO } from '../config';
 import {
   GitHubApiError,
+  GitHubRateLimitError,
   PullRequest,
   PRDiff,
   MergeResult,
   FailingCheck,
   MergeabilityCategory,
+  Issue,
+  IssueComment,
+  Milestone,
 } from './types';
 import { getPRByNumber } from '../db/queries';
 
@@ -37,6 +41,50 @@ export class GitHubClient {
       `/repos/${r}/pulls?state=open&per_page=100`,
     );
     return data.map((pr) => mapPR(pr));
+  }
+
+  /**
+   * Fetch recently closed PRs (merged + closed-not-merged) updated within sinceDays.
+   * Returns PRs with state='merged' when merged_at is set, 'closed' otherwise.
+   * Used by PRBootSweep to backfill missing rows after a deletion event.
+   */
+  async listClosedPullRequests(
+    repo: string,
+    sinceDays: number,
+  ): Promise<PullRequest[]> {
+    const cutoff = new Date(
+      Date.now() - sinceDays * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const data = await this.request<GitHubRawPR[]>(
+      `/repos/${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100`,
+    );
+    return data
+      .filter(
+        (pr) =>
+          (pr.merged_at != null && pr.merged_at >= cutoff) ||
+          (pr.merged_at == null &&
+            pr.closed_at != null &&
+            pr.closed_at >= cutoff),
+      )
+      .map((pr) => mapClosedPR(pr));
+  }
+
+  /**
+   * Batch-fetch open PRs for a repo and return a map of PR number → headSha.
+   * PRs absent from the map have been closed or merged since the DB was last synced.
+   * Used by PRMergeWatcher to replace N individual getPRState calls with one list call.
+   */
+  async listOpenPRStates(
+    repo: string,
+  ): Promise<Map<number, { headSha: string | null }>> {
+    const prs = await this.listOpenPRs(repo);
+    const map = new Map<number, { headSha: string | null }>();
+    for (const pr of prs) {
+      // PullRequest.id is mapped from GitHub's `number` field (the PR number
+      // visible in URLs), not the internal GitHub database `id`. Safe to key by.
+      map.set(pr.id, { headSha: pr.headSha });
+    }
+    return map;
   }
 
   async getPRState(
@@ -211,6 +259,74 @@ export class GitHubClient {
   }
 
   /**
+   * Fetch annotations for a specific check run.
+   * Used to detect billing-quota failures which are only distinguishable via annotations.
+   */
+  async fetchCheckRunAnnotations(
+    repo: string,
+    checkRunId: number,
+  ): Promise<CheckRunAnnotation[]> {
+    return this.request<CheckRunAnnotation[]>(
+      `/repos/${repo}/check-runs/${checkRunId}/annotations`,
+    );
+  }
+
+  /**
+   * Check whether a failing SHA is blocked by a GitHub billing/spending limit.
+   * Fetches all failing check-run annotations and returns the first billing-blocked
+   * annotation message found, or null if none match.
+   */
+  async detectBillingBlock(
+    sha: string,
+    repo?: string,
+  ): Promise<{ blocked: boolean; message: string | null }> {
+    const r = repo ?? GITHUB_REPO;
+    let checkRuns: Array<{
+      id: number;
+      status: string;
+      conclusion: string | null;
+    }>;
+    try {
+      const data = await this.request<{
+        check_runs: Array<{
+          id: number;
+          status: string;
+          conclusion: string | null;
+        }>;
+      }>(`/repos/${r}/commits/${sha}/check-runs?per_page=100`);
+      checkRuns = data.check_runs;
+    } catch (err) {
+      console.warn(
+        `[GitHubClient] detectBillingBlock: check-runs fetch failed for ${sha}: ${(err as Error).message}`,
+      );
+      return { blocked: false, message: null };
+    }
+
+    const failingRuns = checkRuns.filter(
+      (c) =>
+        c.status === 'completed' &&
+        c.conclusion !== null &&
+        FAILING_CHECK_CONCLUSIONS.has(c.conclusion),
+    );
+
+    for (const run of failingRuns) {
+      let annotations: CheckRunAnnotation[];
+      try {
+        annotations = await this.fetchCheckRunAnnotations(r, run.id);
+      } catch {
+        continue;
+      }
+      for (const ann of annotations) {
+        if (isBillingBlockedAnnotation(ann)) {
+          return { blocked: true, message: ann.message };
+        }
+      }
+    }
+
+    return { blocked: false, message: null };
+  }
+
+  /**
    * Fetch failing check-runs for a given commit SHA. Used to distinguish
    * "blocked by failing CI" from "blocked by branch protection" when a merge
    * attempt fails with 409/405 or when mergeable_state is `unstable`/`blocked`.
@@ -295,6 +411,10 @@ export class GitHubClient {
     }
     if (!res.ok) {
       const text = await res.text();
+      if (res.status === 403) {
+        const err = tryParseRateLimitError(text, res.headers);
+        if (err) throw err;
+      }
       throw new GitHubApiError(res.status, text);
     }
     const newEtag = res.headers.get('etag');
@@ -341,14 +461,27 @@ export class GitHubClient {
     if (rawMergeableState === 'unstable') {
       const checksResult = headSha
         ? await this.getChecksForCategorization(headSha, r, ciCheckNames)
-        : { failingChecks: [] as FailingCheck[], hasMissingNamedCheck: false };
-      const { failingChecks } = checksResult;
+        : {
+            failingChecks: [] as FailingCheck[],
+            hasMissingNamedCheck: false,
+            hasRunningCheck: false,
+          };
+      const { failingChecks, hasRunningCheck } = checksResult;
       if (failingChecks.length > 0) {
         return {
           category: 'ci_failed',
           mergeState: 'ci_failed',
           rawMergeableState,
           failingChecks,
+          headSha,
+        };
+      }
+      if (hasRunningCheck) {
+        return {
+          category: 'unknown',
+          mergeState: 'ci_running',
+          rawMergeableState,
+          failingChecks: [],
           headSha,
         };
       }
@@ -418,7 +551,11 @@ export class GitHubClient {
     sha: string,
     repo: string,
     ciCheckNames: string[],
-  ): Promise<{ failingChecks: FailingCheck[]; hasMissingNamedCheck: boolean }> {
+  ): Promise<{
+    failingChecks: FailingCheck[];
+    hasMissingNamedCheck: boolean;
+    hasRunningCheck: boolean;
+  }> {
     let allCheckRuns: Array<{
       name: string;
       status: string;
@@ -438,8 +575,14 @@ export class GitHubClient {
         `[GitHubClient] getFailingChecks failed for ${sha} in ${repo}:`,
         (err as Error).message,
       );
-      return { failingChecks: [], hasMissingNamedCheck: false };
+      return {
+        failingChecks: [],
+        hasMissingNamedCheck: false,
+        hasRunningCheck: false,
+      };
     }
+
+    const hasRunningCheck = allCheckRuns.some((c) => c.status !== 'completed');
 
     const allFailingChecks = allCheckRuns
       .filter(
@@ -451,7 +594,11 @@ export class GitHubClient {
       .map((c) => ({ name: c.name, conclusion: c.conclusion as string }));
 
     if (ciCheckNames.length === 0) {
-      return { failingChecks: allFailingChecks, hasMissingNamedCheck: false };
+      return {
+        failingChecks: allFailingChecks,
+        hasMissingNamedCheck: false,
+        hasRunningCheck,
+      };
     }
 
     const reportedNames = new Set(allCheckRuns.map((c) => c.name));
@@ -461,7 +608,7 @@ export class GitHubClient {
     const hasMissingNamedCheck = ciCheckNames.some(
       (name) => !reportedNames.has(name),
     );
-    return { failingChecks, hasMissingNamedCheck };
+    return { failingChecks, hasMissingNamedCheck, hasRunningCheck };
   }
 
   /** Fetch the full list of changed files for a pull request (paginated). */
@@ -691,12 +838,203 @@ export class GitHubClient {
     return { merged: data.merged, message: data.message, sha: data.sha };
   }
 
+  // ---- Issues -----------------------------------------------------------------
+
+  async listIssues(
+    repo: string,
+    opts: {
+      labels?: string[];
+      milestone?: number | '*' | 'none';
+      state?: 'open' | 'closed' | 'all';
+      since?: string;
+    } = {},
+  ): Promise<Issue[]> {
+    const params = new URLSearchParams();
+    params.set('per_page', '100');
+    if (opts.labels?.length) params.set('labels', opts.labels.join(','));
+    if (opts.milestone !== undefined)
+      params.set('milestone', String(opts.milestone));
+    if (opts.state) params.set('state', opts.state);
+    if (opts.since) params.set('since', opts.since);
+    const data = await this.request<GitHubRawIssue[]>(
+      `/repos/${repo}/issues?${params.toString()}`,
+    );
+    return data.map(mapIssue);
+  }
+
+  async getIssue(repo: string, number: number): Promise<Issue> {
+    const data = await this.request<GitHubRawIssue>(
+      `/repos/${repo}/issues/${number}`,
+    );
+    return mapIssue(data);
+  }
+
+  async createIssue(
+    repo: string,
+    input: {
+      title: string;
+      body?: string;
+      labels?: string[];
+      milestone?: number;
+    },
+  ): Promise<Issue> {
+    const data = await this.request<GitHubRawIssue>(`/repos/${repo}/issues`, {
+      method: 'POST',
+      headers: { ...this.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    return mapIssue(data);
+  }
+
+  async updateIssue(
+    repo: string,
+    number: number,
+    patch: {
+      title?: string;
+      body?: string;
+      labels?: string[];
+      milestone?: number | null;
+      state?: 'open' | 'closed';
+    },
+  ): Promise<Issue> {
+    const data = await this.request<GitHubRawIssue>(
+      `/repos/${repo}/issues/${number}`,
+      {
+        method: 'PATCH',
+        headers: { ...this.headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      },
+    );
+    return mapIssue(data);
+  }
+
+  async addIssueComment(
+    repo: string,
+    number: number,
+    body: string,
+  ): Promise<IssueComment> {
+    const data = await this.request<GitHubRawIssueComment>(
+      `/repos/${repo}/issues/${number}/comments`,
+      {
+        method: 'POST',
+        headers: { ...this.headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body }),
+      },
+    );
+    return mapIssueComment(data);
+  }
+
+  async listIssueComments(
+    repo: string,
+    number: number,
+  ): Promise<IssueComment[]> {
+    const data = await this.request<GitHubRawIssueComment[]>(
+      `/repos/${repo}/issues/${number}/comments?per_page=100`,
+    );
+    return data.map(mapIssueComment);
+  }
+
+  // ---- Repository -------------------------------------------------------------
+
+  async getRepo(repo: string): Promise<{ fullName: string; private: boolean }> {
+    const data = await this.request<{ full_name: string; private: boolean }>(
+      `/repos/${repo}`,
+    );
+    return { fullName: data.full_name, private: data.private };
+  }
+
+  // ---- Milestones -------------------------------------------------------------
+
+  async listMilestones(
+    repo: string,
+    opts: { state?: 'open' | 'closed' | 'all' } = {},
+  ): Promise<Milestone[]> {
+    const params = new URLSearchParams({ per_page: '100' });
+    if (opts.state) params.set('state', opts.state);
+    const data = await this.request<GitHubRawMilestone[]>(
+      `/repos/${repo}/milestones?${params.toString()}`,
+    );
+    return data.map(mapMilestone);
+  }
+
+  async createMilestone(
+    repo: string,
+    input: { title: string; description?: string },
+  ): Promise<Milestone> {
+    const data = await this.request<GitHubRawMilestone>(
+      `/repos/${repo}/milestones`,
+      {
+        method: 'POST',
+        headers: { ...this.headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+    );
+    return mapMilestone(data);
+  }
+
+  async updateMilestone(
+    repo: string,
+    number: number,
+    patch: { title?: string; description?: string; state?: 'open' | 'closed' },
+  ): Promise<Milestone> {
+    const data = await this.request<GitHubRawMilestone>(
+      `/repos/${repo}/milestones/${number}`,
+      {
+        method: 'PATCH',
+        headers: { ...this.headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      },
+    );
+    return mapMilestone(data);
+  }
+
+  // ---- Conditional issue fetch ------------------------------------------------
+
+  async fetchIssuesConditional(
+    repo: string,
+    etag: string | null,
+    opts: { labels?: string[]; since?: string } = {},
+  ): Promise<
+    | { status: 'not_modified'; etag: string | null }
+    | { status: 'ok'; etag: string | null; issues: Issue[] }
+  > {
+    const params = new URLSearchParams({ per_page: '100' });
+    if (opts.labels?.length) params.set('labels', opts.labels.join(','));
+    if (opts.since) params.set('since', opts.since);
+    const url = `${this.base}/repos/${repo}/issues?${params.toString()}`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+    };
+    if (etag) headers['If-None-Match'] = etag;
+    const res = await fetch(url, { headers });
+    if (res.status === 304) {
+      return { status: 'not_modified', etag: etag ?? null };
+    }
+    if (!res.ok) {
+      const text = await res.text();
+      if (res.status === 403) {
+        const err = tryParseRateLimitError(text, res.headers);
+        if (err) throw err;
+      }
+      throw new GitHubApiError(res.status, text);
+    }
+    const newEtag = res.headers.get('etag');
+    const data = (await res.json()) as GitHubRawIssue[];
+    return { status: 'ok', etag: newEtag, issues: data.map(mapIssue) };
+  }
+
   private async request<T>(path: string, options?: RequestInit): Promise<T> {
     const url = path.startsWith('http') ? path : `${this.base}${path}`;
     const res = await fetch(url, { headers: this.headers, ...options });
 
     if (!res.ok) {
       const text = await res.text();
+      if (res.status === 403) {
+        const err = tryParseRateLimitError(text, res.headers);
+        if (err) throw err;
+      }
       // 405 = not mergeable, 409 = merge conflict — include descriptive messages
       throw new GitHubApiError(res.status, text);
     }
@@ -723,6 +1061,8 @@ interface GitHubRawPR {
   state: string;
   created_at: string;
   updated_at: string;
+  merged_at?: string | null;
+  closed_at?: string | null;
   mergeable?: boolean | null;
   mergeable_state?: string | null;
   draft: boolean;
@@ -745,6 +1085,142 @@ function mapPR(pr: GitHubRawPR): PullRequest {
     mergeableState: pr.mergeable_state ?? null,
     draft: pr.draft,
   };
+}
+
+function mapClosedPR(pr: GitHubRawPR): PullRequest {
+  return {
+    ...mapPR(pr),
+    state: pr.merged_at != null ? 'merged' : 'closed',
+  };
+}
+
+interface GitHubRawIssue {
+  number: number;
+  node_id: string;
+  title: string;
+  body: string | null;
+  state: string;
+  labels: Array<{ name: string }>;
+  milestone: { number: number } | null;
+  created_at: string;
+  updated_at: string;
+  html_url: string;
+}
+
+interface GitHubRawIssueComment {
+  id: number;
+  body: string;
+  created_at: string;
+  updated_at: string;
+  html_url: string;
+}
+
+interface GitHubRawMilestone {
+  number: number;
+  node_id: string;
+  title: string;
+  description: string | null;
+  state: string;
+  open_issues: number;
+  closed_issues: number;
+  created_at: string;
+  updated_at: string;
+}
+
+function mapIssue(raw: GitHubRawIssue): Issue {
+  return {
+    id: raw.number,
+    nodeId: raw.node_id,
+    title: raw.title,
+    body: raw.body,
+    state: raw.state as Issue['state'],
+    labels: raw.labels.map((l) => l.name),
+    milestone: raw.milestone?.number ?? null,
+    createdAt: raw.created_at,
+    updatedAt: raw.updated_at,
+    url: raw.html_url,
+  };
+}
+
+function mapIssueComment(raw: GitHubRawIssueComment): IssueComment {
+  return {
+    id: raw.id,
+    body: raw.body,
+    createdAt: raw.created_at,
+    updatedAt: raw.updated_at,
+    url: raw.html_url,
+  };
+}
+
+function mapMilestone(raw: GitHubRawMilestone): Milestone {
+  return {
+    id: raw.number,
+    nodeId: raw.node_id,
+    title: raw.title,
+    description: raw.description,
+    state: raw.state as Milestone['state'],
+    openIssues: raw.open_issues,
+    closedIssues: raw.closed_issues,
+    createdAt: raw.created_at,
+    updatedAt: raw.updated_at,
+  };
+}
+
+// ---- billing-block detection ------------------------------------------------
+
+export interface CheckRunAnnotation {
+  path: string;
+  annotation_level: string;
+  message: string;
+  raw_details: string | null;
+}
+
+/**
+ * Returns true when a check-run annotation matches the GitHub billing/spending-limit
+ * failure pattern. Verified 2026-05-31 against the live GitHub API.
+ *
+ * Pattern: annotation_level='failure', path='.github', message matches the known
+ * billing-limit message prefix.
+ */
+export function isBillingBlockedAnnotation(ann: CheckRunAnnotation): boolean {
+  return (
+    ann.path === '.github' &&
+    ann.annotation_level === 'failure' &&
+    /^The job was not started because (recent account payments|.*spending limit)/i.test(
+      ann.message,
+    )
+  );
+}
+
+const RATE_LIMIT_PATTERNS = [
+  /^API rate limit exceeded/i,
+  /^You have exceeded a secondary rate limit/i,
+];
+
+function tryParseRateLimitError(
+  body: string,
+  headers: Headers,
+): GitHubRateLimitError | null {
+  let message: string;
+  try {
+    const parsed = JSON.parse(body) as { message?: string };
+    message = parsed.message ?? '';
+  } catch {
+    return null;
+  }
+  if (!RATE_LIMIT_PATTERNS.some((re) => re.test(message))) return null;
+
+  const resetEpoch =
+    parseInt(headers.get('x-ratelimit-reset') ?? '', 10) ||
+    parseInt(headers.get('retry-after') ?? '', 10) ||
+    0;
+  const resetAt = resetEpoch
+    ? new Date(resetEpoch * 1000)
+    : new Date(Date.now() + 60_000);
+  const limit = parseInt(headers.get('x-ratelimit-limit') ?? '', 10) || 0;
+  const used = parseInt(headers.get('x-ratelimit-used') ?? '', 10) || 0;
+
+  return new GitHubRateLimitError(message, resetAt, limit, used);
 }
 
 function parseDiffFiles(diff: string): string[] {

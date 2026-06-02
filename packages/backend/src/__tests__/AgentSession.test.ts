@@ -45,6 +45,7 @@ vi.mock('../db/queries', () => ({
   upsertPullRequest: vi.fn(),
   insertSessionAudit: vi.fn(),
   incrementTokens: vi.fn(),
+  setContextOccupancy: vi.fn(),
   setSessionModel: vi.fn(),
   getPRBySessionId: vi.fn(() => null),
   getPRByNotionTaskId: vi.fn(() => null),
@@ -70,6 +71,11 @@ vi.mock('../github/NoOpInvestigator', () => ({
   })),
 }));
 
+// Mock AuditLog to avoid real SQLite writes and to spy on recordEvent calls
+vi.mock('../audit/AuditLog', () => ({
+  recordEvent: vi.fn(),
+}));
+
 import { AgentSession } from '../session/AgentSession';
 import { spawn } from 'child_process';
 import type { NotionClient } from '../notion/NotionClient';
@@ -86,6 +92,7 @@ import {
 import { parseNotionPageIdDashed } from '../session/AgentSession';
 import { NoOpInvestigator } from '../github/NoOpInvestigator';
 import { hasNonEmptyDiff } from '../orchestration/localBranchHelpers';
+import { recordEvent } from '../audit/AuditLog';
 
 function fakeNotionClient(): NotionClient {
   return {
@@ -1766,6 +1773,67 @@ describe('AgentSession', () => {
 
     expect(mockInvestigate).not.toHaveBeenCalled();
   });
+
+  // ── AC: diagnostic events in handleCleanExit ─────────────────────────────
+  it('records both handle_clean_exit_entered and handle_clean_exit_session_marked_done on clean exit', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockReturnValue([]);
+
+    const session = new AgentSession(
+      'diag-clean-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const runPromise = session.run();
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    const calls = vi.mocked(recordEvent).mock.calls;
+    const eventTypes = calls.map((c) => c[0].event_type);
+    expect(eventTypes).toContain('handle_clean_exit_entered');
+    expect(eventTypes).toContain('handle_clean_exit_session_marked_done');
+    // entry must come before marked-done
+    expect(eventTypes.indexOf('handle_clean_exit_entered')).toBeLessThan(
+      eventTypes.indexOf('handle_clean_exit_session_marked_done'),
+    );
+  });
+
+  it('records only handle_clean_exit_entered when pre-markSessionDone path throws', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    // Make getEventsBySession throw to simulate a pre-markSessionDone failure
+    vi.mocked(getEventsBySession).mockImplementation(() => {
+      throw new Error('DB read failure');
+    });
+
+    const session = new AgentSession(
+      'diag-throw-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const runPromise = session.run();
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    // run() will reject because handleCleanExit throws
+    await runPromise.catch(() => {});
+
+    const calls = vi.mocked(recordEvent).mock.calls;
+    const eventTypes = calls.map((c) => c[0].event_type);
+    expect(eventTypes).toContain('handle_clean_exit_entered');
+    expect(eventTypes).not.toContain('handle_clean_exit_session_marked_done');
+  });
 });
 
 // ── AC: parseNotionPageIdDashed ───────────────────────────────────────────────
@@ -1793,5 +1861,45 @@ describe('parseNotionPageIdDashed', () => {
         'https://www.notion.so/My-Task-36e22f9152f381018dd2f6f7c0b402e9',
       ),
     ).toBe('36e22f91-52f3-8101-8dd2-f6f7c0b402e9');
+  });
+
+  // ── AC: handleCleanExit resilient pre-markSessionDone ────────────────────
+  // When getEventsBySession throws, markSessionDone must still run so the
+  // session transitions to status='done' rather than remaining 'running'.
+  it('calls markSessionDone with null prUrl when getEventsBySession throws during clean exit', async () => {
+    const notion = fakeNotionClient();
+    vi.mocked(getRules).mockReturnValue([]);
+    vi.mocked(getEventsBySession).mockImplementation(() => {
+      throw new Error('DB read failure');
+    });
+
+    const session = new AgentSession(
+      'resilient-exit-session',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      notion,
+      '/tmp',
+      'task-id',
+    );
+
+    const messages: ServerMessage[] = [];
+    session.on('message', (msg: ServerMessage) => messages.push(msg));
+
+    const runPromise = session.run();
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+
+    // Session must transition to done even though getEventsBySession threw
+    expect(vi.mocked(markSessionDone)).toHaveBeenCalledWith(
+      'resilient-exit-session',
+      expect.any(Number),
+      null,
+    );
+
+    const ended = messages.find((m) => m.type === 'session_ended');
+    expect(ended).toBeDefined();
+    expect((ended as { status: string }).status).toBe('done');
   });
 });

@@ -18,6 +18,8 @@ import { PermissionEventLog } from './components/PermissionEventLog';
 import { TaskList } from './components/TaskList';
 import { TaskDetail } from './components/TaskDetail';
 import { Settings } from './components/Settings';
+import { UpdateBanner } from './components/UpdateBanner';
+import { RateLimitBanner } from './components/RateLimitBanner';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { Notifications } from './components/Notifications';
 import { ShortcutHint } from './components/ShortcutHint';
@@ -111,6 +113,9 @@ export default function App() {
     taskListRefreshTrigger,
     lastAutofixEvent,
     lastReviewStartedEvent,
+    lastCiBillingBlockedEvent,
+    lastSessionStartedEvent,
+    lastSessionEndedEvent,
   } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -127,6 +132,14 @@ export default function App() {
     'sessions' | 'history' | 'denials'
   >('sessions');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [updateInfo, setUpdateInfo] = useState<{
+    version: string;
+    releaseNotesUrl: string;
+  } | null>(null);
+  const [rateLimitInfo, setRateLimitInfo] = useState<{
+    resetAt: string;
+  } | null>(null);
+  const [rateLimitDismissed, setRateLimitDismissed] = useState(false);
   const notifiedRef = useRef<Set<string>>(new Set());
   const [showReconnected, setShowReconnected] = useState(false);
   const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
@@ -145,6 +158,23 @@ export default function App() {
           { id: notifId, message: msg.message, status: 'error' },
         ]);
         setTimeout(() => dismissNotification(notifId), 10_000);
+        return;
+      }
+      if (msg.type === 'update_available') {
+        setUpdateInfo({
+          version: msg.version,
+          releaseNotesUrl: msg.releaseNotesUrl,
+        });
+        return;
+      }
+      if (msg.type === 'github_rate_limit_hit') {
+        setRateLimitInfo({ resetAt: msg.resetAt });
+        setRateLimitDismissed(false);
+        return;
+      }
+      if (msg.type === 'github_rate_limit_cleared') {
+        setRateLimitInfo(null);
+        setRateLimitDismissed(false);
         return;
       }
       dispatch(msg);
@@ -407,6 +437,55 @@ export default function App() {
       return next;
     });
   }, [lastTaskUpdate]);
+
+  // In-place update when a session starts: mark the matching task's codeSession as starting.
+  // This runs in addition to the task_updated path so the panel reflects the change immediately
+  // even when task_updated is suppressed (display-status dedup).
+  useEffect(() => {
+    if (!lastSessionStartedEvent) return;
+    const { taskId, sessionId } = lastSessionStartedEvent;
+    setTaskViews((prev) => {
+      const idx = prev.findIndex((t) => t.taskId === taskId);
+      if (idx < 0) return prev;
+      const task = prev[idx];
+      if (task.codeSession?.sessionId === sessionId) return prev;
+      const next = [...prev];
+      next[idx] = {
+        ...task,
+        codeSession: task.codeSession ?? {
+          sessionId,
+          status: 'starting',
+          startedAt: Date.now(),
+          endedAt: null,
+          lastMessage: '',
+          inputTokens: 0,
+          outputTokens: 0,
+        },
+      };
+      return next;
+    });
+  }, [lastSessionStartedEvent]);
+
+  // In-place update when a session ends: mark codeSession as ended and carry prUrl.
+  useEffect(() => {
+    if (!lastSessionEndedEvent) return;
+    const { taskId, status, prUrl } = lastSessionEndedEvent;
+    setTaskViews((prev) => {
+      const idx = prev.findIndex((t) => t.taskId === taskId);
+      if (idx < 0) return prev;
+      const task = prev[idx];
+      if (task.codeSession?.endedAt != null) return prev;
+      const next = [...prev];
+      next[idx] = {
+        ...task,
+        codeSession: task.codeSession
+          ? { ...task.codeSession, status, endedAt: Date.now() }
+          : null,
+        pr: prUrl && task.pr ? { ...task.pr, prUrl } : task.pr,
+      };
+      return next;
+    });
+  }, [lastSessionEndedEvent]);
 
   // Passed to TaskList so it can apply optimistic status updates without a full re-fetch
   const handleTaskOptimisticDispatch = useCallback((taskIds: string[]) => {
@@ -864,6 +943,7 @@ export default function App() {
     lastPrReviewEvent,
     lastReviewFailed,
     lastApiOverloadedPaused,
+    lastCiBillingBlockedEvent,
   );
 
   useEffect(() => {
@@ -964,6 +1044,19 @@ export default function App() {
           autoLaunchPollIntervalMs={autoLaunchPollIntervalMs}
         />
       </ErrorBoundary>
+      {updateInfo && (
+        <UpdateBanner
+          version={updateInfo.version}
+          releaseNotesUrl={updateInfo.releaseNotesUrl}
+          onDismiss={() => setUpdateInfo(null)}
+        />
+      )}
+      {rateLimitInfo && !rateLimitDismissed && (
+        <RateLimitBanner
+          resetAt={rateLimitInfo.resetAt}
+          onDismiss={() => setRateLimitDismissed(true)}
+        />
+      )}
       <div className={styles.mainArea}>
         {topView === 'tasks' && (
           <ErrorBoundary name="TasksView">
@@ -1026,6 +1119,10 @@ export default function App() {
                           sessionOverlayOpen={sessionOverlayOpen}
                           onOpenSessionOverlay={handleOpenSessionOverlay}
                           projectId={activeProjectId ?? undefined}
+                          project={
+                            projects.find((p) => p.id === activeProjectId) ??
+                            null
+                          }
                           isLocalOnly={
                             projects.find((p) => p.id === activeProjectId)
                               ?.gitMode === 'local-only'
@@ -1190,6 +1287,11 @@ export default function App() {
                       }
                       onResume={handleResume}
                       sessionMode={sessionMode}
+                      project={
+                        projects.find(
+                          (p) => p.id === selectedSession?.project_id,
+                        ) ?? null
+                      }
                     />
                   </ErrorBoundary>
                 ) : (

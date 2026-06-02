@@ -265,14 +265,19 @@ describe('runAutofix — diff produced → commit + push', () => {
     expect(capturedEnv?.GIT_COMMITTER_EMAIL).toBe('bot@claude-code.internal');
   });
 
-  it('appends commit SHA to .git-blame-ignore-revs', async () => {
+  it('commits SHA to .git-blame-ignore-revs inside the worktree (not projectDir)', async () => {
+    const commitCalls: string[][] = [];
+
     _spawnHook = (cmd, args) => {
       const a = Array.isArray(args) ? (args as string[]) : [];
       if (cmd === 'git' && a[0] === 'status') return makeProc(0, 'M  foo.ts\n');
       if (cmd === 'git' && a[0] === 'add') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'diff' && a[1] === '--cached')
         return makeProc(0, 'foo.ts\n');
-      if (cmd === 'git' && a[0] === 'commit') return makeProc(0, '');
+      if (cmd === 'git' && a[0] === 'commit') {
+        commitCalls.push(a);
+        return makeProc(0, '');
+      }
       if (cmd === 'git' && a[0] === 'push') return makeProc(0, '');
       if (cmd === 'git' && a[0] === 'rev-parse')
         return makeProc(0, 'deadbeef\n');
@@ -281,13 +286,22 @@ describe('runAutofix — diff produced → commit + push', () => {
 
     await runAutofix('/worktree', '/project', ['echo hi'], () => {});
 
+    // appendFileSync must target the worktree, never the project root
     expect(mockAppendFileSync).toHaveBeenCalledOnce();
     const [filePath, content] = mockAppendFileSync.mock.calls[0] as [
       string,
       string,
     ];
     expect(filePath).toContain('.git-blame-ignore-revs');
+    expect(filePath).toContain('worktree');
+    expect(filePath).not.toContain('project');
     expect(content).toContain('deadbeef');
+
+    // the entry must be committed (follow-up commit), not left as working-tree dirt
+    const blameCommit = commitCalls.find((a) =>
+      a.some((s) => s.includes('.git-blame-ignore-revs')),
+    );
+    expect(blameCommit).toBeDefined();
   });
 });
 

@@ -62,7 +62,7 @@ vi.mock('../db/queries', () => ({
   getEventsBySession: vi.fn().mockReturnValue([]),
   getPRByNumber: vi.fn().mockReturnValue(null),
   hasActiveSessionForTask: vi.fn().mockReturnValue(false),
-  backfillStuckResultSessions: vi.fn(),
+  getStuckResultSessionRows: vi.fn().mockReturnValue([]),
 }));
 
 vi.mock('../tasks/TaskBackend', () => ({

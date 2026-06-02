@@ -68,4 +68,28 @@ describe('CIBadges', () => {
     );
     expect(screen.getByText('❌ CI failing: lint, test')).toBeDefined();
   });
+
+  it('renders yellow CI running badge with spinner when mergeState is ci_running', () => {
+    render(<CIBadges mergeState="ci_running" />);
+    expect(screen.getByText('CI running')).toBeDefined();
+    // spinner element should be present
+    expect(document.querySelector('[aria-hidden="true"]')).not.toBeNull();
+  });
+
+  it('does not render ⚠ CI unstable when mergeState is ci_running', () => {
+    render(<CIBadges mergeState="ci_running" />);
+    expect(screen.queryByText('⚠ CI unstable')).toBeNull();
+  });
+
+  it('does not render CI running badge when mergeState is unstable', () => {
+    render(<CIBadges mergeState="unstable" />);
+    expect(screen.queryByText('CI running')).toBeNull();
+  });
+
+  it('renders nothing for ci_running when prState is merged', () => {
+    const { container } = render(
+      <CIBadges mergeState="ci_running" prState="merged" />,
+    );
+    expect(container.firstChild).toBeNull();
+  });
 });

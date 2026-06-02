@@ -13,9 +13,11 @@ import {
   markLocalBranchMerged,
   setLocalBranchPauseReason,
   getSession,
+  getOrphanMergeablePRs,
+  getStaleAutoMergeFailedPRs,
 } from '../db/queries';
 import type { GitHubClient, PRReviewDecision } from './GitHubClient';
-import { GitHubApiError } from './types';
+import { GitHubApiError, GitHubRateLimitError } from './types';
 import { getCorporateMode } from '../config/corporateMode';
 import type { PRMergeWatcher } from './PRMergeWatcher';
 import type { PullRequestRow } from '../db/types';
@@ -42,16 +44,76 @@ const MIN_POLL_INTERVAL_MS = 5_000;
 export class AutoMerger {
   /** In-flight auto-merge loops keyed by `${repo}#${prNumber}` to prevent double-runs. */
   private active = new Set<string>();
+  private pausedUntil: Date | null = null;
+  private rateLimitBroadcasted = false;
 
   constructor(
     private github: GitHubClient,
     private mergeWatcher: PRMergeWatcher,
     private broadcast: (msg: ServerMessage) => void,
     private sessions?: SessionManager,
-  ) {}
+  ) {
+    this.bootSweep();
+  }
 
   private key(prNumber: number, repo: string): string {
     return `${repo}#${prNumber}`;
+  }
+
+  private handleRateLimit(err: GitHubRateLimitError): void {
+    this.pausedUntil = err.resetAt;
+    if (!this.rateLimitBroadcasted) {
+      this.rateLimitBroadcasted = true;
+      console.warn(
+        `[AutoMerger] GitHub rate-limited; backing off until ${err.resetAt.toISOString()}`,
+      );
+      this.broadcast({
+        type: 'github_rate_limit_hit',
+        resetAt: err.resetAt.toISOString(),
+        limit: err.limit,
+        used: err.used,
+      });
+    }
+  }
+
+  /**
+   * On boot, trigger AutoMerger for any PR that is already in the approved +
+   * mergeable + clean state but received no event post-restart. These rows are
+   * missed by the event-driven path because AutoMerger only fires on fresh
+   * verdict=approved events or ci_failing → clean transitions.
+   */
+  bootSweep(): void {
+    const orphans = getOrphanMergeablePRs();
+    for (const row of orphans) {
+      console.log(
+        `[AutoMerger] boot sweep: triggering merge for orphan PR #${row.pr_number} in ${row.repo}`,
+      );
+      this.attempt(row.pr_number, row.repo);
+    }
+    if (orphans.length > 0) {
+      console.log(
+        `[AutoMerger] boot sweep complete — triggered ${orphans.length} orphan PR(s)`,
+      );
+    }
+  }
+
+  /**
+   * Clear stale auto_merge_failed pauses and retry merging. Only clears
+   * auto_merge_failed (transient 405 race); never touches human-actionable
+   * pause reasons (max_reviews, ci_failing, ci_billing_blocked, pr_body_invalid).
+   * Threshold is runtimeSettings.auto_merge_failed_clear_minutes.
+   */
+  clearStalePauses(): void {
+    const thresholdMs =
+      Math.max(1, runtimeSettings.auto_merge_failed_clear_minutes) * 60_000;
+    const stale = getStaleAutoMergeFailedPRs(thresholdMs);
+    for (const row of stale) {
+      console.log(
+        `[AutoMerger] clearing stale auto_merge_failed pause for PR #${row.pr_number} in ${row.repo} (>${runtimeSettings.auto_merge_failed_clear_minutes}m old) — retrying`,
+      );
+      setPauseReason(row.pr_number, row.repo, null);
+      this.attempt(row.pr_number, row.repo);
+    }
   }
 
   /**
@@ -60,8 +122,17 @@ export class AutoMerger {
    * attempt() loop; local branches are squash-merged immediately.
    */
   async pollOnce(): Promise<void> {
+    if (this.pausedUntil !== null) {
+      if (Date.now() < this.pausedUntil.getTime()) return;
+      this.pausedUntil = null;
+      this.rateLimitBroadcasted = false;
+      this.broadcast({ type: 'github_rate_limit_cleared' });
+    }
     const approvedPRs = getApprovedOpenPRs();
     for (const pr of approvedPRs) {
+      // run() checks pause_reason too, but filtering here avoids spawning the
+      // active-set entry for a goroutine that would exit immediately.
+      if (pr.pause_reason !== null) continue;
       this.attempt(pr.pr_number, pr.repo);
     }
 
@@ -280,6 +351,10 @@ export class AutoMerger {
           ciCheckNames,
         );
       } catch (err) {
+        if (err instanceof GitHubRateLimitError) {
+          this.handleRateLimit(err);
+          return;
+        }
         console.warn(
           `[AutoMerger] PR #${prNumber}: status fetch failed: ${(err as Error).message}`,
         );
@@ -312,6 +387,10 @@ export class AutoMerger {
             try {
               reviewDecision = await this.github.getReviewState(prNumber, repo);
             } catch (err) {
+              if (err instanceof GitHubRateLimitError) {
+                this.handleRateLimit(err);
+                return;
+              }
               console.warn(
                 `[AutoMerger] PR #${prNumber}: getReviewState failed: ${(err as Error).message}`,
               );
@@ -330,13 +409,25 @@ export class AutoMerger {
           await this.attemptMerge(row, ciCheckNames);
           return;
         }
-        case 'ci_failed':
+        case 'ci_failed': {
+          const headSha = poll.mergeability.headSha;
+          if (headSha) {
+            const billingBlock = await this.github.detectBillingBlock(
+              headSha,
+              repo,
+            );
+            if (billingBlock.blocked) {
+              await this.pauseAsBillingBlocked(row, billingBlock.message ?? '');
+              return;
+            }
+          }
           await this.pauseWithReason(
             row,
             'ci_failing',
             poll.mergeability.failingChecks.map((c) => c.name),
           );
           return;
+        }
         case 'conflict':
           // Existing merge-conflict handling owns this case (see PRMergeWatcher
           // and the /merge route) — agent gets a rebase message; we don't pause.
@@ -417,6 +508,17 @@ export class AutoMerger {
           return;
         }
         if (category?.category === 'ci_failed') {
+          const headSha = category.headSha;
+          if (headSha) {
+            const billingBlock = await this.github.detectBillingBlock(
+              headSha,
+              pr.repo,
+            );
+            if (billingBlock.blocked) {
+              await this.pauseAsBillingBlocked(pr, billingBlock.message ?? '');
+              return;
+            }
+          }
           await this.pauseWithReason(
             pr,
             'ci_failing',
@@ -430,6 +532,25 @@ export class AutoMerger {
       );
       await this.pauseWithReason(pr, 'auto_merge_failed');
     }
+  }
+
+  private async pauseAsBillingBlocked(
+    pr: PullRequestRow,
+    message: string,
+  ): Promise<void> {
+    setPauseReason(pr.pr_number, pr.repo, 'ci_billing_blocked');
+    this.broadcast({
+      type: 'ci_billing_blocked',
+      prNumber: pr.pr_number,
+      repo: pr.repo,
+      message,
+    });
+    if (pr.task_id) {
+      emitTaskUpdated(pr.task_id);
+    }
+    console.log(
+      `[AutoMerger] PR #${pr.pr_number}: billing/spending limit blocked — paused as ci_billing_blocked`,
+    );
   }
 
   private async pauseWithReason(

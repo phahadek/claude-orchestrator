@@ -160,6 +160,36 @@ export function runMigrations(): void {
       last_attempt_at  TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS pending_review_sync (
+      pr_number  INTEGER NOT NULL,
+      repo       TEXT    NOT NULL,
+      sync_state TEXT    NOT NULL DEFAULT 'pending',
+      PRIMARY KEY (pr_number, repo)
+    );
+
+    CREATE TABLE IF NOT EXISTS session_pause_intervals (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id   TEXT    NOT NULL,
+      pause_reason TEXT    NOT NULL,
+      paused_at    INTEGER NOT NULL,
+      resumed_at   INTEGER NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_session_pause_intervals_session_id ON session_pause_intervals(session_id);
+
+    CREATE TABLE IF NOT EXISTS stuck_session_timers (
+      session_id             TEXT    PRIMARY KEY,
+      task_name              TEXT    NOT NULL,
+      notify_deadline        INTEGER NOT NULL DEFAULT 0,
+      pause_deadline         INTEGER NOT NULL DEFAULT 0,
+      hard_stop_deadline     INTEGER NOT NULL DEFAULT 0,
+      hard_stop_armed        INTEGER NOT NULL DEFAULT 0,
+      notify_remaining_ms    INTEGER,
+      pause_remaining_ms     INTEGER,
+      hard_stop_remaining_ms INTEGER
+    );
+
+
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events(session_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_event_type ON session_events(session_id, event_type);
     CREATE INDEX IF NOT EXISTS idx_session_events_timestamp ON session_events(timestamp DESC);
@@ -225,6 +255,13 @@ export function runMigrations(): void {
   try {
     db.exec(
       `ALTER TABLE sessions ADD COLUMN total_output_tokens INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN context_occupancy_tokens INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
     /* already exists */
@@ -331,6 +368,12 @@ export function runMigrations(): void {
     /* already exists */
   }
 
+  try {
+    db.exec(`ALTER TABLE pull_requests ADD COLUMN pause_reason_set_at INTEGER`);
+  } catch {
+    /* already exists */
+  }
+
   // ── Double-prefix cleanup (notion:notion: contamination from pre-fix-release) ──
   // Per-task rows with double-prefixed keys are deleted; they re-populate on next fetch.
   // Board-cache JSON is repaired in-place so the route doesn't serve stale IDs.
@@ -376,6 +419,25 @@ export function runMigrations(): void {
   } catch {
     /* already exists */
   }
+  try {
+    db.exec(
+      `ALTER TABLE sessions ADD COLUMN compaction_count INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  // ── Backfill github_repo for GitHub-task-source projects ─────────────────────
+  // Idempotent: guarded by github_repo IS NULL, re-running is a no-op.
+  db.exec(`
+    UPDATE projects
+    SET github_repo = json_extract(task_source_config, '$.owner') || '/' || json_extract(task_source_config, '$.repo')
+    WHERE task_source = 'github'
+      AND github_repo IS NULL
+      AND task_source_config IS NOT NULL
+      AND json_extract(task_source_config, '$.owner') IS NOT NULL
+      AND json_extract(task_source_config, '$.repo') IS NOT NULL;
+  `);
 
   // ── pull_requests: notion_task_id → task_id ──────────────────────────────────
   try {
@@ -448,4 +510,12 @@ export function runMigrations(): void {
     WHERE task_id LIKE 'notion:%'
       AND LENGTH(task_id) = 39;
   `);
+
+  try {
+    db.exec(
+      `ALTER TABLE projects ADD COLUMN base_branch TEXT NOT NULL DEFAULT 'dev'`,
+    );
+  } catch {
+    /* already exists */
+  }
 }

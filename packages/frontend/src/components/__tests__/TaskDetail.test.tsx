@@ -6,6 +6,7 @@ import { TaskDetail } from '../TaskDetail';
 import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { SessionState } from '../../hooks/useSessionStore';
+import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 
 function makeTask(overrides?: Partial<TaskView>): TaskView {
   return {
@@ -26,6 +27,15 @@ function makeTask(overrides?: Partial<TaskView>): TaskView {
     totalTokens: { input: 0, output: 0 },
     ...overrides,
   };
+}
+
+function makeProject(overrides?: Partial<ProjectConfig>): ProjectConfig {
+  return {
+    id: 'proj-1',
+    name: 'Test Project',
+    taskSource: 'notion',
+    ...overrides,
+  } as ProjectConfig;
 }
 
 function makeSessionState(overrides?: Partial<SessionState>): SessionState {
@@ -135,10 +145,32 @@ describe('TaskDetail', () => {
     expect(screen.getByText('🔴 High')).toBeTruthy();
   });
 
-  it('renders Notion link', () => {
-    render(<TaskDetail task={makeTask()} send={vi.fn()} onClose={vi.fn()} />);
+  it('renders source-aware link for notion-source project', () => {
+    render(
+      <TaskDetail
+        task={makeTask()}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        project={makeProject({ taskSource: 'notion' })}
+      />,
+    );
     const link = screen.getByText('Notion ↗');
     expect(link.getAttribute('href')).toBe('https://notion.so/task-1');
+  });
+
+  it('renders Issue ↗ link for github-source project', () => {
+    render(
+      <TaskDetail
+        task={makeTask({ notionUrl: 'https://github.com/owner/repo/issues/1' })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        project={makeProject({ taskSource: 'github' })}
+      />,
+    );
+    const link = screen.getByText('Issue ↗');
+    expect(link.getAttribute('href')).toBe(
+      'https://github.com/owner/repo/issues/1',
+    );
   });
 
   it('close button calls history.back() (not onClose directly)', () => {

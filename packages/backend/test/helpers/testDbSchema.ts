@@ -128,6 +128,7 @@ export function applyTestSchema(db: Database.Database): void {
       milestone_branching          TEXT,
       task_source_config           TEXT,
       non_milestone_source_config  TEXT,
+      data_residency_confirmed INTEGER NOT NULL DEFAULT 0,
       created_at               INTEGER NOT NULL,
       updated_at               INTEGER NOT NULL
     );
@@ -173,6 +174,24 @@ export function applyTestSchema(db: Database.Database): void {
       merge_commit_sha TEXT,
       created_at    TEXT NOT NULL,
       updated_at    TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS session_pause_intervals (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id   TEXT    NOT NULL,
+      pause_reason TEXT    NOT NULL,
+      paused_at    INTEGER NOT NULL,
+      resumed_at   INTEGER NULL
+    );
+    CREATE TABLE IF NOT EXISTS stuck_session_timers (
+      session_id             TEXT    PRIMARY KEY,
+      task_name              TEXT    NOT NULL,
+      notify_deadline        INTEGER NOT NULL DEFAULT 0,
+      pause_deadline         INTEGER NOT NULL DEFAULT 0,
+      hard_stop_deadline     INTEGER NOT NULL DEFAULT 0,
+      hard_stop_armed        INTEGER NOT NULL DEFAULT 0,
+      notify_remaining_ms    INTEGER,
+      pause_remaining_ms     INTEGER,
+      hard_stop_remaining_ms INTEGER
     );
   `);
 }

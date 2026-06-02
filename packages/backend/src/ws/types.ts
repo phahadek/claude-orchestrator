@@ -31,9 +31,13 @@ export interface SessionState {
   tags?: string[];
   totalInputTokens?: number;
   totalOutputTokens?: number;
+  compaction_count?: number;
+  context_occupancy_tokens?: number;
   model?: string | null;
   /** PR URL linked to this session, resolved from the pull_requests join. */
   prUrl?: string;
+  /** Notion task ID this session belongs to — enables targeted in-place task updates. */
+  taskId?: string;
 }
 
 /** Full live-state snapshot of a task, sent in task_updated WS messages. */
@@ -58,6 +62,8 @@ export interface TaskView {
     lastMessage: string;
     inputTokens: number;
     outputTokens: number;
+    context_occupancy_tokens?: number;
+    compaction_count?: number;
   } | null;
   pr: {
     prNumber: number;
@@ -119,8 +125,14 @@ export type ServerMessage =
       sessionId: string;
       denials: PermissionDenial[];
     }
-  | { type: 'session_ended'; sessionId: string; status: string; prUrl?: string }
-  | { type: 'pr_created'; sessionId: string; prUrl: string }
+  | {
+      type: 'session_ended';
+      sessionId: string;
+      status: string;
+      prUrl?: string;
+      taskId?: string;
+    }
+  | { type: 'pr_created'; sessionId: string; prUrl: string; taskId?: string }
   | {
       type: 'session_updated';
       sessionId: string;
@@ -128,7 +140,10 @@ export type ServerMessage =
       tags?: string[];
       totalInputTokens?: number;
       totalOutputTokens?: number;
+      compactionCount?: number;
       model?: string;
+      contextOccupancyTokens?: number;
+      contextOccupancyFraction?: number;
     }
   | { type: 'tasks_ready'; tasks: ResolvedTask[] }
   | {
@@ -223,6 +238,13 @@ export type ServerMessage =
       taskTitle: string;
       sessionId: string;
     }
+  | {
+      type: 'github_rate_limit_hit';
+      resetAt: string; // ISO-8601
+      limit: number;
+      used: number;
+    }
+  | { type: 'github_rate_limit_cleared' }
   | { type: 'error'; message: string }
   | { type: 'pr_pause_cleared'; prNumber: number; repo: string }
   | { type: 'autofix_started'; prNumber: number; repo: string }
@@ -260,7 +282,19 @@ export type ServerMessage =
       type: 'enrollment_approved';
       code: string;
       deviceId: string;
-    };
+    }
+  | {
+      type: 'update_available';
+      version: string;
+      releaseNotesUrl: string;
+    }
+  | {
+      type: 'ci_billing_blocked';
+      prNumber: number;
+      repo: string;
+      message: string;
+    }
+  | { type: 'session_archived'; sessionId: string };
 
 // ── Client → Server ──────────────────────────────────────────────
 export type ClientMessage =

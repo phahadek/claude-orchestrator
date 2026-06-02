@@ -2,12 +2,21 @@ name: CI
 
 on:
   push:
+    branches: [dev, main]
+    paths-ignore:
+      - '**/*.md'
+      - '.git-blame-ignore-revs'
+      - 'docs/**'
   pull_request:
     branches: [dev, main]
+    paths-ignore:
+      - '**/*.md'
+      - '.git-blame-ignore-revs'
+      - 'docs/**'
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:

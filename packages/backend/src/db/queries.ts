@@ -21,6 +21,8 @@ import type {
   NewLocalBranchRow,
   DeviceRow,
   NewDeviceRow,
+  SessionPauseInterval,
+  SessionPauseReason,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -41,6 +43,15 @@ const stmtUpdateSessionStatus = db.prepare<{
 }>(`
   UPDATE sessions
   SET status = @status, ended_at = @ended_at
+  WHERE session_id = @session_id
+`);
+
+const stmtUpdateSessionWorktreePath = db.prepare<{
+  session_id: string;
+  worktree_path: string;
+}>(`
+  UPDATE sessions
+  SET worktree_path = @worktree_path
   WHERE session_id = @session_id
 `);
 
@@ -97,6 +108,16 @@ export function updateSessionStatus(
   });
 }
 
+export function updateSessionWorktreePath(
+  sessionId: string,
+  worktreePath: string,
+): void {
+  stmtUpdateSessionWorktreePath.run({
+    session_id: sessionId,
+    worktree_path: worktreePath,
+  });
+}
+
 const stmtMarkSessionDone = db.prepare<{
   session_id: string;
   ended_at: number;
@@ -125,42 +146,59 @@ export function markSessionDone(
   });
 }
 
+export interface StuckResultSessionRow {
+  session_id: string;
+  task_id: string | null;
+  task_url: string | null;
+  project_context_url: string | null;
+  project_id: string | null;
+  pr_url: string | null;
+  worktree_path: string | null;
+  session_type: string;
+  last_ts: number;
+}
+
 /**
- * Backfill sessions that are stuck at status='running' but whose last recorded
- * event is a 'result' event (the CLI's clean-exit signal). These sessions
- * completed normally but the done transition was missed — most likely because
- * the downstream review pipeline threw before handleCleanExit could persist it.
- * Returns the number of sessions updated.
+ * Query sessions stuck at status='running' whose last recorded event is a
+ * 'result' event (the CLI's clean-exit signal). Does NOT update the DB.
+ * If minAgeMs is provided, only returns sessions older than that threshold.
  */
-export function backfillStuckResultSessions(): number {
-  const stuckRows = db
+export function getStuckResultSessionRows(
+  minAgeMs?: number,
+): StuckResultSessionRow[] {
+  if (minAgeMs !== undefined) {
+    return db
+      .prepare(
+        `
+      SELECT s.session_id, s.task_id, s.task_url, s.project_context_url,
+             s.project_id, s.pr_url, s.worktree_path, s.session_type,
+             e.timestamp AS last_ts
+      FROM sessions s
+      JOIN session_events e ON e.session_id = s.session_id
+      WHERE s.status = 'running'
+        AND e.id = (SELECT MAX(id) FROM session_events WHERE session_id = s.session_id)
+        AND e.event_type = 'result'
+        AND s.started_at < (unixepoch('now') - @min_age_seconds) * 1000
+    `,
+      )
+      .all({
+        min_age_seconds: Math.floor(minAgeMs / 1000),
+      }) as StuckResultSessionRow[];
+  }
+  return db
     .prepare(
       `
-    SELECT s.session_id, e.timestamp AS last_ts
+    SELECT s.session_id, s.task_id, s.task_url, s.project_context_url,
+           s.project_id, s.pr_url, s.worktree_path, s.session_type,
+           e.timestamp AS last_ts
     FROM sessions s
     JOIN session_events e ON e.session_id = s.session_id
     WHERE s.status = 'running'
-      AND e.id = (
-        SELECT MAX(id) FROM session_events WHERE session_id = s.session_id
-      )
+      AND e.id = (SELECT MAX(id) FROM session_events WHERE session_id = s.session_id)
       AND e.event_type = 'result'
   `,
     )
-    .all() as Array<{ session_id: string; last_ts: number }>;
-
-  if (stuckRows.length === 0) return 0;
-
-  const updateStmt = db.prepare(
-    `UPDATE sessions SET status = 'done', ended_at = ? WHERE session_id = ? AND status = 'running'`,
-  );
-
-  for (const row of stuckRows) {
-    updateStmt.run(row.last_ts, row.session_id);
-    console.log(
-      `[backfill] session ${row.session_id.slice(0, 8)} running→done (last_event=result at ${new Date(row.last_ts).toISOString()})`,
-    );
-  }
-  return stuckRows.length;
+    .all() as StuckResultSessionRow[];
 }
 
 export function getSession(sessionId: string): Session | undefined {
@@ -311,6 +349,33 @@ export function archiveFinishedSessions(): number {
     )
     .run();
   return result.changes;
+}
+
+/**
+ * Archive concluded sessions (status IN ('done','error','killed'), archived=0)
+ * whose ended_at is older than the given cutoff timestamp (ms).
+ * Returns the session_ids of archived sessions.
+ */
+export function archiveConcludedSessionsOlderThan(cutoffMs: number): string[] {
+  const rows = db
+    .prepare(
+      `SELECT session_id FROM sessions
+       WHERE status IN ('done', 'error', 'killed')
+         AND archived = 0
+         AND ended_at IS NOT NULL
+         AND ended_at < @cutoff`,
+    )
+    .all({ cutoff: cutoffMs }) as { session_id: string }[];
+
+  if (rows.length === 0) return [];
+
+  const ids = rows.map((r) => r.session_id);
+  const placeholders = ids.map(() => '?').join(', ');
+  db.prepare(
+    `UPDATE sessions SET archived = 1 WHERE session_id IN (${placeholders})`,
+  ).run(...ids);
+
+  return ids;
 }
 
 export function getSessionsByProject(projectId: string): Session[] {
@@ -694,6 +759,36 @@ export function incrementTokens(
   ).run(inputTokens, outputTokens, sessionId);
 }
 
+export function incrementCompactionCount(sessionId: string): void {
+  db.prepare(
+    `UPDATE sessions SET compaction_count = compaction_count + 1 WHERE session_id = ?`,
+  ).run(sessionId);
+}
+
+/**
+ * Returns all cached tasks (from task_cache) whose status matches the given display
+ * status string. Only returns individual task entries (skips board/page/non-milestone
+ * sentinel keys). Prefix filters to a specific task source (e.g. 'notion:').
+ */
+export function getTasksByStatusFromCache(
+  status: string,
+  prefix: string,
+): { task_id: string; raw_json: string }[] {
+  return db
+    .prepare(
+      `SELECT task_id, raw_json FROM task_cache
+       WHERE task_id LIKE ?
+         AND JSON_EXTRACT(raw_json, '$.status') = ?`,
+    )
+    .all(`${prefix}%`, status) as { task_id: string; raw_json: string }[];
+}
+
+export function setContextOccupancy(sessionId: string, tokens: number): void {
+  db.prepare(
+    `UPDATE sessions SET context_occupancy_tokens = ? WHERE session_id = ?`,
+  ).run(tokens, sessionId);
+}
+
 export function getZeroTokenSessions(limit: number): Session[] {
   return db
     .prepare(
@@ -734,6 +829,7 @@ export function upsertPullRequest(
     | 'failing_checks'
     | 'pending_push'
     | 'pause_reason'
+    | 'pause_reason_set_at'
     | 'ci_remediation_attempted_sha'
   > & {
     review_session_id?: string | null;
@@ -746,7 +842,13 @@ export function upsertPullRequest(
     failing_checks?: string | null;
     pause_reason?: PullRequestRow['pause_reason'];
   },
-): PullRequestRow {
+): PullRequestRow | null {
+  if (!getProjectByGithubRepo(pr.repo)) {
+    console.warn(
+      `[upsertPullRequest] rejected: repo "${pr.repo}" not configured in any project — skipping upsert to prevent phantom row (pr_url=${pr.pr_url})`,
+    );
+    return null;
+  }
   db.prepare(
     `
     INSERT INTO pull_requests
@@ -895,6 +997,21 @@ export function getPRByTaskId(taskId: string): PullRequestRow | null {
 /** @deprecated Use getPRByTaskId instead */
 export const getPRByNotionTaskId = getPRByTaskId;
 
+/**
+ * Returns the most recent merged PR for a task, or null if none exists.
+ * Used by AutoLauncher to skip tasks whose PR was already merged but whose
+ * Notion status wasn't updated (e.g. the merge-handler fired silently).
+ */
+export function getMergedPRForTask(taskId: string): PullRequestRow | null {
+  return db
+    .prepare<{
+      task_id: string;
+    }>(
+      `SELECT * FROM pull_requests WHERE task_id = @task_id AND state = 'merged' ORDER BY pr_number DESC LIMIT 1`,
+    )
+    .get({ task_id: taskId }) as PullRequestRow | null;
+}
+
 export function getOpenPRs(repo: string): PullRequestRow[] {
   return db
     .prepare<{ repo: string }>(
@@ -987,6 +1104,45 @@ export function deletePR(prNumber: number, repo: string): boolean {
   return result.changes > 0;
 }
 
+// ─── branch → session linkage ───────────────────────────────────────────────
+
+export interface SessionBranchMatch {
+  session_id: string;
+  task_id: string | null;
+}
+
+/**
+ * Attempt to derive a session from a PR's head_branch by matching against
+ * sessions.worktree_path. Returns the match when exactly one session path
+ * contains the branch name. Logs a warning and returns null for zero or
+ * multiple matches.
+ */
+export function lookupSessionByBranch(
+  headBranch: string,
+): SessionBranchMatch | null {
+  const rows = db
+    .prepare<{ pattern: string }>(
+      `SELECT session_id, task_id FROM sessions
+       WHERE worktree_path LIKE @pattern`,
+    )
+    .all({ pattern: `%${headBranch}%` }) as SessionBranchMatch[];
+
+  if (rows.length === 1) {
+    return rows[0];
+  }
+  if (rows.length === 0) {
+    console.warn(
+      `[lookupSessionByBranch] no session found for branch "${headBranch}"`,
+    );
+  } else {
+    const ids = rows.map((r) => r.session_id.slice(0, 8)).join(', ');
+    console.warn(
+      `[lookupSessionByBranch] ambiguous: ${rows.length} sessions match branch "${headBranch}" (${ids}) — leaving session_id null`,
+    );
+  }
+  return null;
+}
+
 // ─── settings ────────────────────────────────────────────────────────────────
 
 export function getSetting(key: string): string | undefined {
@@ -1047,28 +1203,6 @@ export function getSessionAudit(
   `,
     )
     .get({ session_id: sessionId }) as SessionAuditRow | undefined;
-}
-
-export function deleteMergedAndClosedPRs(repo: string): number {
-  const result = db
-    .prepare<{ repo: string }>(
-      `
-    DELETE FROM pull_requests WHERE repo = @repo AND state IN ('merged', 'closed')
-  `,
-    )
-    .run({ repo });
-  return result.changes;
-}
-
-export function countMergedAndClosedPRs(repo: string): number {
-  const row = db
-    .prepare<{ repo: string }>(
-      `
-    SELECT COUNT(*) as count FROM pull_requests WHERE repo = @repo AND state IN ('merged', 'closed')
-  `,
-    )
-    .get({ repo }) as { count: number };
-  return row.count;
 }
 
 export function updateMergeState(
@@ -1139,11 +1273,71 @@ export function setPauseReason(
   repo: string,
   reason: PauseReason | null,
 ): void {
-  db.prepare<{ pr_number: number; repo: string; pause_reason: string | null }>(
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    pause_reason: string | null;
+    pause_reason_set_at: number | null;
+  }>(
     `
-    UPDATE pull_requests SET pause_reason = @pause_reason WHERE pr_number = @pr_number AND repo = @repo
+    UPDATE pull_requests
+    SET pause_reason = @pause_reason,
+        pause_reason_set_at = @pause_reason_set_at
+    WHERE pr_number = @pr_number AND repo = @repo
   `,
-  ).run({ pr_number: prNumber, repo, pause_reason: reason });
+  ).run({
+    pr_number: prNumber,
+    repo,
+    pause_reason: reason,
+    pause_reason_set_at: reason !== null ? Date.now() : null,
+  });
+}
+
+/**
+ * PRs that are open, approved, mergeable=1, merge_state='clean', and have no
+ * pause_reason — i.e. orphaned merge-ready rows that AutoMerger missed because
+ * they were already in this state before the backend started.
+ */
+export function getOrphanMergeablePRs(): Array<{
+  pr_number: number;
+  repo: string;
+}> {
+  return db
+    .prepare(
+      `
+    SELECT pr_number, repo FROM pull_requests
+    WHERE state = 'open'
+      AND mergeable = 1
+      AND merge_state = 'clean'
+      AND pause_reason IS NULL
+      AND review_result IS NOT NULL
+      AND json_extract(review_result, '$.verdict') = 'approved'
+  `,
+    )
+    .all() as Array<{ pr_number: number; repo: string }>;
+}
+
+/**
+ * PRs with pause_reason='auto_merge_failed' whose pause_reason_set_at is older
+ * than thresholdMs milliseconds ago. These are stale transient failures eligible
+ * for automatic retry.
+ */
+export function getStaleAutoMergeFailedPRs(thresholdMs: number): Array<{
+  pr_number: number;
+  repo: string;
+}> {
+  const cutoff = Date.now() - thresholdMs;
+  return db
+    .prepare(
+      `
+    SELECT pr_number, repo FROM pull_requests
+    WHERE state = 'open'
+      AND pause_reason = 'auto_merge_failed'
+      AND pause_reason_set_at IS NOT NULL
+      AND pause_reason_set_at < @cutoff
+  `,
+    )
+    .all({ cutoff }) as Array<{ pr_number: number; repo: string }>;
 }
 
 /**
@@ -1265,6 +1459,8 @@ export interface TaskAggregateRow {
   code_session_input_tokens: number | null;
   code_session_output_tokens: number | null;
   code_session_last_event_payload: string | null;
+  code_session_context_occupancy_tokens: number | null;
+  code_session_compaction_count: number | null;
   // review session (session_type = 'review')
   review_session_id: string | null;
   review_session_status: string | null;
@@ -1331,14 +1527,16 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       cs.status              AS code_session_status,
       cs.started_at          AS code_session_started_at,
       cs.ended_at            AS code_session_ended_at,
-      cs.total_input_tokens  AS code_session_input_tokens,
-      cs.total_output_tokens AS code_session_output_tokens,
+      cs.total_input_tokens        AS code_session_input_tokens,
+      cs.total_output_tokens       AS code_session_output_tokens,
       (
         SELECT payload FROM session_events
         WHERE session_id = cs.session_id
           AND event_type NOT IN ('system', 'user_message')
         ORDER BY id DESC LIMIT 1
-      )                      AS code_session_last_event_payload,
+      )                            AS code_session_last_event_payload,
+      cs.context_occupancy_tokens  AS code_session_context_occupancy_tokens,
+      cs.compaction_count          AS code_session_compaction_count,
       rs.session_id          AS review_session_id,
       rs.status              AS review_session_status,
       rs.total_input_tokens  AS review_session_input_tokens,
@@ -1417,10 +1615,12 @@ export function insertProject(p: NewProjectRow): ProjectRow {
     INSERT INTO projects
       (id, name, project_dir, context_url, github_repo, task_source, git_mode,
        auto_launch_enabled, auto_launch_milestone_id, auto_merge_enabled,
+       task_source_config, base_branch,
        created_at, updated_at)
     VALUES
       (@id, @name, @project_dir, @context_url, @github_repo, @task_source, @git_mode,
        @auto_launch_enabled, @auto_launch_milestone_id, @auto_merge_enabled,
+       @task_source_config, @base_branch,
        @created_at, @updated_at)
   `,
   ).run({
@@ -1429,6 +1629,8 @@ export function insertProject(p: NewProjectRow): ProjectRow {
     auto_launch_enabled: p.auto_launch_enabled ?? 0,
     auto_launch_milestone_id: p.auto_launch_milestone_id ?? null,
     auto_merge_enabled: p.auto_merge_enabled ?? 0,
+    task_source_config: p.task_source_config ?? null,
+    base_branch: p.base_branch ?? 'dev',
     created_at: p.created_at ?? now,
     updated_at: p.updated_at ?? now,
   });
@@ -1439,6 +1641,16 @@ export function getProjectRowById(id: string): ProjectRow | undefined {
   return db
     .prepare<{ id: string }>(`SELECT * FROM projects WHERE id = @id`)
     .get({ id }) as ProjectRow | undefined;
+}
+
+export function getProjectByGithubRepo(
+  githubRepo: string,
+): ProjectRow | undefined {
+  return db
+    .prepare<{
+      github_repo: string;
+    }>(`SELECT * FROM projects WHERE github_repo = @github_repo LIMIT 1`)
+    .get({ github_repo: githubRepo }) as ProjectRow | undefined;
 }
 
 export function listProjectRows(): ProjectRow[] {
@@ -1459,7 +1671,7 @@ export interface ProjectPatch {
   project_dir?: string;
   context_url?: string | null;
   github_repo?: string | null;
-  task_source?: 'notion' | 'yaml' | 'jira';
+  task_source?: 'notion' | 'yaml' | 'jira' | 'github';
   git_mode?: 'github' | 'local-only';
   auto_launch_enabled?: number;
   auto_launch_milestone_id?: string | null;
@@ -1468,6 +1680,7 @@ export interface ProjectPatch {
   non_milestone_source_config?: string | null;
   task_source_config?: string | null;
   data_residency_confirmed?: number;
+  base_branch?: string;
 }
 
 export function updateProject(
@@ -1492,6 +1705,7 @@ export function updateProject(
     non_milestone_source_config: string | null;
     task_source_config: string | null;
     data_residency_confirmed: number;
+    base_branch: string;
     updated_at: number;
   }>(
     `
@@ -1509,6 +1723,7 @@ export function updateProject(
         non_milestone_source_config = @non_milestone_source_config,
         task_source_config = @task_source_config,
         data_residency_confirmed = @data_residency_confirmed,
+        base_branch = @base_branch,
         updated_at = @updated_at
     WHERE id = @id
   `,
@@ -1554,6 +1769,7 @@ export function updateProject(
       patch.data_residency_confirmed !== undefined
         ? patch.data_residency_confirmed
         : (existing.data_residency_confirmed ?? 0),
+    base_branch: patch.base_branch ?? existing.base_branch ?? 'dev',
     updated_at: now,
   });
   return getProjectRowById(id);
@@ -1789,45 +2005,13 @@ export function markCommentsRouted(
 
 // ─── devices ────────────────────────────────────────────────────────────────
 
-const stmtInsertDevice = db.prepare<NewDeviceRow>(`
-  INSERT INTO devices (id, name, user_agent, last_ip, last_seen, enrolled_at, token, revoked)
-  VALUES (@id, @name, @user_agent, @last_ip, @last_seen, @enrolled_at, @token, @revoked)
-`);
-
-const stmtGetDeviceByToken = db.prepare<{ token: string }>(`
-  SELECT * FROM devices WHERE token = @token AND revoked = 0
-`);
-
-const stmtGetDeviceById = db.prepare<{ id: string }>(`
-  SELECT * FROM devices WHERE id = @id
-`);
-
-const stmtListDevices = db.prepare(`
-  SELECT * FROM devices ORDER BY enrolled_at DESC
-`);
-
-const stmtUpdateDeviceName = db.prepare<{ id: string; name: string }>(`
-  UPDATE devices SET name = @name WHERE id = @id
-`);
-
-const stmtRevokeDevice = db.prepare<{ id: string }>(`
-  UPDATE devices SET revoked = 1 WHERE id = @id
-`);
-
-const stmtUpdateDeviceLastSeen = db.prepare<{
-  id: string;
-  last_ip: string | null;
-  last_seen: number;
-}>(`
-  UPDATE devices SET last_ip = @last_ip, last_seen = @last_seen WHERE id = @id
-`);
-
-const stmtCountActiveDevices = db.prepare(`
-  SELECT COUNT(*) as count FROM devices WHERE revoked = 0
-`);
-
 export function insertDevice(device: NewDeviceRow): void {
-  stmtInsertDevice.run({
+  db.prepare<NewDeviceRow>(
+    `
+    INSERT INTO devices (id, name, user_agent, last_ip, last_seen, enrolled_at, token, revoked)
+    VALUES (@id, @name, @user_agent, @last_ip, @last_seen, @enrolled_at, @token, @revoked)
+  `,
+  ).run({
     last_seen: null,
     revoked: 0,
     ...device,
@@ -1835,23 +2019,39 @@ export function insertDevice(device: NewDeviceRow): void {
 }
 
 export function getDeviceByToken(token: string): DeviceRow | null {
-  return (stmtGetDeviceByToken.get({ token }) as DeviceRow | undefined) ?? null;
+  return (
+    (db
+      .prepare<{
+        token: string;
+      }>(`SELECT * FROM devices WHERE token = @token AND revoked = 0`)
+      .get({ token }) as DeviceRow | undefined) ?? null
+  );
 }
 
 export function getDeviceById(id: string): DeviceRow | null {
-  return (stmtGetDeviceById.get({ id }) as DeviceRow | undefined) ?? null;
+  return (
+    (db
+      .prepare<{ id: string }>(`SELECT * FROM devices WHERE id = @id`)
+      .get({ id }) as DeviceRow | undefined) ?? null
+  );
 }
 
 export function listDevices(): DeviceRow[] {
-  return stmtListDevices.all() as DeviceRow[];
+  return db
+    .prepare(`SELECT * FROM devices ORDER BY enrolled_at DESC`)
+    .all() as DeviceRow[];
 }
 
 export function updateDeviceName(id: string, name: string): void {
-  stmtUpdateDeviceName.run({ id, name });
+  db.prepare<{ id: string; name: string }>(
+    `UPDATE devices SET name = @name WHERE id = @id`,
+  ).run({ id, name });
 }
 
 export function revokeDevice(id: string): void {
-  stmtRevokeDevice.run({ id });
+  db.prepare<{ id: string }>(
+    `UPDATE devices SET revoked = 1 WHERE id = @id`,
+  ).run({ id });
 }
 
 export function updateDeviceLastSeen(
@@ -1859,11 +2059,23 @@ export function updateDeviceLastSeen(
   lastIp: string | null,
   lastSeen: number,
 ): void {
-  stmtUpdateDeviceLastSeen.run({ id, last_ip: lastIp, last_seen: lastSeen });
+  db.prepare<{
+    id: string;
+    last_ip: string | null;
+    last_seen: number;
+  }>(
+    `UPDATE devices SET last_ip = @last_ip, last_seen = @last_seen WHERE id = @id`,
+  ).run({
+    id,
+    last_ip: lastIp,
+    last_seen: lastSeen,
+  });
 }
 
 export function getActiveDeviceCount(): number {
-  const row = stmtCountActiveDevices.get() as { count: number };
+  const row = db
+    .prepare(`SELECT COUNT(*) as count FROM devices WHERE revoked = 0`)
+    .get() as { count: number };
   return row.count;
 }
 
@@ -1902,6 +2114,32 @@ export function deleteAllAutofixShasForPR(
   ).run(prNumber, repo);
 }
 
+// ─── pending_review_sync ───────────────────────────────────────────────────────
+
+export interface PendingReviewSyncRow {
+  pr_number: number;
+  repo: string;
+  sync_state: string;
+}
+
+export function insertPendingReviewSync(prNumber: number, repo: string): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO pending_review_sync (pr_number, repo, sync_state) VALUES (?, ?, 'pending')`,
+  ).run(prNumber, repo);
+}
+
+export function deletePendingReviewSync(prNumber: number, repo: string): void {
+  db.prepare(
+    `DELETE FROM pending_review_sync WHERE pr_number = ? AND repo = ?`,
+  ).run(prNumber, repo);
+}
+
+export function getAllPendingReviewSyncs(): PendingReviewSyncRow[] {
+  return db
+    .prepare(`SELECT * FROM pending_review_sync`)
+    .all() as PendingReviewSyncRow[];
+}
+
 // ─── task_no_op_attempts ──────────────────────────────────────────────────────
 
 export interface TaskNoOpAttemptRow {
@@ -1931,4 +2169,132 @@ export function bumpTaskNoOpAttempts(taskId: string): void {
        retry_count = retry_count + 1,
        last_attempt_at = excluded.last_attempt_at`,
   ).run(taskId, now);
+}
+
+// ─── session_pause_intervals ────────────────────────────────────────────────
+
+export function insertPauseInterval(
+  sessionId: string,
+  pauseReason: SessionPauseReason,
+): void {
+  db.prepare(
+    `INSERT INTO session_pause_intervals (session_id, pause_reason, paused_at)
+     VALUES (?, ?, ?)`,
+  ).run(sessionId, pauseReason, Date.now());
+}
+
+export function closePauseInterval(sessionId: string): void {
+  db.prepare(
+    `UPDATE session_pause_intervals
+     SET resumed_at = ?
+     WHERE id = (
+       SELECT id FROM session_pause_intervals
+       WHERE session_id = ? AND resumed_at IS NULL
+       ORDER BY paused_at DESC, id DESC
+       LIMIT 1
+     )`,
+  ).run(Date.now(), sessionId);
+}
+
+export function getPauseIntervalsBySession(
+  sessionId: string,
+): SessionPauseInterval[] {
+  return db
+    .prepare(
+      `SELECT * FROM session_pause_intervals WHERE session_id = ? ORDER BY paused_at ASC`,
+    )
+    .all(sessionId) as SessionPauseInterval[];
+}
+
+export function getTotalPausedMs(
+  sessionId: string,
+  endedAt?: number | null,
+): number {
+  const implicit = endedAt ?? Date.now();
+  const row = db
+    .prepare(
+      `SELECT COALESCE(SUM(COALESCE(resumed_at, ?) - paused_at), 0) AS total
+       FROM session_pause_intervals
+       WHERE session_id = ?`,
+    )
+    .get(implicit, sessionId) as { total: number };
+  return row.total;
+}
+
+// ─── stuck_session_timers ─────────────────────────────────────────────────────
+
+export interface StuckSessionTimerRow {
+  session_id: string;
+  task_name: string;
+  notify_deadline: number;
+  pause_deadline: number;
+  hard_stop_deadline: number;
+  hard_stop_armed: number;
+  notify_remaining_ms: number | null;
+  pause_remaining_ms: number | null;
+  hard_stop_remaining_ms: number | null;
+}
+
+export function upsertStuckSessionTimer(
+  sessionId: string,
+  taskName: string,
+  notifyDeadline: number,
+  pauseDeadline: number,
+  hardStopDeadline: number,
+  hardStopArmed: boolean,
+  notifyRemainingMs: number | null,
+  pauseRemainingMs: number | null,
+  hardStopRemainingMs: number | null,
+): void {
+  db.prepare<{
+    session_id: string;
+    task_name: string;
+    notify_deadline: number;
+    pause_deadline: number;
+    hard_stop_deadline: number;
+    hard_stop_armed: number;
+    notify_remaining_ms: number | null;
+    pause_remaining_ms: number | null;
+    hard_stop_remaining_ms: number | null;
+  }>(
+    `
+    INSERT INTO stuck_session_timers
+      (session_id, task_name, notify_deadline, pause_deadline, hard_stop_deadline,
+       hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms)
+    VALUES
+      (@session_id, @task_name, @notify_deadline, @pause_deadline, @hard_stop_deadline,
+       @hard_stop_armed, @notify_remaining_ms, @pause_remaining_ms, @hard_stop_remaining_ms)
+    ON CONFLICT(session_id) DO UPDATE SET
+      task_name              = excluded.task_name,
+      notify_deadline        = excluded.notify_deadline,
+      pause_deadline         = excluded.pause_deadline,
+      hard_stop_deadline     = excluded.hard_stop_deadline,
+      hard_stop_armed        = excluded.hard_stop_armed,
+      notify_remaining_ms    = excluded.notify_remaining_ms,
+      pause_remaining_ms     = excluded.pause_remaining_ms,
+      hard_stop_remaining_ms = excluded.hard_stop_remaining_ms
+  `,
+  ).run({
+    session_id: sessionId,
+    task_name: taskName,
+    notify_deadline: notifyDeadline,
+    pause_deadline: pauseDeadline,
+    hard_stop_deadline: hardStopDeadline,
+    hard_stop_armed: hardStopArmed ? 1 : 0,
+    notify_remaining_ms: notifyRemainingMs,
+    pause_remaining_ms: pauseRemainingMs,
+    hard_stop_remaining_ms: hardStopRemainingMs,
+  });
+}
+
+export function deleteStuckSessionTimer(sessionId: string): void {
+  db.prepare<{ session_id: string }>(
+    `DELETE FROM stuck_session_timers WHERE session_id = @session_id`,
+  ).run({ session_id: sessionId });
+}
+
+export function getAllStuckSessionTimers(): StuckSessionTimerRow[] {
+  return db
+    .prepare(`SELECT * FROM stuck_session_timers`)
+    .all() as StuckSessionTimerRow[];
 }
