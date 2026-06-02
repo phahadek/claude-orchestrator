@@ -45,23 +45,35 @@ vi.mock('../DockerSessionRunner', () => ({
   reapOrphanContainers: vi.fn(),
 }));
 
-vi.mock('../ContextBuilder', () => ({ buildSessionContext: vi.fn().mockResolvedValue('') }));
-vi.mock('../orchestrator-claudemd', () => ({ buildReviewClaudeMd: vi.fn().mockReturnValue('') }));
+vi.mock('../ContextBuilder', () => ({
+  buildSessionContext: vi.fn().mockResolvedValue(''),
+}));
+vi.mock('../orchestrator-claudemd', () => ({
+  buildReviewClaudeMd: vi.fn().mockReturnValue(''),
+}));
 vi.mock('../branchModel', () => ({
-  resolveStartingPoint: vi.fn().mockReturnValue({ startingPoint: 'dev', milestoneSlug: null }),
+  resolveStartingPoint: vi
+    .fn()
+    .mockReturnValue({ startingPoint: 'dev', milestoneSlug: null }),
   ensureMilestoneBranch: vi.fn(),
 }));
 vi.mock('../orchestrator-config', () => ({
-  loadOrchestratorConfig: vi.fn().mockReturnValue({ mcp_servers: undefined, allowed_tools: [] }),
+  loadOrchestratorConfig: vi
+    .fn()
+    .mockReturnValue({ mcp_servers: undefined, allowed_tools: [] }),
 }));
-vi.mock('../sessionRecovery', () => ({ recoverSession: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('../sessionRecovery', () => ({
+  recoverSession: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('../../audit/AuditLog', () => ({ recordEvent: vi.fn() }));
 vi.mock('../../tasks/TaskBackend', () => ({ getTaskBackend: vi.fn() }));
 vi.mock('../../routes/tasks', () => ({ emitTaskUpdated: vi.fn() }));
 vi.mock('../../tasks/TaskStatusEngine', () => ({
   deriveDisplayStatusFromDb: vi.fn().mockReturnValue('running'),
 }));
-vi.mock('../../tasks/taskId', () => ({ formatTaskId: vi.fn().mockReturnValue('task-123') }));
+vi.mock('../../tasks/taskId', () => ({
+  formatTaskId: vi.fn().mockReturnValue('task-123'),
+}));
 vi.mock('../../notion/NotionClient', () => ({ parseSection: vi.fn() }));
 vi.mock('../../github/reviewUtils', () => ({
   formatReviewFeedback: vi.fn().mockReturnValue('review-feedback'),
@@ -71,7 +83,9 @@ vi.mock('../../security/scrubSecrets', () => ({
   scrubSecrets: vi.fn().mockImplementation((s: string) => s),
 }));
 vi.mock('../../config/corporateMode', () => ({
-  getCorporateMode: vi.fn().mockReturnValue({ gates: { dockerMandatory: false } }),
+  getCorporateMode: vi
+    .fn()
+    .mockReturnValue({ gates: { dockerMandatory: false } }),
 }));
 
 vi.mock('../../db/queries', () => ({
@@ -203,11 +217,17 @@ describe('sendOrResume — dead session path', () => {
 
   it('updates DB row to running (does not insert a new row)', async () => {
     await doResume();
-    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(SESSION_ID, 'running');
+    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(
+      SESSION_ID,
+      'running',
+    );
     // insertSession must NOT have been called with the original session ID
     const insertCalls = vi.mocked(insertSession).mock.calls;
     const insertedOriginal = insertCalls.some(
-      ([s]) => typeof s === 'object' && s !== null && (s as any).session_id === SESSION_ID,
+      ([s]) =>
+        typeof s === 'object' &&
+        s !== null &&
+        (s as any).session_id === SESSION_ID,
     );
     expect(insertedOriginal).toBe(false);
   });
@@ -279,9 +299,12 @@ describe('sendOrResume — dead session path', () => {
     expect(vi.mocked(AgentSession)).toHaveBeenCalledOnce();
 
     // git worktree add must be called at most once.
-    const worktreeAdds = vi.mocked(execSync).mock.calls.filter(
-      ([cmd]) => typeof cmd === 'string' && (cmd as string).includes('worktree add'),
-    );
+    const worktreeAdds = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) =>
+          typeof cmd === 'string' && (cmd as string).includes('worktree add'),
+      );
     expect(worktreeAdds.length).toBeLessThanOrEqual(1);
   });
 });
@@ -320,7 +343,9 @@ describe('sendOrResume — live session fast path', () => {
     // No new session was created.
     expect(vi.mocked(AgentSession)).not.toHaveBeenCalled();
     // Message delivered directly via sendMessage.
-    expect(capturedSessions[0].sendMessage).toHaveBeenCalledWith('live message');
+    expect(capturedSessions[0].sendMessage).toHaveBeenCalledWith(
+      'live message',
+    );
   });
 });
 

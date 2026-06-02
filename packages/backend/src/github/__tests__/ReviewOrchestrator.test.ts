@@ -9,11 +9,17 @@ vi.mock('../DiffSource', () => ({
   LocalDiffSource: vi.fn(),
 }));
 vi.mock('../reviewUtils', () => ({
-  formatReviewFeedback: vi.fn().mockImplementation((r: any, i: number) => `feedback:${r.verdict}:iter${i}`),
+  formatReviewFeedback: vi
+    .fn()
+    .mockImplementation(
+      (r: any, i: number) => `feedback:${r.verdict}:iter${i}`,
+    ),
   formatCIFailureFeedback: vi.fn(),
 }));
 vi.mock('../../session/orchestrator-config', () => ({
-  loadOrchestratorConfig: vi.fn().mockReturnValue({ mcp_servers: undefined, allowed_tools: [] }),
+  loadOrchestratorConfig: vi
+    .fn()
+    .mockReturnValue({ mcp_servers: undefined, allowed_tools: [] }),
 }));
 vi.mock('../../session/autofix-runner', () => ({
   loadAutofixCommands: vi.fn().mockReturnValue([]),
@@ -71,7 +77,9 @@ function makeSessionManager(): SessionManager {
   return sm;
 }
 
-function makeReviewService(verdict: PRReviewResult['verdict'] = 'needs_changes'): PRReviewService {
+function makeReviewService(
+  verdict: PRReviewResult['verdict'] = 'needs_changes',
+): PRReviewService {
   return {
     reviewPR: vi.fn().mockResolvedValue({
       verdict,
@@ -203,6 +211,9 @@ describe('ReviewOrchestrator — pr_opened subscription', () => {
 
     new ReviewOrchestrator(makeReviewService(), sm, 1, true);
 
-    expect(spyOnPrOpened).toHaveBeenCalledWith('pr_opened', expect.any(Function));
+    expect(spyOnPrOpened).toHaveBeenCalledWith(
+      'pr_opened',
+      expect.any(Function),
+    );
   });
 });
