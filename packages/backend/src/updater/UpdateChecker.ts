@@ -11,12 +11,12 @@ function isDevMode(): boolean {
   return process.env.CO_DEV === '1';
 }
 
-function getCurrentVersion(): string {
+export function getCurrentVersion(): string {
   const pkg = require('../../package.json') as { version: string };
   return pkg.version;
 }
 
-function isNewer(current: string, candidate: string): boolean {
+export function isNewer(current: string, candidate: string): boolean {
   const parse = (v: string) =>
     v
       .replace(/^v/, '')
