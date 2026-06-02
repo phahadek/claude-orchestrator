@@ -3,11 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ── DB mock (upsertTaskCache) ─────────────────────────────────────────────────
 
 vi.mock('../../src/db/db.js', async () => {
-  const Database = (await import('better-sqlite3')).default;
-  const memDb = new Database(':memory:');
-  const { applyTestSchema } = await import('../helpers/testDbSchema');
-  applyTestSchema(memDb);
-  return { db: memDb };
+  const { setupTestDb } = await import('../helpers/setupTestDb.js');
+  return { db: setupTestDb() };
 });
 
 import { JiraClient } from '../../src/tasks/JiraClient.js';

@@ -3,6 +3,7 @@ import { runMigrations } from '../../src/db/schema.js';
 
 export function setupTestDb(): Database.Database {
   const mem = new Database(':memory:');
+  mem.pragma('foreign_keys = ON');
   runMigrations(mem);
   return mem;
 }
