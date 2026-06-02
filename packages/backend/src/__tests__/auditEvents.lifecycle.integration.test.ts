@@ -14,12 +14,8 @@ import { describe, it, expect, vi } from 'vitest';
 // ── In-memory DB (must be hoisted before any transitive import uses it) ──────
 
 vi.mock('../db/db.js', async () => {
-  const Database = (await import('better-sqlite3')).default;
-  const db = new Database(':memory:');
-  db.pragma('foreign_keys = ON');
-  const { applyTestSchema } = await import('../../test/helpers/testDbSchema');
-  applyTestSchema(db);
-  return { db };
+  const { setupTestDb } = await import('../../test/helpers/setupTestDb.js');
+  return { db: setupTestDb() };
 });
 
 // ── Imports (resolved after mock is installed) ────────────────────────────────
