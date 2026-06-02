@@ -62,7 +62,10 @@ export function isPushCommand(toolName: string, toolInput: string): boolean {
  * Returns true if the tool call represents a `gh pr create` invocation.
  * Exported for unit testing.
  */
-export function isPRCreateCommand(toolName: string, toolInput: string): boolean {
+export function isPRCreateCommand(
+  toolName: string,
+  toolInput: string,
+): boolean {
   if (toolName !== 'Bash') return false;
   return /\bgh\s+pr\s+create\b/.test(toolInput);
 }

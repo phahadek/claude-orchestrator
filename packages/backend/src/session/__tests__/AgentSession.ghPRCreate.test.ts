@@ -91,7 +91,11 @@ function makeSession(): AgentSession {
 }
 
 function sendEvent(session: AgentSession, event: Record<string, unknown>) {
-  (session as unknown as { handleRawEvent: (e: Record<string, unknown>) => void }).handleRawEvent(event);
+  (
+    session as unknown as {
+      handleRawEvent: (e: Record<string, unknown>) => void;
+    }
+  ).handleRawEvent(event);
 }
 
 // ── Unit tests: isPRCreateCommand ─────────────────────────────────────────────
@@ -99,7 +103,10 @@ function sendEvent(session: AgentSession, event: Record<string, unknown>) {
 describe('isPRCreateCommand', () => {
   it('returns true for a standard gh pr create command', () => {
     expect(
-      isPRCreateCommand('Bash', 'gh pr create --draft --base dev --body-file /tmp/pr-body.md'),
+      isPRCreateCommand(
+        'Bash',
+        'gh pr create --draft --base dev --body-file /tmp/pr-body.md',
+      ),
     ).toBe(true);
   });
 
@@ -122,7 +129,9 @@ describe('isPRCreateCommand', () => {
   });
 
   it('returns false for non-Bash tool names', () => {
-    expect(isPRCreateCommand('mcp__github__create_pull_request', 'gh pr create')).toBe(false);
+    expect(
+      isPRCreateCommand('mcp__github__create_pull_request', 'gh pr create'),
+    ).toBe(false);
     expect(isPRCreateCommand('Write', 'gh pr create')).toBe(false);
   });
 });
@@ -132,7 +141,9 @@ describe('isPRCreateCommand', () => {
 describe('extractTextFromToolResultEvent', () => {
   it('extracts text from a string content field', () => {
     expect(
-      extractTextFromToolResultEvent({ content: 'https://github.com/owner/repo/pull/42' }),
+      extractTextFromToolResultEvent({
+        content: 'https://github.com/owner/repo/pull/42',
+      }),
     ).toBe('https://github.com/owner/repo/pull/42');
   });
 
@@ -222,10 +233,7 @@ describe('gh pr create live detection via handleRawEvent', () => {
   it('extracts URL from output that includes a leading warning line', async () => {
     const session = makeSession();
     emitToolUse(session);
-    emitToolResult(
-      session,
-      `Warning: 1 uncommitted change\n${PR_URL}`,
-    );
+    emitToolResult(session, `Warning: 1 uncommitted change\n${PR_URL}`);
 
     await new Promise((r) => setImmediate(r));
 
