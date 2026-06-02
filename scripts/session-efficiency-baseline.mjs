@@ -161,12 +161,21 @@ const records = rows.map((r) => {
   // otherwise: launches minus 1 (the first launch is the original spawn, not a resume).
   const resume_count =
     r.launched_count > 0 ? Math.max(0, r.launched_count - 1) : null;
-  const has_audit = r.audit_session_id !== null && r.audit_session_id !== undefined;
+  const has_audit =
+    r.audit_session_id !== null && r.audit_session_id !== undefined;
   const pr_wrong_base = has_audit
-    ? (r.pr_targets !== null && r.pr_targets !== undefined ? (r.pr_targets !== 'dev' ? 1 : 0) : null)
+    ? r.pr_targets !== null && r.pr_targets !== undefined
+      ? r.pr_targets !== 'dev'
+        ? 1
+        : 0
+      : null
     : null;
   const spec_mismatch = has_audit
-    ? (r.audit_spec_mismatch !== null && r.audit_spec_mismatch !== undefined ? (r.audit_spec_mismatch ? 1 : 0) : null)
+    ? r.audit_spec_mismatch !== null && r.audit_spec_mismatch !== undefined
+      ? r.audit_spec_mismatch
+        ? 1
+        : 0
+      : null
     : null;
   let violations_count = null;
   if (has_audit) {
