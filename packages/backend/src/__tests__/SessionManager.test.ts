@@ -403,8 +403,12 @@ describe('SessionManager.resumeSession() — nudge, timeout, mid-turn detection'
 
   it('calls this.send() with the nudge message during resume', () => {
     // nudgeMessage is built by buildResumeMessage(row) and then passed to send()
-    expect(source).toMatch(/const\s+nudgeMessage\s*=\s*this\.buildResumeMessage\s*\(\s*row\s*\)/);
-    expect(source).toMatch(/this\.send\s*\(\s*row\.session_id\s*,\s*nudgeMessage\s*\)/);
+    expect(source).toMatch(
+      /const\s+nudgeMessage\s*=\s*this\.buildResumeMessage\s*\(\s*row\s*\)/,
+    );
+    expect(source).toMatch(
+      /this\.send\s*\(\s*row\.session_id\s*,\s*nudgeMessage\s*\)/,
+    );
   });
 
   // The continuation message JSON shape is now produced by CliSessionRunner,

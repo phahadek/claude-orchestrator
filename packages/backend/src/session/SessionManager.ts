@@ -1072,7 +1072,10 @@ export class SessionManager extends EventEmitter {
     if (!pr?.review_result) return RESUME_NUDGE_MESSAGE;
     try {
       const result = JSON.parse(pr.review_result) as PRReviewResult;
-      if (result.verdict === 'needs_changes' || result.verdict === 'incomplete') {
+      if (
+        result.verdict === 'needs_changes' ||
+        result.verdict === 'incomplete'
+      ) {
         return formatReviewFeedback(result, pr.review_iteration ?? 0);
       }
       if (result.verdict === 'approved') {

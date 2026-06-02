@@ -46,7 +46,9 @@ describe('formatReviewFeedback()', () => {
     const result = makeResult({
       verdict: 'needs_changes',
       summary: 'Fix the lint errors.',
-      dimensions: [{ name: 'Lint', passed: false, notes: 'ESLint errors found' }],
+      dimensions: [
+        { name: 'Lint', passed: false, notes: 'ESLint errors found' },
+      ],
     });
     const msg = formatReviewFeedback(result, 2);
     expect(msg).toContain('Iteration 2');
@@ -56,7 +58,10 @@ describe('formatReviewFeedback()', () => {
   });
 
   it('includes verdict for incomplete', () => {
-    const result = makeResult({ verdict: 'incomplete', summary: 'Missing tests.' });
+    const result = makeResult({
+      verdict: 'incomplete',
+      summary: 'Missing tests.',
+    });
     const msg = formatReviewFeedback(result, 1);
     expect(msg).toContain('Incomplete');
     expect(msg).toContain('Missing tests.');
