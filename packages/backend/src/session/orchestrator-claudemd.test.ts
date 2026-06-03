@@ -73,7 +73,9 @@ describe('buildOrchestratorClaudeMd', () => {
     // Section 10: Bash rules
     expect(result).toContain('## Bash Rules (Permission System)');
     expect(result).toContain('One command per Bash call');
-    expect(result).toContain('mcp__github__create_pull_request');
+    // PR creation uses the <pr-body> marker; sessions are told NOT to use the MCP tool
+    expect(result).toContain('Do NOT use the MCP `mcp__github__create_pull_request`');
+    expect(result).not.toContain('gh pr create');
   });
 
   it('Bash Rule 3 instructs repeated -m flags for multi-line commit messages', () => {
@@ -224,8 +226,9 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(result).toContain('https://www.notion.so/task-999');
     expect(result).toContain('https://www.notion.so/ctx-888');
     expect(result).toContain('`main`');
-    // targetBranch used in lifecycle and branch rules
-    expect(result).toContain(`from \`main\``);
+    // targetBranch used in lifecycle (PR targeting) and pre-PR gate (rebase)
+    expect(result).toContain(`targeting \`main\``);
+    expect(result).toContain(`Rebase onto \`main\``);
   });
 });
 
