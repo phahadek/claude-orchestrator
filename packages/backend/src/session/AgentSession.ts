@@ -201,6 +201,8 @@ export class AgentSession extends EventEmitter {
   private lastFilePollutionRevertSha: string | null = null;
   /** Tracks message IDs whose <pr-body> marker has already been processed (deduplicate streaming chunks). */
   private readonly processedPRBodyMessageIds = new Set<string>();
+  /** In-flight promise from handlePRBodyMarker; awaited by handleCleanExit before markSessionDone. */
+  private prBodyMarkerPromise: Promise<void> | null = null;
 
   /** The underlying I/O adapter (CLI subprocess or Agent SDK). */
   private runner: ISessionRunner;
@@ -697,7 +699,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           const markerMatch = accumulatedText.match(PR_BODY_MARKER_REGEX);
           if (markerMatch) {
             this.processedPRBodyMessageIds.add(messageId);
-            void this.handlePRBodyMarker(markerMatch[1].trim());
+            this.prBodyMarkerPromise = this.handlePRBodyMarker(markerMatch[1].trim());
           }
         }
       }
@@ -1238,6 +1240,16 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     });
     const endedAt = Date.now();
     let prUrl: string | undefined;
+
+    // Await any in-flight PR creation from the <pr-body> marker so that the PR
+    // is registered before we scan for the URL and call markSessionDone.
+    if (this.prBodyMarkerPromise) {
+      const MARKER_PR_TIMEOUT_MS = 30_000;
+      await Promise.race([
+        this.prBodyMarkerPromise,
+        new Promise<void>((resolve) => setTimeout(resolve, MARKER_PR_TIMEOUT_MS)),
+      ]);
+    }
 
     try {
       const events = getEventsBySession(this.sessionId);

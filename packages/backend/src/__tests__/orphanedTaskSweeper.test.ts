@@ -368,7 +368,7 @@ describe('OrphanedTaskSweeper', () => {
     expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '✅ Done');
   });
 
-  it('still reverts to Ready when the PR is open (genuinely incomplete orphan)', async () => {
+  it('skips (does not revert) a task whose session has an open PR', async () => {
     const backend = makeBackend([makeTask('notion:abc')]);
     vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
       makeSession('done', 10 * 60 * 1000) as ReturnType<
@@ -382,6 +382,76 @@ describe('OrphanedTaskSweeper', () => {
       session_id: 'sess-1',
       state: 'open',
     } as ReturnType<typeof getPRBySessionId>);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it('skips a done session that ended within the post-clean-exit grace window', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    // Session ended 30 seconds ago (within 2-minute grace window)
+    const endedAt = Date.now() - 30 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue({
+      ...makeSession('done', 10 * 60 * 1000, endedAt),
+    } as ReturnType<typeof getLatestCodeSessionByNotionTaskId>);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it('records the correct projectId from session.project_id, not the loop project', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    // Session's project_id is 'polimarket', but the loop project is 'claude-dashboard'
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue({
+      ...makeSession('done', 60 * 60 * 1000, Date.now() - 30 * 60 * 1000),
+      project_id: 'polimarket',
+    } as ReturnType<typeof getLatestCodeSessionByNotionTaskId>);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'claude-dashboard' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project_id: 'polimarket',
+        payload: expect.objectContaining({ projectId: 'polimarket' }),
+      }),
+    );
+  });
+
+  it('still reverts a genuinely abandoned session (no PR, not done, outside anti-race)', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    // Session is in 'running' status (not done/error/killed), started long ago
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('running', 30 * 60 * 1000) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
       listProjects: () => [
