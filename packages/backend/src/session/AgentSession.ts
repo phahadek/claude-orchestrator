@@ -930,10 +930,15 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     // No existing PR — create one.
     sessionLog(this.sessionId, '<pr-body> marker — creating PR via REST');
 
+    let baseBranch = 'dev';
+    try {
+      baseBranch = getProjectById(this.projectId)?.baseBranch ?? 'dev';
+    } catch {
+      // project lookup failed — keep 'dev' default
+    }
+
     let branch: string;
     let repo: string;
-    const baseBranch =
-      getProjectById(this.projectId)?.baseBranch ?? 'dev';
     try {
       branch = execSync('git branch --show-current', {
         cwd: this.worktreePath,

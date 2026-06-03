@@ -314,4 +314,44 @@ describe('AgentSession — handlePRBodyMarker base branch resolution', () => {
     mockProc.proc.emit('exit', 0);
     await runPromise;
   });
+
+  it('falls back to dev and still creates the PR when getProjectById throws', async () => {
+    vi.mocked(getProjectById).mockImplementation(() => {
+      throw new Error('ProjectService not initialised');
+    });
+
+    const github = fakeGithubClient({ base: { ref: 'dev' } });
+    const session = new AgentSession(
+      'sess-marker-throws',
+      'https://notion.so/task',
+      'https://notion.so/ctx',
+      fakeTaskBackend(),
+      '/worktree',
+      'task-4',
+      undefined,
+      undefined,
+      'standard',
+      undefined,
+      github,
+      [],
+      undefined,
+      undefined,
+      'proj-x',
+    );
+
+    const runPromise = session.run();
+    await emitPRBodyMarker(mockProc, VALID_PR_BODY, 'msg-marker-4');
+
+    // createPR is still called with dev fallback — the project lookup error is caught
+    // independently so git info collection and PR creation can proceed.
+    expect(github.createPR).toHaveBeenCalledWith(
+      'owner/repo',
+      expect.objectContaining({ base: 'dev' }),
+    );
+
+    mockProc.stdout.push(null);
+    await new Promise((r) => setTimeout(r, 0));
+    mockProc.proc.emit('exit', 0);
+    await runPromise;
+  });
 });
