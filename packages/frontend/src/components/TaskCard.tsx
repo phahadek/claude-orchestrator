@@ -47,6 +47,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'PR body missing required sections — update the PR description and resume.',
   attribution_missing:
     'Commit attribution trailer missing — add AI-Authored-By to commits and push.',
+  audit_findings:
+    'Post-session audit found issues — review and address the findings.',
 };
 
 function verdictLabel(verdict: string): string {

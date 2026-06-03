@@ -10,6 +10,8 @@ import type { WorktreeEscapeViolation } from '../db/types';
 
 vi.mock('../db/queries', () => ({
   getPRByNotionTaskId: vi.fn(() => null),
+  getPRBySessionId: vi.fn(() => null),
+  setPauseReason: vi.fn(),
   getEventsBySession: vi.fn(() => []),
 }));
 
@@ -85,12 +87,16 @@ function makeGitHubClient(
   } as unknown as GitHubClient;
 }
 
-function makeSessionManager(): ISessionManager {
-  return { send: vi.fn() };
+function makeSessionManager(isAlive = true): ISessionManager {
+  return {
+    send: vi.fn(),
+    isAlive: vi.fn().mockReturnValue(isAlive),
+  };
 }
 
 // ── Import mocked module for DB fallback / event tests ───────────────────────
 import * as queries from '../db/queries';
+import type { PullRequestRow } from '../db/types';
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -98,6 +104,7 @@ describe('SessionAuditor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(queries.getPRByNotionTaskId).mockReturnValue(null);
+    vi.mocked(queries.getPRBySessionId).mockReturnValue(null);
   });
 
   // ── AC: Clean exit without PR ─────────────────────────────────────────────
@@ -202,10 +209,10 @@ describe('SessionAuditor', () => {
     expect(sm.send).not.toHaveBeenCalled();
   });
 
-  // ── AC: routeFailuresToSession does not throw if session has exited ───────
-  it('routeFailuresToSession does not throw when send() throws', async () => {
+  // ── AC: routeFailuresToSession does not throw if live session send() throws ─
+  it('routeFailuresToSession does not throw when send() throws on a live session', async () => {
     const github = makeGitHubClient({ baseBranch: 'main' }); // produces a violation
-    const sm = makeSessionManager();
+    const sm = makeSessionManager(true); // alive
     vi.mocked(sm.send).mockImplementation(() => {
       throw new Error('Session exited');
     });
@@ -214,6 +221,65 @@ describe('SessionAuditor', () => {
     const session = makeSession();
     // Should not throw
     await expect(auditor.audit(session, 0)).resolves.toBeDefined();
+  });
+
+  // ── AC: concluded session → attention queue ───────────────────────────────
+  it('escalates to attention queue (setPauseReason) when session is not alive and PR exists', async () => {
+    const github = makeGitHubClient({ baseBranch: 'main' }); // produces a violation
+    const sm = makeSessionManager(false); // not alive
+    const prRow: Partial<PullRequestRow> = {
+      pr_number: 42,
+      repo: 'owner/repo',
+    };
+    vi.mocked(queries.getPRBySessionId).mockReturnValue(
+      prRow as PullRequestRow,
+    );
+
+    const auditor = new SessionAuditor(makeNotionClient(), github, sm);
+    const session = makeSession();
+    await auditor.audit(session, 0);
+
+    expect(sm.send).not.toHaveBeenCalled();
+    expect(queries.setPauseReason).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'audit_findings',
+    );
+  });
+
+  it('does NOT call send() when session is not alive', async () => {
+    const github = makeGitHubClient({ baseBranch: 'main' }); // produces a violation
+    const sm = makeSessionManager(false); // not alive
+    vi.mocked(queries.getPRBySessionId).mockReturnValue(null);
+
+    const auditor = new SessionAuditor(makeNotionClient(), github, sm);
+    const session = makeSession();
+    await auditor.audit(session, 0);
+
+    expect(sm.send).not.toHaveBeenCalled();
+  });
+
+  it('does not crash when session is not alive and no PR is found', async () => {
+    const github = makeGitHubClient({ baseBranch: 'main' }); // produces a violation
+    const sm = makeSessionManager(false); // not alive
+    vi.mocked(queries.getPRBySessionId).mockReturnValue(null);
+
+    const auditor = new SessionAuditor(makeNotionClient(), github, sm);
+    const session = makeSession();
+    await expect(auditor.audit(session, 0)).resolves.toBeDefined();
+    expect(queries.setPauseReason).not.toHaveBeenCalled();
+  });
+
+  it('sends message normally to a live session with violations', async () => {
+    const github = makeGitHubClient({ baseBranch: 'main' }); // produces a violation
+    const sm = makeSessionManager(true); // alive
+
+    const auditor = new SessionAuditor(makeNotionClient(), github, sm);
+    const session = makeSession();
+    await auditor.audit(session, 0);
+
+    expect(sm.send).toHaveBeenCalledOnce();
+    expect(queries.setPauseReason).not.toHaveBeenCalled();
   });
 
   // ── AC: Audit skips review sessions ──────────────────────────────────────
