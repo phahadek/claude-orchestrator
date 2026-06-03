@@ -40,7 +40,9 @@ function getReviewConcurrency(): number {
   const raw = process.env.AUTO_REVIEW_CONCURRENCY;
   if (!raw) return DEFAULT_REVIEW_CONCURRENCY;
   const parsed = parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_REVIEW_CONCURRENCY;
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_REVIEW_CONCURRENCY;
 }
 
 function getMaxReviewIterations(): number {

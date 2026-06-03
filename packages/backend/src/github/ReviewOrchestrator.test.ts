@@ -2726,7 +2726,8 @@ describe('ReviewOrchestrator — concurrent drain pool', () => {
       const orch = new ReviewOrchestrator(rs, sm as any);
       expect((orch as any).maxConcurrency).toBe(20);
     } finally {
-      if (savedEnv !== undefined) process.env.AUTO_REVIEW_CONCURRENCY = savedEnv;
+      if (savedEnv !== undefined)
+        process.env.AUTO_REVIEW_CONCURRENCY = savedEnv;
       else delete process.env.AUTO_REVIEW_CONCURRENCY;
     }
   });
@@ -2740,7 +2741,8 @@ describe('ReviewOrchestrator — concurrent drain pool', () => {
       const orch = new ReviewOrchestrator(rs, sm as any);
       expect((orch as any).maxConcurrency).toBe(5);
     } finally {
-      if (savedEnv !== undefined) process.env.AUTO_REVIEW_CONCURRENCY = savedEnv;
+      if (savedEnv !== undefined)
+        process.env.AUTO_REVIEW_CONCURRENCY = savedEnv;
       else delete process.env.AUTO_REVIEW_CONCURRENCY;
     }
   });
