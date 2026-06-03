@@ -33,7 +33,15 @@ import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { recordEvent } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
 
+const DEFAULT_REVIEW_CONCURRENCY = 20;
 const DEFAULT_MAX_ITERATIONS = 3;
+
+function getReviewConcurrency(): number {
+  const raw = process.env.AUTO_REVIEW_CONCURRENCY;
+  if (!raw) return DEFAULT_REVIEW_CONCURRENCY;
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_REVIEW_CONCURRENCY;
+}
 
 function getMaxReviewIterations(): number {
   const raw = getSetting('max_review_iterations');
@@ -61,6 +69,8 @@ type QueuedJob = (ReviewJob & { type?: 'pr' }) | LocalBranchJob;
 export class ReviewOrchestrator {
   private queue: QueuedJob[] = [];
   private running = 0;
+  /** PR keys ("prNumber:repo") for reviews currently executing — enforces per-PR serialization. */
+  private inFlightPRKeys = new Set<string>();
   /** In-flight post-revert worktree sync promises, keyed by "prNumber:repo". */
   private pendingSyncs = new Map<string, Promise<void>>();
   /** Resolves once all incomplete pending_review_sync rows from the previous run are retried. */
@@ -69,7 +79,7 @@ export class ReviewOrchestrator {
   constructor(
     private reviewService: PRReviewService,
     private sessionManager: SessionManager,
-    private maxConcurrency: number = 1,
+    private maxConcurrency: number = getReviewConcurrency(),
     private enabled: boolean = true,
     private github?: GitHubClient,
   ) {
@@ -196,34 +206,58 @@ export class ReviewOrchestrator {
     void this.drain();
   }
 
+  private prKey(job: QueuedJob): string | null {
+    if (job.type === 'local_branch') return null;
+    const prJob = job as ReviewJob;
+    return `${prJob.prNumber}:${prJob.repo}`;
+  }
+
   private async drain(): Promise<void> {
     await this.bootReady;
     while (this.running < this.maxConcurrency && this.queue.length > 0) {
-      this.running++;
-      const job = this.queue.shift()!;
-      try {
-        if (job.type === 'local_branch') {
-          await this.executeLocalBranchReview(job);
-        } else {
-          await this.executeReview(job as ReviewJob);
+      // Find the first job not blocked by per-PR serialization.
+      let jobIndex = -1;
+      for (let i = 0; i < this.queue.length; i++) {
+        const key = this.prKey(this.queue[i]);
+        if (key === null || !this.inFlightPRKeys.has(key)) {
+          jobIndex = i;
+          break;
         }
-      } catch (e) {
-        if (job.type === 'local_branch') {
-          console.error(
-            `[ReviewOrchestrator] review failed for local branch ${job.branchName}:`,
-            e,
-          );
-        } else {
-          const prJob = job as ReviewJob;
-          console.error(
-            `[ReviewOrchestrator] review failed for PR #${prJob.prNumber}:`,
-            e,
-          );
-        }
-      } finally {
-        this.running--;
-        void this.drain();
       }
+      if (jobIndex === -1) break; // all remaining jobs are blocked by in-flight reviews
+
+      const [job] = this.queue.splice(jobIndex, 1);
+      const key = this.prKey(job);
+
+      this.running++;
+      if (key !== null) this.inFlightPRKeys.add(key);
+
+      void (async () => {
+        try {
+          if (job.type === 'local_branch') {
+            await this.executeLocalBranchReview(job);
+          } else {
+            await this.executeReview(job as ReviewJob);
+          }
+        } catch (e) {
+          if (job.type === 'local_branch') {
+            console.error(
+              `[ReviewOrchestrator] review failed for local branch ${(job as LocalBranchJob).branchName}:`,
+              e,
+            );
+          } else {
+            const prJob = job as ReviewJob;
+            console.error(
+              `[ReviewOrchestrator] review failed for PR #${prJob.prNumber}:`,
+              e,
+            );
+          }
+        } finally {
+          this.running--;
+          if (key !== null) this.inFlightPRKeys.delete(key);
+          void this.drain();
+        }
+      })();
     }
   }
 
