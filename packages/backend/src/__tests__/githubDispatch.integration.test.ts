@@ -15,6 +15,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { makeEventRow } from '../../test/helpers/eventFixtures';
 
 // ── DB mock (must hoist before any transitive db import) ──────────────────────
 
@@ -477,7 +478,7 @@ describe('GitHub review — PRReviewService threads github:N task ID', () => {
             {
               id: 1,
               session_id: capturedSessionId!,
-              event_type: 'text',
+              ...makeEventRow('text').live,
               timestamp: Date.now(),
               message_id: null,
               payload: JSON.stringify({

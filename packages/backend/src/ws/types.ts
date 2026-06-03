@@ -1,6 +1,7 @@
 import type { ResolvedTask } from '../notion/types';
 import type { DisplayStatus } from '../tasks/TaskStatusEngine';
-import type { EventType, PauseReason } from '../db/types';
+import type { PauseReason } from '../db/types';
+import type { EventKind } from '../session/eventKind';
 
 // ── Server → Client ──────────────────────────────────────────────
 export interface PermissionDenial {
@@ -92,7 +93,7 @@ export type ServerMessage =
   | {
       type: 'session_event';
       sessionId: string;
-      eventType: EventType;
+      eventType: EventKind;
       content: string;
       messageId?: string;
     }

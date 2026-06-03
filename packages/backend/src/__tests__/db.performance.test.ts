@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { makeEventRow } from '../../test/helpers/eventFixtures';
 
 // ── In-memory SQLite — schema must be applied inside the factory ───────────────
 // queries.ts creates prepared statements at module load, so the tables must
@@ -226,20 +227,18 @@ describe('getActiveTaskAggregates — output shape regression guard', () => {
     });
     insertEvent({
       session_id: 'sess-payload',
-      event_type: 'system',
-      payload: '{"sys":true}',
+      ...makeEventRow('other').live,
       timestamp: 1,
     });
     insertEvent({
       session_id: 'sess-payload',
-      event_type: 'assistant',
-      payload: '{"text":"hello"}',
+      ...makeEventRow('text').live,
       timestamp: 2,
     });
 
     const rows = getActiveTaskAggregates([tid]);
     expect(rows).toHaveLength(1);
-    expect(rows[0].code_session_last_event_payload).toBe('{"text":"hello"}');
+    expect(rows[0].code_session_last_event_payload).toBe(makeEventRow('text').live.payload);
   });
 
   it('returns null code_session_last_event_payload when session has only system/user events', () => {
@@ -256,14 +255,12 @@ describe('getActiveTaskAggregates — output shape regression guard', () => {
     });
     insertEvent({
       session_id: 'sess-sys',
-      event_type: 'system',
-      payload: '{}',
+      ...makeEventRow('other').live,
       timestamp: 1,
     });
     insertEvent({
       session_id: 'sess-sys',
-      event_type: 'user_message',
-      payload: '{}',
+      ...makeEventRow('user_message').live,
       timestamp: 2,
     });
 
@@ -320,7 +317,7 @@ describe('bench: getActiveTaskAggregates', () => {
     const bulkInsert = typedDb.transaction(() => {
       for (let i = 0; i < EVENT_COUNT; i++) {
         const sid = sessionIds[i % SESSION_COUNT];
-        const evType = i % 20 === 0 ? 'system' : 'assistant';
+        const evType = i % 20 === 0 ? 'system' : 'text';
         insertStmt.run(sid, evType, `{"i":${i}}`, i);
       }
     });
@@ -373,7 +370,7 @@ describe('query-plan regression: getActiveTaskAggregates', () => {
         cs.total_output_tokens AS code_session_output_tokens,
         (SELECT payload FROM session_events
          WHERE session_id = cs.session_id
-           AND event_type NOT IN ('system', 'user_message')
+           AND event_type IN ('text', 'tool_use', 'tool_result', 'error')
          ORDER BY id DESC LIMIT 1) AS code_session_last_event_payload,
         rs.session_id AS review_session_id, rs.status AS review_session_status,
         rs.total_input_tokens AS review_session_input_tokens,

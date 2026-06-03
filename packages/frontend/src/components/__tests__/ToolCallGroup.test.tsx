@@ -296,7 +296,7 @@ describe('groupSessionEvents', () => {
   it('passes non-tool events through unchanged', () => {
     const events = [
       makeEvent('text', 'Hello'),
-      makeEvent('system', 'init'),
+      makeEvent('other', 'init'),
       makeEvent('error', 'boom'),
     ];
     const items = groupSessionEvents(events);

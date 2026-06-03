@@ -7,6 +7,7 @@ import {
   getPRByNotionTaskId,
 } from '../db/queries';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
+import { eventKind } from '../session/eventKind';
 
 /**
  * Send the current persistent state of all active sessions to a freshly
@@ -72,7 +73,7 @@ export function sendInitialStateBurst(
       send({
         type: 'session_event',
         sessionId: s.session_id,
-        eventType: ev.event_type,
+        eventType: eventKind(ev),
         content: scrubSecrets(ev.payload),
         ...(ev.message_id != null && { messageId: ev.message_id }),
       });
