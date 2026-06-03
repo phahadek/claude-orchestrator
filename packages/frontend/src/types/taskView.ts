@@ -20,7 +20,8 @@ export type PauseReason =
   | 'awaiting_human_approval'
   | 'human_changes_requested'
   | 'pr_body_invalid'
-  | 'attribution_missing';
+  | 'attribution_missing'
+  | 'audit_findings';
 
 export interface TaskView {
   taskId: string;

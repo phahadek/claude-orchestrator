@@ -3,7 +3,12 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { parseSection } from '../notion/NotionClient';
 import type { GitHubClient } from '../github/GitHubClient';
-import { getPRByNotionTaskId, getEventsBySession } from '../db/queries';
+import {
+  getPRByNotionTaskId,
+  getPRBySessionId,
+  setPauseReason,
+  getEventsBySession,
+} from '../db/queries';
 import type { WorktreeEscapeViolation, SessionEvent } from '../db/types';
 import { eventKind } from './eventKind';
 
@@ -22,6 +27,8 @@ export interface SessionAudit {
 /** Minimal interface used to route audit failures back to a live session. */
 export interface ISessionManager {
   send(sessionId: string, message: string): void;
+  /** Returns true when a live process is running for the given session id. */
+  isAlive(sessionId: string): boolean;
   /** Register a Promise that resolves when the post-revert worktree sync completes.
    *  ReviewOrchestrator awaits this before fetching the PR diff for a re-review. */
   registerRevertSync?(
@@ -305,23 +312,43 @@ export class SessionAuditor {
     violations: (string | WorktreeEscapeViolation)[],
   ): void {
     if (!this.sessionManager) return;
-    const lines = violations.map((v) =>
-      typeof v === 'string'
-        ? `❌ ${v}`
-        : `❌ worktree_escape: ${v.tool} wrote to ${v.path}`,
-    );
-    const message = [
-      'Audit findings for your PR:',
-      '',
-      ...lines,
-      '',
-      'Please address these issues and push a fix.',
-    ].join('\n');
 
+    if (this.sessionManager.isAlive(sessionId)) {
+      const lines = violations.map((v) =>
+        typeof v === 'string'
+          ? `❌ ${v}`
+          : `❌ worktree_escape: ${v.tool} wrote to ${v.path}`,
+      );
+      const message = [
+        'Audit findings for your PR:',
+        '',
+        ...lines,
+        '',
+        'Please address these issues and push a fix.',
+      ].join('\n');
+
+      try {
+        this.sessionManager.send(sessionId, message);
+      } catch {
+        // Unexpected — violations still stored in SQLite
+      }
+      return;
+    }
+
+    // Session is concluded/idle — route to attention queue so findings are visible.
+    const pr = getPRBySessionId(sessionId);
+    if (!pr) {
+      console.warn(
+        `[SessionAuditor] audit findings for concluded session ${sessionId} but no PR found — findings stored in SQLite only`,
+      );
+      return;
+    }
     try {
-      this.sessionManager.send(sessionId, message);
-    } catch {
-      // Session may have already exited — violations still stored in SQLite
+      setPauseReason(pr.pr_number, pr.repo, 'audit_findings');
+    } catch (err) {
+      console.warn(
+        `[SessionAuditor] failed to set audit_findings pause_reason for PR #${pr.pr_number}: ${err}`,
+      );
     }
   }
 }
