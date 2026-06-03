@@ -207,7 +207,7 @@ export interface StuckResultSessionRow {
  * Query sessions stuck at status='running' whose last recorded event is a
  * result event (the CLI's clean-exit signal). Does NOT update the DB.
  * Matches production storage: result events are persisted with event_type='system'
- * and payload.type='result', NOT event_type='result'.
+ * and payload.type='result' (i.e. eventKind(row) === 'result'), NOT event_type='result'.
  * If minAgeMs is provided, only returns sessions older than that threshold.
  */
 export function getStuckResultSessionRows(
