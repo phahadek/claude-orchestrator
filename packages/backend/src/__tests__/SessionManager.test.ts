@@ -3,6 +3,177 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { normalizePath } from '../config';
 
+// ── AC: sendOrResume reconciles zombie rows before respawning ─────────────────
+describe('SessionManager.sendOrResume() — zombie reconciliation', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('imports markSessionSuperseded from db/queries', () => {
+    expect(source).toMatch(/markSessionSuperseded/);
+    expect(source).toMatch(
+      /import[\s\S]*markSessionSuperseded[\s\S]*from.*queries/,
+    );
+  });
+
+  it('imports getOtherRunningSessionsForTask from db/queries', () => {
+    expect(source).toMatch(/getOtherRunningSessionsForTask/);
+    expect(source).toMatch(
+      /import[\s\S]*getOtherRunningSessionsForTask[\s\S]*from.*queries/,
+    );
+  });
+
+  it('calls getOtherRunningSessionsForTask in _doSendOrResume', () => {
+    const doResumeIdx = source.indexOf('_doSendOrResume');
+    const shutdownIdx = source.indexOf('async shutdownAll');
+    const block = source.slice(doResumeIdx, shutdownIdx);
+    expect(block).toMatch(/getOtherRunningSessionsForTask\s*\(\s*row\.task_id/);
+  });
+
+  it('calls markSessionSuperseded for each stale session found', () => {
+    const doResumeIdx = source.indexOf('_doSendOrResume');
+    const shutdownIdx = source.indexOf('async shutdownAll');
+    const block = source.slice(doResumeIdx, shutdownIdx);
+    expect(block).toMatch(/markSessionSuperseded\s*\(/);
+  });
+
+  it('reconciliation is guarded on row.task_id being present', () => {
+    const doResumeIdx = source.indexOf('_doSendOrResume');
+    const shutdownIdx = source.indexOf('async shutdownAll');
+    const block = source.slice(doResumeIdx, shutdownIdx);
+    expect(block).toMatch(/if\s*\(\s*row\.task_id\s*\)/);
+  });
+});
+
+// ── AC: resumeSession re-pins the CLAUDE.md for the dispatched task ────────────
+describe('SessionManager.resumeSession() — task re-pin on resume', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('calls buildSessionContext in resumeSession to rebuild the orchestrator CLAUDE.md', () => {
+    const resumeIdx = source.indexOf('private async resumeSession(');
+    const resumeOrphanIdx = source.indexOf('resumeOrphanSessions', resumeIdx);
+    const block = source.slice(resumeIdx, resumeOrphanIdx);
+    expect(block).toMatch(/buildSessionContext\s*\(/);
+  });
+
+  it('calls injectContextFile("CLAUDE.md", ...) in resumeSession to re-pin the task', () => {
+    const resumeIdx = source.indexOf('private async resumeSession(');
+    const resumeOrphanIdx = source.indexOf('resumeOrphanSessions', resumeIdx);
+    const block = source.slice(resumeIdx, resumeOrphanIdx);
+    expect(block).toMatch(/injectContextFile\s*\(\s*['"]CLAUDE\.md['"]/);
+  });
+
+  it('re-pin is guarded on CLI session mode', () => {
+    const resumeIdx = source.indexOf('private async resumeSession(');
+    const resumeOrphanIdx = source.indexOf('resumeOrphanSessions', resumeIdx);
+    const block = source.slice(resumeIdx, resumeOrphanIdx);
+    expect(block).toMatch(/session_mode.*cli|cli.*session_mode/i);
+  });
+
+  it('attempts to pre-fetch task content before re-injecting', () => {
+    const resumeIdx = source.indexOf('private async resumeSession(');
+    const resumeOrphanIdx = source.indexOf('resumeOrphanSessions', resumeIdx);
+    const block = source.slice(resumeIdx, resumeOrphanIdx);
+    expect(block).toMatch(/fetchTaskPage\s*\(\s*row\.task_id\s*\)/);
+  });
+});
+
+// ── AC: wireSession() — PR-attribution guard ───────────────────────────────────
+describe('SessionManager.wireSession() — PR-attribution guard', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('checks session.taskId against the PR task in the pr_opened listener', () => {
+    const wireIdx = source.indexOf('private wireSession(');
+    // wireSession ends at the next private method
+    const endIdx = source.indexOf('\n  private ', wireIdx + 1);
+    const block = source.slice(wireIdx, endIdx > -1 ? endIdx : wireIdx + 3000);
+    expect(block).toMatch(/session\.taskId/);
+    expect(block).toMatch(/pr_attribution_mismatch|PR attribution mismatch/);
+  });
+
+  it('still emits pr_opened even when a mismatch is detected (non-blocking guard)', () => {
+    const wireIdx = source.indexOf('private wireSession(');
+    const endIdx = source.indexOf('\n  private ', wireIdx + 1);
+    const block = source.slice(wireIdx, endIdx > -1 ? endIdx : wireIdx + 3000);
+    expect(block).toMatch(/this\.emit\s*\(\s*['"]pr_opened['"]/);
+  });
+
+  it('records a pr_attribution_mismatch audit event on mismatch', () => {
+    const wireIdx = source.indexOf('private wireSession(');
+    const endIdx = source.indexOf('\n  private ', wireIdx + 1);
+    const block = source.slice(wireIdx, endIdx > -1 ? endIdx : wireIdx + 3000);
+    expect(block).toMatch(/recordEvent/);
+    expect(block).toMatch(/pr_attribution_mismatch/);
+  });
+});
+
+// ── AC: orchestrator-claudemd.ts — board-discovery instruction removed ─────────
+describe('orchestrator-claudemd.ts — no board-discovery instruction', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'orchestrator-claudemd.ts'),
+    'utf-8',
+  );
+
+  it('includes an explicit guard against self-assigning from the board', () => {
+    expect(source).toMatch(/self.assign|do not.*browse|browse.*board/i);
+  });
+
+  it('warns that the session should stop and wait when no work remains', () => {
+    expect(source).toMatch(/no remaining work.*stop|stop.*wait/i);
+  });
+
+  it('does not instruct sessions to search the board for a task to do', () => {
+    // The lifecycle section must not contain open-ended board-search instructions
+    expect(source).not.toMatch(/fetch.*board.*task|search.*board.*for.*task/i);
+  });
+});
+
+// ── AC: queries.ts — markSessionSuperseded and getOtherRunningSessionsForTask ──
+describe('queries.ts — supersession support', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'db', 'queries.ts'),
+    'utf-8',
+  );
+
+  it('exports markSessionSuperseded function', () => {
+    expect(source).toMatch(/export function markSessionSuperseded/);
+  });
+
+  it('markSessionSuperseded sets status to superseded', () => {
+    const fnIdx = source.indexOf('export function markSessionSuperseded');
+    const fnEnd = source.indexOf('\n}', fnIdx);
+    const block = source.slice(fnIdx, fnEnd + 2);
+    expect(block).toMatch(/superseded/);
+  });
+
+  it('exports getOtherRunningSessionsForTask function', () => {
+    expect(source).toMatch(/export function getOtherRunningSessionsForTask/);
+  });
+
+  it('getOtherRunningSessionsForTask excludes the given session_id', () => {
+    const fnIdx = source.indexOf(
+      'export function getOtherRunningSessionsForTask',
+    );
+    const fnEnd = source.indexOf('\n}', fnIdx);
+    const block = source.slice(fnIdx, fnEnd + 2);
+    expect(block).toMatch(/session_id\s*!=|session_id.*!=|exclude/);
+  });
+
+  it('hasActiveSessionForTask excludes superseded sessions', () => {
+    const fnIdx = source.indexOf('export function hasActiveSessionForTask');
+    const fnEnd = source.indexOf('\n}', fnIdx);
+    const block = source.slice(fnIdx, fnEnd + 2);
+    expect(block).toMatch(/superseded/);
+  });
+});
+
 // ── AC: SessionManager.start() updates task status to In Progress ──────────
 describe('SessionManager.start() — In Progress status', () => {
   const source = fs.readFileSync(

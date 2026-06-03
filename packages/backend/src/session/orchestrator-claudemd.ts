@@ -177,6 +177,8 @@ export function buildOrchestratorClaudeMd(
 
 Follow these steps in order — every session:
 
+> ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work after checking git status, stop and wait for instructions.**
+
 ${
   taskContent
     ? `> **Task spec is pre-loaded below.** Do NOT fetch Notion pages — the task content has
@@ -190,7 +192,7 @@ ${
 
 1. Read \`tasks.yaml\` in the project root for task context (skip remote fetch).
 2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
-      : `1. ${fetchInstruction(taskBackend)}
+      : `1. ${fetchInstruction(taskBackend)} Fetch only the task listed above — do NOT browse the board for other tasks.
 2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
 }
 3. Implement the task per the acceptance criteria.

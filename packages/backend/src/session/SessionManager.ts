@@ -29,6 +29,7 @@ import {
   updateSessionStatus,
   updateSessionWorktreePath,
   markSessionDone,
+  markSessionSuperseded,
   insertEvent,
   getSession,
   getSessionsByStatus,
@@ -38,6 +39,7 @@ import {
   getPRBySessionId,
   getStuckResultSessionRows,
   hasActiveSessionForTask,
+  getOtherRunningSessionsForTask,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
 import type { Session } from '../db/types';
@@ -180,7 +182,7 @@ export interface StartOptions {
 /** How long to suppress lastMessage-only task_updated broadcasts per task (ms). */
 const LAST_MESSAGE_THROTTLE_MS = 3_000;
 
-const TERMINAL_STATUSES = new Set(['done', 'error', 'killed']);
+const TERMINAL_STATUSES = new Set(['done', 'error', 'killed', 'superseded']);
 const ALWAYS_GUARDED_BRANCHES = new Set(['dev', 'main']);
 
 /**
@@ -861,8 +863,30 @@ export class SessionManager extends EventEmitter {
   ): void {
     // Forward all session events to the WS layer via EventEmitter
     session.on('message', (msg: ServerMessage) => this.emit('message', msg));
-    // Forward pr_opened so ReviewOrchestrator can subscribe at the SessionManager level
-    session.on('pr_opened', (job: unknown) => this.emit('pr_opened', job));
+    // PR-attribution guard: warn when a session opens a PR for a different task
+    // than the one it was dispatched for, then still forward so the PR is tracked.
+    session.on('pr_opened', (job: unknown) => {
+      const prJob = job as { taskId?: string };
+      const dispatched = session.taskId;
+      if (
+        dispatched &&
+        prJob.taskId &&
+        prJob.taskId.replace(/-/g, '') !== dispatched.replace(/-/g, '')
+      ) {
+        console.error(
+          `[SessionManager] PR attribution mismatch: session ${sessionId.slice(0, 8)} dispatched for ${dispatched} but PR is attributed to ${prJob.taskId}`,
+        );
+        recordEvent({
+          event_type: 'pr_attribution_mismatch',
+          actor_type: 'system',
+          actor_id: sessionId,
+          project_id: null,
+          task_id: dispatched,
+          payload: { dispatchedTaskId: dispatched, prTaskId: prJob.taskId },
+        });
+      }
+      this.emit('pr_opened', job);
+    });
     // Forward push_detected so ReviewOrchestrator can trigger re-reviews
     session.on('push_detected', (payload: unknown) =>
       this.emit('push_detected', payload),
@@ -1006,6 +1030,54 @@ export class SessionManager extends EventEmitter {
       resumeRunner,
       resumeMcpConfigPath,
     );
+
+    // Re-pin: re-inject CLAUDE.md with the dispatched task so the resumed session
+    // is bound to its original task and cannot self-select another task from the board.
+    if (runtimeSettings.session_mode === 'cli' && row.task_url) {
+      try {
+        let taskContent: string | undefined;
+        if (row.task_id && row.project_id) {
+          try {
+            taskContent = await getTaskBackend(row.project_id).fetchTaskPage(
+              row.task_id,
+            );
+          } catch (fetchErr) {
+            console.warn(
+              `[SessionManager] resumeSession: task fetch failed for ${row.session_id.slice(0, 8)} (injecting without pre-loaded content): ${fetchErr}`,
+            );
+          }
+        }
+        const repinnedContext = buildSessionContext({
+          taskName: row.task_name ?? row.task_url,
+          taskUrl: row.task_url,
+          projectContextUrl: row.project_context_url ?? '',
+          targetBranch: project.baseBranch ?? 'dev',
+          projectDir,
+          worktreePath,
+          verify: orchConfig.verify.length > 0 ? orchConfig.verify : undefined,
+          bashRules:
+            orchConfig.bash_rules.length > 0
+              ? orchConfig.bash_rules
+              : undefined,
+          taskBackend:
+            project.taskSource === 'yaml'
+              ? 'local'
+              : project.taskSource === 'github'
+                ? 'github'
+                : 'notion',
+          taskContent,
+          gitMode: project.gitMode,
+        });
+        session.injectContextFile('CLAUDE.md', repinnedContext);
+        console.log(
+          `[SessionManager] resumeSession: re-pinned CLAUDE.md for ${row.session_id.slice(0, 8)}`,
+        );
+      } catch (err) {
+        console.warn(
+          `[SessionManager] resumeSession: CLAUDE.md re-pin failed for ${row.session_id.slice(0, 8)}: ${err}`,
+        );
+      }
+    }
 
     // Detect mid-turn state: last event was a tool_result or tool_use with no
     // subsequent assistant/result response. Log a warning to aid diagnosis.
@@ -1493,6 +1565,18 @@ export class SessionManager extends EventEmitter {
           : new CliSessionRunner(sessionId);
 
     const mcpConfigPath = writeMcpConfig(worktreePath, orchConfig.mcp_servers);
+
+    // Reconcile zombie rows: mark any other running sessions for this task as
+    // superseded before respawning, so no two live rows exist for the same task.
+    if (row.task_id) {
+      const stale = getOtherRunningSessionsForTask(row.task_id, row.session_id);
+      for (const s of stale) {
+        console.log(
+          `[SessionManager] sendOrResume: superseding stale session ${s.session_id.slice(0, 8)} for task ${row.task_id}`,
+        );
+        markSessionSuperseded(s.session_id, Date.now());
+      }
+    }
 
     // Shared helper: creates session with original ID, registers in map,
     // updates DB row to 'running', emits session_status.
