@@ -409,4 +409,21 @@ describe('<pr-body> marker — clean-exit ordering', () => {
 
     expect(vi.mocked(markSessionDone)).toHaveBeenCalledTimes(1);
   });
+
+  it('markSessionDone receives the PR URL created via marker flow (not undefined)', async () => {
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    // Let createPR resolve
+    await new Promise((r) => setImmediate(r));
+
+    await (session as unknown as { handleCleanExit: () => Promise<void> }).handleCleanExit();
+
+    expect(vi.mocked(markSessionDone)).toHaveBeenCalledWith(
+      'test-session-id',
+      expect.any(Number),
+      PR_URL,
+    );
+  });
 });

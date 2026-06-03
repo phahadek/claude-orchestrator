@@ -1279,6 +1279,9 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       // Fall through with prUrl=undefined — periodic recovery will retry PR extraction.
     }
 
+    // Preserve URL detected live (e.g. via marker flow where the URL is never
+    // emitted into session events — handlePRDetected sets this.prUrl directly).
+    if (!prUrl) prUrl = this.prUrl;
     this.prUrl = prUrl;
 
     // Atomically persist done + pr_url before any network or review-pipeline
