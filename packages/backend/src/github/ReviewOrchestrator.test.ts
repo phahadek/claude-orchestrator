@@ -655,6 +655,12 @@ describe('ReviewOrchestrator — error handling', () => {
 
     await new Promise((r) => setTimeout(r, 30));
 
+    // ReviewOrchestrator is the sole writer — verdict must be persisted here
+    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      expect.stringContaining('"needs_changes"'),
+    );
     // Verdict must be routed to the coding session — not silently dropped
     expect(vi.mocked(sm.sendOrResume)).toHaveBeenCalledWith(
       basePRRow.session_id,

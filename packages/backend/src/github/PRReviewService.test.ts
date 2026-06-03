@@ -488,7 +488,7 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
     expect(typeof opts.sessionId).toBe('string');
 
     expect(result.verdict).toBe('approved');
-    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledOnce();
+    expect(vi.mocked(setPRReviewResult)).not.toHaveBeenCalled();
     expect(vi.mocked(setReviewSessionId)).toHaveBeenCalledWith(
       42,
       'owner/repo',
@@ -636,7 +636,7 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
 
     expect(result.verdict).toBe('approved');
     expect(result.summary).toBe('Approved immediately.');
-    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledOnce();
+    expect(vi.mocked(setPRReviewResult)).not.toHaveBeenCalled();
   });
 
   it('throws when PR is not found in database', async () => {
@@ -2291,7 +2291,7 @@ describe('PRReviewService.reviewPR() — local branch verdict persistence', () =
     expect(vi.mocked(setPRReviewResult)).not.toHaveBeenCalled();
   });
 
-  it('persists verdict to pull_requests.review_result for pr work items (regression)', async () => {
+  it('does NOT persist verdict internally — caller (ReviewOrchestrator) owns the write', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
 
     const approvedPayload = {
@@ -2338,18 +2338,16 @@ describe('PRReviewService.reviewPR() — local branch verdict persistence', () =
       'https://notion.so/ctx',
     );
 
-    await service.reviewPR(
+    const result = await service.reviewPR(
       { type: 'pr', prNumber: 42, repo: 'owner/repo' },
       makeMockDiffSource(),
     );
 
-    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledWith(
-      42,
-      'owner/repo',
-      expect.any(String),
-    );
-    // Must NOT write to local_branches
+    // reviewPR() must NOT write to DB — the caller owns write+route
+    expect(vi.mocked(setPRReviewResult)).not.toHaveBeenCalled();
     expect(vi.mocked(setLocalBranchReviewResult)).not.toHaveBeenCalled();
+    // Verdict is surfaced via the return value for the caller to write
+    expect(result.verdict).toBe('approved');
   });
 });
 
@@ -2568,7 +2566,7 @@ describe('PRReviewService.reviewPR() — transient fetch retry', () => {
     );
 
     expect(result.verdict).toBe('approved');
-    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledOnce();
+    expect(vi.mocked(setPRReviewResult)).not.toHaveBeenCalled();
     expect(diffSource.fetchDiff).toHaveBeenCalledTimes(2);
   });
 
