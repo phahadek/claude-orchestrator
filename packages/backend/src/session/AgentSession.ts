@@ -788,7 +788,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     this.broadcast({
       type: 'session_event',
       sessionId: this.sessionId,
-      eventType: eventType as 'text' | 'tool_use' | 'tool_result' | 'system',
+      eventType: eventType,
       content: payload,
       ...(messageId != null && { messageId }),
     });

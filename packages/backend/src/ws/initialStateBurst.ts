@@ -72,12 +72,7 @@ export function sendInitialStateBurst(
       send({
         type: 'session_event',
         sessionId: s.session_id,
-        eventType: ev.event_type as
-          | 'text'
-          | 'tool_use'
-          | 'tool_result'
-          | 'system'
-          | 'user_message',
+        eventType: ev.event_type,
         content: scrubSecrets(ev.payload),
         ...(ev.message_id != null && { messageId: ev.message_id }),
       });

@@ -285,10 +285,6 @@ export class StuckSessionMonitor {
         return;
       }
       case 'session_event': {
-        if (msg.eventType === 'tool_use') {
-          this.checkHardStop(msg.sessionId);
-          return;
-        }
         if (msg.eventType === 'system') {
           this.handleSystemEvent(msg.sessionId, msg.content);
           return;
