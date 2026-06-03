@@ -5,6 +5,7 @@ import { parseSection } from '../notion/NotionClient';
 import type { GitHubClient } from '../github/GitHubClient';
 import { getPRByNotionTaskId, getEventsBySession } from '../db/queries';
 import type { WorktreeEscapeViolation, SessionEvent } from '../db/types';
+import { eventKind } from './eventKind';
 
 // ── Public interfaces ────────────────────────────────────────────────────────
 
@@ -342,7 +343,7 @@ function extractToolUseBlocks(event: SessionEvent): ToolUseBlock[] {
     return blocks;
   }
 
-  if (event.event_type === 'tool_use') {
+  if (eventKind(event) === 'tool_use') {
     const name = payload.name as string | undefined;
     const input = (payload.input ?? {}) as Record<string, unknown>;
     if (name) blocks.push({ name, input });
