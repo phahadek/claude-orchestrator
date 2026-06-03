@@ -587,11 +587,7 @@ export class ReviewOrchestrator {
     // Single-owner write+route: persist the verdict here, immediately before
     // broadcasting and routing, so there is no path where the DB is updated
     // without the verdict also being dispatched to the coding session.
-    setPRReviewResult(
-      job.prNumber,
-      job.repo,
-      JSON.stringify(result),
-    );
+    setPRReviewResult(job.prNumber, job.repo, JSON.stringify(result));
 
     // Draft transition and Notion update are handled inside reviewService.reviewPR()
     // via handleApprovedVerdict. Derive draftTransitioned from the pre-review row so
