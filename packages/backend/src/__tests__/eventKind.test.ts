@@ -11,11 +11,15 @@ describe('eventKind — live full-event payload shape', () => {
   });
 
   it('tool_use → tool_use', () => {
-    expect(eventKind(makeEventRow('tool_use').live)).toBe<EventKind>('tool_use');
+    expect(eventKind(makeEventRow('tool_use').live)).toBe<EventKind>(
+      'tool_use',
+    );
   });
 
   it('tool_result → tool_result', () => {
-    expect(eventKind(makeEventRow('tool_result').live)).toBe<EventKind>('tool_result');
+    expect(eventKind(makeEventRow('tool_result').live)).toBe<EventKind>(
+      'tool_result',
+    );
   });
 
   it('error → error', () => {
@@ -27,7 +31,9 @@ describe('eventKind — live full-event payload shape', () => {
   });
 
   it('user_message → user_message', () => {
-    expect(eventKind(makeEventRow('user_message').live)).toBe<EventKind>('user_message');
+    expect(eventKind(makeEventRow('user_message').live)).toBe<EventKind>(
+      'user_message',
+    );
   });
 
   it('other → other', () => {
@@ -41,11 +47,15 @@ describe('eventKind — JSONL ev.content shape', () => {
   });
 
   it('tool_use → tool_use (no type field in payload)', () => {
-    expect(eventKind(makeEventRow('tool_use').jsonl)).toBe<EventKind>('tool_use');
+    expect(eventKind(makeEventRow('tool_use').jsonl)).toBe<EventKind>(
+      'tool_use',
+    );
   });
 
   it('tool_result → tool_result (no type field in payload)', () => {
-    expect(eventKind(makeEventRow('tool_result').jsonl)).toBe<EventKind>('tool_result');
+    expect(eventKind(makeEventRow('tool_result').jsonl)).toBe<EventKind>(
+      'tool_result',
+    );
   });
 
   it('error → error (no type field in payload)', () => {
@@ -57,7 +67,9 @@ describe('eventKind — JSONL ev.content shape', () => {
   });
 
   it('user_message → user_message', () => {
-    expect(eventKind(makeEventRow('user_message').jsonl)).toBe<EventKind>('user_message');
+    expect(eventKind(makeEventRow('user_message').jsonl)).toBe<EventKind>(
+      'user_message',
+    );
   });
 });
 
@@ -81,15 +93,24 @@ describe('eventKind — system event payload discrimination', () => {
   });
 
   it('system + no type field → other', () => {
-    expect(eventKind({ event_type: 'system', payload: JSON.stringify({ subtype: 'init' }) })).toBe<EventKind>('other');
+    expect(
+      eventKind({
+        event_type: 'system',
+        payload: JSON.stringify({ subtype: 'init' }),
+      }),
+    ).toBe<EventKind>('other');
   });
 
   it('system + malformed payload → other', () => {
-    expect(eventKind({ event_type: 'system', payload: 'not-json' })).toBe<EventKind>('other');
+    expect(
+      eventKind({ event_type: 'system', payload: 'not-json' }),
+    ).toBe<EventKind>('other');
   });
 
   it('rate_limit → other', () => {
-    expect(eventKind({ event_type: 'rate_limit', payload: '{}' })).toBe<EventKind>('other');
+    expect(
+      eventKind({ event_type: 'rate_limit', payload: '{}' }),
+    ).toBe<EventKind>('other');
   });
 });
 
@@ -121,23 +142,33 @@ describe('regression — transient API error detection (isTransientApiError path
 
 describe('regression — mid-turn detection', () => {
   it('eventKind=tool_result — live shape', () => {
-    expect(eventKind(makeEventRow('tool_result').live)).toBe<EventKind>('tool_result');
+    expect(eventKind(makeEventRow('tool_result').live)).toBe<EventKind>(
+      'tool_result',
+    );
   });
 
   it('eventKind=tool_result — JSONL shape', () => {
-    expect(eventKind(makeEventRow('tool_result').jsonl)).toBe<EventKind>('tool_result');
+    expect(eventKind(makeEventRow('tool_result').jsonl)).toBe<EventKind>(
+      'tool_result',
+    );
   });
 
   it('eventKind=tool_use — live shape', () => {
-    expect(eventKind(makeEventRow('tool_use').live)).toBe<EventKind>('tool_use');
+    expect(eventKind(makeEventRow('tool_use').live)).toBe<EventKind>(
+      'tool_use',
+    );
   });
 
   it('eventKind=tool_use — JSONL shape', () => {
-    expect(eventKind(makeEventRow('tool_use').jsonl)).toBe<EventKind>('tool_use');
+    expect(eventKind(makeEventRow('tool_use').jsonl)).toBe<EventKind>(
+      'tool_use',
+    );
   });
 
   it('eventKind≠tool_result for a text event (no false positive)', () => {
-    expect(eventKind(makeEventRow('text').live)).not.toBe<EventKind>('tool_result');
+    expect(eventKind(makeEventRow('text').live)).not.toBe<EventKind>(
+      'tool_result',
+    );
   });
 });
 

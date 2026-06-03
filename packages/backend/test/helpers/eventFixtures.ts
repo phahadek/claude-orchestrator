@@ -33,7 +33,10 @@ export function makeEventRow(kind: EventKind): EventRowShapes {
           event_type: 'text',
           payload: JSON.stringify({
             type: 'assistant',
-            message: { role: 'assistant', content: [{ type: 'text', text: 'Hello' }] },
+            message: {
+              role: 'assistant',
+              content: [{ type: 'text', text: 'Hello' }],
+            },
           }),
         },
         jsonl: {
@@ -106,11 +109,19 @@ export function makeEventRow(kind: EventKind): EventRowShapes {
       return {
         live: {
           event_type: 'system',
-          payload: JSON.stringify({ type: 'result', subtype: 'success', duration_ms: 1000 }),
+          payload: JSON.stringify({
+            type: 'result',
+            subtype: 'success',
+            duration_ms: 1000,
+          }),
         },
         jsonl: {
           event_type: 'system',
-          payload: JSON.stringify({ type: 'result', subtype: 'success', duration_ms: 1000 }),
+          payload: JSON.stringify({
+            type: 'result',
+            subtype: 'success',
+            duration_ms: 1000,
+          }),
         },
       };
 
