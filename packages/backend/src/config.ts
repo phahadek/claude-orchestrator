@@ -118,7 +118,31 @@ export const ALLOWED_TOOLS = [
   'Bash(sort:*)',
   'Bash(pwd:*)',
   'mcp__claude_ai_Notion__*',
-  'mcp__github__*',
+  // GitHub MCP — explicit allowlist; create_pull_request and merge_pull_request are
+  // backend-owned and must not be available to session agents.
+  'mcp__github__add_issue_comment',
+  'mcp__github__create_branch',
+  'mcp__github__create_issue',
+  'mcp__github__create_or_update_file',
+  'mcp__github__create_pull_request_review',
+  'mcp__github__fork_repository',
+  'mcp__github__get_file_contents',
+  'mcp__github__get_issue',
+  'mcp__github__get_pull_request',
+  'mcp__github__get_pull_request_comments',
+  'mcp__github__get_pull_request_files',
+  'mcp__github__get_pull_request_reviews',
+  'mcp__github__get_pull_request_status',
+  'mcp__github__list_commits',
+  'mcp__github__list_issues',
+  'mcp__github__list_pull_requests',
+  'mcp__github__push_files',
+  'mcp__github__search_code',
+  'mcp__github__search_issues',
+  'mcp__github__search_repositories',
+  'mcp__github__search_users',
+  'mcp__github__update_issue',
+  'mcp__github__update_pull_request_branch',
 ];
 
 function hydrateProject(p: {
