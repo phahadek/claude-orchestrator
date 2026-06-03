@@ -8,6 +8,7 @@ import {
   getPRBySessionId,
   setPauseReason,
   getEventsBySession,
+  getDenialsBySession,
 } from '../db/queries';
 import type { WorktreeEscapeViolation, SessionEvent } from '../db/types';
 import { eventKind } from './eventKind';
@@ -201,13 +202,17 @@ export class SessionAuditor {
 
   /**
    * Scan session_events for tool calls that wrote to paths outside the worktree.
-   * Checks Write/Edit tool file_path inputs and Bash command absolute paths.
+   * Checks Write/Edit tool file_path inputs and Bash command write targets.
+   * Skips tool calls that were denied (permission_denials) — they never executed.
    */
   async auditWorktreeEscape(
     sessionId: string,
     worktreePath: string,
   ): Promise<WorktreeEscapeViolation[]> {
     const events = getEventsBySession(sessionId);
+    const denials = getDenialsBySession(sessionId);
+    const deniedIds = new Set(denials.map((d) => d.tool_use_id));
+
     const violations: WorktreeEscapeViolation[] = [];
     const normalizedWorktree = normalizePath(worktreePath);
     const worktreePrefix = normalizedWorktree.endsWith(path.sep)
@@ -217,6 +222,7 @@ export class SessionAuditor {
     for (const event of events) {
       const blocks = extractToolUseBlocks(event);
       for (const block of blocks) {
+        if (block.id && deniedIds.has(block.id)) continue;
         const paths = extractPathsFromBlock(block);
         for (const p of paths) {
           const resolved = normalizePath(p, worktreePath);
@@ -358,6 +364,7 @@ export class SessionAuditor {
 interface ToolUseBlock {
   name: string;
   input: Record<string, unknown>;
+  id?: string;
 }
 
 /** Extract all tool_use blocks from a session event payload. */
@@ -372,8 +379,9 @@ function extractToolUseBlocks(event: SessionEvent): ToolUseBlock[] {
 
   if (eventKind(event) === 'tool_use') {
     const name = payload.name as string | undefined;
+    const id = payload.id as string | undefined;
     const input = (payload.input ?? {}) as Record<string, unknown>;
-    if (name) blocks.push({ name, input });
+    if (name) blocks.push({ name, input, id });
   } else if (eventKind(event) === 'text') {
     const message = payload.message as Record<string, unknown> | undefined;
     const content = message?.content as
@@ -385,6 +393,7 @@ function extractToolUseBlocks(event: SessionEvent): ToolUseBlock[] {
           blocks.push({
             name: block.name,
             input: (block.input ?? {}) as Record<string, unknown>,
+            id: block.id as string | undefined,
           });
         }
       }
@@ -403,23 +412,34 @@ function extractPathsFromBlock(block: ToolUseBlock): string[] {
   }
   if (name === 'Bash') {
     const command = input.command as string | undefined;
-    return command ? extractAbsolutePathsFromCommand(command) : [];
+    return command ? extractWriteTargetsFromCommand(command) : [];
   }
   return [];
 }
 
-/** Extract absolute paths embedded in a shell command string. */
-function extractAbsolutePathsFromCommand(command: string): string[] {
-  const paths: string[] = [];
-  // Windows absolute: C:\... or C:/...
-  for (const match of command.matchAll(/[A-Za-z]:[/\\][^\s"'`;\n]*/g)) {
-    paths.push(match[0]);
+/**
+ * Extract only actual write targets from a shell command string.
+ * Handles output redirects (>/>>), tee, and cp/mv destinations.
+ * URLs are stripped first to prevent https:// fragments matching as paths.
+ */
+function extractWriteTargetsFromCommand(command: string): string[] {
+  const stripped = command.replace(/https?:\/\/[^\s"'`;\n]*/gi, '');
+  const targets: string[] = [];
+
+  // Output redirects: > path or >> path
+  for (const match of stripped.matchAll(/>>?\s*([^\s"'`;\n|&]+)/g)) {
+    targets.push(match[1]);
   }
-  // Git-Bash absolute: /c/... (single lowercase letter drive)
-  for (const match of command.matchAll(/\/[a-zA-Z]\/[^\s"'`;\n]*/g)) {
-    paths.push(match[0]);
+  // tee destinations: tee [-flags] path
+  for (const match of stripped.matchAll(/\btee\s+(?:-\S+\s+)*([^\s"'`;\n|&]+)/g)) {
+    targets.push(match[1]);
   }
-  return paths;
+  // cp/mv destinations: cp/mv [-flags] src dest
+  for (const match of stripped.matchAll(/\b(?:cp|mv)\s+(?:-\S+\s+)*\S+\s+([^\s"'`;\n|&]+)/g)) {
+    targets.push(match[1]);
+  }
+
+  return targets;
 }
 
 /**
