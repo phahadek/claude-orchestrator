@@ -2554,3 +2554,196 @@ describe('ReviewOrchestrator — reviewLocalBranch: sendOrResume + audit logging
     ).resolves.toBeUndefined();
   });
 });
+
+// ── Concurrent drain pool ─────────────────────────────────────────────────────
+
+describe('ReviewOrchestrator — concurrent drain pool', () => {
+  it('dispatches two independent PRs concurrently when maxConcurrency=2', async () => {
+    const started: number[] = [];
+    let resolveFirst!: () => void;
+    const firstDone = new Promise<void>((r) => {
+      resolveFirst = r;
+    });
+
+    const rs = {
+      reviewPR: vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          started.push(1);
+          await firstDone;
+          return {
+            prNumber: 1,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
+        })
+        .mockImplementationOnce(async () => {
+          started.push(2);
+          return {
+            prNumber: 2,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
+        }),
+      sendReReview: vi.fn(),
+      reReviewPR: vi.fn(),
+    } as unknown as PRReviewService;
+
+    const sm = makeMockSessionManager();
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    new ReviewOrchestrator(rs, sm as any, 2, true);
+
+    sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
+    sm.emit('pr_opened', { ...baseJob, prNumber: 2 });
+
+    // Both reviews should start without waiting for the first to finish
+    await new Promise((r) => setTimeout(r, 30));
+    expect(started).toEqual([1, 2]);
+
+    resolveFirst();
+    await new Promise((r) => setTimeout(r, 10));
+  });
+
+  it('a slow review for one PR does not stall an independent PR review', async () => {
+    const started: number[] = [];
+    let resolveFirst!: () => void;
+    const firstDone = new Promise<void>((r) => {
+      resolveFirst = r;
+    });
+
+    const rs = {
+      reviewPR: vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          started.push(1);
+          await firstDone; // blocks indefinitely until we release
+          return {
+            prNumber: 1,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
+        })
+        .mockImplementationOnce(async () => {
+          started.push(2);
+          return {
+            prNumber: 2,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
+        }),
+      sendReReview: vi.fn(),
+      reReviewPR: vi.fn(),
+    } as unknown as PRReviewService;
+
+    const sm = makeMockSessionManager();
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    new ReviewOrchestrator(rs, sm as any, 20, true);
+
+    sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
+    sm.emit('pr_opened', { ...baseJob, prNumber: 2 });
+
+    // PR 2 should complete even though PR 1 is stuck
+    await new Promise((r) => setTimeout(r, 30));
+    expect(started).toContain(2);
+
+    resolveFirst();
+    await new Promise((r) => setTimeout(r, 10));
+  });
+
+  it('per-PR serialization: two jobs for the same PR do not run concurrently', async () => {
+    const started: string[] = [];
+    let resolveFirst!: () => void;
+    const firstDone = new Promise<void>((r) => {
+      resolveFirst = r;
+    });
+
+    const rs = {
+      reviewPR: vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          started.push('first');
+          await firstDone;
+          return {
+            prNumber: 1,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
+        })
+        .mockImplementationOnce(async () => {
+          started.push('second');
+          return {
+            prNumber: 1,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
+        }),
+      sendReReview: vi.fn(),
+      reReviewPR: vi.fn(),
+    } as unknown as PRReviewService;
+
+    const sm = makeMockSessionManager();
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    new ReviewOrchestrator(rs, sm as any, 20, true);
+
+    // Queue two jobs for the SAME PR
+    sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
+    sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
+
+    // Only the first should be running; the second is blocked
+    await new Promise((r) => setTimeout(r, 30));
+    expect(started).toEqual(['first']);
+
+    // Release the first; the second should now start
+    resolveFirst();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(started).toEqual(['first', 'second']);
+  });
+
+  it('default maxConcurrency is 20 (configurable via AUTO_REVIEW_CONCURRENCY)', () => {
+    const savedEnv = process.env.AUTO_REVIEW_CONCURRENCY;
+    try {
+      delete process.env.AUTO_REVIEW_CONCURRENCY;
+      const sm = makeMockSessionManager();
+      const rs = makeMockReviewService();
+      const orch = new ReviewOrchestrator(rs, sm as any);
+      expect((orch as any).maxConcurrency).toBe(20);
+    } finally {
+      if (savedEnv !== undefined)
+        process.env.AUTO_REVIEW_CONCURRENCY = savedEnv;
+      else delete process.env.AUTO_REVIEW_CONCURRENCY;
+    }
+  });
+
+  it('AUTO_REVIEW_CONCURRENCY env var overrides default concurrency', () => {
+    const savedEnv = process.env.AUTO_REVIEW_CONCURRENCY;
+    try {
+      process.env.AUTO_REVIEW_CONCURRENCY = '5';
+      const sm = makeMockSessionManager();
+      const rs = makeMockReviewService();
+      const orch = new ReviewOrchestrator(rs, sm as any);
+      expect((orch as any).maxConcurrency).toBe(5);
+    } finally {
+      if (savedEnv !== undefined)
+        process.env.AUTO_REVIEW_CONCURRENCY = savedEnv;
+      else delete process.env.AUTO_REVIEW_CONCURRENCY;
+    }
+  });
+});
