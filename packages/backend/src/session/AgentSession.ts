@@ -1,7 +1,8 @@
 import { EventEmitter } from 'events';
+import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { ALLOWED_TOOLS, runtimeSettings } from '../config';
+import { ALLOWED_TOOLS, GITHUB_REPO, runtimeSettings } from '../config';
 import {
   upsertSessionEvent,
   updateSessionStatus,
@@ -42,6 +43,7 @@ import {
 } from './eventTypes';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
+const PR_BODY_MARKER_REGEX = /<pr-body>([\s\S]*?)<\/pr-body>/;
 
 /**
  * Returns true if the tool call represents a git push operation.
@@ -196,6 +198,8 @@ export class AgentSession extends EventEmitter {
    *  Used as a loop guard: if the PR's HEAD equals this SHA, the check is skipped
    *  so we don't re-revert our own revert commit. */
   private lastFilePollutionRevertSha: string | null = null;
+  /** Tracks message IDs whose <pr-body> marker has already been processed (deduplicate streaming chunks). */
+  private readonly processedPRBodyMessageIds = new Set<string>();
 
   /** The underlying I/O adapter (CLI subprocess or Agent SDK). */
   private runner: ISessionRunner;
@@ -681,6 +685,20 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           ...event,
           message: { ...msg, content: mergedContent },
         });
+
+        // Detect <pr-body>…</pr-body> marker emitted by the session.
+        // Guard by message ID so streaming chunks don't trigger multiple times.
+        if (!this.processedPRBodyMessageIds.has(messageId)) {
+          const accumulatedText = mergedContent
+            .filter((b) => b.type === 'text' && typeof b.text === 'string')
+            .map((b) => b.text as string)
+            .join('');
+          const markerMatch = accumulatedText.match(PR_BODY_MARKER_REGEX);
+          if (markerMatch) {
+            this.processedPRBodyMessageIds.add(messageId);
+            void this.handlePRBodyMarker(markerMatch[1].trim());
+          }
+        }
       }
     }
 
@@ -837,6 +855,152 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     const prUrl = prShape.html_url ?? text.match(PR_URL_REGEX)?.[0];
     if (!prUrl) return;
     await this.handlePRDetected(prUrl, prShape);
+  }
+
+  /**
+   * Handle a <pr-body>…</pr-body> marker emitted by the session.
+   * Validates the body, then either creates a new PR or updates an existing one.
+   * Invalid body → re-prompts the session over stdin; no PR opened.
+   */
+  private async handlePRBodyMarker(body: string): Promise<void> {
+    if (!this.githubClient) {
+      sessionLog(
+        this.sessionId,
+        '<pr-body> marker found but githubClient not configured — skipping',
+      );
+      return;
+    }
+
+    // Validate before creating — invalid body re-prompts; no PR opened.
+    const validation = validatePRBody(body);
+    if (!validation.valid) {
+      sessionLog(
+        this.sessionId,
+        `<pr-body> validation failed — missing: ${validation.missingSections.join(', ')}`,
+      );
+      const missing = validation.missingSections
+        .map((s) => `\`${s}\``)
+        .join(', ');
+      this.sendMessage(
+        `The PR body is missing required sections: ${missing}.\n\n` +
+          `Please fix the body and re-emit it inside a <pr-body>…</pr-body> marker ` +
+          `in your next message. All four sections must be present: ` +
+          `\`## Summary\`, task-source section, \`## Automated Tests\`, \`## Files Changed\`.`,
+      );
+      return;
+    }
+
+    // Check for an existing PR for this session (idempotent update path).
+    const existingPR = getPRBySessionId(this.sessionId);
+    if (existingPR) {
+      sessionLog(
+        this.sessionId,
+        `<pr-body> marker — updating body of existing PR #${existingPR.pr_number}`,
+      );
+      try {
+        await this.githubClient.updatePR(
+          existingPR.repo,
+          existingPR.pr_number,
+          {
+            body,
+          },
+        );
+        recordEvent({
+          event_type: 'pr_body_updated_via_marker',
+          actor_type: 'ai',
+          actor_id: this.sessionId,
+          project_id: this.projectId || null,
+          task_id: this.taskId || null,
+          payload: { pr_number: existingPR.pr_number, repo: existingPR.repo },
+        });
+      } catch (e) {
+        console.warn(
+          `[AgentSession] updatePR #${existingPR.pr_number} failed: ${(e as Error).message}`,
+        );
+      }
+      return;
+    }
+
+    // No existing PR — create one.
+    sessionLog(this.sessionId, '<pr-body> marker — creating PR via REST');
+
+    let branch: string;
+    let repo: string;
+    let baseBranch = 'dev';
+    try {
+      branch = execSync('git branch --show-current', {
+        cwd: this.worktreePath,
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      }).trim();
+
+      const remoteUrl = execSync('git remote get-url origin', {
+        cwd: this.worktreePath,
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      }).trim();
+      const repoMatch = remoteUrl.match(
+        /github\.com[:/]([^/]+\/[^.]+?)(?:\.git)?$/,
+      );
+      repo = repoMatch ? repoMatch[1] : GITHUB_REPO;
+
+      try {
+        const remoteHead = execSync(
+          'git symbolic-ref refs/remotes/origin/HEAD',
+          {
+            cwd: this.worktreePath,
+            encoding: 'utf-8',
+            stdio: 'pipe',
+          },
+        ).trim();
+        const parsed = remoteHead.replace('refs/remotes/origin/', '');
+        if (parsed) baseBranch = parsed;
+      } catch {
+        // refs/remotes/origin/HEAD not cached — keep 'dev' default
+      }
+    } catch (e) {
+      console.warn(
+        `[AgentSession] handlePRBodyMarker: git info failed — ${(e as Error).message}`,
+      );
+      return;
+    }
+
+    if (!branch) {
+      console.warn(
+        `[AgentSession] handlePRBodyMarker: empty branch name — skipping`,
+      );
+      return;
+    }
+
+    const taskName = branch.replace(/^feature\//, '');
+    const title = `feat: ${taskName}`;
+
+    try {
+      const created = await this.githubClient.createPR(repo, {
+        title,
+        body,
+        head: branch,
+        base: baseBranch,
+        draft: true,
+      });
+
+      const prShape: GitHubPRShape = {
+        number: created.number,
+        html_url: created.html_url,
+        title: created.title,
+        body: created.body,
+        head: { ref: created.head.ref, sha: created.head.sha },
+        base: { ref: created.base.ref },
+        state: created.state,
+        created_at: created.created_at,
+        updated_at: created.updated_at,
+        draft: created.draft,
+      };
+
+      await this.handlePRDetected(created.html_url, prShape);
+    } catch (e) {
+      console.error(`[AgentSession] createPR via <pr-body> marker failed:`, e);
+    }
   }
 
   /**

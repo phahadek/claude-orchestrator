@@ -6,6 +6,7 @@ export type EventType =
   | 'status_updated'
   | 'pr_body_invalid'
   | 'pr_body_invalid_warning'
+  | 'pr_body_updated_via_marker'
   | 'attribution_missing'
   | 'session_launch_refused_zdr'
   | 'data_residency_flag_toggled'
