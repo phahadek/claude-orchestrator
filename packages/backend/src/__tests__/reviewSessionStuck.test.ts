@@ -72,7 +72,9 @@ vi.mock('../session/autofix-runner.js', () => ({
 }));
 
 vi.mock('../session/filePollutionCheck.js', () => ({
-  runFilePollutionCheck: vi.fn().mockResolvedValue({ headSha: null, revertCommitSha: null }),
+  runFilePollutionCheck: vi
+    .fn()
+    .mockResolvedValue({ headSha: null, revertCommitSha: null }),
 }));
 
 vi.mock('../session/orchestrator-config.js', () => ({
@@ -147,7 +149,9 @@ function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
 
 function makeMockGitHub(): GitHubClient {
   return {
-    fetchPR: vi.fn().mockResolvedValue({ headSha: 'abc123', title: 'test', body: null }),
+    fetchPR: vi
+      .fn()
+      .mockResolvedValue({ headSha: 'abc123', title: 'test', body: null }),
     fetchDiff: vi.fn().mockResolvedValue({ diff: 'diff --git a/foo.ts' }),
     markPRReady: vi.fn().mockResolvedValue(undefined),
   } as unknown as GitHubClient;
@@ -229,19 +233,21 @@ describe('ReviewOrchestrator — killed review session routes incomplete verdict
     );
 
     // Capture the session ID from start() and fire session_ended after a tick
-    sm.start = vi.fn().mockImplementation(
-      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
-        const id = opts.sessionId;
-        // Simulate the review session being killed: emit session_ended with no verdict stored
-        setImmediate(() =>
-          sm.emit('message', {
-            type: 'session_ended',
-            sessionId: id,
-          }),
-        );
-        return id;
-      },
-    );
+    sm.start = vi
+      .fn()
+      .mockImplementation(
+        (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+          const id = opts.sessionId;
+          // Simulate the review session being killed: emit session_ended with no verdict stored
+          setImmediate(() =>
+            sm.emit('message', {
+              type: 'session_ended',
+              sessionId: id,
+            }),
+          );
+          return id;
+        },
+      );
 
     const orchestrator = new ReviewOrchestrator(
       reviewService,

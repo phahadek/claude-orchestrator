@@ -626,7 +626,9 @@ describe('ReviewOrchestrator — error handling', () => {
     const sm = makeMockSessionManager();
     let resolveReview!: (r: import('./PRReviewService').PRReviewResult) => void;
     const slowReview = new Promise<import('./PRReviewService').PRReviewResult>(
-      (res) => { resolveReview = res; },
+      (res) => {
+        resolveReview = res;
+      },
     );
     const rs = {
       reviewPR: vi.fn().mockReturnValue(slowReview),
