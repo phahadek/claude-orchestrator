@@ -238,7 +238,9 @@ describe('getActiveTaskAggregates — output shape regression guard', () => {
 
     const rows = getActiveTaskAggregates([tid]);
     expect(rows).toHaveLength(1);
-    expect(rows[0].code_session_last_event_payload).toBe(makeEventRow('text').live.payload);
+    expect(rows[0].code_session_last_event_payload).toBe(
+      makeEventRow('text').live.payload,
+    );
   });
 
   it('returns null code_session_last_event_payload when session has only system/user events', () => {

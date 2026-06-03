@@ -1246,7 +1246,9 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       const last20 = events
         .filter((ev) => {
           const k = eventKind(ev);
-          return k !== 'tool_use' && k !== 'tool_result' && k !== 'user_message';
+          return (
+            k !== 'tool_use' && k !== 'tool_result' && k !== 'user_message'
+          );
         })
         .slice(-20);
 
