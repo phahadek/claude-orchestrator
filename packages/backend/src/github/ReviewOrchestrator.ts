@@ -33,7 +33,6 @@ import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { recordEvent } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
 
-const REVIEW_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_ITERATIONS = 3;
 
 function getMaxReviewIterations(): number {
@@ -447,31 +446,19 @@ export class ReviewOrchestrator {
 
     let result: PRReviewResult;
     try {
-      result = await Promise.race([
-        this.reviewService.reviewPR(
-          workItem,
-          diffSource,
-          job.projectId,
-          job.contextUrl,
-        ),
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () => reject(new Error('Review timed out')),
-            REVIEW_TIMEOUT_MS,
-          ),
-        ),
-      ]);
+      result = await this.reviewService.reviewPR(
+        workItem,
+        diffSource,
+        job.projectId,
+        job.contextUrl,
+      );
     } catch (e) {
-      const summary =
-        e instanceof Error && e.message === 'Review timed out'
-          ? 'Review timed out'
-          : String(e);
       this.sessionManager.emit('message', {
         type: 'pr_review_complete',
         prNumber: job.localBranchId,
         repo: `local/${job.branchName}`,
         verdict: 'error',
-        summary,
+        summary: String(e),
       });
       return;
     }
@@ -570,29 +557,18 @@ export class ReviewOrchestrator {
 
     let result: PRReviewResult;
     try {
-      result = await Promise.race([
-        this.reviewService.reviewPR(
-          workItem,
-          diffSource,
-          project.id,
-          job.contextUrl,
-        ),
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () => reject(new Error('Review timed out')),
-            REVIEW_TIMEOUT_MS,
-          ),
-        ),
-      ]);
+      result = await this.reviewService.reviewPR(
+        workItem,
+        diffSource,
+        project.id,
+        job.contextUrl,
+      );
     } catch (e) {
       if (e instanceof FetchRetryExhaustedError) {
         // review_failed was already emitted by PRReviewService; leave review_result null
         return;
       }
-      const summary =
-        e instanceof Error && e.message === 'Review timed out'
-          ? 'Review timed out'
-          : String(e);
+      const summary = String(e);
       setPRReviewResult(
         job.prNumber,
         job.repo,
@@ -607,6 +583,11 @@ export class ReviewOrchestrator {
       });
       return;
     }
+
+    // Single-owner write+route: persist the verdict here, immediately before
+    // broadcasting and routing, so there is no path where the DB is updated
+    // without the verdict also being dispatched to the coding session.
+    setPRReviewResult(job.prNumber, job.repo, JSON.stringify(result));
 
     // Draft transition and Notion update are handled inside reviewService.reviewPR()
     // via handleApprovedVerdict. Derive draftTransitioned from the pre-review row so

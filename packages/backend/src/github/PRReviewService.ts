@@ -272,7 +272,6 @@ export class PRReviewService {
           aiResult,
           sizeSignal,
         );
-        setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
         if (finalResult.verdict === 'approved') {
           await this.handleApprovedVerdict(
             prNumber,
@@ -326,7 +325,6 @@ export class PRReviewService {
           aiResult,
           sizeSignal,
         );
-        setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
         if (finalResult.verdict === 'approved') {
           await this.handleApprovedVerdict(
             prNumber,
@@ -386,7 +384,6 @@ export class PRReviewService {
         aiResult,
         sizeSignal,
       );
-      setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
       if (finalResult.verdict === 'approved') {
         await this.handleApprovedVerdict(
           prNumber,
