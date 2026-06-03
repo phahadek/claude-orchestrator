@@ -266,7 +266,6 @@ export class StuckSessionMonitor {
   private onMessage(msg: ServerMessage): void {
     switch (msg.type) {
       case 'session_started':
-        if (msg.sessionType === 'review') return;
         this.startTracking(msg.sessionId, msg.taskName);
         return;
       case 'session_ended':

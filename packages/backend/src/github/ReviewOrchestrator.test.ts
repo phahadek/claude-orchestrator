@@ -617,57 +617,57 @@ describe('ReviewOrchestrator — incomplete verdict', () => {
   });
 });
 
-// ── Timeout handling ──────────────────────────────────────────────────────────
+// ── Error handling (no timeout race) ─────────────────────────────────────────
 
-describe('ReviewOrchestrator — timeout', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it('stores error verdict and broadcasts error event on timeout', async () => {
-    vi.useFakeTimers();
+describe('ReviewOrchestrator — error handling', () => {
+  it('regression #180: needs_changes verdict is routed even when review resolves after the old 120s bound', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
 
     const sm = makeMockSessionManager();
-    // reviewPR never resolves — simulates a hung review
+    let resolveReview!: (r: import('./PRReviewService').PRReviewResult) => void;
+    const slowReview = new Promise<import('./PRReviewService').PRReviewResult>(
+      (res) => { resolveReview = res; },
+    );
     const rs = {
-      reviewPR: vi.fn().mockReturnValue(new Promise(() => {})),
+      reviewPR: vi.fn().mockReturnValue(slowReview),
       sendReReview: vi.fn(),
     } as unknown as PRReviewService;
 
     new ReviewOrchestrator(rs, sm as any, 1, true);
+    vi.mocked(sm.sendOrResume).mockResolvedValue('code-session');
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
 
     sm.emit('pr_opened', baseJob);
 
-    // Advance past the 120s timeout
-    await vi.advanceTimersByTimeAsync(121_000);
+    // Resolve with needs_changes after the old 120s wall-clock would have fired
+    resolveReview({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'needs_changes',
+      dimensions: [{ name: 'Tests', passed: false, notes: 'Missing tests' }],
+      summary: 'Please add tests',
+      reviewedAt: new Date().toISOString(),
+    });
 
-    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledOnce();
-    const [prNum, repo, resultJson] =
-      vi.mocked(setPRReviewResult).mock.calls[0];
-    expect(prNum).toBe(1);
-    expect(repo).toBe('owner/repo');
-    const stored = JSON.parse(resultJson as string) as {
-      verdict: string;
-      summary: string;
-      dimensions: unknown;
-    };
-    expect(stored.verdict).toBe('error');
-    expect(stored.summary).toContain('timed out');
-    expect(Array.isArray(stored.dimensions)).toBe(true);
+    await new Promise((r) => setTimeout(r, 30));
 
+    // Verdict must be routed to the coding session — not silently dropped
+    expect(vi.mocked(sm.sendOrResume)).toHaveBeenCalledWith(
+      basePRRow.session_id,
+      expect.stringContaining('Review Feedback'),
+    );
     const reviewComplete = messages.find(
       (m: any) => m.type === 'pr_review_complete',
     );
     expect(reviewComplete).toMatchObject({
       type: 'pr_review_complete',
-      verdict: 'error',
+      verdict: 'needs_changes',
     });
   });
 
-  it('stores error verdict with dimensions: [] when executeReview catches a non-timeout error', async () => {
+  it('stores error verdict with dimensions: [] when executeReview catches an error', async () => {
     const sm = makeMockSessionManager();
     const rs = {
       reviewPR: vi.fn().mockRejectedValue(new Error('GitHub API unreachable')),
