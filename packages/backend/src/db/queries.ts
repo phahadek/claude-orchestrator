@@ -143,7 +143,10 @@ const stmtMarkSessionSuperseded = db.prepare<{
  * Superseded rows are treated as terminal: excluded from active-session checks
  * and not resumed on next boot.
  */
-export function markSessionSuperseded(sessionId: string, endedAt: number): void {
+export function markSessionSuperseded(
+  sessionId: string,
+  endedAt: number,
+): void {
   stmtMarkSessionSuperseded.run({ session_id: sessionId, ended_at: endedAt });
 }
 

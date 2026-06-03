@@ -12,12 +12,16 @@ describe('SessionManager.sendOrResume() — zombie reconciliation', () => {
 
   it('imports markSessionSuperseded from db/queries', () => {
     expect(source).toMatch(/markSessionSuperseded/);
-    expect(source).toMatch(/import[\s\S]*markSessionSuperseded[\s\S]*from.*queries/);
+    expect(source).toMatch(
+      /import[\s\S]*markSessionSuperseded[\s\S]*from.*queries/,
+    );
   });
 
   it('imports getOtherRunningSessionsForTask from db/queries', () => {
     expect(source).toMatch(/getOtherRunningSessionsForTask/);
-    expect(source).toMatch(/import[\s\S]*getOtherRunningSessionsForTask[\s\S]*from.*queries/);
+    expect(source).toMatch(
+      /import[\s\S]*getOtherRunningSessionsForTask[\s\S]*from.*queries/,
+    );
   });
 
   it('calls getOtherRunningSessionsForTask in _doSendOrResume', () => {
@@ -154,7 +158,9 @@ describe('queries.ts — supersession support', () => {
   });
 
   it('getOtherRunningSessionsForTask excludes the given session_id', () => {
-    const fnIdx = source.indexOf('export function getOtherRunningSessionsForTask');
+    const fnIdx = source.indexOf(
+      'export function getOtherRunningSessionsForTask',
+    );
     const fnEnd = source.indexOf('\n}', fnIdx);
     const block = source.slice(fnIdx, fnEnd + 2);
     expect(block).toMatch(/session_id\s*!=|session_id.*!=|exclude/);
