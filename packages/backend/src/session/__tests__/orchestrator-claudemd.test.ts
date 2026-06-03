@@ -41,13 +41,19 @@ describe('buildOrchestratorClaudeMd', () => {
     it('renders for all task-backend variants', () => {
       const backends = ['notion', 'local', 'jira', 'github'] as const;
       for (const taskBackend of backends) {
-        const output = buildOrchestratorClaudeMd({ ...BASE_PARAMS, taskBackend });
+        const output = buildOrchestratorClaudeMd({
+          ...BASE_PARAMS,
+          taskBackend,
+        });
         expect(output).toContain('## Context Efficiency');
       }
     });
 
     it('renders for local-only git mode', () => {
-      const output = buildOrchestratorClaudeMd({ ...BASE_PARAMS, gitMode: 'local-only' });
+      const output = buildOrchestratorClaudeMd({
+        ...BASE_PARAMS,
+        gitMode: 'local-only',
+      });
       expect(output).toContain('## Context Efficiency');
     });
 
