@@ -2,7 +2,12 @@ import { EventEmitter } from 'events';
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { ALLOWED_TOOLS, GITHUB_REPO, runtimeSettings } from '../config';
+import {
+  ALLOWED_TOOLS,
+  GITHUB_REPO,
+  runtimeSettings,
+  getProjectById,
+} from '../config';
 import {
   upsertSessionEvent,
   updateSessionStatus,
@@ -927,7 +932,8 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 
     let branch: string;
     let repo: string;
-    let baseBranch = 'dev';
+    const baseBranch =
+      getProjectById(this.projectId)?.baseBranch ?? 'dev';
     try {
       branch = execSync('git branch --show-current', {
         cwd: this.worktreePath,
@@ -944,21 +950,6 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         /github\.com[:/]([^/]+\/[^.]+?)(?:\.git)?$/,
       );
       repo = repoMatch ? repoMatch[1] : GITHUB_REPO;
-
-      try {
-        const remoteHead = execSync(
-          'git symbolic-ref refs/remotes/origin/HEAD',
-          {
-            cwd: this.worktreePath,
-            encoding: 'utf-8',
-            stdio: 'pipe',
-          },
-        ).trim();
-        const parsed = remoteHead.replace('refs/remotes/origin/', '');
-        if (parsed) baseBranch = parsed;
-      } catch {
-        // refs/remotes/origin/HEAD not cached — keep 'dev' default
-      }
     } catch (e) {
       console.warn(
         `[AgentSession] handlePRBodyMarker: git info failed — ${(e as Error).message}`,
