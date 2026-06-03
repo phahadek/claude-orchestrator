@@ -76,12 +76,14 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(result).toContain('mcp__github__create_pull_request');
   });
 
-  it('Bash Rule 3 mandates the fixed `.claude/.commit-msg` path for multi-line commit messages', () => {
+  it('Bash Rule 3 instructs repeated -m flags for multi-line commit messages', () => {
     const result = buildOrchestratorClaudeMd(defaultParams);
-    // The fixed gitignored path must be present
-    expect(result).toContain('git commit -F .claude/.commit-msg');
-    // The old free-form instruction must NOT be present (would allow session-invented filenames)
-    expect(result).not.toMatch(/git commit -F <file>/);
+    // Repeated -m flag approach must be present
+    expect(result).toContain('repeated `-m` flags');
+    expect(result).toContain('git commit -m "<subject>" -m "<paragraph 2>"');
+    // Old scratch-file approach must NOT be present
+    expect(result).not.toContain('.claude/.commit-msg');
+    expect(result).not.toContain('git commit -F');
   });
 
   it('lists each verify command in the Pre-PR Gate when verify is non-empty', () => {
