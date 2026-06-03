@@ -43,6 +43,7 @@ import {
   getOtherRunningSessionsForTask,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
+import { eventKind } from './eventKind';
 import type { Session } from '../db/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { GitHubClient } from '../github/GitHubClient';
@@ -1086,8 +1087,8 @@ export class SessionManager extends EventEmitter {
     const lastEvent = sessionEvents[sessionEvents.length - 1];
     if (
       lastEvent &&
-      (lastEvent.event_type === 'tool_result' ||
-        lastEvent.event_type === 'tool_use')
+      (eventKind(lastEvent) === 'tool_result' ||
+        eventKind(lastEvent) === 'tool_use')
     ) {
       console.warn(
         `[SessionManager] resumeSession ${row.session_id}: Resuming mid-turn session — sending continuation nudge`,

@@ -41,6 +41,7 @@ import {
   SILENT_SKIP_TYPES,
   toEventType,
 } from './eventTypes';
+import { eventKind } from './eventKind';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
 const PR_BODY_MARKER_REGEX = /<pr-body>([\s\S]*?)<\/pr-body>/;
@@ -412,7 +413,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     const events = getEventsBySession(this.sessionId);
     if (events.length === 0) return false;
     const lastEvent = events[events.length - 1];
-    if (lastEvent.event_type !== 'error') return false;
+    if (eventKind(lastEvent) !== 'error') return false;
     const payload = lastEvent.payload.toLowerCase();
     return (
       payload.includes('api_error') || payload.includes('overloaded_error')
