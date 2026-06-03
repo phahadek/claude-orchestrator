@@ -302,7 +302,10 @@ describe('OrphanedTaskSweeper', () => {
     await sweeper.sweepOnce();
 
     expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '✅ Done');
-    expect(backend.updateStatus).not.toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
+    expect(backend.updateStatus).not.toHaveBeenCalledWith(
+      'notion:abc',
+      '🗂️ Ready',
+    );
   });
 
   it('marks Done (not Ready) when the latest session has a closed GitHub PR', async () => {

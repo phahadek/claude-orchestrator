@@ -557,7 +557,9 @@ describe('resumeOrphanSessions() — merged/closed PR reaping', () => {
     vi.mocked(queries.getSessionsByStatus).mockReturnValue([]);
     vi.mocked(queries.getStuckResultSessionRows).mockReturnValue([]);
     vi.mocked(
-      queries.getRunningSessionsWithMergedOrClosedPR as ReturnType<typeof vi.fn>,
+      queries.getRunningSessionsWithMergedOrClosedPR as ReturnType<
+        typeof vi.fn
+      >,
     ).mockReturnValue([mergedRow]);
 
     const sm = new SessionManager();

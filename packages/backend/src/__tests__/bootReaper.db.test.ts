@@ -41,7 +41,11 @@ function insertSession(
   ).run(sessionId, status, Date.now() - 10 * 60 * 1000, prUrl);
 }
 
-function insertEvent(sessionId: string, eventType: string, payload: string): void {
+function insertEvent(
+  sessionId: string,
+  eventType: string,
+  payload: string,
+): void {
   db.prepare(
     `INSERT INTO session_events (session_id, event_type, payload, timestamp)
      VALUES (?, ?, ?, ?)`,
@@ -77,7 +81,11 @@ describe('getStuckResultSessionRows() — production event shape', () => {
 
   it('does NOT match a running session whose last event is a non-result system event', () => {
     insertSession('sess-running');
-    insertEvent('sess-running', 'system', '{"type":"assistant","content":"hello"}');
+    insertEvent(
+      'sess-running',
+      'system',
+      '{"type":"assistant","content":"hello"}',
+    );
 
     const rows = getStuckResultSessionRows();
     expect(rows).toHaveLength(0);
