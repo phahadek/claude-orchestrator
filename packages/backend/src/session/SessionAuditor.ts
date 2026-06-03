@@ -431,11 +431,15 @@ function extractWriteTargetsFromCommand(command: string): string[] {
     targets.push(match[1]);
   }
   // tee destinations: tee [-flags] path
-  for (const match of stripped.matchAll(/\btee\s+(?:-\S+\s+)*([^\s"'`;\n|&]+)/g)) {
+  for (const match of stripped.matchAll(
+    /\btee\s+(?:-\S+\s+)*([^\s"'`;\n|&]+)/g,
+  )) {
     targets.push(match[1]);
   }
   // cp/mv destinations: cp/mv [-flags] src dest
-  for (const match of stripped.matchAll(/\b(?:cp|mv)\s+(?:-\S+\s+)*\S+\s+([^\s"'`;\n|&]+)/g)) {
+  for (const match of stripped.matchAll(
+    /\b(?:cp|mv)\s+(?:-\S+\s+)*\S+\s+([^\s"'`;\n|&]+)/g,
+  )) {
     targets.push(match[1]);
   }
 

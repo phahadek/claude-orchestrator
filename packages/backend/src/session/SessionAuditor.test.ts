@@ -591,7 +591,11 @@ describe('auditWorktreeEscape', () => {
     const outsidePath = 'C:\\Users\\phadek\\IdeaProjects\\project\\outside.db';
     const TOOL_USE_ID = 'tool-use-denied-abc';
     vi.mocked(queries.getEventsBySession).mockReturnValue([
-      makeToolUseEvent('Write', { file_path: outsidePath, content: '' }, TOOL_USE_ID),
+      makeToolUseEvent(
+        'Write',
+        { file_path: outsidePath, content: '' },
+        TOOL_USE_ID,
+      ),
     ]);
     vi.mocked(queries.getDenialsBySession).mockReturnValue([
       {
@@ -603,8 +607,15 @@ describe('auditWorktreeEscape', () => {
         timestamp: Date.now(),
       } as PermissionDenialRow,
     ]);
-    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
-    const violations = await auditor.auditWorktreeEscape('test-session-id', WORKTREE);
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
+    const violations = await auditor.auditWorktreeEscape(
+      'test-session-id',
+      WORKTREE,
+    );
     expect(violations).toHaveLength(0);
   });
 
@@ -613,7 +624,11 @@ describe('auditWorktreeEscape', () => {
     const EXECUTED_ID = 'tool-use-executed';
     const DENIED_ID = 'tool-use-denied';
     vi.mocked(queries.getEventsBySession).mockReturnValue([
-      makeToolUseEvent('Write', { file_path: outsidePath, content: '' }, EXECUTED_ID),
+      makeToolUseEvent(
+        'Write',
+        { file_path: outsidePath, content: '' },
+        EXECUTED_ID,
+      ),
     ]);
     vi.mocked(queries.getDenialsBySession).mockReturnValue([
       {
@@ -625,8 +640,15 @@ describe('auditWorktreeEscape', () => {
         timestamp: Date.now(),
       } as PermissionDenialRow,
     ]);
-    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
-    const violations = await auditor.auditWorktreeEscape('test-session-id', WORKTREE);
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
+    const violations = await auditor.auditWorktreeEscape(
+      'test-session-id',
+      WORKTREE,
+    );
     expect(violations).toHaveLength(1);
     expect(violations[0].tool).toBe('Write');
   });
@@ -639,8 +661,15 @@ describe('auditWorktreeEscape', () => {
           'gh pr create --body "## Notion Task\nhttps://app.notion.com/p/Fix-worktree-escape-detector-false-positives-37422f9152f3810294ffdbf042648e8c"',
       }),
     ]);
-    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
-    const violations = await auditor.auditWorktreeEscape('test-session-id', WORKTREE);
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
+    const violations = await auditor.auditWorktreeEscape(
+      'test-session-id',
+      WORKTREE,
+    );
     expect(violations).toHaveLength(0);
   });
 
@@ -650,8 +679,15 @@ describe('auditWorktreeEscape', () => {
     vi.mocked(queries.getEventsBySession).mockReturnValue([
       makeToolUseEvent('Bash', { command: `uv run script.py ${outsidePath}` }),
     ]);
-    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
-    const violations = await auditor.auditWorktreeEscape('test-session-id', WORKTREE);
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
+    const violations = await auditor.auditWorktreeEscape(
+      'test-session-id',
+      WORKTREE,
+    );
     expect(violations).toHaveLength(0);
   });
 
@@ -661,8 +697,15 @@ describe('auditWorktreeEscape', () => {
         command: `echo hello > ${WORKTREE}\\output.txt`,
       }),
     ]);
-    const auditor = new SessionAuditor(makeNotionClient(), undefined, undefined);
-    const violations = await auditor.auditWorktreeEscape('test-session-id', WORKTREE);
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
+    const violations = await auditor.auditWorktreeEscape(
+      'test-session-id',
+      WORKTREE,
+    );
     expect(violations).toHaveLength(0);
   });
 });
