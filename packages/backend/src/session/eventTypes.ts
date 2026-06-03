@@ -44,16 +44,10 @@ export function toEventType(raw: string): EventType {
     case 'text':
     case 'message':
       return 'text';
-    case 'tool_use':
-      return 'tool_use';
-    case 'tool_result':
-      return 'tool_result';
     case 'system':
     case 'user':
     case 'file-history-snapshot':
       return 'system';
-    case 'error':
-      return 'error';
     default:
       return 'system';
   }

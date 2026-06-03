@@ -73,14 +73,7 @@ export type NewSession = Omit<
 
 // ─── session_events ────────────────────────────────────────────────────────
 
-export type EventType =
-  | 'text'
-  | 'tool_use'
-  | 'tool_result'
-  | 'system'
-  | 'error'
-  | 'user_message'
-  | 'rate_limit';
+export type EventType = 'text' | 'system' | 'user_message' | 'rate_limit';
 
 export interface SessionEvent {
   id: number;

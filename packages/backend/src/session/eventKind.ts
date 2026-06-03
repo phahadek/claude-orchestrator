@@ -25,12 +25,6 @@ export function eventKind(
   switch (row.event_type) {
     case 'text':
       return 'text';
-    case 'tool_use':
-      return 'tool_use';
-    case 'tool_result':
-      return 'tool_result';
-    case 'error':
-      return 'error';
     case 'user_message':
       return 'user_message';
     case 'system': {
