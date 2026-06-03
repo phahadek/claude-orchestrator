@@ -374,7 +374,7 @@ function extractToolUseBlocks(event: SessionEvent): ToolUseBlock[] {
     const name = payload.name as string | undefined;
     const input = (payload.input ?? {}) as Record<string, unknown>;
     if (name) blocks.push({ name, input });
-  } else if (event.event_type === 'text') {
+  } else if (eventKind(event) === 'text') {
     const message = payload.message as Record<string, unknown> | undefined;
     const content = message?.content as
       | Array<Record<string, unknown>>

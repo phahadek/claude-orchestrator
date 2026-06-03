@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { Readable, Writable } from 'stream';
+import { makeEventRow } from '../../test/helpers/eventFixtures';
 
 // ── Mock child_process.spawn ───────────────────────────────────────────────
 // We need to mock before importing AgentSession because it imports spawn
@@ -560,7 +561,7 @@ describe('AgentSession', () => {
       {
         id: 1,
         session_id: 'standard-pr-session',
-        event_type: 'text',
+        ...makeEventRow('text').live,
         payload: JSON.stringify({
           type: 'assistant',
           message: {
@@ -607,7 +608,7 @@ describe('AgentSession', () => {
       {
         id: 1,
         session_id: 'merged-pr-session',
-        event_type: 'text',
+        ...makeEventRow('text').live,
         payload: JSON.stringify({
           type: 'assistant',
           message: {
@@ -662,7 +663,7 @@ describe('AgentSession', () => {
       {
         id: 1,
         session_id: 'closed-pr-session',
-        event_type: 'text',
+        ...makeEventRow('text').live,
         payload: JSON.stringify({
           type: 'assistant',
           message: {
@@ -815,7 +816,7 @@ describe('AgentSession', () => {
       {
         id: 1,
         session_id: 'no-double-pr',
-        event_type: 'text',
+        ...makeEventRow('text').live,
         payload: 'PR: https://github.com/myorg/myrepo/pull/77',
         timestamp: Date.now(),
         message_id: null,
@@ -1019,7 +1020,7 @@ describe('AgentSession', () => {
       {
         id: 1,
         session_id: 'merged-upsert-session',
-        event_type: 'text',
+        ...makeEventRow('text').live,
         payload: JSON.stringify({
           type: 'assistant',
           message: {
@@ -1071,7 +1072,7 @@ describe('AgentSession', () => {
       {
         id: 1,
         session_id: 'closed-upsert-session',
-        event_type: 'text',
+        ...makeEventRow('text').live,
         payload: JSON.stringify({
           type: 'assistant',
           message: {
@@ -1123,7 +1124,7 @@ describe('AgentSession', () => {
       {
         id: 1,
         session_id: 'open-upsert-session',
-        event_type: 'text',
+        ...makeEventRow('text').live,
         payload: JSON.stringify({
           type: 'assistant',
           message: {
@@ -1176,7 +1177,7 @@ describe('AgentSession', () => {
       {
         id: 1,
         session_id: 'pr-session',
-        event_type: 'text',
+        ...makeEventRow('text').live,
         payload: JSON.stringify({
           type: 'assistant',
           message: {
@@ -1232,11 +1233,7 @@ describe('AgentSession', () => {
       {
         id: 1,
         session_id: 'sess-overload',
-        event_type: 'error',
-        payload: JSON.stringify({
-          type: 'error',
-          error: { type: 'overloaded_error', message: 'Overloaded' },
-        }),
+        ...makeEventRow('error').live,
         timestamp: Date.now(),
         message_id: null,
       },
@@ -1315,11 +1312,7 @@ describe('AgentSession', () => {
       {
         id: 1,
         session_id: 'sess-with-pr',
-        event_type: 'error',
-        payload: JSON.stringify({
-          type: 'error',
-          error: { type: 'overloaded_error', message: 'Overloaded' },
-        }),
+        ...makeEventRow('error').live,
         timestamp: Date.now(),
         message_id: null,
       },
@@ -1375,7 +1368,7 @@ describe('AgentSession', () => {
       {
         id: 1,
         session_id: 'sess-no-pr',
-        event_type: 'error',
+        ...makeEventRow('error').live,
         payload: JSON.stringify({
           type: 'error',
           error: { type: 'api_error', message: 'Internal server error' },
@@ -1434,7 +1427,7 @@ describe('AgentSession', () => {
       {
         id: 1,
         session_id: 'done-pr-session',
-        event_type: 'text',
+        ...makeEventRow('text').live,
         payload: JSON.stringify({
           type: 'assistant',
           message: {
@@ -1523,7 +1516,7 @@ describe('AgentSession', () => {
       {
         id: 1,
         session_id: 'review-error-session',
-        event_type: 'text',
+        ...makeEventRow('text').live,
         payload: JSON.stringify({
           type: 'assistant',
           message: {
@@ -1584,11 +1577,7 @@ describe('AgentSession', () => {
       {
         id: 1,
         session_id: 'sess-dedup',
-        event_type: 'error',
-        payload: JSON.stringify({
-          type: 'error',
-          error: { type: 'overloaded_error', message: 'Overloaded' },
-        }),
+        ...makeEventRow('error').live,
         timestamp: Date.now(),
         message_id: null,
       },
@@ -1685,7 +1674,7 @@ describe('AgentSession', () => {
       {
         id: 1,
         session_id: 'pr-present-session',
-        event_type: 'text',
+        ...makeEventRow('text').live,
         payload: JSON.stringify({
           type: 'assistant',
           message: {

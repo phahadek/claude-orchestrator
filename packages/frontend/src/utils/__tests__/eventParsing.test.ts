@@ -139,28 +139,36 @@ describe('summarizeEvent', () => {
     });
   });
 
-  describe('system events', () => {
+  describe('other (system-derived) events', () => {
     it('hides init subtype from card preview', () => {
       const payload = { type: 'system', subtype: 'init' };
-      const result = summarizeEvent(ev('system', JSON.stringify(payload)));
+      const result = summarizeEvent(ev('other', JSON.stringify(payload)));
       expect(result).toBe('');
     });
 
     it('hides rate_limit subtype from card preview', () => {
       const payload = { type: 'system', subtype: 'rate_limit' };
-      const result = summarizeEvent(ev('system', JSON.stringify(payload)));
+      const result = summarizeEvent(ev('other', JSON.stringify(payload)));
       expect(result).toBe('');
     });
 
     it('renders a friendly label for success subtype', () => {
       const payload = { type: 'system', subtype: 'success' };
-      const result = summarizeEvent(ev('system', JSON.stringify(payload)));
+      const result = summarizeEvent(ev('other', JSON.stringify(payload)));
       expect(result).toBe('Session complete');
     });
 
     it('falls back to raw content when payload is not parseable JSON', () => {
-      const result = summarizeEvent(ev('system', 'raw system text'));
+      const result = summarizeEvent(ev('other', 'raw system text'));
       expect(result).toBe('raw system text');
+    });
+  });
+
+  describe('result events', () => {
+    it('returns empty string for result events (completion markers)', () => {
+      const payload = { type: 'result', subtype: 'success', duration_ms: 1000 };
+      const result = summarizeEvent(ev('result', JSON.stringify(payload)));
+      expect(result).toBe('');
     });
   });
 

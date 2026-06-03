@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
+import { makeEventRow } from '../../test/helpers/eventFixtures';
 
 vi.mock('../db/queries', () => ({
   getEventsBySession: vi.fn(() => []),
@@ -142,7 +143,7 @@ describe('NoOpInvestigator.investigate', () => {
         {
           id: 1,
           session_id: 'inv-session',
-          event_type: 'text',
+          ...makeEventRow('text').live,
           payload: JSON.stringify({
             type: 'assistant',
             message: {

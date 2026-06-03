@@ -788,7 +788,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     this.broadcast({
       type: 'session_event',
       sessionId: this.sessionId,
-      eventType: eventType,
+      eventType: eventKind({ event_type: eventType, payload }),
       content: payload,
       ...(messageId != null && { messageId }),
     });
@@ -1241,11 +1241,15 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 
     try {
       const events = getEventsBySession(this.sessionId);
-      // Only scan text and system events — tool_use events carry tool-call
-      // inputs (Write, Edit, etc.) which may contain placeholder URLs in test
-      // fixtures or code comments, producing phantom pull_requests rows.
+      // Exclude tool-call and user-message events — tool_use inputs (Write, Edit,
+      // etc.) may contain placeholder URLs producing phantom pull_requests rows.
       const last20 = events
-        .filter((ev) => ev.event_type === 'text' || ev.event_type === 'system')
+        .filter((ev) => {
+          const k = eventKind(ev);
+          return (
+            k !== 'tool_use' && k !== 'tool_result' && k !== 'user_message'
+          );
+        })
         .slice(-20);
 
       for (const ev of last20) {

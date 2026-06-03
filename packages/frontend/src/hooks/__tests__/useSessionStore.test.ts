@@ -293,7 +293,7 @@ describe('useSessionStore', () => {
     const rateLimitEvent: ServerMessage = {
       type: 'session_event',
       sessionId: SESSION_ID,
-      eventType: 'system',
+      eventType: 'other',
       content: JSON.stringify({
         type: 'rate_limit_event',
         rate_limit_info: { status: 'rate_limited' },
@@ -309,7 +309,7 @@ describe('useSessionStore', () => {
     const rateLimitEvent: ServerMessage = {
       type: 'session_event',
       sessionId: SESSION_ID,
-      eventType: 'system',
+      eventType: 'other',
       content: JSON.stringify({
         type: 'rate_limit_event',
         rate_limit_info: { status: 'rate_limited' },
@@ -328,7 +328,7 @@ describe('useSessionStore', () => {
     const rateLimitEvent: ServerMessage = {
       type: 'session_event',
       sessionId: SESSION_ID,
-      eventType: 'system',
+      eventType: 'other',
       content: JSON.stringify({
         type: 'rate_limit_event',
         rate_limit_info: { status: 'rate_limited' },
@@ -339,7 +339,7 @@ describe('useSessionStore', () => {
     const resumedEvent: ServerMessage = {
       type: 'session_event',
       sessionId: SESSION_ID,
-      eventType: 'system',
+      eventType: 'other',
       content: JSON.stringify({
         type: 'rate_limit_event',
         rate_limit_info: { status: 'resumed' },

@@ -1615,7 +1615,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       (
         SELECT payload FROM session_events
         WHERE session_id = cs.session_id
-          AND event_type NOT IN ('system', 'user_message')
+          AND event_type IN ('text', 'tool_use', 'tool_result', 'error')
         ORDER BY id DESC LIMIT 1
       )                            AS code_session_last_event_payload,
       cs.context_occupancy_tokens  AS code_session_context_occupancy_tokens,
@@ -1655,7 +1655,7 @@ export function getLatestNonSystemEventPayload(
       `
     SELECT payload FROM session_events
     WHERE session_id = ?
-      AND event_type NOT IN ('system', 'user_message')
+      AND event_type IN ('text', 'tool_use', 'tool_result', 'error')
     ORDER BY id DESC
     LIMIT 1
   `,

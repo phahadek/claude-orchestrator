@@ -21,6 +21,7 @@ import { getProjectById } from '../config';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import type { ServerMessage } from '../ws/types';
+import { eventKind } from '../session/eventKind';
 
 let _broadcast: (msg: ServerMessage) => void = () => {};
 export function setBroadcast(fn: (msg: ServerMessage) => void): void {
@@ -67,7 +68,7 @@ sessionsRouter.get('/:id/events', (req: Request, res: Response) => {
   const events = getEventsBySession(sessionId)
     .filter((ev) => !isSystemOnlyUserEvent(ev.payload))
     .map((ev) => ({
-      eventType: ev.event_type,
+      eventType: eventKind(ev),
       content: ev.payload,
       timestamp: ev.timestamp,
       ...(ev.message_id != null && { messageId: ev.message_id }),

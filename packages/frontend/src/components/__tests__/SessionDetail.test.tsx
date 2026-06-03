@@ -88,7 +88,7 @@ describe('SessionDetail', () => {
   it('renders all events from session.events', () => {
     const events = [
       makeEvent('text', 'Hello world', 1000),
-      makeEvent('system', 'Session started', 2000),
+      makeEvent('other', 'Session started', 2000),
       makeEvent('error', 'Something went wrong', 3000),
     ];
     render(
@@ -591,14 +591,14 @@ describe('EventRow', () => {
   });
 
   it('renders system event as italic text (plain string)', () => {
-    render(<EventRow event={makeEvent('system', 'Session started')} />);
+    render(<EventRow event={makeEvent('other', 'Session started')} />);
     expect(screen.getByText('Session started')).toBeTruthy();
   });
 
   it('hides system init event from transcript', () => {
     const content = JSON.stringify({ type: 'system', subtype: 'init' });
     const { container } = render(
-      <EventRow event={makeEvent('system', content)} />,
+      <EventRow event={makeEvent('other', content)} />,
     );
     // init is in the hidden-system-subtypes set — EventRow returns null
     expect(container.firstChild).toBeNull();
@@ -612,7 +612,7 @@ describe('EventRow', () => {
           'Hello user<local-command-caveat>some caveat</local-command-caveat>',
       },
     });
-    render(<EventRow event={makeEvent('system', content)} />);
+    render(<EventRow event={makeEvent('other', content)} />);
     expect(screen.getByText('Hello usersome caveat')).toBeTruthy();
   });
 
@@ -621,7 +621,7 @@ describe('EventRow', () => {
       type: 'file-history-snapshot',
       snapshot: {},
     });
-    render(<EventRow event={makeEvent('system', content)} />);
+    render(<EventRow event={makeEvent('other', content)} />);
     expect(screen.getByText(/File history snapshot/)).toBeTruthy();
   });
 
@@ -755,7 +755,7 @@ describe('EventRow', () => {
     // Validates the key format renders without duplicate-key warnings
     const events = [
       makeEvent('text', 'first', 1000),
-      makeEvent('system', 'second', 2000),
+      makeEvent('other', 'second', 2000),
     ];
     const { container } = render(
       <>
@@ -821,7 +821,7 @@ describe('EventRow', () => {
       result: 'Task complete',
     });
     const { container } = render(
-      <EventRow event={makeEvent('system', content)} />,
+      <EventRow event={makeEvent('other', content)} />,
     );
     expect(container.firstChild).toBeNull();
   });
@@ -830,7 +830,7 @@ describe('EventRow', () => {
     // A system payload whose content field is an empty string — extractSystem returns ''
     const content = JSON.stringify({ type: 'system', content: '' });
     const { container } = render(
-      <EventRow event={makeEvent('system', content)} />,
+      <EventRow event={makeEvent('other', content)} />,
     );
     expect(container.firstChild).toBeNull();
   });
@@ -842,7 +842,7 @@ describe('EventRow', () => {
       message: { content: '<caveat></caveat>' },
     });
     const { container } = render(
-      <EventRow event={makeEvent('system', content)} />,
+      <EventRow event={makeEvent('other', content)} />,
     );
     expect(container.firstChild).toBeNull();
   });
@@ -855,7 +855,7 @@ describe('EventRow', () => {
         content: [{ type: 'text', text: 'Please fix the bug in foo.ts' }],
       },
     });
-    render(<EventRow event={makeEvent('system', content)} />);
+    render(<EventRow event={makeEvent('other', content)} />);
     expect(screen.getByText('Please fix the bug in foo.ts')).toBeTruthy();
     expect(screen.queryByText('[user]')).toBeNull();
   });
@@ -875,7 +875,7 @@ describe('EventRow', () => {
       },
     });
     const { container } = render(
-      <EventRow event={makeEvent('system', content)} />,
+      <EventRow event={makeEvent('other', content)} />,
     );
     expect(container.firstChild).toBeNull();
   });

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { makeEventRow } from '../../test/helpers/eventFixtures';
 
 vi.mock('../db/db.js', async () => {
   const { setupTestDb } = await import('../../test/helpers/setupTestDb.js');
@@ -31,7 +32,7 @@ function makeSession(id: string) {
 function addEvent(sessionId: string, payload: Record<string, unknown>) {
   insertEventOrIgnore({
     session_id: sessionId,
-    event_type: 'system',
+    ...makeEventRow('result').live,
     payload: JSON.stringify(payload),
     timestamp: Date.now(),
   });
