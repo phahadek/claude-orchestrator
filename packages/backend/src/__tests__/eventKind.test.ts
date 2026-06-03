@@ -18,7 +18,9 @@ describe('eventKind — direct column mapping', () => {
 
   it('tool_use → tool_use (live shape)', () => {
     expect(
-      eventKind(row('tool_use', { type: 'tool_use', name: 'Write', input: {} })),
+      eventKind(
+        row('tool_use', { type: 'tool_use', name: 'Write', input: {} }),
+      ),
     ).toBe<EventKind>('tool_use');
   });
 
@@ -30,7 +32,9 @@ describe('eventKind — direct column mapping', () => {
 
   it('tool_result → tool_result (live shape)', () => {
     expect(
-      eventKind(row('tool_result', { type: 'tool_result', tool_use_id: 'id1' })),
+      eventKind(
+        row('tool_result', { type: 'tool_result', tool_use_id: 'id1' }),
+      ),
     ).toBe<EventKind>('tool_result');
   });
 
@@ -53,12 +57,19 @@ describe('eventKind — direct column mapping', () => {
 
   it('error → error (JSONL ev.content shape — no type field)', () => {
     expect(
-      eventKind(row('error', { error_type: 'api_error', message: 'Internal server error' })),
+      eventKind(
+        row('error', {
+          error_type: 'api_error',
+          message: 'Internal server error',
+        }),
+      ),
     ).toBe<EventKind>('error');
   });
 
   it('user_message → user_message', () => {
-    expect(eventKind(row('user_message', { content: 'hi' }))).toBe<EventKind>('user_message');
+    expect(eventKind(row('user_message', { content: 'hi' }))).toBe<EventKind>(
+      'user_message',
+    );
   });
 
   it('rate_limit → other', () => {
@@ -72,7 +83,11 @@ describe('eventKind — system event payload discrimination', () => {
   it('system + payload.type=result → result (production reaper shape)', () => {
     expect(
       eventKind(
-        row('system', { type: 'result', subtype: 'success', duration_ms: 1000 }),
+        row('system', {
+          type: 'result',
+          subtype: 'success',
+          duration_ms: 1000,
+        }),
       ),
     ).toBe<EventKind>('result');
   });
@@ -96,11 +111,15 @@ describe('eventKind — system event payload discrimination', () => {
   });
 
   it('system + no type field → other', () => {
-    expect(eventKind(row('system', { subtype: 'init' }))).toBe<EventKind>('other');
+    expect(eventKind(row('system', { subtype: 'init' }))).toBe<EventKind>(
+      'other',
+    );
   });
 
   it('system + malformed payload → other', () => {
-    expect(eventKind({ event_type: 'system', payload: 'not-json' })).toBe<EventKind>('other');
+    expect(
+      eventKind({ event_type: 'system', payload: 'not-json' }),
+    ).toBe<EventKind>('other');
   });
 });
 
@@ -136,15 +155,21 @@ describe('regression — transient API error detection', () => {
 
 describe('regression — mid-turn detection', () => {
   it('eventKind=tool_result for a stored tool_result event', () => {
-    expect(eventKind(row('tool_result', { tool_use_id: 'tid' }))).toBe<EventKind>('tool_result');
+    expect(
+      eventKind(row('tool_result', { tool_use_id: 'tid' })),
+    ).toBe<EventKind>('tool_result');
   });
 
   it('eventKind=tool_use for a stored tool_use event', () => {
-    expect(eventKind(row('tool_use', { name: 'Bash', input: {} }))).toBe<EventKind>('tool_use');
+    expect(
+      eventKind(row('tool_use', { name: 'Bash', input: {} })),
+    ).toBe<EventKind>('tool_use');
   });
 
   it('eventKind≠tool_result for a text event (no false positive)', () => {
-    expect(eventKind(row('text', { message: { content: [] } }))).not.toBe<EventKind>('tool_result');
+    expect(
+      eventKind(row('text', { message: { content: [] } })),
+    ).not.toBe<EventKind>('tool_result');
   });
 });
 
