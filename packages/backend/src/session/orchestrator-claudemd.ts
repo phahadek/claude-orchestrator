@@ -112,14 +112,17 @@ function prBodyTaskSectionHeader(backend: TaskBackend): string {
  *  2. Task assignment (task name, task URL, project context URL)
  *  3. Lifecycle steps
  *  4. Status ownership
- *  5. PR format standards
- *  6. Branch rules
- *  7. Pre-PR gate
- *  8. Forbidden actions
- *  9. Git isolation
- * 10. Filesystem isolation (personal mode)
- * 11. Bash rules (permission system)
- * 12. Separator + "# Project Instructions (from project CLAUDE.md)" (added by caller)
+ *  5. Efficiency rules
+ *  6. Context efficiency
+ *  7. PR format standards
+ *  8. Branch rules
+ *  9. Commit attribution
+ * 10. Pre-PR gate
+ * 11. Forbidden actions
+ * 12. Git isolation
+ * 13. Filesystem isolation (personal mode)
+ * 14. Bash rules (permission system)
+ * 15. Separator + "# Project Instructions (from project CLAUDE.md)" (added by caller)
  */
 export function buildOrchestratorClaudeMd(
   params: OrchestratorClaudeMdParams,
@@ -224,6 +227,18 @@ Optimize for speed and token efficiency:
 - **Prefer Edit over Write for files that already exist.** Only use Write to create a new file or when replacing the majority of a file. Never re-emit an unchanged file body.
 - **Never Read a file you just wrote or edited** — you already know its contents and line layout.
 - **Never Read/cat raw \`tasks/*.output\` background-task files** — they bypass the Bash output cap. Use the TaskOutput tool if you must inspect a backgrounded command's output.
+
+---
+
+## Context Efficiency
+
+Large Read payloads and broad Grep results are the primary drivers of context exhaustion.
+Prefer surgical access over full-file reads:
+
+- **Grep first, then read the slice** — use Grep to locate the region, then Read with \`offset\`/\`limit\` to fetch only the lines you need. Never read a large file whole when you only need a section.
+- **Scope every Grep** — always supply a \`path\`/\`glob\` and a specific pattern. Avoid repo-wide matches; large result sets consume context and hide the signal.
+- **Don't re-read after editing** — the Edit result already reflects the change. Re-reading wastes tokens.
+- **Reference modules: read the relevant region only** — for large existing files used only as reference, read the relevant lines, not the whole file.
 
 ---
 
