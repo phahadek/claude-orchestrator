@@ -7,11 +7,14 @@ import type { ServerMessage } from '../ws/types';
 import {
   getLatestCodeSessionByNotionTaskId,
   hasActiveSessionForTask,
+  getPRBySessionId,
+  getLocalBranchBySession,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 
 const IN_PROGRESS_STATUS = '🔄 In Progress';
 const READY_STATUS = '🗂️ Ready';
+const DONE_STATUS = '✅ Done';
 const ANTI_RACE_MS = 5 * 60 * 1000;
 
 /**
@@ -140,7 +143,20 @@ export class OrphanedTaskSweeper {
     const lastSeenAt =
       latestSession?.ended_at ?? latestSession?.started_at ?? null;
 
-    await backend.updateStatus(taskId, READY_STATUS);
+    // If the task's PR is already merged or closed, mark Done rather than
+    // reverting to Ready — re-dispatching a merged task would re-assign finished work.
+    const prMergedOrClosed =
+      latestSession !== undefined &&
+      (() => {
+        const pr = getPRBySessionId(latestSession.session_id);
+        if (pr && (pr.state === 'merged' || pr.state === 'closed')) return true;
+        const lb = getLocalBranchBySession(latestSession.session_id);
+        return lb?.status === 'merged';
+      })();
+
+    const newStatus = prMergedOrClosed ? DONE_STATUS : READY_STATUS;
+
+    await backend.updateStatus(taskId, newStatus);
 
     recordEvent({
       event_type: 'task_orphan_reverted',
@@ -153,11 +169,11 @@ export class OrphanedTaskSweeper {
     this.broadcast({
       type: 'task_status_changed',
       notionTaskId: taskId,
-      newStatus: READY_STATUS,
+      newStatus,
     });
 
     console.log(
-      `[OrphanedTaskSweeper] reverted orphan task ${taskId} in project ${projectId}`,
+      `[OrphanedTaskSweeper] reverted orphan task ${taskId} in project ${projectId} → ${newStatus}`,
     );
   }
 }

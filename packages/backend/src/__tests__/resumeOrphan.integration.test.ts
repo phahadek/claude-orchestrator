@@ -153,6 +153,7 @@ vi.mock('../db/queries', () => ({
   updateSessionStatus: vi.fn(),
   markSessionDone: vi.fn(),
   getStuckResultSessionRows: vi.fn(() => []),
+  getRunningSessionsWithMergedOrClosedPR: vi.fn(() => []),
   insertSession: vi.fn(),
   insertEvent: vi.fn(),
   upsertSessionEvent: vi.fn(() => 1),
@@ -535,5 +536,39 @@ describe('resumeOrphanSessions() — spawn arg contract: --resume <session_id>',
     expect(sessionIdIdx).toBeGreaterThan(-1);
     expect(spawnArgs[sessionIdIdx + 1]).toBe(SESSION_UUID);
     expect(spawnArgs).not.toContain('--resume');
+  });
+});
+
+// ── Test 6: merged/closed PR sessions are reaped, not resumed ────────────────
+describe('resumeOrphanSessions() — merged/closed PR reaping', () => {
+  it('marks merged-PR sessions as done on boot instead of resuming them', async () => {
+    const mergedRow = {
+      session_id: 'merged-sess',
+      task_id: 'task-merged',
+      task_url: 'https://notion.so/task',
+      project_context_url: 'https://notion.so/ctx',
+      project_id: 'test-project',
+      pr_url: 'https://github.com/owner/repo/pull/504',
+      worktree_path: '/fake/project/.claude/worktrees/merged-sess',
+      session_type: 'standard',
+      last_ts: 1_000_000,
+    };
+
+    vi.mocked(queries.getSessionsByStatus).mockReturnValue([]);
+    vi.mocked(queries.getStuckResultSessionRows).mockReturnValue([]);
+    vi.mocked(
+      queries.getRunningSessionsWithMergedOrClosedPR as ReturnType<typeof vi.fn>,
+    ).mockReturnValue([mergedRow]);
+
+    const sm = new SessionManager();
+    await sm.resumeOrphanSessions();
+
+    // Merged-PR session must be marked done, not spawned.
+    expect(queries.markSessionDone).toHaveBeenCalledWith(
+      'merged-sess',
+      mergedRow.last_ts,
+      mergedRow.pr_url,
+    );
+    expect(spawn).not.toHaveBeenCalled();
   });
 });

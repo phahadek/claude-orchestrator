@@ -205,7 +205,9 @@ export interface StuckResultSessionRow {
 
 /**
  * Query sessions stuck at status='running' whose last recorded event is a
- * 'result' event (the CLI's clean-exit signal). Does NOT update the DB.
+ * result event (the CLI's clean-exit signal). Does NOT update the DB.
+ * Matches production storage: result events are persisted with event_type='system'
+ * and payload.type='result', NOT event_type='result'.
  * If minAgeMs is provided, only returns sessions older than that threshold.
  */
 export function getStuckResultSessionRows(
@@ -222,7 +224,8 @@ export function getStuckResultSessionRows(
       JOIN session_events e ON e.session_id = s.session_id
       WHERE s.status = 'running'
         AND e.id = (SELECT MAX(id) FROM session_events WHERE session_id = s.session_id)
-        AND e.event_type = 'result'
+        AND e.event_type = 'system'
+        AND json_extract(e.payload, '$.type') = 'result'
         AND s.started_at < (unixepoch('now') - @min_age_seconds) * 1000
     `,
       )
@@ -240,7 +243,42 @@ export function getStuckResultSessionRows(
     JOIN session_events e ON e.session_id = s.session_id
     WHERE s.status = 'running'
       AND e.id = (SELECT MAX(id) FROM session_events WHERE session_id = s.session_id)
-      AND e.event_type = 'result'
+      AND e.event_type = 'system'
+      AND json_extract(e.payload, '$.type') = 'result'
+  `,
+    )
+    .all() as StuckResultSessionRow[];
+}
+
+/**
+ * Query running sessions whose PR is already merged or closed — these should be
+ * reaped on boot rather than resumed as orphans.
+ * Covers both GitHub PRs (pull_requests table, state='merged'|'closed') and
+ * local-only branches (local_branches table, status='merged').
+ */
+export function getRunningSessionsWithMergedOrClosedPR(): StuckResultSessionRow[] {
+  return db
+    .prepare(
+      `
+    SELECT s.session_id, s.task_id, s.task_url, s.project_context_url,
+           s.project_id, s.pr_url, s.worktree_path, s.session_type,
+           COALESCE(e.timestamp, s.started_at) AS last_ts
+    FROM sessions s
+    LEFT JOIN session_events e ON e.session_id = s.session_id
+      AND e.id = (SELECT MAX(id) FROM session_events WHERE session_id = s.session_id)
+    WHERE s.status = 'running'
+      AND (
+        EXISTS (
+          SELECT 1 FROM pull_requests pr
+          WHERE pr.session_id = s.session_id
+            AND pr.state IN ('merged', 'closed')
+        )
+        OR EXISTS (
+          SELECT 1 FROM local_branches lb
+          WHERE lb.session_id = s.session_id
+            AND lb.status = 'merged'
+        )
+      )
   `,
     )
     .all() as StuckResultSessionRow[];

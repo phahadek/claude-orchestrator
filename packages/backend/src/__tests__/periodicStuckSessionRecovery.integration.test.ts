@@ -71,7 +71,7 @@ function insertStuckSession(
   ).run(sessionId, projectId, startedAt, sessionType);
   db.prepare(
     `INSERT INTO session_events (session_id, event_type, payload, timestamp)
-     VALUES (?, 'result', '{}', ?)`,
+     VALUES (?, 'system', '{"type":"result"}', ?)`,
   ).run(sessionId, lastEventTs);
 }
 
