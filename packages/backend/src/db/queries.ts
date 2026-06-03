@@ -128,6 +128,48 @@ const stmtMarkSessionDone = db.prepare<{
   WHERE session_id = @session_id
 `);
 
+const stmtMarkSessionSuperseded = db.prepare<{
+  session_id: string;
+  ended_at: number;
+}>(`
+  UPDATE sessions
+  SET status = 'superseded', ended_at = @ended_at
+  WHERE session_id = @session_id
+`);
+
+/**
+ * Mark a session as superseded — used when sendOrResume creates a continuation
+ * and another running row for the same task_id exists and must be retired.
+ * Superseded rows are treated as terminal: excluded from active-session checks
+ * and not resumed on next boot.
+ */
+export function markSessionSuperseded(sessionId: string, endedAt: number): void {
+  stmtMarkSessionSuperseded.run({ session_id: sessionId, ended_at: endedAt });
+}
+
+/**
+ * Returns other standard (non-review) sessions in status='running' for the same
+ * task_id, excluding the given session. Used by sendOrResume to reconcile zombie
+ * rows before respawning.
+ */
+export function getOtherRunningSessionsForTask(
+  taskId: string,
+  excludeSessionId: string,
+): Session[] {
+  const norm = taskId.replace(/-/g, '');
+  return db
+    .prepare<{ task_id: string; session_id: string }>(
+      `
+    SELECT * FROM sessions
+    WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
+      AND session_id != @session_id
+      AND status = 'running'
+      AND (session_type = 'standard' OR session_type IS NULL)
+  `,
+    )
+    .all({ task_id: norm, session_id: excludeSessionId }) as Session[];
+}
+
 /**
  * Atomically mark a session as done, setting ended_at and pr_url in a single
  * write. Preferred over updateSessionStatus for clean-exit paths because it
@@ -275,7 +317,7 @@ export function hasActiveSessionForTask(taskId: string): boolean {
       `
     SELECT 1 FROM sessions
     WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
-      AND status NOT IN ('done', 'error', 'killed')
+      AND status NOT IN ('done', 'error', 'killed', 'superseded')
       AND (session_type = 'standard' OR session_type IS NULL)
     LIMIT 1
   `,
