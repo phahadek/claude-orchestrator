@@ -62,4 +62,32 @@ describe('buildOrchestratorClaudeMd', () => {
       expect(output.length).toBeLessThan(20_000);
     });
   });
+
+  describe('PR body marker (no scratch-file instructions)', () => {
+    it('instructs sessions to emit a <pr-body> marker, not write a file', () => {
+      const output = buildOrchestratorClaudeMd(BASE_PARAMS);
+      expect(output).toContain('<pr-body>');
+    });
+
+    it('does NOT instruct writing pr-body.md', () => {
+      const output = buildOrchestratorClaudeMd(BASE_PARAMS);
+      expect(output).not.toContain('pr-body.md');
+    });
+
+    it('does NOT instruct running gh pr create', () => {
+      const output = buildOrchestratorClaudeMd(BASE_PARAMS);
+      expect(output).not.toContain('gh pr create');
+    });
+
+    it('does NOT include --body-file flag in PR creation instructions', () => {
+      const output = buildOrchestratorClaudeMd(BASE_PARAMS);
+      expect(output).not.toContain('--body-file');
+    });
+
+    it('omits PR format section and marker for local-only git mode', () => {
+      const output = buildOrchestratorClaudeMd({ ...BASE_PARAMS, gitMode: 'local-only' });
+      expect(output).not.toContain('## PR Format Standards');
+      expect(output).not.toContain('<pr-body>');
+    });
+  });
 });

@@ -762,6 +762,49 @@ export class GitHubClient {
     }));
   }
 
+  /**
+   * Open a new draft pull request via the GitHub REST API.
+   * Used by the backend when a session emits a <pr-body> marker.
+   */
+  async createPR(
+    repo: string,
+    params: {
+      title: string;
+      body: string;
+      head: string;
+      base: string;
+      draft?: boolean;
+    },
+  ): Promise<PRCreationResult> {
+    return this.request<PRCreationResult>(`/repos/${repo}/pulls`, {
+      method: 'POST',
+      headers: { ...this.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: params.title,
+        body: params.body,
+        head: params.head,
+        base: params.base,
+        draft: params.draft ?? true,
+      }),
+    });
+  }
+
+  /**
+   * Update an existing pull request's body (and optionally title) via PATCH.
+   * Used for idempotent marker re-emission — second <pr-body> updates, never creates a duplicate.
+   */
+  async updatePR(
+    repo: string,
+    prNumber: number,
+    patch: { title?: string; body?: string },
+  ): Promise<PRCreationResult> {
+    return this.request<PRCreationResult>(`/repos/${repo}/pulls/${prNumber}`, {
+      method: 'PATCH',
+      headers: { ...this.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+  }
+
   async deleteBranch(repo: string, branchName: string): Promise<void> {
     await this.request(`/repos/${repo}/git/refs/heads/${branchName}`, {
       method: 'DELETE',
@@ -1233,6 +1276,20 @@ function parseDiffFiles(diff: string): string[] {
     }
   }
   return files;
+}
+
+/** Minimal PR shape returned by createPR() and updatePR(). */
+export interface PRCreationResult {
+  number: number;
+  html_url: string;
+  title: string;
+  body: string | null;
+  head: { ref: string; sha: string };
+  base: { ref: string };
+  state: string;
+  created_at: string;
+  updated_at: string;
+  draft: boolean;
 }
 
 export type PRReviewDecision =
