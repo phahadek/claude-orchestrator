@@ -74,7 +74,9 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(result).toContain('## Bash Rules (Permission System)');
     expect(result).toContain('One command per Bash call');
     // PR creation uses the <pr-body> marker; sessions are told NOT to use the MCP tool
-    expect(result).toContain('Do NOT use the MCP `mcp__github__create_pull_request`');
+    expect(result).toContain(
+      'Do NOT use the MCP `mcp__github__create_pull_request`',
+    );
     expect(result).not.toContain('gh pr create');
   });
 
