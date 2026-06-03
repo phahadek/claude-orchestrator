@@ -88,12 +88,16 @@ describe('GitHubClient.createPR', () => {
       base: 'dev',
     });
 
-    const sentBody = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string);
+    const sentBody = JSON.parse(
+      (mockFetch.mock.calls[0][1] as RequestInit).body as string,
+    );
     expect(sentBody.draft).toBe(true);
   });
 
   it('throws GitHubApiError on non-ok response', async () => {
-    globalThis.fetch = makeFetch(422, { message: 'Validation Failed' }) as never;
+    globalThis.fetch = makeFetch(422, {
+      message: 'Validation Failed',
+    }) as never;
 
     const client = new GitHubClient();
     await expect(
@@ -123,7 +127,9 @@ describe('GitHubClient.updatePR', () => {
     globalThis.fetch = mockFetch as never;
 
     const client = new GitHubClient();
-    const result = await client.updatePR('owner/repo', 99, { body: 'updated body' });
+    const result = await client.updatePR('owner/repo', 99, {
+      body: 'updated body',
+    });
 
     expect(result.number).toBe(99);
     expect(mockFetch).toHaveBeenCalledWith(
@@ -145,7 +151,9 @@ describe('GitHubClient.updatePR', () => {
       body: 'new body',
     });
 
-    const sentBody = JSON.parse((mockFetch.mock.calls[0][1] as RequestInit).body as string);
+    const sentBody = JSON.parse(
+      (mockFetch.mock.calls[0][1] as RequestInit).body as string,
+    );
     expect(sentBody.title).toBe('feat: new-name');
     expect(sentBody.body).toBe('new body');
   });

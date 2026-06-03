@@ -85,7 +85,10 @@ describe('buildOrchestratorClaudeMd', () => {
     });
 
     it('omits PR format section and marker for local-only git mode', () => {
-      const output = buildOrchestratorClaudeMd({ ...BASE_PARAMS, gitMode: 'local-only' });
+      const output = buildOrchestratorClaudeMd({
+        ...BASE_PARAMS,
+        gitMode: 'local-only',
+      });
       expect(output).not.toContain('## PR Format Standards');
       expect(output).not.toContain('<pr-body>');
     });

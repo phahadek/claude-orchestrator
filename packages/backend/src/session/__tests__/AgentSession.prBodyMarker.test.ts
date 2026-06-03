@@ -171,7 +171,9 @@ function emitAssistantWithMarker(
     type: 'assistant',
     message: {
       id: msgId,
-      content: [{ type: 'text', text: `Done!\n\n<pr-body>\n${body}\n</pr-body>` }],
+      content: [
+        { type: 'text', text: `Done!\n\n<pr-body>\n${body}\n</pr-body>` },
+      ],
     },
   });
 }
@@ -181,7 +183,10 @@ function emitAssistantWithMarker(
 describe('<pr-body> marker — createPR path', () => {
   beforeEach(() => {
     vi.mocked(upsertPullRequest).mockClear();
-    vi.mocked(validatePRBody).mockReturnValue({ valid: true, missingSections: [] });
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: true,
+      missingSections: [],
+    });
     vi.mocked(getPRBySessionId).mockReturnValue(null);
   });
 
@@ -268,7 +273,11 @@ describe('<pr-body> marker — validation failure path', () => {
     const session = makeSession(ghClient);
 
     // Access the internal runner to observe sendMessage calls
-    const runner = (session as unknown as { runner: { sendMessage: ReturnType<typeof vi.fn> } }).runner;
+    const runner = (
+      session as unknown as {
+        runner: { sendMessage: ReturnType<typeof vi.fn> };
+      }
+    ).runner;
 
     emitAssistantWithMarker(session, 'incomplete body', 'msg_bad');
     await new Promise((r) => setImmediate(r));
@@ -284,7 +293,10 @@ describe('<pr-body> marker — validation failure path', () => {
 describe('<pr-body> marker — idempotent update path', () => {
   beforeEach(() => {
     vi.mocked(upsertPullRequest).mockClear();
-    vi.mocked(validatePRBody).mockReturnValue({ valid: true, missingSections: [] });
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: true,
+      missingSections: [],
+    });
   });
 
   it('calls updatePR instead of createPR when a PR already exists for this session', async () => {

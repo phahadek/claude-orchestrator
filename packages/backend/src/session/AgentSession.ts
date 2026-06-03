@@ -878,7 +878,9 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         this.sessionId,
         `<pr-body> validation failed — missing: ${validation.missingSections.join(', ')}`,
       );
-      const missing = validation.missingSections.map((s) => `\`${s}\``).join(', ');
+      const missing = validation.missingSections
+        .map((s) => `\`${s}\``)
+        .join(', ');
       this.sendMessage(
         `The PR body is missing required sections: ${missing}.\n\n` +
           `Please fix the body and re-emit it inside a <pr-body>…</pr-body> marker ` +
@@ -896,9 +898,13 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         `<pr-body> marker — updating body of existing PR #${existingPR.pr_number}`,
       );
       try {
-        await this.githubClient.updatePR(existingPR.repo, existingPR.pr_number, {
-          body,
-        });
+        await this.githubClient.updatePR(
+          existingPR.repo,
+          existingPR.pr_number,
+          {
+            body,
+          },
+        );
         recordEvent({
           event_type: 'pr_body_updated_via_marker',
           actor_type: 'ai',
@@ -939,11 +945,14 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       repo = repoMatch ? repoMatch[1] : GITHUB_REPO;
 
       try {
-        const remoteHead = execSync('git symbolic-ref refs/remotes/origin/HEAD', {
-          cwd: this.worktreePath,
-          encoding: 'utf-8',
-          stdio: 'pipe',
-        }).trim();
+        const remoteHead = execSync(
+          'git symbolic-ref refs/remotes/origin/HEAD',
+          {
+            cwd: this.worktreePath,
+            encoding: 'utf-8',
+            stdio: 'pipe',
+          },
+        ).trim();
         const parsed = remoteHead.replace('refs/remotes/origin/', '');
         if (parsed) baseBranch = parsed;
       } catch {
