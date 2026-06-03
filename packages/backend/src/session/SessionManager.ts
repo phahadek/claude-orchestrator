@@ -38,6 +38,7 @@ import {
   getPRByNumber,
   getPRBySessionId,
   getStuckResultSessionRows,
+  getRunningSessionsWithMergedOrClosedPR,
   hasActiveSessionForTask,
   getOtherRunningSessionsForTask,
 } from '../db/queries';
@@ -1174,6 +1175,45 @@ export class SessionManager extends EventEmitter {
         `[SessionManager] recovering ${stuckRows.length} stuck session(s) from running→done`,
       );
       for (const row of stuckRows) {
+        markSessionDone(row.session_id, row.last_ts, row.pr_url ?? null);
+        let taskBackend;
+        try {
+          taskBackend = row.project_id ? getTaskBackend(row.project_id) : null;
+        } catch {
+          taskBackend = null;
+        }
+        if (taskBackend) {
+          await recoverSession(row.session_id, {
+            scope: 'boot',
+            prUrl: row.pr_url ?? undefined,
+            prDetectedLive: false,
+            sessionType: row.session_type || 'standard',
+            taskId: row.task_id || '',
+            projectId: row.project_id || '',
+            worktreePath: row.worktree_path || '',
+            taskUrl: row.task_url || '',
+            projectContextUrl: row.project_context_url || '',
+            taskBackend,
+            sessionManager: this,
+            broadcast: (msg) => this.emit('message', msg),
+            emitPrOpened: (data) => this.emit('pr_opened', data),
+          }).catch((e) =>
+            console.error(
+              `[SessionManager] recoverSession failed for ${row.session_id}: ${e}`,
+            ),
+          );
+        }
+      }
+    }
+
+    // Reap running sessions whose PR is already merged or closed — terminate
+    // rather than resume so they don't re-dispatch already-merged work.
+    const mergedPrRows = getRunningSessionsWithMergedOrClosedPR();
+    if (mergedPrRows.length > 0) {
+      console.log(
+        `[SessionManager] reaping ${mergedPrRows.length} session(s) with merged/closed PR`,
+      );
+      for (const row of mergedPrRows) {
         markSessionDone(row.session_id, row.last_ts, row.pr_url ?? null);
         let taskBackend;
         try {
