@@ -5,7 +5,12 @@ import supertest from 'supertest';
 // ── Hoisted mock state ────────────────────────────────────────────────────────
 // vi.mock factories are hoisted; variables they reference must be too.
 
-const { mockRuntimeSettings, mockSetSetting, mockGetSetting, mockGetAllSettings } = vi.hoisted(() => {
+const {
+  mockRuntimeSettings,
+  mockSetSetting,
+  mockGetSetting,
+  mockGetAllSettings,
+} = vi.hoisted(() => {
   const mockRuntimeSettings = {
     max_concurrent_code_sessions: 20,
     auto_review_concurrency: 1,
