@@ -156,8 +156,7 @@ export class OrphanedTaskSweeper {
     // Resolve the authoritative project ID: prefer the session's own project_id
     // so that tasks from project "polimarket" aren't attributed to "claude-dashboard"
     // just because that project's loop encountered the task first.
-    const effectiveProjectId =
-      latestSession?.project_id ?? projectId;
+    const effectiveProjectId = latestSession?.project_id ?? projectId;
 
     if (latestSession !== undefined) {
       const pr = getPRBySessionId(latestSession.session_id);

@@ -699,7 +699,9 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           const markerMatch = accumulatedText.match(PR_BODY_MARKER_REGEX);
           if (markerMatch) {
             this.processedPRBodyMessageIds.add(messageId);
-            this.prBodyMarkerPromise = this.handlePRBodyMarker(markerMatch[1].trim());
+            this.prBodyMarkerPromise = this.handlePRBodyMarker(
+              markerMatch[1].trim(),
+            );
           }
         }
       }
@@ -1247,7 +1249,9 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       const MARKER_PR_TIMEOUT_MS = 30_000;
       await Promise.race([
         this.prBodyMarkerPromise,
-        new Promise<void>((resolve) => setTimeout(resolve, MARKER_PR_TIMEOUT_MS)),
+        new Promise<void>((resolve) =>
+          setTimeout(resolve, MARKER_PR_TIMEOUT_MS),
+        ),
       ]);
     }
 
