@@ -63,6 +63,7 @@ vi.mock('child_process', () => ({
       return 'https://github.com/owner/repo.git\n';
     if (cmd === 'git symbolic-ref refs/remotes/origin/HEAD')
       return 'refs/remotes/origin/dev\n';
+    if (cmd === 'git push -u origin feature/my-task') return '';
     throw new Error(`unexpected: ${cmd}`);
   }),
 }));
@@ -87,6 +88,7 @@ import {
 } from '../../db/queries';
 import { validatePRBody } from '../../github/PRBodyValidator';
 import { recordEvent } from '../../audit/AuditLog';
+import { execSync } from 'child_process';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -455,5 +457,136 @@ describe('<pr-body> marker — clean-exit ordering', () => {
       expect.any(Number),
       PR_URL,
     );
+  });
+});
+
+describe('<pr-body> marker — backend push before createPR', () => {
+  beforeEach(() => {
+    vi.mocked(upsertPullRequest).mockClear();
+    vi.mocked(recordEvent).mockClear();
+    vi.mocked(execSync).mockClear();
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: true,
+      missingSections: [],
+    });
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    // Reset execSync to default happy-path behaviour
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === 'git branch --show-current') return 'feature/my-task\n';
+      if (cmd === 'git remote get-url origin')
+        return 'https://github.com/owner/repo.git\n';
+      if (cmd === 'git symbolic-ref refs/remotes/origin/HEAD')
+        return 'refs/remotes/origin/dev\n';
+      if (cmd === 'git push -u origin feature/my-task') return '';
+      throw new Error(`unexpected execSync: ${cmd}`);
+    });
+  });
+
+  it('pushes the branch before calling createPR', async () => {
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    const pushCall = vi
+      .mocked(execSync)
+      .mock.calls.find((args) =>
+        String(args[0]).startsWith('git push -u origin'),
+      );
+    expect(pushCall).toBeDefined();
+    expect(ghClient.createPR).toHaveBeenCalledTimes(1);
+
+    // push must precede createPR — check call order via mock.invocationCallOrder
+    const pushOrder = vi
+      .mocked(execSync)
+      .mock.invocationCallOrder.find((_, i) =>
+        String(vi.mocked(execSync).mock.calls[i]?.[0]).startsWith('git push'),
+      );
+    const createOrder = vi.mocked(ghClient.createPR).mock
+      .invocationCallOrder[0];
+    expect(pushOrder).toBeDefined();
+    expect(createOrder).toBeDefined();
+    expect(pushOrder!).toBeLessThan(createOrder!);
+  });
+
+  it('upserts PR row after successful push + createPR', async () => {
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(upsertPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ pr_number: 42, session_id: 'test-session-id' }),
+    );
+  });
+
+  it('records pr_creation_failed (stage push) and skips createPR when push fails', async () => {
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === 'git branch --show-current') return 'feature/my-task\n';
+      if (cmd === 'git remote get-url origin')
+        return 'https://github.com/owner/repo.git\n';
+      if (cmd === 'git symbolic-ref refs/remotes/origin/HEAD')
+        return 'refs/remotes/origin/dev\n';
+      if (cmd === 'git push -u origin feature/my-task')
+        throw new Error('remote: Repository not found.');
+      throw new Error(`unexpected execSync: ${cmd}`);
+    });
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).not.toHaveBeenCalled();
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'pr_creation_failed',
+        payload: expect.objectContaining({ stage: 'push' }),
+      }),
+    );
+  });
+
+  it('records pr_creation_failed (stage create) and leaves no PR row when createPR fails', async () => {
+    const ghClient = makeGithubClient({
+      createPR: vi.fn().mockRejectedValue(new Error('422 Validation Failed')),
+    });
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(upsertPullRequest).not.toHaveBeenCalled();
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'pr_creation_failed',
+        payload: expect.objectContaining({ stage: 'create' }),
+      }),
+    );
+  });
+
+  it('does NOT re-push when an existing PR is found (idempotent update path)', async () => {
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      pr_number: 42,
+      repo: 'owner/repo',
+      base_branch: 'dev',
+    } as never);
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY, 'msg_idem');
+
+    await new Promise((r) => setImmediate(r));
+
+    const pushCall = vi
+      .mocked(execSync)
+      .mock.calls.find((args) =>
+        String(args[0]).startsWith('git push -u origin'),
+      );
+    expect(pushCall).toBeUndefined();
+    expect(ghClient.createPR).not.toHaveBeenCalled();
+    expect(ghClient.updatePR).toHaveBeenCalledTimes(1);
   });
 });

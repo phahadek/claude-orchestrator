@@ -177,20 +177,17 @@ async function emitPRBodyMarker(
 describe('AgentSession — handlePRBodyMarker base branch resolution', () => {
   beforeEach(() => {
     mockProc = createMockProc();
-    mockExecSync = vi.fn((cmd: string) => {
+    const defaultExecSync = (cmd: string) => {
       if (cmd === 'git branch --show-current') return 'feature/my-task\n';
       if (cmd === 'git remote get-url origin')
         return 'https://github.com/owner/repo.git\n';
+      if (cmd.startsWith('git push -u origin ')) return '';
       throw new Error(`unexpected execSync: ${cmd}`);
-    });
+    };
+    mockExecSync = vi.fn(defaultExecSync);
     vi.clearAllMocks();
     // Re-register execSync behaviour after clearAllMocks
-    mockExecSync = vi.fn((cmd: string) => {
-      if (cmd === 'git branch --show-current') return 'feature/my-task\n';
-      if (cmd === 'git remote get-url origin')
-        return 'https://github.com/owner/repo.git\n';
-      throw new Error(`unexpected execSync: ${cmd}`);
-    });
+    mockExecSync = vi.fn(defaultExecSync);
   });
 
   it('uses project.baseBranch (dev) from config — not origin/HEAD', async () => {
