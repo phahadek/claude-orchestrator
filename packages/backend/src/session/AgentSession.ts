@@ -48,6 +48,7 @@ import {
   toEventType,
 } from './eventTypes';
 import { eventKind } from './eventKind';
+import { isContextOverflow } from './contextOverflow';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
 const PR_BODY_MARKER_REGEX = /<pr-body>([\s\S]*?)<\/pr-body>/;
@@ -199,6 +200,8 @@ export class AgentSession extends EventEmitter {
   private retryCount = 0;
   /** Guard: fires at most once per session to avoid duplicate pause broadcasts. */
   private inSessionApiErrorFired = false;
+  /** Set when a context-overflow result event is detected; suppresses generic retry. */
+  private contextOverflowDetected = false;
   /** One-cycle injection skip lock set by PRFileReverter.
    *  Each entry is consumed (deleted) the first time injectContextFile checks it,
    *  blocking exactly one injection attempt per reverted file before resetting. */
@@ -357,6 +360,28 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       if (exitCode === 0) {
         this.retryCount = 0;
         await this.handleCleanExit();
+        return;
+      }
+
+      // Non-zero exit — context overflow takes priority: do not retry, surface distinctly.
+      if (this.contextOverflowDetected) {
+        sessionLog(this.sessionId, 'context overflow — exiting without retry');
+        if (!this.hasEnded) {
+          this.sessionManager?.markSessionErrored?.(
+            this.sessionId,
+            'error',
+            'context_overflow',
+          );
+          if (!this.hasEnded) {
+            updateSessionStatus(this.sessionId, 'error', Date.now());
+            this.broadcast({
+              type: 'session_ended',
+              sessionId: this.sessionId,
+              status: 'error',
+              ...(this.taskId && { taskId: this.taskId }),
+            });
+          }
+        }
         return;
       }
 
@@ -659,6 +684,16 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           type: 'permission_denials',
           sessionId: this.sessionId,
           denials,
+        });
+      }
+
+      // Detect context overflow before the session exits (or mid-session).
+      if (!this.contextOverflowDetected && isContextOverflow(event)) {
+        this.contextOverflowDetected = true;
+        sessionLog(this.sessionId, 'context overflow detected');
+        this.broadcast({
+          type: 'context_overflow_detected',
+          sessionId: this.sessionId,
         });
       }
     }
