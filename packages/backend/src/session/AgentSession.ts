@@ -1011,7 +1011,11 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     const taskName = branch.replace(/^feature\//, '');
     const title = `feat: ${taskName}`;
 
-    await this.createPRWithRetry(repo, { title, body, head: branch, base: baseBranch }, branch);
+    await this.createPRWithRetry(
+      repo,
+      { title, body, head: branch, base: baseBranch },
+      branch,
+    );
   }
 
   private async createPRWithRetry(
@@ -1056,9 +1060,13 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               `createPR 422 already-exists — updating existing PR #${existingPR.pr_number}`,
             );
             try {
-              await this.githubClient!.updatePR(existingPR.repo, existingPR.pr_number, {
-                body: params.body,
-              });
+              await this.githubClient!.updatePR(
+                existingPR.repo,
+                existingPR.pr_number,
+                {
+                  body: params.body,
+                },
+              );
             } catch (ue) {
               console.warn(
                 `[AgentSession] updatePR fallback #${existingPR.pr_number} failed: ${(ue as Error).message}`,

@@ -154,13 +154,17 @@ function emitAssistantWithMarker(session: AgentSession, body: string) {
     type: 'assistant',
     message: {
       id: 'msg_pr_body',
-      content: [{ type: 'text', text: `Done!\n\n<pr-body>\n${body}\n</pr-body>` }],
+      content: [
+        { type: 'text', text: `Done!\n\n<pr-body>\n${body}\n</pr-body>` },
+      ],
     },
   });
 }
 
 function getRunner(session: AgentSession) {
-  return (session as unknown as { runner: { sendMessage: ReturnType<typeof vi.fn> } }).runner;
+  return (
+    session as unknown as { runner: { sendMessage: ReturnType<typeof vi.fn> } }
+  ).runner;
 }
 
 // ── Push failure → bounded retry ─────────────────────────────────────────────
@@ -330,7 +334,8 @@ describe('<pr-body> marker — createPR transient retry', () => {
     const ghClient = makeGithubClient({
       createPR: vi.fn().mockImplementation(() => {
         calls++;
-        if (calls < 3) return Promise.reject(new Error('503 Service Unavailable'));
+        if (calls < 3)
+          return Promise.reject(new Error('503 Service Unavailable'));
         return Promise.resolve(successResponse);
       }),
     });
@@ -392,9 +397,11 @@ describe('<pr-body> marker — createPR 422 diversion', () => {
 
   it('422 "head branch not found" → records push-stage failure and sends retry message', async () => {
     const ghClient = makeGithubClient({
-      createPR: vi.fn().mockRejectedValue(
-        new Error('422 Unprocessable Entity: head branch not found'),
-      ),
+      createPR: vi
+        .fn()
+        .mockRejectedValue(
+          new Error('422 Unprocessable Entity: head branch not found'),
+        ),
     });
     vi.mocked(countPushFailureEvents).mockReturnValue(1);
 
@@ -419,9 +426,13 @@ describe('<pr-body> marker — createPR 422 diversion', () => {
 
   it('422 "pull request already exists" → diverts to update path, no duplicate create', async () => {
     const ghClient = makeGithubClient({
-      createPR: vi.fn().mockRejectedValue(
-        new Error('422 Validation Failed: A pull request already exists for owner:feature/my-task.'),
-      ),
+      createPR: vi
+        .fn()
+        .mockRejectedValue(
+          new Error(
+            '422 Validation Failed: A pull request already exists for owner:feature/my-task.',
+          ),
+        ),
     });
     // First call (early-return guard in handlePRBodyMarker): no existing PR.
     // Second call (inside createPRWithRetry after 422): returns existing PR.
@@ -450,9 +461,11 @@ describe('<pr-body> marker — createPR 422 diversion', () => {
 
   it('other 422 is terminal — records create-stage failure, not retried', async () => {
     const ghClient = makeGithubClient({
-      createPR: vi.fn().mockRejectedValue(
-        new Error('422 Validation Failed: some unknown client error'),
-      ),
+      createPR: vi
+        .fn()
+        .mockRejectedValue(
+          new Error('422 Validation Failed: some unknown client error'),
+        ),
     });
 
     const session = makeSession(ghClient);
