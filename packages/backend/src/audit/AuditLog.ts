@@ -16,3 +16,23 @@ export function recordEvent(event: AuditEvent): void {
     JSON.stringify(event.payload),
   );
 }
+
+/**
+ * Returns the number of pr_creation_failed events with stage='push' recorded
+ * for the given session. Used to derive the persisted push-retry count.
+ */
+export function countPushFailureEvents(sessionId: string): number {
+  const rows = db
+    .prepare(
+      `SELECT payload FROM audit_log
+       WHERE event_type = 'pr_creation_failed' AND actor_id = ?`,
+    )
+    .all(sessionId) as { payload: string }[];
+  return rows.filter((r) => {
+    try {
+      return (JSON.parse(r.payload) as { stage?: string }).stage === 'push';
+    } catch {
+      return false;
+    }
+  }).length;
+}

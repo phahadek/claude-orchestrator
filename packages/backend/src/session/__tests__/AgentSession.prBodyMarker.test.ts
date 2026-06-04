@@ -37,6 +37,7 @@ vi.mock('../../tasks/TaskBackend', () => ({
 
 vi.mock('../../audit/AuditLog', () => ({
   recordEvent: vi.fn(),
+  countPushFailureEvents: vi.fn().mockReturnValue(0),
 }));
 
 vi.mock('../filePollutionCheck', () => ({
