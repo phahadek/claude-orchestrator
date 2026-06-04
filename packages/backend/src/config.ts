@@ -249,6 +249,8 @@ export interface RuntimeSettings {
   auto_archive_grace_minutes: number;
   /** ConcludedSessionArchiver: interval in minutes between archiver sweeps. */
   auto_archive_sweep_interval_minutes: number;
+  /** Model used for large-context task escalation; empty string = feature off. */
+  large_task_model: string;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -292,4 +294,5 @@ export const runtimeSettings: RuntimeSettings = {
   auto_archive_sweep_interval_minutes: Number(
     process.env.AUTO_ARCHIVE_SWEEP_INTERVAL_MINUTES ?? 5,
   ),
+  large_task_model: '',
 };
