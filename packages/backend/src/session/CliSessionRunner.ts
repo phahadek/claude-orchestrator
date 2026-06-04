@@ -37,7 +37,13 @@ export class CliSessionRunner implements ISessionRunner {
     options: SessionRunnerOptions,
     onEvent: (event: RawSessionEvent) => void,
   ): Promise<number | null> {
-    const { worktreePath, model, allowedTools, mcpConfigPath, disableAutoCompact } = options;
+    const {
+      worktreePath,
+      model,
+      allowedTools,
+      mcpConfigPath,
+      disableAutoCompact,
+    } = options;
 
     const spawnArgs = [
       ...(resumeSessionId

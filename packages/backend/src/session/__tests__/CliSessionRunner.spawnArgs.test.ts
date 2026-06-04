@@ -98,16 +98,28 @@ describe('CliSessionRunner spawn args', () => {
 
   it('includes --settings autoCompactEnabled:false when disableAutoCompact is true', async () => {
     const runner = new CliSessionRunner(SESSION_ID);
-    await runner.run('hello', undefined, { ...defaultOptions, disableAutoCompact: true }, () => {});
+    await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, disableAutoCompact: true },
+      () => {},
+    );
 
     const settingsIdx = capturedSpawnArgs.indexOf('--settings');
     expect(settingsIdx).not.toBe(-1);
-    expect(capturedSpawnArgs[settingsIdx + 1]).toBe('{"autoCompactEnabled":false}');
+    expect(capturedSpawnArgs[settingsIdx + 1]).toBe(
+      '{"autoCompactEnabled":false}',
+    );
   });
 
   it('does not include --settings when disableAutoCompact is false', async () => {
     const runner = new CliSessionRunner(SESSION_ID);
-    await runner.run('hello', undefined, { ...defaultOptions, disableAutoCompact: false }, () => {});
+    await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, disableAutoCompact: false },
+      () => {},
+    );
 
     expect(capturedSpawnArgs).not.toContain('--settings');
   });
@@ -121,11 +133,21 @@ describe('CliSessionRunner spawn args', () => {
 
   it('disableAutoCompact can be set independently per spawn', async () => {
     const runner1 = new CliSessionRunner(SESSION_ID);
-    await runner1.run('hello', undefined, { ...defaultOptions, disableAutoCompact: true }, () => {});
+    await runner1.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, disableAutoCompact: true },
+      () => {},
+    );
     const argsWithDisabled = [...capturedSpawnArgs];
 
     const runner2 = new CliSessionRunner(SESSION_ID);
-    await runner2.run('hello', undefined, { ...defaultOptions, disableAutoCompact: false }, () => {});
+    await runner2.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, disableAutoCompact: false },
+      () => {},
+    );
     const argsWithEnabled = [...capturedSpawnArgs];
 
     expect(argsWithDisabled).toContain('--settings');
