@@ -2453,7 +2453,9 @@ export function hasTestResultForSha(
       pr_number: number;
       repo: string;
       sha: string;
-    }>(`SELECT 1 FROM orchestrator_test_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`)
+    }>(
+      `SELECT 1 FROM orchestrator_test_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
+    )
     .get({ pr_number: prNumber, repo, sha });
   return row != null;
 }
@@ -2495,6 +2497,8 @@ export function getTestResult(
       pr_number: number;
       repo: string;
       sha: string;
-    }>(`SELECT * FROM orchestrator_test_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`)
+    }>(
+      `SELECT * FROM orchestrator_test_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
+    )
     .get({ pr_number: prNumber, repo, sha }) as TestResultRow | undefined;
 }

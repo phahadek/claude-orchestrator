@@ -53,7 +53,9 @@ vi.mock('../../db/queries', () => ({
 }));
 
 // test-runner mock
-const mockRunTestCommands = vi.fn().mockResolvedValue({ passed: true, output: 'ok' });
+const mockRunTestCommands = vi
+  .fn()
+  .mockResolvedValue({ passed: true, output: 'ok' });
 
 vi.mock('../../session/test-runner', () => ({
   runTestCommands: (...args: unknown[]) => mockRunTestCommands(...args),
@@ -124,7 +126,14 @@ describe('ReviewOrchestrator.runTestPipeline — empty test commands', () => {
     const rs = makeReviewService();
     const orch = new ReviewOrchestrator(rs, sm, 1, true);
 
-    await orch.runTestPipeline(1, 'owner/repo', 'sha-abc', '/worktree', [], 300);
+    await orch.runTestPipeline(
+      1,
+      'owner/repo',
+      'sha-abc',
+      '/worktree',
+      [],
+      300,
+    );
 
     expect(mockRunTestCommands).not.toHaveBeenCalled();
     expect(mockUpsertTestResult).not.toHaveBeenCalled();
@@ -135,7 +144,14 @@ describe('ReviewOrchestrator.runTestPipeline — empty test commands', () => {
     const rs = makeReviewService();
     const orch = new ReviewOrchestrator(rs, sm, 1, true);
 
-    await orch.runTestPipeline(1, 'owner/repo', '', '/worktree', ['npm test'], 300);
+    await orch.runTestPipeline(
+      1,
+      'owner/repo',
+      '',
+      '/worktree',
+      ['npm test'],
+      300,
+    );
 
     expect(mockRunTestCommands).not.toHaveBeenCalled();
     expect(mockUpsertTestResult).not.toHaveBeenCalled();
@@ -187,32 +203,67 @@ describe('ReviewOrchestrator.runTestPipeline — re-run on new SHA', () => {
   it('runs tests and persists for sha-A, then runs again for sha-B', async () => {
     // First SHA — no prior result
     mockHasTestResultForSha.mockReturnValueOnce(false);
-    mockRunTestCommands.mockResolvedValueOnce({ passed: true, output: 'pass-A' });
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: true,
+      output: 'pass-A',
+    });
 
     const sm = makeSessionManager();
     const rs = makeReviewService();
     const orch = new ReviewOrchestrator(rs, sm, 1, true);
 
-    await orch.runTestPipeline(1, 'org/repo', 'sha-A', '/worktree', ['npm test'], 300);
+    await orch.runTestPipeline(
+      1,
+      'org/repo',
+      'sha-A',
+      '/worktree',
+      ['npm test'],
+      300,
+    );
 
-    expect(mockUpsertTestResult).toHaveBeenCalledWith(1, 'org/repo', 'sha-A', true, 'pass-A');
+    expect(mockUpsertTestResult).toHaveBeenCalledWith(
+      1,
+      'org/repo',
+      'sha-A',
+      true,
+      'pass-A',
+    );
 
     vi.clearAllMocks();
     mockHasTestResultForSha.mockReturnValueOnce(false);
-    mockRunTestCommands.mockResolvedValueOnce({ passed: false, output: 'fail-B' });
+    mockRunTestCommands.mockResolvedValueOnce({
+      passed: false,
+      output: 'fail-B',
+    });
 
     // Second SHA — also no prior result → runs again
-    await orch.runTestPipeline(1, 'org/repo', 'sha-B', '/worktree', ['npm test'], 300);
+    await orch.runTestPipeline(
+      1,
+      'org/repo',
+      'sha-B',
+      '/worktree',
+      ['npm test'],
+      300,
+    );
 
     expect(mockRunTestCommands).toHaveBeenCalledOnce();
-    expect(mockUpsertTestResult).toHaveBeenCalledWith(1, 'org/repo', 'sha-B', false, 'fail-B');
+    expect(mockUpsertTestResult).toHaveBeenCalledWith(
+      1,
+      'org/repo',
+      'sha-B',
+      false,
+      'fail-B',
+    );
   });
 });
 
 describe('ReviewOrchestrator.runTestPipeline — persistence', () => {
   it('persists passed:true and output when commands pass', async () => {
     mockHasTestResultForSha.mockReturnValue(false);
-    mockRunTestCommands.mockResolvedValue({ passed: true, output: 'test output' });
+    mockRunTestCommands.mockResolvedValue({
+      passed: true,
+      output: 'test output',
+    });
 
     const sm = makeSessionManager();
     const rs = makeReviewService();
