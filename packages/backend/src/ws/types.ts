@@ -291,7 +291,8 @@ export type ServerMessage =
       repo: string;
       message: string;
     }
-  | { type: 'session_archived'; sessionId: string };
+  | { type: 'session_archived'; sessionId: string }
+  | { type: 'context_overflow_detected'; sessionId: string };
 
 // ── Client → Server ──────────────────────────────────────────────
 export type ClientMessage =
