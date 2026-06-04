@@ -36,6 +36,7 @@ import {
   setPRReviewResult,
   setPendingPush,
   getSetting,
+  getTestResult,
 } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 
@@ -311,9 +312,27 @@ export class PRMergeWatcher {
       return;
 
     const project = getProjectByGithubRepo(pr.repo);
-    const ciCheckNames = project
-      ? loadOrchestratorConfig(project.projectDir).ci_check_name
-      : [];
+    const config = project ? loadOrchestratorConfig(project.projectDir) : null;
+
+    // ── Orchestrator-run test gate (F2) ──────────────────────────────────────
+    // When test: commands are configured, the per-SHA test result is the
+    // authoritative CI signal — GitHub CI is disabled on private repos so
+    // GitHub reports the PR mergeable; we gate on F1's result instead.
+    if (config && config.test.length > 0 && pr.head_sha && pr.session_id) {
+      const testResult = getTestResult(pr.pr_number, pr.repo, pr.head_sha);
+      if (testResult && !testResult.passed) {
+        if (pr.ci_remediation_attempted_sha !== pr.head_sha) {
+          setCiRemediationAttemptedSha(pr.pr_number, pr.repo, pr.head_sha);
+          setPauseReason(pr.pr_number, pr.repo, 'ci_failing');
+          await this.runCIFailureRemediation(pr, [], testResult.output);
+        }
+        return; // Gated on failing tests — skip GitHub mergeability evaluation
+      }
+      // No result yet (test hasn't run) or test passed → fall through
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    const ciCheckNames = config?.ci_check_name ?? [];
 
     let category: MergeabilityCategory;
     try {
@@ -453,10 +472,12 @@ export class PRMergeWatcher {
    * Run autofix-then-session-feedback remediation for a CI-failing PR.
    * The caller is responsible for the per-SHA dedup check and recording
    * ci_remediation_attempted_sha before calling this method.
+   * logExcerpt: captured test output to include in the feedback (F2 orchestrator tests).
    */
   private async runCIFailureRemediation(
     pr: PullRequestRow,
     failingNames: string[],
+    logExcerpt?: string | null,
   ): Promise<void> {
     console.log(
       `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has failing CI checks: ${failingNames.join(', ') || '(unknown)'}`,
@@ -514,7 +535,7 @@ export class PRMergeWatcher {
       prNumber: pr.pr_number,
       failingCheckNames: failingNames,
       runUrl,
-      logExcerpt: null,
+      logExcerpt: logExcerpt ?? null,
     });
     this.sessions
       .sendOrResume(pr.session_id!, msg)
@@ -697,6 +718,28 @@ export class PRMergeWatcher {
         prRow.repo,
         prRow.task_id,
       );
+
+      // Run orchestrator tests for the new SHA so F2 can gate on the fresh result.
+      {
+        const pushProject = getProjectByGithubRepo(prRow.repo);
+        if (pushProject && headSha) {
+          const pushConfig = loadOrchestratorConfig(pushProject.projectDir);
+          if (pushConfig.test.length > 0) {
+            const pushSession = getSession(prRow.session_id!);
+            const worktreePath = pushSession?.worktree_path ?? '';
+            if (worktreePath) {
+              await this.reviewOrchestrator!.runTestPipeline(
+                prRow.pr_number,
+                prRow.repo,
+                headSha,
+                worktreePath,
+                pushConfig.test,
+                pushConfig.test_timeout_sec,
+              );
+            }
+          }
+        }
+      }
 
       try {
         let result: PRReviewResult;
