@@ -118,10 +118,7 @@ export function updateSessionWorktreePath(
   });
 }
 
-export function setSessionPauseReason(
-  sessionId: string,
-  reason: string,
-): void {
+export function setSessionPauseReason(sessionId: string, reason: string): void {
   db.prepare<{ session_id: string; pause_reason: string }>(
     `UPDATE sessions SET pause_reason = @pause_reason WHERE session_id = @session_id`,
   ).run({ session_id: sessionId, pause_reason: reason });

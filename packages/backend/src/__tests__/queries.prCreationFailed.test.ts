@@ -77,7 +77,11 @@ beforeEach(async () => {
 function setupTask() {
   upsertTaskCache(
     TASK_ID,
-    JSON.stringify({ id: TASK_ID, title: 'Test Task', status: '🔄 In Progress' }),
+    JSON.stringify({
+      id: TASK_ID,
+      title: 'Test Task',
+      status: '🔄 In Progress',
+    }),
   );
 }
 
@@ -90,7 +94,9 @@ describe('getActiveTaskAggregates — pr_creation_failed two-gate surface', () =
     setSessionPauseReason('sess-1', 'pr_creation_failed');
 
     const [row] = getActiveTaskAggregates([TASK_ID]);
-    expect(row.session_pr_creation_failed_pause_reason).toBe('pr_creation_failed');
+    expect(row.session_pr_creation_failed_pause_reason).toBe(
+      'pr_creation_failed',
+    );
     expect(row.pr_pause_reason).toBeNull();
   });
 
@@ -117,10 +123,14 @@ describe('getActiveTaskAggregates — pr_creation_failed two-gate surface', () =
   it('gate (b): after relaunch, newer session with null reason clears the surface', () => {
     setupTask();
     // Older session failed
-    insertSession(makeSession({ session_id: 'sess-1', task_id: TASK_ID, started_at: 1000 }));
+    insertSession(
+      makeSession({ session_id: 'sess-1', task_id: TASK_ID, started_at: 1000 }),
+    );
     setSessionPauseReason('sess-1', 'pr_creation_failed');
     // Newer session launched (no failure yet)
-    insertSession(makeSession({ session_id: 'sess-2', task_id: TASK_ID, started_at: 2000 }));
+    insertSession(
+      makeSession({ session_id: 'sess-2', task_id: TASK_ID, started_at: 2000 }),
+    );
 
     const [row] = getActiveTaskAggregates([TASK_ID]);
     expect(row.session_pr_creation_failed_pause_reason).toBeNull();
@@ -129,13 +139,19 @@ describe('getActiveTaskAggregates — pr_creation_failed two-gate surface', () =
 
   it('gate (b): if newer session also fails terminally, surfaces again', () => {
     setupTask();
-    insertSession(makeSession({ session_id: 'sess-1', task_id: TASK_ID, started_at: 1000 }));
+    insertSession(
+      makeSession({ session_id: 'sess-1', task_id: TASK_ID, started_at: 1000 }),
+    );
     setSessionPauseReason('sess-1', 'pr_creation_failed');
-    insertSession(makeSession({ session_id: 'sess-2', task_id: TASK_ID, started_at: 2000 }));
+    insertSession(
+      makeSession({ session_id: 'sess-2', task_id: TASK_ID, started_at: 2000 }),
+    );
     setSessionPauseReason('sess-2', 'pr_creation_failed');
 
     const [row] = getActiveTaskAggregates([TASK_ID]);
-    expect(row.session_pr_creation_failed_pause_reason).toBe('pr_creation_failed');
+    expect(row.session_pr_creation_failed_pause_reason).toBe(
+      'pr_creation_failed',
+    );
     expect(row.code_session_id).toBe('sess-2');
   });
 });

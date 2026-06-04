@@ -83,7 +83,11 @@ vi.mock('../CliSessionRunner', () => ({
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
 import { AgentSession } from '../AgentSession';
-import { upsertPullRequest, getPRBySessionId, setSessionPauseReason } from '../../db/queries';
+import {
+  upsertPullRequest,
+  getPRBySessionId,
+  setSessionPauseReason,
+} from '../../db/queries';
 import { recordEvent, countPushFailureEvents } from '../../audit/AuditLog';
 import { execSync } from 'child_process';
 
