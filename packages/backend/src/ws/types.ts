@@ -65,6 +65,7 @@ export interface TaskView {
     outputTokens: number;
     context_occupancy_tokens?: number;
     compaction_count?: number;
+    model?: string | null;
   } | null;
   pr: {
     prNumber: number;

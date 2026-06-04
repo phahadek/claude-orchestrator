@@ -190,7 +190,9 @@ export class AgentSession extends EventEmitter {
   private totalOutputTokens = 0;
   /** Count of compact_boundary events seen this session (in-memory, synced to SQLite). */
   private compactionCount = 0;
-  private static readonly CONTEXT_WINDOW_LIMIT = 200_000;
+  static contextWindowForModel(model: string | null): number {
+    return model?.includes('[1m]') ? 1_000_000 : 200_000;
+  }
   /** Model name extracted from the first assistant event (e.g. 'claude-sonnet-4-6'). */
   public model: string | null = null;
   /** Count of consecutive transient-error retries for this session instance. Resets on clean exit. */
@@ -340,6 +342,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           allowedTools: [...ALLOWED_TOOLS, ...this.extraAllowedTools],
           systemPrompt: this.systemPromptContent,
           mcpConfigPath: this.mcpConfigPath,
+          disableAutoCompact: !!runtimeSettings.large_task_model,
         },
         (event) => this.handleRawEvent(event),
       );
@@ -757,7 +760,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             totalOutputTokens: this.totalOutputTokens,
             contextOccupancyTokens: occupancy,
             contextOccupancyFraction:
-              occupancy / AgentSession.CONTEXT_WINDOW_LIMIT,
+              occupancy / AgentSession.contextWindowForModel(this.model),
           });
         }
       }
