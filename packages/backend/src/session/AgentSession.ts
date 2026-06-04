@@ -35,7 +35,7 @@ import {
 } from '../github/PRBodyValidator';
 import { runFilePollutionCheck as filePollutionCheckFn } from './filePollutionCheck';
 import { checkCommitAttribution } from '../github/CommitAttributionWatcher';
-import { recordEvent } from '../audit/AuditLog';
+import { recordEvent, countPushFailureEvents } from '../audit/AuditLog';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import type { ISessionManager } from './SessionAuditor';
 import type { ISessionRunner } from './SessionRunner';
@@ -994,48 +994,152 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         task_id: this.taskId || null,
         payload: { stage: 'push', error: msg },
       });
+      // Bounded retry: derive count from persisted events so it survives re-prompts.
+      // The event recorded above is already included, so priorCount >= 1 here.
+      const priorCount = countPushFailureEvents(this.sessionId);
+      const PUSH_RETRY_LIMIT = 2;
+      if (priorCount <= PUSH_RETRY_LIMIT) {
+        this.sendMessage(
+          `I couldn't push your branch \`${branch}\` to origin (${msg}). ` +
+            `Please run \`git push -u origin ${branch}\` yourself, then re-emit the ` +
+            `\`<pr-body>\` marker so I can open the PR.`,
+        );
+      }
       return;
     }
 
     const taskName = branch.replace(/^feature\//, '');
     const title = `feat: ${taskName}`;
 
-    try {
-      const created = await this.githubClient.createPR(repo, {
-        title,
-        body,
-        head: branch,
-        base: baseBranch,
-        draft: true,
-      });
+    await this.createPRWithRetry(
+      repo,
+      { title, body, head: branch, base: baseBranch },
+      branch,
+    );
+  }
 
-      const prShape: GitHubPRShape = {
-        number: created.number,
-        html_url: created.html_url,
-        title: created.title,
-        body: created.body,
-        head: { ref: created.head.ref, sha: created.head.sha },
-        base: { ref: created.base.ref },
-        state: created.state,
-        created_at: created.created_at,
-        updated_at: created.updated_at,
-        draft: created.draft,
-      };
+  private async createPRWithRetry(
+    repo: string,
+    params: { title: string; body: string; head: string; base: string },
+    branch: string,
+  ): Promise<void> {
+    const MAX_ATTEMPTS = 3;
+    const BACKOFF_MS = [2000, 4000, 8000];
 
-      await this.handlePRDetected(created.html_url, prShape);
-    } catch (e) {
-      const msg = (e as Error).message;
-      console.error(
-        `[AgentSession] createPR via <pr-body> marker failed: ${msg}`,
-      );
-      recordEvent({
-        event_type: 'pr_creation_failed',
-        actor_type: 'system',
-        actor_id: this.sessionId,
-        project_id: this.projectId || null,
-        task_id: this.taskId || null,
-        payload: { stage: 'create', error: msg },
-      });
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      try {
+        const created = await this.githubClient!.createPR(repo, {
+          ...params,
+          draft: true,
+        });
+
+        const prShape: GitHubPRShape = {
+          number: created.number,
+          html_url: created.html_url,
+          title: created.title,
+          body: created.body,
+          head: { ref: created.head.ref, sha: created.head.sha },
+          base: { ref: created.base.ref },
+          state: created.state,
+          created_at: created.created_at,
+          updated_at: created.updated_at,
+          draft: created.draft,
+        };
+
+        await this.handlePRDetected(created.html_url, prShape);
+        return;
+      } catch (e) {
+        const msg = (e as Error).message;
+
+        // 422 "A pull request already exists" → divert to update path.
+        if (/422/.test(msg) && /pull request already exists/i.test(msg)) {
+          const existingPR = getPRBySessionId(this.sessionId);
+          if (existingPR) {
+            sessionLog(
+              this.sessionId,
+              `createPR 422 already-exists — updating existing PR #${existingPR.pr_number}`,
+            );
+            try {
+              await this.githubClient!.updatePR(
+                existingPR.repo,
+                existingPR.pr_number,
+                {
+                  body: params.body,
+                },
+              );
+            } catch (ue) {
+              console.warn(
+                `[AgentSession] updatePR fallback #${existingPR.pr_number} failed: ${(ue as Error).message}`,
+              );
+            }
+          }
+          return;
+        }
+
+        // 422 "head branch not found" → divert to push-failure path.
+        if (/422/.test(msg) && /head.*not found|head branch/i.test(msg)) {
+          console.error(
+            `[AgentSession] createPR 422 head-not-found — diverting to push-failure path: ${msg}`,
+          );
+          recordEvent({
+            event_type: 'pr_creation_failed',
+            actor_type: 'system',
+            actor_id: this.sessionId,
+            project_id: this.projectId || null,
+            task_id: this.taskId || null,
+            payload: { stage: 'push', error: msg },
+          });
+          const priorCount = countPushFailureEvents(this.sessionId);
+          const PUSH_RETRY_LIMIT = 2;
+          if (priorCount <= PUSH_RETRY_LIMIT) {
+            this.sendMessage(
+              `I couldn't push your branch \`${branch}\` to origin (${msg}). ` +
+                `Please run \`git push -u origin ${branch}\` yourself, then re-emit the ` +
+                `\`<pr-body>\` marker so I can open the PR.`,
+            );
+          }
+          return;
+        }
+
+        // Any other 422 is a terminal client error — don't retry.
+        if (/422/.test(msg)) {
+          console.error(`[AgentSession] createPR terminal 422: ${msg}`);
+          recordEvent({
+            event_type: 'pr_creation_failed',
+            actor_type: 'system',
+            actor_id: this.sessionId,
+            project_id: this.projectId || null,
+            task_id: this.taskId || null,
+            payload: { stage: 'create', error: msg },
+          });
+          return;
+        }
+
+        // Transient error (5xx / network / timeout) — retry with backoff.
+        const isTransient =
+          /5\d\d/.test(msg) ||
+          /ECONNRESET|ETIMEDOUT|ENOTFOUND|network|socket|timeout/i.test(msg);
+
+        if (!isTransient || attempt === MAX_ATTEMPTS - 1) {
+          console.error(
+            `[AgentSession] createPR via <pr-body> marker failed (attempt ${attempt + 1}/${MAX_ATTEMPTS}): ${msg}`,
+          );
+          recordEvent({
+            event_type: 'pr_creation_failed',
+            actor_type: 'system',
+            actor_id: this.sessionId,
+            project_id: this.projectId || null,
+            task_id: this.taskId || null,
+            payload: { stage: 'create', error: msg },
+          });
+          return;
+        }
+
+        console.warn(
+          `[AgentSession] createPR transient error (attempt ${attempt + 1}/${MAX_ATTEMPTS}), retrying in ${BACKOFF_MS[attempt]}ms: ${msg}`,
+        );
+        await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt]));
+      }
     }
   }
 
