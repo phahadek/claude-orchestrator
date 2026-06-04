@@ -273,6 +273,65 @@ describe('AutoLauncher', () => {
     ).not.toHaveBeenCalled();
   });
 
+  it('does NOT re-update an already-Done task whose PR is merged (idempotency guard)', async () => {
+    const sm = makeMockSessionManager();
+    const task = makeTask({ id: 'done-task', status: '✅ Done' });
+    db.prepare(
+      `
+      INSERT INTO pull_requests
+        (pr_number, pr_url, task_id, session_id, repo, state,
+         created_at, updated_at, synced_at)
+      VALUES
+        (2, 'https://github.com/o/r/pull/2', @task_id, NULL, 'o/r', 'merged',
+         'now', 'now', 'now')
+    `,
+    ).run({ task_id: task.id });
+    const backend = makeMockBackend([makeResolved(task)]);
+
+    const launcher = new AutoLauncher(sm, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+    expect(
+      (backend as unknown as { updateStatus: ReturnType<typeof vi.fn> })
+        .updateStatus,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('marks a still-Ready task Done when its PR is already merged (catch-up still fires)', async () => {
+    const sm = makeMockSessionManager();
+    const task = makeTask({ id: 'ready-merged-task', status: '🗂️ Ready' });
+    db.prepare(
+      `
+      INSERT INTO pull_requests
+        (pr_number, pr_url, task_id, session_id, repo, state,
+         created_at, updated_at, synced_at)
+      VALUES
+        (3, 'https://github.com/o/r/pull/3', @task_id, NULL, 'o/r', 'merged',
+         'now', 'now', 'now')
+    `,
+    ).run({ task_id: task.id });
+    const backend = makeMockBackend([makeResolved(task)]);
+
+    const launcher = new AutoLauncher(sm, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+    expect(
+      (backend as unknown as { updateStatus: ReturnType<typeof vi.fn> })
+        .updateStatus,
+    ).toHaveBeenCalledWith('ready-merged-task', '✅ Done');
+    expect(
+      (sm as unknown as { start: ReturnType<typeof vi.fn> }).start,
+    ).not.toHaveBeenCalled();
+  });
+
   it('skips when a live session for the task already exists', async () => {
     const sm = makeMockSessionManager();
     (
