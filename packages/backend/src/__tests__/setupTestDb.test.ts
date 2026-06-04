@@ -20,6 +20,7 @@ const EXPECTED_TABLES = new Set([
   'pull_requests',
   'pr_review_comments_routed',
   'orchestrator_autofix_shas',
+  'orchestrator_test_results',
   'task_no_op_attempts',
   'pending_review_sync',
   'session_pause_intervals',

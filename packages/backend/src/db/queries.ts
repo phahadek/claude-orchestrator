@@ -2431,3 +2431,74 @@ export function deleteActiveMerge(key: string): void {
 export function getAllActiveMerges(): ActiveMergeRow[] {
   return db.prepare(`SELECT * FROM active_merges`).all() as ActiveMergeRow[];
 }
+
+// ─── orchestrator_test_results ────────────────────────────────────────────────
+
+export interface TestResultRow {
+  pr_number: number;
+  repo: string;
+  sha: string;
+  passed: number;
+  output: string;
+  ran_at: string;
+}
+
+export function hasTestResultForSha(
+  prNumber: number,
+  repo: string,
+  sha: string,
+): boolean {
+  const row = db
+    .prepare<{
+      pr_number: number;
+      repo: string;
+      sha: string;
+    }>(
+      `SELECT 1 FROM orchestrator_test_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
+    )
+    .get({ pr_number: prNumber, repo, sha });
+  return row != null;
+}
+
+export function upsertTestResult(
+  prNumber: number,
+  repo: string,
+  sha: string,
+  passed: boolean,
+  output: string,
+): void {
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    sha: string;
+    passed: number;
+    output: string;
+    ran_at: string;
+  }>(
+    `INSERT OR REPLACE INTO orchestrator_test_results (pr_number, repo, sha, passed, output, ran_at)
+     VALUES (@pr_number, @repo, @sha, @passed, @output, @ran_at)`,
+  ).run({
+    pr_number: prNumber,
+    repo,
+    sha,
+    passed: passed ? 1 : 0,
+    output,
+    ran_at: new Date().toISOString(),
+  });
+}
+
+export function getTestResult(
+  prNumber: number,
+  repo: string,
+  sha: string,
+): TestResultRow | undefined {
+  return db
+    .prepare<{
+      pr_number: number;
+      repo: string;
+      sha: string;
+    }>(
+      `SELECT * FROM orchestrator_test_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
+    )
+    .get({ pr_number: prNumber, repo, sha }) as TestResultRow | undefined;
+}

@@ -167,6 +167,16 @@ export function runMigrations(target: Database.Database): void {
       PRIMARY KEY (pr_number, repo, sha)
     );
 
+    CREATE TABLE IF NOT EXISTS orchestrator_test_results (
+      pr_number  INTEGER NOT NULL,
+      repo       TEXT    NOT NULL,
+      sha        TEXT    NOT NULL,
+      passed     INTEGER NOT NULL,
+      output     TEXT    NOT NULL DEFAULT '',
+      ran_at     TEXT    NOT NULL,
+      PRIMARY KEY (pr_number, repo, sha)
+    );
+
     CREATE TABLE IF NOT EXISTS task_no_op_attempts (
       task_id          TEXT PRIMARY KEY,
       retry_count      INTEGER NOT NULL DEFAULT 0,

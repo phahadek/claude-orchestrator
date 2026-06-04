@@ -19,6 +19,13 @@ verify:
 ci_check_name:
   - build
 
+# Commands the orchestrator runs as authoritative tests per head-SHA.
+# Empty list = feature off (no-op). Each command is run with a per-command timeout.
+test: []
+
+# Per-command timeout in seconds for test commands. Default 300 (5 min).
+test_timeout_sec: 300
+
 # Extra Bash tool permission patterns merged with the base allowed-tools set.
 allowed_tools: []
 
