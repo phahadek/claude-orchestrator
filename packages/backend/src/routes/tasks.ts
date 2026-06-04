@@ -134,7 +134,9 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     };
   }
 
-  const pauseReason = (row.pr_pause_reason ?? null) as PauseReason | null;
+  const pauseReason = (row.pr_pause_reason ??
+    row.session_pr_creation_failed_pause_reason ??
+    null) as PauseReason | null;
 
   const displayStatus = deriveDisplayStatus({
     notionStatus,

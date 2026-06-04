@@ -17,6 +17,7 @@ vi.mock('../../db/queries', () => ({
   getPRBySessionId: vi.fn().mockReturnValue(null),
   setHeadSha: vi.fn(),
   setPauseReason: vi.fn(),
+  setSessionPauseReason: vi.fn(),
   insertPauseInterval: vi.fn(),
 }));
 
@@ -82,7 +83,11 @@ vi.mock('../CliSessionRunner', () => ({
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
 import { AgentSession } from '../AgentSession';
-import { upsertPullRequest, getPRBySessionId } from '../../db/queries';
+import {
+  upsertPullRequest,
+  getPRBySessionId,
+  setSessionPauseReason,
+} from '../../db/queries';
 import { recordEvent, countPushFailureEvents } from '../../audit/AuditLog';
 import { execSync } from 'child_process';
 
@@ -255,6 +260,29 @@ describe('<pr-body> marker — push failure bounded retry', () => {
     expect(runner.sendMessage).not.toHaveBeenCalled();
   });
 
+  it('sets session pause_reason=pr_creation_failed when push retries are exhausted', async () => {
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === 'git branch --show-current') return 'feature/my-task\n';
+      if (cmd === 'git remote get-url origin')
+        return 'https://github.com/owner/repo.git\n';
+      if (cmd === 'git symbolic-ref refs/remotes/origin/HEAD')
+        return 'refs/remotes/origin/dev\n';
+      if (cmd === 'git push -u origin feature/my-task')
+        throw new Error('remote: Repository not found.');
+      throw new Error(`unexpected: ${cmd}`);
+    });
+    vi.mocked(countPushFailureEvents).mockReturnValue(3); // past limit
+
+    const session = makeSession(makeGithubClient());
+    emitAssistantWithMarker(session, VALID_BODY);
+    await new Promise((r) => setImmediate(r));
+
+    expect(setSessionPauseReason).toHaveBeenCalledWith(
+      'test-session-id',
+      'pr_creation_failed',
+    );
+  });
+
   it('retry count is derived from recorded events (persisted across re-prompts)', async () => {
     vi.mocked(execSync).mockImplementation((cmd: string) => {
       if (cmd === 'git branch --show-current') return 'feature/my-task\n';
@@ -374,6 +402,23 @@ describe('<pr-body> marker — createPR transient retry', () => {
       }),
     );
   });
+
+  it('sets session pause_reason=pr_creation_failed after all transient retries exhausted', async () => {
+    const ghClient = makeGithubClient({
+      createPR: vi.fn().mockRejectedValue(new Error('503 Service Unavailable')),
+    });
+
+    const session = makeSession(ghClient);
+    vi.mocked(setSessionPauseReason).mockClear();
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await vi.runAllTimersAsync();
+
+    expect(setSessionPauseReason).toHaveBeenCalledWith(
+      'test-session-id',
+      'pr_creation_failed',
+    );
+  });
 });
 
 // ── createPR 422 handling ─────────────────────────────────────────────────────
@@ -480,6 +525,27 @@ describe('<pr-body> marker — createPR 422 diversion', () => {
         event_type: 'pr_creation_failed',
         payload: expect.objectContaining({ stage: 'create' }),
       }),
+    );
+  });
+
+  it('other 422 terminal — sets session pause_reason=pr_creation_failed', async () => {
+    const ghClient = makeGithubClient({
+      createPR: vi
+        .fn()
+        .mockRejectedValue(
+          new Error('422 Validation Failed: some unknown client error'),
+        ),
+    });
+
+    const session = makeSession(ghClient);
+    vi.mocked(setSessionPauseReason).mockClear();
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(setSessionPauseReason).toHaveBeenCalledWith(
+      'test-session-id',
+      'pr_creation_failed',
     );
   });
 });

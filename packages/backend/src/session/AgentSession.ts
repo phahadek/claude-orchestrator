@@ -23,6 +23,7 @@ import {
   getPRBySessionId,
   setHeadSha,
   setPauseReason,
+  setSessionPauseReason,
   insertPauseInterval,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
@@ -1004,6 +1005,8 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             `Please run \`git push -u origin ${branch}\` yourself, then re-emit the ` +
             `\`<pr-body>\` marker so I can open the PR.`,
         );
+      } else {
+        setSessionPauseReason(this.sessionId, 'pr_creation_failed');
       }
       return;
     }
@@ -1097,6 +1100,8 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
                 `Please run \`git push -u origin ${branch}\` yourself, then re-emit the ` +
                 `\`<pr-body>\` marker so I can open the PR.`,
             );
+          } else {
+            setSessionPauseReason(this.sessionId, 'pr_creation_failed');
           }
           return;
         }
@@ -1112,6 +1117,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             task_id: this.taskId || null,
             payload: { stage: 'create', error: msg },
           });
+          setSessionPauseReason(this.sessionId, 'pr_creation_failed');
           return;
         }
 
@@ -1132,6 +1138,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             task_id: this.taskId || null,
             payload: { stage: 'create', error: msg },
           });
+          setSessionPauseReason(this.sessionId, 'pr_creation_failed');
           return;
         }
 
