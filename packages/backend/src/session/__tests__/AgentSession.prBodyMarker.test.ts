@@ -498,10 +498,11 @@ describe('<pr-body> marker — backend push before createPR', () => {
     expect(ghClient.createPR).toHaveBeenCalledTimes(1);
 
     // push must precede createPR — check call order via mock.invocationCallOrder
-    const pushOrder = vi.mocked(execSync).mock.invocationCallOrder.find(
-      (_, i) =>
+    const pushOrder = vi
+      .mocked(execSync)
+      .mock.invocationCallOrder.find((_, i) =>
         String(vi.mocked(execSync).mock.calls[i]?.[0]).startsWith('git push'),
-    );
+      );
     const createOrder = vi.mocked(ghClient.createPR).mock
       .invocationCallOrder[0];
     expect(pushOrder).toBeDefined();

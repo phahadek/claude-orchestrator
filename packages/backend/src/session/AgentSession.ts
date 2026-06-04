@@ -983,7 +983,9 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       });
     } catch (e) {
       const msg = (e as Error).message;
-      console.error(`[AgentSession] git push for <pr-body> marker failed: ${msg}`);
+      console.error(
+        `[AgentSession] git push for <pr-body> marker failed: ${msg}`,
+      );
       recordEvent({
         event_type: 'pr_creation_failed',
         actor_type: 'system',
@@ -1023,7 +1025,9 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       await this.handlePRDetected(created.html_url, prShape);
     } catch (e) {
       const msg = (e as Error).message;
-      console.error(`[AgentSession] createPR via <pr-body> marker failed: ${msg}`);
+      console.error(
+        `[AgentSession] createPR via <pr-body> marker failed: ${msg}`,
+      );
       recordEvent({
         event_type: 'pr_creation_failed',
         actor_type: 'system',
