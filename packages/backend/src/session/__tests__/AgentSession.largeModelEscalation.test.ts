@@ -11,7 +11,11 @@ const mockRuntimeSettings = vi.hoisted(() => ({
 
 // Per-call run option captures — index 0 = first spawn, index 1 = escalated spawn.
 const runCalls = vi.hoisted(
-  () => [] as Array<{ options: SessionRunnerOptions; onEvent: (e: Record<string, unknown>) => void }>,
+  () =>
+    [] as Array<{
+      options: SessionRunnerOptions;
+      onEvent: (e: Record<string, unknown>) => void;
+    }>,
 );
 
 const mockSendMessage = vi.hoisted(() => vi.fn());
@@ -173,9 +177,7 @@ describe('AgentSession — large-model escalation on context overflow', () => {
 
     // Continuation nudge sent via sendMessage on the first event of the escalated session.
     expect(mockSendMessage).toHaveBeenCalledTimes(1);
-    expect(mockSendMessage.mock.calls[0][0]).toContain(
-      '1M-context model',
-    );
+    expect(mockSendMessage.mock.calls[0][0]).toContain('1M-context model');
 
     // large-model tag written to DB.
     expect(queries.setSessionTags).toHaveBeenCalledWith(
@@ -190,7 +192,10 @@ describe('AgentSession — large-model escalation on context overflow', () => {
 
     // session_updated with the large-model tag.
     const tagUpdate = messages.find(
-      (m) => m.type === 'session_updated' && 'tags' in m && (m as { tags?: string[] }).tags?.includes('large-model'),
+      (m) =>
+        m.type === 'session_updated' &&
+        'tags' in m &&
+        (m as { tags?: string[] }).tags?.includes('large-model'),
     );
     expect(tagUpdate).toBeDefined();
   });
