@@ -16,6 +16,8 @@ const IN_PROGRESS_STATUS = '🔄 In Progress';
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
 const ANTI_RACE_MS = 5 * 60 * 1000;
+/** Grace window after clean-exit: skip revert to let async post-exit work (PR creation) settle. */
+const POST_CLEAN_EXIT_GRACE_MS = 2 * 60 * 1000;
 
 /**
  * Periodic sweep that detects tasks stuck at "🔄 In Progress" in Notion with no
@@ -134,6 +136,14 @@ export class OrphanedTaskSweeper {
       if (Date.now() - latestSession.started_at < ANTI_RACE_MS) {
         return;
       }
+      // Defense-in-depth: skip if the session ended cleanly (done) within the
+      // grace window — async PR creation (marker flow) may still be in flight.
+      if (latestSession.status === 'done') {
+        const endedAt = latestSession.ended_at ?? latestSession.started_at;
+        if (Date.now() - endedAt < POST_CLEAN_EXIT_GRACE_MS) {
+          return;
+        }
+      }
     }
 
     // Skip if any non-terminal session exists for this task.
@@ -142,6 +152,20 @@ export class OrphanedTaskSweeper {
     // Orphan confirmed: Notion shows In Progress, no live session.
     const lastSeenAt =
       latestSession?.ended_at ?? latestSession?.started_at ?? null;
+
+    // Resolve the authoritative project ID: prefer the session's own project_id
+    // so that tasks from project "polimarket" aren't attributed to "claude-dashboard"
+    // just because that project's loop encountered the task first.
+    const effectiveProjectId = latestSession?.project_id ?? projectId;
+
+    if (latestSession !== undefined) {
+      const pr = getPRBySessionId(latestSession.session_id);
+      // If the task has an open PR, the session did its job — skip revert.
+      // (Merged/closed PRs fall through to the Done path below.)
+      if (pr && pr.state !== 'merged' && pr.state !== 'closed') {
+        return;
+      }
+    }
 
     // If the task's PR is already merged or closed, mark Done rather than
     // reverting to Ready — re-dispatching a merged task would re-assign finished work.
@@ -161,9 +185,9 @@ export class OrphanedTaskSweeper {
     recordEvent({
       event_type: 'task_orphan_reverted',
       actor_type: 'system',
-      project_id: projectId,
+      project_id: effectiveProjectId,
       task_id: taskId,
-      payload: { taskId, projectId, lastSeenAt },
+      payload: { taskId, projectId: effectiveProjectId, lastSeenAt },
     });
 
     this.broadcast({

@@ -80,7 +80,11 @@ vi.mock('../CliSessionRunner', () => ({
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
 
 import { AgentSession } from '../AgentSession';
-import { upsertPullRequest, getPRBySessionId } from '../../db/queries';
+import {
+  upsertPullRequest,
+  getPRBySessionId,
+  markSessionDone,
+} from '../../db/queries';
 import { validatePRBody } from '../../github/PRBodyValidator';
 import { recordEvent } from '../../audit/AuditLog';
 
@@ -346,5 +350,110 @@ describe('<pr-body> marker — idempotent update path', () => {
     await new Promise((r) => setImmediate(r));
 
     expect(ghClient.createPR).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('<pr-body> marker — clean-exit ordering', () => {
+  beforeEach(() => {
+    vi.mocked(upsertPullRequest).mockClear();
+    vi.mocked(markSessionDone).mockClear();
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: true,
+      missingSections: [],
+    });
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+  });
+
+  it('prBodyMarkerPromise is set (tracked) after marker emission', () => {
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    const promise = (
+      session as unknown as { prBodyMarkerPromise: Promise<void> | null }
+    ).prBodyMarkerPromise;
+    expect(promise).toBeInstanceOf(Promise);
+  });
+
+  it('handleCleanExit awaits prBodyMarkerPromise before calling markSessionDone', async () => {
+    let resolveCreatePR!: (
+      value: ReturnType<typeof makeGithubClient>['createPR'] extends (
+        ...args: unknown[]
+      ) => Promise<infer R>
+        ? R
+        : never,
+    ) => void;
+    const createPRDeferred = new Promise<{
+      number: number;
+      html_url: string;
+      title: string;
+      body: string;
+      head: { ref: string; sha: string };
+      base: { ref: string };
+      state: string;
+      created_at: string;
+      updated_at: string;
+      draft: boolean;
+    }>((resolve) => {
+      resolveCreatePR = resolve;
+    });
+
+    const ghClient = makeGithubClient({
+      createPR: vi.fn().mockReturnValue(createPRDeferred),
+    });
+    const session = makeSession(ghClient);
+
+    // Emit the marker — prBodyMarkerPromise is now pending (createPR not resolved yet)
+    emitAssistantWithMarker(session, VALID_BODY);
+    await new Promise((r) => setImmediate(r));
+
+    // Start handleCleanExit without awaiting it yet
+    const cleanExitPromise = (
+      session as unknown as { handleCleanExit: () => Promise<void> }
+    ).handleCleanExit();
+
+    // Flush microtasks — handleCleanExit should be waiting on prBodyMarkerPromise
+    await new Promise((r) => setImmediate(r));
+
+    // markSessionDone must NOT have been called yet (blocked on createPR)
+    expect(vi.mocked(markSessionDone)).not.toHaveBeenCalled();
+
+    // Resolve the createPR so handlePRBodyMarker can complete
+    resolveCreatePR({
+      number: 42,
+      html_url: PR_URL,
+      title: 'feat: my-task',
+      body: VALID_BODY,
+      head: { ref: 'feature/my-task', sha: 'abc123' },
+      base: { ref: 'dev' },
+      state: 'open',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+      draft: true,
+    });
+
+    // Now handleCleanExit should proceed and call markSessionDone
+    await cleanExitPromise;
+
+    expect(vi.mocked(markSessionDone)).toHaveBeenCalledTimes(1);
+  });
+
+  it('markSessionDone receives the PR URL created via marker flow (not undefined)', async () => {
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    // Let createPR resolve
+    await new Promise((r) => setImmediate(r));
+
+    await (
+      session as unknown as { handleCleanExit: () => Promise<void> }
+    ).handleCleanExit();
+
+    expect(vi.mocked(markSessionDone)).toHaveBeenCalledWith(
+      'test-session-id',
+      expect.any(Number),
+      PR_URL,
+    );
   });
 });
