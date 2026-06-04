@@ -229,11 +229,13 @@ describe('AgentSession — context overflow integration', () => {
     proc.emit('exit', 1);
     await runPromise;
 
-    const overflowMsg = messages.find((m) => m.type === 'context_overflow_detected');
+    const overflowMsg = messages.find(
+      (m) => m.type === 'context_overflow_detected',
+    );
     expect(overflowMsg).toBeDefined();
-    expect(
-      (overflowMsg as { type: string; sessionId: string }).sessionId,
-    ).toBe('s-overflow');
+    expect((overflowMsg as { type: string; sessionId: string }).sessionId).toBe(
+      's-overflow',
+    );
 
     expect(messages.find((m) => m.type === 'session_ended')).toBeDefined();
   });
