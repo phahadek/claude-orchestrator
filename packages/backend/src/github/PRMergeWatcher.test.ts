@@ -2499,7 +2499,9 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       bash_rules: [],
       bootstrap_script: '',
     } as any);
-    vi.mocked(getSession).mockReturnValue({ worktree_path: '/wt/session' } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/wt/session',
+    } as any);
     const reviewOrchestrator = makeMockReviewOrchestrator();
     const reviewService = makeMockPRReviewService();
     vi.mocked(
