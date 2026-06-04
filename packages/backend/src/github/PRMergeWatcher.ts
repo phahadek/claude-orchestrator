@@ -701,15 +701,49 @@ export class PRMergeWatcher {
       try {
         let result: PRReviewResult;
         try {
-          result = await Promise.race([
-            this.prReviewService!.reReviewPR(prRow.pr_number, prRow.repo),
-            new Promise<never>((_, reject) =>
-              setTimeout(
+          // Build a resettable timeout so a large-model escalation (which restarts
+          // the review session on a 1M-context model) doesn't cause a false timeout.
+          const reviewSessionId = prRow.review_session_id ?? null;
+          let reviewTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
+          let escalationListener: ((msg: ServerMessage) => void) | undefined;
+
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            const arm = () => {
+              clearTimeout(reviewTimeoutHandle);
+              reviewTimeoutHandle = setTimeout(
                 () => reject(new Error('Re-review timed out')),
                 PUSH_REVIEW_TIMEOUT_MS,
-              ),
-            ),
-          ]);
+              );
+            };
+            arm();
+
+            if (reviewSessionId) {
+              escalationListener = (msg: ServerMessage) => {
+                if (
+                  msg.type === 'large_model_escalation_started' &&
+                  msg.sessionId === reviewSessionId
+                ) {
+                  console.log(
+                    `[PRMergeWatcher] review session ${reviewSessionId.slice(0, 8)} escalated to 1M model — resetting re-review timeout`,
+                  );
+                  arm();
+                }
+              };
+              this.sessions.on('message', escalationListener);
+            }
+          });
+
+          try {
+            result = await Promise.race([
+              this.prReviewService!.reReviewPR(prRow.pr_number, prRow.repo),
+              timeoutPromise,
+            ]);
+          } finally {
+            clearTimeout(reviewTimeoutHandle);
+            if (escalationListener) {
+              this.sessions.off('message', escalationListener);
+            }
+          }
         } catch (e) {
           const summary = e instanceof Error ? e.message : String(e);
           console.error(

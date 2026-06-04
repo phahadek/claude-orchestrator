@@ -25,6 +25,8 @@ import {
   setPauseReason,
   setSessionPauseReason,
   insertPauseInterval,
+  getSessionTags,
+  setSessionTags,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -214,6 +216,8 @@ export class AgentSession extends EventEmitter {
   private readonly processedPRBodyMessageIds = new Set<string>();
   /** In-flight promise from handlePRBodyMarker; awaited by handleCleanExit before markSessionDone. */
   private prBodyMarkerPromise: Promise<void> | null = null;
+  /** Continuation nudge to deliver via stdin on the first event of the escalated session. */
+  private _pendingEscalationNudge: string | null = null;
 
   /** The underlying I/O adapter (CLI subprocess or Agent SDK). */
   private runner: ISessionRunner;
@@ -318,6 +322,11 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         ? runtimeSettings.review_session_model
         : runtimeSettings.code_session_model;
 
+    // Per-iteration overrides set by the large-model escalation path (T3b).
+    // null = use the default computed value; non-null = use the override.
+    let escalationModel: string | undefined;
+    let escalationDisableAutoCompact: boolean | null = null;
+
     // Loop is exited by an explicit return on every terminal path: clean exit,
     // kill/spawn error, or non-transient failure. Only a transient API error
     // continues to the next iteration to retry with backoff.
@@ -341,11 +350,14 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         resumeIdForSpawn,
         {
           worktreePath: this.worktreePath,
-          model: modelSetting || undefined,
+          model: escalationModel ?? (modelSetting || undefined),
           allowedTools: [...ALLOWED_TOOLS, ...this.extraAllowedTools],
           systemPrompt: this.systemPromptContent,
           mcpConfigPath: this.mcpConfigPath,
-          disableAutoCompact: !!runtimeSettings.large_task_model,
+          disableAutoCompact:
+            escalationDisableAutoCompact !== null
+              ? escalationDisableAutoCompact
+              : !!runtimeSettings.large_task_model,
         },
         (event) => this.handleRawEvent(event),
       );
@@ -363,9 +375,60 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         return;
       }
 
-      // Non-zero exit — context overflow takes priority: do not retry, surface distinctly.
+      // Non-zero exit — context overflow takes priority: attempt large-model escalation,
+      // or surface as a distinct error if escalation is not possible.
       if (this.contextOverflowDetected) {
-        sessionLog(this.sessionId, 'context overflow — exiting without retry');
+        const largeModel = runtimeSettings.large_task_model;
+
+        if (largeModel && this.model !== largeModel) {
+          // Escalate: restart on the 1M-context model with autocompaction re-enabled.
+          sessionLog(
+            this.sessionId,
+            `context overflow — escalating to large model ${largeModel} (was: ${this.model ?? 'unknown'})`,
+          );
+
+          const currentTags = getSessionTags(this.sessionId);
+          const updatedTags = currentTags.includes('large-model')
+            ? currentTags
+            : [...currentTags, 'large-model'];
+          setSessionTags(this.sessionId, updatedTags);
+          this.broadcast({
+            type: 'session_updated',
+            sessionId: this.sessionId,
+            tags: updatedTags,
+          });
+
+          // Signal escalation so listeners (e.g. PRMergeWatcher) can reset timeouts.
+          this.broadcast({
+            type: 'large_model_escalation_started',
+            sessionId: this.sessionId,
+          });
+
+          // Reset state for the escalated spawn
+          this.contextOverflowDetected = false;
+          // Reset model so the escalated session's first assistant event updates it.
+          this.model = null;
+          escalationModel = largeModel;
+          escalationDisableAutoCompact = false; // re-enable autocompaction on 1M model
+          this._pendingEscalationNudge =
+            "You exceeded the previous model's context window and have been resumed on a 1M-context model. Continue the task from where you left off.";
+          resumeIdForSpawn = this.sessionId;
+
+          this.broadcast({
+            type: 'session_status',
+            sessionId: this.sessionId,
+            status: 'running',
+          });
+          continue;
+        }
+
+        // No escalation: large_task_model not set, or already on the large model.
+        sessionLog(
+          this.sessionId,
+          largeModel
+            ? `context overflow — already on large model ${largeModel}, no re-escalation`
+            : 'context overflow — large_task_model not configured, exiting without retry',
+        );
         if (!this.hasEnded) {
           this.sessionManager?.markSessionErrored?.(
             this.sessionId,
@@ -498,6 +561,13 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
    * This is called for each event by both CliSessionRunner and ApiSessionRunner.
    */
   private handleRawEvent(event: Record<string, unknown>): void {
+    // Deliver escalation nudge on the first event from the restarted session
+    if (this._pendingEscalationNudge !== null) {
+      const nudge = this._pendingEscalationNudge;
+      this._pendingEscalationNudge = null;
+      this.runner.sendMessage(nudge);
+    }
+
     const rawType = (event.type as string) ?? 'unknown';
 
     // Debug logging
