@@ -138,6 +138,7 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
                 <ContextBadge
                   contextOccupancyTokens={codeSession.context_occupancy_tokens}
                   compactionCount={codeSession.compaction_count}
+                  model={codeSession.model}
                 />
               </div>
             )}

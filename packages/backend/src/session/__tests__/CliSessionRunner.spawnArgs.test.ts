@@ -95,4 +95,62 @@ describe('CliSessionRunner spawn args', () => {
     expect(env.BASH_MAX_OUTPUT_LENGTH).toBe('30000');
     expect(env.BASH_DEFAULT_TIMEOUT_MS).toBe('300000');
   });
+
+  it('includes --settings autoCompactEnabled:false when disableAutoCompact is true', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, disableAutoCompact: true },
+      () => {},
+    );
+
+    const settingsIdx = capturedSpawnArgs.indexOf('--settings');
+    expect(settingsIdx).not.toBe(-1);
+    expect(capturedSpawnArgs[settingsIdx + 1]).toBe(
+      '{"autoCompactEnabled":false}',
+    );
+  });
+
+  it('does not include --settings when disableAutoCompact is false', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, disableAutoCompact: false },
+      () => {},
+    );
+
+    expect(capturedSpawnArgs).not.toContain('--settings');
+  });
+
+  it('does not include --settings when disableAutoCompact is absent', async () => {
+    const runner = new CliSessionRunner(SESSION_ID);
+    await runner.run('hello', undefined, defaultOptions, () => {});
+
+    expect(capturedSpawnArgs).not.toContain('--settings');
+  });
+
+  it('disableAutoCompact can be set independently per spawn', async () => {
+    const runner1 = new CliSessionRunner(SESSION_ID);
+    await runner1.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, disableAutoCompact: true },
+      () => {},
+    );
+    const argsWithDisabled = [...capturedSpawnArgs];
+
+    const runner2 = new CliSessionRunner(SESSION_ID);
+    await runner2.run(
+      'hello',
+      undefined,
+      { ...defaultOptions, disableAutoCompact: false },
+      () => {},
+    );
+    const argsWithEnabled = [...capturedSpawnArgs];
+
+    expect(argsWithDisabled).toContain('--settings');
+    expect(argsWithEnabled).not.toContain('--settings');
+  });
 });

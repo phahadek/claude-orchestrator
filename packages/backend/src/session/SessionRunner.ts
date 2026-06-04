@@ -21,6 +21,12 @@ export interface SessionRunnerOptions {
    * Undefined = no override (all user-level servers are inherited).
    */
   mcpConfigPath?: string;
+  /**
+   * When true, spawns the CLI with `--settings '{"autoCompactEnabled":false}'`
+   * to disable automatic context compaction for this spawn.
+   * Per-spawn (not session-global) so a later escalation spawn can re-enable it.
+   */
+  disableAutoCompact?: boolean;
 }
 
 /**

@@ -222,6 +222,7 @@ export function SessionDetail({
           <ContextBadge
             contextOccupancyTokens={session.context_occupancy_tokens}
             compactionCount={session.compaction_count}
+            model={session.model}
           />
           {(session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0) >
             0 && (

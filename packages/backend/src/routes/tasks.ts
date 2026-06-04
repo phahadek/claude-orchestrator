@@ -91,6 +91,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
       context_occupancy_tokens:
         row.code_session_context_occupancy_tokens ?? undefined,
       compaction_count: row.code_session_compaction_count ?? undefined,
+      model: row.code_session_model ?? null,
     };
   }
 

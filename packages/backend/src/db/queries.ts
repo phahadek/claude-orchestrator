@@ -1550,6 +1550,7 @@ export interface TaskAggregateRow {
   code_session_last_event_payload: string | null;
   code_session_context_occupancy_tokens: number | null;
   code_session_compaction_count: number | null;
+  code_session_model: string | null;
   // review session (session_type = 'review')
   review_session_id: string | null;
   review_session_status: string | null;
@@ -1627,6 +1628,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       )                            AS code_session_last_event_payload,
       cs.context_occupancy_tokens  AS code_session_context_occupancy_tokens,
       cs.compaction_count          AS code_session_compaction_count,
+      cs.model                     AS code_session_model,
       rs.session_id          AS review_session_id,
       rs.status              AS review_session_status,
       rs.total_input_tokens  AS review_session_input_tokens,

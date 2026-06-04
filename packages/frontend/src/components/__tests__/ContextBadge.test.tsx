@@ -55,4 +55,49 @@ describe('ContextBadge', () => {
     const badge = screen.getByTitle('100,000 of 200,000 tokens');
     expect(badge).toBeDefined();
   });
+
+  it('uses 1M window when model contains [1m]', () => {
+    render(
+      <ContextBadge
+        contextOccupancyTokens={500_000}
+        compactionCount={0}
+        model="claude-opus-4-7[1m]"
+      />,
+    );
+    expect(screen.getByText('50% ctx')).toBeDefined();
+  });
+
+  it('uses 200k window when model does not contain [1m]', () => {
+    render(
+      <ContextBadge
+        contextOccupancyTokens={100_000}
+        compactionCount={0}
+        model="claude-sonnet-4-6"
+      />,
+    );
+    expect(screen.getByText('50% ctx')).toBeDefined();
+  });
+
+  it('uses 200k window when model is null', () => {
+    render(
+      <ContextBadge
+        contextOccupancyTokens={100_000}
+        compactionCount={0}
+        model={null}
+      />,
+    );
+    expect(screen.getByText('50% ctx')).toBeDefined();
+  });
+
+  it('renders correct title with 1M window for [1m] model', () => {
+    render(
+      <ContextBadge
+        contextOccupancyTokens={500_000}
+        compactionCount={0}
+        model="claude-opus-4-7[1m]"
+      />,
+    );
+    const badge = screen.getByTitle('500,000 of 1,000,000 tokens');
+    expect(badge).toBeDefined();
+  });
 });

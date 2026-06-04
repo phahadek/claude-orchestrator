@@ -37,7 +37,13 @@ export class CliSessionRunner implements ISessionRunner {
     options: SessionRunnerOptions,
     onEvent: (event: RawSessionEvent) => void,
   ): Promise<number | null> {
-    const { worktreePath, model, allowedTools, mcpConfigPath } = options;
+    const {
+      worktreePath,
+      model,
+      allowedTools,
+      mcpConfigPath,
+      disableAutoCompact,
+    } = options;
 
     const spawnArgs = [
       ...(resumeSessionId
@@ -52,6 +58,9 @@ export class CliSessionRunner implements ISessionRunner {
       '--permission-mode',
       'acceptEdits',
       ...(model ? ['--model', model] : []),
+      ...(disableAutoCompact
+        ? ['--settings', '{"autoCompactEnabled":false}']
+        : []),
       ...(mcpConfigPath
         ? ['--mcp-config', mcpConfigPath, '--strict-mcp-config']
         : []),

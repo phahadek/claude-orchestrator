@@ -1,19 +1,24 @@
 import styles from './ContextBadge.module.css';
 
-const CONTEXT_WINDOW = 200_000;
+function contextWindowForModel(model: string | null | undefined): number {
+  return model?.includes('[1m]') ? 1_000_000 : 200_000;
+}
 
 interface Props {
   contextOccupancyTokens: number | undefined;
   compactionCount: number | undefined;
+  model?: string | null;
 }
 
 export function ContextBadge({
   contextOccupancyTokens,
   compactionCount,
+  model,
 }: Props) {
+  const contextWindow = contextWindowForModel(model);
   const ctxPct =
     contextOccupancyTokens != null
-      ? Math.round((contextOccupancyTokens / CONTEXT_WINDOW) * 100)
+      ? Math.round((contextOccupancyTokens / contextWindow) * 100)
       : null;
 
   return (
@@ -26,7 +31,7 @@ export function ContextBadge({
       {ctxPct != null && (
         <span
           className={styles.contextBadge}
-          title={`${(contextOccupancyTokens ?? 0).toLocaleString()} of ${CONTEXT_WINDOW.toLocaleString()} tokens`}
+          title={`${(contextOccupancyTokens ?? 0).toLocaleString()} of ${contextWindow.toLocaleString()} tokens`}
         >
           <span
             className={styles.contextBarFill}
