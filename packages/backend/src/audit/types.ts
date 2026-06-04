@@ -24,7 +24,8 @@ export type EventType =
   | 'verdict_routing_failed'
   | 'manual_pr_clear'
   | 'sessions_auto_archived'
-  | 'pr_attribution_mismatch';
+  | 'pr_attribution_mismatch'
+  | 'pr_creation_failed';
 
 export type ActorType = 'ai' | 'human' | 'system';
 

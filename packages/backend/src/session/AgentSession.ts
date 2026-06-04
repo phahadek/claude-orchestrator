@@ -973,6 +973,28 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       return;
     }
 
+    // Push the branch to origin so GitHub can find it when createPR is called.
+    // Re-pushing an already-current branch is a harmless fast-forward no-op.
+    try {
+      execSync(`git push -u origin ${branch}`, {
+        cwd: this.worktreePath,
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      });
+    } catch (e) {
+      const msg = (e as Error).message;
+      console.error(`[AgentSession] git push for <pr-body> marker failed: ${msg}`);
+      recordEvent({
+        event_type: 'pr_creation_failed',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: this.projectId || null,
+        task_id: this.taskId || null,
+        payload: { stage: 'push', error: msg },
+      });
+      return;
+    }
+
     const taskName = branch.replace(/^feature\//, '');
     const title = `feat: ${taskName}`;
 
@@ -1000,7 +1022,16 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 
       await this.handlePRDetected(created.html_url, prShape);
     } catch (e) {
-      console.error(`[AgentSession] createPR via <pr-body> marker failed:`, e);
+      const msg = (e as Error).message;
+      console.error(`[AgentSession] createPR via <pr-body> marker failed: ${msg}`);
+      recordEvent({
+        event_type: 'pr_creation_failed',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: this.projectId || null,
+        task_id: this.taskId || null,
+        payload: { stage: 'create', error: msg },
+      });
     }
   }
 
