@@ -13,6 +13,8 @@ import {
   insertPendingReviewSync,
   deletePendingReviewSync,
   getAllPendingReviewSyncs,
+  hasTestResultForSha,
+  upsertTestResult,
 } from '../db/queries';
 import { syncToOrigin } from './PRFileReverter';
 import type {
@@ -29,6 +31,7 @@ import { formatReviewFeedback, formatCIFailureFeedback } from './reviewUtils';
 import { runVerifyAsGate } from '../orchestration/verifyRunner';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
+import { runTestCommands } from '../session/test-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { recordEvent } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
@@ -368,6 +371,47 @@ export class ReviewOrchestrator {
     return dbConsumeAutofixSha(prNumber, repo, sha);
   }
 
+  /**
+   * Run the configured test: commands for a PR's head SHA.
+   * Deduplicates: if a result already exists for this SHA, skips execution.
+   * Persists { passed, output } keyed by (prNumber, repo, sha) for F2 to consult.
+   */
+  async runTestPipeline(
+    prNumber: number,
+    repo: string,
+    headSha: string,
+    worktreePath: string,
+    commands: string[],
+    timeoutSec: number,
+  ): Promise<void> {
+    if (commands.length === 0) return;
+    if (!headSha) return;
+
+    if (hasTestResultForSha(prNumber, repo, headSha)) {
+      console.log(
+        `[ReviewOrchestrator] tests already ran for PR #${prNumber} SHA ${headSha.slice(0, 7)} — skipping`,
+      );
+      return;
+    }
+
+    console.log(
+      `[ReviewOrchestrator] running tests for PR #${prNumber} SHA ${headSha.slice(0, 7)} (timeout ${timeoutSec}s)`,
+    );
+
+    const { passed, output } = await runTestCommands(
+      worktreePath,
+      commands,
+      timeoutSec,
+      (msg) => console.log(`[ReviewOrchestrator] test PR #${prNumber}: ${msg}`),
+    );
+
+    upsertTestResult(prNumber, repo, headSha, passed, output);
+
+    console.log(
+      `[ReviewOrchestrator] tests ${passed ? 'PASSED' : 'FAILED'} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
+    );
+  }
+
   private async executeLocalBranchReview(job: LocalBranchJob): Promise<void> {
     const project = getProjectById(job.projectId);
     if (project) {
@@ -569,6 +613,27 @@ export class ReviewOrchestrator {
 
     // ── Autofix + file-pollution-check step ──────────────────────────────────
     await this.runAutofixPipeline(job.prNumber, job.repo, job.taskId ?? null);
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Orchestrator-run tests (per head-SHA, deduped) ────────────────────────
+    {
+      const freshPrRow = getPRByNumber(job.prNumber, job.repo);
+      const headSha = freshPrRow?.head_sha ?? '';
+      const worktreePath = freshPrRow?.session_id
+        ? (getSession(freshPrRow.session_id)?.worktree_path ?? '')
+        : '';
+      if (headSha && worktreePath) {
+        const config = loadOrchestratorConfig(project.projectDir);
+        await this.runTestPipeline(
+          job.prNumber,
+          job.repo,
+          headSha,
+          worktreePath,
+          config.test,
+          config.test_timeout_sec,
+        );
+      }
+    }
     // ─────────────────────────────────────────────────────────────────────────
 
     this.sessionManager.emit('message', {

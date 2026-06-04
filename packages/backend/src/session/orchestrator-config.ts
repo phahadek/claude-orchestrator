@@ -22,6 +22,10 @@ export interface OrchestratorConfig {
    * Undefined = no override (all user-level servers are inherited).
    */
   mcp_servers?: Record<string, unknown>;
+  /** Commands the orchestrator runs as authoritative tests, per head-SHA. Empty = feature off. */
+  test: string[];
+  /** Per-command timeout in seconds for test commands. Default 300. */
+  test_timeout_sec: number;
 }
 
 const DEFAULTS: OrchestratorConfig = {
@@ -31,6 +35,8 @@ const DEFAULTS: OrchestratorConfig = {
   allowed_tools: [],
   bash_rules: [],
   bootstrap_script: '',
+  test: [],
+  test_timeout_sec: 300,
 };
 
 /**
@@ -67,6 +73,13 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
         typeof parsed.bootstrap_script === 'string'
           ? parsed.bootstrap_script
           : DEFAULTS.bootstrap_script,
+      test: Array.isArray(parsed.test) ? parsed.test : DEFAULTS.test,
+      test_timeout_sec:
+        typeof parsed.test_timeout_sec === 'number' &&
+        Number.isFinite(parsed.test_timeout_sec) &&
+        parsed.test_timeout_sec > 0
+          ? parsed.test_timeout_sec
+          : DEFAULTS.test_timeout_sec,
       mcp_servers:
         parsed.mcp_servers !== null &&
         typeof parsed.mcp_servers === 'object' &&
