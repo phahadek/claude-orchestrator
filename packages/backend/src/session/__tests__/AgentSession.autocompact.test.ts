@@ -9,7 +9,9 @@ const mockRuntimeSettings = vi.hoisted(() => ({
   review_session_model: '',
 }));
 
-const capturedRunOptions = vi.hoisted(() => ({ value: null as SessionRunnerOptions | null }));
+const capturedRunOptions = vi.hoisted(() => ({
+  value: null as SessionRunnerOptions | null,
+}));
 
 vi.mock('../../db/queries', () => ({
   upsertSessionEvent: vi.fn().mockReturnValue(1),
@@ -74,13 +76,15 @@ vi.mock('../../config', () => ({
 
 vi.mock('../CliSessionRunner', () => ({
   CliSessionRunner: vi.fn().mockImplementation(() => ({
-    run: vi.fn().mockImplementation(
-      (_prompt: unknown, _resume: unknown, options: SessionRunnerOptions) => {
-        capturedRunOptions.value = options;
-        // Exit immediately with non-zero so AgentSession terminates quickly.
-        return Promise.resolve(1);
-      },
-    ),
+    run: vi
+      .fn()
+      .mockImplementation(
+        (_prompt: unknown, _resume: unknown, options: SessionRunnerOptions) => {
+          capturedRunOptions.value = options;
+          // Exit immediately with non-zero so AgentSession terminates quickly.
+          return Promise.resolve(1);
+        },
+      ),
     sendMessage: vi.fn(),
     endSession: vi.fn(),
     kill: vi.fn().mockResolvedValue(undefined),
