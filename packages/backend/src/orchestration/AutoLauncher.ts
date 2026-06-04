@@ -144,6 +144,10 @@ export class AutoLauncher {
     // Catch-up pass: if a task is still Ready in Notion but its PR was already
     // merged (the merge-handler fired silently), mark it Done now and skip launch.
     for (const resolved of allTasks) {
+      // Idempotency guard: tasks already at Done are present in `allTasks` only
+      // for dependency resolution. Re-writing Done to Notion every cycle was a
+      // runaway (thousands of redundant API writes), so skip already-Done tasks.
+      if (resolved.task.status === DONE_STATUS) continue;
       const mergedPR = getMergedPRForTask(resolved.task.id);
       if (mergedPR) {
         console.warn(
