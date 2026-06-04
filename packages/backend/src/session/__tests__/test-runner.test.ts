@@ -44,19 +44,15 @@ function makeProc(
       },
     },
     on: (e, cb) => {
-      if (e === 'close')
-        closeCbs.push(cb as (c: number | null) => void);
+      if (e === 'close') closeCbs.push(cb as (c: number | null) => void);
     },
   };
 
-  setTimeout(
-    () => {
-      if (stdout) outCbs.forEach((cb) => cb(Buffer.from(stdout)));
-      if (stderr) errCbs.forEach((cb) => cb(Buffer.from(stderr)));
-      closeCbs.forEach((cb) => cb(exitCode));
-    },
-    delayMs,
-  );
+  setTimeout(() => {
+    if (stdout) outCbs.forEach((cb) => cb(Buffer.from(stdout)));
+    if (stderr) errCbs.forEach((cb) => cb(Buffer.from(stderr)));
+    closeCbs.forEach((cb) => cb(exitCode));
+  }, delayMs);
 
   return proc;
 }
@@ -94,12 +90,7 @@ describe('runTestCommands — successful commands', () => {
   it('returns passed:true when all commands exit 0', async () => {
     _spawnHook = () => makeProc(0, 'test output');
 
-    const promise = runTestCommands(
-      '/worktree',
-      ['npm test'],
-      300,
-      () => {},
-    );
+    const promise = runTestCommands('/worktree', ['npm test'], 300, () => {});
     await vi.runAllTimersAsync();
     const result = await promise;
 

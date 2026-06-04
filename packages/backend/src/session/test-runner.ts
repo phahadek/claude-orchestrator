@@ -52,7 +52,8 @@ function runCommandWithTimeout(
       if (proc.pid != null) killProcessTree(proc.pid);
       resolve({
         exitCode: 1,
-        output: Buffer.concat(chunks).toString('utf8') + '\n[test-runner] TIMEOUT',
+        output:
+          Buffer.concat(chunks).toString('utf8') + '\n[test-runner] TIMEOUT',
         timedOut: true,
       });
     }, timeoutMs);
