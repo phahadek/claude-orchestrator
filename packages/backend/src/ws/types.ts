@@ -292,7 +292,8 @@ export type ServerMessage =
       message: string;
     }
   | { type: 'session_archived'; sessionId: string }
-  | { type: 'context_overflow_detected'; sessionId: string };
+  | { type: 'context_overflow_detected'; sessionId: string }
+  | { type: 'large_model_escalation_started'; sessionId: string };
 
 // ── Client → Server ──────────────────────────────────────────────
 export type ClientMessage =
