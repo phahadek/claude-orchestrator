@@ -49,6 +49,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Commit attribution trailer missing — add AI-Authored-By to commits and push.',
   audit_findings:
     'Post-session audit found issues — review and address the findings.',
+  pr_creation_failed:
+    "PR creation failed — the session couldn't open its PR. Review and retry.",
 };
 
 function verdictLabel(verdict: string): string {

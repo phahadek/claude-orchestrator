@@ -7,6 +7,7 @@ import {
   getPRByNotionTaskId,
   getPRBySessionId,
   setPauseReason,
+  setSessionPauseReason,
   getEventsBySession,
   getDenialsBySession,
 } from '../db/queries';
@@ -344,9 +345,13 @@ export class SessionAuditor {
     // Session is concluded/idle — route to attention queue so findings are visible.
     const pr = getPRBySessionId(sessionId);
     if (!pr) {
-      console.warn(
-        `[SessionAuditor] audit findings for concluded session ${sessionId} but no PR found — findings stored in SQLite only`,
-      );
+      try {
+        setSessionPauseReason(sessionId, 'pr_creation_failed');
+      } catch (err) {
+        console.warn(
+          `[SessionAuditor] failed to set pr_creation_failed session pause_reason for ${sessionId}: ${err}`,
+        );
+      }
       return;
     }
     try {

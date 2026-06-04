@@ -578,4 +578,10 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN pause_reason TEXT`);
+  } catch {
+    /* already exists */
+  }
 }

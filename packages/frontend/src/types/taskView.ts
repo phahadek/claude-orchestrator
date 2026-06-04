@@ -21,7 +21,8 @@ export type PauseReason =
   | 'human_changes_requested'
   | 'pr_body_invalid'
   | 'attribution_missing'
-  | 'audit_findings';
+  | 'audit_findings'
+  | 'pr_creation_failed';
 
 export interface TaskView {
   taskId: string;

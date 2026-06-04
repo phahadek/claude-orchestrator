@@ -118,6 +118,15 @@ export function updateSessionWorktreePath(
   });
 }
 
+export function setSessionPauseReason(
+  sessionId: string,
+  reason: string,
+): void {
+  db.prepare<{ session_id: string; pause_reason: string }>(
+    `UPDATE sessions SET pause_reason = @pause_reason WHERE session_id = @session_id`,
+  ).run({ session_id: sessionId, pause_reason: reason });
+}
+
 const stmtMarkSessionDone = db.prepare<{
   session_id: string;
   ended_at: number;
@@ -1562,6 +1571,7 @@ export interface TaskAggregateRow {
   pr_review_iteration: number | null;
   pr_merge_state: string | null;
   pr_pause_reason: string | null;
+  session_pr_creation_failed_pause_reason: string | null;
 }
 
 export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
@@ -1635,7 +1645,13 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       pr.review_result       AS pr_review_result,
       pr.review_iteration    AS pr_review_iteration,
       pr.merge_state         AS pr_merge_state,
-      pr.pause_reason        AS pr_pause_reason
+      pr.pause_reason        AS pr_pause_reason,
+      CASE
+        WHEN pr.pr_number IS NULL
+          AND cs.pause_reason = 'pr_creation_failed'
+        THEN cs.pause_reason
+        ELSE NULL
+      END                    AS session_pr_creation_failed_pause_reason
     FROM task_cache tc
     LEFT JOIN ranked_code cs ON cs.task_id = tc.task_id AND cs.rn = 1
     LEFT JOIN ranked_review rs ON rs.task_id = tc.task_id AND rs.rn = 1

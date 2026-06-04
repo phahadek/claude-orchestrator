@@ -12,6 +12,7 @@ vi.mock('../db/queries', () => ({
   getPRByNotionTaskId: vi.fn(() => null),
   getPRBySessionId: vi.fn(() => null),
   setPauseReason: vi.fn(),
+  setSessionPauseReason: vi.fn(),
   getEventsBySession: vi.fn(() => []),
   getDenialsBySession: vi.fn(() => []),
 }));
@@ -269,7 +270,7 @@ describe('SessionAuditor', () => {
     expect(sm.send).not.toHaveBeenCalled();
   });
 
-  it('does not crash when session is not alive and no PR is found', async () => {
+  it('sets session pause_reason when session is not alive and no PR is found', async () => {
     const github = makeGitHubClient({ baseBranch: 'main' }); // produces a violation
     const sm = makeSessionManager(false); // not alive
     vi.mocked(queries.getPRBySessionId).mockReturnValue(null);
@@ -277,6 +278,26 @@ describe('SessionAuditor', () => {
     const auditor = new SessionAuditor(makeNotionClient(), github, sm);
     const session = makeSession();
     await expect(auditor.audit(session, 0)).resolves.toBeDefined();
+    expect(queries.setPauseReason).not.toHaveBeenCalled();
+    expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
+      'test-session-id',
+      'pr_creation_failed',
+    );
+  });
+
+  it('"Clean exit but no PR" → sets session pause_reason via routeFailuresToSession', async () => {
+    const sm = makeSessionManager(false); // not alive — session concluded
+    vi.mocked(queries.getPRBySessionId).mockReturnValue(null);
+    vi.mocked(queries.getPRByNotionTaskId).mockReturnValue(null);
+
+    const auditor = new SessionAuditor(makeNotionClient(), undefined, sm);
+    const session = makeSession({ prUrl: undefined });
+    await auditor.audit(session, 0); // exit 0, no PR → 'Clean exit but no PR opened'
+
+    expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
+      'test-session-id',
+      'pr_creation_failed',
+    );
     expect(queries.setPauseReason).not.toHaveBeenCalled();
   });
 
