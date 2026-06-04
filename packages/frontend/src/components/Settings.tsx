@@ -26,6 +26,7 @@ interface SettingsValues {
   auto_archive_enabled: string;
   auto_archive_grace_minutes: string;
   auto_archive_sweep_interval_minutes: string;
+  large_task_model: string;
 }
 
 const MIN_POLL_INTERVAL_MS = 5000;
@@ -48,6 +49,14 @@ const MODEL_OPTIONS = [
   { label: 'claude-opus-4-6', value: 'claude-opus-4-6' },
   { label: 'claude-sonnet-4-6', value: 'claude-sonnet-4-6' },
   { label: 'claude-haiku-4-5', value: 'claude-haiku-4-5' },
+];
+
+const LARGE_TASK_MODEL_OPTIONS = [
+  { label: '(off)', value: '' },
+  { label: 'claude-opus-4-8[1m]', value: 'claude-opus-4-8[1m]' },
+  { label: 'claude-opus-4-7[1m]', value: 'claude-opus-4-7[1m]' },
+  { label: 'claude-opus-4-6[1m]', value: 'claude-opus-4-6[1m]' },
+  { label: 'claude-sonnet-4-6[1m]', value: 'claude-sonnet-4-6[1m]' },
 ];
 
 interface Props {
@@ -350,6 +359,28 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                     }
                   >
                     {MODEL_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label className={styles.label}>
+                    Large-task model
+                    <span className={styles.hint}>
+                      {' '}
+                      (1M-context escalation; empty = off)
+                    </span>
+                  </label>
+                  <select
+                    className={styles.select}
+                    value={settings?.large_task_model ?? ''}
+                    onChange={(e) =>
+                      void handleChange('large_task_model', e.target.value)
+                    }
+                  >
+                    {LARGE_TASK_MODEL_OPTIONS.map((o) => (
                       <option key={o.value} value={o.value}>
                         {o.label}
                       </option>

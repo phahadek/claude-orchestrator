@@ -25,6 +25,7 @@ const SETTING_KEYS = [
   'auto_archive_enabled',
   'auto_archive_grace_minutes',
   'auto_archive_sweep_interval_minutes',
+  'large_task_model',
 ] as const;
 
 type SettingKey = (typeof SETTING_KEYS)[number];
@@ -68,6 +69,8 @@ function applyToRuntime(key: SettingKey, value: string): void {
     runtimeSettings.auto_archive_grace_minutes = Number(value);
   } else if (key === 'auto_archive_sweep_interval_minutes') {
     runtimeSettings.auto_archive_sweep_interval_minutes = Number(value);
+  } else if (key === 'large_task_model') {
+    runtimeSettings.large_task_model = value;
   }
 }
 
@@ -85,7 +88,8 @@ export function loadRuntimeSettingsFromDb(): void {
       } else if (
         key === 'code_session_model' ||
         key === 'review_session_model' ||
-        key === 'session_mode'
+        key === 'session_mode' ||
+        key === 'large_task_model'
       ) {
         defaultVal = runtimeSettings[key];
       } else {
@@ -133,6 +137,7 @@ function runtimeSettingsAsRecord(): Record<SettingKey, string> {
     auto_archive_sweep_interval_minutes: String(
       runtimeSettings.auto_archive_sweep_interval_minutes,
     ),
+    large_task_model: runtimeSettings.large_task_model,
   };
 }
 
