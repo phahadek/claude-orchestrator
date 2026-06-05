@@ -96,13 +96,25 @@ describe('recoverSession', () => {
     vi.clearAllMocks();
   });
 
-  it('broadcasts session_ended on clean exit with no PR', async () => {
+  it('broadcasts session_ended with idle status on clean_exit scope', async () => {
     const broadcast = vi.fn();
-    await recoverSession('sess-1', baseOpts({ broadcast }));
+    await recoverSession('sess-1', baseOpts({ broadcast, scope: 'clean_exit' }));
     expect(broadcast).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'session_ended',
         sessionId: 'sess-1',
+        status: 'idle',
+      }),
+    );
+  });
+
+  it('broadcasts session_ended with done status on boot scope', async () => {
+    const broadcast = vi.fn();
+    await recoverSession('sess-1b', baseOpts({ broadcast, scope: 'boot' }));
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'session_ended',
+        sessionId: 'sess-1b',
         status: 'done',
       }),
     );

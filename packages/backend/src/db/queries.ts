@@ -134,6 +134,16 @@ const stmtMarkSessionDone = db.prepare<{
   WHERE session_id = @session_id
 `);
 
+const stmtMarkSessionIdle = db.prepare<{
+  session_id: string;
+  ended_at: number;
+  pr_url: string | null;
+}>(`
+  UPDATE sessions
+  SET status = 'idle', ended_at = @ended_at, pr_url = COALESCE(@pr_url, pr_url)
+  WHERE session_id = @session_id
+`);
+
 const stmtMarkSessionSuperseded = db.prepare<{
   session_id: string;
   ended_at: number;
@@ -191,6 +201,23 @@ export function markSessionDone(
   prUrl?: string | null,
 ): void {
   stmtMarkSessionDone.run({
+    session_id: sessionId,
+    ended_at: endedAt,
+    pr_url: prUrl ?? null,
+  });
+}
+
+/**
+ * Atomically mark a session as idle (process exited, PR open, waiting for
+ * review/merge). Sets ended_at and pr_url in a single write. The session
+ * remains resumable via sendOrResume; it becomes done only when the PR merges.
+ */
+export function markSessionIdle(
+  sessionId: string,
+  endedAt: number,
+  prUrl?: string | null,
+): void {
+  stmtMarkSessionIdle.run({
     session_id: sessionId,
     ended_at: endedAt,
     pr_url: prUrl ?? null,
@@ -364,7 +391,7 @@ export function hasActiveSessionForTask(taskId: string): boolean {
       `
     SELECT 1 FROM sessions
     WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
-      AND status NOT IN ('done', 'error', 'killed', 'superseded')
+      AND status NOT IN ('idle', 'done', 'error', 'killed', 'superseded')
       AND (session_type = 'standard' OR session_type IS NULL)
     LIMIT 1
   `,

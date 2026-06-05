@@ -136,9 +136,9 @@ export class OrphanedTaskSweeper {
       if (Date.now() - latestSession.started_at < ANTI_RACE_MS) {
         return;
       }
-      // Defense-in-depth: skip if the session ended cleanly (done) within the
+      // Defense-in-depth: skip if the session ended cleanly (idle) within the
       // grace window — async PR creation (marker flow) may still be in flight.
-      if (latestSession.status === 'done') {
+      if (latestSession.status === 'idle') {
         const endedAt = latestSession.ended_at ?? latestSession.started_at;
         if (Date.now() - endedAt < POST_CLEAN_EXIT_GRACE_MS) {
           return;

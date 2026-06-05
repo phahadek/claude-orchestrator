@@ -45,7 +45,7 @@ export interface RecoverSessionOpts {
 }
 
 /**
- * Executes the post-markSessionDone side-effect chain for a session.
+ * Executes the post-session-end side-effect chain for a session.
  * Extracted from AgentSession.handleCleanExit so the same chain can be
  * invoked by StuckSessionMonitor for periodic stuck-session recovery.
  *
@@ -270,7 +270,9 @@ export async function recoverSession(
   broadcast({
     type: 'session_ended',
     sessionId,
-    status: 'done',
+    // Process-exit sets idle (waiting for PR merge); boot/periodic scopes
+    // operate on already-done sessions persisted before a restart.
+    status: scope === 'clean_exit' ? 'idle' : 'done',
     ...(prUrl ? { prUrl } : {}),
     ...(taskId && { taskId }),
   });

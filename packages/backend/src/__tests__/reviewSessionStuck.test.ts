@@ -36,6 +36,7 @@ vi.mock('../db/queries.js', () => ({
   getAllStuckSessionTimers: vi.fn().mockReturnValue([]),
   getStuckResultSessionRows: vi.fn().mockReturnValue([]),
   markSessionDone: vi.fn(),
+  markSessionIdle: vi.fn(),
   getLocalBranchBySession: vi.fn(),
   setLocalBranchPauseReason: vi.fn(),
   addAutofixSha: vi.fn(),

@@ -37,6 +37,7 @@ import {
   setPendingPush,
   getSetting,
   getTestResult,
+  markSessionDone,
 } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 
@@ -882,6 +883,12 @@ export class PRMergeWatcher {
             (err as Error).message,
           ),
         );
+    }
+
+    // Mark the code session done — it was idle (process exited, PR open) and
+    // the PR just merged, so this is the terminal done transition.
+    if (pr.session_id) {
+      markSessionDone(pr.session_id, Date.now(), pr.pr_url ?? null);
     }
 
     // End coding session gracefully (stdin close → clean CLI exit).

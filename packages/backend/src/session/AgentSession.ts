@@ -12,6 +12,7 @@ import {
   upsertSessionEvent,
   updateSessionStatus,
   markSessionDone,
+  markSessionIdle,
   getEventsBySession,
   insertPermissionDenial,
   upsertPullRequest,
@@ -214,7 +215,7 @@ export class AgentSession extends EventEmitter {
   private lastFilePollutionRevertSha: string | null = null;
   /** Tracks message IDs whose <pr-body> marker has already been processed (deduplicate streaming chunks). */
   private readonly processedPRBodyMessageIds = new Set<string>();
-  /** In-flight promise from handlePRBodyMarker; awaited by handleCleanExit before markSessionDone. */
+  /** In-flight promise from handlePRBodyMarker; awaited by handleCleanExit before markSessionIdle. */
   private prBodyMarkerPromise: Promise<void> | null = null;
   /** Continuation nudge to deliver via stdin on the first event of the escalated session. */
   private _pendingEscalationNudge: string | null = null;
@@ -1494,7 +1495,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     let prUrl: string | undefined;
 
     // Await any in-flight PR creation from the <pr-body> marker so that the PR
-    // is registered before we scan for the URL and call markSessionDone.
+    // is registered before we scan for the URL and call markSessionIdle.
     if (this.prBodyMarkerPromise) {
       const MARKER_PR_TIMEOUT_MS = 30_000;
       await Promise.race([
@@ -1538,12 +1539,13 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     if (!prUrl) prUrl = this.prUrl;
     this.prUrl = prUrl;
 
-    // Atomically persist done + pr_url before any network or review-pipeline
-    // calls. This ensures the session is terminal in the DB even if the
-    // downstream review pipeline throws or the process dies mid-handleCleanExit.
-    markSessionDone(this.sessionId, endedAt, prUrl ?? null);
+    // Atomically persist idle + pr_url before any network or review-pipeline
+    // calls. Session becomes done only when the PR merges (PRMergeWatcher).
+    // Using idle (not done) prevents the post-hoc auditor from triggering review
+    // on a stale SHA before the PR has been properly reviewed/merged.
+    markSessionIdle(this.sessionId, endedAt, prUrl ?? null);
     recordEvent({
-      event_type: 'handle_clean_exit_session_marked_done',
+      event_type: 'handle_clean_exit_session_marked_idle',
       actor_type: 'system',
       actor_id: this.sessionId,
       project_id: this.projectId ?? null,

@@ -120,6 +120,7 @@ vi.mock('../db/queries', () => ({
   upsertSessionEvent: vi.fn(() => 1),
   updateSessionStatus: vi.fn(),
   markSessionDone: vi.fn(),
+  markSessionIdle: vi.fn(),
   getEventsBySession: vi.fn(() => []),
   insertPermissionDenial: vi.fn(),
   upsertPullRequest: vi.fn(),
