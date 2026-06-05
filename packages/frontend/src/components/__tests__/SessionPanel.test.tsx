@@ -192,14 +192,22 @@ describe('SessionPanel — showTaskName prop', () => {
 
   it('renders task name when showTaskName={true}', () => {
     render(
-      <SessionPanel session={makeSession()} {...defaultProps} showTaskName={true} />,
+      <SessionPanel
+        session={makeSession()}
+        {...defaultProps}
+        showTaskName={true}
+      />,
     );
     expect(screen.getByText('Test Task')).toBeTruthy();
   });
 
   it('omits task name when showTaskName={false} but still renders SessionControls', () => {
     render(
-      <SessionPanel session={makeSession()} {...defaultProps} showTaskName={false} />,
+      <SessionPanel
+        session={makeSession()}
+        {...defaultProps}
+        showTaskName={false}
+      />,
     );
     expect(screen.queryByText('Test Task')).toBeNull();
     // SessionControls still renders (Kill button visible for running session)
