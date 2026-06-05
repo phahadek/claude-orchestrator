@@ -594,4 +594,12 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  try {
+    target.exec(
+      `ALTER TABLE sessions ADD COLUMN aborted INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
 }

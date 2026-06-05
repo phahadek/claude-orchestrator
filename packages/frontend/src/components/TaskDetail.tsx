@@ -112,6 +112,7 @@ export function TaskDetail({
   const [mergeInFlight, setMergeInFlight] = useState(false);
   const [markMergedInFlight, setMarkMergedInFlight] = useState(false);
   const [fixConflictsInFlight, setFixConflictsInFlight] = useState(false);
+  const [abortInFlight, setAbortInFlight] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [optimisticDisplayStatus, setOptimisticDisplayStatus] =
     useState<DisplayStatus | null>(null);
@@ -182,6 +183,38 @@ export function TaskDetail({
       setReviewError(err instanceof Error ? err.message : 'Network error');
     } finally {
       setFixConflictsInFlight(false);
+    }
+  }
+
+  async function handleAbort() {
+    if (
+      !confirm(
+        'Abort this task? This will kill the session and reset the task to Ready. ' +
+          "The session's work will be discarded and the next launch will start fresh. " +
+          'This cannot be undone.',
+      )
+    )
+      return;
+    if (!projectId) return;
+    setAbortInFlight(true);
+    setReviewError(null);
+    try {
+      const res = await fetch(`/api/tasks/${task.taskId}/abort`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId,
+          sessionId: task.codeSession?.sessionId,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setReviewError(body.error ?? `HTTP ${res.status}`);
+      }
+    } catch (err) {
+      setReviewError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setAbortInFlight(false);
     }
   }
 
@@ -303,6 +336,18 @@ export function TaskDetail({
               {getTaskSourceLinkLabel(project?.taskSource ?? 'notion')}
             </a>
           )}
+          {task.codeSession &&
+            (task.codeSession.status === 'running' ||
+              task.codeSession.status === 'starting') && (
+              <button
+                className={styles.abortButton}
+                disabled={abortInFlight || !projectId}
+                onClick={() => void handleAbort()}
+                title="Kill the session and reset this task to Ready for a fresh launch"
+              >
+                {abortInFlight ? 'Aborting…' : 'Abort'}
+              </button>
+            )}
         </div>
       </div>
 

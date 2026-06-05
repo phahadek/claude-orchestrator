@@ -32,6 +32,7 @@ export interface Session {
   task_name: string | null;
   metadata: string | null; // JSON blob for small session metadata (e.g. aiTitle)
   review_result: string | null; // JSON — verdict stored for local-only review sessions
+  aborted: number; // 0 | 1 — set when operator explicitly aborts; prevents resume/re-attach
 }
 
 export type NewSession = Omit<
@@ -52,6 +53,7 @@ export type NewSession = Omit<
   | 'task_name'
   | 'metadata'
   | 'review_result'
+  | 'aborted'
 > & {
   ended_at?: number | null;
   pr_url?: string | null;
@@ -69,6 +71,7 @@ export type NewSession = Omit<
   task_name?: string | null;
   metadata?: string | null;
   review_result?: string | null;
+  aborted?: number;
 };
 
 // ─── session_events ────────────────────────────────────────────────────────

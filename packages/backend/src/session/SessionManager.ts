@@ -41,6 +41,7 @@ import {
   getRunningSessionsWithMergedOrClosedPR,
   hasActiveSessionForTask,
   getOtherRunningSessionsForTask,
+  markSessionAborted,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
 import { eventKind } from './eventKind';
@@ -1410,6 +1411,20 @@ export class SessionManager extends EventEmitter {
     }
   }
 
+  /**
+   * Abort a task's session: kill the session, mark it as aborted (no-resume),
+   * and reset the task to 🗂️ Ready so the next launch is a fresh session.
+   * Distinct from Kill: sets the aborted flag so sendOrResume/resumeOrphanSessions
+   * will not re-attach to the killed session.
+   */
+  async abort(sessionId: string): Promise<void> {
+    markSessionAborted(sessionId);
+    await this.kill(sessionId);
+    // markSessionErrored (called via kill → session.kill) already resets the task to
+    // 🗂️ Ready for non-BLOCKED_REASONS. The aborted flag prevents any resume path
+    // from re-attaching to this session.
+  }
+
   /** Close stdin on the session process so the CLI can exit cleanly. */
   endSession(sessionId: string): void {
     this.sessions.get(sessionId)?.endSession();
@@ -1516,6 +1531,15 @@ export class SessionManager extends EventEmitter {
     if (!row) {
       console.error(
         `[SessionManager] sendOrResume: session ${sessionId} not found in DB`,
+      );
+      return sessionId;
+    }
+
+    // Aborted sessions must not be resumed — the task has been reset to Ready and
+    // the next launch will be a fresh session. Drop the message silently.
+    if (row.aborted) {
+      console.warn(
+        `[SessionManager] sendOrResume: session ${sessionId.slice(0, 8)} is aborted — skipping resume`,
       );
       return sessionId;
     }

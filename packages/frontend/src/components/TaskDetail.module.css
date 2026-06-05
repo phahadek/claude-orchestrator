@@ -134,6 +134,28 @@
   text-decoration: underline;
 }
 
+.abortButton {
+  font-size: 0.75rem;
+  padding: 3px 10px;
+  border: 1px solid var(--border-error, #c0392b);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-error, #c0392b);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.abortButton:hover:not(:disabled) {
+  background: var(--border-error, #c0392b);
+  color: #fff;
+}
+
+.abortButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ── Body — independent scroll regions ───────────────────────────── */
 .body {
   flex: 1;

@@ -147,7 +147,7 @@ app.use(
     autoMerger,
   ),
 );
-app.use('/api', createTasksRouter());
+app.use('/api', createTasksRouter(sessionManager));
 app.use('/api/analytics', analyticsRouter);
 app.use('/api', projectsRouter);
 app.use('/api', configRouter);

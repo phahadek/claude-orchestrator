@@ -124,6 +124,12 @@ export function setSessionPauseReason(sessionId: string, reason: string): void {
   ).run({ session_id: sessionId, pause_reason: reason });
 }
 
+export function markSessionAborted(sessionId: string): void {
+  db.prepare<{ session_id: string }>(
+    `UPDATE sessions SET aborted = 1 WHERE session_id = @session_id`,
+  ).run({ session_id: sessionId });
+}
+
 const stmtMarkSessionDone = db.prepare<{
   session_id: string;
   ended_at: number;

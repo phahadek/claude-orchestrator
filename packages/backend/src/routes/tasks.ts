@@ -7,6 +7,7 @@ import {
   getTaskCache,
   getActiveTaskAggregates,
   getSetting,
+  getLatestCodeSessionByNotionTaskId,
 } from '../db/queries';
 import type { TaskAggregateRow } from '../db/queries';
 import { deriveDisplayStatus } from '../tasks/TaskStatusEngine';
@@ -15,6 +16,7 @@ import { DependencyResolver } from '../notion/DependencyResolver';
 import type { PRReviewResult } from '../github/PRReviewService';
 import type { ServerMessage, TaskView } from '../ws/types';
 import type { PauseReason } from '../db/types';
+import type { SessionManager } from '../session/SessionManager';
 import yaml from 'js-yaml';
 export type { TaskView } from '../ws/types';
 
@@ -266,7 +268,7 @@ export function summarizeEvent(payload: string): string {
   return '';
 }
 
-export function createTasksRouter(): Router {
+export function createTasksRouter(sessionManager?: SessionManager): Router {
   const router = Router();
 
   // ── GET /api/tasks/export?format=yaml&projectId=<id>&boardId=<id> ────────
@@ -487,6 +489,59 @@ export function createTasksRouter(): Router {
     } catch (err) {
       res.status(500).json({
         error: err instanceof Error ? err.message : 'Failed to update status',
+      });
+    }
+  });
+
+  // ── POST /api/tasks/:id/abort ─────────────────────────────────────────────
+  // Kill the task's active session and reset it to 🗂️ Ready for a fresh launch.
+  // The aborted session is marked so it will never be resumed.
+  router.post('/tasks/:id/abort', async (req: Request, res: Response) => {
+    const taskId = String(req.params.id);
+    const body = req.body as { projectId?: unknown; sessionId?: unknown };
+    const projectId =
+      typeof body.projectId === 'string' ? body.projectId : null;
+
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId is required' });
+      return;
+    }
+
+    const project = getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: `Project '${projectId}' not found` });
+      return;
+    }
+
+    // Resolve the session to abort: prefer caller-supplied sessionId (from task view),
+    // fall back to latest code session for the task.
+    const providedSessionId =
+      typeof body.sessionId === 'string' ? body.sessionId : null;
+    const sessionRow = providedSessionId
+      ? undefined
+      : getLatestCodeSessionByNotionTaskId(taskId);
+    const sessionId = providedSessionId ?? sessionRow?.session_id ?? null;
+
+    // Kill the session and mark it aborted (prevents resume/re-attach).
+    if (sessionId && sessionManager) {
+      await sessionManager.abort(sessionId);
+    }
+
+    // Explicitly reset the task to Ready — always, even if no session was found,
+    // so a stuck "In Progress" task can be reset manually.
+    try {
+      await getTaskBackend(projectId).updateStatus(taskId, '🗂️ Ready', {
+        source: 'human',
+      });
+      if (taskBroadcastFn) {
+        taskBroadcastFn({ type: 'task_status_changed', notionTaskId: taskId, newStatus: '🗂️ Ready' });
+        const updated = buildTaskView(taskId);
+        if (updated) taskBroadcastFn({ type: 'task_updated', task: updated });
+      }
+      res.json({ ok: true, sessionId });
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Failed to abort task',
       });
     }
   });
