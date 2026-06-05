@@ -729,6 +729,46 @@ describe('auditWorktreeEscape', () => {
     );
     expect(violations).toHaveLength(0);
   });
+
+  // ── AC: /dev/null redirects are not flagged ───────────────────────────────
+  it.each([
+    ['stderr redirect', 'cmd 2>/dev/null'],
+    ['stdout redirect', 'cmd >/dev/null'],
+    ['stdout redirect with space', 'cmd > /dev/null'],
+    ['combined redirect', 'cmd &>/dev/null'],
+    ['stdout numbered redirect', 'cmd 1>/dev/null'],
+  ])('%s to /dev/null produces no violation', async (_label, command) => {
+    vi.mocked(queries.getEventsBySession).mockReturnValue([
+      makeToolUseEvent('Bash', { command }),
+    ]);
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
+    const violations = await auditor.auditWorktreeEscape(
+      'test-session-id',
+      WORKTREE,
+    );
+    expect(violations).toHaveLength(0);
+  });
+
+  it('Bash redirect to real out-of-worktree path still produces a violation', async () => {
+    vi.mocked(queries.getEventsBySession).mockReturnValue([
+      makeToolUseEvent('Bash', { command: 'echo hello > /etc/foo' }),
+    ]);
+    const auditor = new SessionAuditor(
+      makeNotionClient(),
+      undefined,
+      undefined,
+    );
+    const violations = await auditor.auditWorktreeEscape(
+      'test-session-id',
+      WORKTREE,
+    );
+    expect(violations).toHaveLength(1);
+    expect(violations[0].type).toBe('worktree_escape');
+  });
 });
 
 // ── Windows path normalization — false-positive fix ──────────────────────────
