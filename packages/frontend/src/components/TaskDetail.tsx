@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
 import type { DisplayStatus } from '@claude-orchestrator/backend/src/tasks/TaskStatusEngine';
@@ -13,6 +13,7 @@ import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
 import { sessionsApi } from '../api/projects';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
+import { Composer } from './Composer';
 import styles from './TaskDetail.module.css';
 
 // ── Display status helpers ─────────────────────────────────────────
@@ -73,57 +74,6 @@ function parseOwnerRepo(prUrl: string): { owner: string; repo: string } | null {
   const match = prUrl.match(/github\.com\/([^/]+)\/([^/]+)\/pull\//);
   if (!match) return null;
   return { owner: match[1], repo: match[2] };
-}
-
-// ── Inline composer ───────────────────────────────────────────────
-
-interface ComposerProps {
-  sessionId: string;
-  send: (msg: ClientMessage) => void;
-}
-
-function InlineComposer({ sessionId, send }: ComposerProps) {
-  const [draft, setDraft] = useState('');
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  function handleSend() {
-    if (!draft.trim()) return;
-    send({ type: 'send_message', sessionId, message: draft });
-    setDraft('');
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-    }
-  }
-
-  return (
-    <div className={styles.composer}>
-      <textarea
-        ref={textareaRef}
-        className={styles.composerInput}
-        value={draft}
-        rows={1}
-        onChange={(e) => {
-          setDraft(e.target.value);
-          e.target.style.height = 'auto';
-          e.target.style.height = `${e.target.scrollHeight}px`;
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey && draft.trim()) {
-            e.preventDefault();
-            handleSend();
-          }
-        }}
-        placeholder="Send a message to the session…"
-      />
-      <button
-        className={styles.sendButton}
-        onClick={handleSend}
-        disabled={!draft.trim()}
-      >
-        Send
-      </button>
-    </div>
-  );
 }
 
 // ── Props ─────────────────────────────────────────────────────────
@@ -460,7 +410,7 @@ export function TaskDetail({
                       View full session
                     </button>
                     {isCodeActive && (
-                      <InlineComposer
+                      <Composer
                         sessionId={task.codeSession.sessionId}
                         send={send}
                       />
@@ -481,7 +431,7 @@ export function TaskDetail({
                       )}
                     </div>
                     {isCodeActive && (
-                      <InlineComposer
+                      <Composer
                         sessionId={task.codeSession.sessionId}
                         send={send}
                       />
