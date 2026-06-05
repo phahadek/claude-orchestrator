@@ -31,10 +31,20 @@ interface SettingsValues {
 
 const MIN_POLL_INTERVAL_MS = 5000;
 
-function validateField(
+const NON_NUMERIC_KEYS = new Set<keyof SettingsValues>([
+  'code_session_model',
+  'review_session_model',
+  'session_mode',
+  'large_task_model',
+  'auto_review',
+  'auto_archive_enabled',
+]);
+
+export function validateField(
   key: keyof SettingsValues,
   value: string,
 ): string | null {
+  if (NON_NUMERIC_KEYS.has(key)) return null;
   const num = Number(value);
   if (!Number.isInteger(num) || isNaN(num)) return 'Must be a whole number';
   if (key === 'auto_launch_concurrency' && num < 1) return 'Minimum is 1';
