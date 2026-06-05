@@ -255,7 +255,11 @@ const stuckSessionMonitor = new StuckSessionMonitor(
 
 // Orphaned-task sweep: runs at the auto-launch poll interval, finds tasks stuck
 // at In Progress with no live session and reverts them to Ready.
-const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast);
+// sendOrResume is wired so idle sessions without a PR are nudged rather than reverted.
+const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast, {
+  sendOrResume: (sessionId, text) =>
+    sessionManager.sendOrResume(sessionId, text),
+});
 
 // Concluded-session archiver: periodically archives sessions that have been
 // in a terminal state longer than the configured grace period.
