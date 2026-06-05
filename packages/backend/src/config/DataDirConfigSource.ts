@@ -15,6 +15,7 @@ const KNOWN_KEYS = new Set([
   'db',
   'sessions',
   'autoReview',
+  'setupComplete',
 ]);
 
 export const CONFIG_DEFAULTS: OrchestratorConfig = {
@@ -24,6 +25,7 @@ export const CONFIG_DEFAULTS: OrchestratorConfig = {
   db: { path: './dashboard.db' },
   sessions: { dir: '' },
   autoReview: { enabled: true, concurrency: 1 },
+  setupComplete: false,
 };
 
 function str(v: unknown, field: string): string {
@@ -109,6 +111,9 @@ function validateConfig(raw: unknown): OrchestratorConfig {
         ar.concurrency,
         'autoReview.concurrency',
       );
+  }
+  if ('setupComplete' in top) {
+    result.setupComplete = bool(top.setupComplete, 'setupComplete');
   }
 
   return result;

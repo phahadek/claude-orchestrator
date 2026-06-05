@@ -19,6 +19,7 @@ export interface OrchestratorConfig {
     enabled: boolean;
     concurrency: number;
   };
+  setupComplete: boolean;
 }
 
 export type DeepPartial<T> = {

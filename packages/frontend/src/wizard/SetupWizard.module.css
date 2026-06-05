@@ -1,0 +1,344 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-base, #1e1e2e);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 9000;
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.card {
+  background: var(--bg-surface, #181825);
+  border: 1px solid var(--border, #313244);
+  border-radius: 12px;
+  padding: 36px 40px;
+  max-width: 560px;
+  width: 100%;
+}
+
+.cardWide {
+  max-width: 760px;
+}
+
+.stepIndicator {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  margin-bottom: 28px;
+}
+
+.stepDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border, #313244);
+}
+
+.stepDotActive {
+  background: var(--accent, #89b4fa);
+}
+
+.stepDotDone {
+  background: var(--color-green, #a6e3a1);
+}
+
+.title {
+  color: var(--text-primary, #cdd6f4);
+  font-size: 1.375rem;
+  font-weight: 700;
+  margin: 0 0 8px;
+  text-align: center;
+}
+
+.subtitle {
+  color: var(--text-muted, #a6adc8);
+  font-size: 0.9375rem;
+  margin: 0 0 24px;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.sectionLabel {
+  color: var(--text-primary, #cdd6f4);
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+
+.formGroup {
+  margin-bottom: 16px;
+}
+
+.label {
+  display: block;
+  color: var(--text-muted, #a6adc8);
+  font-size: 0.8125rem;
+  margin-bottom: 5px;
+}
+
+.input {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border, #45475a);
+  background: var(--bg-base, #1e1e2e);
+  color: var(--text-primary, #cdd6f4);
+  font-size: 0.875rem;
+  box-sizing: border-box;
+  font-family: inherit;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--accent, #89b4fa);
+}
+
+.inputRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.inputRow .input {
+  flex: 1;
+}
+
+.tokenLink {
+  color: var(--accent, #89b4fa);
+  font-size: 0.8125rem;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.tokenLink:hover {
+  text-decoration: underline;
+}
+
+.validationStatus {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8125rem;
+  margin-top: 5px;
+  min-height: 20px;
+}
+
+.validOk {
+  color: var(--color-green, #a6e3a1);
+}
+
+.validErr {
+  color: var(--color-red, #f38ba8);
+}
+
+.validChecking {
+  color: var(--text-muted, #a6adc8);
+}
+
+.envRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--bg-base, #1e1e2e);
+  border: 1px solid var(--border, #313244);
+  margin-bottom: 10px;
+}
+
+.envIcon {
+  font-size: 1.1rem;
+  width: 24px;
+  text-align: center;
+}
+
+.envLabel {
+  flex: 1;
+  color: var(--text-primary, #cdd6f4);
+  font-size: 0.875rem;
+}
+
+.envStatusOk {
+  color: var(--color-green, #a6e3a1);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.envStatusFail {
+  color: var(--color-red, #f38ba8);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.envStatusWarn {
+  color: var(--color-yellow, #f9e2af);
+  font-size: 0.8125rem;
+}
+
+.claudeAuthGuide {
+  background: var(--bg-base, #1e1e2e);
+  border: 1px solid var(--color-yellow, #f9e2af);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 16px 0;
+  color: var(--text-muted, #a6adc8);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.claudeAuthGuide strong {
+  color: var(--text-primary, #cdd6f4);
+}
+
+.claudeAuthGuide code {
+  background: var(--bg-surface, #181825);
+  border: 1px solid var(--border, #313244);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-family: monospace;
+  font-size: 0.875rem;
+  color: var(--color-green, #a6e3a1);
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 24px;
+  justify-content: flex-end;
+}
+
+.btnPrimary {
+  background: var(--accent, #89b4fa);
+  color: #1e1e2e;
+  border: none;
+  border-radius: 6px;
+  padding: 9px 22px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.btnPrimary:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.btnPrimary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btnSecondary {
+  background: transparent;
+  color: var(--text-muted, #a6adc8);
+  border: 1px solid var(--border, #45475a);
+  border-radius: 6px;
+  padding: 9px 18px;
+  font-size: 0.875rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.btnSecondary:hover {
+  color: var(--text-primary, #cdd6f4);
+  border-color: var(--text-muted, #a6adc8);
+}
+
+.skipRow {
+  text-align: center;
+  margin-top: 16px;
+}
+
+.skipBtn {
+  background: none;
+  border: none;
+  color: var(--text-muted, #6c7086);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  padding: 4px 8px;
+  font-family: inherit;
+}
+
+.skipBtn:hover {
+  color: var(--text-muted, #a6adc8);
+  text-decoration: underline;
+}
+
+.errorMsg {
+  color: var(--color-red, #f38ba8);
+  font-size: 0.8125rem;
+  margin-top: 8px;
+}
+
+.successIcon {
+  font-size: 3rem;
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  color: var(--text-muted, #a6adc8);
+  font-size: 0.875rem;
+}
+
+.divider {
+  border: none;
+  border-top: 1px solid var(--border, #313244);
+  margin: 20px 0;
+}
+
+.importSection {
+  background: var(--bg-base, #1e1e2e);
+  border: 1px solid var(--border, #313244);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+
+.importSectionTitle {
+  color: var(--text-muted, #a6adc8);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  margin: 0 0 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.importResult {
+  color: var(--color-green, #a6e3a1);
+  font-size: 0.8125rem;
+  margin-top: 8px;
+}
+
+.retryBtn {
+  background: none;
+  border: 1px solid var(--border, #45475a);
+  border-radius: 6px;
+  color: var(--text-muted, #a6adc8);
+  font-size: 0.8125rem;
+  padding: 5px 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.retryBtn:hover {
+  color: var(--text-primary, #cdd6f4);
+}
+
+.projectFormWrapper {
+  margin-top: 8px;
+}
+
+.projectFormWrapper form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
