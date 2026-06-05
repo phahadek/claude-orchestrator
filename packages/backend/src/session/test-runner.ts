@@ -62,8 +62,7 @@ function runCommandWithTimeout(
     let settled = false;
     let totalBytes = 0;
     let rssPoller: ReturnType<typeof setInterval> | null = null;
-    // Declared before settle so the closure can reference it; assigned after.
-    let timer!: ReturnType<typeof setTimeout>;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
     function collect(d: Buffer) {
       if (totalBytes < OUTPUT_CAP_CHARS) {
@@ -80,7 +79,7 @@ function runCommandWithTimeout(
     }) {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer !== null) clearTimeout(timer);
       if (rssPoller !== null) clearInterval(rssPoller);
       resolve(result);
     }
