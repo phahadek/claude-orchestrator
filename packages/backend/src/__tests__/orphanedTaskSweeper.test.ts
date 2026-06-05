@@ -604,9 +604,13 @@ describe('OrphanedTaskSweeper', () => {
     const backend = makeBackend([makeTask('notion:abc')]);
     const endedAt = Date.now() - 10 * 60 * 1000;
     vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
-      makeSession('idle', 30 * 60 * 1000, endedAt, '/fake/worktree', 1) as ReturnType<
-        typeof getLatestCodeSessionByNotionTaskId
-      >,
+      makeSession(
+        'idle',
+        30 * 60 * 1000,
+        endedAt,
+        '/fake/worktree',
+        1,
+      ) as ReturnType<typeof getLatestCodeSessionByNotionTaskId>,
     );
     const sendOrResume = vi.fn().mockResolvedValue('sess-1');
 

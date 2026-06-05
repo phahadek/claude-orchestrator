@@ -108,7 +108,11 @@ describe('archiveConcludedSessionsOlderThan', () => {
   });
 
   it('does not archive idle sessions within the grace period', () => {
-    insertSession({ session_id: 'fresh-idle', status: 'idle', ended_at: CUTOFF });
+    insertSession({
+      session_id: 'fresh-idle',
+      status: 'idle',
+      ended_at: CUTOFF,
+    });
 
     const ids = archiveConcludedSessionsOlderThan(CUTOFF);
     expect(ids).toHaveLength(0);
