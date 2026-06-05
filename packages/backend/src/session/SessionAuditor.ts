@@ -448,7 +448,8 @@ function extractWriteTargetsFromCommand(command: string): string[] {
     targets.push(match[1]);
   }
 
-  return targets;
+  // /dev/null (and other null sinks) are not real write targets.
+  return targets.filter((t) => t !== '/dev/null');
 }
 
 /**
