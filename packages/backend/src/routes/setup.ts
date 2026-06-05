@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { DataDirConfigSource } from '../config/DataDirConfigSource';
+import { getOrchestratorConfig } from '../config/appConfig';
 import { countProjects } from '../db/queries';
 import type { DeepPartial, OrchestratorConfig } from '../config/types';
 import { GitHubClient } from '../github/GitHubClient';
@@ -17,8 +18,7 @@ const router = Router();
 // ── Status ────────────────────────────────────────────────────────────────────
 
 router.get('/setup/status', (_req, res) => {
-  const src = new DataDirConfigSource();
-  const cfg = src.read();
+  const cfg = getOrchestratorConfig();
   const missing: string[] = [];
 
   if (!cfg.github.token) missing.push('github.token');
@@ -225,8 +225,7 @@ export default router;
  * token or no projects have been configured yet.
  */
 export function isSetupRequired(): boolean {
-  const src = new DataDirConfigSource();
-  const cfg = src.read();
+  const cfg = getOrchestratorConfig();
   if (!cfg.github.token) return true;
   try {
     if (countProjects() === 0) return true;

@@ -27,10 +27,17 @@ vi.mock('../config/dataDir.js', () => ({
 }));
 
 // Static imports — Vitest resolves these through the mocks above
-import setupRouter from '../routes/setup.js';
+import setupRouter, { isSetupRequired } from '../routes/setup.js';
 import { countProjects } from '../db/queries.js';
 import { getDataDir } from '../config/dataDir.js';
-import { DataDirConfigSource } from '../config/DataDirConfigSource.js';
+import {
+  DataDirConfigSource,
+  CONFIG_DEFAULTS,
+} from '../config/DataDirConfigSource.js';
+import {
+  _setConfigSourceForTesting,
+  _resetAppConfigCache,
+} from '../config/appConfig.js';
 
 const mockedCountProjects = countProjects as MockedFunction<
   typeof countProjects
@@ -54,10 +61,14 @@ describe('GET /api/setup/status', () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-setup-'));
     mockedGetDataDir.mockReturnValue(tmpDir);
+    // The status route now reads the resolved config (config.json → .env fallback),
+    // so drive it through the app-config override pointed at this test's data dir.
+    _setConfigSourceForTesting(new DataDirConfigSource(tmpDir));
     mockedCountProjects.mockReturnValue(0);
   });
 
   afterEach(() => {
+    _resetAppConfigCache();
     fs.rmSync(tmpDir, { recursive: true, force: true });
     vi.clearAllMocks();
   });
@@ -93,6 +104,36 @@ describe('GET /api/setup/status', () => {
     const res = await supertest(buildApp()).get('/api/setup/status');
     expect(res.body.missing).toContain('github.token');
     expect(res.body.missing).not.toContain('notion.apiKey');
+  });
+});
+
+// ── isSetupRequired — legacy .env fallback regression ─────────────────────────
+
+describe('isSetupRequired (legacy .env / resolved-config regression)', () => {
+  afterEach(() => {
+    _resetAppConfigCache();
+    vi.clearAllMocks();
+  });
+
+  it('does NOT require setup when the resolved config carries a github token and projects exist (legacy .env mode)', () => {
+    // Regression: isSetupRequired previously read config.json directly and ignored
+    // the .env fallback, wrongly gating every legacy dev install behind the wizard
+    // (TypeError: projects.find is not a function on the dashboard).
+    _setConfigSourceForTesting({
+      read: () => ({
+        ...CONFIG_DEFAULTS,
+        github: { ...CONFIG_DEFAULTS.github, token: 'ghp-from-env' },
+      }),
+      write: () => {},
+    });
+    mockedCountProjects.mockReturnValue(3);
+    expect(isSetupRequired()).toBe(false);
+  });
+
+  it('requires setup when no source provides a github token', () => {
+    _setConfigSourceForTesting({ read: () => CONFIG_DEFAULTS, write: () => {} });
+    mockedCountProjects.mockReturnValue(0);
+    expect(isSetupRequired()).toBe(true);
   });
 });
 
