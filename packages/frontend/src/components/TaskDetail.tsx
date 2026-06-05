@@ -317,6 +317,7 @@ export function TaskDetail({
                 setSessionArchived={setSessionArchived}
                 setSessionFavorited={setSessionFavorited}
                 project={project}
+                showTaskName={false}
               />
             ) : (
               <p className={styles.noTranscript}>
@@ -377,6 +378,7 @@ export function TaskDetail({
                     setSessionArchived={setSessionArchived}
                     setSessionFavorited={setSessionFavorited}
                     project={project}
+                    showTaskName={false}
                   />
                 ) : (
                   <p className={styles.noTranscript}>

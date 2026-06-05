@@ -20,6 +20,7 @@ interface Props {
   sessionMode?: string;
   project?: ProjectConfig | null;
   onClose?: () => void;
+  showTaskName?: boolean;
 }
 
 export function SessionPanel({
@@ -32,6 +33,7 @@ export function SessionPanel({
   sessionMode,
   project = null,
   onClose,
+  showTaskName = true,
 }: Props) {
   const [showReviewTranscript, setShowReviewTranscript] = useState(false);
   const [activeTab, setActiveTab] = useState<'transcript' | 'diff'>(
@@ -48,9 +50,11 @@ export function SessionPanel({
   return (
     <div className={styles.panel}>
       <div className={styles.header}>
-        <span className={styles.taskName}>
-          {taskNameFromNotionUrl(session.taskName)}
-        </span>
+        {showTaskName && (
+          <span className={styles.taskName}>
+            {taskNameFromNotionUrl(session.taskName)}
+          </span>
+        )}
         <SessionControls
           session={session}
           send={send}
