@@ -184,6 +184,29 @@ describe('SessionPanel — review session', () => {
   });
 });
 
+describe('SessionPanel — showTaskName prop', () => {
+  it('renders task name by default (showTaskName unset)', () => {
+    render(<SessionPanel session={makeSession()} {...defaultProps} />);
+    expect(screen.getByText('Test Task')).toBeTruthy();
+  });
+
+  it('renders task name when showTaskName={true}', () => {
+    render(
+      <SessionPanel session={makeSession()} {...defaultProps} showTaskName={true} />,
+    );
+    expect(screen.getByText('Test Task')).toBeTruthy();
+  });
+
+  it('omits task name when showTaskName={false} but still renders SessionControls', () => {
+    render(
+      <SessionPanel session={makeSession()} {...defaultProps} showTaskName={false} />,
+    );
+    expect(screen.queryByText('Test Task')).toBeNull();
+    // SessionControls still renders (Kill button visible for running session)
+    expect(screen.getByText('Kill')).toBeTruthy();
+  });
+});
+
 describe('SessionDetail as thin wrapper', () => {
   it('renders null when session is null', () => {
     const { container } = render(
