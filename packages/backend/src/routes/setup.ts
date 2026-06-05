@@ -172,6 +172,25 @@ function parseEnvFile(content: string): Record<string, string> {
   return result;
 }
 
+// ── Write ─────────────────────────────────────────────────────────────────────
+
+router.post('/setup/write', (req, res) => {
+  const { githubToken, notionApiKey } = req.body as {
+    githubToken?: string;
+    notionApiKey?: string;
+  };
+  const src = new DataDirConfigSource();
+  if (typeof githubToken === 'string') {
+    src.write({ github: { token: githubToken } });
+  }
+  if (typeof notionApiKey === 'string') {
+    src.write({ notion: { apiKey: notionApiKey } });
+  }
+  res.json({ ok: true });
+});
+
+// ── Import ────────────────────────────────────────────────────────────────────
+
 router.post('/setup/import', (req, res) => {
   const { path: envPath } = req.body as { path?: string };
   if (typeof envPath !== 'string' || !envPath) {
@@ -241,9 +260,19 @@ export function isSetupRequired(): boolean {
  * setup mode. Callers (e.g. the wizard UI) can always reach /api/setup/* and
  * /api/enrollment/*; everything else returns 503 until setup completes.
  */
+// Routes that are always accessible even during setup (config management paths)
+const SETUP_ALLOWED_PREFIXES = [
+  '/setup',
+  '/enrollment',
+  '/config',
+  '/projects',
+  '/milestones',
+  '/settings',
+];
+
 export function createSetupModeGuard(): RequestHandler {
   return (req, res, next) => {
-    if (req.path.startsWith('/setup') || req.path.startsWith('/enrollment')) {
+    if (SETUP_ALLOWED_PREFIXES.some((p) => req.path.startsWith(p))) {
       return next();
     }
     if (isSetupRequired()) {

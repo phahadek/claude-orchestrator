@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { EnrollmentFlow } from './auth/EnrollmentFlow';
+import { FirstRunWizard } from './wizard/FirstRunWizard';
 import type { ConnectionState } from './hooks/useWebSocket';
 import { useSessionStore } from './hooks/useSessionStore';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -77,11 +78,24 @@ function resolveActiveBoardId(project: ProjectConfig): string {
 
 export default function App() {
   const [needsEnrollment, setNeedsEnrollment] = useState(false);
+  const [showWizard, setShowWizard] = useState(false);
 
   useEffect(() => {
     const handler = () => setNeedsEnrollment(true);
     window.addEventListener('device-unauthorized', handler);
     return () => window.removeEventListener('device-unauthorized', handler);
+  }, []);
+
+  useEffect(() => {
+    if (localStorage.getItem('wizardSkipped') === 'true') return;
+    fetch('/api/setup/status')
+      .then((r) => r.json())
+      .then((data: { setupNeeded: boolean }) => {
+        if (data.setupNeeded) setShowWizard(true);
+      })
+      .catch(() => {
+        /* non-critical — dashboard still renders */
+      });
   }, []);
 
   const {
@@ -1375,6 +1389,17 @@ export default function App() {
           onEnrolled={() => {
             setNeedsEnrollment(false);
             window.location.reload();
+          }}
+        />
+      )}
+
+      {showWizard && (
+        <FirstRunWizard
+          onComplete={() => window.location.reload()}
+          onSkip={() => {
+            localStorage.setItem('wizardSkipped', 'true');
+            setShowWizard(false);
+            setTopView('settings');
           }}
         />
       )}
