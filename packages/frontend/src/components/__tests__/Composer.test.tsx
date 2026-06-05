@@ -5,21 +5,29 @@ import { Composer } from '../Composer';
 describe('Composer', () => {
   it('send button is disabled when draft is empty', () => {
     render(<Composer sessionId="sess-1" send={vi.fn()} />);
-    const btn = screen.getByRole('button', { name: /send/i }) as HTMLButtonElement;
+    const btn = screen.getByRole('button', {
+      name: /send/i,
+    }) as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
   });
 
   it('send button is disabled when draft is whitespace only', () => {
     render(<Composer sessionId="sess-1" send={vi.fn()} />);
-    const btn = screen.getByRole('button', { name: /send/i }) as HTMLButtonElement;
+    const btn = screen.getByRole('button', {
+      name: /send/i,
+    }) as HTMLButtonElement;
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '   ' } });
     expect(btn.disabled).toBe(true);
   });
 
   it('send button is enabled when draft has content', () => {
     render(<Composer sessionId="sess-1" send={vi.fn()} />);
-    const btn = screen.getByRole('button', { name: /send/i }) as HTMLButtonElement;
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'hello' } });
+    const btn = screen.getByRole('button', {
+      name: /send/i,
+    }) as HTMLButtonElement;
+    fireEvent.change(screen.getByRole('textbox'), {
+      target: { value: 'hello' },
+    });
     expect(btn.disabled).toBe(false);
   });
 
@@ -49,7 +57,10 @@ describe('Composer', () => {
   it('does not send when draft is empty on Enter', () => {
     const send = vi.fn();
     render(<Composer sessionId="sess-1" send={send} />);
-    fireEvent.keyDown(screen.getByRole('textbox'), { key: 'Enter', shiftKey: false });
+    fireEvent.keyDown(screen.getByRole('textbox'), {
+      key: 'Enter',
+      shiftKey: false,
+    });
     expect(send).not.toHaveBeenCalled();
   });
 

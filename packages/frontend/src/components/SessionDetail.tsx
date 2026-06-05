@@ -150,7 +150,6 @@ export function SessionDetail({
     }
   }
 
-
   async function handleNoteCommit() {
     if (!session) return;
     setEditingNote(false);
