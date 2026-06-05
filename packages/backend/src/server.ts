@@ -50,6 +50,7 @@ import { deleteGhostSessions, getPRBySessionId } from './db/queries';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
 import { runPRBootSweep } from './github/PRBootSweep';
+import { runBootIdleReconciliation } from './session/bootIdleReconciliation';
 import setupRouter, { createSetupModeGuard } from './routes/setup';
 
 runMigrations(db);
@@ -283,9 +284,11 @@ jsonlReader
     stuckSessionMonitor.startScan();
     autoMerger.rehydrate();
 
-    runPRBootSweep(githubClient).catch((err: unknown) =>
-      console.warn('[server] PR boot sweep failed:', (err as Error).message),
-    );
+    runPRBootSweep(githubClient)
+      .then(() => runBootIdleReconciliation())
+      .catch((err: unknown) =>
+        console.warn('[server] PR boot sweep failed:', (err as Error).message),
+      );
 
     prMergeWatcher.start();
     reviewerCommentsWatcher.start();

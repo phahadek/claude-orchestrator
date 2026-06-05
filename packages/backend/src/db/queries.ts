@@ -1505,6 +1505,36 @@ export function getAllOpenPRs(): PullRequestRow[] {
     .all() as PullRequestRow[];
 }
 
+export interface IdleSessionWithResolvedPR {
+  session_id: string;
+  task_id: string | null;
+  project_id: string | null;
+  pr_state: string;
+  pr_number: number;
+  repo: string;
+  pr_url: string | null;
+}
+
+/**
+ * Returns idle sessions that have a linked PR already in a terminal state
+ * (merged or closed). Used by the boot-time reconciliation pass to apply
+ * session terminal transitions for PRs that resolved while the server was down.
+ */
+export function getIdleSessionsWithResolvedPRs(): IdleSessionWithResolvedPR[] {
+  return db
+    .prepare(
+      `
+    SELECT s.session_id, s.task_id, s.project_id,
+           pr.state AS pr_state, pr.pr_number, pr.repo, pr.pr_url
+    FROM sessions s
+    JOIN pull_requests pr ON pr.session_id = s.session_id
+    WHERE s.status = 'idle'
+      AND pr.state IN ('merged', 'closed')
+  `,
+    )
+    .all() as IdleSessionWithResolvedPR[];
+}
+
 /**
  * Returns eligible PRs for the bulk-merge button: open, approved verdict,
  * not paused, and mergeable=1, scoped to the given project's milestone.
