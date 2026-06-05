@@ -70,10 +70,7 @@ describe('SessionPanel — code session', () => {
   it('hides the Composer for terminal sessions', () => {
     for (const status of ['done', 'error', 'killed']) {
       const { unmount } = render(
-        <SessionPanel
-          session={makeSession({ status })}
-          {...defaultProps}
-        />,
+        <SessionPanel session={makeSession({ status })} {...defaultProps} />,
       );
       expect(
         screen.queryByPlaceholderText('Send a message to the session…'),
