@@ -63,7 +63,11 @@ beforeEach(() => {
 
 describe('runBootIdleReconciliation', () => {
   it('transitions idle session with merged PR to done', () => {
-    makeSession('sess-merged-1', 'idle', 'https://github.com/owner/repo/pull/10');
+    makeSession(
+      'sess-merged-1',
+      'idle',
+      'https://github.com/owner/repo/pull/10',
+    );
     makePRRow(10, 'sess-merged-1', 'merged');
 
     runBootIdleReconciliation();
@@ -72,7 +76,11 @@ describe('runBootIdleReconciliation', () => {
   });
 
   it('transitions idle session with closed PR to error', () => {
-    makeSession('sess-closed-1', 'idle', 'https://github.com/owner/repo/pull/20');
+    makeSession(
+      'sess-closed-1',
+      'idle',
+      'https://github.com/owner/repo/pull/20',
+    );
     makePRRow(20, 'sess-closed-1', 'closed');
 
     runBootIdleReconciliation();
@@ -81,7 +89,11 @@ describe('runBootIdleReconciliation', () => {
   });
 
   it('does not touch running sessions with merged PR', () => {
-    makeSession('sess-running', 'running', 'https://github.com/owner/repo/pull/30');
+    makeSession(
+      'sess-running',
+      'running',
+      'https://github.com/owner/repo/pull/30',
+    );
     makePRRow(30, 'sess-running', 'merged');
 
     runBootIdleReconciliation();
@@ -90,7 +102,11 @@ describe('runBootIdleReconciliation', () => {
   });
 
   it('does not touch idle sessions with open PR', () => {
-    makeSession('sess-open-pr', 'idle', 'https://github.com/owner/repo/pull/40');
+    makeSession(
+      'sess-open-pr',
+      'idle',
+      'https://github.com/owner/repo/pull/40',
+    );
     makePRRow(40, 'sess-open-pr', 'open');
 
     runBootIdleReconciliation();
@@ -125,8 +141,16 @@ describe('runBootIdleReconciliation', () => {
   });
 
   it('handles multiple sessions in one pass', () => {
-    makeSession('sess-multi-m', 'idle', 'https://github.com/owner/repo/pull/70');
-    makeSession('sess-multi-c', 'idle', 'https://github.com/owner/repo/pull/71');
+    makeSession(
+      'sess-multi-m',
+      'idle',
+      'https://github.com/owner/repo/pull/70',
+    );
+    makeSession(
+      'sess-multi-c',
+      'idle',
+      'https://github.com/owner/repo/pull/71',
+    );
     makePRRow(70, 'sess-multi-m', 'merged');
     makePRRow(71, 'sess-multi-c', 'closed');
 
@@ -137,7 +161,11 @@ describe('runBootIdleReconciliation', () => {
   });
 
   it('sets ended_at when transitioning merged idle session to done', () => {
-    makeSession('sess-ended-at', 'idle', 'https://github.com/owner/repo/pull/80');
+    makeSession(
+      'sess-ended-at',
+      'idle',
+      'https://github.com/owner/repo/pull/80',
+    );
     makePRRow(80, 'sess-ended-at', 'merged');
 
     runBootIdleReconciliation();
