@@ -508,10 +508,16 @@ describe('OrphanedTaskSweeper', () => {
     await sweeper.sweepOnce();
 
     // Must nudge, not revert
-    expect(sendOrResume).toHaveBeenCalledWith('sess-1', expect.stringContaining('PR'));
+    expect(sendOrResume).toHaveBeenCalledWith(
+      'sess-1',
+      expect.stringContaining('PR'),
+    );
     expect(backend.updateStatus).not.toHaveBeenCalled();
     expect(recordEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ event_type: 'task_orphan_nudged', task_id: 'notion:abc' }),
+      expect.objectContaining({
+        event_type: 'task_orphan_nudged',
+        task_id: 'notion:abc',
+      }),
     );
   });
 
@@ -541,9 +547,15 @@ describe('OrphanedTaskSweeper', () => {
     expect(sendOrResume).not.toHaveBeenCalled();
     expect(backend.updateStatus).not.toHaveBeenCalled();
     // Surfaced to operator via session pause_reason
-    expect(setSessionPauseReason).toHaveBeenCalledWith('sess-1', 'stalled_idle');
+    expect(setSessionPauseReason).toHaveBeenCalledWith(
+      'sess-1',
+      'stalled_idle',
+    );
     expect(recordEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ event_type: 'task_orphan_surfaced', task_id: 'notion:abc' }),
+      expect.objectContaining({
+        event_type: 'task_orphan_surfaced',
+        task_id: 'notion:abc',
+      }),
     );
   });
 
@@ -551,9 +563,12 @@ describe('OrphanedTaskSweeper', () => {
     const backend = makeBackend([makeTask('notion:abc')]);
     const endedAt = Date.now() - 10 * 60 * 1000;
     vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
-      makeSession('idle', 30 * 60 * 1000, endedAt, '/gone/worktree') as ReturnType<
-        typeof getLatestCodeSessionByNotionTaskId
-      >,
+      makeSession(
+        'idle',
+        30 * 60 * 1000,
+        endedAt,
+        '/gone/worktree',
+      ) as ReturnType<typeof getLatestCodeSessionByNotionTaskId>,
     );
     vi.mocked(fs.existsSync).mockReturnValue(false);
     const sendOrResume = vi.fn().mockResolvedValue('sess-1');
@@ -570,7 +585,10 @@ describe('OrphanedTaskSweeper', () => {
 
     expect(sendOrResume).not.toHaveBeenCalled();
     expect(backend.updateStatus).not.toHaveBeenCalled();
-    expect(setSessionPauseReason).toHaveBeenCalledWith('sess-1', 'stalled_idle');
+    expect(setSessionPauseReason).toHaveBeenCalledWith(
+      'sess-1',
+      'stalled_idle',
+    );
     expect(recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'task_orphan_surfaced',

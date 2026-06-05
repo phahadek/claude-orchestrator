@@ -231,7 +231,12 @@ export class OrphanedTaskSweeper {
 
     // Unrecoverable: worktree is gone — surface to operator, no nudge possible.
     if (!worktree_path || !fs.existsSync(worktree_path)) {
-      this.surfaceToOperator(session_id, taskId, effectiveProjectId, 'worktree_missing');
+      this.surfaceToOperator(
+        session_id,
+        taskId,
+        effectiveProjectId,
+        'worktree_missing',
+      );
       return;
     }
 
@@ -239,7 +244,12 @@ export class OrphanedTaskSweeper {
 
     if (nudgesAlready >= NUDGE_LIMIT) {
       // Nudge budget exhausted — surface to operator, never revert.
-      this.surfaceToOperator(session_id, taskId, effectiveProjectId, 'nudge_limit_reached');
+      this.surfaceToOperator(
+        session_id,
+        taskId,
+        effectiveProjectId,
+        'nudge_limit_reached',
+      );
       return;
     }
 
