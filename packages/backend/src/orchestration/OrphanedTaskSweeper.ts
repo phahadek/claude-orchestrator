@@ -201,7 +201,8 @@ export class OrphanedTaskSweeper {
     }
 
     // An idle session with no PR is a recoverable asset — nudge rather than revert.
-    if (latestSession?.status === 'idle') {
+    // Exception: an archived idle session is no longer recoverable; fall through to revert.
+    if (latestSession?.status === 'idle' && !latestSession.archived) {
       await this.maybeNudgeIdleSession(
         latestSession,
         taskId,

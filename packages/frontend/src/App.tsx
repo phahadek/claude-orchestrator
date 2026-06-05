@@ -280,7 +280,7 @@ export default function App() {
   const handleArchiveAll = useCallback(async () => {
     await fetch('/api/sessions/archive-finished', { method: 'POST' });
     for (const s of sessions) {
-      if (!s.archived && ['done', 'error', 'killed'].includes(s.status)) {
+      if (!s.archived && ['done', 'error', 'killed', 'idle'].includes(s.status)) {
         setSessionArchived(s.sessionId, true);
       }
     }
