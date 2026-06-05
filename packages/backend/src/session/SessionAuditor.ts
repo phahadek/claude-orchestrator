@@ -226,6 +226,7 @@ export class SessionAuditor {
         if (block.id && deniedIds.has(block.id)) continue;
         const paths = extractPathsFromBlock(block);
         for (const p of paths) {
+          if (isNullSink(p)) continue;
           const resolved = normalizePath(p, worktreePath);
           if (
             resolved !== normalizedWorktree &&
@@ -448,8 +449,12 @@ function extractWriteTargetsFromCommand(command: string): string[] {
     targets.push(match[1]);
   }
 
-  // /dev/null (and other null sinks) are not real write targets.
-  return targets.filter((t) => t !== '/dev/null');
+  return targets.filter((t) => !isNullSink(t));
+}
+
+/** Returns true for shell null-sink paths that are never real write targets. */
+function isNullSink(p: string): boolean {
+  return p === '/dev/null' || p.toLowerCase() === 'nul';
 }
 
 /**
