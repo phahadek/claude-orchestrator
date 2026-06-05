@@ -1088,6 +1088,22 @@ export class GitHubClient {
     }
     return res.text() as unknown as Promise<T>;
   }
+
+  /** Probe-validate an arbitrary token without modifying the instance's own credentials. */
+  static async probe(token: string): Promise<{ login: string }> {
+    const res = await fetch('https://api.github.com/user', {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => res.statusText);
+      throw new GitHubApiError(res.status, text);
+    }
+    return res.json() as Promise<{ login: string }>;
+  }
 }
 
 // ---- helpers ----------------------------------------------------------------
