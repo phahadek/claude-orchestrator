@@ -22,10 +22,16 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import type { ServerMessage } from '../ws/types';
 import { eventKind } from '../session/eventKind';
+import type { SessionManager } from '../session/SessionManager';
 
 let _broadcast: (msg: ServerMessage) => void = () => {};
 export function setBroadcast(fn: (msg: ServerMessage) => void): void {
   _broadcast = fn;
+}
+
+let _sessionManager: SessionManager | null = null;
+export function setSessionManager(sm: SessionManager): void {
+  _sessionManager = sm;
 }
 
 export const sessionsRouter = Router();
@@ -227,6 +233,33 @@ sessionsRouter.post('/:id/mark-merged', async (req: Request, res: Response) => {
     res.status(500).json({
       error:
         err instanceof Error ? err.message : 'Failed to update task status',
+    });
+  }
+});
+
+// POST /api/sessions/:id/abort
+// Kill the session and reset the task to Ready for a fresh launch.
+// Unlike Kill, abort pre-marks the session as killed in the DB before sending
+// the kill signal, so a server restart cannot resume the aborted session.
+sessionsRouter.post('/:id/abort', async (req: Request, res: Response) => {
+  const sessionId = String(req.params.id);
+  const session = getSession(sessionId);
+  if (!session) {
+    res.status(404).json({ error: 'Session not found' });
+    return;
+  }
+
+  if (!_sessionManager) {
+    res.status(503).json({ error: 'Session manager not available' });
+    return;
+  }
+
+  try {
+    await _sessionManager.abortSession(sessionId);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : 'Failed to abort session',
     });
   }
 });
