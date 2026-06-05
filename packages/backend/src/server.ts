@@ -46,7 +46,7 @@ import { deleteGhostSessions, getPRBySessionId } from './db/queries';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
 import { runPRBootSweep } from './github/PRBootSweep';
-import setupRouter from './routes/setup';
+import setupRouter, { createSetupModeGuard } from './routes/setup';
 
 runMigrations(db);
 loadRuntimeSettingsFromDb();
@@ -102,6 +102,8 @@ app.use(express.json());
 app.use('/api/enrollment', createEnrollmentRouter());
 // Setup endpoints are public — wizard UI uses them before credentials exist
 app.use('/api', setupRouter);
+// Gate all other /api routes when setup has not been completed
+app.use('/api', createSetupModeGuard());
 app.use(requireDeviceAuth);
 app.use('/api/permission-events', permissionEventsRouter);
 app.use('/api/permission-denials', permissionDenialsRouter);

@@ -1,14 +1,16 @@
 import { Router } from 'express';
+import type { RequestHandler } from 'express';
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import {
-  DataDirConfigSource,
-  CONFIG_DEFAULTS,
-} from '../config/DataDirConfigSource';
+import { DataDirConfigSource } from '../config/DataDirConfigSource';
 import { countProjects } from '../db/queries';
 import type { DeepPartial, OrchestratorConfig } from '../config/types';
+import { GitHubClient } from '../github/GitHubClient';
+import { GitHubApiError } from '../github/types';
+import { probeNotionToken } from '../notion/NotionClient';
+import { NotionApiError } from '../notion/types';
 
 const router = Router();
 
@@ -89,22 +91,12 @@ async function validateGitHubToken(
   token: string,
 ): Promise<{ valid: boolean; message: string }> {
   try {
-    const res = await fetch('https://api.github.com/user', {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
-      },
-    });
-    if (res.ok) {
-      const data = (await res.json()) as { login?: string };
-      return {
-        valid: true,
-        message: `Authenticated as ${data.login ?? 'unknown'}`,
-      };
-    }
-    return { valid: false, message: `GitHub API error: ${res.status}` };
+    const data = await GitHubClient.probe(token);
+    return { valid: true, message: `Authenticated as ${data.login}` };
   } catch (err) {
+    if (err instanceof GitHubApiError) {
+      return { valid: false, message: `GitHub API error: ${err.statusCode}` };
+    }
     return { valid: false, message: `Request failed: ${String(err)}` };
   }
 }
@@ -113,21 +105,15 @@ async function validateNotionToken(
   token: string,
 ): Promise<{ valid: boolean; message: string }> {
   try {
-    const res = await fetch('https://api.notion.com/v1/users/me', {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Notion-Version': '2022-06-28',
-      },
-    });
-    if (res.ok) {
-      const data = (await res.json()) as { name?: string; type?: string };
-      return {
-        valid: true,
-        message: `Authenticated as ${data.name ?? data.type ?? 'unknown'}`,
-      };
-    }
-    return { valid: false, message: `Notion API error: ${res.status}` };
+    const data = await probeNotionToken(token);
+    return {
+      valid: true,
+      message: `Authenticated as ${data.name ?? data.type ?? 'unknown'}`,
+    };
   } catch (err) {
+    if (err instanceof NotionApiError) {
+      return { valid: false, message: `Notion API error: ${err.statusCode}` };
+    }
     return { valid: false, message: `Request failed: ${String(err)}` };
   }
 }
@@ -231,3 +217,46 @@ router.post('/setup/import', (req, res) => {
 });
 
 export default router;
+
+// ── Setup-mode guard ──────────────────────────────────────────────────────────
+
+/**
+ * Returns true when the backend is in "setup mode": config.json lacks a GitHub
+ * token or no projects have been configured yet.
+ */
+export function isSetupRequired(): boolean {
+  const src = new DataDirConfigSource();
+  const cfg = src.read();
+  if (!cfg.github.token) return true;
+  try {
+    if (countProjects() === 0) return true;
+  } catch {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Express middleware that gates non-setup API routes when the backend is in
+ * setup mode. Callers (e.g. the wizard UI) can always reach /api/setup/* and
+ * /api/enrollment/*; everything else returns 503 until setup completes.
+ */
+export function createSetupModeGuard(): RequestHandler {
+  return (req, res, next) => {
+    if (
+      req.path.startsWith('/setup') ||
+      req.path.startsWith('/enrollment')
+    ) {
+      return next();
+    }
+    if (isSetupRequired()) {
+      res.status(503).json({
+        error: 'setup_required',
+        message:
+          'Complete the first-run setup wizard before using the dashboard.',
+      });
+      return;
+    }
+    next();
+  };
+}

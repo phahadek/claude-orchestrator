@@ -633,3 +633,20 @@ export class NotionClient {
     }
   }
 }
+
+/** Probe-validate an arbitrary Notion integration token by calling /v1/users/me. */
+export async function probeNotionToken(
+  token: string,
+): Promise<{ name?: string; type?: string }> {
+  const res = await fetch('https://api.notion.com/v1/users/me', {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Notion-Version': NOTION_VERSION,
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new NotionApiError(res.status, text);
+  }
+  return res.json() as Promise<{ name?: string; type?: string }>;
+}

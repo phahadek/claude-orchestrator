@@ -214,13 +214,11 @@ describe('POST /api/setup/validate', () => {
   it('returns valid=true for a good Notion token', async () => {
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValueOnce(
-          new Response(JSON.stringify({ name: 'Test Bot', type: 'bot' }), {
-            status: 200,
-          }),
-        ),
+      vi.fn().mockResolvedValueOnce(
+        new Response(JSON.stringify({ name: 'Test Bot', type: 'bot' }), {
+          status: 200,
+        }),
+      ),
     );
 
     const res = await supertest(buildApp())
