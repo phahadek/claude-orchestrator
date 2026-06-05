@@ -248,14 +248,6 @@ export class PRMergeWatcher {
     } else if (state === 'closed') {
       updatePRState(pr.pr_number, pr.repo, 'closed');
       deleteAllAutofixShasForPR(pr.pr_number, pr.repo);
-      // Transition coding session idle → error on close-without-merge
-      if (pr.session_id) {
-        this.sessions.markSessionErrored(pr.session_id, 'error', 'pr_closed');
-      }
-      // End review session gracefully
-      if (pr.review_session_id) {
-        this.sessions.endSession(pr.review_session_id);
-      }
       this.broadcast({
         type: 'pr_closed',
         prNumber: pr.pr_number,
