@@ -93,7 +93,9 @@ describe('SessionControls — Kill action', () => {
   it('sends kill WS message when confirmed', () => {
     vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
     const send = vi.fn();
-    render(<SessionControls session={makeSession()} {...defaultProps} send={send} />);
+    render(
+      <SessionControls session={makeSession()} {...defaultProps} send={send} />,
+    );
     fireEvent.click(screen.getByText('Kill'));
     expect(send).toHaveBeenCalledWith<[ClientMessage]>({
       type: 'kill',
@@ -105,7 +107,9 @@ describe('SessionControls — Kill action', () => {
   it('does not send kill when confirm is cancelled', () => {
     vi.stubGlobal('confirm', vi.fn().mockReturnValue(false));
     const send = vi.fn();
-    render(<SessionControls session={makeSession()} {...defaultProps} send={send} />);
+    render(
+      <SessionControls session={makeSession()} {...defaultProps} send={send} />,
+    );
     fireEvent.click(screen.getByText('Kill'));
     expect(send).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
@@ -116,7 +120,9 @@ describe('SessionControls — End Session action', () => {
   it('sends end_session WS message when confirmed', () => {
     vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
     const send = vi.fn();
-    render(<SessionControls session={makeSession()} {...defaultProps} send={send} />);
+    render(
+      <SessionControls session={makeSession()} {...defaultProps} send={send} />,
+    );
     fireEvent.click(screen.getByText('End Session'));
     expect(send).toHaveBeenCalledWith<[ClientMessage]>({
       type: 'end_session',
@@ -128,7 +134,9 @@ describe('SessionControls — End Session action', () => {
   it('does not send end_session when confirm is cancelled', () => {
     vi.stubGlobal('confirm', vi.fn().mockReturnValue(false));
     const send = vi.fn();
-    render(<SessionControls session={makeSession()} {...defaultProps} send={send} />);
+    render(
+      <SessionControls session={makeSession()} {...defaultProps} send={send} />,
+    );
     fireEvent.click(screen.getByText('End Session'));
     expect(send).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
@@ -200,10 +208,9 @@ describe('SessionControls — Archive action', () => {
     );
     fireEvent.click(screen.getByText('Unarchive'));
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/sessions/sess-1/unarchive',
-        { method: 'PATCH' },
-      );
+      expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1/unarchive', {
+        method: 'PATCH',
+      });
       expect(setSessionArchived).toHaveBeenCalledWith('sess-1', false);
     });
   });
@@ -377,10 +384,7 @@ describe('SessionControls — Tags', () => {
 
   it('adds a tag via PATCH on Enter', async () => {
     render(
-      <SessionControls
-        session={makeSession({ tags: [] })}
-        {...defaultProps}
-      />,
+      <SessionControls session={makeSession({ tags: [] })} {...defaultProps} />,
     );
     const input = screen.getByPlaceholderText('Add tag...');
     fireEvent.change(input, { target: { value: 'newtag' } });

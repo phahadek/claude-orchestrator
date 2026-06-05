@@ -118,10 +118,7 @@ describe('SessionDetail', () => {
   it('hides the composer for terminal states', () => {
     for (const status of ['done', 'error', 'killed']) {
       const { unmount } = render(
-        <SessionDetail
-          session={makeSession({ status })}
-          {...defaultProps}
-        />,
+        <SessionDetail session={makeSession({ status })} {...defaultProps} />,
       );
       expect(
         screen.queryByPlaceholderText('Send a message to the session…'),
@@ -133,11 +130,7 @@ describe('SessionDetail', () => {
   it('sends send_message on Enter key (not Shift+Enter)', () => {
     const send = vi.fn();
     render(
-      <SessionDetail
-        session={makeSession()}
-        {...defaultProps}
-        send={send}
-      />,
+      <SessionDetail session={makeSession()} {...defaultProps} send={send} />,
     );
     const input = screen.getByPlaceholderText('Send a message to the session…');
     fireEvent.change(input, { target: { value: 'hello' } });
@@ -384,7 +377,11 @@ describe('SessionDetail', () => {
       .mockImplementation(() => {});
     const onClose = vi.fn();
     render(
-      <SessionDetail session={makeSession()} {...defaultProps} onClose={onClose} />,
+      <SessionDetail
+        session={makeSession()}
+        {...defaultProps}
+        onClose={onClose}
+      />,
     );
     fireEvent.click(screen.getByLabelText('Close panel'));
     expect(backSpy).toHaveBeenCalledOnce();
