@@ -95,7 +95,7 @@ async function validateGitHubToken(
     return { valid: true, message: `Authenticated as ${data.login}` };
   } catch (err) {
     if (err instanceof GitHubApiError) {
-      return { valid: false, message: `GitHub API error: ${err.statusCode}` };
+      return { valid: false, message: `GitHub API error: ${err.status}` };
     }
     return { valid: false, message: `Request failed: ${String(err)}` };
   }
