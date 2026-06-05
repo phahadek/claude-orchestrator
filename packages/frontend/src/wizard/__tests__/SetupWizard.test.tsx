@@ -1,4 +1,10 @@
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import {
+  render,
+  screen,
+  waitFor,
+  fireEvent,
+  act,
+} from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock ProjectFormModal to avoid complex form rendering in wizard tests
@@ -106,10 +112,7 @@ describe('App shows wizard when setup is incomplete', () => {
 
 describe('SetupWizard — Welcome step', () => {
   beforeEach(() => {
-    vi.stubGlobal(
-      'fetch',
-      makeFetch({ 'setup/env-check': makeEnvCheck({}) }),
-    );
+    vi.stubGlobal('fetch', makeFetch({ 'setup/env-check': makeEnvCheck({}) }));
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -203,9 +206,7 @@ describe('SetupWizard — Env check step', () => {
     fireEvent.click(screen.getByRole('button', { name: /continue/i }));
 
     await waitFor(() => {
-      const nextBtn = screen.getByTestId(
-        'env-check-next',
-      ) as HTMLButtonElement;
+      const nextBtn = screen.getByTestId('env-check-next') as HTMLButtonElement;
       expect(nextBtn.disabled).toBe(false);
     });
   });

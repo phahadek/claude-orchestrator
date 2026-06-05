@@ -4,7 +4,10 @@ import {
   type ProjectFormValues,
 } from '../components/Settings/ProjectFormModal';
 import { projectsApi } from '../api/projects';
-import type { GithubTaskSourceConfig, NonMilestoneSourceConfig } from '../api/projects';
+import type {
+  GithubTaskSourceConfig,
+  NonMilestoneSourceConfig,
+} from '../api/projects';
 import styles from './SetupWizard.module.css';
 
 type WizardStep = 'welcome' | 'env-check' | 'credentials' | 'project' | 'done';
@@ -26,7 +29,13 @@ interface Props {
   onComplete: (goToSettings?: boolean) => void;
 }
 
-const STEPS: WizardStep[] = ['welcome', 'env-check', 'credentials', 'project', 'done'];
+const STEPS: WizardStep[] = [
+  'welcome',
+  'env-check',
+  'credentials',
+  'project',
+  'done',
+];
 const STEP_LABELS = ['Welcome', 'Env', 'Credentials', 'Project', 'Done'];
 
 function toCreatePayload(values: ProjectFormValues) {
@@ -112,7 +121,9 @@ export function SetupWizard({ onComplete }: Props) {
   useEffect(() => {
     const detected =
       typeof window !== 'undefined'
-        ? (window as unknown as Record<string, unknown>).__detectedEnvPath as string | undefined
+        ? ((window as unknown as Record<string, unknown>).__detectedEnvPath as
+            | string
+            | undefined)
         : undefined;
     if (detected) setImportPath(detected);
   }, []);
@@ -246,13 +257,13 @@ export function SetupWizard({ onComplete }: Props) {
   }, [onComplete]);
 
   const canAdvanceEnvCheck =
-    envCheck !== null &&
-    envCheck.claudeAuthenticated &&
-    envCheck.gitInstalled;
+    envCheck !== null && envCheck.claudeAuthenticated && envCheck.gitInstalled;
 
   return (
     <div className={styles.overlay} data-testid="setup-wizard">
-      <div className={`${styles.card}${step === 'project' ? ` ${styles.cardWide}` : ''}`}>
+      <div
+        className={`${styles.card}${step === 'project' ? ` ${styles.cardWide}` : ''}`}
+      >
         {/* Step indicator */}
         <div className={styles.stepIndicator} aria-label="Setup progress">
           {STEPS.map((s, i) => (
@@ -274,7 +285,9 @@ export function SetupWizard({ onComplete }: Props) {
             </p>
 
             <div className={styles.importSection}>
-              <p className={styles.importSectionTitle}>Import existing .env (optional)</p>
+              <p className={styles.importSectionTitle}>
+                Import existing .env (optional)
+              </p>
               <div className={styles.inputRow}>
                 <input
                   className={styles.input}
@@ -296,9 +309,7 @@ export function SetupWizard({ onComplete }: Props) {
               {importResult && (
                 <p className={styles.importResult}>{importResult}</p>
               )}
-              {importError && (
-                <p className={styles.errorMsg}>{importError}</p>
-              )}
+              {importError && <p className={styles.errorMsg}>{importError}</p>}
             </div>
 
             <div className={styles.actions}>
@@ -349,16 +360,16 @@ export function SetupWizard({ onComplete }: Props) {
 
                 {!envCheck.claudeAuthenticated && envCheck.claudeInstalled && (
                   <div className={styles.claudeAuthGuide} role="alert">
-                    <strong>Claude is not authenticated.</strong> Open a terminal
-                    and run:
+                    <strong>Claude is not authenticated.</strong> Open a
+                    terminal and run:
                     <br />
                     <br />
                     <code>claude login</code>
                     <br />
                     <br />
                     Follow the browser prompt to sign in to your Anthropic
-                    account. This page will update automatically once you&apos;re
-                    logged in.
+                    account. This page will update automatically once
+                    you&apos;re logged in.
                   </div>
                 )}
 
@@ -445,8 +456,12 @@ export function SetupWizard({ onComplete }: Props) {
                 />
                 <button
                   className={styles.retryBtn}
-                  onClick={() => void handleValidateToken('github', githubToken)}
-                  disabled={!githubToken.trim() || validation.github === 'checking'}
+                  onClick={() =>
+                    void handleValidateToken('github', githubToken)
+                  }
+                  disabled={
+                    !githubToken.trim() || validation.github === 'checking'
+                  }
                   type="button"
                 >
                   Check
@@ -454,10 +469,14 @@ export function SetupWizard({ onComplete }: Props) {
               </div>
               <div className={styles.validationStatus}>
                 {validation.github === 'ok' && (
-                  <span className={styles.validOk}>✓ {validation.githubMsg}</span>
+                  <span className={styles.validOk}>
+                    ✓ {validation.githubMsg}
+                  </span>
                 )}
                 {validation.github === 'error' && (
-                  <span className={styles.validErr}>✗ {validation.githubMsg}</span>
+                  <span className={styles.validErr}>
+                    ✗ {validation.githubMsg}
+                  </span>
                 )}
                 {validation.github === 'checking' && (
                   <span className={styles.validChecking}>Checking…</span>
@@ -478,7 +497,9 @@ export function SetupWizard({ onComplete }: Props) {
             <div className={styles.formGroup}>
               <label className={styles.label} htmlFor="wizard-notion-token">
                 Notion Integration Token{' '}
-                <span style={{ color: 'var(--text-muted, #6c7086)' }}>(optional)</span>
+                <span style={{ color: 'var(--text-muted, #6c7086)' }}>
+                  (optional)
+                </span>
               </label>
               <div className={styles.inputRow}>
                 <input
@@ -499,8 +520,12 @@ export function SetupWizard({ onComplete }: Props) {
                 />
                 <button
                   className={styles.retryBtn}
-                  onClick={() => void handleValidateToken('notion', notionToken)}
-                  disabled={!notionToken.trim() || validation.notion === 'checking'}
+                  onClick={() =>
+                    void handleValidateToken('notion', notionToken)
+                  }
+                  disabled={
+                    !notionToken.trim() || validation.notion === 'checking'
+                  }
                   type="button"
                 >
                   Check
@@ -508,10 +533,14 @@ export function SetupWizard({ onComplete }: Props) {
               </div>
               <div className={styles.validationStatus}>
                 {validation.notion === 'ok' && (
-                  <span className={styles.validOk}>✓ {validation.notionMsg}</span>
+                  <span className={styles.validOk}>
+                    ✓ {validation.notionMsg}
+                  </span>
                 )}
                 {validation.notion === 'error' && (
-                  <span className={styles.validErr}>✗ {validation.notionMsg}</span>
+                  <span className={styles.validErr}>
+                    ✗ {validation.notionMsg}
+                  </span>
                 )}
                 {validation.notion === 'checking' && (
                   <span className={styles.validChecking}>Checking…</span>
@@ -594,7 +623,10 @@ export function SetupWizard({ onComplete }: Props) {
             <p className={styles.subtitle}>
               Your dashboard is configured and ready to use.
             </p>
-            <div className={styles.actions} style={{ justifyContent: 'center' }}>
+            <div
+              className={styles.actions}
+              style={{ justifyContent: 'center' }}
+            >
               <button
                 className={styles.btnPrimary}
                 onClick={() => onComplete(false)}

@@ -81,9 +81,15 @@ const localStore: Record<string, string> = {};
 beforeEach(() => {
   vi.stubGlobal('localStorage', {
     getItem: (k: string) => localStore[k] ?? null,
-    setItem: (k: string, v: string) => { localStore[k] = v; },
-    removeItem: (k: string) => { delete localStore[k]; },
-    clear: () => { Object.keys(localStore).forEach((k) => delete localStore[k]); },
+    setItem: (k: string, v: string) => {
+      localStore[k] = v;
+    },
+    removeItem: (k: string) => {
+      delete localStore[k];
+    },
+    clear: () => {
+      Object.keys(localStore).forEach((k) => delete localStore[k]);
+    },
   });
 });
 
