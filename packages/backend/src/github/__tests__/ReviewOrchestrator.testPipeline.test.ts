@@ -72,6 +72,8 @@ const mockLoadOrchestratorConfig = vi.fn().mockReturnValue({
   bootstrap_script: '',
   test: [],
   test_timeout_sec: 300,
+  test_max_rss_mb: 0,
+  test_fail_fast: true,
 });
 
 vi.mock('../../session/orchestrator-config', () => ({
@@ -117,6 +119,8 @@ beforeEach(() => {
     bootstrap_script: '',
     test: [],
     test_timeout_sec: 300,
+    test_max_rss_mb: 0,
+    test_fail_fast: true,
   });
 });
 
@@ -334,6 +338,7 @@ describe('ReviewOrchestrator.runTestPipeline — persistence', () => {
       ['vitest run'],
       120,
       expect.any(Function),
+      { maxRssMb: 0, failFast: true },
     );
   });
 });

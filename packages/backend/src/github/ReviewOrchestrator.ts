@@ -383,6 +383,8 @@ export class ReviewOrchestrator {
     worktreePath: string,
     commands: string[],
     timeoutSec: number,
+    maxRssMb = 0,
+    failFast = true,
   ): Promise<void> {
     if (commands.length === 0) return;
     if (!headSha) return;
@@ -403,6 +405,7 @@ export class ReviewOrchestrator {
       commands,
       timeoutSec,
       (msg) => console.log(`[ReviewOrchestrator] test PR #${prNumber}: ${msg}`),
+      { maxRssMb, failFast },
     );
 
     upsertTestResult(prNumber, repo, headSha, passed, output);
@@ -631,6 +634,8 @@ export class ReviewOrchestrator {
           worktreePath,
           config.test,
           config.test_timeout_sec,
+          config.test_max_rss_mb,
+          config.test_fail_fast,
         );
       }
     }

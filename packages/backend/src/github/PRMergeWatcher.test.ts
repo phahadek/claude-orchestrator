@@ -2528,6 +2528,8 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       ci_check_name: [],
       test: ['npm test'],
       test_timeout_sec: 60,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
       autofix: [],
       verify: [],
       allowed_tools: [],
@@ -2575,6 +2577,8 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       '/wt/session',
       ['npm test'],
       60,
+      0,
+      true,
     );
   });
 });

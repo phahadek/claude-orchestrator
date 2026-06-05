@@ -736,6 +736,8 @@ export class PRMergeWatcher {
                 worktreePath,
                 pushConfig.test,
                 pushConfig.test_timeout_sec,
+                pushConfig.test_max_rss_mb,
+                pushConfig.test_fail_fast,
               );
             }
           }
