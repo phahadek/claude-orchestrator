@@ -197,9 +197,7 @@ describe('validateField — non-numeric keys', () => {
   });
 
   it('returns null for large_task_model with a model string', () => {
-    expect(
-      validateField('large_task_model', 'claude-opus-4-8[1m]'),
-    ).toBeNull();
+    expect(validateField('large_task_model', 'claude-opus-4-8[1m]')).toBeNull();
   });
 
   it('returns null for auto_review with "true"', () => {
