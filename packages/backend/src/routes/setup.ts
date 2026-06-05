@@ -216,6 +216,36 @@ router.post('/setup/import', (req, res) => {
   res.json({ imported, dbFound, dbPath: dbFound ? siblingDb : null });
 });
 
+// ── Save credentials ──────────────────────────────────────────────────────────
+
+router.post('/setup/save-credentials', (req, res) => {
+  const { githubToken, notionApiKey } = req.body as {
+    githubToken?: string;
+    notionApiKey?: string;
+  };
+  if (typeof githubToken !== 'string' || !githubToken) {
+    res.status(400).json({ error: 'githubToken is required' });
+    return;
+  }
+  const src = new DataDirConfigSource();
+  const partial: Parameters<typeof src.write>[0] = {
+    github: { token: githubToken },
+  };
+  if (typeof notionApiKey === 'string' && notionApiKey) {
+    partial.notion = { apiKey: notionApiKey };
+  }
+  src.write(partial);
+  res.json({ ok: true });
+});
+
+// ── Complete / Skip ───────────────────────────────────────────────────────────
+
+router.post('/setup/complete', (_req, res) => {
+  const src = new DataDirConfigSource();
+  src.write({ setupComplete: true } as Parameters<typeof src.write>[0]);
+  res.json({ ok: true });
+});
+
 export default router;
 
 // ── Setup-mode guard ──────────────────────────────────────────────────────────
@@ -223,9 +253,11 @@ export default router;
 /**
  * Returns true when the backend is in "setup mode": config.json lacks a GitHub
  * token or no projects have been configured yet.
+ * Returns false when setup has been explicitly completed or skipped.
  */
 export function isSetupRequired(): boolean {
   const cfg = getOrchestratorConfig();
+  if (cfg.setupComplete) return false;
   if (!cfg.github.token) return true;
   try {
     if (countProjects() === 0) return true;

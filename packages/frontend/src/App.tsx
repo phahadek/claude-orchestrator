@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { EnrollmentFlow } from './auth/EnrollmentFlow';
+import { SetupWizard } from './wizard/SetupWizard';
 import type { ConnectionState } from './hooks/useWebSocket';
 import { useSessionStore } from './hooks/useSessionStore';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -77,6 +78,19 @@ function resolveActiveBoardId(project: ProjectConfig): string {
 
 export default function App() {
   const [needsEnrollment, setNeedsEnrollment] = useState(false);
+  const [setupNeeded, setSetupNeeded] = useState(false);
+  const [wizardGoToSettings, setWizardGoToSettings] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/setup/status')
+      .then((r) => r.json())
+      .then((data: { setupNeeded: boolean }) => {
+        if (data.setupNeeded) setSetupNeeded(true);
+      })
+      .catch(() => {
+        /* keep showing dashboard on failure */
+      });
+  }, []);
 
   useEffect(() => {
     const handler = () => setNeedsEnrollment(true);
@@ -202,6 +216,11 @@ export default function App() {
   const detailWidthRef = useRef(detailWidthPct);
 
   const [topView, setTopView] = useState<TopView>('tasks');
+
+  useEffect(() => {
+    if (wizardGoToSettings) setTopView('settings');
+  }, [wizardGoToSettings]);
+
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskViews, setTaskViews] = useState<TaskView[]>([]);
   const [taskViewsLoading, setTaskViewsLoading] = useState(true);
@@ -1001,6 +1020,17 @@ export default function App() {
       searchInputRef.current?.focus();
     },
   });
+
+  if (setupNeeded) {
+    return (
+      <SetupWizard
+        onComplete={(goToSettings) => {
+          setSetupNeeded(false);
+          if (goToSettings) setWizardGoToSettings(true);
+        }}
+      />
+    );
+  }
 
   return (
     <div
