@@ -203,7 +203,6 @@ export default function App() {
 
   const [topView, setTopView] = useState<TopView>('tasks');
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [sessionOverlayOpen, setSessionOverlayOpen] = useState(false);
   const [taskViews, setTaskViews] = useState<TaskView[]>([]);
   const [taskViewsLoading, setTaskViewsLoading] = useState(true);
   const settingsInitialTab = 'general' as const;
@@ -212,7 +211,6 @@ export default function App() {
   const { pushView } = useNavigationHistory({
     setSelectedTaskId,
     setSelectedId,
-    setSessionOverlayOpen,
   });
 
   const handleSelectTask = useCallback(
@@ -232,12 +230,6 @@ export default function App() {
     },
     [selectedId, pushView],
   );
-
-  const handleOpenSessionOverlay = useCallback(() => {
-    if (!selectedTaskId) return;
-    pushView({ type: 'sessionOverlay', taskId: selectedTaskId });
-    setSessionOverlayOpen(true);
-  }, [selectedTaskId, pushView]);
 
   useEffect(() => {
     detailWidthRef.current = detailWidthPct;
@@ -1116,8 +1108,6 @@ export default function App() {
                           send={send}
                           sessions={sessions}
                           onClose={() => history.back()}
-                          sessionOverlayOpen={sessionOverlayOpen}
-                          onOpenSessionOverlay={handleOpenSessionOverlay}
                           projectId={activeProjectId ?? undefined}
                           project={
                             projects.find((p) => p.id === activeProjectId) ??

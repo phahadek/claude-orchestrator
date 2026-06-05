@@ -6,7 +6,6 @@ function makeHandlers() {
   return {
     setSelectedTaskId: vi.fn(),
     setSelectedId: vi.fn(),
-    setSessionOverlayOpen: vi.fn(),
   };
 }
 
@@ -37,12 +36,6 @@ describe('useNavigationHistory', () => {
     result.current.pushView({ type: 'session', id: 'sess-1' });
     expect(window.history.pushState).toHaveBeenCalledWith(
       { type: 'session', id: 'sess-1' },
-      '',
-    );
-
-    result.current.pushView({ type: 'sessionOverlay', taskId: 'task-1' });
-    expect(window.history.pushState).toHaveBeenCalledWith(
-      { type: 'sessionOverlay', taskId: 'task-1' },
       '',
     );
   });
@@ -89,7 +82,6 @@ describe('useNavigationHistory', () => {
 
     expect(handlers.setSelectedTaskId).toHaveBeenCalledWith('task-42');
     expect(handlers.setSelectedId).toHaveBeenCalledWith(null);
-    expect(handlers.setSessionOverlayOpen).toHaveBeenCalledWith(false);
   });
 
   it('popstate with session state calls setSelectedId, clears others', () => {
@@ -100,18 +92,6 @@ describe('useNavigationHistory', () => {
 
     expect(handlers.setSelectedId).toHaveBeenCalledWith('sess-99');
     expect(handlers.setSelectedTaskId).toHaveBeenCalledWith(null);
-    expect(handlers.setSessionOverlayOpen).toHaveBeenCalledWith(false);
-  });
-
-  it('popstate with sessionOverlay state calls setSelectedTaskId and opens overlay', () => {
-    const handlers = makeHandlers();
-    renderHook(() => useNavigationHistory(handlers));
-
-    firePopState({ type: 'sessionOverlay', taskId: 'task-1' });
-
-    expect(handlers.setSelectedTaskId).toHaveBeenCalledWith('task-1');
-    expect(handlers.setSelectedId).toHaveBeenCalledWith(null);
-    expect(handlers.setSessionOverlayOpen).toHaveBeenCalledWith(true);
   });
 
   it('popstate with null state clears all navigation state', () => {
@@ -122,7 +102,6 @@ describe('useNavigationHistory', () => {
 
     expect(handlers.setSelectedTaskId).toHaveBeenCalledWith(null);
     expect(handlers.setSelectedId).toHaveBeenCalledWith(null);
-    expect(handlers.setSessionOverlayOpen).toHaveBeenCalledWith(false);
   });
 
   it('popstate with unknown type clears all navigation state', () => {
@@ -133,7 +112,6 @@ describe('useNavigationHistory', () => {
 
     expect(handlers.setSelectedTaskId).toHaveBeenCalledWith(null);
     expect(handlers.setSelectedId).toHaveBeenCalledWith(null);
-    expect(handlers.setSessionOverlayOpen).toHaveBeenCalledWith(false);
   });
 
   it('does not fire after unmount', () => {

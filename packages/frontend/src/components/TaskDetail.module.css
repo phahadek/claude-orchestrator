@@ -143,40 +143,6 @@
   min-height: 0;
 }
 
-/* ── Tab bar ─────────────────────────────────────────────────────── */
-.tabBar {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-  padding: 0 16px;
-  background: var(--bg-secondary);
-}
-
-.tabButton {
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--text-faint);
-  cursor: pointer;
-  font-size: 0.8rem;
-  padding: 6px 12px;
-  transition:
-    color 0.15s,
-    border-color 0.15s;
-  margin-bottom: -1px;
-}
-
-.tabButton:hover {
-  color: var(--text-primary);
-}
-
-.tabButton--active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
-}
-
 /* ── Section shared styles ────────────────────────────────────────── */
 .sectionHeader {
   display: flex;
@@ -589,23 +555,6 @@
   line-height: 1.4;
 }
 
-/* ── Kill button ─────────────────────────────────────────────────── */
-.killButton {
-  background: rgba(243, 139, 168, 0.15);
-  border: 1px solid rgba(243, 139, 168, 0.4);
-  border-radius: var(--radius-sm);
-  color: var(--ctp-red, #f38ba8);
-  cursor: pointer;
-  font-size: 0.8rem;
-  padding: 4px 10px;
-  flex-shrink: 0;
-  transition: background 0.15s;
-}
-
-.killButton:hover {
-  background: rgba(243, 139, 168, 0.25);
-}
-
 /* ── Empty state ─────────────────────────────────────────────────── */
 .emptyState {
   padding: 32px 16px;
@@ -633,77 +582,10 @@
   color: var(--text-muted);
 }
 
-/* ── Mobile session overlay ───────────────────────────────────────── */
-.sessionOverlayBackdrop {
-  display: none;
-}
-
-.sessionOverlay {
-  display: none;
-}
-
-/* ── Mobile compact session summary ──────────────────────────────── */
-.sessionSummary {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 8px 16px 12px;
-}
-
-.sessionSummaryMessage {
-  font-size: 0.82rem;
-  color: var(--text-muted);
-  margin: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-
-.sessionSummaryTokens {
-  font-size: 0.75rem;
-  color: var(--text-faint);
-}
-
-.viewSessionButton {
-  align-self: flex-start;
-  background: rgba(137, 180, 250, 0.1);
-  border: 1px solid rgba(137, 180, 250, 0.3);
-  border-radius: var(--radius-sm);
-  color: #89b4fa;
-  cursor: pointer;
-  font-size: 0.82rem;
-  padding: 5px 12px;
-  transition: background 0.15s;
-}
-
-.viewSessionButton:hover {
-  background: rgba(137, 180, 250, 0.2);
-}
-
-/* ── Mobile overlay: remove left border when rendering as overlay ── */
+/* ── Mobile: compact header chrome ──────────────────────────────── */
 @media (max-width: 768px) {
   .panel {
     border-left: none;
-    position: relative;
-  }
-
-  .sessionOverlayBackdrop {
-    display: block;
-    position: absolute;
-    inset: 0;
-    z-index: 9;
-    cursor: pointer;
-  }
-
-  .sessionOverlay {
-    display: flex;
-    flex-direction: column;
-    position: absolute;
-    inset: 0;
-    z-index: 10;
-    overflow: hidden;
   }
 
   /* ── Compact header chrome to free vertical space on narrow viewports ── */
@@ -737,15 +619,6 @@
 
   .notionLink {
     font-size: 0.72rem;
-  }
-
-  .tabBar {
-    padding: 0 8px;
-  }
-
-  .tabButton {
-    font-size: 0.75rem;
-    padding: 3px 8px;
   }
 
   .sectionHeader {

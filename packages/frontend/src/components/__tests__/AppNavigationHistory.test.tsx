@@ -105,31 +105,11 @@ vi.mock('../TaskList', () => ({
 }));
 
 vi.mock('../TaskDetail', () => ({
-  TaskDetail: ({
-    onClose,
-    sessionOverlayOpen,
-    onOpenSessionOverlay,
-  }: {
-    onClose: () => void;
-    sessionOverlayOpen?: boolean;
-    onOpenSessionOverlay?: () => void;
-  }) => (
+  TaskDetail: ({ onClose }: { onClose: () => void }) => (
     <div data-testid="task-detail">
       <button type="button" onClick={onClose} aria-label="Close task detail">
         ✕
       </button>
-      {onOpenSessionOverlay && (
-        <button
-          type="button"
-          onClick={onOpenSessionOverlay}
-          data-testid="open-overlay-btn"
-        >
-          View full session
-        </button>
-      )}
-      {sessionOverlayOpen && (
-        <div data-testid="session-overlay-open">overlay open</div>
-      )}
     </div>
   ),
 }));
@@ -271,21 +251,6 @@ describe('App — navigation history', () => {
 
     expect(window.history.back).toHaveBeenCalledOnce();
     await waitFor(() => expect(screen.queryByTestId('task-detail')).toBeNull());
-  });
-
-  it('onOpenSessionOverlay calls history.pushState with sessionOverlay type', async () => {
-    render(<App />);
-    await waitFor(() => screen.getByTestId('task-list'));
-    fireEvent.click(screen.getByTestId('task-list'));
-    await waitFor(() => screen.getByTestId('task-detail'));
-
-    fireEvent.click(screen.getByTestId('open-overlay-btn'));
-
-    expect(window.history.pushState).toHaveBeenCalledWith(
-      { type: 'sessionOverlay', taskId: 'task-1' },
-      '',
-    );
-    expect(screen.getByTestId('session-overlay-open')).toBeDefined();
   });
 
   it('simulating popstate when no detail view is open does not crash', async () => {
