@@ -51,6 +51,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Post-session audit found issues — review and address the findings.',
   pr_creation_failed:
     "PR creation failed — the session couldn't open its PR. Review and retry.",
+  stalled_idle:
+    'Session stalled without opening a PR — review and resume or abort.',
 };
 
 function verdictLabel(verdict: string): string {
