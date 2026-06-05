@@ -243,10 +243,7 @@ export function isSetupRequired(): boolean {
  */
 export function createSetupModeGuard(): RequestHandler {
   return (req, res, next) => {
-    if (
-      req.path.startsWith('/setup') ||
-      req.path.startsWith('/enrollment')
-    ) {
+    if (req.path.startsWith('/setup') || req.path.startsWith('/enrollment')) {
       return next();
     }
     if (isSetupRequired()) {
