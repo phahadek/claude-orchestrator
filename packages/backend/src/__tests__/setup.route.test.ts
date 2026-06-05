@@ -131,7 +131,10 @@ describe('isSetupRequired (legacy .env / resolved-config regression)', () => {
   });
 
   it('requires setup when no source provides a github token', () => {
-    _setConfigSourceForTesting({ read: () => CONFIG_DEFAULTS, write: () => {} });
+    _setConfigSourceForTesting({
+      read: () => CONFIG_DEFAULTS,
+      write: () => {},
+    });
     mockedCountProjects.mockReturnValue(0);
     expect(isSetupRequired()).toBe(true);
   });
