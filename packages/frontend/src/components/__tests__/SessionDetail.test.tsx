@@ -33,17 +33,17 @@ function makeEvent(
   return { eventType, content, timestamp };
 }
 
+const defaultProps = {
+  send: vi.fn() as (msg: ClientMessage) => void,
+  onClose: vi.fn(),
+  setSessionArchived: vi.fn(),
+  setSessionFavorited: vi.fn(),
+};
+
 describe('SessionDetail', () => {
   it('renders null when session is null', () => {
     const { container } = render(
-      <SessionDetail
-        session={null}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
-      />,
+      <SessionDetail session={null} {...defaultProps} />,
     );
     expect(container.firstChild).toBeNull();
   });
@@ -52,11 +52,7 @@ describe('SessionDetail', () => {
     render(
       <SessionDetail
         session={makeSession()}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
+        {...defaultProps}
         project={makeProject({ taskSource: 'notion' })}
       />,
     );
@@ -71,11 +67,7 @@ describe('SessionDetail', () => {
         session={makeSession({
           notionTaskUrl: 'https://github.com/owner/repo/issues/1',
         })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
+        {...defaultProps}
         project={makeProject({ taskSource: 'github' })}
       />,
     );
@@ -92,14 +84,7 @@ describe('SessionDetail', () => {
       makeEvent('error', 'Something went wrong', 3000),
     ];
     render(
-      <SessionDetail
-        session={makeSession({ events })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
-      />,
+      <SessionDetail session={makeSession({ events })} {...defaultProps} />,
     );
     expect(screen.getByText('Hello world')).toBeTruthy();
     expect(screen.getByText('Session started')).toBeTruthy();
@@ -110,11 +95,7 @@ describe('SessionDetail', () => {
     render(
       <SessionDetail
         session={makeSession({ status: 'running' })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
+        {...defaultProps}
       />,
     );
     expect(
@@ -126,11 +107,7 @@ describe('SessionDetail', () => {
     render(
       <SessionDetail
         session={makeSession({ status: 'needs_permission' })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
+        {...defaultProps}
       />,
     );
     expect(
@@ -141,14 +118,7 @@ describe('SessionDetail', () => {
   it('hides the composer for terminal states', () => {
     for (const status of ['done', 'error', 'killed']) {
       const { unmount } = render(
-        <SessionDetail
-          session={makeSession({ status })}
-          send={vi.fn()}
-          onClose={vi.fn()}
-          onDelete={vi.fn()}
-          onArchive={vi.fn()}
-          onUnarchive={vi.fn()}
-        />,
+        <SessionDetail session={makeSession({ status })} {...defaultProps} />,
       );
       expect(
         screen.queryByPlaceholderText('Send a message to the session…'),
@@ -160,14 +130,7 @@ describe('SessionDetail', () => {
   it('sends send_message on Enter key (not Shift+Enter)', () => {
     const send = vi.fn();
     render(
-      <SessionDetail
-        session={makeSession()}
-        send={send}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
-      />,
+      <SessionDetail session={makeSession()} {...defaultProps} send={send} />,
     );
     const input = screen.getByPlaceholderText('Send a message to the session…');
     fireEvent.change(input, { target: { value: 'hello' } });
@@ -182,14 +145,7 @@ describe('SessionDetail', () => {
   it('does not send on Shift+Enter', () => {
     const send = vi.fn();
     render(
-      <SessionDetail
-        session={makeSession()}
-        send={send}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
-      />,
+      <SessionDetail session={makeSession()} {...defaultProps} send={send} />,
     );
     const input = screen.getByPlaceholderText('Send a message to the session…');
     fireEvent.change(input, { target: { value: 'hello' } });
@@ -200,14 +156,7 @@ describe('SessionDetail', () => {
   it('does not send empty messages on Enter', () => {
     const send = vi.fn();
     render(
-      <SessionDetail
-        session={makeSession()}
-        send={send}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
-      />,
+      <SessionDetail session={makeSession()} {...defaultProps} send={send} />,
     );
     const input = screen.getByPlaceholderText('Send a message to the session…');
     fireEvent.keyDown(input, { key: 'Enter', shiftKey: false });
@@ -225,11 +174,8 @@ describe('SessionDetail', () => {
     render(
       <SessionDetail
         session={makeSession({ status: 'running' })}
+        {...defaultProps}
         send={send}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
       />,
     );
     fireEvent.click(screen.getByText('Kill'));
@@ -246,11 +192,8 @@ describe('SessionDetail', () => {
     render(
       <SessionDetail
         session={makeSession({ status: 'running' })}
+        {...defaultProps}
         send={send}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
       />,
     );
     fireEvent.click(screen.getByText('Kill'));
@@ -273,16 +216,7 @@ describe('SessionDetail', () => {
         },
       ],
     });
-    render(
-      <SessionDetail
-        session={session}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
-      />,
-    );
+    render(<SessionDetail session={session} {...defaultProps} />);
     expect(screen.getByText(/2 permission denials/)).toBeTruthy();
   });
 
@@ -296,16 +230,7 @@ describe('SessionDetail', () => {
         },
       ],
     });
-    render(
-      <SessionDetail
-        session={session}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
-      />,
-    );
+    render(<SessionDetail session={session} {...defaultProps} />);
     expect(screen.queryByText(/Denied: Bash/)).toBeNull();
     fireEvent.click(screen.getByLabelText('Toggle permission denials'));
     expect(screen.getByText(/Denied: Bash/)).toBeTruthy();
@@ -315,11 +240,7 @@ describe('SessionDetail', () => {
     render(
       <SessionDetail
         session={makeSession({ permissionDenials: [] })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
+        {...defaultProps}
       />,
     );
     expect(screen.queryByText(/permission denial/)).toBeNull();
@@ -335,16 +256,7 @@ describe('SessionDetail', () => {
         },
       ],
     });
-    render(
-      <SessionDetail
-        session={session}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
-      />,
-    );
+    render(<SessionDetail session={session} {...defaultProps} />);
     fireEvent.click(screen.getByLabelText('Toggle permission denials'));
     expect(
       screen.getByText(/🚫 Denied: Bash\(curl https:\/\/example\.com\)/),
@@ -361,16 +273,7 @@ describe('SessionDetail', () => {
         },
       ],
     });
-    render(
-      <SessionDetail
-        session={session}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
-      />,
-    );
+    render(<SessionDetail session={session} {...defaultProps} />);
     expect(screen.getByText(/1 permission denial(?!s)/)).toBeTruthy();
   });
 
@@ -378,11 +281,7 @@ describe('SessionDetail', () => {
     render(
       <SessionDetail
         session={makeSession({ compaction_count: 3 })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
+        {...defaultProps}
       />,
     );
     expect(screen.getByText('compacted 3×')).toBeTruthy();
@@ -392,27 +291,14 @@ describe('SessionDetail', () => {
     render(
       <SessionDetail
         session={makeSession({ compaction_count: 0 })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
+        {...defaultProps}
       />,
     );
     expect(screen.queryByText(/compacted/)).toBeNull();
   });
 
   it('hides compaction badge when compaction_count is absent', () => {
-    render(
-      <SessionDetail
-        session={makeSession()}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
-      />,
-    );
+    render(<SessionDetail session={makeSession()} {...defaultProps} />);
     expect(screen.queryByText(/compacted/)).toBeNull();
   });
 
@@ -420,22 +306,14 @@ describe('SessionDetail', () => {
     const { rerender } = render(
       <SessionDetail
         session={makeSession({ compaction_count: 1 })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
+        {...defaultProps}
       />,
     );
     expect(screen.getByText('compacted 1×')).toBeTruthy();
     rerender(
       <SessionDetail
         session={makeSession({ compaction_count: 2 })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
+        {...defaultProps}
       />,
     );
     expect(screen.getByText('compacted 2×')).toBeTruthy();
@@ -445,11 +323,7 @@ describe('SessionDetail', () => {
     render(
       <SessionDetail
         session={makeSession({ context_occupancy_tokens: 0 })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
+        {...defaultProps}
       />,
     );
     expect(screen.getByText('0% ctx')).toBeTruthy();
@@ -459,11 +333,7 @@ describe('SessionDetail', () => {
     render(
       <SessionDetail
         session={makeSession({ context_occupancy_tokens: 124_000 })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
+        {...defaultProps}
       />,
     );
     expect(screen.getByText('62% ctx')).toBeTruthy();
@@ -473,27 +343,14 @@ describe('SessionDetail', () => {
     render(
       <SessionDetail
         session={makeSession({ context_occupancy_tokens: 210_000 })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
+        {...defaultProps}
       />,
     );
     expect(screen.getByText('105% ctx')).toBeTruthy();
   });
 
   it('does not render context occupancy badge when context_occupancy_tokens is absent', () => {
-    render(
-      <SessionDetail
-        session={makeSession()}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
-      />,
-    );
+    render(<SessionDetail session={makeSession()} {...defaultProps} />);
     expect(screen.queryByText(/% ctx/)).toBeNull();
   });
 
@@ -501,22 +358,14 @@ describe('SessionDetail', () => {
     const { rerender } = render(
       <SessionDetail
         session={makeSession({ context_occupancy_tokens: 40_000 })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
+        {...defaultProps}
       />,
     );
     expect(screen.getByText('20% ctx')).toBeTruthy();
     rerender(
       <SessionDetail
         session={makeSession({ context_occupancy_tokens: 100_000 })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
+        {...defaultProps}
       />,
     );
     expect(screen.getByText('50% ctx')).toBeTruthy();
@@ -530,11 +379,8 @@ describe('SessionDetail', () => {
     render(
       <SessionDetail
         session={makeSession()}
-        send={vi.fn()}
+        {...defaultProps}
         onClose={onClose}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
       />,
     );
     fireEvent.click(screen.getByLabelText('Close panel'));
@@ -927,27 +773,14 @@ describe('context-occupancy gauge and compaction badge', () => {
     render(
       <SessionDetail
         session={makeSession({ context_occupancy_tokens: 50_000 })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
+        {...defaultProps}
       />,
     );
     expect(screen.getByText(/% ctx/)).toBeTruthy();
   });
 
   it('does not render gauge when context_occupancy_tokens is absent', () => {
-    render(
-      <SessionDetail
-        session={makeSession()}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
-      />,
-    );
+    render(<SessionDetail session={makeSession()} {...defaultProps} />);
     expect(screen.queryByText(/% ctx/)).toBeNull();
   });
 
@@ -955,11 +788,7 @@ describe('context-occupancy gauge and compaction badge', () => {
     render(
       <SessionDetail
         session={makeSession({ compaction_count: 2 })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
+        {...defaultProps}
       />,
     );
     expect(screen.getByText('compacted 2×')).toBeTruthy();
@@ -969,11 +798,7 @@ describe('context-occupancy gauge and compaction badge', () => {
     render(
       <SessionDetail
         session={makeSession({ compaction_count: 0 })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onDelete={vi.fn()}
-        onArchive={vi.fn()}
-        onUnarchive={vi.fn()}
+        {...defaultProps}
       />,
     );
     expect(screen.queryByText(/compacted/)).toBeNull();

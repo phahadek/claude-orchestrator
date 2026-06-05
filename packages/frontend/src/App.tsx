@@ -1131,6 +1131,8 @@ export default function App() {
                             projects.find((p) => p.id === activeProjectId)
                               ?.autoMergeEnabled ?? false
                           }
+                          setSessionArchived={setSessionArchived}
+                          setSessionFavorited={setSessionFavorited}
                         />
                       </ErrorBoundary>
                     );
@@ -1269,22 +1271,12 @@ export default function App() {
                       session={selectedSession}
                       send={send}
                       onClose={() => history.back()}
-                      onDelete={(sessionId) => {
+                      setSessionArchived={setSessionArchived}
+                      setSessionFavorited={setSessionFavorited}
+                      onDeleted={(sessionId) => {
                         deleteSession(sessionId);
                         window.history.back();
                       }}
-                      onArchive={(sessionId) =>
-                        setSessionArchived(sessionId, true)
-                      }
-                      onUnarchive={(sessionId) =>
-                        setSessionArchived(sessionId, false)
-                      }
-                      onFavorite={(sessionId) =>
-                        setSessionFavorited(sessionId, true)
-                      }
-                      onUnfavorite={(sessionId) =>
-                        setSessionFavorited(sessionId, false)
-                      }
                       onResume={handleResume}
                       sessionMode={sessionMode}
                       project={

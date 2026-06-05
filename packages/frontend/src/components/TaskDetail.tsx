@@ -93,6 +93,8 @@ interface Props {
   sessionOverlayOpen?: boolean;
   /** Called when the user wants to open the mobile session overlay. */
   onOpenSessionOverlay?: () => void;
+  setSessionArchived?: (sessionId: string, archived: boolean) => void;
+  setSessionFavorited?: (sessionId: string, favorited: boolean) => void;
 }
 
 // ── TaskDetail ────────────────────────────────────────────────────
@@ -109,6 +111,8 @@ export function TaskDetail({
   autoMergeEnabled = false,
   sessionOverlayOpen = false,
   onOpenSessionOverlay,
+  setSessionArchived = () => {},
+  setSessionFavorited = () => {},
 }: Props) {
   const isMobile = useIsMobile();
   const [showReviewSection, setShowReviewSection] = useState(true);
@@ -300,9 +304,9 @@ export function TaskDetail({
               session={codeSession}
               send={send}
               onClose={() => window.history.back()}
-              onDelete={() => window.history.back()}
-              onArchive={() => window.history.back()}
-              onUnarchive={() => window.history.back()}
+              setSessionArchived={setSessionArchived}
+              setSessionFavorited={setSessionFavorited}
+              onDeleted={() => window.history.back()}
               project={project}
             />
           </div>
