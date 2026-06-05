@@ -1674,7 +1674,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       pr.pause_reason        AS pr_pause_reason,
       CASE
         WHEN pr.pr_number IS NULL
-          AND cs.pause_reason = 'pr_creation_failed'
+          AND cs.pause_reason IN ('pr_creation_failed', 'stalled_idle')
         THEN cs.pause_reason
         ELSE NULL
       END                    AS session_pr_creation_failed_pause_reason

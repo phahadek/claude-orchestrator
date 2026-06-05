@@ -18,6 +18,20 @@ export function recordEvent(event: AuditEvent): void {
 }
 
 /**
+ * Returns the number of task_orphan_nudged events recorded for the given
+ * session. Used to derive the persisted nudge count across sweeper cycles.
+ */
+export function countNudgeEvents(sessionId: string): number {
+  const row = db
+    .prepare<[string], { cnt: number }>(
+      `SELECT COUNT(*) AS cnt FROM audit_log
+       WHERE event_type = 'task_orphan_nudged' AND actor_id = ?`,
+    )
+    .get(sessionId);
+  return row?.cnt ?? 0;
+}
+
+/**
  * Returns the number of pr_creation_failed events with stage='push' recorded
  * for the given session. Used to derive the persisted push-retry count.
  */

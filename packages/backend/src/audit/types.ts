@@ -20,6 +20,8 @@ export type EventType =
   | 'handle_clean_exit_session_marked_done'
   | 'handle_clean_exit_session_marked_idle'
   | 'task_orphan_reverted'
+  | 'task_orphan_nudged'
+  | 'task_orphan_surfaced'
   | 'session_errored'
   | 'session_backfilled'
   | 'verdict_routing_failed'

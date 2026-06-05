@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { runtimeSettings, getAllProjects } from '../config';
 import type { ProjectConfig } from '../config';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -9,8 +10,10 @@ import {
   hasActiveSessionForTask,
   getPRBySessionId,
   getLocalBranchBySession,
+  setSessionPauseReason,
 } from '../db/queries';
-import { recordEvent } from '../audit/AuditLog';
+import { recordEvent, countNudgeEvents } from '../audit/AuditLog';
+import type { Session } from '../db/types';
 
 const IN_PROGRESS_STATUS = '🔄 In Progress';
 const READY_STATUS = '🗂️ Ready';
@@ -18,6 +21,11 @@ const DONE_STATUS = '✅ Done';
 const ANTI_RACE_MS = 5 * 60 * 1000;
 /** Grace window after clean-exit: skip revert to let async post-exit work (PR creation) settle. */
 const POST_CLEAN_EXIT_GRACE_MS = 2 * 60 * 1000;
+/** Max nudge attempts before surfacing to the operator. */
+const NUDGE_LIMIT = 2;
+/** Nudge message sent to a stalled idle session that hasn't opened a PR. */
+const IDLE_NUDGE_MESSAGE =
+  'You appear to have finished your work but no PR was opened. Please open a draft PR now so your changes can be reviewed. If you are done with your task, follow the PR format in CLAUDE.md and emit the <pr-body>…</pr-body> marker.';
 
 /**
  * Periodic sweep that detects tasks stuck at "🔄 In Progress" in Notion with no
@@ -40,6 +48,8 @@ export class OrphanedTaskSweeper {
       listProjects?: () => ProjectConfig[];
       resolveBackend?: (projectId: string) => TaskBackend;
       intervalMs?: number;
+      /** Shared nudge path — calls SessionManager.sendOrResume under the hood. */
+      sendOrResume?: (sessionId: string, text: string) => Promise<string>;
     } = {},
   ) {}
 
@@ -178,8 +188,141 @@ export class OrphanedTaskSweeper {
         return lb?.status === 'merged';
       })();
 
-    const newStatus = prMergedOrClosed ? DONE_STATUS : READY_STATUS;
+    if (prMergedOrClosed) {
+      await this.revertTask(
+        taskId,
+        projectId,
+        effectiveProjectId,
+        lastSeenAt,
+        backend,
+        DONE_STATUS,
+      );
+      return;
+    }
 
+    // An idle session with no PR is a recoverable asset — nudge rather than revert.
+    if (latestSession?.status === 'idle') {
+      await this.maybeNudgeIdleSession(
+        latestSession,
+        taskId,
+        effectiveProjectId,
+      );
+      return;
+    }
+
+    // Genuine orphan (non-idle, no PR, no active session) — revert to Ready.
+    await this.revertTask(
+      taskId,
+      projectId,
+      effectiveProjectId,
+      lastSeenAt,
+      backend,
+      READY_STATUS,
+    );
+  }
+
+  /** Nudge a stalled idle session or surface it to the operator if nudges are exhausted. */
+  private async maybeNudgeIdleSession(
+    session: Session,
+    taskId: string,
+    effectiveProjectId: string,
+  ): Promise<void> {
+    const { session_id, worktree_path } = session;
+
+    // Unrecoverable: worktree is gone — surface to operator, no nudge possible.
+    if (!worktree_path || !fs.existsSync(worktree_path)) {
+      this.surfaceToOperator(
+        session_id,
+        taskId,
+        effectiveProjectId,
+        'worktree_missing',
+      );
+      return;
+    }
+
+    const nudgesAlready = countNudgeEvents(session_id);
+
+    if (nudgesAlready >= NUDGE_LIMIT) {
+      // Nudge budget exhausted — surface to operator, never revert.
+      this.surfaceToOperator(
+        session_id,
+        taskId,
+        effectiveProjectId,
+        'nudge_limit_reached',
+      );
+      return;
+    }
+
+    const sendOrResume = this.options.sendOrResume;
+    if (!sendOrResume) {
+      // No sendOrResume injected — log and skip (shouldn't happen in production).
+      console.warn(
+        `[OrphanedTaskSweeper] sendOrResume not injected — cannot nudge session ${session_id} for task ${taskId}`,
+      );
+      return;
+    }
+
+    try {
+      await sendOrResume(session_id, IDLE_NUDGE_MESSAGE);
+    } catch (err) {
+      console.warn(
+        `[OrphanedTaskSweeper] sendOrResume failed for session ${session_id}: ${(err as Error).message}`,
+      );
+      return;
+    }
+
+    recordEvent({
+      event_type: 'task_orphan_nudged',
+      actor_type: 'system',
+      actor_id: session_id,
+      project_id: effectiveProjectId,
+      task_id: taskId,
+      payload: { taskId, sessionId: session_id, nudgeCount: nudgesAlready + 1 },
+    });
+
+    console.log(
+      `[OrphanedTaskSweeper] nudged idle session ${session_id} for task ${taskId} (nudge ${nudgesAlready + 1}/${NUDGE_LIMIT})`,
+    );
+  }
+
+  /** Surface a stalled session to the operator (attention queue) without reverting the task. */
+  private surfaceToOperator(
+    sessionId: string,
+    taskId: string,
+    effectiveProjectId: string,
+    reason: string,
+  ): void {
+    setSessionPauseReason(sessionId, 'stalled_idle');
+
+    recordEvent({
+      event_type: 'task_orphan_surfaced',
+      actor_type: 'system',
+      actor_id: sessionId,
+      project_id: effectiveProjectId,
+      task_id: taskId,
+      payload: { taskId, sessionId, reason },
+    });
+
+    this.broadcast({
+      type: 'task_status_changed',
+      notionTaskId: taskId,
+      newStatus: IN_PROGRESS_STATUS,
+    });
+
+    console.log(
+      `[OrphanedTaskSweeper] surfaced stalled session ${sessionId} for task ${taskId} to operator (reason: ${reason})`,
+    );
+  }
+
+  /** Revert a task to the given Notion status. Used only for merged/closed PRs and genuine orphans. */
+  private async revertTask(
+    taskId: string,
+    projectId: string,
+    effectiveProjectId: string,
+    lastSeenAt: number | null,
+    backend: TaskBackend,
+    newStatus: string,
+  ): Promise<void> {
     await backend.updateStatus(taskId, newStatus);
 
     recordEvent({
