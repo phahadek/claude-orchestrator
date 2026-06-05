@@ -356,8 +356,7 @@ export function TaskDetail({
                 <span
                   className={`${styles.verdictPill} ${styles[VERDICT_CSS_KEYS[task.review.verdict] ?? 'verdict--error']}`}
                 >
-                  {VERDICT_LABELS[task.review.verdict] ??
-                    task.review.verdict}
+                  {VERDICT_LABELS[task.review.verdict] ?? task.review.verdict}
                 </span>
               ) : task.review.status === 'running' ||
                 task.review.status === 'starting' ? (
@@ -436,10 +435,7 @@ export function TaskDetail({
                 role="button"
                 aria-expanded={isPrExpanded}
               >
-                <span
-                  className={styles.reviewToggleIcon}
-                  aria-hidden="true"
-                >
+                <span className={styles.reviewToggleIcon} aria-hidden="true">
                   {isPrExpanded ? '▼' : '▶'}
                 </span>
                 <span className={styles.sectionTitle}>Pull Request</span>
@@ -455,12 +451,8 @@ export function TaskDetail({
                 {/* Line 1: PR number + title (truncated) + state badge */}
                 <div className={styles.prTitleRow}>
                   <div className={styles.prTitleLeft}>
-                    <span className={styles.prNumber}>
-                      #{task.pr.prNumber}
-                    </span>
-                    <span className={styles.prTitleText}>
-                      {task.pr.title}
-                    </span>
+                    <span className={styles.prNumber}>#{task.pr.prNumber}</span>
+                    <span className={styles.prTitleText}>{task.pr.title}</span>
                   </div>
                   <span
                     className={`${styles.prStateBadge} ${styles[`prState--${task.pr.state}${task.pr.draft ? '-draft' : ''}`]}`}
@@ -490,8 +482,8 @@ export function TaskDetail({
 
                 {task.pr.mergeState === 'dirty' && (
                   <div className={styles.conflictBanner}>
-                    ⚠ Merge conflicts detected — use Fix Conflicts to have
-                    the code session rebase and resolve them.
+                    ⚠ Merge conflicts detected — use Fix Conflicts to have the
+                    code session rebase and resolve them.
                   </div>
                 )}
 
@@ -517,9 +509,7 @@ export function TaskDetail({
                         onClick={() => void handleFixConflicts()}
                         title="Send rebase instructions to the code session to resolve merge conflicts"
                       >
-                        {fixConflictsInFlight
-                          ? 'Fixing…'
-                          : '↺ Fix Conflicts'}
+                        {fixConflictsInFlight ? 'Fixing…' : '↺ Fix Conflicts'}
                       </button>
                     )}
                     {task.review?.verdict === 'approved' &&

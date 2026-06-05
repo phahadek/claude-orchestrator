@@ -228,7 +228,10 @@ describe('TaskDetail', () => {
   });
 
   it('code session SessionPanel exposes Kill button for running session', () => {
-    const codeSession = makeCodeSession({ sessionId: 'sess-1', status: 'running' });
+    const codeSession = makeCodeSession({
+      sessionId: 'sess-1',
+      status: 'running',
+    });
     const sessions: SessionState[] = [
       makeSessionState({ sessionId: 'sess-1', status: 'running' }),
     ];
@@ -244,7 +247,10 @@ describe('TaskDetail', () => {
   });
 
   it('code session SessionPanel exposes Favorite button', () => {
-    const codeSession = makeCodeSession({ sessionId: 'sess-1', status: 'running' });
+    const codeSession = makeCodeSession({
+      sessionId: 'sess-1',
+      status: 'running',
+    });
     const sessions: SessionState[] = [
       makeSessionState({ sessionId: 'sess-1', status: 'running' }),
     ];
@@ -262,7 +268,10 @@ describe('TaskDetail', () => {
   });
 
   it('code session SessionPanel exposes Archive button for finished session', () => {
-    const codeSession = makeCodeSession({ sessionId: 'sess-1', status: 'done' });
+    const codeSession = makeCodeSession({
+      sessionId: 'sess-1',
+      status: 'done',
+    });
     const sessions: SessionState[] = [
       makeSessionState({ sessionId: 'sess-1', status: 'done' }),
     ];
@@ -279,7 +288,10 @@ describe('TaskDetail', () => {
   });
 
   it('code session SessionPanel exposes Delete button for finished session', () => {
-    const codeSession = makeCodeSession({ sessionId: 'sess-1', status: 'done' });
+    const codeSession = makeCodeSession({
+      sessionId: 'sess-1',
+      status: 'done',
+    });
     const sessions: SessionState[] = [
       makeSessionState({ sessionId: 'sess-1', status: 'done' }),
     ];
@@ -295,7 +307,10 @@ describe('TaskDetail', () => {
   });
 
   it('does not show Kill for finished code session', () => {
-    const codeSession = makeCodeSession({ sessionId: 'sess-1', status: 'done' });
+    const codeSession = makeCodeSession({
+      sessionId: 'sess-1',
+      status: 'done',
+    });
     const sessions: SessionState[] = [
       makeSessionState({ sessionId: 'sess-1', status: 'done' }),
     ];
@@ -311,7 +326,10 @@ describe('TaskDetail', () => {
   });
 
   it('shows message composer for active code session via SessionPanel', () => {
-    const codeSession = makeCodeSession({ sessionId: 'sess-1', status: 'running' });
+    const codeSession = makeCodeSession({
+      sessionId: 'sess-1',
+      status: 'running',
+    });
     const sessions: SessionState[] = [
       makeSessionState({ sessionId: 'sess-1', status: 'running' }),
     ];
@@ -329,7 +347,10 @@ describe('TaskDetail', () => {
   });
 
   it('does not show composer for finished code session', () => {
-    const codeSession = makeCodeSession({ sessionId: 'sess-1', status: 'done' });
+    const codeSession = makeCodeSession({
+      sessionId: 'sess-1',
+      status: 'done',
+    });
     const sessions: SessionState[] = [
       makeSessionState({ sessionId: 'sess-1', status: 'done' }),
     ];
