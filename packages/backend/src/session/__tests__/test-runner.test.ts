@@ -1,4 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// ── fs mock (for RSS /proc reads) ─────────────────────────────────────────────
+
+import * as fsModule from 'fs';
+vi.mock('fs');
 
 // ── child_process mock ────────────────────────────────────────────────────────
 
@@ -66,6 +71,11 @@ import { runTestCommands } from '../test-runner';
 beforeEach(() => {
   vi.useFakeTimers();
   _spawnHook = null;
+  vi.mocked(fsModule.readFileSync).mockReturnValue('' as unknown as Buffer);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -183,5 +193,166 @@ describe('runTestCommands — timeout', () => {
     await promise;
 
     expect(logs.some((l) => l.includes('TIMEOUT'))).toBe(true);
+  });
+});
+
+describe('runTestCommands — fail-fast', () => {
+  it('stops after first failure when failFast is true', async () => {
+    let callCount = 0;
+    _spawnHook = () => {
+      callCount++;
+      return makeProc(callCount === 1 ? 1 : 0, `cmd${callCount}`);
+    };
+
+    const promise = runTestCommands(
+      '/worktree',
+      ['cmd1', 'cmd2'],
+      300,
+      () => {},
+      { failFast: true },
+    );
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(callCount).toBe(1);
+    expect(result.passed).toBe(false);
+    expect(result.output).not.toContain('cmd2');
+  });
+
+  it('runs all commands when failFast is false', async () => {
+    let callCount = 0;
+    _spawnHook = () => {
+      callCount++;
+      return makeProc(callCount === 1 ? 1 : 0, `cmd${callCount}`);
+    };
+
+    const promise = runTestCommands(
+      '/worktree',
+      ['cmd1', 'cmd2'],
+      300,
+      () => {},
+      { failFast: false },
+    );
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(callCount).toBe(2);
+    expect(result.passed).toBe(false);
+  });
+
+  it('stops on timeout when failFast is true', async () => {
+    let callCount = 0;
+    _spawnHook = (cmd) => {
+      // On Windows, killProcessTree uses spawn('taskkill'); don't count those.
+      if (cmd !== 'taskkill') callCount++;
+      return makeProc(0, '', '', 9999_000);
+    };
+
+    const promise = runTestCommands(
+      '/worktree',
+      ['slow-cmd', 'second-cmd'],
+      5,
+      () => {},
+      { failFast: true },
+    );
+    await vi.advanceTimersByTimeAsync(6_000);
+    const result = await promise;
+
+    expect(callCount).toBe(1);
+    expect(result.passed).toBe(false);
+    expect(result.output).toContain('TIMEOUT');
+  });
+});
+
+describe('runTestCommands — RSS kill', () => {
+  let originalPlatform: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', {
+      value: 'linux',
+      configurable: true,
+      writable: true,
+    });
+    vi.mocked(fsModule.readFileSync).mockReturnValue(
+      'Name:\tpytest\nVmRSS:\t999999 kB\n' as unknown as Buffer,
+    );
+  });
+
+  afterEach(() => {
+    if (originalPlatform) {
+      Object.defineProperty(process, 'platform', originalPlatform);
+    }
+  });
+
+  it('kills process and marks failed when RSS exceeds maxRssMb', async () => {
+    _spawnHook = () => makeProc(0, 'running', '', 9999_000);
+
+    const promise = runTestCommands('/worktree', ['pytest'], 300, () => {}, {
+      maxRssMb: 512,
+    });
+    // Advance past the 2s RSS poll interval
+    await vi.advanceTimersByTimeAsync(3_000);
+    const result = await promise;
+
+    expect(result.passed).toBe(false);
+    expect(result.output).toContain('OOM_KILL');
+    expect(result.output).toContain('512 MB');
+  });
+
+  it('calls log with OOM_KILL message', async () => {
+    _spawnHook = () => makeProc(0, '', '', 9999_000);
+
+    const logs: string[] = [];
+    const promise = runTestCommands(
+      '/worktree',
+      ['pytest'],
+      300,
+      (m) => logs.push(m),
+      { maxRssMb: 256 },
+    );
+    await vi.advanceTimersByTimeAsync(3_000);
+    await promise;
+
+    expect(logs.some((l) => l.includes('OOM_KILL'))).toBe(true);
+  });
+
+  it('does not kill when RSS is within limit', async () => {
+    // Return RSS well below the limit
+    vi.mocked(fsModule.readFileSync).mockReturnValue(
+      'VmRSS:\t1024 kB\n' as unknown as Buffer,
+    );
+    _spawnHook = () => makeProc(0, 'ok');
+
+    const promise = runTestCommands('/worktree', ['pytest'], 300, () => {}, {
+      maxRssMb: 512,
+    });
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(result.passed).toBe(true);
+  });
+
+  it('stops after OOM_KILL when failFast is true', async () => {
+    let callCount = 0;
+    _spawnHook = (cmd) => {
+      // On Windows, killProcessTree uses spawn('taskkill'); don't count those.
+      if (cmd !== 'taskkill') callCount++;
+      return makeProc(0, '', '', 9999_000);
+    };
+
+    const promise = runTestCommands(
+      '/worktree',
+      ['pytest', 'second-cmd'],
+      300,
+      () => {},
+      { maxRssMb: 512, failFast: true },
+    );
+    await vi.advanceTimersByTimeAsync(3_000);
+    const result = await promise;
+
+    expect(callCount).toBe(1);
+    expect(result.passed).toBe(false);
+    expect(result.output).toContain('OOM_KILL');
   });
 });
