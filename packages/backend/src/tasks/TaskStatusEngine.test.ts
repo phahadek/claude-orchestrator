@@ -212,8 +212,32 @@ describe('deriveDisplayStatus', () => {
     expect(deriveDisplayStatus(makeInput({ prState: 'merged' }))).toBe('done');
   });
 
-  it("returns 'done' when prState is 'closed'", () => {
-    expect(deriveDisplayStatus(makeInput({ prState: 'closed' }))).toBe('done');
+  it("returns 'ready' (not done) when prState is 'closed' — closed PR is not terminal", () => {
+    expect(deriveDisplayStatus(makeInput({ prState: 'closed' }))).toBe('ready');
+  });
+
+  it("returns 'in_progress' (not done) when prState is 'closed' and Notion says In Progress", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({ notionStatus: '🔄 In Progress', prState: 'closed' }),
+      ),
+    ).toBe('in_progress');
+  });
+
+  it("returns 'ready' (not done) when prState is 'closed' and Notion says Ready", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({ notionStatus: '🗂️ Ready', prState: 'closed' }),
+      ),
+    ).toBe('ready');
+  });
+
+  it("returns 'done' when prState is 'closed' and notionStatus is '✅ Done' — Notion is source of truth", () => {
+    expect(
+      deriveDisplayStatus(
+        makeInput({ notionStatus: '✅ Done', prState: 'closed' }),
+      ),
+    ).toBe('done');
   });
 
   it("returns 'done' even when reviewVerdict is 'approved' if PR is merged", () => {

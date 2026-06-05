@@ -36,8 +36,10 @@ export interface TaskStatusInput {
 export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
   const { notionStatus, prState, reviewVerdict, pauseReason } = input;
 
-  // 1. done — PR merged or closed (terminal override, takes precedence over Notion)
-  if (prState === 'merged' || prState === 'closed') {
+  // 1. done — PR merged (terminal override, takes precedence over Notion)
+  // Closed-without-merge is NOT terminal: Notion status remains the source of truth
+  // so a retired PR doesn't hide an In Progress task still being re-worked.
+  if (prState === 'merged') {
     return 'done';
   }
 
