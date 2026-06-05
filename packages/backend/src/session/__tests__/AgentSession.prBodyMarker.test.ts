@@ -6,6 +6,7 @@ vi.mock('../../db/queries', () => ({
   upsertSessionEvent: vi.fn().mockReturnValue(1),
   updateSessionStatus: vi.fn(),
   markSessionDone: vi.fn(),
+  markSessionIdle: vi.fn(),
   getEventsBySession: vi.fn().mockReturnValue([]),
   insertPermissionDenial: vi.fn(),
   upsertPullRequest: vi.fn(),
@@ -86,6 +87,7 @@ import {
   upsertPullRequest,
   getPRBySessionId,
   markSessionDone,
+  markSessionIdle,
 } from '../../db/queries';
 import { validatePRBody } from '../../github/PRBodyValidator';
 import { recordEvent } from '../../audit/AuditLog';
@@ -360,6 +362,7 @@ describe('<pr-body> marker — clean-exit ordering', () => {
   beforeEach(() => {
     vi.mocked(upsertPullRequest).mockClear();
     vi.mocked(markSessionDone).mockClear();
+    vi.mocked(markSessionIdle).mockClear();
     vi.mocked(validatePRBody).mockReturnValue({
       valid: true,
       missingSections: [],
@@ -378,7 +381,7 @@ describe('<pr-body> marker — clean-exit ordering', () => {
     expect(promise).toBeInstanceOf(Promise);
   });
 
-  it('handleCleanExit awaits prBodyMarkerPromise before calling markSessionDone', async () => {
+  it('handleCleanExit awaits prBodyMarkerPromise before calling markSessionIdle', async () => {
     let resolveCreatePR!: (
       value: ReturnType<typeof makeGithubClient>['createPR'] extends (
         ...args: unknown[]
@@ -418,8 +421,8 @@ describe('<pr-body> marker — clean-exit ordering', () => {
     // Flush microtasks — handleCleanExit should be waiting on prBodyMarkerPromise
     await new Promise((r) => setImmediate(r));
 
-    // markSessionDone must NOT have been called yet (blocked on createPR)
-    expect(vi.mocked(markSessionDone)).not.toHaveBeenCalled();
+    // markSessionIdle must NOT have been called yet (blocked on createPR)
+    expect(vi.mocked(markSessionIdle)).not.toHaveBeenCalled();
 
     // Resolve the createPR so handlePRBodyMarker can complete
     resolveCreatePR({
@@ -435,13 +438,13 @@ describe('<pr-body> marker — clean-exit ordering', () => {
       draft: true,
     });
 
-    // Now handleCleanExit should proceed and call markSessionDone
+    // Now handleCleanExit should proceed and call markSessionIdle
     await cleanExitPromise;
 
-    expect(vi.mocked(markSessionDone)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(markSessionIdle)).toHaveBeenCalledTimes(1);
   });
 
-  it('markSessionDone receives the PR URL created via marker flow (not undefined)', async () => {
+  it('markSessionIdle receives the PR URL created via marker flow (not undefined)', async () => {
     const ghClient = makeGithubClient();
     const session = makeSession(ghClient);
     emitAssistantWithMarker(session, VALID_BODY);
@@ -453,7 +456,7 @@ describe('<pr-body> marker — clean-exit ordering', () => {
       session as unknown as { handleCleanExit: () => Promise<void> }
     ).handleCleanExit();
 
-    expect(vi.mocked(markSessionDone)).toHaveBeenCalledWith(
+    expect(vi.mocked(markSessionIdle)).toHaveBeenCalledWith(
       'test-session-id',
       expect.any(Number),
       PR_URL,

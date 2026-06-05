@@ -17,7 +17,7 @@ export type DisplayStatus =
 
 export interface TaskStatusInput {
   notionStatus: string; // raw Notion status string
-  codeSessionStatus: string | null; // 'running' | 'done' | 'error' | null
+  codeSessionStatus: string | null; // 'running' | 'idle' | 'done' | 'error' | null
   prState: string | null; // 'open' | 'merged' | 'closed' | null
   prDraft: boolean; // true if PR is draft
   reviewVerdict: string | null; // 'approved' | 'needs_changes' | 'incomplete' | null

@@ -105,6 +105,7 @@ export type ServerMessage =
         | 'starting'
         | 'running'
         | 'needs_permission'
+        | 'idle'
         | 'done'
         | 'error'
         | 'killed'

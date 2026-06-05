@@ -40,6 +40,7 @@ vi.mock('../db/queries', () => ({
   insertPermissionEvent: vi.fn(),
   updateSessionStatus: vi.fn(),
   markSessionDone: vi.fn(),
+  markSessionIdle: vi.fn(),
   getEventsBySession: vi.fn(() => []),
   getRules: vi.fn(() => []),
   insertPermissionDenial: vi.fn(),
@@ -85,7 +86,7 @@ import {
   getRules,
   getEventsBySession,
   upsertSessionEvent,
-  markSessionDone,
+  markSessionIdle,
   getPRBySessionId,
   getPRByNumber,
   setPauseReason,
@@ -1420,8 +1421,8 @@ describe('AgentSession', () => {
     await runPromise;
   });
 
-  // ── AC: clean-exit with PR — markSessionDone sets status+pr_url atomically ─
-  it('calls markSessionDone with prUrl when a PR URL is found at clean exit', async () => {
+  // ── AC: clean-exit with PR — markSessionIdle sets status+pr_url atomically ─
+  it('calls markSessionIdle with prUrl when a PR URL is found at clean exit', async () => {
     const notion = fakeNotionClient();
     vi.mocked(getEventsBySession).mockReturnValue([
       {
@@ -1462,7 +1463,7 @@ describe('AgentSession', () => {
     mockProc.proc.emit('exit', 0);
     await runPromise;
 
-    expect(vi.mocked(markSessionDone)).toHaveBeenCalledWith(
+    expect(vi.mocked(markSessionIdle)).toHaveBeenCalledWith(
       'done-pr-session',
       expect.any(Number),
       'https://github.com/owner/repo/pull/99',
@@ -1470,11 +1471,11 @@ describe('AgentSession', () => {
 
     const ended = messages.find((m) => m.type === 'session_ended');
     expect(ended).toBeDefined();
-    expect((ended as { status: string }).status).toBe('done');
+    expect((ended as { status: string }).status).toBe('idle');
   });
 
-  // ── AC: clean-exit without PR — markSessionDone still called ─────────────
-  it('calls markSessionDone with null prUrl when no PR URL found at clean exit', async () => {
+  // ── AC: clean-exit without PR — markSessionIdle still called ─────────────
+  it('calls markSessionIdle with null prUrl when no PR URL found at clean exit', async () => {
     const notion = fakeNotionClient();
     vi.mocked(getEventsBySession).mockReturnValue([]);
 
@@ -1496,7 +1497,7 @@ describe('AgentSession', () => {
     mockProc.proc.emit('exit', 0);
     await runPromise;
 
-    expect(vi.mocked(markSessionDone)).toHaveBeenCalledWith(
+    expect(vi.mocked(markSessionIdle)).toHaveBeenCalledWith(
       'done-no-pr-session',
       expect.any(Number),
       null,
@@ -1504,13 +1505,13 @@ describe('AgentSession', () => {
 
     const ended = messages.find((m) => m.type === 'session_ended');
     expect(ended).toBeDefined();
-    expect((ended as { status: string }).status).toBe('done');
+    expect((ended as { status: string }).status).toBe('idle');
   });
 
   // ── AC: review pipeline error cannot abort handleCleanExit ────────────────
-  // When pr_opened emits and a synchronous listener throws, markSessionDone
+  // When pr_opened emits and a synchronous listener throws, markSessionIdle
   // has already been called and session_ended is still broadcast.
-  it('broadcasts session_ended and calls markSessionDone even when pr_opened listener throws', async () => {
+  it('broadcasts session_ended and calls markSessionIdle even when pr_opened listener throws', async () => {
     const notion = fakeNotionClient();
     vi.mocked(getEventsBySession).mockReturnValue([
       {
@@ -1556,8 +1557,8 @@ describe('AgentSession', () => {
     mockProc.proc.emit('exit', 0);
     await runPromise;
 
-    // markSessionDone must have been called before the throw
-    expect(vi.mocked(markSessionDone)).toHaveBeenCalledWith(
+    // markSessionIdle must have been called before the throw
+    expect(vi.mocked(markSessionIdle)).toHaveBeenCalledWith(
       'review-error-session',
       expect.any(Number),
       'https://github.com/owner/repo/pull/88',
@@ -1566,7 +1567,7 @@ describe('AgentSession', () => {
     // session_ended must still be broadcast despite the review pipeline error
     const ended = messages.find((m) => m.type === 'session_ended');
     expect(ended).toBeDefined();
-    expect((ended as { status: string }).status).toBe('done');
+    expect((ended as { status: string }).status).toBe('idle');
   });
 
   it('fires handleInSessionApiError at most once even when multiple error events arrive', async () => {
@@ -1764,7 +1765,7 @@ describe('AgentSession', () => {
   });
 
   // ── AC: diagnostic events in handleCleanExit ─────────────────────────────
-  it('records both handle_clean_exit_entered and handle_clean_exit_session_marked_done on clean exit', async () => {
+  it('records both handle_clean_exit_entered and handle_clean_exit_session_marked_idle on clean exit', async () => {
     const notion = fakeNotionClient();
     vi.mocked(getRules).mockReturnValue([]);
     vi.mocked(getEventsBySession).mockReturnValue([]);
@@ -1787,17 +1788,17 @@ describe('AgentSession', () => {
     const calls = vi.mocked(recordEvent).mock.calls;
     const eventTypes = calls.map((c) => c[0].event_type);
     expect(eventTypes).toContain('handle_clean_exit_entered');
-    expect(eventTypes).toContain('handle_clean_exit_session_marked_done');
-    // entry must come before marked-done
+    expect(eventTypes).toContain('handle_clean_exit_session_marked_idle');
+    // entry must come before marked-idle
     expect(eventTypes.indexOf('handle_clean_exit_entered')).toBeLessThan(
-      eventTypes.indexOf('handle_clean_exit_session_marked_done'),
+      eventTypes.indexOf('handle_clean_exit_session_marked_idle'),
     );
   });
 
-  it('records only handle_clean_exit_entered when pre-markSessionDone path throws', async () => {
+  it('records only handle_clean_exit_entered when pre-markSessionIdle path throws', async () => {
     const notion = fakeNotionClient();
     vi.mocked(getRules).mockReturnValue([]);
-    // Make getEventsBySession throw to simulate a pre-markSessionDone failure
+    // Make getEventsBySession throw to simulate a pre-markSessionIdle failure
     vi.mocked(getEventsBySession).mockImplementation(() => {
       throw new Error('DB read failure');
     });
@@ -1821,7 +1822,7 @@ describe('AgentSession', () => {
     const calls = vi.mocked(recordEvent).mock.calls;
     const eventTypes = calls.map((c) => c[0].event_type);
     expect(eventTypes).toContain('handle_clean_exit_entered');
-    expect(eventTypes).not.toContain('handle_clean_exit_session_marked_done');
+    expect(eventTypes).not.toContain('handle_clean_exit_session_marked_idle');
   });
 });
 
@@ -1852,10 +1853,10 @@ describe('parseNotionPageIdDashed', () => {
     ).toBe('36e22f91-52f3-8101-8dd2-f6f7c0b402e9');
   });
 
-  // ── AC: handleCleanExit resilient pre-markSessionDone ────────────────────
-  // When getEventsBySession throws, markSessionDone must still run so the
-  // session transitions to status='done' rather than remaining 'running'.
-  it('calls markSessionDone with null prUrl when getEventsBySession throws during clean exit', async () => {
+  // ── AC: handleCleanExit resilient pre-markSessionIdle ────────────────────
+  // When getEventsBySession throws, markSessionIdle must still run so the
+  // session transitions to status='idle' rather than remaining 'running'.
+  it('calls markSessionIdle with null prUrl when getEventsBySession throws during clean exit', async () => {
     const notion = fakeNotionClient();
     vi.mocked(getRules).mockReturnValue([]);
     vi.mocked(getEventsBySession).mockImplementation(() => {
@@ -1880,8 +1881,8 @@ describe('parseNotionPageIdDashed', () => {
     mockProc.proc.emit('exit', 0);
     await runPromise;
 
-    // Session must transition to done even though getEventsBySession threw
-    expect(vi.mocked(markSessionDone)).toHaveBeenCalledWith(
+    // Session must transition to idle even though getEventsBySession threw
+    expect(vi.mocked(markSessionIdle)).toHaveBeenCalledWith(
       'resilient-exit-session',
       expect.any(Number),
       null,
@@ -1889,6 +1890,6 @@ describe('parseNotionPageIdDashed', () => {
 
     const ended = messages.find((m) => m.type === 'session_ended');
     expect(ended).toBeDefined();
-    expect((ended as { status: string }).status).toBe('done');
+    expect((ended as { status: string }).status).toBe('idle');
   });
 });

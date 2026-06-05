@@ -20,6 +20,10 @@
   background: rgba(243, 139, 168, 0.15);
   color: var(--ctp-red);
 }
+.badge-idle {
+  background: rgba(180, 190, 254, 0.15);
+  color: var(--ctp-lavender);
+}
 .badge-done {
   background: rgba(166, 227, 161, 0.15);
   color: var(--ctp-green);

@@ -93,6 +93,7 @@ vi.mock('../../db/queries', () => ({
   updateSessionStatus: vi.fn(),
   updateSessionWorktreePath: vi.fn(),
   markSessionDone: vi.fn(),
+  markSessionIdle: vi.fn(),
   insertEvent: vi.fn(),
   getSession: vi.fn(),
   getSessionsByStatus: vi.fn().mockReturnValue([]),

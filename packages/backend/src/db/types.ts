@@ -4,6 +4,7 @@ export type SessionStatus =
   | 'starting'
   | 'running'
   | 'needs_permission'
+  | 'idle'
   | 'done'
   | 'error'
   | 'killed';

@@ -19,6 +19,7 @@ vi.mock('../db/queries.js', () => ({
   setPendingPush: vi.fn(),
   getSetting: vi.fn().mockReturnValue(null),
   getTestResult: vi.fn().mockReturnValue(undefined),
+  markSessionDone: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
@@ -55,6 +56,7 @@ import {
   deleteAllAutofixShasForPR,
   setHeadSha,
   getTestResult,
+  markSessionDone,
 } from '../db/queries';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
@@ -772,6 +774,39 @@ describe('PRMergeWatcher.handleMerged()', () => {
       'merged',
     );
     expect(messages.filter((m) => m.type === 'pr_merged')).toHaveLength(0);
+  });
+
+  it('calls markSessionDone for the code session on merge (idle → done)', async () => {
+    const pr = makePRRow({
+      session_id: 'sess-idle-123',
+      pr_url: 'https://github.com/owner/repo/pull/42',
+    });
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.handleMerged(pr, 'abc123');
+
+    expect(vi.mocked(markSessionDone)).toHaveBeenCalledWith(
+      'sess-idle-123',
+      expect.any(Number),
+      'https://github.com/owner/repo/pull/42',
+    );
+  });
+
+  it('does not call markSessionDone when session_id is null', async () => {
+    const pr = makePRRow({ session_id: null });
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.handleMerged(pr, 'abc123');
+
+    expect(vi.mocked(markSessionDone)).not.toHaveBeenCalled();
   });
 });
 
