@@ -2,7 +2,9 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { FirstRunWizard } from '../FirstRunWizard';
 
-function mockFetch(responses: Array<{ url?: string | RegExp; body: unknown; ok?: boolean }>) {
+function mockFetch(
+  responses: Array<{ url?: string | RegExp; body: unknown; ok?: boolean }>,
+) {
   const fn = vi.fn((input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString();
     const match = responses.find((r) => {
@@ -26,9 +28,15 @@ function makeLocalStorage() {
   const store: Record<string, string> = {};
   return {
     getItem: (k: string) => store[k] ?? null,
-    setItem: (k: string, v: string) => { store[k] = v; },
-    removeItem: (k: string) => { delete store[k]; },
-    clear: () => { Object.keys(store).forEach((k) => delete store[k]); },
+    setItem: (k: string, v: string) => {
+      store[k] = v;
+    },
+    removeItem: (k: string) => {
+      delete store[k];
+    },
+    clear: () => {
+      Object.keys(store).forEach((k) => delete store[k]);
+    },
   };
 }
 
@@ -62,7 +70,16 @@ describe('FirstRunWizard rendering', () => {
 
 describe('wizard navigation', () => {
   it('advances to env-check step on Next click', () => {
-    mockFetch([{ url: '/api/setup/env-check', body: { claudeInstalled: true, claudeAuthenticated: true, gitInstalled: true } }]);
+    mockFetch([
+      {
+        url: '/api/setup/env-check',
+        body: {
+          claudeInstalled: true,
+          claudeAuthenticated: true,
+          gitInstalled: true,
+        },
+      },
+    ]);
     render(<FirstRunWizard onComplete={vi.fn()} onSkip={vi.fn()} />);
     fireEvent.click(screen.getByText('Next →'));
     expect(screen.getByTestId('step-env-check')).toBeDefined();
@@ -76,13 +93,19 @@ describe('env-check step', () => {
     mockFetch([
       {
         url: '/api/setup/env-check',
-        body: { claudeInstalled: true, claudeAuthenticated: false, gitInstalled: true },
+        body: {
+          claudeInstalled: true,
+          claudeAuthenticated: false,
+          gitInstalled: true,
+        },
       },
     ]);
     render(<FirstRunWizard onComplete={vi.fn()} onSkip={vi.fn()} />);
     fireEvent.click(screen.getByText('Next →')); // go to env-check
 
-    await waitFor(() => expect(screen.getByTestId('env-check-results')).toBeDefined());
+    await waitFor(() =>
+      expect(screen.getByTestId('env-check-results')).toBeDefined(),
+    );
 
     const nextBtn = screen.getByTestId('env-check-next');
     expect((nextBtn as HTMLButtonElement).disabled).toBe(true);
@@ -92,7 +115,11 @@ describe('env-check step', () => {
     mockFetch([
       {
         url: '/api/setup/env-check',
-        body: { claudeInstalled: true, claudeAuthenticated: false, gitInstalled: true },
+        body: {
+          claudeInstalled: true,
+          claudeAuthenticated: false,
+          gitInstalled: true,
+        },
       },
     ]);
     render(<FirstRunWizard onComplete={vi.fn()} onSkip={vi.fn()} />);
@@ -106,13 +133,19 @@ describe('env-check step', () => {
     mockFetch([
       {
         url: '/api/setup/env-check',
-        body: { claudeInstalled: true, claudeAuthenticated: true, gitInstalled: true },
+        body: {
+          claudeInstalled: true,
+          claudeAuthenticated: true,
+          gitInstalled: true,
+        },
       },
     ]);
     render(<FirstRunWizard onComplete={vi.fn()} onSkip={vi.fn()} />);
     fireEvent.click(screen.getByText('Next →'));
 
-    await waitFor(() => expect(screen.getByTestId('env-check-results')).toBeDefined());
+    await waitFor(() =>
+      expect(screen.getByTestId('env-check-results')).toBeDefined(),
+    );
 
     const nextBtn = screen.getByTestId('env-check-next');
     expect((nextBtn as HTMLButtonElement).disabled).toBe(false);

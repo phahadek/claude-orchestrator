@@ -39,7 +39,13 @@ const EMPTY_PROJECT: ProjectFormValues = {
   baseBranch: 'dev',
 };
 
-const STEPS: Step[] = ['welcome', 'env-check', 'credentials', 'first-project', 'done'];
+const STEPS: Step[] = [
+  'welcome',
+  'env-check',
+  'credentials',
+  'first-project',
+  'done',
+];
 
 function stepIndex(s: Step): number {
   return STEPS.indexOf(s);
@@ -61,16 +67,21 @@ export function FirstRunWizard({ onComplete, onSkip }: Props) {
   // Step 3 state
   const [githubToken, setGithubToken] = useState('');
   const [notionToken, setNotionToken] = useState('');
-  const [githubValidation, setGithubValidation] = useState<ValidateResult | null>(null);
-  const [notionValidation, setNotionValidation] = useState<ValidateResult | null>(null);
+  const [githubValidation, setGithubValidation] =
+    useState<ValidateResult | null>(null);
+  const [notionValidation, setNotionValidation] =
+    useState<ValidateResult | null>(null);
   const [githubValidating, setGithubValidating] = useState(false);
   const [notionValidating, setNotionValidating] = useState(false);
   const [credSaving, setCredSaving] = useState(false);
   const [credError, setCredError] = useState<string | null>(null);
 
   // Step 4 state
-  const [projectValues, setProjectValues] = useState<ProjectFormValues>(EMPTY_PROJECT);
-  const [projectErrors, setProjectErrors] = useState<Record<string, string>>({});
+  const [projectValues, setProjectValues] =
+    useState<ProjectFormValues>(EMPTY_PROJECT);
+  const [projectErrors, setProjectErrors] = useState<Record<string, string>>(
+    {},
+  );
   const [projectSaving, setProjectSaving] = useState(false);
   const [projectError, setProjectError] = useState<string | null>(null);
 
@@ -108,7 +119,10 @@ export function FirstRunWizard({ onComplete, onSkip }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: importPath.trim() }),
       });
-      const data = (await res.json()) as { imported?: string[]; error?: string };
+      const data = (await res.json()) as {
+        imported?: string[];
+        error?: string;
+      };
       if (!res.ok) {
         setImportError(data.error ?? `Error ${res.status}`);
       } else {
@@ -180,7 +194,9 @@ export function FirstRunWizard({ onComplete, onSkip }: Props) {
       });
       setStep('first-project');
     } catch (err) {
-      setCredError(err instanceof Error ? err.message : 'Failed to save credentials');
+      setCredError(
+        err instanceof Error ? err.message : 'Failed to save credentials',
+      );
     } finally {
       setCredSaving(false);
     }
@@ -189,7 +205,8 @@ export function FirstRunWizard({ onComplete, onSkip }: Props) {
   function validateProjectForm(): boolean {
     const errs: Record<string, string> = {};
     if (!projectValues.name.trim()) errs.name = 'Name is required';
-    if (!projectValues.projectDir.trim()) errs.projectDir = 'Project Dir is required';
+    if (!projectValues.projectDir.trim())
+      errs.projectDir = 'Project Dir is required';
     if (projectValues.taskSource === 'github') {
       if (!projectValues.githubOwnerRepo.trim()) {
         errs.githubOwnerRepo = 'Repository is required (owner/repo)';
@@ -211,31 +228,43 @@ export function FirstRunWizard({ onComplete, onSkip }: Props) {
       let taskSourceConfig: string | null = null;
       if (projectValues.taskSource === 'github') {
         const [owner, repo] = projectValues.githubOwnerRepo.trim().split('/');
-        taskSourceConfig = JSON.stringify({ owner, repo, defaultMilestone: null });
+        taskSourceConfig = JSON.stringify({
+          owner,
+          repo,
+          defaultMilestone: null,
+        });
       }
       await projectsApi.create({
         name: projectValues.name.trim(),
         projectDir: projectValues.projectDir.trim(),
         contextUrl: projectValues.contextUrl.trim() || null,
-        githubRepo: projectValues.gitMode !== 'local-only'
-          ? projectValues.githubRepo.trim() || null
-          : null,
+        githubRepo:
+          projectValues.gitMode !== 'local-only'
+            ? projectValues.githubRepo.trim() || null
+            : null,
         taskSource: projectValues.taskSource,
         taskSourceConfig,
         gitMode: projectValues.gitMode,
         autoLaunchEnabled: projectValues.autoLaunchEnabled,
         autoMergeEnabled:
-          projectValues.gitMode !== 'local-only' ? projectValues.autoMergeEnabled : false,
+          projectValues.gitMode !== 'local-only'
+            ? projectValues.autoMergeEnabled
+            : false,
         baseBranch: projectValues.baseBranch || 'dev',
         ...(rawCfg
           ? {
-              nonMilestoneSourceConfig: JSON.parse(rawCfg) as Record<string, unknown>,
+              nonMilestoneSourceConfig: JSON.parse(rawCfg) as Record<
+                string,
+                unknown
+              >,
             }
           : {}),
       });
       setStep('done');
     } catch (err) {
-      setProjectError(err instanceof Error ? err.message : 'Failed to create project');
+      setProjectError(
+        err instanceof Error ? err.message : 'Failed to create project',
+      );
     } finally {
       setProjectSaving(false);
     }
@@ -288,13 +317,19 @@ export function FirstRunWizard({ onComplete, onSkip }: Props) {
             <div data-testid="step-welcome">
               <h2 className={styles.stepTitle}>Get started</h2>
               <p className={styles.stepDesc}>
-                Let's configure Claude Orchestrator in a few steps. If you have an
-                existing setup, you can import your credentials from a <code>.env</code> file.
+                Let's configure Claude Orchestrator in a few steps. If you have
+                an existing setup, you can import your credentials from a{' '}
+                <code>.env</code> file.
               </p>
 
               <div className={styles.section}>
-                <h3 className={styles.sectionTitle}>Import from .env (optional)</h3>
-                <form onSubmit={(e) => void handleImport(e)} className={styles.inlineForm}>
+                <h3 className={styles.sectionTitle}>
+                  Import from .env (optional)
+                </h3>
+                <form
+                  onSubmit={(e) => void handleImport(e)}
+                  className={styles.inlineForm}
+                >
                   <input
                     type="text"
                     className={styles.input}
@@ -342,12 +377,23 @@ export function FirstRunWizard({ onComplete, onSkip }: Props) {
                 Claude Orchestrator requires Claude CLI (authenticated) and Git.
               </p>
 
-              {envLoading && <p className={styles.muted}>Checking environment…</p>}
+              {envLoading && (
+                <p className={styles.muted}>Checking environment…</p>
+              )}
 
               {envStatus && (
-                <div className={styles.checkList} data-testid="env-check-results">
+                <div
+                  className={styles.checkList}
+                  data-testid="env-check-results"
+                >
                   <div className={styles.checkItem}>
-                    <span className={envStatus.claudeInstalled ? styles.checkOk : styles.checkFail}>
+                    <span
+                      className={
+                        envStatus.claudeInstalled
+                          ? styles.checkOk
+                          : styles.checkFail
+                      }
+                    >
                       {envStatus.claudeInstalled ? '✓' : '✗'}
                     </span>
                     <span>Claude CLI installed</span>
@@ -355,30 +401,43 @@ export function FirstRunWizard({ onComplete, onSkip }: Props) {
                   <div className={styles.checkItem}>
                     <span
                       className={
-                        envStatus.claudeAuthenticated ? styles.checkOk : styles.checkFail
+                        envStatus.claudeAuthenticated
+                          ? styles.checkOk
+                          : styles.checkFail
                       }
                     >
                       {envStatus.claudeAuthenticated ? '✓' : '✗'}
                     </span>
                     <span>Claude authenticated</span>
                     {!envStatus.claudeAuthenticated && (
-                      <div className={styles.authGuide} data-testid="auth-guide">
+                      <div
+                        className={styles.authGuide}
+                        data-testid="auth-guide"
+                      >
                         <p>
-                          Run <code className={styles.code}>claude login</code> in your
-                          terminal, then click <strong>Re-check</strong>.
+                          Run <code className={styles.code}>claude login</code>{' '}
+                          in your terminal, then click <strong>Re-check</strong>
+                          .
                         </p>
                       </div>
                     )}
                   </div>
                   <div className={styles.checkItem}>
-                    <span className={envStatus.gitInstalled ? styles.checkOk : styles.checkFail}>
+                    <span
+                      className={
+                        envStatus.gitInstalled
+                          ? styles.checkOk
+                          : styles.checkFail
+                      }
+                    >
                       {envStatus.gitInstalled ? '✓' : '✗'}
                     </span>
                     <span>Git installed</span>
                     {!envStatus.gitInstalled && (
                       <p className={styles.hint}>
                         Install Git from{' '}
-                        <span className={styles.code}>git-scm.com</span> and restart.
+                        <span className={styles.code}>git-scm.com</span> and
+                        restart.
                       </p>
                     )}
                   </div>
@@ -421,8 +480,8 @@ export function FirstRunWizard({ onComplete, onSkip }: Props) {
             <div data-testid="step-credentials">
               <h2 className={styles.stepTitle}>Global credentials</h2>
               <p className={styles.stepDesc}>
-                Enter your GitHub Personal Access Token. A Notion integration token is
-                required only if you use Notion as your task source.
+                Enter your GitHub Personal Access Token. A Notion integration
+                token is required only if you use Notion as your task source.
               </p>
 
               <div className={styles.credField}>
@@ -462,7 +521,9 @@ export function FirstRunWizard({ onComplete, onSkip }: Props) {
                 {githubValidation && (
                   <p
                     className={
-                      githubValidation.valid ? styles.successText : styles.errorText
+                      githubValidation.valid
+                        ? styles.successText
+                        : styles.errorText
                     }
                     data-testid="github-validation-result"
                   >
@@ -509,7 +570,9 @@ export function FirstRunWizard({ onComplete, onSkip }: Props) {
                 {notionValidation && (
                   <p
                     className={
-                      notionValidation.valid ? styles.successText : styles.errorText
+                      notionValidation.valid
+                        ? styles.successText
+                        : styles.errorText
                     }
                     data-testid="notion-validation-result"
                   >
@@ -574,12 +637,17 @@ export function FirstRunWizard({ onComplete, onSkip }: Props) {
                     className={styles.input}
                     value={projectValues.projectDir}
                     onChange={(e) =>
-                      setProjectValues((v) => ({ ...v, projectDir: e.target.value }))
+                      setProjectValues((v) => ({
+                        ...v,
+                        projectDir: e.target.value,
+                      }))
                     }
                     placeholder="/absolute/path/to/repo"
                   />
                   {projectErrors.projectDir && (
-                    <p className={styles.fieldError}>{projectErrors.projectDir}</p>
+                    <p className={styles.fieldError}>
+                      {projectErrors.projectDir}
+                    </p>
                   )}
                 </div>
 
@@ -590,7 +658,10 @@ export function FirstRunWizard({ onComplete, onSkip }: Props) {
                     className={styles.input}
                     value={projectValues.baseBranch}
                     onChange={(e) =>
-                      setProjectValues((v) => ({ ...v, baseBranch: e.target.value }))
+                      setProjectValues((v) => ({
+                        ...v,
+                        baseBranch: e.target.value,
+                      }))
                     }
                     placeholder="main"
                   />
@@ -602,19 +673,26 @@ export function FirstRunWizard({ onComplete, onSkip }: Props) {
                     className={styles.input}
                     value={projectValues.taskSource}
                     onChange={(e) => {
-                      const val = e.target.value as 'notion' | 'yaml' | 'github';
+                      const val = e.target.value as
+                        | 'notion'
+                        | 'yaml'
+                        | 'github';
                       setProjectValues((v) => ({ ...v, taskSource: val }));
                     }}
                   >
                     <option value="notion">Notion</option>
-                    <option value="yaml">YAML (tasks.yaml in projectDir)</option>
+                    <option value="yaml">
+                      YAML (tasks.yaml in projectDir)
+                    </option>
                     <option value="github">GitHub Issues</option>
                   </select>
                 </div>
 
                 {projectValues.taskSource === 'github' && (
                   <div className={styles.formField}>
-                    <label className={styles.label}>Repository (owner/repo)</label>
+                    <label className={styles.label}>
+                      Repository (owner/repo)
+                    </label>
                     <input
                       type="text"
                       className={styles.input}
@@ -628,7 +706,9 @@ export function FirstRunWizard({ onComplete, onSkip }: Props) {
                       placeholder="owner/repo"
                     />
                     {projectErrors.githubOwnerRepo && (
-                      <p className={styles.fieldError}>{projectErrors.githubOwnerRepo}</p>
+                      <p className={styles.fieldError}>
+                        {projectErrors.githubOwnerRepo}
+                      </p>
                     )}
                   </div>
                 )}
@@ -645,14 +725,20 @@ export function FirstRunWizard({ onComplete, onSkip }: Props) {
                       }))
                     }
                   >
-                    <option value="github">GitHub (default) — PR-based workflow</option>
-                    <option value="local-only">Local only — no GitHub remote</option>
+                    <option value="github">
+                      GitHub (default) — PR-based workflow
+                    </option>
+                    <option value="local-only">
+                      Local only — no GitHub remote
+                    </option>
                   </select>
                 </div>
 
                 {projectValues.gitMode !== 'local-only' && (
                   <div className={styles.formField}>
-                    <label className={styles.label}>GitHub Repo (optional)</label>
+                    <label className={styles.label}>
+                      GitHub Repo (optional)
+                    </label>
                     <input
                       type="text"
                       className={styles.input}
@@ -668,7 +754,9 @@ export function FirstRunWizard({ onComplete, onSkip }: Props) {
                   </div>
                 )}
 
-                {projectError && <p className={styles.errorText}>{projectError}</p>}
+                {projectError && (
+                  <p className={styles.errorText}>{projectError}</p>
+                )}
 
                 <div className={styles.stepActions}>
                   <button
@@ -721,7 +809,7 @@ export function FirstRunWizard({ onComplete, onSkip }: Props) {
               onClick={() => void handleSkip()}
               data-testid="skip-to-settings"
             >
-              {skipping ? 'Saving…' : 'Skip, I\'ll configure in Settings'}
+              {skipping ? 'Saving…' : "Skip, I'll configure in Settings"}
             </button>
           </div>
         )}
