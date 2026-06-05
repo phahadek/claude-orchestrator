@@ -1593,6 +1593,19 @@ export class SessionManager extends EventEmitter {
       return sessionId;
     }
 
+    // Refuse to respawn sessions that reached a terminal state — done/error/killed
+    // sessions are intentionally finished and must not be revived by stale feedback.
+    if (
+      row.status === 'done' ||
+      row.status === 'error' ||
+      row.status === 'killed'
+    ) {
+      console.warn(
+        `[SessionManager] sendOrResume: refusing to respawn terminal session ${sessionId} (status=${row.status})`,
+      );
+      return sessionId;
+    }
+
     const project = getProjectById(row.project_id ?? '');
     if (!project) {
       console.error(
