@@ -46,6 +46,7 @@ import { deleteGhostSessions, getPRBySessionId } from './db/queries';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
 import { runPRBootSweep } from './github/PRBootSweep';
+import setupRouter from './routes/setup';
 
 runMigrations(db);
 loadRuntimeSettingsFromDb();
@@ -99,6 +100,8 @@ const app = express();
 app.use(express.json());
 // Enrollment endpoints are public — mount before the device auth middleware
 app.use('/api/enrollment', createEnrollmentRouter());
+// Setup endpoints are public — wizard UI uses them before credentials exist
+app.use('/api', setupRouter);
 app.use(requireDeviceAuth);
 app.use('/api/permission-events', permissionEventsRouter);
 app.use('/api/permission-denials', permissionDenialsRouter);
