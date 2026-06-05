@@ -4,16 +4,11 @@ import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
 import type { DisplayStatus } from '@claude-orchestrator/backend/src/tasks/TaskStatusEngine';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import type { SessionState } from '../hooks/useSessionStore';
-import { StatusBadge } from './StatusBadge';
-import { EventTranscript } from './EventTranscript';
-import { DiffViewer } from './DiffViewer';
-import { SessionDetail } from './SessionDetail';
-import { parseReviewResultFromEvents } from './ReviewDetailView';
+import { SessionPanel } from './SessionPanel';
 import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
 import { sessionsApi } from '../api/projects';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
-import { Composer } from './Composer';
 import styles from './TaskDetail.module.css';
 
 // ── Display status helpers ─────────────────────────────────────────
@@ -89,10 +84,6 @@ interface Props {
   isLocalOnly?: boolean;
   /** When true, hides the "Mark Merged" button — AutoMerger handles merging. */
   autoMergeEnabled?: boolean;
-  /** Whether the mobile session overlay is open (controlled by App). */
-  sessionOverlayOpen?: boolean;
-  /** Called when the user wants to open the mobile session overlay. */
-  onOpenSessionOverlay?: () => void;
   setSessionArchived?: (sessionId: string, archived: boolean) => void;
   setSessionFavorited?: (sessionId: string, favorited: boolean) => void;
 }
@@ -109,8 +100,6 @@ export function TaskDetail({
   project = null,
   isLocalOnly = false,
   autoMergeEnabled = false,
-  sessionOverlayOpen = false,
-  onOpenSessionOverlay,
   setSessionArchived = () => {},
   setSessionFavorited = () => {},
 }: Props) {
@@ -119,7 +108,6 @@ export function TaskDetail({
   const [mobileOpenSection, setMobileOpenSection] = useState<
     'review' | 'pr' | null
   >('review');
-  const [showReviewDimensions, setShowReviewDimensions] = useState(false);
   const [reviewInFlight, setReviewInFlight] = useState(false);
   const [mergeInFlight, setMergeInFlight] = useState(false);
   const [markMergedInFlight, setMarkMergedInFlight] = useState(false);
@@ -127,20 +115,17 @@ export function TaskDetail({
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [optimisticDisplayStatus, setOptimisticDisplayStatus] =
     useState<DisplayStatus | null>(null);
-  const [activeTab, setActiveTab] = useState<'overview' | 'diff'>('overview');
 
   // Reset state when task changes
   useEffect(() => {
     setShowReviewSection(true);
     setMobileOpenSection('review');
-    setShowReviewDimensions(false);
     setReviewError(null);
     setFixConflictsInFlight(false);
     setOptimisticDisplayStatus(null);
-    setActiveTab('overview');
   }, [task.taskId]);
 
-  // Look up live session state for event transcripts
+  // Look up live session state
   const codeSession = task.codeSession
     ? (sessions.find((s) => s.sessionId === task.codeSession!.sessionId) ??
       null)
@@ -148,17 +133,6 @@ export function TaskDetail({
   const reviewSession = task.review
     ? (sessions.find((s) => s.sessionId === task.review!.sessionId) ?? null)
     : null;
-
-  const liveStatus = codeSession?.status ?? task.codeSession?.status;
-  const isCodeActive =
-    liveStatus === 'running' || liveStatus === 'needs_permission';
-
-  function handleKill() {
-    if (!task.codeSession || !isCodeActive) return;
-    if (confirm('Kill this session? It will have 15 seconds to wrap up.')) {
-      send({ type: 'kill', sessionId: task.codeSession.sessionId });
-    }
-  }
 
   const effectiveDisplayStatus = optimisticDisplayStatus ?? task.displayStatus;
   const displayStatusLabel =
@@ -290,29 +264,6 @@ export function TaskDetail({
 
   return (
     <div className={styles.panel}>
-      {/* ── Mobile session overlay ── */}
-      {isMobile && sessionOverlayOpen && codeSession && (
-        <>
-          <div
-            className={styles.sessionOverlayBackdrop}
-            onClick={() => window.history.back()}
-            aria-hidden="true"
-            data-testid="session-overlay-backdrop"
-          />
-          <div className={styles.sessionOverlay} data-testid="session-overlay">
-            <SessionDetail
-              session={codeSession}
-              send={send}
-              onClose={() => window.history.back()}
-              setSessionArchived={setSessionArchived}
-              setSessionFavorited={setSessionFavorited}
-              onDeleted={() => window.history.back()}
-              project={project}
-            />
-          </div>
-        </>
-      )}
-
       {/* ── Header ── */}
       <div className={styles.header}>
         <div className={styles.headerTop}>
@@ -356,367 +307,255 @@ export function TaskDetail({
       </div>
 
       <div className={styles.body}>
-        {/* ── Tab bar — only shown when task has a PR ── */}
-        {task.pr && (
-          <div className={styles.tabBar}>
-            <button
-              className={`${styles.tabButton} ${activeTab === 'overview' ? styles['tabButton--active'] : ''}`}
-              onClick={() => setActiveTab('overview')}
-            >
-              Overview
-            </button>
-            <button
-              className={`${styles.tabButton} ${activeTab === 'diff' ? styles['tabButton--active'] : ''}`}
-              onClick={() => setActiveTab('diff')}
-            >
-              Diff
-            </button>
+        {/* ── Code SessionPanel ── */}
+        {task.codeSession && (
+          <div className={styles.codeSection}>
+            {codeSession ? (
+              <SessionPanel
+                session={codeSession}
+                send={send}
+                setSessionArchived={setSessionArchived}
+                setSessionFavorited={setSessionFavorited}
+                project={project}
+              />
+            ) : (
+              <p className={styles.noTranscript}>
+                Transcript not available — session not loaded.
+              </p>
+            )}
           </div>
         )}
 
-        {/* ── Overview tab (or full content when no PR) ── */}
-        {(!task.pr || activeTab === 'overview') && (
-          <>
-            {/* ── Code Session — full transcript on desktop, compact summary on mobile ── */}
-            {task.codeSession && (
-              <div className={styles.codeSection}>
-                <div className={styles.sectionHeader}>
-                  <span className={styles.sectionTitle}>Code Session</span>
-                  <StatusBadge status={task.codeSession.status} />
-                  {isCodeActive && (
-                    <button className={styles.killButton} onClick={handleKill}>
-                      Kill
-                    </button>
-                  )}
-                </div>
-                {isMobile ? (
-                  <div className={styles.sessionSummary}>
-                    {task.codeSession.lastMessage && (
-                      <p className={styles.sessionSummaryMessage}>
-                        {task.codeSession.lastMessage}
-                      </p>
-                    )}
-                    {task.codeSession.inputTokens +
-                      task.codeSession.outputTokens >
-                      0 && (
-                      <span className={styles.sessionSummaryTokens}>
-                        {formatTokenCount(
-                          task.codeSession.inputTokens +
-                            task.codeSession.outputTokens,
-                        )}{' '}
-                        tokens
-                      </span>
-                    )}
-                    <button
-                      className={styles.viewSessionButton}
-                      onClick={onOpenSessionOverlay}
-                    >
-                      View full session
-                    </button>
-                    {isCodeActive && (
-                      <Composer
-                        sessionId={task.codeSession.sessionId}
-                        send={send}
-                      />
-                    )}
-                  </div>
-                ) : (
-                  <>
-                    <div className={styles.transcriptArea}>
-                      {codeSession ? (
-                        <EventTranscript
-                          events={codeSession.events}
-                          permissionDenials={codeSession.permissionDenials}
-                        />
-                      ) : (
-                        <p className={styles.noTranscript}>
-                          Transcript not available — session not loaded.
-                        </p>
-                      )}
-                    </div>
-                    {isCodeActive && (
-                      <Composer
-                        sessionId={task.codeSession.sessionId}
-                        send={send}
-                      />
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-
-            {/* ── Review session — collapsible transcript ── */}
-            {task.review && (
-              <div className={styles.reviewSection}>
-                <div
-                  className={styles.reviewSectionHeader}
-                  onClick={handleReviewToggle}
-                  role="button"
-                  aria-expanded={isReviewExpanded}
-                >
-                  <span className={styles.reviewToggleIcon} aria-hidden="true">
-                    {isReviewExpanded ? '▼' : '▶'}
-                  </span>
-                  <span className={styles.sectionTitle}>Review</span>
-                  {task.review.iterationCount > 0 && (
-                    <span className={styles.iterationCount}>
-                      #{task.review.iterationCount}
-                    </span>
-                  )}
-                  {task.review.inputTokens + task.review.outputTokens > 0 && (
-                    <span className={styles.reviewTokenCount}>
-                      {formatTokenCount(
-                        task.review.inputTokens + task.review.outputTokens,
-                      )}{' '}
-                      tokens
-                    </span>
-                  )}
-                  {task.review.verdict ? (
-                    <span
-                      className={`${styles.verdictPill} ${styles[VERDICT_CSS_KEYS[task.review.verdict] ?? 'verdict--error']}`}
-                    >
-                      {VERDICT_LABELS[task.review.verdict] ??
-                        task.review.verdict}
-                    </span>
-                  ) : task.review.status === 'running' ||
-                    task.review.status === 'starting' ? (
-                    <span
-                      className={`${styles.verdictPill} ${styles['verdict--pending']}`}
-                    >
-                      In progress…
-                    </span>
-                  ) : null}
-                </div>
-
-                {isReviewExpanded && (
-                  <div className={styles.reviewBody}>
-                    {reviewSession ? (
-                      <>
-                        <div className={styles.reviewTranscriptArea}>
-                          <EventTranscript events={reviewSession.events} />
-                        </div>
-                        <button
-                          className={styles.toggleButton}
-                          onClick={() => setShowReviewDimensions((v) => !v)}
-                          aria-expanded={showReviewDimensions}
-                        >
-                          {showReviewDimensions
-                            ? '▼ Hide dimensions'
-                            : '▶ Show dimensions'}
-                        </button>
-                        {showReviewDimensions && (
-                          <ReviewDimensions session={reviewSession} />
-                        )}
-                      </>
-                    ) : (
-                      <p className={styles.noTranscript}>
-                        Review transcript not available.
-                      </p>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* ── Mark Merged — local-only projects, no PR, manual merge only ── */}
-            {isLocalOnly &&
-              !task.pr &&
-              !autoMergeEnabled &&
-              (task.codeSession || task.review) && (
-                <div className={styles.prSection}>
-                  <div className={styles.sectionHeader}>
-                    <span className={styles.sectionTitle}>Mark as Done</span>
-                  </div>
-                  {reviewError && (
-                    <div className={styles.errorBanner}>{reviewError}</div>
-                  )}
-                  <div className={styles.prActions}>
-                    <button
-                      className={styles.mergeButton}
-                      disabled={
-                        markMergedInFlight ||
-                        effectiveDisplayStatus === 'done' ||
-                        !(
-                          task.review?.verdict === 'approved' ||
-                          task.codeSession?.status === 'done'
-                        )
-                      }
-                      onClick={() => void handleMarkMerged()}
-                      title={
-                        task.review?.verdict !== 'approved' &&
-                        task.codeSession?.status !== 'done'
-                          ? 'Available after code session completes or review approves'
-                          : undefined
-                      }
-                    >
-                      {markMergedInFlight ? 'Marking…' : 'Mark Merged ↓'}
-                    </button>
-                  </div>
-                </div>
+        {/* ── Review SessionPanel — collapsible ── */}
+        {task.review && (
+          <div className={styles.reviewSection}>
+            <div
+              className={styles.reviewSectionHeader}
+              onClick={handleReviewToggle}
+              role="button"
+              aria-expanded={isReviewExpanded}
+            >
+              <span className={styles.reviewToggleIcon} aria-hidden="true">
+                {isReviewExpanded ? '▼' : '▶'}
+              </span>
+              <span className={styles.sectionTitle}>Review</span>
+              {task.review.iterationCount > 0 && (
+                <span className={styles.iterationCount}>
+                  #{task.review.iterationCount}
+                </span>
               )}
+              {task.review.inputTokens + task.review.outputTokens > 0 && (
+                <span className={styles.reviewTokenCount}>
+                  {formatTokenCount(
+                    task.review.inputTokens + task.review.outputTokens,
+                  )}{' '}
+                  tokens
+                </span>
+              )}
+              {task.review.verdict ? (
+                <span
+                  className={`${styles.verdictPill} ${styles[VERDICT_CSS_KEYS[task.review.verdict] ?? 'verdict--error']}`}
+                >
+                  {VERDICT_LABELS[task.review.verdict] ??
+                    task.review.verdict}
+                </span>
+              ) : task.review.status === 'running' ||
+                task.review.status === 'starting' ? (
+                <span
+                  className={`${styles.verdictPill} ${styles['verdict--pending']}`}
+                >
+                  In progress…
+                </span>
+              ) : null}
+            </div>
 
-            {/* ── Pull Request — compact metadata + action buttons ── */}
-            {task.pr && (
-              <div className={styles.prSection}>
-                {mobileAccordionActive ? (
-                  <div
-                    className={styles.prSectionHeaderMobile}
-                    onClick={handlePrToggle}
-                    role="button"
-                    aria-expanded={isPrExpanded}
-                  >
-                    <span
-                      className={styles.reviewToggleIcon}
-                      aria-hidden="true"
-                    >
-                      {isPrExpanded ? '▼' : '▶'}
-                    </span>
-                    <span className={styles.sectionTitle}>Pull Request</span>
-                  </div>
+            {isReviewExpanded && (
+              <div className={styles.reviewBody}>
+                {reviewSession ? (
+                  <SessionPanel
+                    session={reviewSession}
+                    send={send}
+                    setSessionArchived={setSessionArchived}
+                    setSessionFavorited={setSessionFavorited}
+                    project={project}
+                  />
                 ) : (
-                  <div className={styles.sectionHeader}>
-                    <span className={styles.sectionTitle}>Pull Request</span>
-                  </div>
-                )}
-
-                {isPrExpanded && (
-                  <>
-                    {/* Line 1: PR number + title (truncated) + state badge */}
-                    <div className={styles.prTitleRow}>
-                      <div className={styles.prTitleLeft}>
-                        <span className={styles.prNumber}>
-                          #{task.pr.prNumber}
-                        </span>
-                        <span className={styles.prTitleText}>
-                          {task.pr.title}
-                        </span>
-                      </div>
-                      <span
-                        className={`${styles.prStateBadge} ${styles[`prState--${task.pr.state}${task.pr.draft ? '-draft' : ''}`]}`}
-                      >
-                        {prStateLabel(task.pr.state, task.pr.draft)}
-                      </span>
-                    </div>
-
-                    {/* Line 2: branch info + GitHub link */}
-                    <div className={styles.prBranchRow}>
-                      <span className={styles.prBranch}>
-                        {task.pr.headBranch} → {task.pr.baseBranch}
-                      </span>
-                      <a
-                        href={task.pr.prUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className={styles.githubLink}
-                      >
-                        GitHub ↗
-                      </a>
-                    </div>
-
-                    {reviewError && (
-                      <div className={styles.errorBanner}>{reviewError}</div>
-                    )}
-
-                    {task.pr.mergeState === 'dirty' && (
-                      <div className={styles.conflictBanner}>
-                        ⚠ Merge conflicts detected — use Fix Conflicts to have
-                        the code session rebase and resolve them.
-                      </div>
-                    )}
-
-                    {/* Line 3 (conditional): action buttons only when PR is open */}
-                    {task.pr.state === 'open' && (
-                      <div className={styles.prActions}>
-                        {task.pr.mergeState !== 'dirty' && (
-                          <button
-                            className={styles.reviewButton}
-                            disabled={reviewInFlight || !projectId}
-                            onClick={() => void handleRunReview()}
-                            title={
-                              !projectId ? 'Project ID unavailable' : undefined
-                            }
-                          >
-                            {reviewInFlight ? 'Reviewing…' : 'Run Review'}
-                          </button>
-                        )}
-                        {task.pr.mergeState === 'dirty' && (
-                          <button
-                            className={styles.reReviewButton}
-                            disabled={fixConflictsInFlight}
-                            onClick={() => void handleFixConflicts()}
-                            title="Send rebase instructions to the code session to resolve merge conflicts"
-                          >
-                            {fixConflictsInFlight
-                              ? 'Fixing…'
-                              : '↺ Fix Conflicts'}
-                          </button>
-                        )}
-                        {task.review?.verdict === 'approved' &&
-                          task.pr.mergeState !== 'dirty' && (
-                            <button
-                              className={styles.mergeButton}
-                              disabled={mergeInFlight}
-                              onClick={() => void handleMerge()}
-                            >
-                              {mergeInFlight ? 'Merging…' : 'Merge ↓'}
-                            </button>
-                          )}
-                        {task.review?.verdict === 'approved' &&
-                          task.pr.mergeState === 'dirty' && (
-                            <button
-                              className={styles.mergeButton}
-                              disabled={true}
-                              title="Cannot merge — PR has merge conflicts"
-                            >
-                              Merge ↓
-                            </button>
-                          )}
-                      </div>
-                    )}
-                  </>
+                  <p className={styles.noTranscript}>
+                    Review transcript not available.
+                  </p>
                 )}
               </div>
             )}
-
-            {/* Empty state */}
-            {!task.codeSession && !task.pr && !task.review && (
-              <div className={styles.emptyState}>
-                <p>No active sessions or PRs for this task.</p>
-              </div>
-            )}
-          </>
+          </div>
         )}
 
-        {/* ── Diff tab ── */}
-        {task.pr && activeTab === 'diff' && (
-          <DiffViewer prNumber={task.pr.prNumber} projectId={projectId} />
+        {/* ── Mark Merged — local-only projects, no PR, manual merge only ── */}
+        {isLocalOnly &&
+          !task.pr &&
+          !autoMergeEnabled &&
+          (task.codeSession || task.review) && (
+            <div className={styles.prSection}>
+              <div className={styles.sectionHeader}>
+                <span className={styles.sectionTitle}>Mark as Done</span>
+              </div>
+              {reviewError && (
+                <div className={styles.errorBanner}>{reviewError}</div>
+              )}
+              <div className={styles.prActions}>
+                <button
+                  className={styles.mergeButton}
+                  disabled={
+                    markMergedInFlight ||
+                    effectiveDisplayStatus === 'done' ||
+                    !(
+                      task.review?.verdict === 'approved' ||
+                      task.codeSession?.status === 'done'
+                    )
+                  }
+                  onClick={() => void handleMarkMerged()}
+                  title={
+                    task.review?.verdict !== 'approved' &&
+                    task.codeSession?.status !== 'done'
+                      ? 'Available after code session completes or review approves'
+                      : undefined
+                  }
+                >
+                  {markMergedInFlight ? 'Marking…' : 'Mark Merged ↓'}
+                </button>
+              </div>
+            </div>
+          )}
+
+        {/* ── Pull Request — compact metadata + action buttons ── */}
+        {task.pr && (
+          <div className={styles.prSection}>
+            {mobileAccordionActive ? (
+              <div
+                className={styles.prSectionHeaderMobile}
+                onClick={handlePrToggle}
+                role="button"
+                aria-expanded={isPrExpanded}
+              >
+                <span
+                  className={styles.reviewToggleIcon}
+                  aria-hidden="true"
+                >
+                  {isPrExpanded ? '▼' : '▶'}
+                </span>
+                <span className={styles.sectionTitle}>Pull Request</span>
+              </div>
+            ) : (
+              <div className={styles.sectionHeader}>
+                <span className={styles.sectionTitle}>Pull Request</span>
+              </div>
+            )}
+
+            {isPrExpanded && (
+              <>
+                {/* Line 1: PR number + title (truncated) + state badge */}
+                <div className={styles.prTitleRow}>
+                  <div className={styles.prTitleLeft}>
+                    <span className={styles.prNumber}>
+                      #{task.pr.prNumber}
+                    </span>
+                    <span className={styles.prTitleText}>
+                      {task.pr.title}
+                    </span>
+                  </div>
+                  <span
+                    className={`${styles.prStateBadge} ${styles[`prState--${task.pr.state}${task.pr.draft ? '-draft' : ''}`]}`}
+                  >
+                    {prStateLabel(task.pr.state, task.pr.draft)}
+                  </span>
+                </div>
+
+                {/* Line 2: branch info + GitHub link */}
+                <div className={styles.prBranchRow}>
+                  <span className={styles.prBranch}>
+                    {task.pr.headBranch} → {task.pr.baseBranch}
+                  </span>
+                  <a
+                    href={task.pr.prUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={styles.githubLink}
+                  >
+                    GitHub ↗
+                  </a>
+                </div>
+
+                {reviewError && (
+                  <div className={styles.errorBanner}>{reviewError}</div>
+                )}
+
+                {task.pr.mergeState === 'dirty' && (
+                  <div className={styles.conflictBanner}>
+                    ⚠ Merge conflicts detected — use Fix Conflicts to have
+                    the code session rebase and resolve them.
+                  </div>
+                )}
+
+                {/* Line 3 (conditional): action buttons only when PR is open */}
+                {task.pr.state === 'open' && (
+                  <div className={styles.prActions}>
+                    {task.pr.mergeState !== 'dirty' && (
+                      <button
+                        className={styles.reviewButton}
+                        disabled={reviewInFlight || !projectId}
+                        onClick={() => void handleRunReview()}
+                        title={
+                          !projectId ? 'Project ID unavailable' : undefined
+                        }
+                      >
+                        {reviewInFlight ? 'Reviewing…' : 'Run Review'}
+                      </button>
+                    )}
+                    {task.pr.mergeState === 'dirty' && (
+                      <button
+                        className={styles.reReviewButton}
+                        disabled={fixConflictsInFlight}
+                        onClick={() => void handleFixConflicts()}
+                        title="Send rebase instructions to the code session to resolve merge conflicts"
+                      >
+                        {fixConflictsInFlight
+                          ? 'Fixing…'
+                          : '↺ Fix Conflicts'}
+                      </button>
+                    )}
+                    {task.review?.verdict === 'approved' &&
+                      task.pr.mergeState !== 'dirty' && (
+                        <button
+                          className={styles.mergeButton}
+                          disabled={mergeInFlight}
+                          onClick={() => void handleMerge()}
+                        >
+                          {mergeInFlight ? 'Merging…' : 'Merge ↓'}
+                        </button>
+                      )}
+                    {task.review?.verdict === 'approved' &&
+                      task.pr.mergeState === 'dirty' && (
+                        <button
+                          className={styles.mergeButton}
+                          disabled={true}
+                          title="Cannot merge — PR has merge conflicts"
+                        >
+                          Merge ↓
+                        </button>
+                      )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Empty state */}
+        {!task.codeSession && !task.pr && !task.review && (
+          <div className={styles.emptyState}>
+            <p>No active sessions or PRs for this task.</p>
+          </div>
         )}
       </div>
-    </div>
-  );
-}
-
-// ── ReviewDimensions ──────────────────────────────────────────────
-
-function ReviewDimensions({ session }: { session: SessionState }) {
-  const result = parseReviewResultFromEvents(session.events);
-  if (!result || result.dimensions.length === 0) return null;
-
-  return (
-    <div className={styles.dimensions}>
-      {result.dimensions.map((dim, i) => (
-        <div key={i} className={styles.dimension}>
-          <span
-            className={`${styles.dimIcon} ${dim.passed ? styles['dimIcon--pass'] : styles['dimIcon--fail']}`}
-          >
-            {dim.passed ? '✓' : '✕'}
-          </span>
-          <div className={styles.dimContent}>
-            <span className={styles.dimName}>{dim.name}</span>
-            {dim.notes && <span className={styles.dimNotes}>{dim.notes}</span>}
-          </div>
-        </div>
-      ))}
     </div>
   );
 }
