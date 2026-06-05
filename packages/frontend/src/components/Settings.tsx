@@ -470,7 +470,7 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
 
                 <h3 className={styles.sectionTitle}>Auto-archive</h3>
                 <p className={styles.hint}>
-                  Concluded sessions (done/error/killed) are automatically
+                  Concluded sessions (done/error/killed/idle) are automatically
                   archived after the grace period expires.
                 </p>
                 <div className={styles.field}>

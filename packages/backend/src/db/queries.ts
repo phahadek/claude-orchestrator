@@ -461,22 +461,23 @@ export function unfavoriteSession(sessionId: string): boolean {
 export function archiveFinishedSessions(): number {
   const result = db
     .prepare(
-      `UPDATE sessions SET archived = 1 WHERE status IN ('done', 'error', 'killed')`,
+      `UPDATE sessions SET archived = 1 WHERE status IN ('done', 'error', 'killed', 'idle')`,
     )
     .run();
   return result.changes;
 }
 
 /**
- * Archive concluded sessions (status IN ('done','error','killed'), archived=0)
+ * Archive concluded sessions (status IN ('done','error','killed','idle'), archived=0)
  * whose ended_at is older than the given cutoff timestamp (ms).
+ * Archival is orthogonal to lifecycle: idle sessions are equally eligible.
  * Returns the session_ids of archived sessions.
  */
 export function archiveConcludedSessionsOlderThan(cutoffMs: number): string[] {
   const rows = db
     .prepare(
       `SELECT session_id FROM sessions
-       WHERE status IN ('done', 'error', 'killed')
+       WHERE status IN ('done', 'error', 'killed', 'idle')
          AND archived = 0
          AND ended_at IS NOT NULL
          AND ended_at < @cutoff`,

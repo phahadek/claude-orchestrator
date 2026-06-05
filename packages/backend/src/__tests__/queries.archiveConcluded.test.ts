@@ -91,6 +91,38 @@ describe('archiveConcludedSessionsOlderThan', () => {
     expect(ids).toHaveLength(0);
   });
 
+  it('archives idle sessions older than cutoff (archival is orthogonal to lifecycle)', () => {
+    insertSession({
+      session_id: 'old-idle',
+      status: 'idle',
+      ended_at: CUTOFF - 1,
+    });
+
+    const ids = archiveConcludedSessionsOlderThan(CUTOFF);
+    expect(ids).toEqual(['old-idle']);
+
+    const row = db
+      .prepare(`SELECT archived FROM sessions WHERE session_id = 'old-idle'`)
+      .get() as { archived: number };
+    expect(row.archived).toBe(1);
+  });
+
+  it('does not archive idle sessions within the grace period', () => {
+    insertSession({
+      session_id: 'fresh-idle',
+      status: 'idle',
+      ended_at: CUTOFF,
+    });
+
+    const ids = archiveConcludedSessionsOlderThan(CUTOFF);
+    expect(ids).toHaveLength(0);
+
+    const row = db
+      .prepare(`SELECT archived FROM sessions WHERE session_id = 'fresh-idle'`)
+      .get() as { archived: number };
+    expect(row.archived).toBe(0);
+  });
+
   it('does not touch active (running) sessions', () => {
     insertSession({ session_id: 'running', status: 'running', ended_at: null });
 

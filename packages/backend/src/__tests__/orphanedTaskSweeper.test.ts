@@ -95,6 +95,7 @@ function makeSession(
   startedAtOffsetMs: number,
   endedAt?: number,
   worktreePath?: string | null,
+  archived = 0,
 ) {
   const started_at = Date.now() - startedAtOffsetMs;
   return {
@@ -106,6 +107,7 @@ function makeSession(
     ended_at: endedAt ?? null,
     session_type: 'standard',
     worktree_path: worktreePath !== undefined ? worktreePath : '/fake/worktree',
+    archived,
   };
 }
 
@@ -596,6 +598,36 @@ describe('OrphanedTaskSweeper', () => {
         payload: expect.objectContaining({ reason: 'worktree_missing' }),
       }),
     );
+  });
+
+  it('reverts task to Ready for idle+archived=1 session (not nudged)', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 10 * 60 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession(
+        'idle',
+        30 * 60 * 1000,
+        endedAt,
+        '/fake/worktree',
+        1,
+      ) as ReturnType<typeof getLatestCodeSessionByNotionTaskId>,
+    );
+    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      sendOrResume,
+    });
+
+    await sweeper.sweepOnce();
+
+    // Archived idle session must NOT be nudged
+    expect(sendOrResume).not.toHaveBeenCalled();
+    // Treat as a genuine orphan — revert to Ready
+    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
   });
 
   it('skips (open PR) is still respected for idle sessions', async () => {
