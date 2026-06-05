@@ -257,7 +257,8 @@ const stuckSessionMonitor = new StuckSessionMonitor(
 // at In Progress with no live session and reverts them to Ready.
 // sendOrResume is wired so idle sessions without a PR are nudged rather than reverted.
 const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast, {
-  sendOrResume: (sessionId, text) => sessionManager.sendOrResume(sessionId, text),
+  sendOrResume: (sessionId, text) =>
+    sessionManager.sendOrResume(sessionId, text),
 });
 
 // Concluded-session archiver: periodically archives sessions that have been
