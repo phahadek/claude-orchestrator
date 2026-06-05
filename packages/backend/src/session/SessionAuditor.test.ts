@@ -179,8 +179,8 @@ describe('SessionAuditor', () => {
     // specMismatch is populated for informational record
     expect(audit.specMismatch).toContain('SomeUnexpected.tsx');
     // but NOT propagated to violations (no re-prompt)
-    const specViolation = audit.violations.find((v) =>
-      typeof v === 'string' && v.includes('PR modifies files'),
+    const specViolation = audit.violations.find(
+      (v) => typeof v === 'string' && v.includes('PR modifies files'),
     );
     expect(specViolation).toBeUndefined();
   });

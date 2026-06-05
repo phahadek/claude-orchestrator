@@ -666,8 +666,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               const toolUseId =
                 typeof block.id === 'string' ? block.id : undefined;
               const alreadyWarned =
-                toolUseId != null &&
-                this.warnedEscapeToolUseIds.has(toolUseId);
+                toolUseId != null && this.warnedEscapeToolUseIds.has(toolUseId);
               if (!alreadyWarned) {
                 const input = (block.input ?? {}) as Record<string, unknown>;
                 const escape = detectInFlightEscape(

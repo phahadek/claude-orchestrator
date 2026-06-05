@@ -258,17 +258,20 @@ describe('recoverSession', () => {
 
   it('broadcasts missed_pr_nudge (not audit findings) when session has no PR', async () => {
     const { SessionAuditor } = await import('../session/SessionAuditor');
-    vi.mocked(SessionAuditor).mockImplementationOnce(() => ({
-      audit: vi.fn(async () => ({
-        sessionId: 'sess-no-pr',
-        prOpened: false,
-        prTargetsBranch: null,
-        taskStatusAfter: null,
-        violations: [],
-        specMismatch: null,
-        auditedAt: new Date().toISOString(),
-      })),
-    }) as any);
+    vi.mocked(SessionAuditor).mockImplementationOnce(
+      () =>
+        ({
+          audit: vi.fn(async () => ({
+            sessionId: 'sess-no-pr',
+            prOpened: false,
+            prTargetsBranch: null,
+            taskStatusAfter: null,
+            violations: [],
+            specMismatch: null,
+            auditedAt: new Date().toISOString(),
+          })),
+        }) as any,
+    );
 
     const broadcast = vi.fn();
     await recoverSession(
@@ -279,7 +282,10 @@ describe('recoverSession', () => {
     await new Promise((r) => setTimeout(r, 10));
 
     expect(broadcast).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'missed_pr_nudge', sessionId: 'sess-no-pr' }),
+      expect.objectContaining({
+        type: 'missed_pr_nudge',
+        sessionId: 'sess-no-pr',
+      }),
     );
     // Must NOT produce a security-grade audit-findings message
     const auditFindings = broadcast.mock.calls.find(

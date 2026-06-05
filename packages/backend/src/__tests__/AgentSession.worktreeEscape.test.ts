@@ -86,7 +86,8 @@ function fakeNotionClient(): NotionClient {
   } as unknown as NotionClient;
 }
 
-const WORKTREE = 'C:\\Users\\phadek\\IdeaProjects\\project\\.claude\\worktrees\\abc';
+const WORKTREE =
+  'C:\\Users\\phadek\\IdeaProjects\\project\\.claude\\worktrees\\abc';
 
 // Helper: emit an assistant event with a single tool_use block
 function makeAssistantToolUseEvent(
@@ -98,7 +99,9 @@ function makeAssistantToolUseEvent(
     type: 'assistant',
     message: {
       id: 'msg-1',
-      content: [{ type: 'tool_use', id: toolUseId, name: toolName, input: toolInput }],
+      content: [
+        { type: 'tool_use', id: toolUseId, name: toolName, input: toolInput },
+      ],
     },
   });
 }
@@ -155,7 +158,9 @@ describe('AgentSession — in-flight worktree-escape detection', () => {
     const initialLen = mockProc.stdinChunks.length;
 
     mockProc.stdout.push(
-      makeAssistantToolUseEvent('Bash', { command: 'npm run build > /dev/null 2>&1' }) + '\n',
+      makeAssistantToolUseEvent('Bash', {
+        command: 'npm run build > /dev/null 2>&1',
+      }) + '\n',
     );
     await new Promise((r) => setTimeout(r, 50));
 

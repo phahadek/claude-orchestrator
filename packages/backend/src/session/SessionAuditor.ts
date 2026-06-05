@@ -66,8 +66,16 @@ export function detectInFlightEscape(
 
   for (const p of paths) {
     const resolved = normalizePath(p, worktreePath);
-    if (resolved !== normalizedWorktree && !resolved.startsWith(worktreePrefix)) {
-      return { type: 'worktree_escape', tool: toolName, path: p, escapedTo: resolved };
+    if (
+      resolved !== normalizedWorktree &&
+      !resolved.startsWith(worktreePrefix)
+    ) {
+      return {
+        type: 'worktree_escape',
+        tool: toolName,
+        path: p,
+        escapedTo: resolved,
+      };
     }
   }
   return null;
@@ -329,7 +337,6 @@ export class SessionAuditor {
 
     return parts.length > 0 ? parts.join('; ') : null;
   }
-
 }
 
 // ── Private helpers ──────────────────────────────────────────────────────────
