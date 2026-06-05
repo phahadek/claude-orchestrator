@@ -17,7 +17,11 @@ import {
 } from './routes/rules';
 import configRouter from './routes/config';
 import settingsRouter, { loadRuntimeSettingsFromDb } from './routes/settings';
-import { sessionsRouter, setBroadcast, setSessionManager } from './routes/sessions';
+import {
+  sessionsRouter,
+  setBroadcast,
+  setSessionManager,
+} from './routes/sessions';
 import { createPrsRouter, setPRBroadcast } from './routes/prs';
 import { createTasksRouter, setTaskBroadcast } from './routes/tasks';
 import { analyticsRouter } from './routes/analytics';

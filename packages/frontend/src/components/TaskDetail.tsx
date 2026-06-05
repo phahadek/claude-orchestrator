@@ -226,8 +226,7 @@ export function TaskDetail({
     'idle',
   ]);
   const isCodeSessionActive =
-    !!task.codeSession &&
-    ACTIVE_CODE_STATUSES.has(task.codeSession.status);
+    !!task.codeSession && ACTIVE_CODE_STATUSES.has(task.codeSession.status);
 
   async function handleAbort() {
     const sessionId = task.codeSession?.sessionId;
