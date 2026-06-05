@@ -402,6 +402,81 @@ describe('PRMergeWatcher.poll()', () => {
       repo: 'owner/repo',
     });
   });
+
+  it('marks coding session as error when PR is closed without merge', async () => {
+    const pr = makePRRow({
+      session_id: 'coding-session',
+      review_session_id: null,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    vi.mocked(github.getPRState).mockResolvedValue({
+      state: 'closed',
+      headSha: null,
+    });
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(sessions.markSessionErrored)).toHaveBeenCalledWith(
+      'coding-session',
+      'error',
+      'pr_closed',
+    );
+  });
+
+  it('ends review session when PR is closed without merge', async () => {
+    const pr = makePRRow({
+      session_id: 'coding-session',
+      review_session_id: 'review-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    vi.mocked(github.getPRState).mockResolvedValue({
+      state: 'closed',
+      headSha: null,
+    });
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(sessions.endSession)).toHaveBeenCalledWith(
+      'review-session',
+    );
+  });
+
+  it('does not call markSessionErrored when closed PR has no session', async () => {
+    const pr = makePRRow({ session_id: null });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    vi.mocked(github.getPRState).mockResolvedValue({
+      state: 'closed',
+      headSha: null,
+    });
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(sessions.markSessionErrored)).not.toHaveBeenCalled();
+  });
 });
 
 // ── PR closed — session terminal transition ───────────────────────────────────
