@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import type { SessionState } from '../hooks/useSessionStore';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
@@ -16,6 +16,7 @@ import { ReviewDetailView } from './ReviewDetailView';
 import { EventTranscript } from './EventTranscript';
 import { DiffViewer } from './DiffViewer';
 import { ContextBadge } from './ContextBadge';
+import { Composer } from './Composer';
 import styles from './SessionDetail.module.css';
 
 // Re-export EventRow and groupSessionEvents for consumers (e.g. tests) that import
@@ -52,8 +53,6 @@ export function SessionDetail({
   sessionMode,
   project = null,
 }: Props) {
-  const [draftMessage, setDraftMessage] = useState('');
-  const composerRef = useRef<HTMLTextAreaElement>(null);
   const [deleting, setDeleting] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [editingNote, setEditingNote] = useState(false);
@@ -151,18 +150,6 @@ export function SessionDetail({
     }
   }
 
-  function handleSend() {
-    if (!session || !draftMessage.trim()) return;
-    send({
-      type: 'send_message',
-      sessionId: session.sessionId,
-      message: draftMessage,
-    });
-    setDraftMessage('');
-    if (composerRef.current) {
-      composerRef.current.style.height = 'auto';
-    }
-  }
 
   async function handleNoteCommit() {
     if (!session) return;
@@ -444,33 +431,7 @@ export function SessionDetail({
             })()}
 
           {activeTab === 'transcript' && isActive && (
-            <div className={styles.composer}>
-              <textarea
-                ref={composerRef}
-                className={styles.composerInput}
-                value={draftMessage}
-                rows={1}
-                onChange={(e) => {
-                  setDraftMessage(e.target.value);
-                  e.target.style.height = 'auto';
-                  e.target.style.height = `${e.target.scrollHeight}px`;
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey && draftMessage.trim()) {
-                    e.preventDefault();
-                    handleSend();
-                  }
-                }}
-                placeholder="Send a message to the session…"
-              />
-              <button
-                className={styles.sendButton}
-                onClick={handleSend}
-                disabled={!draftMessage.trim()}
-              >
-                Send
-              </button>
-            </div>
+            <Composer sessionId={session.sessionId} send={send} />
           )}
         </>
       )}
