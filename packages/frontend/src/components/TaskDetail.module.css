@@ -143,7 +143,9 @@
   color: var(--text-error, #c0392b);
   cursor: pointer;
   flex-shrink: 0;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .abortButton:hover:not(:disabled) {

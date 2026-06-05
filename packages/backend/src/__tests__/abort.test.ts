@@ -49,9 +49,7 @@ import * as queries from '../db/queries.js';
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
-function buildApp(sessionManager?: {
-  abort: ReturnType<typeof vi.fn>;
-}) {
+function buildApp(sessionManager?: { abort: ReturnType<typeof vi.fn> }) {
   const app = express();
   app.use(express.json());
   app.use('/api', createTasksRouter(sessionManager as never));
@@ -68,7 +66,9 @@ describe('POST /api/tasks/:id/abort', () => {
   });
 
   it('returns 400 when projectId is missing', async () => {
-    const res = await supertest(buildApp()).post('/api/tasks/task-1/abort').send({});
+    const res = await supertest(buildApp())
+      .post('/api/tasks/task-1/abort')
+      .send({});
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/projectId/);
   });

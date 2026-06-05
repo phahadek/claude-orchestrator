@@ -534,7 +534,11 @@ export function createTasksRouter(sessionManager?: SessionManager): Router {
         source: 'human',
       });
       if (taskBroadcastFn) {
-        taskBroadcastFn({ type: 'task_status_changed', notionTaskId: taskId, newStatus: '🗂️ Ready' });
+        taskBroadcastFn({
+          type: 'task_status_changed',
+          notionTaskId: taskId,
+          newStatus: '🗂️ Ready',
+        });
         const updated = buildTaskView(taskId);
         if (updated) taskBroadcastFn({ type: 'task_updated', task: updated });
       }
