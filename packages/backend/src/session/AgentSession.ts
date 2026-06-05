@@ -11,7 +11,6 @@ import {
 import {
   upsertSessionEvent,
   updateSessionStatus,
-  markSessionDone,
   markSessionIdle,
   getEventsBySession,
   insertPermissionDenial,
