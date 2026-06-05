@@ -32,7 +32,9 @@ import { countProjects } from '../db/queries.js';
 import { getDataDir } from '../config/dataDir.js';
 import { DataDirConfigSource } from '../config/DataDirConfigSource.js';
 
-const mockedCountProjects = countProjects as MockedFunction<typeof countProjects>;
+const mockedCountProjects = countProjects as MockedFunction<
+  typeof countProjects
+>;
 const mockedGetDataDir = getDataDir as MockedFunction<typeof getDataDir>;
 
 // ── Test app ─────────────────────────────────────────────────────────────────
@@ -71,7 +73,10 @@ describe('GET /api/setup/status', () => {
 
   it('reports setupNeeded=false when all required values are present', async () => {
     const src = new DataDirConfigSource(tmpDir);
-    src.write({ github: { token: 'ghp-ok', repo: '' }, notion: { apiKey: 'ntn-ok' } });
+    src.write({
+      github: { token: 'ghp-ok', repo: '' },
+      notion: { apiKey: 'ntn-ok' },
+    });
     mockedCountProjects.mockReturnValue(1);
 
     const res = await supertest(buildApp()).get('/api/setup/status');
@@ -103,7 +108,9 @@ describe('GET /api/setup/env-check', () => {
   });
 
   it('reports claudeAuthenticated=false when credentials file is absent', async () => {
-    const fakeAppData = fs.mkdtempSync(path.join(os.tmpdir(), 'oc-appdata-empty-'));
+    const fakeAppData = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'oc-appdata-empty-'),
+    );
     const origAppData = process.env.APPDATA;
     process.env.APPDATA = fakeAppData;
     try {
@@ -171,9 +178,11 @@ describe('POST /api/setup/validate', () => {
   it('returns valid=true for a good GitHub PAT', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValueOnce(
-        new Response(JSON.stringify({ login: 'octocat' }), { status: 200 }),
-      ),
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ login: 'octocat' }), { status: 200 }),
+        ),
     );
 
     const res = await supertest(buildApp())
@@ -188,9 +197,9 @@ describe('POST /api/setup/validate', () => {
   it('returns valid=false for a bad GitHub PAT', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValueOnce(
-        new Response('Unauthorized', { status: 401 }),
-      ),
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response('Unauthorized', { status: 401 })),
     );
 
     const res = await supertest(buildApp())
@@ -205,12 +214,13 @@ describe('POST /api/setup/validate', () => {
   it('returns valid=true for a good Notion token', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ name: 'Test Bot', type: 'bot' }),
-          { status: 200 },
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ name: 'Test Bot', type: 'bot' }), {
+            status: 200,
+          }),
         ),
-      ),
     );
 
     const res = await supertest(buildApp())
@@ -224,9 +234,9 @@ describe('POST /api/setup/validate', () => {
   it('returns valid=false for a bad Notion token', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValueOnce(
-        new Response('Unauthorized', { status: 401 }),
-      ),
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response('Unauthorized', { status: 401 })),
     );
 
     const res = await supertest(buildApp())
@@ -255,9 +265,7 @@ describe('POST /api/setup/import', () => {
   });
 
   it('returns 400 when path is missing', async () => {
-    const res = await supertest(buildApp())
-      .post('/api/setup/import')
-      .send({});
+    const res = await supertest(buildApp()).post('/api/setup/import').send({});
     expect(res.status).toBe(400);
   });
 

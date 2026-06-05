@@ -37,10 +37,9 @@ router.get('/setup/status', (_req, res) => {
 
 function checkInstalled(cmd: string): boolean {
   try {
-    execSync(
-      process.platform === 'win32' ? `where ${cmd}` : `which ${cmd}`,
-      { stdio: 'pipe' },
-    );
+    execSync(process.platform === 'win32' ? `where ${cmd}` : `which ${cmd}`, {
+      stdio: 'pipe',
+    });
     return true;
   } catch {
     return false;
@@ -154,7 +153,10 @@ router.post('/setup/validate', async (req, res) => {
 
 // ── Import ────────────────────────────────────────────────────────────────────
 
-const ENV_KEY_MAP: Record<string, (val: string) => DeepPartial<OrchestratorConfig>> = {
+const ENV_KEY_MAP: Record<
+  string,
+  (val: string) => DeepPartial<OrchestratorConfig>
+> = {
   NOTION_API_KEY: (v) => ({ notion: { apiKey: v } }),
   GITHUB_TOKEN: (v) => ({ github: { token: v } }),
   GITHUB_REPO: (v) => ({ github: { repo: v } }),
