@@ -98,7 +98,10 @@ describe('recoverSession', () => {
 
   it('broadcasts session_ended with idle status on clean_exit scope', async () => {
     const broadcast = vi.fn();
-    await recoverSession('sess-1', baseOpts({ broadcast, scope: 'clean_exit' }));
+    await recoverSession(
+      'sess-1',
+      baseOpts({ broadcast, scope: 'clean_exit' }),
+    );
     expect(broadcast).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'session_ended',
