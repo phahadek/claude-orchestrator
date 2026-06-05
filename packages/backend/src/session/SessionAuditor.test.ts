@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
-import { SessionAuditor } from './SessionAuditor';
-import type { AuditableSession, ISessionManager } from './SessionAuditor';
+import { SessionAuditor, detectInFlightEscape } from './SessionAuditor';
+import type { AuditableSession } from './SessionAuditor';
 import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { PullRequest } from '../github/types';
@@ -10,9 +10,6 @@ import type { WorktreeEscapeViolation } from '../db/types';
 
 vi.mock('../db/queries', () => ({
   getPRByNotionTaskId: vi.fn(() => null),
-  getPRBySessionId: vi.fn(() => null),
-  setPauseReason: vi.fn(),
-  setSessionPauseReason: vi.fn(),
   getEventsBySession: vi.fn(() => []),
   getDenialsBySession: vi.fn(() => []),
 }));
@@ -98,16 +95,9 @@ function makeGitHubClient(
   } as unknown as GitHubClient;
 }
 
-function makeSessionManager(isAlive = true): ISessionManager {
-  return {
-    send: vi.fn(),
-    isAlive: vi.fn().mockReturnValue(isAlive),
-  };
-}
-
 // ── Import mocked module for DB fallback / event tests ───────────────────────
 import * as queries from '../db/queries';
-import type { PullRequestRow, PermissionDenialRow } from '../db/types';
+import type { PermissionDenialRow } from '../db/types';
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
@@ -115,7 +105,6 @@ describe('SessionAuditor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(queries.getPRByNotionTaskId).mockReturnValue(null);
-    vi.mocked(queries.getPRBySessionId).mockReturnValue(null);
   });
 
   // ── AC: Clean exit without PR ─────────────────────────────────────────────
@@ -168,8 +157,8 @@ describe('SessionAuditor', () => {
     expect(branchViolation).toBeUndefined();
   });
 
-  // ── AC: Spec mismatch — files in diff not in spec ────────────────────────
-  it('flags files in the diff that are not listed in the task spec', async () => {
+  // ── AC: Spec mismatch — informational only, not in violations ───────────────
+  it('spec mismatch is recorded in specMismatch field but NOT added to violations', async () => {
     const notion = makeNotionClient(
       'packages/backend/src/session/SessionAuditor.ts',
     );
@@ -187,130 +176,24 @@ describe('SessionAuditor', () => {
     const session = makeSession();
     const audit = await auditor.audit(session, 0);
 
-    const unexpectedViolation = audit.violations.find((v) =>
-      v.includes('PR modifies files not listed in task spec'),
+    // specMismatch is populated for informational record
+    expect(audit.specMismatch).toContain('SomeUnexpected.tsx');
+    // but NOT propagated to violations (no re-prompt)
+    const specViolation = audit.violations.find(
+      (v) => typeof v === 'string' && v.includes('PR modifies files'),
     );
-    expect(unexpectedViolation).toBeDefined();
-    expect(unexpectedViolation).toContain('SomeUnexpected.tsx');
+    expect(specViolation).toBeUndefined();
   });
 
-  // ── AC: routeFailuresToSession sends violations as follow-up message ─────
-  it('routeFailuresToSession sends violations as a follow-up message to the session', async () => {
+  // ── AC: audit() does not send messages or set pause reasons ──────────────
+  it('audit() with violations does NOT call sessionManager.send()', async () => {
     const github = makeGitHubClient({ baseBranch: 'main' }); // will produce a violation
-    const sm = makeSessionManager();
-    const auditor = new SessionAuditor(makeNotionClient(), github, sm);
-    const session = makeSession();
-    await auditor.audit(session, 0);
-
-    expect(sm.send).toHaveBeenCalledOnce();
-    const [calledSessionId, message] = vi.mocked(sm.send).mock.calls[0];
-    expect(calledSessionId).toBe('test-session-id');
-    expect(message).toContain('❌');
-    expect(message).toContain('Audit findings for your PR:');
-  });
-
-  it('does NOT call send when there are no violations', async () => {
-    const github = makeGitHubClient(); // baseBranch: dev, good title, good body
-    const sm = makeSessionManager();
-    // No files section — spec comparison returns null
-    const auditor = new SessionAuditor(makeNotionClient(''), github, sm);
+    const sm = { send: vi.fn(), isAlive: vi.fn().mockReturnValue(true) };
+    const auditor = new SessionAuditor(makeNotionClient(), github, sm as any);
     const session = makeSession();
     await auditor.audit(session, 0);
 
     expect(sm.send).not.toHaveBeenCalled();
-  });
-
-  // ── AC: routeFailuresToSession does not throw if live session send() throws ─
-  it('routeFailuresToSession does not throw when send() throws on a live session', async () => {
-    const github = makeGitHubClient({ baseBranch: 'main' }); // produces a violation
-    const sm = makeSessionManager(true); // alive
-    vi.mocked(sm.send).mockImplementation(() => {
-      throw new Error('Session exited');
-    });
-
-    const auditor = new SessionAuditor(makeNotionClient(), github, sm);
-    const session = makeSession();
-    // Should not throw
-    await expect(auditor.audit(session, 0)).resolves.toBeDefined();
-  });
-
-  // ── AC: concluded session → attention queue ───────────────────────────────
-  it('escalates to attention queue (setPauseReason) when session is not alive and PR exists', async () => {
-    const github = makeGitHubClient({ baseBranch: 'main' }); // produces a violation
-    const sm = makeSessionManager(false); // not alive
-    const prRow: Partial<PullRequestRow> = {
-      pr_number: 42,
-      repo: 'owner/repo',
-    };
-    vi.mocked(queries.getPRBySessionId).mockReturnValue(
-      prRow as PullRequestRow,
-    );
-
-    const auditor = new SessionAuditor(makeNotionClient(), github, sm);
-    const session = makeSession();
-    await auditor.audit(session, 0);
-
-    expect(sm.send).not.toHaveBeenCalled();
-    expect(queries.setPauseReason).toHaveBeenCalledWith(
-      42,
-      'owner/repo',
-      'audit_findings',
-    );
-  });
-
-  it('does NOT call send() when session is not alive', async () => {
-    const github = makeGitHubClient({ baseBranch: 'main' }); // produces a violation
-    const sm = makeSessionManager(false); // not alive
-    vi.mocked(queries.getPRBySessionId).mockReturnValue(null);
-
-    const auditor = new SessionAuditor(makeNotionClient(), github, sm);
-    const session = makeSession();
-    await auditor.audit(session, 0);
-
-    expect(sm.send).not.toHaveBeenCalled();
-  });
-
-  it('sets session pause_reason when session is not alive and no PR is found', async () => {
-    const github = makeGitHubClient({ baseBranch: 'main' }); // produces a violation
-    const sm = makeSessionManager(false); // not alive
-    vi.mocked(queries.getPRBySessionId).mockReturnValue(null);
-
-    const auditor = new SessionAuditor(makeNotionClient(), github, sm);
-    const session = makeSession();
-    await expect(auditor.audit(session, 0)).resolves.toBeDefined();
-    expect(queries.setPauseReason).not.toHaveBeenCalled();
-    expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
-      'test-session-id',
-      'pr_creation_failed',
-    );
-  });
-
-  it('"Clean exit but no PR" → sets session pause_reason via routeFailuresToSession', async () => {
-    const sm = makeSessionManager(false); // not alive — session concluded
-    vi.mocked(queries.getPRBySessionId).mockReturnValue(null);
-    vi.mocked(queries.getPRByNotionTaskId).mockReturnValue(null);
-
-    const auditor = new SessionAuditor(makeNotionClient(), undefined, sm);
-    const session = makeSession({ prUrl: undefined });
-    await auditor.audit(session, 0); // exit 0, no PR → 'Clean exit but no PR opened'
-
-    expect(queries.setSessionPauseReason).toHaveBeenCalledWith(
-      'test-session-id',
-      'pr_creation_failed',
-    );
-    expect(queries.setPauseReason).not.toHaveBeenCalled();
-  });
-
-  it('sends message normally to a live session with violations', async () => {
-    const github = makeGitHubClient({ baseBranch: 'main' }); // produces a violation
-    const sm = makeSessionManager(true); // alive
-
-    const auditor = new SessionAuditor(makeNotionClient(), github, sm);
-    const session = makeSession();
-    await auditor.audit(session, 0);
-
-    expect(sm.send).toHaveBeenCalledOnce();
-    expect(queries.setPauseReason).not.toHaveBeenCalled();
   });
 
   // ── AC: Audit skips review sessions ──────────────────────────────────────
@@ -929,6 +812,76 @@ describe('auditWorktreeEscape — Windows path normalization', () => {
       expect(violations).toHaveLength(0);
     },
   );
+});
+
+// ── detectInFlightEscape — exported helper for in-flight detection ────────────
+
+describe('detectInFlightEscape', () => {
+  const WORKTREE =
+    'C:\\Users\\phadek\\IdeaProjects\\project\\.claude\\worktrees\\abc';
+
+  it('Write outside worktree returns a worktree_escape violation', () => {
+    const result = detectInFlightEscape(
+      'Write',
+      { file_path: 'C:\\Users\\phadek\\outside.ts', content: '' },
+      WORKTREE,
+    );
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('worktree_escape');
+    expect(result?.tool).toBe('Write');
+    expect(result?.path).toBe('C:\\Users\\phadek\\outside.ts');
+  });
+
+  it('Write inside worktree returns null', () => {
+    const result = detectInFlightEscape(
+      'Write',
+      { file_path: `${WORKTREE}\\src\\index.ts`, content: '' },
+      WORKTREE,
+    );
+    expect(result).toBeNull();
+  });
+
+  it('Edit outside worktree returns a violation', () => {
+    const result = detectInFlightEscape(
+      'Edit',
+      {
+        file_path: 'C:\\Users\\phadek\\other\\file.ts',
+        old_string: 'a',
+        new_string: 'b',
+      },
+      WORKTREE,
+    );
+    expect(result).not.toBeNull();
+    expect(result?.tool).toBe('Edit');
+  });
+
+  it('Bash redirect to /dev/null produces no violation', () => {
+    const result = detectInFlightEscape(
+      'Bash',
+      { command: 'npm run build > /dev/null 2>&1' },
+      WORKTREE,
+    );
+    expect(result).toBeNull();
+  });
+
+  it('Bash redirect to outside path returns a violation', () => {
+    const result = detectInFlightEscape(
+      'Bash',
+      { command: 'echo hello > C:\\Users\\phadek\\outside\\out.txt' },
+      WORKTREE,
+    );
+    expect(result).not.toBeNull();
+    expect(result?.tool).toBe('Bash');
+  });
+
+  it('Bash with no write returns null', () => {
+    const result = detectInFlightEscape(
+      'Bash',
+      { command: 'npx tsc --noEmit' },
+      WORKTREE,
+    );
+    expect(result).toBeNull();
+  });
 });
 
 // ── runMigrations() — session_audits table ───────────────────────────────────

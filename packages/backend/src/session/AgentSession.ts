@@ -41,6 +41,7 @@ import { checkCommitAttribution } from '../github/CommitAttributionWatcher';
 import { recordEvent, countPushFailureEvents } from '../audit/AuditLog';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import type { ISessionManager } from './SessionAuditor';
+import { detectInFlightEscape } from './SessionAuditor';
 import type { ISessionRunner } from './SessionRunner';
 import { CliSessionRunner } from './CliSessionRunner';
 import { recoverSession } from './sessionRecovery';
@@ -214,6 +215,8 @@ export class AgentSession extends EventEmitter {
   private lastFilePollutionRevertSha: string | null = null;
   /** Tracks message IDs whose <pr-body> marker has already been processed (deduplicate streaming chunks). */
   private readonly processedPRBodyMessageIds = new Set<string>();
+  /** tool_use_ids already warned for worktree escape (deduplicate across streaming chunks). */
+  private readonly warnedEscapeToolUseIds = new Set<string>();
   /** In-flight promise from handlePRBodyMarker; awaited by handleCleanExit before markSessionIdle. */
   private prBodyMarkerPromise: Promise<void> | null = null;
   /** Continuation nudge to deliver via stdin on the first event of the escalated session. */
@@ -656,6 +659,33 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               typeof block.id === 'string'
             ) {
               this.pendingPushFileToolUseIds.add(block.id);
+            }
+
+            // In-flight worktree-escape detection: warn and continue.
+            if (this.worktreePath && typeof block.name === 'string') {
+              const toolUseId =
+                typeof block.id === 'string' ? block.id : undefined;
+              const alreadyWarned =
+                toolUseId != null && this.warnedEscapeToolUseIds.has(toolUseId);
+              if (!alreadyWarned) {
+                const input = (block.input ?? {}) as Record<string, unknown>;
+                const escape = detectInFlightEscape(
+                  block.name,
+                  input,
+                  this.worktreePath,
+                );
+                if (escape) {
+                  if (toolUseId != null)
+                    this.warnedEscapeToolUseIds.add(toolUseId);
+                  sessionLog(
+                    this.sessionId,
+                    `worktree_escape detected in-flight: ${escape.tool} → ${escape.path}`,
+                  );
+                  this.sendMessage(
+                    `⚠️ Worktree escape detected: \`${escape.tool}\` is writing to \`${escape.path}\` which is outside your assigned worktree (\`${this.worktreePath}\`). Please only write files inside the worktree.`,
+                  );
+                }
+              }
             }
           }
         }
