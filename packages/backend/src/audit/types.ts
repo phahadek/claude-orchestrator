@@ -28,7 +28,8 @@ export type EventType =
   | 'manual_pr_clear'
   | 'sessions_auto_archived'
   | 'pr_attribution_mismatch'
-  | 'pr_creation_failed';
+  | 'pr_creation_failed'
+  | 'session_aborted';
 
 export type ActorType = 'ai' | 'human' | 'system';
 

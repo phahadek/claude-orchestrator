@@ -112,6 +112,7 @@ export function TaskDetail({
   const [mergeInFlight, setMergeInFlight] = useState(false);
   const [markMergedInFlight, setMarkMergedInFlight] = useState(false);
   const [fixConflictsInFlight, setFixConflictsInFlight] = useState(false);
+  const [abortInFlight, setAbortInFlight] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [optimisticDisplayStatus, setOptimisticDisplayStatus] =
     useState<DisplayStatus | null>(null);
@@ -215,6 +216,41 @@ export function TaskDetail({
       setReviewError(err instanceof Error ? err.message : 'Network error');
     } finally {
       setMergeInFlight(false);
+    }
+  }
+
+  const ACTIVE_CODE_STATUSES = new Set([
+    'starting',
+    'running',
+    'needs_permission',
+    'idle',
+  ]);
+  const isCodeSessionActive =
+    !!task.codeSession &&
+    ACTIVE_CODE_STATUSES.has(task.codeSession.status);
+
+  async function handleAbort() {
+    const sessionId = task.codeSession?.sessionId;
+    if (!sessionId) return;
+    if (
+      !confirm(
+        'Abort this session?\n\nThis will kill the session and reset the task to Ready. ' +
+          'All work in progress will be discarded. The next launch will start fresh — ' +
+          'the aborted session will not be resumed.',
+      )
+    )
+      return;
+    setAbortInFlight(true);
+    setReviewError(null);
+    try {
+      await sessionsApi.abort(sessionId);
+      setOptimisticDisplayStatus('ready');
+    } catch (err) {
+      setReviewError(
+        err instanceof Error ? err.message : 'Failed to abort session',
+      );
+    } finally {
+      setAbortInFlight(false);
     }
   }
 
@@ -324,6 +360,25 @@ export function TaskDetail({
                 Transcript not available — session not loaded.
               </p>
             )}
+          </div>
+        )}
+
+        {/* ── Abort — destructive action to kill session + reset to Ready ── */}
+        {isCodeSessionActive && (
+          <div className={styles.abortSection}>
+            {reviewError && (
+              <div className={styles.errorBanner}>{reviewError}</div>
+            )}
+            <div className={styles.abortActions}>
+              <button
+                className={styles.abortButton}
+                disabled={abortInFlight}
+                onClick={() => void handleAbort()}
+                title="Kill the session and reset the task to Ready. Work in progress will be discarded."
+              >
+                {abortInFlight ? 'Aborting…' : 'Abort'}
+              </button>
+            </div>
           </div>
         )}
 

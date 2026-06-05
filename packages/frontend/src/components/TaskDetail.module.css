@@ -555,6 +555,42 @@
   line-height: 1.4;
 }
 
+/* ── Abort section ───────────────────────────────────────────────── */
+.abortSection {
+  flex-shrink: 0;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.abortActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.abortButton {
+  background: rgba(243, 139, 168, 0.08);
+  border: 1px solid rgba(243, 139, 168, 0.3);
+  border-radius: var(--radius-sm);
+  color: #f38ba8;
+  cursor: pointer;
+  font-size: 0.82rem;
+  padding: 5px 12px;
+  transition: background 0.15s;
+}
+
+.abortButton:hover:not(:disabled) {
+  background: rgba(243, 139, 168, 0.18);
+}
+
+.abortButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ── Empty state ─────────────────────────────────────────────────── */
 .emptyState {
   padding: 32px 16px;

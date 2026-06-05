@@ -1410,6 +1410,79 @@ export class SessionManager extends EventEmitter {
     }
   }
 
+  /**
+   * Abort a session: kill the process, pre-mark the DB as killed (so orphan-resume
+   * cannot re-attach on server restart), and reset the task to Ready.
+   *
+   * Distinct from kill(): abort always resets the task to Ready and pre-marks the
+   * session killed in the DB before sending the kill signal, ensuring the session
+   * can never be resumed even if the server crashes mid-abort.
+   */
+  async abortSession(sessionId: string): Promise<void> {
+    const endedAt = Date.now();
+    const row = getSession(sessionId);
+    if (!row) return;
+
+    // Pre-mark as killed immediately — prevents orphan-resume on server restart.
+    updateSessionStatus(sessionId, 'killed', endedAt);
+
+    // Set hasEnded on the in-memory session to prevent markSessionErrored from
+    // double-updating DB and task status when kill() fires.
+    const liveSession = this.sessions.get(sessionId);
+    if (liveSession) liveSession.hasEnded = true;
+
+    // Broadcast session_ended so the frontend updates the session card immediately.
+    this.emit('message', {
+      type: 'session_ended',
+      sessionId,
+      status: 'killed',
+      ...(row.task_id && { taskId: row.task_id }),
+    } satisfies ServerMessage);
+
+    // Record audit event.
+    recordEvent({
+      event_type: 'session_aborted',
+      actor_type: 'system',
+      actor_id: sessionId,
+      project_id: row.project_id ?? null,
+      task_id: row.task_id ?? null,
+      payload: { sessionId, reason: 'user_abort' },
+    });
+
+    // Kill the process (fire-and-forget — cleanup via run().then() still fires).
+    if (liveSession) {
+      liveSession.kill().catch((err) => {
+        console.error(
+          `[SessionManager] abortSession kill error for ${sessionId.slice(0, 8)}: ${err}`,
+        );
+      });
+    }
+
+    // Reset the task to Ready so the next launch is a fresh session.
+    if (row.session_type !== 'standard' || !row.task_id) return;
+    const notionTaskId = row.task_id;
+    const projectId = row.project_id ?? '';
+
+    getTaskBackend(projectId)
+      .updateStatus(notionTaskId, '🗂️ Ready', {
+        source: 'orchestrator',
+        sessionId,
+      })
+      .then(() => {
+        this.emit('message', {
+          type: 'task_status_changed',
+          notionTaskId,
+          newStatus: '🗂️ Ready',
+        } satisfies ServerMessage);
+        emitTaskUpdated(notionTaskId);
+      })
+      .catch((e) =>
+        console.error(
+          `[SessionManager] abortSession updateStatus failed: ${e}`,
+        ),
+      );
+  }
+
   /** Close stdin on the session process so the CLI can exit cleanly. */
   endSession(sessionId: string): void {
     this.sessions.get(sessionId)?.endSession();

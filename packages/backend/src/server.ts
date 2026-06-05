@@ -17,7 +17,7 @@ import {
 } from './routes/rules';
 import configRouter from './routes/config';
 import settingsRouter, { loadRuntimeSettingsFromDb } from './routes/settings';
-import { sessionsRouter, setBroadcast } from './routes/sessions';
+import { sessionsRouter, setBroadcast, setSessionManager } from './routes/sessions';
 import { createPrsRouter, setPRBroadcast } from './routes/prs';
 import { createTasksRouter, setTaskBroadcast } from './routes/tasks';
 import { analyticsRouter } from './routes/analytics';
@@ -169,6 +169,8 @@ function broadcast(msg: ServerMessage) {
 
 // Wire broadcast into the sessions router (for PATCH note/tags)
 setBroadcast(broadcast);
+// Wire sessionManager into the sessions router (for abort)
+setSessionManager(sessionManager);
 // Wire broadcast into the prs router (for merge/close events)
 setPRBroadcast(broadcast);
 // Wire broadcast into the tasks route (for task_updated WS messages)
