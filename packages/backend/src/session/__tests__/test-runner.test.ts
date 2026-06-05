@@ -288,13 +288,9 @@ describe('runTestCommands — RSS kill', () => {
   it('kills process and marks failed when RSS exceeds maxRssMb', async () => {
     _spawnHook = () => makeProc(0, 'running', '', 9999_000);
 
-    const promise = runTestCommands(
-      '/worktree',
-      ['pytest'],
-      300,
-      () => {},
-      { maxRssMb: 512 },
-    );
+    const promise = runTestCommands('/worktree', ['pytest'], 300, () => {}, {
+      maxRssMb: 512,
+    });
     // Advance past the 2s RSS poll interval
     await vi.advanceTimersByTimeAsync(3_000);
     const result = await promise;
@@ -328,13 +324,9 @@ describe('runTestCommands — RSS kill', () => {
     );
     _spawnHook = () => makeProc(0, 'ok');
 
-    const promise = runTestCommands(
-      '/worktree',
-      ['pytest'],
-      300,
-      () => {},
-      { maxRssMb: 512 },
-    );
+    const promise = runTestCommands('/worktree', ['pytest'], 300, () => {}, {
+      maxRssMb: 512,
+    });
     await vi.runAllTimersAsync();
     const result = await promise;
 

@@ -45,7 +45,12 @@ function runCommandWithTimeout(
   cwd: string,
   timeoutMs: number,
   maxRssMb: number,
-): Promise<{ exitCode: number; output: string; timedOut: boolean; oomKilled: boolean }> {
+): Promise<{
+  exitCode: number;
+  output: string;
+  timedOut: boolean;
+  oomKilled: boolean;
+}> {
   return new Promise((resolve) => {
     const spawnOpts =
       platform === 'win32'
@@ -122,7 +127,12 @@ function runCommandWithTimeout(
     });
 
     proc.on('error', (err) => {
-      settle({ exitCode: 1, output: err.message, timedOut: false, oomKilled: false });
+      settle({
+        exitCode: 1,
+        output: err.message,
+        timedOut: false,
+        oomKilled: false,
+      });
     });
   });
 }
@@ -150,16 +160,14 @@ export async function runTestCommands(
 
   for (const cmd of commands) {
     log(`[test-runner] running: ${cmd}\n`);
-    const { exitCode, output, timedOut, oomKilled } = await runCommandWithTimeout(
-      cmd,
-      worktreePath,
-      timeoutMs,
-      maxRssMb,
-    );
+    const { exitCode, output, timedOut, oomKilled } =
+      await runCommandWithTimeout(cmd, worktreePath, timeoutMs, maxRssMb);
     outputParts.push(`$ ${cmd}\n${output}`);
 
     if (oomKilled) {
-      log(`[test-runner] OOM_KILL after exceeding ${maxRssMb} MB RSS: ${cmd}\n`);
+      log(
+        `[test-runner] OOM_KILL after exceeding ${maxRssMb} MB RSS: ${cmd}\n`,
+      );
       allPassed = false;
     } else if (timedOut) {
       log(`[test-runner] TIMEOUT after ${timeoutSec}s: ${cmd}\n`);
