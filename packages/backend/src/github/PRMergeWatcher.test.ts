@@ -422,7 +422,10 @@ describe('PRMergeWatcher — idle→error session transition on PR close', () =>
   }
 
   it('calls markSessionErrored with pr_closed reason for the coding session', async () => {
-    const pr = makePRRow({ session_id: 'coding-session', review_session_id: null });
+    const pr = makePRRow({
+      session_id: 'coding-session',
+      review_session_id: null,
+    });
     const sessions = makeMockSessions();
 
     const watcher = makeWatcherForClosedPR(pr, sessions);
@@ -436,13 +439,18 @@ describe('PRMergeWatcher — idle→error session transition on PR close', () =>
   });
 
   it('ends review session when PR is closed', async () => {
-    const pr = makePRRow({ session_id: 'coding-session', review_session_id: 'review-session' });
+    const pr = makePRRow({
+      session_id: 'coding-session',
+      review_session_id: 'review-session',
+    });
     const sessions = makeMockSessions();
 
     const watcher = makeWatcherForClosedPR(pr, sessions);
     await watcher.poll();
 
-    expect(vi.mocked(sessions.endSession)).toHaveBeenCalledWith('review-session');
+    expect(vi.mocked(sessions.endSession)).toHaveBeenCalledWith(
+      'review-session',
+    );
   });
 
   it('does not call markSessionErrored when closed PR has no session_id', async () => {

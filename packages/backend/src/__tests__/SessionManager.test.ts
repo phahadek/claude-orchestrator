@@ -1164,3 +1164,47 @@ describe('SessionManager.buildResumeMessage() — verdict-enriched resume nudge'
     expect(source).toMatch(/from\s+['"]\.\.\/github\/PRReviewService['"]/);
   });
 });
+
+// ── AC: _doSendOrResume() — terminal status guard ─────────────────────────────
+describe('SessionManager._doSendOrResume() — terminal status guard', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('checks row.status against done, error, and killed before respawning', () => {
+    const doResumeIdx = source.indexOf('_doSendOrResume');
+    const shutdownIdx = source.indexOf('async shutdownAll');
+    const block = source.slice(doResumeIdx, shutdownIdx);
+    expect(block).toMatch(/row\.status\s*===\s*'done'/);
+    expect(block).toMatch(/row\.status\s*===\s*'error'/);
+    expect(block).toMatch(/row\.status\s*===\s*'killed'/);
+  });
+
+  it('logs a warning and returns early for terminal sessions', () => {
+    const doResumeIdx = source.indexOf('_doSendOrResume');
+    const shutdownIdx = source.indexOf('async shutdownAll');
+    const block = source.slice(doResumeIdx, shutdownIdx);
+    // Must log a warning with the session status before bailing
+    expect(block).toMatch(
+      /console\.warn[\s\S]*?terminal|terminal[\s\S]*?console\.warn/,
+    );
+    // Guard must appear before any git worktree or process-spawn code
+    const guardIdx = block.indexOf("row.status === 'done'");
+    const worktreeIdx = block.indexOf('git worktree add');
+    expect(guardIdx).toBeGreaterThan(-1);
+    expect(worktreeIdx).toBeGreaterThan(guardIdx);
+  });
+
+  it('allows idle sessions to proceed through respawn', () => {
+    const doResumeIdx = source.indexOf('_doSendOrResume');
+    const shutdownIdx = source.indexOf('async shutdownAll');
+    const block = source.slice(doResumeIdx, shutdownIdx);
+    // Guard must NOT include 'idle' — idle→running re-entry must be permitted
+    const guardMatch = block.match(
+      /if\s*\([^)]*row\.status\s*===\s*'done'[^)]*\)/,
+    );
+    expect(guardMatch).not.toBeNull();
+    expect(guardMatch![0]).not.toContain('idle');
+  });
+});

@@ -196,7 +196,10 @@ export class ReviewerCommentsWatcher {
       newComments,
       hasChangesRequested,
     );
-    this.sessions.send(sessionId, feedback);
+    // Use sendOrResume so idle sessions (submitted PR and exited) are respawned
+    // to receive the feedback. send() is a no-op for non-live sessions and would
+    // silently drop the comments even though they get marked as routed below.
+    await this.sessions.sendOrResume(sessionId, feedback);
     markCommentsRouted(
       pr.pr_number,
       pr.repo,
