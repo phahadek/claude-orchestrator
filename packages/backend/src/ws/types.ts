@@ -213,6 +213,12 @@ export type ServerMessage =
     }
   | { type: 'stuck_session_killed'; sessionId: string; taskName: string }
   | {
+      type: 'stuck_session_idle_open_pr';
+      sessionId: string;
+      taskId: string | null;
+      prUrl: string;
+    }
+  | {
       type: 'api_overloaded_paused';
       sessionId: string;
       prNumber?: number;

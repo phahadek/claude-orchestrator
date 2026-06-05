@@ -10,6 +10,7 @@ import {
   getAllStuckSessionTimers,
   getStuckResultSessionRows,
   markSessionDone,
+  markSessionIdle,
 } from '../db/queries';
 import type { ServerMessage } from '../ws/types';
 import type { GitHubClient } from '../github/GitHubClient';
@@ -113,6 +114,22 @@ export class StuckSessionMonitor {
     try {
       const rows = getStuckResultSessionRows(PERIODIC_MIN_AGE_MS);
       for (const row of rows) {
+        // If the session already has an open PR, transition to idle and notify the
+        // operator rather than marking done — the task is still in review.
+        if (row.pr_url) {
+          const pr = getPRBySessionId(row.session_id);
+          if (pr && (pr.state === 'open' || pr.state === 'draft')) {
+            markSessionIdle(row.session_id, row.last_ts, row.pr_url);
+            this.broadcast({
+              type: 'stuck_session_idle_open_pr',
+              sessionId: row.session_id,
+              taskId: row.task_id ?? null,
+              prUrl: row.pr_url,
+            });
+            continue;
+          }
+        }
+
         markSessionDone(row.session_id, row.last_ts, row.pr_url ?? null);
         let taskBackend;
         try {
