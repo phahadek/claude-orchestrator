@@ -5,9 +5,6 @@ import { parseSection } from '../notion/NotionClient';
 import type { GitHubClient } from '../github/GitHubClient';
 import {
   getPRByNotionTaskId,
-  getPRBySessionId,
-  setPauseReason,
-  setSessionPauseReason,
   getEventsBySession,
   getDenialsBySession,
 } from '../db/queries';
@@ -50,6 +47,32 @@ export interface ISessionManager {
   ): void;
 }
 
+/**
+ * Check a single tool-use block for a worktree escape.
+ * Used in-flight as tool_use events stream in from the session.
+ * Returns a violation if the tool writes outside the worktree, or null if safe.
+ */
+export function detectInFlightEscape(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  worktreePath: string,
+): WorktreeEscapeViolation | null {
+  const block: ToolUseBlock = { name: toolName, input: toolInput };
+  const paths = extractPathsFromBlock(block);
+  const normalizedWorktree = normalizePath(worktreePath);
+  const worktreePrefix = normalizedWorktree.endsWith(path.sep)
+    ? normalizedWorktree
+    : normalizedWorktree + path.sep;
+
+  for (const p of paths) {
+    const resolved = normalizePath(p, worktreePath);
+    if (resolved !== normalizedWorktree && !resolved.startsWith(worktreePrefix)) {
+      return { type: 'worktree_escape', tool: toolName, path: p, escapedTo: resolved };
+    }
+  }
+  return null;
+}
+
 /** Minimal session shape needed by the auditor — avoids a circular import. */
 export interface AuditableSession {
   sessionId: string;
@@ -71,7 +94,7 @@ export class SessionAuditor {
   constructor(
     private notionClientOrProjectId: TaskBackend | string,
     private githubClient?: GitHubClient,
-    private sessionManager?: ISessionManager,
+    _sessionManager?: ISessionManager,
   ) {}
 
   private resolveBackend(): TaskBackend {
@@ -159,15 +182,12 @@ export class SessionAuditor {
             violations.push('PR body missing required section: ## Test plan');
           }
 
-          // 6. PR content matches task spec?
+          // 6. PR content matches task spec? (informational only — not a re-prompt gate)
           specMismatch = await this.compareToSpec(
             repo,
             prNumber,
             session.taskId,
           );
-          if (specMismatch) {
-            violations.push(specMismatch);
-          }
         }
       }
     }
@@ -193,10 +213,6 @@ export class SessionAuditor {
       specMismatch,
       auditedAt: new Date().toISOString(),
     };
-
-    if (violations.length > 0) {
-      this.routeFailuresToSession(session.sessionId, violations);
-    }
 
     return audit;
   }
@@ -314,54 +330,6 @@ export class SessionAuditor {
     return parts.length > 0 ? parts.join('; ') : null;
   }
 
-  private routeFailuresToSession(
-    sessionId: string,
-    violations: (string | WorktreeEscapeViolation)[],
-  ): void {
-    if (!this.sessionManager) return;
-
-    if (this.sessionManager.isAlive(sessionId)) {
-      const lines = violations.map((v) =>
-        typeof v === 'string'
-          ? `❌ ${v}`
-          : `❌ worktree_escape: ${v.tool} wrote to ${v.path}`,
-      );
-      const message = [
-        'Audit findings for your PR:',
-        '',
-        ...lines,
-        '',
-        'Please address these issues and push a fix.',
-      ].join('\n');
-
-      try {
-        this.sessionManager.send(sessionId, message);
-      } catch {
-        // Unexpected — violations still stored in SQLite
-      }
-      return;
-    }
-
-    // Session is concluded/idle — route to attention queue so findings are visible.
-    const pr = getPRBySessionId(sessionId);
-    if (!pr) {
-      try {
-        setSessionPauseReason(sessionId, 'pr_creation_failed');
-      } catch (err) {
-        console.warn(
-          `[SessionAuditor] failed to set pr_creation_failed session pause_reason for ${sessionId}: ${err}`,
-        );
-      }
-      return;
-    }
-    try {
-      setPauseReason(pr.pr_number, pr.repo, 'audit_findings');
-    } catch (err) {
-      console.warn(
-        `[SessionAuditor] failed to set audit_findings pause_reason for PR #${pr.pr_number}: ${err}`,
-      );
-    }
-  }
 }
 
 // ── Private helpers ──────────────────────────────────────────────────────────

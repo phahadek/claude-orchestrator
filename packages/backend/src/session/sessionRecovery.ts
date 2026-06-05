@@ -304,6 +304,10 @@ export async function recoverSession(
           specMismatch: audit.specMismatch,
           auditedAt: audit.auditedAt,
         });
+        // Light nudge when session completed without opening a PR.
+        if (!audit.prOpened) {
+          broadcast({ type: 'missed_pr_nudge', sessionId: audit.sessionId });
+        }
       })
       .catch((err) => {
         console.error(`[recoverSession] audit failed for ${sessionId}: ${err}`);
