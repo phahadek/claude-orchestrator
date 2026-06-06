@@ -8,7 +8,11 @@ import { AgentSession, parseNotionPageIdDashed } from './AgentSession';
 import { formatTaskId } from '../tasks/taskId';
 import { buildSessionContext } from './ContextBuilder';
 import { buildReviewClaudeMd } from './orchestrator-claudemd';
-import { resolveStartingPoint, ensureMilestoneBranch } from './branchModel';
+import {
+  resolveStartingPoint,
+  ensureMilestoneBranch,
+  slugify,
+} from './branchModel';
 import { loadOrchestratorConfig } from './orchestrator-config';
 import { CliSessionRunner } from './CliSessionRunner';
 import { ApiSessionRunner } from './ApiSessionRunner';
@@ -579,10 +583,21 @@ export class SessionManager extends EventEmitter {
         ? startingPoint
         : `origin/${project.baseBranch}`;
 
+    const featureBranch = taskName ? `feature/${slugify(taskName)}` : null;
     try {
-      execSync(`git worktree add --detach "${worktreePath}" ${worktreeBase}`, {
-        cwd: projectDir,
-      });
+      if (featureBranch) {
+        execSync(
+          `git worktree add -b "${featureBranch}" "${worktreePath}" ${worktreeBase}`,
+          { cwd: projectDir },
+        );
+      } else {
+        execSync(
+          `git worktree add --detach "${worktreePath}" ${worktreeBase}`,
+          {
+            cwd: projectDir,
+          },
+        );
+      }
     } catch (err) {
       console.error(
         `[SessionManager] failed to create worktree for ${sessionId}: ${err}`,
@@ -1659,10 +1674,34 @@ export class SessionManager extends EventEmitter {
         ? startingPoint
         : `origin/${project.baseBranch}`;
 
+    const resumeFeatureBranch = row.task_name
+      ? `feature/${slugify(row.task_name)}`
+      : null;
     try {
-      execSync(`git worktree add --detach "${worktreePath}" ${worktreeBase}`, {
-        cwd: projectDir,
-      });
+      if (resumeFeatureBranch) {
+        try {
+          // Attach to existing branch when the session resumes with an open PR.
+          execSync(
+            `git worktree add "${worktreePath}" "${resumeFeatureBranch}"`,
+            {
+              cwd: projectDir,
+            },
+          );
+        } catch {
+          // Branch doesn't exist locally (e.g. was cleaned up) — recreate it.
+          execSync(
+            `git worktree add -b "${resumeFeatureBranch}" "${worktreePath}" ${worktreeBase}`,
+            { cwd: projectDir },
+          );
+        }
+      } else {
+        execSync(
+          `git worktree add --detach "${worktreePath}" ${worktreeBase}`,
+          {
+            cwd: projectDir,
+          },
+        );
+      }
     } catch (err) {
       console.error(
         `[SessionManager] sendOrResume: failed to create worktree: ${err}`,

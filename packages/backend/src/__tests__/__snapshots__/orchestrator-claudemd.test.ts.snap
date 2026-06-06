@@ -23,7 +23,7 @@ Follow these steps in order — every session:
 > ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work after checking git status, stop and wait for instructions.**
 
 1. Fetch the GitHub issue via the gh CLI. Fetch only the task listed above — do NOT browse the board for other tasks.
-2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.
+2. The orchestrator creates the worktree on a named feature branch. Verify with \`git branch --show-current\` — it should output \`feature/<task-name>\`.
 3. Implement the task per the acceptance criteria.
 4. Pass the pre-PR gate (see Pre-PR Gate section below).
 5. Open a draft PR targeting \`dev\` using the required body template.
@@ -213,7 +213,7 @@ Follow these steps in order — every session:
 > ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work after checking git status, stop and wait for instructions.**
 
 1. Fetch the Jira issue. Fetch only the task listed above — do NOT browse the board for other tasks.
-2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.
+2. The orchestrator creates the worktree on a named feature branch. Verify with \`git branch --show-current\` — it should output \`feature/<task-name>\`.
 3. Implement the task per the acceptance criteria.
 4. Pass the pre-PR gate (see Pre-PR Gate section below).
 5. Open a draft PR targeting \`dev\` using the required body template.
@@ -406,7 +406,7 @@ Follow these steps in order — every session:
 > Skip the remote fetch step and instead read \`tasks.yaml\` for task context.
 
 1. Read \`tasks.yaml\` in the project root for task context (skip remote fetch).
-2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.
+2. The orchestrator creates the worktree on a named feature branch. Verify with \`git branch --show-current\` — it should output \`feature/<task-name>\`.
 3. Implement the task per the acceptance criteria.
 4. Pass the pre-PR gate (see Pre-PR Gate section below).
 5. Open a draft PR targeting \`dev\` using the required body template.
@@ -596,7 +596,7 @@ Follow these steps in order — every session:
 > ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work after checking git status, stop and wait for instructions.**
 
 1. Fetch the Notion task page and project context page. Fetch only the task listed above — do NOT browse the board for other tasks.
-2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.
+2. The orchestrator creates the worktree on a named feature branch. Verify with \`git branch --show-current\` — it should output \`feature/<task-name>\`.
 3. Implement the task per the acceptance criteria.
 4. Pass the pre-PR gate (see Pre-PR Gate section below).
 5. Open a draft PR targeting \`dev\` using the required body template.

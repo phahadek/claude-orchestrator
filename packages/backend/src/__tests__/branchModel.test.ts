@@ -276,9 +276,9 @@ describe('SessionManager — detached worktree branch model', () => {
     expect(source).not.toMatch(/`session\/\$\{newSessionId\}`/);
   });
 
-  it('uses git worktree add --detach instead of -b', () => {
-    expect(source).toMatch(/git worktree add --detach/);
-    expect(source).not.toMatch(/git worktree add ".*" -b/);
+  it('creates worktree on named feature branch when taskName is available', () => {
+    expect(source).toMatch(/git worktree add -b/);
+    expect(source).toMatch(/feature\/\$\{slugify/);
   });
 
   it('imports resolveStartingPoint and ensureMilestoneBranch from branchModel', () => {
