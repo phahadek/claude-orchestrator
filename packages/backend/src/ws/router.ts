@@ -1,9 +1,12 @@
 import { WebSocket } from 'ws';
 import { ClientMessage } from './types';
 import { SessionManager } from '../session/SessionManager';
-import { getTaskBackend } from '../tasks/TaskBackend';
 import { getProjectById } from '../config';
 import { approveEnrollment } from '../auth/Enrollment';
+import { getTaskCache } from '../db/queries';
+import { ProjectService } from '../projects/ProjectService';
+import { DependencyResolver } from '../notion/DependencyResolver';
+import type { NotionTask } from '../notion/types';
 
 export function handleMessage(
   ws: WebSocket,
@@ -124,21 +127,30 @@ export function handleMessage(
         );
         break;
       }
-      let backend;
-      try {
-        backend = getTaskBackend(msg.projectId);
-      } catch (e) {
-        ws.send(JSON.stringify({ type: 'error', message: String(e) }));
+      // Serve from cache only — never block on a Notion round-trip.
+      const milestone = ProjectService.getMilestone(msg.milestoneId);
+      if (!milestone?.sourceId) {
+        ws.send(
+          JSON.stringify({
+            type: 'tasks_ready',
+            tasks: [],
+          }),
+        );
         break;
       }
-      backend
-        .fetchReadyTasks(msg.milestoneId, msg.skipCache)
-        .then((tasks) =>
-          ws.send(JSON.stringify({ type: 'tasks_ready', tasks })),
-        )
-        .catch((e) =>
-          ws.send(JSON.stringify({ type: 'error', message: String(e) })),
-        );
+      const cacheRow = getTaskCache(`board:${milestone.sourceId}`);
+      if (!cacheRow) {
+        ws.send(JSON.stringify({ type: 'tasks_ready', tasks: [] }));
+        break;
+      }
+      try {
+        const notionTasks = JSON.parse(cacheRow.raw_json) as NotionTask[];
+        const resolver = new DependencyResolver();
+        const resolved = resolver.resolve(notionTasks);
+        ws.send(JSON.stringify({ type: 'tasks_ready', tasks: resolved }));
+      } catch {
+        ws.send(JSON.stringify({ type: 'tasks_ready', tasks: [] }));
+      }
       break;
     }
     case 'enrollment_approve': {

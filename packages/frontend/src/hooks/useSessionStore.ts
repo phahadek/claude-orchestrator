@@ -188,6 +188,12 @@ export function useSessionStore() {
     status: string;
     prUrl?: string;
   } | null>(null);
+  const [lastCacheUpdatedEvent, setLastCacheUpdatedEvent] = useState<{
+    projectId: string;
+    boardId: string;
+    taskCount: number;
+    refreshedAt: number;
+  } | null>(null);
 
   const dispatch = useCallback((msg: ServerMessage) => {
     setSynced(true);
@@ -530,6 +536,14 @@ export function useSessionStore() {
       });
       setPrRefreshTrigger((n) => n + 1);
     }
+    if (msg.type === 'task_cache_updated') {
+      setLastCacheUpdatedEvent({
+        projectId: msg.projectId,
+        boardId: msg.boardId,
+        taskCount: msg.taskCount,
+        refreshedAt: msg.refreshedAt,
+      });
+    }
   }, []);
 
   const resetTasks = useCallback(() => {
@@ -655,5 +669,6 @@ export function useSessionStore() {
     lastCiBillingBlockedEvent,
     lastSessionStartedEvent,
     lastSessionEndedEvent,
+    lastCacheUpdatedEvent,
   };
 }
