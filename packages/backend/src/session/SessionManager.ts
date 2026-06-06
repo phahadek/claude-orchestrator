@@ -602,7 +602,8 @@ export class SessionManager extends EventEmitter {
     } catch (err) {
       const e = err as { stderr?: string | Buffer; message: string };
       const stderr = e.stderr ? e.stderr.toString() : '';
-      const fullMsg = `${e.message}${stderr ? `\nstderr: ${stderr}` : ''}`.trim();
+      const fullMsg =
+        `${e.message}${stderr ? `\nstderr: ${stderr}` : ''}`.trim();
       console.error(
         `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
       );

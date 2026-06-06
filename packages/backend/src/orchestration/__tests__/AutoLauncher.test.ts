@@ -1217,7 +1217,9 @@ describe('AutoLauncher — launch failure tracking', () => {
     const backend = makeFailingBackend(task);
     const sessionManager = makeSessionManager(0);
     sessionManager.start.mockImplementation(() => {
-      throw new WorktreeSetupError('Command failed', { isBranchAlreadyExists: true });
+      throw new WorktreeSetupError('Command failed', {
+        isBranchAlreadyExists: true,
+      });
     });
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -1254,14 +1256,20 @@ describe('AutoLauncher — launch failure tracking', () => {
 
     sessionManager.start
       .mockImplementationOnce(() => {
-        throw new WorktreeSetupError('Command failed', { isBranchAlreadyExists: true });
+        throw new WorktreeSetupError('Command failed', {
+          isBranchAlreadyExists: true,
+        });
       })
       .mockImplementationOnce(() => {
-        throw new WorktreeSetupError('Command failed', { isBranchAlreadyExists: true });
+        throw new WorktreeSetupError('Command failed', {
+          isBranchAlreadyExists: true,
+        });
       })
       .mockImplementationOnce(() => 'session-ok') // success clears count
       .mockImplementation(() => {
-        throw new WorktreeSetupError('Command failed', { isBranchAlreadyExists: true });
+        throw new WorktreeSetupError('Command failed', {
+          isBranchAlreadyExists: true,
+        });
       });
 
     const launcher = new AutoLauncher(sessionManager as never, broadcast, {
@@ -1279,19 +1287,25 @@ describe('AutoLauncher — launch failure tracking', () => {
     // 1 success — resets count
     backend.fetchReadyTasks.mockResolvedValue([task]);
     await launcher.pollOnce();
-    expect(broadcastMsgs.filter((m) => m.type === 'auto_launch_paused')).toHaveLength(0);
+    expect(
+      broadcastMsgs.filter((m) => m.type === 'auto_launch_paused'),
+    ).toHaveLength(0);
 
     // Now 2 more failures — not yet at limit again (count reset to 1 after success)
     for (let i = 0; i < 2; i++) {
       backend.fetchReadyTasks.mockResolvedValue([task]);
       await launcher.pollOnce();
     }
-    expect(broadcastMsgs.filter((m) => m.type === 'auto_launch_paused')).toHaveLength(0);
+    expect(
+      broadcastMsgs.filter((m) => m.type === 'auto_launch_paused'),
+    ).toHaveLength(0);
 
     // 3rd failure after reset — hits limit
     backend.fetchReadyTasks.mockResolvedValue([task]);
     await launcher.pollOnce();
-    expect(broadcastMsgs.filter((m) => m.type === 'auto_launch_paused')).toHaveLength(1);
+    expect(
+      broadcastMsgs.filter((m) => m.type === 'auto_launch_paused'),
+    ).toHaveLength(1);
 
     warnSpy.mockRestore();
   });

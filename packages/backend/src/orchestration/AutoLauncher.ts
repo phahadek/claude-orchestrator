@@ -333,10 +333,7 @@ export class AutoLauncher {
     if (maybePauseReason != null && maybePauseReason !== '') return false;
     // Skip tasks that have exceeded the consecutive launch failure limit.
     const failures = this.launchFailures.get(task.id);
-    if (
-      failures &&
-      failures.count >= AutoLauncher.MAX_FAILURES_BEFORE_PAUSE
-    )
+    if (failures && failures.count >= AutoLauncher.MAX_FAILURES_BEFORE_PAUSE)
       return false;
     // Also skip if the task's most recent PR is paused (e.g. stuck_timeout)
     // so we don't relaunch a session that was force-paused.
@@ -412,7 +409,9 @@ export class AutoLauncher {
         err instanceof WorktreeSetupError
           ? err.message
           : (err as Error).message;
-      console.warn(`[AutoLauncher] failed to launch task ${task.id}: ${fullMsg}`);
+      console.warn(
+        `[AutoLauncher] failed to launch task ${task.id}: ${fullMsg}`,
+      );
 
       const entry = this.launchFailures.get(task.id) ?? {
         count: 0,
