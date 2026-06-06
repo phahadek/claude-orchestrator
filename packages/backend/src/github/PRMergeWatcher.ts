@@ -42,7 +42,8 @@ import {
 import { emitTaskUpdated } from '../routes/tasks';
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-const PUSH_REVIEW_TIMEOUT_MS = 120_000;
+const PUSH_REVIEW_TIMEOUT_MS = 240_000;
+const PENDING_REREVIEW_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_MAX_REVIEW_ITERATIONS = 3;
 
 /**
@@ -73,7 +74,7 @@ export class PRMergeWatcher {
   private rateLimitBroadcasted = false;
   private prReviewService: PRReviewService | undefined;
   private reviewOrchestrator: ReviewOrchestrator | undefined;
-  private readonly pendingReReviews = new Set<string>();
+  private readonly pendingReReviews = new Map<string, number>();
 
   constructor(
     private github: GitHubClient,
@@ -160,6 +161,7 @@ export class PRMergeWatcher {
       this.rateLimitBroadcasted = false;
       this.broadcast({ type: 'github_rate_limit_cleared' });
     }
+    this.sweepStalePendingReReviews();
     const silentMerges = this.firstPollPending;
     const openPRs = getAllOpenPRs();
 
@@ -635,9 +637,10 @@ export class PRMergeWatcher {
 
     // Add to pendingReReviews synchronously (before first await) to prevent
     // concurrent re-reviews for the same session.
-    this.pendingReReviews.add(sessionId);
+    this.pendingReReviews.set(sessionId, Date.now());
 
     void (async () => {
+      try {
       let headSha = prRow.head_sha;
       let fetchError: unknown;
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -682,7 +685,6 @@ export class PRMergeWatcher {
         console.log(
           `[PRMergeWatcher] handlePushDetected: autofix-only push for PR #${prRow.pr_number} — skipping re-review`,
         );
-        this.pendingReReviews.delete(sessionId);
         return;
       }
 
@@ -699,7 +701,6 @@ export class PRMergeWatcher {
           repo: prRow.repo,
           message,
         });
-        this.pendingReReviews.delete(sessionId);
         return;
       }
 
@@ -715,7 +716,6 @@ export class PRMergeWatcher {
         `[PRMergeWatcher] shouldAutoReview: iter=${prRow.review_iteration}/${maxIter} head=${headSha?.slice(0, 7)} lastReviewed=${prRow.last_reviewed_sha?.slice(0, 7)} → ${autoReviewOk}`,
       );
       if (!autoReviewOk) {
-        this.pendingReReviews.delete(sessionId);
         return;
       }
 
@@ -866,7 +866,27 @@ export class PRMergeWatcher {
       } finally {
         this.pendingReReviews.delete(sessionId);
       }
+      } catch (e) {
+        console.error(
+          `[PRMergeWatcher] handlePushDetected unexpected error for session ${sessionId.slice(0, 8)}:`,
+          e,
+        );
+      } finally {
+        this.pendingReReviews.delete(sessionId);
+      }
     })();
+  }
+
+  private sweepStalePendingReReviews(): void {
+    const now = Date.now();
+    for (const [sid, addedAt] of this.pendingReReviews) {
+      if (now - addedAt > PENDING_REREVIEW_TTL_MS) {
+        console.warn(
+          `[PRMergeWatcher] sweeping stale pendingReReview for session ${sid.slice(0, 8)} (age ${Math.round((now - addedAt) / 1000)}s)`,
+        );
+        this.pendingReReviews.delete(sid);
+      }
+    }
   }
 
   /**
