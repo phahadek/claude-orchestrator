@@ -67,6 +67,18 @@ describe('SessionPanel — code session', () => {
     ).toBeTruthy();
   });
 
+  it('renders the Composer for idle session', () => {
+    render(
+      <SessionPanel
+        session={makeSession({ status: 'idle' })}
+        {...defaultProps}
+      />,
+    );
+    expect(
+      screen.getByPlaceholderText('Send a message to the session…'),
+    ).toBeTruthy();
+  });
+
   it('hides the Composer for terminal sessions', () => {
     for (const status of ['done', 'error', 'killed']) {
       const { unmount } = render(

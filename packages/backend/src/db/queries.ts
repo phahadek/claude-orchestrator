@@ -468,16 +468,16 @@ export function archiveFinishedSessions(): number {
 }
 
 /**
- * Archive concluded sessions (status IN ('done','error','killed','idle'), archived=0)
+ * Archive concluded sessions (status IN ('done','error','killed'), archived=0)
  * whose ended_at is older than the given cutoff timestamp (ms).
- * Archival is orthogonal to lifecycle: idle sessions are equally eligible.
+ * Idle sessions are excluded — the CLI subprocess is still alive and resumable.
  * Returns the session_ids of archived sessions.
  */
 export function archiveConcludedSessionsOlderThan(cutoffMs: number): string[] {
   const rows = db
     .prepare(
       `SELECT session_id FROM sessions
-       WHERE status IN ('done', 'error', 'killed', 'idle')
+       WHERE status IN ('done', 'error', 'killed')
          AND archived = 0
          AND ended_at IS NOT NULL
          AND ended_at < @cutoff`,

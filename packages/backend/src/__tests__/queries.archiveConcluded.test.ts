@@ -91,7 +91,7 @@ describe('archiveConcludedSessionsOlderThan', () => {
     expect(ids).toHaveLength(0);
   });
 
-  it('archives idle sessions older than cutoff (archival is orthogonal to lifecycle)', () => {
+  it('does not archive idle sessions even when ended_at is in the past (idle is resumable)', () => {
     insertSession({
       session_id: 'old-idle',
       status: 'idle',
@@ -99,26 +99,10 @@ describe('archiveConcludedSessionsOlderThan', () => {
     });
 
     const ids = archiveConcludedSessionsOlderThan(CUTOFF);
-    expect(ids).toEqual(['old-idle']);
-
-    const row = db
-      .prepare(`SELECT archived FROM sessions WHERE session_id = 'old-idle'`)
-      .get() as { archived: number };
-    expect(row.archived).toBe(1);
-  });
-
-  it('does not archive idle sessions within the grace period', () => {
-    insertSession({
-      session_id: 'fresh-idle',
-      status: 'idle',
-      ended_at: CUTOFF,
-    });
-
-    const ids = archiveConcludedSessionsOlderThan(CUTOFF);
     expect(ids).toHaveLength(0);
 
     const row = db
-      .prepare(`SELECT archived FROM sessions WHERE session_id = 'fresh-idle'`)
+      .prepare(`SELECT archived FROM sessions WHERE session_id = 'old-idle'`)
       .get() as { archived: number };
     expect(row.archived).toBe(0);
   });
