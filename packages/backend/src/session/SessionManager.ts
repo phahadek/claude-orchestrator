@@ -883,7 +883,14 @@ export class SessionManager extends EventEmitter {
     // PR-attribution guard: warn when a session opens a PR for a different task
     // than the one it was dispatched for, then still forward so the PR is tracked.
     session.on('pr_opened', (job: unknown) => {
-      const prJob = job as { taskId?: string };
+      const prJob = job as {
+        taskId?: string;
+        prNumber?: number;
+        repo?: string;
+      };
+      console.log(
+        `[SessionManager] forwarding pr_opened for PR #${prJob.prNumber ?? '?'} (${prJob.repo ?? '?'}) from session ${sessionId.slice(0, 8)}`,
+      );
       const dispatched = session.taskId;
       if (
         dispatched &&
@@ -902,6 +909,9 @@ export class SessionManager extends EventEmitter {
           payload: { dispatchedTaskId: dispatched, prTaskId: prJob.taskId },
         });
       }
+      console.log(
+        `[SessionManager] emitting pr_opened to ReviewOrchestrator for PR #${prJob.prNumber ?? '?'}`,
+      );
       this.emit('pr_opened', job);
     });
     // Forward push_detected so ReviewOrchestrator can trigger re-reviews

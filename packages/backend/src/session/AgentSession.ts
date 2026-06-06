@@ -1447,6 +1447,9 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       prUrl,
       ...(this.taskId && { taskId: this.taskId }),
     });
+    console.log(
+      `[AgentSession] emitting pr_opened for PR #${prNumber} (${repo}) session=${this.sessionId}`,
+    );
     this.emit('pr_opened', {
       prNumber,
       repo,

@@ -94,6 +94,7 @@ import {
   setLocalBranchPauseReason,
   addAutofixSha,
   consumeAutofixSha as dbConsumeAutofixSha,
+  getAllPendingReviewSyncs,
 } from '../db/queries';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
@@ -2744,6 +2745,131 @@ describe('ReviewOrchestrator — concurrent drain pool', () => {
       if (savedEnv !== undefined)
         process.env.AUTO_REVIEW_CONCURRENCY = savedEnv;
       else delete process.env.AUTO_REVIEW_CONCURRENCY;
+    }
+  });
+});
+
+// ── Stall detector ────────────────────────────────────────────────────────────
+
+describe('ReviewOrchestrator — stall detector', () => {
+  it('destroy() stops the stall detector interval', () => {
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    // Pass tiny intervals so we don't hold real timers open
+    const orch = new ReviewOrchestrator(
+      rs,
+      sm as any,
+      1,
+      true,
+      undefined,
+      60_000,
+      30 * 60_000,
+    );
+    expect((orch as any).stallDetectorInterval).not.toBeNull();
+    orch.destroy();
+    expect((orch as any).stallDetectorInterval).toBeNull();
+    // Second destroy() is a no-op
+    orch.destroy();
+    expect((orch as any).stallDetectorInterval).toBeNull();
+  });
+
+  it('stall detector force-clears a stuck slot and unblocks the queue', async () => {
+    vi.useFakeTimers();
+    try {
+      // Reset all persistent mock implementations from earlier tests before setting up fresh ones.
+      vi.resetAllMocks();
+
+      vi.mocked(getPRByNumber).mockReturnValue({
+        ...basePRRow,
+        session_id: null, // no session → worktreePath stays '' → runTestPipeline skipped
+      } as any);
+      vi.mocked(loadAutofixCommands).mockReturnValue([]);
+      vi.mocked(loadOrchestratorConfig).mockReturnValue({
+        verify: [],
+        test: [],
+        test_timeout_sec: 60,
+        test_max_rss_mb: 0,
+        test_fail_fast: true,
+      } as any);
+      vi.mocked(getAllPendingReviewSyncs).mockReturnValue([]);
+
+      let resolveStuck!: () => void;
+      const stuckDone = new Promise<void>((r) => {
+        resolveStuck = r;
+      });
+
+      const rs = {
+        reviewPR: vi
+          .fn()
+          .mockImplementationOnce(async () => {
+            await stuckDone; // PR 1 blocks until explicitly released
+            return {
+              prNumber: 1,
+              repo: 'owner/repo',
+              verdict: 'approved',
+              dimensions: [],
+              summary: 'ok',
+              reviewedAt: '',
+            };
+          })
+          .mockImplementationOnce(async () => {
+            return {
+              prNumber: 2,
+              repo: 'owner/repo',
+              verdict: 'approved',
+              dimensions: [],
+              summary: 'ok',
+              reviewedAt: '',
+            };
+          }),
+        sendReReview: vi.fn(),
+        reReviewPR: vi.fn(),
+      } as unknown as PRReviewService;
+
+      const sm = makeMockSessionManager();
+
+      // concurrency=1, stall check every 200 ms, stall threshold 500 ms
+      const orch = new ReviewOrchestrator(
+        rs,
+        sm as any,
+        1,
+        true,
+        undefined,
+        200,
+        500,
+      );
+
+      // Start PR 1 (fills the single concurrency slot and blocks)
+      sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
+      // Queue PR 2 (blocked because concurrency is full)
+      sm.emit('pr_opened', { ...baseJob, prNumber: 2 });
+
+      // Allow event-loop microtasks to settle so PR 1 actually starts
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect((orch as any).running).toBe(1);
+      expect((orch as any).queue.length).toBe(1);
+
+      // Advance past the stall threshold — detector should fire and clear PR 1's slot
+      await vi.advanceTimersByTimeAsync(700);
+
+      // Stall detector clears the stuck PR 1 slot
+      expect((orch as any).inFlightPRKeys.size).toBe(0);
+      expect((orch as any).inFlightStartTimes.size).toBe(0);
+
+      // Drain was called; allow PR 2 to start (needs microtask flushes)
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // PR 2 should have been started (reviewPR called a second time)
+      expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledTimes(2);
+
+      resolveStuck();
+      orch.destroy();
+    } finally {
+      vi.useRealTimers();
     }
   });
 });
