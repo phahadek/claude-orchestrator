@@ -85,7 +85,9 @@ vi.mock('../CliSessionRunner', () => ({
 }));
 
 vi.mock('../SessionAuditor', () => ({
-  detectInFlightEscape: vi.fn().mockReturnValue({ violations: [], specMismatch: null }),
+  detectInFlightEscape: vi
+    .fn()
+    .mockReturnValue({ violations: [], specMismatch: null }),
 }));
 
 vi.mock('../../utils/eventFilters', () => ({
@@ -118,7 +120,9 @@ function makeSession(worktreePath = WORKTREE): AgentSession {
 }
 
 async function callHandlePushDetected(session: AgentSession): Promise<void> {
-  await (session as unknown as { handlePushDetected(): Promise<void> }).handlePushDetected();
+  await (
+    session as unknown as { handlePushDetected(): Promise<void> }
+  ).handlePushDetected();
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -131,14 +135,19 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
 
   it('pushes when worktree is ahead of origin and emits session_auto_pushed', async () => {
     vi.mocked(execSync).mockImplementation((cmd: string) => {
-      if (cmd.includes('rev-parse --abbrev-ref')) return Buffer.from('feature/my-branch\n');
+      if (cmd.includes('rev-parse --abbrev-ref'))
+        return Buffer.from('feature/my-branch\n');
       if (cmd.includes('rev-parse HEAD')) return Buffer.from('abc1234\n');
-      if (cmd.includes('ls-remote')) return Buffer.from('def5678\tfeature/my-branch\n');
+      if (cmd.includes('ls-remote'))
+        return Buffer.from('def5678\tfeature/my-branch\n');
       if (cmd.includes('rev-list --left-right')) return Buffer.from('0\t1\n');
       if (cmd.includes('git push')) return Buffer.from('');
       return Buffer.from('');
     });
-    vi.mocked(getPRBySessionId).mockReturnValue({ pr_number: 10, repo: 'owner/repo' } as any);
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      pr_number: 10,
+      repo: 'owner/repo',
+    } as any);
 
     const session = makeSession();
     const messages: unknown[] = [];
@@ -150,14 +159,16 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
     await callHandlePushDetected(session);
 
     // push was executed
-    const pushCall = vi.mocked(execSync).mock.calls.find(([cmd]) =>
-      (cmd as string).includes('git push origin'),
-    );
+    const pushCall = vi
+      .mocked(execSync)
+      .mock.calls.find(([cmd]) => (cmd as string).includes('git push origin'));
     expect(pushCall).toBeDefined();
     expect(pushCall![0]).toBe('git push origin feature/my-branch');
 
     // session_auto_pushed WS event emitted
-    const autoPushMsg = messages.find((m: any) => m.type === 'session_auto_pushed');
+    const autoPushMsg = messages.find(
+      (m: any) => m.type === 'session_auto_pushed',
+    );
     expect(autoPushMsg).toMatchObject({
       type: 'session_auto_pushed',
       sessionId: 'test-auto-push',
@@ -167,15 +178,19 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
 
     // push_detected still fires
     expect(pushDetectedEvents).toHaveLength(1);
-    expect(pushDetectedEvents[0]).toMatchObject({ sessionId: 'test-auto-push' });
+    expect(pushDetectedEvents[0]).toMatchObject({
+      sessionId: 'test-auto-push',
+    });
   });
 
   it('does not push when worktree HEAD equals origin HEAD', async () => {
     const SHA = 'abc1234';
     vi.mocked(execSync).mockImplementation((cmd: string) => {
-      if (cmd.includes('rev-parse --abbrev-ref')) return Buffer.from('feature/foo\n');
+      if (cmd.includes('rev-parse --abbrev-ref'))
+        return Buffer.from('feature/foo\n');
       if (cmd.includes('rev-parse HEAD')) return Buffer.from(`${SHA}\n`);
-      if (cmd.includes('ls-remote')) return Buffer.from(`${SHA}\tfeature/foo\n`);
+      if (cmd.includes('ls-remote'))
+        return Buffer.from(`${SHA}\tfeature/foo\n`);
       return Buffer.from('');
     });
 
@@ -188,11 +203,13 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
 
     await callHandlePushDetected(session);
 
-    const pushCall = vi.mocked(execSync).mock.calls.find(([cmd]) =>
-      (cmd as string).includes('git push'),
-    );
+    const pushCall = vi
+      .mocked(execSync)
+      .mock.calls.find(([cmd]) => (cmd as string).includes('git push'));
     expect(pushCall).toBeUndefined();
-    expect(messages.find((m: any) => m.type === 'session_auto_pushed')).toBeUndefined();
+    expect(
+      messages.find((m: any) => m.type === 'session_auto_pushed'),
+    ).toBeUndefined();
 
     // push_detected still fires unchanged
     expect(pushDetectedEvents).toHaveLength(1);
@@ -200,13 +217,18 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
 
   it('skips push and sets diverged_branch pause_reason when branch is diverged', async () => {
     vi.mocked(execSync).mockImplementation((cmd: string) => {
-      if (cmd.includes('rev-parse --abbrev-ref')) return Buffer.from('feature/diverged\n');
+      if (cmd.includes('rev-parse --abbrev-ref'))
+        return Buffer.from('feature/diverged\n');
       if (cmd.includes('rev-parse HEAD')) return Buffer.from('local111\n');
-      if (cmd.includes('ls-remote')) return Buffer.from('remote222\tfeature/diverged\n');
+      if (cmd.includes('ls-remote'))
+        return Buffer.from('remote222\tfeature/diverged\n');
       if (cmd.includes('rev-list --left-right')) return Buffer.from('2\t1\n');
       return Buffer.from('');
     });
-    vi.mocked(getPRBySessionId).mockReturnValue({ pr_number: 42, repo: 'owner/repo' } as any);
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      pr_number: 42,
+      repo: 'owner/repo',
+    } as any);
 
     const session = makeSession();
     const messages: unknown[] = [];
@@ -218,13 +240,17 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
     await callHandlePushDetected(session);
 
     // no push
-    const pushCall = vi.mocked(execSync).mock.calls.find(([cmd]) =>
-      (cmd as string).includes('git push'),
-    );
+    const pushCall = vi
+      .mocked(execSync)
+      .mock.calls.find(([cmd]) => (cmd as string).includes('git push'));
     expect(pushCall).toBeUndefined();
 
     // pause_reason set
-    expect(setPauseReason).toHaveBeenCalledWith(42, 'owner/repo', 'diverged_branch');
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'diverged_branch',
+    );
 
     // push_detected still fires
     expect(pushDetectedEvents).toHaveLength(1);
@@ -232,7 +258,8 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
 
   it('catches ls-remote failure, logs it, and still emits push_detected', async () => {
     vi.mocked(execSync).mockImplementation((cmd: string) => {
-      if (cmd.includes('rev-parse --abbrev-ref')) return Buffer.from('feature/foo\n');
+      if (cmd.includes('rev-parse --abbrev-ref'))
+        return Buffer.from('feature/foo\n');
       if (cmd.includes('rev-parse HEAD')) return Buffer.from('abc1234\n');
       if (cmd.includes('ls-remote')) throw new Error('network error');
       return Buffer.from('');
@@ -263,7 +290,8 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
 
   it('does not push when ls-remote returns empty (new branch not yet on remote)', async () => {
     vi.mocked(execSync).mockImplementation((cmd: string) => {
-      if (cmd.includes('rev-parse --abbrev-ref')) return Buffer.from('feature/new\n');
+      if (cmd.includes('rev-parse --abbrev-ref'))
+        return Buffer.from('feature/new\n');
       if (cmd.includes('rev-parse HEAD')) return Buffer.from('abc1234\n');
       if (cmd.includes('ls-remote')) return Buffer.from('');
       if (cmd.includes('rev-list --left-right')) return Buffer.from('0\t1\n');
@@ -282,12 +310,14 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
 
     // localHead='abc1234', remoteHead='' → not equal → proceed to rev-list
     // then ahead=1, behind=0 → push
-    const pushCall = vi.mocked(execSync).mock.calls.find(([cmd]) =>
-      (cmd as string).includes('git push origin'),
-    );
+    const pushCall = vi
+      .mocked(execSync)
+      .mock.calls.find(([cmd]) => (cmd as string).includes('git push origin'));
     expect(pushCall).toBeDefined();
 
-    const autoPushMsg = messages.find((m: any) => m.type === 'session_auto_pushed');
+    const autoPushMsg = messages.find(
+      (m: any) => m.type === 'session_auto_pushed',
+    );
     expect(autoPushMsg).toBeDefined();
     expect(pushDetectedEvents).toHaveLength(1);
   });
