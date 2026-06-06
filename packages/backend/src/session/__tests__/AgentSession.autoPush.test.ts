@@ -252,6 +252,17 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
       'diverged_branch',
     );
 
+    // session_auto_pushed is broadcast with commits:0 to signal diverged state
+    const autoPushMsg = messages.find(
+      (m: any) => m.type === 'session_auto_pushed',
+    );
+    expect(autoPushMsg).toMatchObject({
+      type: 'session_auto_pushed',
+      sessionId: 'test-auto-push',
+      branch: 'feature/diverged',
+      commits: 0,
+    });
+
     // push_detected still fires
     expect(pushDetectedEvents).toHaveLength(1);
   });
@@ -288,7 +299,7 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
     expect(pushDetectedEvents).toHaveLength(1);
   });
 
-  it('does not push when ls-remote returns empty (new branch not yet on remote)', async () => {
+  it('pushes when ls-remote returns empty (new branch not yet on remote)', async () => {
     vi.mocked(execSync).mockImplementation((cmd: string) => {
       if (cmd.includes('rev-parse --abbrev-ref'))
         return Buffer.from('feature/new\n');
@@ -322,3 +333,60 @@ describe('AgentSession.handlePushDetected — auto-push logic', () => {
     expect(pushDetectedEvents).toHaveLength(1);
   });
 });
+
+// ── Integration test ──────────────────────────────────────────────────────────
+
+describe('integration: needs_changes → session commits → orchestrator auto-pushes → re-review fires', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+  });
+
+  it('auto-pushes committed changes and triggers the re-review pipeline', async () => {
+    // Session received "needs_changes" feedback and committed a fix locally,
+    // but did not push. The worktree is 1 commit ahead of origin.
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd.includes('rev-parse --abbrev-ref'))
+        return Buffer.from('feature/fix\n');
+      if (cmd.includes('rev-parse HEAD')) return Buffer.from('newsha1\n');
+      if (cmd.includes('ls-remote'))
+        return Buffer.from('oldsha1\tfeature/fix\n');
+      if (cmd.includes('rev-list --left-right')) return Buffer.from('0\t1\n');
+      if (cmd.includes('git push')) return Buffer.from('');
+      return Buffer.from('');
+    });
+
+    const prRow = {
+      pr_number: 99,
+      repo: 'owner/repo',
+      state: 'open',
+      review_session_id: 'review-session-abc',
+      session_id: 'test-auto-push',
+    };
+    vi.mocked(getPRBySessionId).mockReturnValue(prRow as any);
+
+    // Simulate server.ts thin wrapper: push_detected → PRMergeWatcher.handlePushDetected
+    const mockMergeWatcherHandlePush = vi.fn().mockResolvedValue(undefined);
+    const session = makeSession();
+    session.on('push_detected', ({ sessionId }: { sessionId: string }) => {
+      const pr = getPRBySessionId(sessionId);
+      if (pr && (pr as any).state === 'open') {
+        void mockMergeWatcherHandlePush(pr);
+      }
+    });
+
+    await callHandlePushDetected(session);
+
+    // Auto-push ran first — git push was called before push_detected fired
+    const pushCall = vi
+      .mocked(execSync)
+      .mock.calls.find(([cmd]) => (cmd as string).includes('git push origin'));
+    expect(pushCall).toBeDefined();
+    expect(pushCall![0]).toBe('git push origin feature/fix');
+
+    // The re-review pipeline was triggered with the correct PR row
+    expect(mockMergeWatcherHandlePush).toHaveBeenCalledTimes(1);
+    expect(mockMergeWatcherHandlePush).toHaveBeenCalledWith(prRow);
+  });
+});
+
