@@ -389,4 +389,3 @@ describe('integration: needs_changes → session commits → orchestrator auto-p
     expect(mockMergeWatcherHandlePush).toHaveBeenCalledWith(prRow);
   });
 });
-
