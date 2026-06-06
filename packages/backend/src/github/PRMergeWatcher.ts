@@ -641,231 +641,231 @@ export class PRMergeWatcher {
 
     void (async () => {
       try {
-      let headSha = prRow.head_sha;
-      let fetchError: unknown;
-      for (let attempt = 0; attempt < 2; attempt++) {
-        try {
-          const freshPR = await this.github.fetchPR(
-            prRow.repo,
-            prRow.pr_number,
-          );
-          headSha = freshPR.headSha;
-          fetchError = undefined;
-          if (headSha !== prRow.head_sha) {
-            setHeadSha(prRow.pr_number, prRow.repo, headSha);
-          }
-          break;
-        } catch (e) {
-          fetchError = e;
-          if (attempt === 0) {
-            console.warn(
-              `[PRMergeWatcher] fetch PR #${prRow.pr_number} failed (attempt 1), retrying...`,
-            );
-            await new Promise<void>((resolve) => setTimeout(resolve, 2000));
-          }
-        }
-      }
-      if (fetchError) {
-        console.warn(
-          `[PRMergeWatcher] failed to fetch latest PR state for #${prRow.pr_number} after retry:`,
-          fetchError,
-        );
-      }
-
-      // Skip re-review when the only push since the last review was the autofix
-      // commit — the code at that SHA was already reviewed in executeReview().
-      if (
-        headSha &&
-        this.reviewOrchestrator!.consumeAutofixSha(
-          prRow.pr_number,
-          prRow.repo,
-          headSha,
-        )
-      ) {
-        console.log(
-          `[PRMergeWatcher] handlePushDetected: autofix-only push for PR #${prRow.pr_number} — skipping re-review`,
-        );
-        return;
-      }
-
-      const maxIter = this.getMaxReviewIterations();
-
-      // Escalation cap reached — emit review_escalated before bailing out.
-      if (prRow.review_iteration >= maxIter) {
-        const message = `Review loop for PR #${prRow.pr_number} reached ${maxIter} iterations without approval. Manual intervention needed.`;
-        console.warn(`[PRMergeWatcher] ${message}`);
-        setPauseReason(prRow.pr_number, prRow.repo, 'max_reviews');
-        this.broadcast({
-          type: 'review_escalated',
-          prNumber: prRow.pr_number,
-          repo: prRow.repo,
-          message,
-        });
-        return;
-      }
-
-      const autoReviewOk = shouldAutoReview(
-        {
-          reviewIteration: prRow.review_iteration,
-          headSha,
-          lastReviewedSha: prRow.last_reviewed_sha,
-        },
-        maxIter,
-      );
-      console.log(
-        `[PRMergeWatcher] shouldAutoReview: iter=${prRow.review_iteration}/${maxIter} head=${headSha?.slice(0, 7)} lastReviewed=${prRow.last_reviewed_sha?.slice(0, 7)} → ${autoReviewOk}`,
-      );
-      if (!autoReviewOk) {
-        return;
-      }
-
-      const iteration = prRow.review_iteration + 1;
-
-      // Run autofix + pollution-check on every push, same as first review.
-      await this.reviewOrchestrator!.runAutofixPipeline(
-        prRow.pr_number,
-        prRow.repo,
-        prRow.task_id,
-      );
-
-      // Run orchestrator tests for the new SHA so F2 can gate on the fresh result.
-      {
-        const pushProject = getProjectByGithubRepo(prRow.repo);
-        if (pushProject && headSha) {
-          const pushConfig = loadOrchestratorConfig(pushProject.projectDir);
-          if (pushConfig.test.length > 0) {
-            const pushSession = getSession(prRow.session_id!);
-            const worktreePath = pushSession?.worktree_path ?? '';
-            if (worktreePath) {
-              await this.reviewOrchestrator!.runTestPipeline(
-                prRow.pr_number,
-                prRow.repo,
-                headSha,
-                worktreePath,
-                pushConfig.test,
-                pushConfig.test_timeout_sec,
-                pushConfig.test_max_rss_mb,
-                pushConfig.test_fail_fast,
-              );
-            }
-          }
-        }
-      }
-
-      try {
-        let result: PRReviewResult;
-        try {
-          // Build a resettable timeout so a large-model escalation (which restarts
-          // the review session on a 1M-context model) doesn't cause a false timeout.
-          const reviewSessionId = prRow.review_session_id ?? null;
-          let reviewTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
-          let escalationListener: ((msg: ServerMessage) => void) | undefined;
-
-          const timeoutPromise = new Promise<never>((_, reject) => {
-            const arm = () => {
-              clearTimeout(reviewTimeoutHandle);
-              reviewTimeoutHandle = setTimeout(
-                () => reject(new Error('Re-review timed out')),
-                PUSH_REVIEW_TIMEOUT_MS,
-              );
-            };
-            arm();
-
-            if (reviewSessionId) {
-              escalationListener = (msg: ServerMessage) => {
-                if (
-                  msg.type === 'large_model_escalation_started' &&
-                  msg.sessionId === reviewSessionId
-                ) {
-                  console.log(
-                    `[PRMergeWatcher] review session ${reviewSessionId.slice(0, 8)} escalated to 1M model — resetting re-review timeout`,
-                  );
-                  arm();
-                }
-              };
-              this.sessions.on('message', escalationListener);
-            }
-          });
-
+        let headSha = prRow.head_sha;
+        let fetchError: unknown;
+        for (let attempt = 0; attempt < 2; attempt++) {
           try {
-            result = await Promise.race([
-              this.prReviewService!.reReviewPR(prRow.pr_number, prRow.repo),
-              timeoutPromise,
-            ]);
-          } finally {
-            clearTimeout(reviewTimeoutHandle);
-            if (escalationListener) {
-              this.sessions.off('message', escalationListener);
+            const freshPR = await this.github.fetchPR(
+              prRow.repo,
+              prRow.pr_number,
+            );
+            headSha = freshPR.headSha;
+            fetchError = undefined;
+            if (headSha !== prRow.head_sha) {
+              setHeadSha(prRow.pr_number, prRow.repo, headSha);
+            }
+            break;
+          } catch (e) {
+            fetchError = e;
+            if (attempt === 0) {
+              console.warn(
+                `[PRMergeWatcher] fetch PR #${prRow.pr_number} failed (attempt 1), retrying...`,
+              );
+              await new Promise<void>((resolve) => setTimeout(resolve, 2000));
             }
           }
-        } catch (e) {
-          const summary = e instanceof Error ? e.message : String(e);
-          console.error(
-            `[PRMergeWatcher] re-review failed for PR #${prRow.pr_number}:`,
-            e,
+        }
+        if (fetchError) {
+          console.warn(
+            `[PRMergeWatcher] failed to fetch latest PR state for #${prRow.pr_number} after retry:`,
+            fetchError,
           );
-          setPauseReason(prRow.pr_number, prRow.repo, 'review_failed');
-          const failMessage = `Re-review for PR #${prRow.pr_number} failed: ${summary}`;
-          this.broadcast({
-            type: 'review_failed',
-            prNumber: prRow.pr_number,
-            repo: prRow.repo,
-            message: failMessage,
-          });
-          setPRReviewResult(
+        }
+
+        // Skip re-review when the only push since the last review was the autofix
+        // commit — the code at that SHA was already reviewed in executeReview().
+        if (
+          headSha &&
+          this.reviewOrchestrator!.consumeAutofixSha(
             prRow.pr_number,
             prRow.repo,
-            JSON.stringify({ verdict: 'error', summary, dimensions: [] }),
+            headSha,
+          )
+        ) {
+          console.log(
+            `[PRMergeWatcher] handlePushDetected: autofix-only push for PR #${prRow.pr_number} — skipping re-review`,
           );
-          this.broadcast({
-            type: 'review_verdict',
-            prNumber: prRow.pr_number,
-            repo: prRow.repo,
-            verdict: 'error',
-            summary,
-            iteration,
-          });
           return;
         }
 
-        setLastReviewedSha(prRow.pr_number, prRow.repo, headSha);
-        if (result.verdict === 'approved' && prRow.pause_reason !== null) {
-          setPauseReason(prRow.pr_number, prRow.repo, null);
-        }
-        this.broadcast({
-          type: 'review_verdict',
-          prNumber: prRow.pr_number,
-          repo: prRow.repo,
-          verdict: result.verdict,
-          summary: result.summary,
-          iteration,
-        });
+        const maxIter = this.getMaxReviewIterations();
 
-        if (result.verdict === 'needs_changes') {
-          try {
-            await this.sessions.sendOrResume(
-              sessionId,
-              formatReviewFeedback(result, iteration),
-            );
-          } catch (e) {
-            console.warn(
-              `[PRMergeWatcher] Failed to deliver review feedback to session ${sessionId}:`,
-              e,
-            );
-          }
-        } else if (result.verdict === 'incomplete') {
-          const message = `Review for PR #${prRow.pr_number} returned an incomplete verdict — the reviewer could not assess the PR. Manual intervention needed.`;
+        // Escalation cap reached — emit review_escalated before bailing out.
+        if (prRow.review_iteration >= maxIter) {
+          const message = `Review loop for PR #${prRow.pr_number} reached ${maxIter} iterations without approval. Manual intervention needed.`;
           console.warn(`[PRMergeWatcher] ${message}`);
+          setPauseReason(prRow.pr_number, prRow.repo, 'max_reviews');
           this.broadcast({
-            type: 'review_incomplete',
+            type: 'review_escalated',
             prNumber: prRow.pr_number,
             repo: prRow.repo,
             message,
           });
+          return;
         }
-      } finally {
-        this.pendingReReviews.delete(sessionId);
-      }
+
+        const autoReviewOk = shouldAutoReview(
+          {
+            reviewIteration: prRow.review_iteration,
+            headSha,
+            lastReviewedSha: prRow.last_reviewed_sha,
+          },
+          maxIter,
+        );
+        console.log(
+          `[PRMergeWatcher] shouldAutoReview: iter=${prRow.review_iteration}/${maxIter} head=${headSha?.slice(0, 7)} lastReviewed=${prRow.last_reviewed_sha?.slice(0, 7)} → ${autoReviewOk}`,
+        );
+        if (!autoReviewOk) {
+          return;
+        }
+
+        const iteration = prRow.review_iteration + 1;
+
+        // Run autofix + pollution-check on every push, same as first review.
+        await this.reviewOrchestrator!.runAutofixPipeline(
+          prRow.pr_number,
+          prRow.repo,
+          prRow.task_id,
+        );
+
+        // Run orchestrator tests for the new SHA so F2 can gate on the fresh result.
+        {
+          const pushProject = getProjectByGithubRepo(prRow.repo);
+          if (pushProject && headSha) {
+            const pushConfig = loadOrchestratorConfig(pushProject.projectDir);
+            if (pushConfig.test.length > 0) {
+              const pushSession = getSession(prRow.session_id!);
+              const worktreePath = pushSession?.worktree_path ?? '';
+              if (worktreePath) {
+                await this.reviewOrchestrator!.runTestPipeline(
+                  prRow.pr_number,
+                  prRow.repo,
+                  headSha,
+                  worktreePath,
+                  pushConfig.test,
+                  pushConfig.test_timeout_sec,
+                  pushConfig.test_max_rss_mb,
+                  pushConfig.test_fail_fast,
+                );
+              }
+            }
+          }
+        }
+
+        try {
+          let result: PRReviewResult;
+          try {
+            // Build a resettable timeout so a large-model escalation (which restarts
+            // the review session on a 1M-context model) doesn't cause a false timeout.
+            const reviewSessionId = prRow.review_session_id ?? null;
+            let reviewTimeoutHandle: ReturnType<typeof setTimeout> | undefined;
+            let escalationListener: ((msg: ServerMessage) => void) | undefined;
+
+            const timeoutPromise = new Promise<never>((_, reject) => {
+              const arm = () => {
+                clearTimeout(reviewTimeoutHandle);
+                reviewTimeoutHandle = setTimeout(
+                  () => reject(new Error('Re-review timed out')),
+                  PUSH_REVIEW_TIMEOUT_MS,
+                );
+              };
+              arm();
+
+              if (reviewSessionId) {
+                escalationListener = (msg: ServerMessage) => {
+                  if (
+                    msg.type === 'large_model_escalation_started' &&
+                    msg.sessionId === reviewSessionId
+                  ) {
+                    console.log(
+                      `[PRMergeWatcher] review session ${reviewSessionId.slice(0, 8)} escalated to 1M model — resetting re-review timeout`,
+                    );
+                    arm();
+                  }
+                };
+                this.sessions.on('message', escalationListener);
+              }
+            });
+
+            try {
+              result = await Promise.race([
+                this.prReviewService!.reReviewPR(prRow.pr_number, prRow.repo),
+                timeoutPromise,
+              ]);
+            } finally {
+              clearTimeout(reviewTimeoutHandle);
+              if (escalationListener) {
+                this.sessions.off('message', escalationListener);
+              }
+            }
+          } catch (e) {
+            const summary = e instanceof Error ? e.message : String(e);
+            console.error(
+              `[PRMergeWatcher] re-review failed for PR #${prRow.pr_number}:`,
+              e,
+            );
+            setPauseReason(prRow.pr_number, prRow.repo, 'review_failed');
+            const failMessage = `Re-review for PR #${prRow.pr_number} failed: ${summary}`;
+            this.broadcast({
+              type: 'review_failed',
+              prNumber: prRow.pr_number,
+              repo: prRow.repo,
+              message: failMessage,
+            });
+            setPRReviewResult(
+              prRow.pr_number,
+              prRow.repo,
+              JSON.stringify({ verdict: 'error', summary, dimensions: [] }),
+            );
+            this.broadcast({
+              type: 'review_verdict',
+              prNumber: prRow.pr_number,
+              repo: prRow.repo,
+              verdict: 'error',
+              summary,
+              iteration,
+            });
+            return;
+          }
+
+          setLastReviewedSha(prRow.pr_number, prRow.repo, headSha);
+          if (result.verdict === 'approved' && prRow.pause_reason !== null) {
+            setPauseReason(prRow.pr_number, prRow.repo, null);
+          }
+          this.broadcast({
+            type: 'review_verdict',
+            prNumber: prRow.pr_number,
+            repo: prRow.repo,
+            verdict: result.verdict,
+            summary: result.summary,
+            iteration,
+          });
+
+          if (result.verdict === 'needs_changes') {
+            try {
+              await this.sessions.sendOrResume(
+                sessionId,
+                formatReviewFeedback(result, iteration),
+              );
+            } catch (e) {
+              console.warn(
+                `[PRMergeWatcher] Failed to deliver review feedback to session ${sessionId}:`,
+                e,
+              );
+            }
+          } else if (result.verdict === 'incomplete') {
+            const message = `Review for PR #${prRow.pr_number} returned an incomplete verdict — the reviewer could not assess the PR. Manual intervention needed.`;
+            console.warn(`[PRMergeWatcher] ${message}`);
+            this.broadcast({
+              type: 'review_incomplete',
+              prNumber: prRow.pr_number,
+              repo: prRow.repo,
+              message,
+            });
+          }
+        } finally {
+          this.pendingReReviews.delete(sessionId);
+        }
       } catch (e) {
         console.error(
           `[PRMergeWatcher] handlePushDetected unexpected error for session ${sessionId.slice(0, 8)}:`,

@@ -2343,9 +2343,7 @@ describe('PRMergeWatcher — pendingReReviews leak recovery', () => {
     await watcher.handlePushDetected(pr);
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(
-      (watcher as any).pendingReReviews.has('coding-session'),
-    ).toBe(false);
+    expect((watcher as any).pendingReReviews.has('coding-session')).toBe(false);
   });
 
   it('cleans up pendingReReviews when runTestPipeline throws', async () => {
@@ -2397,9 +2395,7 @@ describe('PRMergeWatcher — pendingReReviews leak recovery', () => {
     await watcher.handlePushDetected(pr);
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(
-      (watcher as any).pendingReReviews.has('coding-session'),
-    ).toBe(false);
+    expect((watcher as any).pendingReReviews.has('coding-session')).toBe(false);
   });
 
   it('sweepStalePendingReReviews removes entries older than TTL and emits warn', () => {
@@ -2411,13 +2407,16 @@ describe('PRMergeWatcher — pendingReReviews leak recovery', () => {
     );
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const staleTimestamp = Date.now() - 6 * 60 * 1000; // 6 min > 5 min TTL
-    (watcher as any).pendingReReviews.set('stale-session-id-abc', staleTimestamp);
+    (watcher as any).pendingReReviews.set(
+      'stale-session-id-abc',
+      staleTimestamp,
+    );
 
     (watcher as any).sweepStalePendingReReviews();
 
-    expect(
-      (watcher as any).pendingReReviews.has('stale-session-id-abc'),
-    ).toBe(false);
+    expect((watcher as any).pendingReReviews.has('stale-session-id-abc')).toBe(
+      false,
+    );
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining(
         '[PRMergeWatcher] sweeping stale pendingReReview for session stale-se',
