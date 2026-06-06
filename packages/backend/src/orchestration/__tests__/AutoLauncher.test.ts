@@ -1326,6 +1326,30 @@ describe('AutoLauncher — launch failure tracking', () => {
     warnSpy.mockRestore();
   });
 
+  it('task is not retried after reaching MAX_FAILURES_BEFORE_PAUSE (DB check)', async () => {
+    const task = makeResolvedTask({ id: 'task-db-pause' });
+    vi.mocked(getTaskPauseReason).mockImplementation((id) =>
+      id === 'task-db-pause' ? 'launch_failed' : null,
+    );
+    const backend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+    };
+    const sessionManager = makeSessionManager(0);
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    expect(sessionManager.start).not.toHaveBeenCalled();
+
+    vi.mocked(getTaskPauseReason).mockReturnValue(null);
+  });
+
   it('warn log includes full stderr when a WorktreeSetupError is thrown', async () => {
     const task = makeResolvedTask({ id: 'task-stderr' });
     const backend = makeFailingBackend(task);
@@ -1352,6 +1376,152 @@ describe('AutoLauncher — launch failure tracking', () => {
     await launcher.pollOnce();
 
     expect(warnCalls.some((w) => w.includes(stderrMsg))).toBe(true);
+    warnSpy.mockRestore();
+  });
+});
+
+// ── Parallel project iteration tests ─────────────────────────────────────────
+
+describe('AutoLauncher — parallel project iteration', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
+    vi.mocked(getMergedPRForTask).mockReturnValue(null);
+    vi.mocked(getTaskPauseReason).mockReturnValue(null);
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 2;
+  });
+
+  it('project[0] rejection does not block project[1] and project[2] in the same cycle', async () => {
+    const proj1Backend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockRejectedValue(new Error('proj-1 failure')),
+    };
+    const proj2Backend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([]),
+    };
+    const proj3Backend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([]),
+    };
+
+    const resolveBackend = vi.fn().mockImplementation((id: string) => {
+      if (id === 'proj-1') return proj1Backend;
+      if (id === 'proj-2') return proj2Backend;
+      return proj3Backend;
+    });
+    const sessionManager = makeSessionManager(0);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [
+        makeProject({ id: 'proj-1' }),
+        makeProject({ id: 'proj-2' }),
+        makeProject({ id: 'proj-3' }),
+      ],
+      resolveBackend,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    expect(proj1Backend.fetchReadyTasks).toHaveBeenCalledOnce();
+    expect(proj2Backend.fetchReadyTasks).toHaveBeenCalledOnce();
+    expect(proj3Backend.fetchReadyTasks).toHaveBeenCalledOnce();
+
+    errorSpy.mockRestore();
+  });
+
+  it('pollOnce resolves normally even when all projects fail', async () => {
+    const failBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockRejectedValue(new Error('always fails')),
+    };
+    const sessionManager = makeSessionManager(0);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [
+        makeProject({ id: 'proj-1' }),
+        makeProject({ id: 'proj-2' }),
+      ],
+      resolveBackend: () => failBackend,
+      pollOnStart: false,
+    });
+
+    await expect(launcher.pollOnce()).resolves.toBeUndefined();
+
+    errorSpy.mockRestore();
+  });
+});
+
+// ── Parallel merged-PR catch-up tests ────────────────────────────────────────
+
+describe('AutoLauncher — parallel merged-PR catch-up', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
+    vi.mocked(getTaskPauseReason).mockReturnValue(null);
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 2;
+  });
+
+  it('10 merged-PR tasks run with at most UPDATE_CONCURRENCY=3 concurrent updateStatus calls', async () => {
+    const tasks = Array.from({ length: 10 }, (_, i) =>
+      makeResolvedTask({ id: `task-${i}`, title: `Task ${i}` }),
+    );
+
+    vi.mocked(getMergedPRForTask).mockImplementation((taskId) => {
+      const idx = parseInt(taskId.split('-')[1]);
+      return {
+        id: idx + 1,
+        pr_number: idx + 100,
+        pr_url: `https://github.com/x/y/pull/${idx + 100}`,
+        task_id: taskId,
+        state: 'merged',
+        repo: 'x/y',
+      } as never;
+    });
+
+    let concurrent = 0;
+    let maxConcurrent = 0;
+
+    const updateStatus = vi.fn().mockImplementation(async () => {
+      concurrent++;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+      await new Promise<void>((resolve) => setTimeout(resolve, 10));
+      concurrent--;
+    });
+
+    const notionBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue(tasks),
+      updateStatus,
+    };
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const launcher = new AutoLauncher(
+      makeSessionManager(0) as never,
+      undefined,
+      {
+        listProjects: () => [makeProject()],
+        resolveBackend: () => notionBackend as never,
+        pollOnStart: false,
+      },
+    );
+
+    await launcher.pollOnce();
+
+    expect(updateStatus).toHaveBeenCalledTimes(10);
+    expect(maxConcurrent).toBeLessThanOrEqual(3);
+    expect(maxConcurrent).toBeGreaterThan(0);
+
     warnSpy.mockRestore();
   });
 });
