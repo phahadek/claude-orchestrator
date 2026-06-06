@@ -206,35 +206,6 @@ export async function runAutofix(
   );
   const branch = branchRaw.trim();
 
-  // Append the autofix commit SHA to .git-blame-ignore-revs inside the
-  // worktree and commit it before pushing, so the entry travels with the PR
-  // branch and is never left as uncommitted dirt in the main-repo working tree.
-  try {
-    const blameIgnorePath = path.join(worktreePath, '.git-blame-ignore-revs');
-    fs.appendFileSync(
-      blameIgnorePath,
-      `${sha} # chore: apply autofix [orchestrator]\n`,
-    );
-    await spawnCmd('git', ['add', '.git-blame-ignore-revs'], {
-      cwd: worktreePath,
-      env,
-    });
-    const blameCommitResult = await spawnCmd(
-      'git',
-      ['commit', '-m', 'chore: update .git-blame-ignore-revs [orchestrator]'],
-      { cwd: worktreePath, env },
-    );
-    if (blameCommitResult.exitCode === 0) {
-      log(`[autofix] committed ${sha} to .git-blame-ignore-revs\n`);
-    } else {
-      log(
-        `[autofix] WARN: failed to commit .git-blame-ignore-revs (exit ${blameCommitResult.exitCode})\n`,
-      );
-    }
-  } catch (err) {
-    log(`[autofix] WARN: failed to write .git-blame-ignore-revs: ${err}\n`);
-  }
-
   const pushResult = await spawnCmd('git', ['push', 'origin', 'HEAD'], {
     cwd: worktreePath,
     env,
