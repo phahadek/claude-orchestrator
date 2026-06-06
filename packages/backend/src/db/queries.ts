@@ -1483,6 +1483,45 @@ export function getPausedPrReasonForTask(taskId: string): PauseReason | null {
   return (row?.pause_reason as PauseReason | null) ?? null;
 }
 
+// ─── task_pause_reasons ────────────────────────────────────────────────────────
+
+/**
+ * Persist a task-level pause reason for tasks that have no PR yet (e.g. launch_failed).
+ * Replaces any existing entry for the same task_id.
+ */
+export function setTaskPauseReason(
+  taskId: string,
+  reason: PauseReason,
+  detail: string,
+): void {
+  db.prepare<{
+    task_id: string;
+    pause_reason: string;
+    detail: string;
+    set_at: number;
+  }>(
+    `INSERT OR REPLACE INTO task_pause_reasons (task_id, pause_reason, detail, set_at)
+     VALUES (@task_id, @pause_reason, @detail, @set_at)`,
+  ).run({ task_id: taskId, pause_reason: reason, detail, set_at: Date.now() });
+}
+
+/** Returns the task-level pause reason, or null if none is set. */
+export function getTaskPauseReason(taskId: string): PauseReason | null {
+  const row = db
+    .prepare<{
+      task_id: string;
+    }>(`SELECT pause_reason FROM task_pause_reasons WHERE task_id = @task_id`)
+    .get({ task_id: taskId }) as { pause_reason: string } | undefined;
+  return (row?.pause_reason as PauseReason) ?? null;
+}
+
+/** Clear a task-level pause reason (e.g. on successful launch). */
+export function clearTaskPauseReason(taskId: string): void {
+  db.prepare<{ task_id: string }>(
+    `DELETE FROM task_pause_reasons WHERE task_id = @task_id`,
+  ).run({ task_id: taskId });
+}
+
 /**
  * Approved + open PRs that are eligible to be auto-merged. Excludes PRs paused
  * via any pause_reason (e.g. stuck_timeout) so the Auto-merger skips tasks that

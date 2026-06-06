@@ -594,4 +594,14 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // Task-level pause reasons for tasks that have never had a PR (e.g. launch_failed).
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS task_pause_reasons (
+      task_id      TEXT    PRIMARY KEY,
+      pause_reason TEXT    NOT NULL,
+      detail       TEXT,
+      set_at       INTEGER NOT NULL
+    )
+  `);
 }

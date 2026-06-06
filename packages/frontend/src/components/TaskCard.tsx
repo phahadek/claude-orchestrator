@@ -55,6 +55,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Session stalled without opening a PR — review and resume or abort.',
   notion_done_update_stuck:
     'PR merged but Notion status update failed repeatedly — update Notion to Done manually and clear the pause.',
+  launch_failed:
+    'Launch failed repeatedly — fix the underlying issue (e.g. delete the stale branch) then restart the backend.',
 };
 
 function verdictLabel(verdict: string): string {
