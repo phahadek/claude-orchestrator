@@ -1508,9 +1508,9 @@ export function setTaskPauseReason(
 /** Returns the task-level pause reason, or null if none is set. */
 export function getTaskPauseReason(taskId: string): PauseReason | null {
   const row = db
-    .prepare<{ task_id: string }>(
-      `SELECT pause_reason FROM task_pause_reasons WHERE task_id = @task_id`,
-    )
+    .prepare<{
+      task_id: string;
+    }>(`SELECT pause_reason FROM task_pause_reasons WHERE task_id = @task_id`)
     .get({ task_id: taskId }) as { pause_reason: string } | undefined;
   return (row?.pause_reason as PauseReason) ?? null;
 }

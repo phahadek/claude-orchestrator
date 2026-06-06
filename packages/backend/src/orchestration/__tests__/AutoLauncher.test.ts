@@ -1219,7 +1219,9 @@ describe('AutoLauncher — launch failure tracking', () => {
     expect(setTaskPauseReason).toHaveBeenCalledWith(
       'task-fail',
       'launch_failed',
-      expect.stringContaining("A branch named 'feature/test-task' already exists"),
+      expect.stringContaining(
+        "A branch named 'feature/test-task' already exists",
+      ),
     );
 
     warnSpy.mockRestore();
