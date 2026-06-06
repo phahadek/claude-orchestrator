@@ -130,6 +130,7 @@ export default function App() {
     lastCiBillingBlockedEvent,
     lastSessionStartedEvent,
     lastSessionEndedEvent,
+    prPipelineStages,
   } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -1337,6 +1338,7 @@ export default function App() {
                 prMergeabilityChangedEvent={lastPrMergeabilityChangedEvent}
                 autofixEvent={lastAutofixEvent}
                 reviewStartedEvent={lastReviewStartedEvent}
+                prPipelineStages={prPipelineStages}
               />
             </div>
           </ErrorBoundary>

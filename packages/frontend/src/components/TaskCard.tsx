@@ -3,7 +3,7 @@ import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { useDispatch } from '../hooks/useDispatch';
 import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
-import { CIBadges } from './CIBadges';
+import { CIBadges, PipelineStageBadge } from './CIBadges';
 import { ContextBadge } from './ContextBadge';
 import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
 import styles from './TaskCard.module.css';
@@ -182,6 +182,11 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
                 mergeState={pr.mergeState}
                 pauseReason={task.pauseReason}
                 prState={pr.state}
+              />
+              <PipelineStageBadge
+                stage={pr.preReviewStage ?? null}
+                prState={pr.state}
+                compact
               />
             </div>
           ) : (

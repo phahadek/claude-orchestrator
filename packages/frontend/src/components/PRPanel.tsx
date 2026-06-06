@@ -7,6 +7,7 @@ import type {
 } from './WorkItemCard';
 import { PRHistoryRow } from './PRHistoryRow';
 import { ErrorBoundary } from './ErrorBoundary';
+import { PipelineStageBadge } from './CIBadges';
 import styles from './PRPanel.module.css';
 
 interface Props {
@@ -41,6 +42,8 @@ interface Props {
     sessionId: string;
     receivedAt: number;
   } | null;
+  /** Live pipeline stage per PR number, driven by WS events from useSessionStore */
+  prPipelineStages?: Map<number, string | null>;
 }
 
 export function PRPanel({
@@ -55,11 +58,16 @@ export function PRPanel({
   prMergeabilityChangedEvent,
   autofixEvent,
   reviewStartedEvent,
+  prPipelineStages,
 }: Props) {
   const [prs, setPRs] = useState<WorkItemListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [networkError, setNetworkError] = useState(false);
   const [noRepo, setNoRepo] = useState(false);
+  /** Local pipeline stage overrides: seeded from REST data, then updated by WS events */
+  const [localPipelineStages, setLocalPipelineStages] = useState<
+    Map<number, string | null>
+  >(new Map());
 
   const [reviewInFlight, setReviewInFlight] = useState<Set<number>>(new Set());
   const [reviewElapsed, setReviewElapsed] = useState<Map<number, number>>(
@@ -106,6 +114,19 @@ export function PRPanel({
       }
       const data = (await prsRes.json()) as WorkItemListItem[];
       setPRs(data);
+      // Seed pipeline stages from REST data for initial-state hydration
+      setLocalPipelineStages((prev) => {
+        const next = new Map(prev);
+        for (const item of data) {
+          if (item.type === 'pr' && 'preReviewStage' in item) {
+            const stage = (item as PRWorkItem).preReviewStage ?? null;
+            if (!next.has(item.prNumber)) {
+              next.set(item.prNumber, stage);
+            }
+          }
+        }
+        return next;
+      });
       setNetworkError(false);
       setNoRepo(false);
     } catch {
@@ -147,6 +168,22 @@ export function PRPanel({
       return next;
     });
   };
+
+  // Merge WS-driven pipeline stages from store into local map
+  useEffect(() => {
+    if (!prPipelineStages || prPipelineStages.size === 0) return;
+    setLocalPipelineStages((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const [prNumber, stage] of prPipelineStages) {
+        if (next.get(prNumber) !== stage) {
+          next.set(prNumber, stage);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [prPipelineStages]);
 
   useEffect(() => {
     fetchPRs();
@@ -580,6 +617,16 @@ export function PRPanel({
                       className={`${styles.autofixBadge} ${styles.autofixFailed}`}
                     >
                       ⚠ Autofix failed (proceeding)
+                    </div>
+                  )}
+                  {localPipelineStages.get(prNumber) && (
+                    <div className={styles.pipelineBadgeRow}>
+                      <PipelineStageBadge
+                        stage={localPipelineStages.get(prNumber) ?? null}
+                        prState={
+                          item.type === 'pr' ? item.state : undefined
+                        }
+                      />
                     </div>
                   )}
                   <WorkItemCard

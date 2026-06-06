@@ -1,5 +1,103 @@
 import styles from './CIBadges.module.css';
 
+export type PreReviewStage =
+  | 'autofix'
+  | 'verify'
+  | 'tests'
+  | 'awaiting_review'
+  | 'blocked_autofix'
+  | 'blocked_verify';
+
+const STAGE_CONFIG: Record<
+  PreReviewStage,
+  { emoji: string; label: string; compactLabel: string; styleKey: string }
+> = {
+  autofix: {
+    emoji: '⚙',
+    label: 'Running autofix',
+    compactLabel: 'Autofix',
+    styleKey: 'running',
+  },
+  verify: {
+    emoji: '🔍',
+    label: 'Running verify',
+    compactLabel: 'Verify',
+    styleKey: 'running',
+  },
+  tests: {
+    emoji: '🧪',
+    label: 'Running tests',
+    compactLabel: 'Tests',
+    styleKey: 'running',
+  },
+  awaiting_review: {
+    emoji: '⏳',
+    label: 'Awaiting review',
+    compactLabel: 'Awaiting',
+    styleKey: 'awaiting',
+  },
+  blocked_autofix: {
+    emoji: '❌',
+    label: 'Blocked by autofix gate',
+    compactLabel: 'Blocked',
+    styleKey: 'blocked',
+  },
+  blocked_verify: {
+    emoji: '❌',
+    label: 'Blocked by verify gate',
+    compactLabel: 'Blocked',
+    styleKey: 'blocked',
+  },
+};
+
+export interface PipelineStageBadgeProps {
+  stage: string | null;
+  prState?: string;
+  compact?: boolean;
+  /** For blocked stages: the failed command to show on hover */
+  failedCommand?: string;
+}
+
+export function PipelineStageBadge({
+  stage,
+  prState,
+  compact = false,
+  failedCommand,
+}: PipelineStageBadgeProps) {
+  if (!stage) return null;
+  if (prState === 'merged' || prState === 'closed') return null;
+
+  const config = STAGE_CONFIG[stage as PreReviewStage];
+  if (!config) return null;
+
+  const isRunning = config.styleKey === 'running';
+  const isAwaiting = config.styleKey === 'awaiting';
+  const isBlocked = config.styleKey === 'blocked';
+
+  const title = failedCommand
+    ? `${config.label}: ${failedCommand}`
+    : config.label;
+
+  const className = isRunning
+    ? styles.pipelineRunningBadge
+    : isAwaiting
+      ? styles.pipelineAwaitingBadge
+      : isBlocked
+        ? styles.pipelineBlockedBadge
+        : styles.pipelineRunningBadge;
+
+  const text = compact
+    ? `${config.emoji} ${config.compactLabel}`
+    : `${config.emoji} ${config.label}`;
+
+  return (
+    <span className={className} title={title}>
+      {isRunning && <span className={styles.pipelineSpinner} aria-hidden="true" />}
+      {text}
+    </span>
+  );
+}
+
 export interface CIBadgesProps {
   mergeState: string | null;
   pauseReason?: string | null;

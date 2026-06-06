@@ -38,6 +38,7 @@ import {
   getSetting,
   getTestResult,
   markSessionDone,
+  setPreReviewStage,
 } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 
@@ -249,6 +250,7 @@ export class PRMergeWatcher {
       await this.handleMerged(pr, null, { silent: silentMerges });
     } else if (state === 'closed') {
       updatePRState(pr.pr_number, pr.repo, 'closed');
+      setPreReviewStage(pr.pr_number, pr.repo, null);
       deleteAllAutofixShasForPR(pr.pr_number, pr.repo);
       // Transition coding session idle → error on close-without-merge
       if (pr.session_id) {
@@ -901,6 +903,7 @@ export class PRMergeWatcher {
     options: { silent?: boolean } = {},
   ): Promise<void> {
     updatePRState(pr.pr_number, pr.repo, 'merged');
+    setPreReviewStage(pr.pr_number, pr.repo, null);
     deleteAllAutofixShasForPR(pr.pr_number, pr.repo);
 
     // Delete the origin branch for feature/* branches.

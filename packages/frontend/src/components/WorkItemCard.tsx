@@ -38,6 +38,7 @@ export interface PRWorkItem {
   mergeState: string | null;
   failingChecks?: string[] | null;
   pauseReason?: string | null;
+  preReviewStage?: string | null;
   autoMergeEnabled: boolean;
 }
 

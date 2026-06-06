@@ -57,3 +57,56 @@
   animation: spin 0.8s linear infinite;
   flex-shrink: 0;
 }
+
+.pipelineRunningBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  padding: 2px 10px;
+  border-radius: 12px;
+  white-space: nowrap;
+  font-weight: 500;
+  background: rgba(137, 180, 250, 0.12);
+  color: #89b4fa;
+  border: 1px solid rgba(137, 180, 250, 0.35);
+}
+
+.pipelineAwaitingBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  padding: 2px 10px;
+  border-radius: 12px;
+  white-space: nowrap;
+  font-weight: 500;
+  background: rgba(166, 227, 161, 0.12);
+  color: #a6e3a1;
+  border: 1px solid rgba(166, 227, 161, 0.35);
+}
+
+.pipelineBlockedBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.78rem;
+  padding: 2px 10px;
+  border-radius: 12px;
+  white-space: nowrap;
+  font-weight: 500;
+  background: rgba(243, 139, 168, 0.12);
+  color: #f38ba8;
+  border: 1px solid rgba(243, 139, 168, 0.35);
+}
+
+.pipelineSpinner {
+  display: inline-block;
+  width: 0.65em;
+  height: 0.65em;
+  border: 1.5px solid rgba(137, 180, 250, 0.3);
+  border-top-color: #89b4fa;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
