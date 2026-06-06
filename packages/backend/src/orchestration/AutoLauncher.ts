@@ -29,7 +29,12 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
     p,
     new Promise<never>((_, reject) =>
       setTimeout(
-        () => reject(new AutoLauncherFetchTimeoutError(`${label} timed out after ${ms}ms`)),
+        () =>
+          reject(
+            new AutoLauncherFetchTimeoutError(
+              `${label} timed out after ${ms}ms`,
+            ),
+          ),
         ms,
       ),
     ),
@@ -93,7 +98,8 @@ export class AutoLauncher {
     if (
       this.polling &&
       this.pollLastStartedAt !== null &&
-      Date.now() - this.pollLastStartedAt > 2 * runtimeSettings.auto_launch_poll_interval_ms
+      Date.now() - this.pollLastStartedAt >
+        2 * runtimeSettings.auto_launch_poll_interval_ms
     ) {
       console.warn(
         `[AutoLauncher] poll STALL DETECTED — force-resetting (age=${Date.now() - this.pollLastStartedAt}ms)`,
@@ -167,7 +173,10 @@ export class AutoLauncher {
     }
 
     const milestoneTasks = await withTimeout(
-      backend.fetchReadyTasks(milestoneId, backend.type === 'notion' ? true : undefined),
+      backend.fetchReadyTasks(
+        milestoneId,
+        backend.type === 'notion' ? true : undefined,
+      ),
       FETCH_TIMEOUT_MS,
       `fetchReadyTasks(${project.id})`,
     );
@@ -217,7 +226,8 @@ export class AutoLauncher {
     }
 
     const candidates = allTasks.filter((t) => this.isLaunchCandidate(t));
-    if (candidates.length === 0) return { eligible: 0, launched: 0, skipped: 0 };
+    if (candidates.length === 0)
+      return { eligible: 0, launched: 0, skipped: 0 };
 
     let launched = 0;
     for (const candidate of candidates) {
@@ -238,7 +248,11 @@ export class AutoLauncher {
       }
     }
 
-    return { eligible: candidates.length, launched, skipped: candidates.length - launched };
+    return {
+      eligible: candidates.length,
+      launched,
+      skipped: candidates.length - launched,
+    };
   }
 
   /**

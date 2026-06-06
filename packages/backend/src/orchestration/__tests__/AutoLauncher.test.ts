@@ -28,7 +28,10 @@ import {
   getPausedPrReasonForTask,
   getMergedPRForTask,
 } from '../../db/queries.js';
-import { AutoLauncher, AutoLauncherFetchTimeoutError } from '../AutoLauncher.js';
+import {
+  AutoLauncher,
+  AutoLauncherFetchTimeoutError,
+} from '../AutoLauncher.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -554,7 +557,9 @@ describe('AutoLauncher — fetch timeouts', () => {
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
     vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
     vi.mocked(getMergedPRForTask).mockReturnValue(null);
-    (runtimeSettings as { auto_launch_concurrency: number }).auto_launch_concurrency = 2;
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 2;
   });
 
   afterEach(() => {
@@ -615,16 +620,20 @@ describe('AutoLauncher — fetch timeouts', () => {
     });
 
     // Intercept the error logged at the outer try/catch
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation((...args) => {
-      capturedError = args[1];
-    });
+    const errorSpy = vi
+      .spyOn(console, 'error')
+      .mockImplementation((...args) => {
+        capturedError = args[1];
+      });
 
     const pollPromise = launcher.pollOnce();
     await vi.advanceTimersByTimeAsync(30_001);
     await pollPromise;
 
     expect(capturedError).toBeInstanceOf(AutoLauncherFetchTimeoutError);
-    expect((capturedError as AutoLauncherFetchTimeoutError).message).toContain('timed out after 30000ms');
+    expect((capturedError as AutoLauncherFetchTimeoutError).message).toContain(
+      'timed out after 30000ms',
+    );
 
     errorSpy.mockRestore();
   });
@@ -658,7 +667,10 @@ describe('AutoLauncher — fetch timeouts', () => {
     await vi.advanceTimersByTimeAsync(30_001);
     await pollPromise;
 
-    expect(hangingBackend.updateStatus).toHaveBeenCalledWith('task-1', '✅ Done');
+    expect(hangingBackend.updateStatus).toHaveBeenCalledWith(
+      'task-1',
+      '✅ Done',
+    );
     // pollOnce resolved without throwing
     expect(sessionManager.start).not.toHaveBeenCalled();
   });
@@ -672,8 +684,12 @@ describe('AutoLauncher — stall detection', () => {
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
     vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
     vi.mocked(getMergedPRForTask).mockReturnValue(null);
-    (runtimeSettings as { auto_launch_concurrency: number }).auto_launch_concurrency = 2;
-    (runtimeSettings as { auto_launch_poll_interval_ms: number }).auto_launch_poll_interval_ms = 60_000;
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 2;
+    (
+      runtimeSettings as { auto_launch_poll_interval_ms: number }
+    ).auto_launch_poll_interval_ms = 60_000;
   });
 
   it('force-resets polling=false when pollLastStartedAt exceeds 2× interval', () => {
@@ -691,7 +707,9 @@ describe('AutoLauncher — stall detection', () => {
 
     (launcher as unknown as { scheduleNext: () => void }).scheduleNext();
 
-    expect((launcher as unknown as Record<string, unknown>).polling).toBe(false);
+    expect((launcher as unknown as Record<string, unknown>).polling).toBe(
+      false,
+    );
   });
 
   it('emits STALL DETECTED warn log when force-resetting', () => {
@@ -710,7 +728,9 @@ describe('AutoLauncher — stall detection', () => {
     (launcher as unknown as { scheduleNext: () => void }).scheduleNext();
 
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[AutoLauncher] poll STALL DETECTED — force-resetting'),
+      expect.stringContaining(
+        '[AutoLauncher] poll STALL DETECTED — force-resetting',
+      ),
     );
 
     warnSpy.mockRestore();
@@ -761,7 +781,9 @@ describe('AutoLauncher — stall detection', () => {
 
     // scheduleNext detects stall and resets polling
     (launcher as unknown as { scheduleNext: () => void }).scheduleNext();
-    expect((launcher as unknown as Record<string, unknown>).polling).toBe(false);
+    expect((launcher as unknown as Record<string, unknown>).polling).toBe(
+      false,
+    );
 
     // A subsequent pollOnce can now proceed (not skipped due to polling=true)
     await launcher.pollOnce();
@@ -777,8 +799,12 @@ describe('AutoLauncher — tick logs', () => {
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
     vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
     vi.mocked(getMergedPRForTask).mockReturnValue(null);
-    (runtimeSettings as { auto_launch_concurrency: number }).auto_launch_concurrency = 2;
-    (runtimeSettings as { auto_launch_poll_interval_ms: number }).auto_launch_poll_interval_ms = 60_000;
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 2;
+    (
+      runtimeSettings as { auto_launch_poll_interval_ms: number }
+    ).auto_launch_poll_interval_ms = 60_000;
   });
 
   it('emits poll start and poll complete on every cycle', async () => {
@@ -799,10 +825,18 @@ describe('AutoLauncher — tick logs', () => {
     await launcher.pollOnce();
 
     const calls = logSpy.mock.calls.map((c) => String(c[0]));
-    expect(calls.some((c) => c.includes('[AutoLauncher] poll start cycle=1'))).toBe(true);
-    expect(calls.some((c) => c.includes('[AutoLauncher] poll complete cycle=1'))).toBe(true);
-    expect(calls.some((c) => c.includes('[AutoLauncher] poll start cycle=2'))).toBe(true);
-    expect(calls.some((c) => c.includes('[AutoLauncher] poll complete cycle=2'))).toBe(true);
+    expect(
+      calls.some((c) => c.includes('[AutoLauncher] poll start cycle=1')),
+    ).toBe(true);
+    expect(
+      calls.some((c) => c.includes('[AutoLauncher] poll complete cycle=1')),
+    ).toBe(true);
+    expect(
+      calls.some((c) => c.includes('[AutoLauncher] poll start cycle=2')),
+    ).toBe(true);
+    expect(
+      calls.some((c) => c.includes('[AutoLauncher] poll complete cycle=2')),
+    ).toBe(true);
 
     logSpy.mockRestore();
   });
@@ -853,8 +887,12 @@ describe('AutoLauncher — tick logs', () => {
 
     await launcher.pollOnce();
 
-    const startIdx = logOrder.findIndex((l) => l.includes('poll start cycle=1'));
-    const completeIdx = logOrder.findIndex((l) => l.includes('poll complete cycle=1'));
+    const startIdx = logOrder.findIndex((l) =>
+      l.includes('poll start cycle=1'),
+    );
+    const completeIdx = logOrder.findIndex((l) =>
+      l.includes('poll complete cycle=1'),
+    );
     expect(startIdx).toBeGreaterThanOrEqual(0);
     expect(completeIdx).toBeGreaterThan(startIdx);
 
