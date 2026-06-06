@@ -260,6 +260,7 @@ export function createPrsRouter(
           setTimeout(() => reject(new Error('Review timed out')), 120_000),
         ),
       ]);
+      setPRReviewResult(prNumber, repo, JSON.stringify(result));
       _broadcast({
         type: 'pr_review_complete',
         prNumber,
@@ -611,6 +612,7 @@ export function createPrsRouter(
             setTimeout(() => reject(new Error('Review timed out')), 120_000),
           ),
         ]);
+        setPRReviewResult(prNumber, repo, JSON.stringify(result));
         _broadcast({
           type: 'pr_review_complete',
           prNumber,
