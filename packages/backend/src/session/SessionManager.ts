@@ -8,7 +8,11 @@ import { AgentSession, parseNotionPageIdDashed } from './AgentSession';
 import { formatTaskId } from '../tasks/taskId';
 import { buildSessionContext } from './ContextBuilder';
 import { buildReviewClaudeMd } from './orchestrator-claudemd';
-import { resolveStartingPoint, ensureMilestoneBranch, slugify } from './branchModel';
+import {
+  resolveStartingPoint,
+  ensureMilestoneBranch,
+  slugify,
+} from './branchModel';
 import { loadOrchestratorConfig } from './orchestrator-config';
 import { CliSessionRunner } from './CliSessionRunner';
 import { ApiSessionRunner } from './ApiSessionRunner';
@@ -587,9 +591,12 @@ export class SessionManager extends EventEmitter {
           { cwd: projectDir },
         );
       } else {
-        execSync(`git worktree add --detach "${worktreePath}" ${worktreeBase}`, {
-          cwd: projectDir,
-        });
+        execSync(
+          `git worktree add --detach "${worktreePath}" ${worktreeBase}`,
+          {
+            cwd: projectDir,
+          },
+        );
       }
     } catch (err) {
       console.error(
@@ -1674,9 +1681,12 @@ export class SessionManager extends EventEmitter {
       if (resumeFeatureBranch) {
         try {
           // Attach to existing branch when the session resumes with an open PR.
-          execSync(`git worktree add "${worktreePath}" "${resumeFeatureBranch}"`, {
-            cwd: projectDir,
-          });
+          execSync(
+            `git worktree add "${worktreePath}" "${resumeFeatureBranch}"`,
+            {
+              cwd: projectDir,
+            },
+          );
         } catch {
           // Branch doesn't exist locally (e.g. was cleaned up) — recreate it.
           execSync(
@@ -1685,9 +1695,12 @@ export class SessionManager extends EventEmitter {
           );
         }
       } else {
-        execSync(`git worktree add --detach "${worktreePath}" ${worktreeBase}`, {
-          cwd: projectDir,
-        });
+        execSync(
+          `git worktree add --detach "${worktreePath}" ${worktreeBase}`,
+          {
+            cwd: projectDir,
+          },
+        );
       }
     } catch (err) {
       console.error(
