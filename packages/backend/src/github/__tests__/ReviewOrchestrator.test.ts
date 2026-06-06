@@ -36,7 +36,7 @@ vi.mock('../../config', () => ({
   getProjectByGithubRepo: vi.fn(),
   getProjectById: vi.fn(),
   normalizePath: vi.fn().mockImplementation((p: string) => p),
-  runtimeSettings: { session_mode: 'cli' },
+  runtimeSettings: { session_mode: 'cli', auto_review_concurrency: 1 },
 }));
 vi.mock('../../db/queries', () => ({
   getPRByNumber: vi.fn(),
@@ -137,7 +137,7 @@ describe('ReviewOrchestrator — needs_changes verdict routing', () => {
 
   it('calls sendOrResume with the original coder session ID when verdict is needs_changes', async () => {
     const reviewService = makeReviewService('needs_changes');
-    new ReviewOrchestrator(reviewService, sm, 1, true);
+    new ReviewOrchestrator(reviewService, sm, true);
 
     // Trigger the review via pr_opened event (the normal code flow).
     sm.emit('pr_opened', makeReviewJob());
@@ -154,7 +154,7 @@ describe('ReviewOrchestrator — needs_changes verdict routing', () => {
 
   it('passes the formatted feedback to sendOrResume', async () => {
     const reviewService = makeReviewService('needs_changes');
-    new ReviewOrchestrator(reviewService, sm, 1, true);
+    new ReviewOrchestrator(reviewService, sm, true);
 
     sm.emit('pr_opened', makeReviewJob());
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -172,7 +172,7 @@ describe('ReviewOrchestrator — needs_changes verdict routing', () => {
 
   it('does NOT call sendOrResume when verdict is approved', async () => {
     const reviewService = makeReviewService('approved');
-    new ReviewOrchestrator(reviewService, sm, 1, true);
+    new ReviewOrchestrator(reviewService, sm, true);
 
     sm.emit('pr_opened', makeReviewJob());
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -187,7 +187,7 @@ describe('ReviewOrchestrator — needs_changes verdict routing', () => {
     // structural fix ensures the actual SessionManager.send() call will then
     // record the event under that same ID (covered by SessionManager.test.ts).
     const reviewService = makeReviewService('needs_changes');
-    new ReviewOrchestrator(reviewService, sm, 1, true);
+    new ReviewOrchestrator(reviewService, sm, true);
 
     sm.emit('pr_opened', makeReviewJob());
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -208,7 +208,7 @@ describe('ReviewOrchestrator — pr_opened subscription', () => {
     const sm = makeSessionManager();
     const spyOnPrOpened = vi.spyOn(sm, 'on');
 
-    new ReviewOrchestrator(makeReviewService(), sm, 1, true);
+    new ReviewOrchestrator(makeReviewService(), sm, true);
 
     expect(spyOnPrOpened).toHaveBeenCalledWith(
       'pr_opened',

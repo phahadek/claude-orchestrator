@@ -1,4 +1,4 @@
-import { getProjectByGithubRepo, getProjectById } from '../config';
+import { getProjectByGithubRepo, getProjectById, runtimeSettings } from '../config';
 import {
   setPRReviewResult,
   getSetting,
@@ -36,17 +36,7 @@ import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { recordEvent } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
 
-const DEFAULT_REVIEW_CONCURRENCY = 20;
 const DEFAULT_MAX_ITERATIONS = 3;
-
-function getReviewConcurrency(): number {
-  const raw = process.env.AUTO_REVIEW_CONCURRENCY;
-  if (!raw) return DEFAULT_REVIEW_CONCURRENCY;
-  const parsed = parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0
-    ? parsed
-    : DEFAULT_REVIEW_CONCURRENCY;
-}
 
 function getMaxReviewIterations(): number {
   const raw = getSetting('max_review_iterations');
@@ -90,7 +80,6 @@ export class ReviewOrchestrator {
   constructor(
     private reviewService: PRReviewService,
     private sessionManager: SessionManager,
-    private maxConcurrency: number = getReviewConcurrency(),
     private enabled: boolean = true,
     private github?: GitHubClient,
     stallCheckIntervalMs: number = STALL_CHECK_INTERVAL_MS,
@@ -263,9 +252,9 @@ export class ReviewOrchestrator {
     return `${prJob.prNumber}:${prJob.repo}`;
   }
 
-  private async drain(): Promise<void> {
+  async drain(): Promise<void> {
     await this.bootReady;
-    while (this.running < this.maxConcurrency && this.queue.length > 0) {
+    while (this.running < runtimeSettings.auto_review_concurrency && this.queue.length > 0) {
       // Find the first job not blocked by per-PR serialization.
       let jobIndex = -1;
       for (let i = 0; i < this.queue.length; i++) {
@@ -289,12 +278,12 @@ export class ReviewOrchestrator {
       if (job.type === 'local_branch') {
         const lbJob = job as LocalBranchJob;
         console.log(
-          `[ReviewOrchestrator] drain: starting local-branch review for ${lbJob.branchName} (running: ${this.running}/${this.maxConcurrency})`,
+          `[ReviewOrchestrator] drain: starting local-branch review for ${lbJob.branchName} (running: ${this.running}/${runtimeSettings.auto_review_concurrency})`,
         );
       } else {
         const prJob = job as ReviewJob;
         console.log(
-          `[ReviewOrchestrator] drain: starting review for PR #${prJob.prNumber} (${prJob.repo}) (running: ${this.running}/${this.maxConcurrency})`,
+          `[ReviewOrchestrator] drain: starting review for PR #${prJob.prNumber} (${prJob.repo}) (running: ${this.running}/${runtimeSettings.auto_review_concurrency})`,
         );
       }
 
@@ -453,8 +442,7 @@ export class ReviewOrchestrator {
     maxRssMb = 0,
     failFast = true,
   ): Promise<void> {
-    if (!commands?.length) return;
-    if (!headSha) return;
+    if (!commands?.length || !headSha) return;
 
     if (hasTestResultForSha(prNumber, repo, headSha)) {
       console.log(

@@ -46,7 +46,6 @@ const projectFixture = {
 
 vi.mock('../config.js', () => ({
   AUTO_REVIEW_ENABLED: true,
-  AUTO_REVIEW_CONCURRENCY: 1,
   TASK_BACKEND: 'local',
   getProjectById: vi.fn(),
   getProjectByGithubRepo: vi.fn((repo: string) =>

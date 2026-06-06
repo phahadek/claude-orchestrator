@@ -16,7 +16,10 @@ import {
   permissionDenialsRouter,
 } from './routes/rules';
 import configRouter from './routes/config';
-import settingsRouter, { loadRuntimeSettingsFromDb } from './routes/settings';
+import settingsRouter, {
+  loadRuntimeSettingsFromDb,
+  setReviewOrchestrator as setSettingsReviewOrchestrator,
+} from './routes/settings';
 import {
   sessionsRouter,
   setBroadcast,
@@ -39,7 +42,7 @@ import { ReviewOrchestrator } from './github/ReviewOrchestrator';
 import { PRMergeWatcher } from './github/PRMergeWatcher';
 import { AutoMerger } from './github/AutoMerger';
 import { ReviewerCommentsWatcher } from './github/ReviewerCommentsWatcher';
-import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
+import { AUTO_REVIEW_ENABLED } from './config';
 import { getCorporateMode } from './config/corporateMode';
 import { getOrchestratorConfig } from './config/appConfig';
 import { AutoLauncher } from './orchestration/AutoLauncher';
@@ -94,10 +97,10 @@ const prReviewService = new PRReviewService(
 const reviewOrchestrator = new ReviewOrchestrator(
   prReviewService,
   sessionManager,
-  AUTO_REVIEW_CONCURRENCY,
   AUTO_REVIEW_ENABLED,
   githubClient,
 );
+setSettingsReviewOrchestrator(reviewOrchestrator);
 
 const PORT = getOrchestratorConfig().server.port;
 
