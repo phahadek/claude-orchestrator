@@ -9,7 +9,9 @@ import {
   hasActiveSessionForTask,
   getPausedPrReasonForTask,
   getMergedPRForTask,
+  setPauseReason,
 } from '../db/queries';
+import { recordEvent } from '../audit/AuditLog';
 
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
@@ -55,6 +57,17 @@ export class AutoLauncher {
   private stopped = true;
   private pollLastStartedAt: number | null = null;
   private cycleCounter = 0;
+  private notionUpdateAttempts = new Map<
+    string,
+    { count: number; nextRetryAt: number; lastError: string }
+  >();
+  private static readonly BACKOFF_SCHEDULE_MS = [
+    60_000,
+    5 * 60_000,
+    15 * 60_000,
+    60 * 60_000,
+  ];
+  private static readonly MAX_ATTEMPTS_BEFORE_AUDIT = 5;
 
   constructor(
     private readonly sessionManager: SessionManager,
@@ -207,20 +220,50 @@ export class AutoLauncher {
       // runaway (thousands of redundant API writes), so skip already-Done tasks.
       if (resolved.task.status === DONE_STATUS) continue;
       const mergedPR = getMergedPRForTask(resolved.task.id);
-      if (mergedPR) {
-        console.warn(
-          `[AutoLauncher] task "${resolved.task.title}" (${resolved.task.id}) skipped — PR #${mergedPR.pr_number} (${mergedPR.pr_url}) is already merged; updating task status to Done`,
+      if (!mergedPR) continue;
+
+      // Backoff: skip this cycle if still in cooldown from a previous failure.
+      const attempt = this.notionUpdateAttempts.get(resolved.task.id);
+      if (attempt && Date.now() < attempt.nextRetryAt) continue;
+
+      console.warn(
+        `[AutoLauncher] task "${resolved.task.title}" (${resolved.task.id}) skipped — PR #${mergedPR.pr_number} (${mergedPR.pr_url}) is already merged; updating task status to Done`,
+      );
+      try {
+        await withTimeout(
+          backend.updateStatus(resolved.task.id, DONE_STATUS),
+          FETCH_TIMEOUT_MS,
+          `updateStatus(${resolved.task.id})`,
         );
-        try {
-          await withTimeout(
-            backend.updateStatus(resolved.task.id, DONE_STATUS),
-            FETCH_TIMEOUT_MS,
-            `updateStatus(${resolved.task.id})`,
-          );
-        } catch (err) {
-          console.warn(
-            `[AutoLauncher] failed to update task ${resolved.task.id} to Done: ${err}`,
-          );
+        this.notionUpdateAttempts.delete(resolved.task.id);
+      } catch (err) {
+        const next = attempt ? attempt.count + 1 : 1;
+        const backoffMs =
+          AutoLauncher.BACKOFF_SCHEDULE_MS[
+            Math.min(next - 1, AutoLauncher.BACKOFF_SCHEDULE_MS.length - 1)
+          ];
+        this.notionUpdateAttempts.set(resolved.task.id, {
+          count: next,
+          nextRetryAt: Date.now() + backoffMs,
+          lastError: String(err),
+        });
+        console.warn(
+          `[AutoLauncher] failed to update task ${resolved.task.id} to Done (attempt ${next}, next retry in ${backoffMs / 1000}s): ${err}`,
+        );
+        if (next === AutoLauncher.MAX_ATTEMPTS_BEFORE_AUDIT) {
+          recordEvent({
+            event_type: 'auto_launch_done_update_stuck',
+            actor_type: 'system',
+            actor_id: null,
+            project_id: project.id,
+            task_id: resolved.task.id,
+            payload: {
+              pr_number: mergedPR.pr_number,
+              last_error: String(err),
+              attempts: next,
+            },
+          });
+          setPauseReason(mergedPR.pr_number, mergedPR.repo, 'notion_done_update_stuck');
         }
       }
     }

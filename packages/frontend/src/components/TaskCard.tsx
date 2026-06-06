@@ -53,6 +53,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     "PR creation failed — the session couldn't open its PR. Review and retry.",
   stalled_idle:
     'Session stalled without opening a PR — review and resume or abort.',
+  notion_done_update_stuck:
+    'PR merged but Notion status update failed repeatedly — update Notion to Done manually and clear the pause.',
 };
 
 function verdictLabel(verdict: string): string {

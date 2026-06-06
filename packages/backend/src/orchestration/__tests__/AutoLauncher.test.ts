@@ -20,6 +20,11 @@ vi.mock('../../db/queries.js', () => ({
   hasActiveSessionForTask: vi.fn().mockReturnValue(false),
   getPausedPrReasonForTask: vi.fn().mockReturnValue(null),
   getMergedPRForTask: vi.fn().mockReturnValue(null),
+  setPauseReason: vi.fn(),
+}));
+
+vi.mock('../../audit/AuditLog.js', () => ({
+  recordEvent: vi.fn(),
 }));
 
 import { runtimeSettings } from '../../config.js';
@@ -27,7 +32,9 @@ import {
   hasActiveSessionForTask,
   getPausedPrReasonForTask,
   getMergedPRForTask,
+  setPauseReason,
 } from '../../db/queries.js';
+import { recordEvent } from '../../audit/AuditLog.js';
 import {
   AutoLauncher,
   AutoLauncherFetchTimeoutError,
@@ -933,5 +940,194 @@ describe('AutoLauncher — tick logs', () => {
     expect(calls.some((c) => c.includes('poll complete cycle=2'))).toBe(true);
 
     logSpy.mockRestore();
+  });
+});
+
+// ── Backoff + audit trail tests ───────────────────────────────────────────────
+
+describe('AutoLauncher — Notion Done-update backoff', () => {
+  const mergedPR = {
+    id: 1,
+    pr_number: 200,
+    pr_url: 'https://github.com/owner/repo/pull/200',
+    task_id: 'task-1',
+    state: 'merged',
+    repo: 'owner/repo',
+  };
+
+  function makeBackoffBackend(updateStatus: ReturnType<typeof vi.fn>) {
+    return {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([makeResolvedTask()]),
+      updateStatus,
+    };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
+    vi.mocked(getMergedPRForTask).mockReturnValue(mergedPR as never);
+    (runtimeSettings as { auto_launch_concurrency: number }).auto_launch_concurrency = 2;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('5 consecutive failures progress through backoff schedule with correct nextRetryAt', async () => {
+    const BACKOFF = [60_000, 300_000, 900_000, 3_600_000];
+    const updateStatus = vi.fn().mockRejectedValue(new Error('Notion down'));
+    const backend = makeBackoffBackend(updateStatus);
+    const resolveBackend = vi.fn().mockReturnValue(backend);
+    const sessionManager = makeSessionManager(0);
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend,
+      pollOnStart: false,
+    });
+
+    const map = (launcher as unknown as Record<string, unknown>)
+      .notionUpdateAttempts as Map<string, { count: number; nextRetryAt: number; lastError: string }>;
+
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      const before = Date.now();
+      await launcher.pollOnce();
+      const entry = map.get('task-1');
+      expect(entry).toBeDefined();
+      expect(entry!.count).toBe(attempt);
+      const expectedBackoff = BACKOFF[Math.min(attempt - 1, BACKOFF.length - 1)];
+      expect(entry!.nextRetryAt).toBeGreaterThanOrEqual(before + expectedBackoff);
+
+      // Advance past the cooldown so next attempt fires
+      await vi.advanceTimersByTimeAsync(expectedBackoff + 1);
+    }
+  });
+
+  it('success clears the backoff entry', async () => {
+    const updateStatus = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Notion down'))
+      .mockResolvedValue(undefined);
+    const backend = makeBackoffBackend(updateStatus);
+    const resolveBackend = vi.fn().mockReturnValue(backend);
+    const sessionManager = makeSessionManager(0);
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend,
+      pollOnStart: false,
+    });
+
+    const map = (launcher as unknown as Record<string, unknown>)
+      .notionUpdateAttempts as Map<string, { count: number; nextRetryAt: number; lastError: string }>;
+
+    // First poll: failure → entry created
+    await launcher.pollOnce();
+    expect(map.has('task-1')).toBe(true);
+
+    // Advance past cooldown (60s after first failure)
+    await vi.advanceTimersByTimeAsync(60_001);
+
+    // Second poll: success → entry cleared
+    await launcher.pollOnce();
+    expect(map.has('task-1')).toBe(false);
+  });
+
+  it('audit row fires exactly once at attempt 5 and not at 6 or 7', async () => {
+    const BACKOFF = [60_000, 300_000, 900_000, 3_600_000];
+    const updateStatus = vi.fn().mockRejectedValue(new Error('Notion down'));
+    const backend = makeBackoffBackend(updateStatus);
+    const resolveBackend = vi.fn().mockReturnValue(backend);
+    const sessionManager = makeSessionManager(0);
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend,
+      pollOnStart: false,
+    });
+
+    // Run 7 consecutive failures
+    for (let i = 1; i <= 7; i++) {
+      await launcher.pollOnce();
+      const backoff = BACKOFF[Math.min(i - 1, BACKOFF.length - 1)];
+      await vi.advanceTimersByTimeAsync(backoff + 1);
+    }
+
+    // recordEvent called exactly once (at attempt 5)
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'auto_launch_done_update_stuck',
+        actor_type: 'system',
+        task_id: 'task-1',
+        payload: expect.objectContaining({ attempts: 5 }),
+      }),
+    );
+
+    // setPauseReason called exactly once
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      mergedPR.pr_number,
+      mergedPR.repo,
+      'notion_done_update_stuck',
+    );
+  });
+
+  it('tasks with nextRetryAt > now are skipped without calling updateStatus', async () => {
+    const updateStatus = vi.fn().mockRejectedValue(new Error('Notion down'));
+    const backend = makeBackoffBackend(updateStatus);
+    const resolveBackend = vi.fn().mockReturnValue(backend);
+    const sessionManager = makeSessionManager(0);
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend,
+      pollOnStart: false,
+    });
+
+    // First failure → enters 60s cooldown
+    await launcher.pollOnce();
+    expect(updateStatus).toHaveBeenCalledTimes(1);
+
+    // Poll again immediately (still in cooldown) → updateStatus NOT called again
+    await launcher.pollOnce();
+    expect(updateStatus).toHaveBeenCalledTimes(1);
+
+    // Advance past the cooldown
+    await vi.advanceTimersByTimeAsync(60_001);
+
+    // Now poll → updateStatus called again
+    await launcher.pollOnce();
+    expect(updateStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('warn log includes attempt count and next retry duration', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const updateStatus = vi.fn().mockRejectedValue(new Error('Notion down'));
+    const backend = makeBackoffBackend(updateStatus);
+    const resolveBackend = vi.fn().mockReturnValue(backend);
+    const sessionManager = makeSessionManager(0);
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    const calls = warnSpy.mock.calls.map((c) => String(c[0]));
+    expect(
+      calls.some(
+        (c) =>
+          c.includes('attempt 1') &&
+          c.includes('next retry in 60s'),
+      ),
+    ).toBe(true);
+
+    warnSpy.mockRestore();
   });
 });

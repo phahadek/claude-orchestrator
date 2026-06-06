@@ -23,7 +23,8 @@ export type PauseReason =
   | 'attribution_missing'
   | 'audit_findings'
   | 'pr_creation_failed'
-  | 'stalled_idle';
+  | 'stalled_idle'
+  | 'notion_done_update_stuck';
 
 export interface TaskView {
   taskId: string;
