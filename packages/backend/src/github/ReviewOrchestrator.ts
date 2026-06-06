@@ -650,7 +650,11 @@ export class ReviewOrchestrator {
   private async routeGateFailureToSession(
     job: ReviewJob,
     kind: 'verify' | 'autofix',
-    detail: { failedCommand?: string; truncatedOutput?: string; summary: string },
+    detail: {
+      failedCommand?: string;
+      truncatedOutput?: string;
+      summary: string;
+    },
   ): Promise<void> {
     const prRow = getPRByNumber(job.prNumber, job.repo);
 

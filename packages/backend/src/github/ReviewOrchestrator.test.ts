@@ -2616,7 +2616,10 @@ describe('ReviewOrchestrator — executeReview gate failures', () => {
     } as any);
     // autofix succeeds
     vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
-    vi.mocked(runAutofix).mockResolvedValue({ success: true, summary: 'clean' });
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      summary: 'clean',
+    });
     // verify passes
     vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
 
