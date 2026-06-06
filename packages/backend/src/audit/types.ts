@@ -29,7 +29,8 @@ export type EventType =
   | 'sessions_auto_archived'
   | 'pr_attribution_mismatch'
   | 'pr_creation_failed'
-  | 'session_aborted';
+  | 'session_aborted'
+  | 'auto_launch_done_update_stuck';
 
 export type ActorType = 'ai' | 'human' | 'system';
 
