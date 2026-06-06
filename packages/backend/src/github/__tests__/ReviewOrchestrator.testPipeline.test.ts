@@ -27,7 +27,7 @@ vi.mock('../../config', () => ({
   getProjectByGithubRepo: vi.fn(),
   getProjectById: vi.fn(),
   normalizePath: vi.fn().mockImplementation((p: string) => p),
-  runtimeSettings: { session_mode: 'cli' },
+  runtimeSettings: { session_mode: 'cli', auto_review_concurrency: 1 },
 }));
 
 // DB queries mock — includes new test-result functions
@@ -128,7 +128,7 @@ describe('ReviewOrchestrator.runTestPipeline — empty test commands', () => {
   it('is a no-op when commands array is empty', async () => {
     const sm = makeSessionManager();
     const rs = makeReviewService();
-    const orch = new ReviewOrchestrator(rs, sm, 1, true);
+    const orch = new ReviewOrchestrator(rs, sm, true);
 
     await orch.runTestPipeline(
       1,
@@ -146,7 +146,7 @@ describe('ReviewOrchestrator.runTestPipeline — empty test commands', () => {
   it('is a no-op when headSha is empty', async () => {
     const sm = makeSessionManager();
     const rs = makeReviewService();
-    const orch = new ReviewOrchestrator(rs, sm, 1, true);
+    const orch = new ReviewOrchestrator(rs, sm, true);
 
     await orch.runTestPipeline(
       1,
@@ -168,7 +168,7 @@ describe('ReviewOrchestrator.runTestPipeline — dedup on unchanged SHA', () => 
 
     const sm = makeSessionManager();
     const rs = makeReviewService();
-    const orch = new ReviewOrchestrator(rs, sm, 1, true);
+    const orch = new ReviewOrchestrator(rs, sm, true);
 
     await orch.runTestPipeline(
       42,
@@ -188,7 +188,7 @@ describe('ReviewOrchestrator.runTestPipeline — dedup on unchanged SHA', () => 
 
     const sm = makeSessionManager();
     const rs = makeReviewService();
-    const orch = new ReviewOrchestrator(rs, sm, 1, true);
+    const orch = new ReviewOrchestrator(rs, sm, true);
 
     await orch.runTestPipeline(
       42,
@@ -214,7 +214,7 @@ describe('ReviewOrchestrator.runTestPipeline — re-run on new SHA', () => {
 
     const sm = makeSessionManager();
     const rs = makeReviewService();
-    const orch = new ReviewOrchestrator(rs, sm, 1, true);
+    const orch = new ReviewOrchestrator(rs, sm, true);
 
     await orch.runTestPipeline(
       1,
@@ -271,7 +271,7 @@ describe('ReviewOrchestrator.runTestPipeline — persistence', () => {
 
     const sm = makeSessionManager();
     const rs = makeReviewService();
-    const orch = new ReviewOrchestrator(rs, sm, 1, true);
+    const orch = new ReviewOrchestrator(rs, sm, true);
 
     await orch.runTestPipeline(
       7,
@@ -297,7 +297,7 @@ describe('ReviewOrchestrator.runTestPipeline — persistence', () => {
 
     const sm = makeSessionManager();
     const rs = makeReviewService();
-    const orch = new ReviewOrchestrator(rs, sm, 1, true);
+    const orch = new ReviewOrchestrator(rs, sm, true);
 
     await orch.runTestPipeline(
       7,
@@ -322,7 +322,7 @@ describe('ReviewOrchestrator.runTestPipeline — persistence', () => {
 
     const sm = makeSessionManager();
     const rs = makeReviewService();
-    const orch = new ReviewOrchestrator(rs, sm, 1, true);
+    const orch = new ReviewOrchestrator(rs, sm, true);
 
     await orch.runTestPipeline(
       1,

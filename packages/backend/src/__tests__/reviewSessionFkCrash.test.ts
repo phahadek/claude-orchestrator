@@ -74,7 +74,6 @@ const projectFixture = {
 
 vi.mock('../config', () => ({
   AUTO_REVIEW_ENABLED: false,
-  AUTO_REVIEW_CONCURRENCY: 1,
   ALLOWED_TOOLS: [],
   config: {
     claudePath: '/fake/claude',
@@ -91,6 +90,7 @@ vi.mock('../config', () => ({
     code_session_model: '',
     review_session_model: '',
     max_concurrent_code_sessions: 20,
+    auto_review_concurrency: 20,
   },
 }));
 

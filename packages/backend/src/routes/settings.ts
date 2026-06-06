@@ -3,6 +3,11 @@ import type { Request, Response } from 'express';
 import { getSetting, setSetting, getAllSettings } from '../db/queries';
 import { runtimeSettings } from '../config';
 
+let _reviewOrchestrator: { drain(): Promise<void> } | null = null;
+export function setReviewOrchestrator(orch: { drain(): Promise<void> }): void {
+  _reviewOrchestrator = orch;
+}
+
 const router = Router();
 
 const SETTING_KEYS = [
@@ -35,6 +40,7 @@ function applyToRuntime(key: SettingKey, value: string): void {
     runtimeSettings.max_concurrent_code_sessions = Number(value);
   } else if (key === 'auto_review_concurrency') {
     runtimeSettings.auto_review_concurrency = Number(value);
+    void _reviewOrchestrator?.drain();
   } else if (key === 'auto_review') {
     runtimeSettings.auto_review = value !== 'false';
   } else if (key === 'card_preview_lines') {

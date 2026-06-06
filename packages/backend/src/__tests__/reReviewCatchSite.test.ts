@@ -38,7 +38,6 @@ const projectFixture = {
 
 vi.mock('../config.js', () => ({
   AUTO_REVIEW_ENABLED: true,
-  AUTO_REVIEW_CONCURRENCY: 1,
   TASK_BACKEND: 'local',
   getProjectById: vi.fn(),
   getProjectByGithubRepo: vi.fn((repo: string) =>
@@ -46,7 +45,7 @@ vi.mock('../config.js', () => ({
   ),
   getAllProjects: vi.fn(() => [projectFixture]),
   normalizePath: (p: string) => p,
-  runtimeSettings: {},
+  runtimeSettings: { auto_review_concurrency: 20 },
 }));
 
 import { PRReviewService } from '../github/PRReviewService.js';

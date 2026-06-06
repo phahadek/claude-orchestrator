@@ -81,7 +81,6 @@ export const JIRA_TOKEN = getSecret('JIRA_TOKEN') ?? ''; // API token or PAT
 export const JIRA_EMAIL = process.env.JIRA_EMAIL ?? ''; // email for basic auth (optional)
 
 export const AUTO_REVIEW_ENABLED = _oc.autoReview.enabled;
-export const AUTO_REVIEW_CONCURRENCY = _oc.autoReview.concurrency;
 
 // ── Session Bash output / timeout caps ───────────────────────────────────────
 // Single source for both CLI (spawn) and API (Agent SDK) mode.
@@ -258,7 +257,7 @@ export const runtimeSettings: RuntimeSettings = {
   max_concurrent_code_sessions: Number(
     process.env.MAX_CONCURRENT_CODE_SESSIONS ?? 20,
   ),
-  auto_review_concurrency: _oc.autoReview.concurrency,
+  auto_review_concurrency: 20,
   auto_review: _oc.autoReview.enabled,
   card_preview_lines: Number(process.env.CARD_PREVIEW_LINES ?? 3),
   code_session_model: '',

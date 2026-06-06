@@ -20,6 +20,8 @@ vi.mock('../db/queries.js', () => ({
   getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
   insertPendingReviewSync: vi.fn(),
   deletePendingReviewSync: vi.fn(),
+  hasTestResultForSha: vi.fn().mockReturnValue(false),
+  upsertTestResult: vi.fn(),
 }));
 
 vi.mock('../session/autofix-runner.js', () => ({
@@ -66,6 +68,7 @@ vi.mock('../config.js', () => ({
     if (id === 'proj-local') return localOnlyProjectFixture;
     return undefined;
   }),
+  runtimeSettings: { auto_review_concurrency: 1 },
 }));
 
 vi.mock('../orchestration/verifyRunner.js', () => ({
@@ -88,6 +91,7 @@ vi.mock('../session/orchestrator-config.js', () => ({
 }));
 
 import { ReviewOrchestrator } from './ReviewOrchestrator';
+import { runtimeSettings } from '../config';
 import {
   setPRReviewResult,
   getPRByNumber,
@@ -208,6 +212,7 @@ const basePRRow = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  runtimeSettings.auto_review_concurrency = 1;
 });
 
 // ── Disabled orchestrator ─────────────────────────────────────────────────────
@@ -216,7 +221,7 @@ describe('ReviewOrchestrator — disabled', () => {
   it('does not enqueue when enabled === false', async () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, false);
+    new ReviewOrchestrator(rs, sm as any, false);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 20));
@@ -231,7 +236,7 @@ describe('ReviewOrchestrator — missing taskId', () => {
   it('does not enqueue when job.taskId is empty', async () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', { ...baseJob, taskId: '' });
     await new Promise((r) => setTimeout(r, 20));
@@ -287,7 +292,7 @@ describe('ReviewOrchestrator — concurrency', () => {
       reReviewPR: vi.fn(),
     } as unknown as PRReviewService;
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
     sm.emit('pr_opened', { ...baseJob, prNumber: 2 });
@@ -320,7 +325,7 @@ describe('ReviewOrchestrator — pr_review_complete broadcast', () => {
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -363,7 +368,7 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -389,7 +394,7 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -418,7 +423,7 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -452,7 +457,7 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -480,7 +485,7 @@ describe('ReviewOrchestrator — feedback routing on needs_changes', () => {
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -520,7 +525,7 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -546,7 +551,7 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -567,7 +572,7 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -598,7 +603,7 @@ describe('ReviewOrchestrator — incomplete verdict', () => {
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -640,7 +645,7 @@ describe('ReviewOrchestrator — error handling', () => {
       sendReReview: vi.fn(),
     } as unknown as PRReviewService;
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
     vi.mocked(sm.sendOrResume).mockResolvedValue('code-session');
 
     const messages: object[] = [];
@@ -687,7 +692,7 @@ describe('ReviewOrchestrator — error handling', () => {
       sendReReview: vi.fn(),
     } as unknown as PRReviewService;
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -738,7 +743,7 @@ describe('ReviewOrchestrator — merge conflict causes needs_changes', () => {
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -770,7 +775,7 @@ describe('ReviewOrchestrator — draft PR transition on approved verdict', () =>
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -806,7 +811,7 @@ describe('ReviewOrchestrator — draft PR transition on approved verdict', () =>
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -846,7 +851,7 @@ describe('Break 4 (AC) — auto findings routing: sessionManager.sendOrResume() 
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
@@ -876,7 +881,7 @@ describe('Break 5 (AC) — re-review trigger: re-review called on push_detected'
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -914,7 +919,7 @@ describe('ReviewOrchestrator — Notion status update on approved verdict', () =
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -938,7 +943,7 @@ describe('ReviewOrchestrator — Notion status update on approved verdict', () =
       reviewedAt: new Date().toISOString(),
     });
 
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -957,7 +962,7 @@ describe('ReviewOrchestrator — autofix WS messages', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -983,7 +988,7 @@ describe('ReviewOrchestrator — autofix WS messages', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -1005,7 +1010,7 @@ describe('ReviewOrchestrator — autofix WS messages', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -1028,7 +1033,7 @@ describe('ReviewOrchestrator — autofix WS messages', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -1049,7 +1054,7 @@ describe('ReviewOrchestrator — autofix WS messages', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -1075,7 +1080,8 @@ describe('ReviewOrchestrator — autofix WS messages', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 2, true);
+    runtimeSettings.auto_review_concurrency = 2;
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
     sm.emit('pr_opened', { ...baseJob, prNumber: 2 });
@@ -1099,7 +1105,7 @@ describe('ReviewOrchestrator — autofix WS messages', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -1123,7 +1129,7 @@ describe('ReviewOrchestrator — autofix WS messages', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -1143,7 +1149,7 @@ describe('ReviewOrchestrator — consumeAutofixSha (autofix-only iteration detec
   it('consumeAutofixSha returns false when no autofix commit was recorded', () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    const orchestrator = new ReviewOrchestrator(rs, sm as any, 1, true);
+    const orchestrator = new ReviewOrchestrator(rs, sm as any, true);
 
     expect(orchestrator.consumeAutofixSha(1, 'owner/repo', 'any-sha')).toBe(
       false,
@@ -1164,7 +1170,7 @@ describe('ReviewOrchestrator — consumeAutofixSha (autofix-only iteration detec
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    const orchestrator = new ReviewOrchestrator(rs, sm as any, 1, true);
+    const orchestrator = new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -1196,7 +1202,7 @@ describe('ReviewOrchestrator — consumeAutofixSha (autofix-only iteration detec
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    const orchestrator = new ReviewOrchestrator(rs, sm as any, 1, true);
+    const orchestrator = new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -1220,7 +1226,7 @@ describe('ReviewOrchestrator — consumeAutofixSha (autofix-only iteration detec
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    const orchestrator = new ReviewOrchestrator(rs, sm as any, 1, true);
+    const orchestrator = new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -1254,7 +1260,7 @@ describe('ReviewOrchestrator — consumeAutofixSha (autofix-only iteration detec
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    const orchestrator = new ReviewOrchestrator(rs, sm as any, 1, true);
+    const orchestrator = new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -1318,7 +1324,7 @@ describe('ReviewOrchestrator — local_branch_submitted', () => {
       reviewedAt: new Date().toISOString(),
     });
     const sm = makeMockSessionManager();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('message', {
       type: 'local_branch_submitted',
@@ -1347,7 +1353,7 @@ describe('ReviewOrchestrator — local_branch_submitted', () => {
 
     const rs = makeMockReviewService();
     const sm = makeMockSessionManager();
-    new ReviewOrchestrator(rs, sm as any, 1, false);
+    new ReviewOrchestrator(rs, sm as any, false);
 
     sm.emit('message', {
       type: 'local_branch_submitted',
@@ -1372,7 +1378,7 @@ describe('ReviewOrchestrator — local_branch_submitted', () => {
 
     const rs = makeMockReviewService();
     const sm = makeMockSessionManager();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('message', {
       type: 'local_branch_submitted',
@@ -1391,7 +1397,7 @@ describe('ReviewOrchestrator — local_branch_submitted', () => {
 
     const rs = makeMockReviewService();
     const sm = makeMockSessionManager();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
@@ -1463,7 +1469,7 @@ describe('ReviewOrchestrator — verify-as-gate: local-only, empty verify list',
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('message', {
       type: 'local_branch_submitted',
@@ -1497,7 +1503,7 @@ describe('ReviewOrchestrator — verify-as-gate: local-only, all verify commands
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('message', {
       type: 'local_branch_submitted',
@@ -1539,7 +1545,7 @@ describe('ReviewOrchestrator — verify-as-gate: local-only, first verify comman
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('message', {
       type: 'local_branch_submitted',
@@ -1574,7 +1580,7 @@ describe('ReviewOrchestrator — verify-as-gate: local-only, first verify comman
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('message', {
       type: 'local_branch_submitted',
@@ -1612,7 +1618,7 @@ describe('ReviewOrchestrator — verify-as-gate: verify runs AFTER autofix (orde
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('message', {
       type: 'local_branch_submitted',
@@ -1709,7 +1715,7 @@ describe('ReviewOrchestrator — verify-gate autofix-first', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     emitLocalBranch(sm);
     await new Promise((r) => setTimeout(r, 30));
@@ -1760,7 +1766,7 @@ describe('ReviewOrchestrator — verify-gate autofix-first', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     emitLocalBranch(sm);
     await new Promise((r) => setTimeout(r, 30));
@@ -1802,7 +1808,7 @@ describe('ReviewOrchestrator — verify-gate autofix-first', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     emitLocalBranch(sm);
     await new Promise((r) => setTimeout(r, 30));
@@ -1856,7 +1862,7 @@ describe('ReviewOrchestrator — registerRevertSync pendingSyncs mutex', () => {
       }),
     } as unknown as PRReviewService;
 
-    const orch = new ReviewOrchestrator(rs, sm as any, 1, true);
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
 
     // Register a slow sync for this PR before opening the review
     orch.registerRevertSync(1, 'owner/repo', syncPromise);
@@ -1899,7 +1905,7 @@ describe('ReviewOrchestrator — registerRevertSync pendingSyncs mutex', () => {
     });
 
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     // Simulate what SessionManager.registerRevertSync emits
     sm.emit('revert_sync_registered', {
@@ -1932,7 +1938,7 @@ describe('ReviewOrchestrator — registerRevertSync pendingSyncs mutex', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    const orch = new ReviewOrchestrator(rs, sm as any, 1, true);
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
 
     // Register a sync that is already resolved
     orch.registerRevertSync(1, 'owner/repo', Promise.resolve());
@@ -1986,7 +1992,7 @@ describe('ReviewOrchestrator — file pollution check after autofix', () => {
     const sm = makeMockSessionManager();
     const gc = makeGitHubClient();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true, gc);
+    new ReviewOrchestrator(rs, sm as any, true, gc);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 50));
@@ -2017,7 +2023,7 @@ describe('ReviewOrchestrator — file pollution check after autofix', () => {
     const sm = makeMockSessionManager();
     const gc = makeGitHubClient();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true, gc);
+    new ReviewOrchestrator(rs, sm as any, true, gc);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 50));
@@ -2045,7 +2051,7 @@ describe('ReviewOrchestrator — file pollution check after autofix', () => {
     const sm = makeMockSessionManager();
     const gc = makeGitHubClient();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true, gc);
+    new ReviewOrchestrator(rs, sm as any, true, gc);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 50));
@@ -2086,7 +2092,7 @@ describe('ReviewOrchestrator — file pollution check after autofix', () => {
         };
       }),
     } as unknown as PRReviewService;
-    new ReviewOrchestrator(rs, sm as any, 1, true, gc);
+    new ReviewOrchestrator(rs, sm as any, true, gc);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 50));
@@ -2111,7 +2117,7 @@ describe('ReviewOrchestrator — file pollution check after autofix', () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
     // No GitHub client passed
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 50));
@@ -2138,7 +2144,7 @@ describe('ReviewOrchestrator — file pollution check after autofix', () => {
     const sm = makeMockSessionManager();
     const gc = makeGitHubClient();
     const rs = makeMockReviewService();
-    new ReviewOrchestrator(rs, sm as any, 1, true, gc);
+    new ReviewOrchestrator(rs, sm as any, true, gc);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 50));
@@ -2173,7 +2179,7 @@ describe('ReviewOrchestrator — runAutofixPipeline helper', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    const orch = new ReviewOrchestrator(rs, sm as any, 1, true);
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -2192,7 +2198,7 @@ describe('ReviewOrchestrator — runAutofixPipeline helper', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    const orch = new ReviewOrchestrator(rs, sm as any, 1, true);
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -2208,7 +2214,7 @@ describe('ReviewOrchestrator — runAutofixPipeline helper', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    const orch = new ReviewOrchestrator(rs, sm as any, 1, true);
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -2241,7 +2247,7 @@ describe('ReviewOrchestrator — runAutofixPipeline helper', () => {
     const sm = makeMockSessionManager();
     const gc = makeGitHubClient();
     const rs = makeMockReviewService();
-    const orch = new ReviewOrchestrator(rs, sm as any, 1, true, gc);
+    const orch = new ReviewOrchestrator(rs, sm as any, true, gc);
 
     await orch.runAutofixPipeline(1, 'owner/repo', 'task-direct');
 
@@ -2263,7 +2269,7 @@ describe('ReviewOrchestrator — runAutofixPipeline helper', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    const orch = new ReviewOrchestrator(rs, sm as any, 1, true);
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
 
     await orch.runAutofixPipeline(1, 'owner/repo', null);
 
@@ -2304,7 +2310,7 @@ describe('ReviewOrchestrator — runAutofixPipeline helper', () => {
     const mockGithub = makeMockGitHubClient();
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    const orch = new ReviewOrchestrator(rs, sm as any, 1, true, mockGithub);
+    const orch = new ReviewOrchestrator(rs, sm as any, true, mockGithub);
 
     await orch.runAutofixPipeline(1, 'owner/repo', null);
 
@@ -2339,7 +2345,7 @@ describe('ReviewOrchestrator — runAutofixPipeline helper', () => {
     const mockGithub = makeMockGitHubClient();
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    const orch = new ReviewOrchestrator(rs, sm as any, 1, true, mockGithub);
+    const orch = new ReviewOrchestrator(rs, sm as any, true, mockGithub);
 
     await orch.runAutofixPipeline(1, 'owner/repo', null);
 
@@ -2358,7 +2364,7 @@ describe('ReviewOrchestrator — runAutofixPipeline helper', () => {
     vi.mocked(dbConsumeAutofixSha).mockReturnValueOnce(true);
 
     // Fresh ReviewOrchestrator instance (no in-memory state from previous instance)
-    const freshOrch = new ReviewOrchestrator(rs, sm as any, 1, true);
+    const freshOrch = new ReviewOrchestrator(rs, sm as any, true);
 
     expect(
       freshOrch.consumeAutofixSha(1, 'owner/repo', 'pre-restart-sha'),
@@ -2380,7 +2386,7 @@ describe('ReviewOrchestrator — runAutofixPipeline helper', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    const orch = new ReviewOrchestrator(rs, sm as any, 1, true);
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
 
     const messages: object[] = [];
     sm.on('message', (msg: object) => messages.push(msg));
@@ -2703,7 +2709,7 @@ describe('ReviewOrchestrator — reviewLocalBranch: sendOrResume + audit logging
       summary: 'Needs work.',
       reviewedAt: new Date().toISOString(),
     });
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     emitLocalBranch(sm);
     await new Promise((r) => setTimeout(r, 30));
@@ -2733,7 +2739,7 @@ describe('ReviewOrchestrator — reviewLocalBranch: sendOrResume + audit logging
       summary: 'Needs work.',
       reviewedAt: new Date().toISOString(),
     });
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     emitLocalBranch(sm);
     await new Promise((r) => setTimeout(r, 30));
@@ -2768,7 +2774,7 @@ describe('ReviewOrchestrator — reviewLocalBranch: sendOrResume + audit logging
       summary: 'Needs work.',
       reviewedAt: new Date().toISOString(),
     });
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     emitLocalBranch(sm);
     await new Promise((r) => setTimeout(r, 30));
@@ -2797,7 +2803,7 @@ describe('ReviewOrchestrator — reviewLocalBranch: sendOrResume + audit logging
       summary: 'Needs work.',
       reviewedAt: new Date().toISOString(),
     });
-    new ReviewOrchestrator(rs, sm as any, 1, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     // Should not throw — errors are caught internally
     await expect(
@@ -2857,7 +2863,8 @@ describe('ReviewOrchestrator — concurrent drain pool', () => {
 
     const sm = makeMockSessionManager();
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
-    new ReviewOrchestrator(rs, sm as any, 2, true);
+    runtimeSettings.auto_review_concurrency = 2;
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
     sm.emit('pr_opened', { ...baseJob, prNumber: 2 });
@@ -2909,7 +2916,8 @@ describe('ReviewOrchestrator — concurrent drain pool', () => {
 
     const sm = makeMockSessionManager();
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
-    new ReviewOrchestrator(rs, sm as any, 20, true);
+    runtimeSettings.auto_review_concurrency = 20;
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
     sm.emit('pr_opened', { ...baseJob, prNumber: 2 });
@@ -2961,7 +2969,8 @@ describe('ReviewOrchestrator — concurrent drain pool', () => {
 
     const sm = makeMockSessionManager();
     vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
-    new ReviewOrchestrator(rs, sm as any, 20, true);
+    runtimeSettings.auto_review_concurrency = 20;
+    new ReviewOrchestrator(rs, sm as any, true);
 
     // Queue two jobs for the SAME PR
     sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
@@ -2977,34 +2986,145 @@ describe('ReviewOrchestrator — concurrent drain pool', () => {
     expect(started).toEqual(['first', 'second']);
   });
 
-  it('default maxConcurrency is 20 (configurable via AUTO_REVIEW_CONCURRENCY)', () => {
-    const savedEnv = process.env.AUTO_REVIEW_CONCURRENCY;
-    try {
-      delete process.env.AUTO_REVIEW_CONCURRENCY;
-      const sm = makeMockSessionManager();
-      const rs = makeMockReviewService();
-      const orch = new ReviewOrchestrator(rs, sm as any);
-      expect((orch as any).maxConcurrency).toBe(20);
-    } finally {
-      if (savedEnv !== undefined)
-        process.env.AUTO_REVIEW_CONCURRENCY = savedEnv;
-      else delete process.env.AUTO_REVIEW_CONCURRENCY;
-    }
+  it('runtimeSettings.auto_review_concurrency=N runs exactly N jobs concurrently', async () => {
+    const started: number[] = [];
+    const resolvers: Array<() => void> = [];
+    const blockers = [0, 1, 2].map(
+      (i) =>
+        new Promise<void>((resolve) => {
+          resolvers[i] = resolve;
+        }),
+    );
+
+    const rs = {
+      reviewPR: vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          started.push(1);
+          await blockers[0];
+          return {
+            prNumber: 1,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
+        })
+        .mockImplementationOnce(async () => {
+          started.push(2);
+          await blockers[1];
+          return {
+            prNumber: 2,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
+        })
+        .mockImplementationOnce(async () => {
+          started.push(3);
+          await blockers[2];
+          return {
+            prNumber: 3,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
+        }),
+      sendReReview: vi.fn(),
+      reReviewPR: vi.fn(),
+    } as unknown as PRReviewService;
+
+    const sm = makeMockSessionManager();
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    runtimeSettings.auto_review_concurrency = 2;
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
+    sm.emit('pr_opened', { ...baseJob, prNumber: 2 });
+    sm.emit('pr_opened', { ...baseJob, prNumber: 3 });
+
+    await new Promise((r) => setTimeout(r, 30));
+    // Only 2 of the 3 should be running (concurrency=2)
+    expect(started).toEqual([1, 2]);
+
+    resolvers[0]();
+    await new Promise((r) => setTimeout(r, 30));
+    // After first completes, third should start
+    expect(started).toEqual([1, 2, 3]);
+
+    resolvers[1]();
+    resolvers[2]();
+    await new Promise((r) => setTimeout(r, 10));
   });
 
-  it('AUTO_REVIEW_CONCURRENCY env var overrides default concurrency', () => {
-    const savedEnv = process.env.AUTO_REVIEW_CONCURRENCY;
-    try {
-      process.env.AUTO_REVIEW_CONCURRENCY = '5';
-      const sm = makeMockSessionManager();
-      const rs = makeMockReviewService();
-      const orch = new ReviewOrchestrator(rs, sm as any);
-      expect((orch as any).maxConcurrency).toBe(5);
-    } finally {
-      if (savedEnv !== undefined)
-        process.env.AUTO_REVIEW_CONCURRENCY = savedEnv;
-      else delete process.env.AUTO_REVIEW_CONCURRENCY;
-    }
+  it('increasing runtimeSettings.auto_review_concurrency mid-queue dispatches additional jobs on next drain', async () => {
+    const started: number[] = [];
+    const resolvers: Array<() => void> = [];
+    const blockers = [0, 1].map(
+      (i) =>
+        new Promise<void>((resolve) => {
+          resolvers[i] = resolve;
+        }),
+    );
+
+    const rs = {
+      reviewPR: vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          started.push(1);
+          await blockers[0];
+          return {
+            prNumber: 1,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
+        })
+        .mockImplementationOnce(async () => {
+          started.push(2);
+          await blockers[1];
+          return {
+            prNumber: 2,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
+        }),
+      sendReReview: vi.fn(),
+      reReviewPR: vi.fn(),
+    } as unknown as PRReviewService;
+
+    const sm = makeMockSessionManager();
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    // Start with concurrency=1 so only PR 1 runs
+    runtimeSettings.auto_review_concurrency = 1;
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
+    sm.emit('pr_opened', { ...baseJob, prNumber: 2 });
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(started).toEqual([1]); // only 1 running
+
+    // Increase concurrency — drain should dispatch PR 2 immediately
+    runtimeSettings.auto_review_concurrency = 2;
+    await orch.drain();
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(started).toEqual([1, 2]); // both running now
+
+    resolvers[0]();
+    resolvers[1]();
+    await new Promise((r) => setTimeout(r, 10));
   });
 });
 
@@ -3018,7 +3138,6 @@ describe('ReviewOrchestrator — stall detector', () => {
     const orch = new ReviewOrchestrator(
       rs,
       sm as any,
-      1,
       true,
       undefined,
       60_000,
@@ -3087,11 +3206,10 @@ describe('ReviewOrchestrator — stall detector', () => {
 
       const sm = makeMockSessionManager();
 
-      // concurrency=1, stall check every 200 ms, stall threshold 500 ms
+      // concurrency=1 (from runtimeSettings), stall check every 200 ms, stall threshold 500 ms
       const orch = new ReviewOrchestrator(
         rs,
         sm as any,
-        1,
         true,
         undefined,
         200,
