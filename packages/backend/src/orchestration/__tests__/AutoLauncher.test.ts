@@ -22,6 +22,9 @@ vi.mock('../../db/queries.js', () => ({
   getPausedPrReasonForTask: vi.fn().mockReturnValue(null),
   getMergedPRForTask: vi.fn().mockReturnValue(null),
   setPauseReason: vi.fn(),
+  setTaskPauseReason: vi.fn(),
+  getTaskPauseReason: vi.fn().mockReturnValue(null),
+  clearTaskPauseReason: vi.fn(),
 }));
 
 vi.mock('../../audit/AuditLog.js', () => ({
@@ -34,6 +37,9 @@ import {
   getPausedPrReasonForTask,
   getMergedPRForTask,
   setPauseReason,
+  setTaskPauseReason,
+  getTaskPauseReason,
+  clearTaskPauseReason,
 } from '../../db/queries.js';
 import { recordEvent } from '../../audit/AuditLog.js';
 import {
@@ -93,6 +99,7 @@ describe('AutoLauncher — project-driven polling', () => {
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
     vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
     vi.mocked(getMergedPRForTask).mockReturnValue(null);
+    vi.mocked(getTaskPauseReason).mockReturnValue(null);
     (
       runtimeSettings as { auto_launch_concurrency: number }
     ).auto_launch_concurrency = 2;
@@ -1150,6 +1157,7 @@ describe('AutoLauncher — launch failure tracking', () => {
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
     vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
     vi.mocked(getMergedPRForTask).mockReturnValue(null);
+    vi.mocked(getTaskPauseReason).mockReturnValue(null);
     (
       runtimeSettings as { auto_launch_concurrency: number }
     ).auto_launch_concurrency = 2;
@@ -1198,7 +1206,7 @@ describe('AutoLauncher — launch failure tracking', () => {
       expect.objectContaining({ type: 'auto_launch_paused' }),
     );
 
-    // Cycle 3 — failure 3, pause + broadcast
+    // Cycle 3 — failure 3, pause + broadcast + DB write
     backend.fetchReadyTasks.mockResolvedValue([task]);
     await launcher.pollOnce();
     expect(broadcast).toHaveBeenCalledWith(
@@ -1207,6 +1215,11 @@ describe('AutoLauncher — launch failure tracking', () => {
         taskId: 'task-fail',
         reason: 'launch_failed',
       }),
+    );
+    expect(setTaskPauseReason).toHaveBeenCalledWith(
+      'task-fail',
+      'launch_failed',
+      expect.stringContaining("A branch named 'feature/test-task' already exists"),
     );
 
     warnSpy.mockRestore();
@@ -1284,12 +1297,13 @@ describe('AutoLauncher — launch failure tracking', () => {
       await launcher.pollOnce();
     }
 
-    // 1 success — resets count
+    // 1 success — resets count and clears DB entry
     backend.fetchReadyTasks.mockResolvedValue([task]);
     await launcher.pollOnce();
     expect(
       broadcastMsgs.filter((m) => m.type === 'auto_launch_paused'),
     ).toHaveLength(0);
+    expect(clearTaskPauseReason).toHaveBeenCalledWith('task-reset');
 
     // Now 2 more failures — not yet at limit again (count reset to 1 after success)
     for (let i = 0; i < 2; i++) {

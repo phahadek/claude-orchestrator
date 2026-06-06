@@ -3,6 +3,7 @@ import {
   getLatestCodeSessionByNotionTaskId,
   getSetting,
   getTaskCache,
+  getTaskPauseReason,
 } from '../db/queries';
 import type { PauseReason } from '../db/types';
 
@@ -115,6 +116,6 @@ export function deriveDisplayStatusFromDb(notionTaskId: string): DisplayStatus {
     reviewVerdict,
     reviewIterationCount: prRow?.review_iteration ?? 0,
     reviewIterationCap: getReviewIterationCap(),
-    pauseReason: prRow?.pause_reason ?? null,
+    pauseReason: prRow?.pause_reason ?? getTaskPauseReason(notionTaskId) ?? null,
   });
 }

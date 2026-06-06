@@ -11,6 +11,9 @@ import {
   getPausedPrReasonForTask,
   getMergedPRForTask,
   setPauseReason,
+  setTaskPauseReason,
+  getTaskPauseReason,
+  clearTaskPauseReason,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 
@@ -331,10 +334,12 @@ export class AutoLauncher {
     const maybePauseReason = (task as { pause_reason?: string | null })
       .pause_reason;
     if (maybePauseReason != null && maybePauseReason !== '') return false;
-    // Skip tasks that have exceeded the consecutive launch failure limit.
+    // Skip tasks that have exceeded the consecutive launch failure limit
+    // (in-memory fast path, or persisted DB entry that survives restarts).
     const failures = this.launchFailures.get(task.id);
     if (failures && failures.count >= AutoLauncher.MAX_FAILURES_BEFORE_PAUSE)
       return false;
+    if (getTaskPauseReason(task.id) != null) return false;
     // Also skip if the task's most recent PR is paused (e.g. stuck_timeout)
     // so we don't relaunch a session that was force-paused.
     if (getPausedPrReasonForTask(task.id) != null) return false;
@@ -393,6 +398,7 @@ export class AutoLauncher {
         taskId: task.id,
       });
       this.launchFailures.delete(task.id);
+      clearTaskPauseReason(task.id);
       console.log(
         `[AutoLauncher] launched session ${sessionId.slice(0, 8)} for task ${task.title || task.id} in project ${project.id}`,
       );
@@ -422,6 +428,7 @@ export class AutoLauncher {
       this.launchFailures.set(task.id, entry);
 
       if (entry.count >= AutoLauncher.MAX_FAILURES_BEFORE_PAUSE) {
+        setTaskPauseReason(task.id, 'launch_failed', fullMsg);
         this.broadcast?.({
           type: 'auto_launch_paused',
           taskId: task.id,
