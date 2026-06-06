@@ -969,7 +969,9 @@ describe('AutoLauncher — Notion Done-update backoff', () => {
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
     vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
     vi.mocked(getMergedPRForTask).mockReturnValue(mergedPR as never);
-    (runtimeSettings as { auto_launch_concurrency: number }).auto_launch_concurrency = 2;
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 2;
   });
 
   afterEach(() => {
@@ -990,7 +992,10 @@ describe('AutoLauncher — Notion Done-update backoff', () => {
     });
 
     const map = (launcher as unknown as Record<string, unknown>)
-      .notionUpdateAttempts as Map<string, { count: number; nextRetryAt: number; lastError: string }>;
+      .notionUpdateAttempts as Map<
+      string,
+      { count: number; nextRetryAt: number; lastError: string }
+    >;
 
     for (let attempt = 1; attempt <= 5; attempt++) {
       const before = Date.now();
@@ -998,8 +1003,11 @@ describe('AutoLauncher — Notion Done-update backoff', () => {
       const entry = map.get('task-1');
       expect(entry).toBeDefined();
       expect(entry!.count).toBe(attempt);
-      const expectedBackoff = BACKOFF[Math.min(attempt - 1, BACKOFF.length - 1)];
-      expect(entry!.nextRetryAt).toBeGreaterThanOrEqual(before + expectedBackoff);
+      const expectedBackoff =
+        BACKOFF[Math.min(attempt - 1, BACKOFF.length - 1)];
+      expect(entry!.nextRetryAt).toBeGreaterThanOrEqual(
+        before + expectedBackoff,
+      );
 
       // Advance past the cooldown so next attempt fires
       await vi.advanceTimersByTimeAsync(expectedBackoff + 1);
@@ -1022,7 +1030,10 @@ describe('AutoLauncher — Notion Done-update backoff', () => {
     });
 
     const map = (launcher as unknown as Record<string, unknown>)
-      .notionUpdateAttempts as Map<string, { count: number; nextRetryAt: number; lastError: string }>;
+      .notionUpdateAttempts as Map<
+      string,
+      { count: number; nextRetryAt: number; lastError: string }
+    >;
 
     // First poll: failure → entry created
     await launcher.pollOnce();
@@ -1122,9 +1133,7 @@ describe('AutoLauncher — Notion Done-update backoff', () => {
     const calls = warnSpy.mock.calls.map((c) => String(c[0]));
     expect(
       calls.some(
-        (c) =>
-          c.includes('attempt 1') &&
-          c.includes('next retry in 60s'),
+        (c) => c.includes('attempt 1') && c.includes('next retry in 60s'),
       ),
     ).toBe(true);
 

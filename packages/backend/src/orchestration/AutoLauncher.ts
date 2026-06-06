@@ -263,7 +263,11 @@ export class AutoLauncher {
               attempts: next,
             },
           });
-          setPauseReason(mergedPR.pr_number, mergedPR.repo, 'notion_done_update_stuck');
+          setPauseReason(
+            mergedPR.pr_number,
+            mergedPR.repo,
+            'notion_done_update_stuck',
+          );
         }
       }
     }
