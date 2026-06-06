@@ -337,6 +337,24 @@ Output ONLY the JSON object. No markdown, no explanation, no preamble.`;
 }
 
 /**
+ * Format a "base branch was modified" pause notification for a GitHub PR session.
+ * This is a transient race: the orchestrator will retry automatically via
+ * clearStalePauses(). No action is required from the code session.
+ */
+export function formatBaseBranchModifiedFeedback(args: {
+  prNumber: number;
+  baseBranch: string;
+}): string {
+  const { prNumber, baseBranch } = args;
+  return (
+    `## Merge Paused — Base Branch Modified\n\n` +
+    `PR #${prNumber} could not be merged because \`${baseBranch}\` was modified ` +
+    `while the merge was in progress (a transient race condition).\n\n` +
+    `**No action is required.** The orchestrator will automatically retry the merge.`
+  );
+}
+
+/**
  * Format a merge conflict notification for a local branch coding session.
  * Asks the session to rebase onto the base branch and resolve conflicts.
  */
