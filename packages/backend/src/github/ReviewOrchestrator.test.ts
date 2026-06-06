@@ -22,6 +22,7 @@ vi.mock('../db/queries.js', () => ({
   deletePendingReviewSync: vi.fn(),
   hasTestResultForSha: vi.fn().mockReturnValue(false),
   upsertTestResult: vi.fn(),
+  setPreReviewStage: vi.fn(),
 }));
 
 vi.mock('../session/autofix-runner.js', () => ({
@@ -103,6 +104,7 @@ import {
   addAutofixSha,
   consumeAutofixSha as dbConsumeAutofixSha,
   getAllPendingReviewSyncs,
+  setPreReviewStage,
 } from '../db/queries';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
@@ -208,6 +210,7 @@ const basePRRow = {
   head_sha: 'sha-abc',
   last_reviewed_sha: null,
   node_id: null,
+  pre_review_stage: null,
 };
 
 beforeEach(() => {
@@ -3248,5 +3251,158 @@ describe('ReviewOrchestrator — stall detector', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ── Pipeline stage events ─────────────────────────────────────────────────────
+
+describe('ReviewOrchestrator — pipeline stage events and persistence', () => {
+  it('emits verify_pipeline_started / complete events and persists stage when worktree is available', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      session_id: 'coding-session-id',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'coding-session-id',
+      worktree_path: '/wt/task',
+    } as any);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      verify: ['npx tsc --noEmit'],
+      autofix: [],
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+      test: [],
+      test_timeout_sec: 60,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    const emitted: string[] = [];
+    sm.on('message', (msg: { type: string }) => emitted.push(msg.type));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(emitted).toContain('verify_pipeline_started');
+    expect(emitted).toContain('verify_pipeline_complete');
+    expect(vi.mocked(setPreReviewStage)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'verify',
+    );
+  });
+
+  it('emits test_pipeline_started / complete and sets awaiting_review stage when tests are configured', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      session_id: 'coding-session-id',
+      head_sha: 'sha-abc',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'coding-session-id',
+      worktree_path: '/wt/task',
+    } as any);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      verify: [],
+      autofix: [],
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+      test: ['npm test'],
+      test_timeout_sec: 60,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    const emitted: string[] = [];
+    sm.on('message', (msg: { type: string }) => emitted.push(msg.type));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(emitted).toContain('test_pipeline_started');
+    expect(emitted).toContain('test_pipeline_complete');
+    expect(vi.mocked(setPreReviewStage)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'tests',
+    );
+    expect(vi.mocked(setPreReviewStage)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'awaiting_review',
+    );
+  });
+
+  it('clears pre_review_stage to null before emitting review_started', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({ ...basePRRow } as any);
+    vi.mocked(getSession).mockReturnValue(undefined);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 50));
+
+    const setPreReviewStageCalls = vi.mocked(setPreReviewStage).mock.calls;
+    const nullCall = setPreReviewStageCalls.find(
+      ([, , stage]) => stage === null,
+    );
+    expect(nullCall).toBeDefined();
+  });
+
+  it('persists blocked_verify stage on verify gate failure', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      session_id: 'coding-session-id',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      session_id: 'coding-session-id',
+      worktree_path: '/wt/task',
+    } as any);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({
+      passed: false,
+      failedCommand: 'npx tsc --noEmit',
+      truncatedOutput: 'error TS2345',
+    });
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      verify: ['npx tsc --noEmit'],
+      autofix: [],
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+      test: [],
+      test_timeout_sec: 60,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(setPreReviewStage)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'blocked_verify',
+    );
   });
 });

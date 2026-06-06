@@ -19,6 +19,7 @@ import {
   getAllPendingReviewSyncs,
   hasTestResultForSha,
   upsertTestResult,
+  setPreReviewStage,
 } from '../db/queries';
 import { syncToOrigin } from './PRFileReverter';
 import type {
@@ -348,6 +349,7 @@ export class ReviewOrchestrator {
       prNumber,
       repo,
     });
+    setPreReviewStage(prNumber, repo, 'autofix');
 
     const prRow = getPRByNumber(prNumber, repo);
     const worktreePath = prRow?.session_id
@@ -671,6 +673,11 @@ export class ReviewOrchestrator {
       failedCommand: detail.failedCommand,
       summary: detail.summary,
     });
+    setPreReviewStage(
+      job.prNumber,
+      job.repo,
+      kind === 'autofix' ? 'blocked_autofix' : 'blocked_verify',
+    );
 
     const sessionId = prRow?.session_id;
     if (!sessionId) return;
@@ -758,6 +765,12 @@ export class ReviewOrchestrator {
         ? (getSession(gatePrRow.session_id)?.worktree_path ?? '')
         : '';
       if (gateWorktreePath) {
+        this.sessionManager.emit('message', {
+          type: 'verify_pipeline_started',
+          prNumber: job.prNumber,
+          repo: job.repo,
+        });
+        setPreReviewStage(job.prNumber, job.repo, 'verify');
         const verifyConfig = loadOrchestratorConfig(project.projectDir);
         const verifyResult = await runVerifyAsGate(
           gateWorktreePath,
@@ -776,6 +789,11 @@ export class ReviewOrchestrator {
           });
           return;
         }
+        this.sessionManager.emit('message', {
+          type: 'verify_pipeline_complete',
+          prNumber: job.prNumber,
+          repo: job.repo,
+        });
       }
     }
     // ─────────────────────────────────────────────────────────────────────────
@@ -789,6 +807,12 @@ export class ReviewOrchestrator {
         : '';
       if (headSha && worktreePath) {
         const config = loadOrchestratorConfig(project.projectDir);
+        this.sessionManager.emit('message', {
+          type: 'test_pipeline_started',
+          prNumber: job.prNumber,
+          repo: job.repo,
+        });
+        setPreReviewStage(job.prNumber, job.repo, 'tests');
         await this.runTestPipeline(
           job.prNumber,
           job.repo,
@@ -799,10 +823,17 @@ export class ReviewOrchestrator {
           config.test_max_rss_mb,
           config.test_fail_fast,
         );
+        this.sessionManager.emit('message', {
+          type: 'test_pipeline_complete',
+          prNumber: job.prNumber,
+          repo: job.repo,
+        });
+        setPreReviewStage(job.prNumber, job.repo, 'awaiting_review');
       }
     }
     // ─────────────────────────────────────────────────────────────────────────
 
+    setPreReviewStage(job.prNumber, job.repo, null);
     this.sessionManager.emit('message', {
       type: 'review_started',
       prNumber: job.prNumber,

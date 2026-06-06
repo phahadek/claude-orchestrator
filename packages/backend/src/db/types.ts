@@ -357,4 +357,5 @@ export interface PullRequestRow {
   pause_reason: PauseReason | null; // non-null marks the task as needs_attention
   pause_reason_set_at: number | null; // Unix ms timestamp of when pause_reason was last set
   ci_remediation_attempted_sha: string | null; // last head_sha for which CI remediation was attempted
+  pre_review_stage: string | null;
 }

@@ -163,6 +163,10 @@
   border-color: #fab387;
 }
 
+.pipelineBadgeRow {
+  margin-bottom: 2px;
+}
+
 @media (max-width: 768px) {
   .headerBar {
     flex-direction: column;
