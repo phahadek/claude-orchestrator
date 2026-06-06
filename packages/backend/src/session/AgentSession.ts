@@ -1114,7 +1114,20 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 
     if (!branch) {
       console.warn(
-        `[AgentSession] handlePRBodyMarker: empty branch name — skipping`,
+        `[AgentSession] handlePRBodyMarker: empty branch name (detached HEAD) — re-prompting`,
+      );
+      recordEvent({
+        event_type: 'pr_creation_failed',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: this.projectId || null,
+        task_id: this.taskId || null,
+        payload: { stage: 'branch', error: 'detached HEAD — no current branch' },
+      });
+      this.sendMessage(
+        `The worktree is in detached HEAD state — there is no current branch, so I cannot open a PR.\n\n` +
+          `Please run \`git checkout -b feature/<task-name>\` to create a branch, then re-emit the ` +
+          `\`<pr-body>\` marker so I can push and open the PR.`,
       );
       return;
     }
