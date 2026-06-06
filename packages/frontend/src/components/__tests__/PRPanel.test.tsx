@@ -729,7 +729,11 @@ describe('PRPanel — PipelineStageBadge', () => {
   });
 
   it('does not render pipeline badge when preReviewStage is null', async () => {
-    const pr = makePR({ prNumber: 6, title: 'No Stage PR', preReviewStage: null });
+    const pr = makePR({
+      prNumber: 6,
+      title: 'No Stage PR',
+      preReviewStage: null,
+    });
     setupFetchWithPRs([pr]);
     render(<PRPanel activeProjectId="proj-1" />);
     await waitFor(() => {
@@ -769,7 +773,9 @@ describe('PRPanel — PipelineStageBadge', () => {
         prPipelineStages={new Map([[8, 'autofix']])}
       />,
     );
-    await waitFor(() => expect(screen.getByText(/Running autofix/)).toBeDefined());
+    await waitFor(() =>
+      expect(screen.getByText(/Running autofix/)).toBeDefined(),
+    );
 
     rerender(
       <PRPanel
@@ -777,7 +783,9 @@ describe('PRPanel — PipelineStageBadge', () => {
         prPipelineStages={new Map([[8, 'verify']])}
       />,
     );
-    await waitFor(() => expect(screen.getByText(/Running verify/)).toBeDefined());
+    await waitFor(() =>
+      expect(screen.getByText(/Running verify/)).toBeDefined(),
+    );
 
     rerender(
       <PRPanel
@@ -785,7 +793,9 @@ describe('PRPanel — PipelineStageBadge', () => {
         prPipelineStages={new Map([[8, 'tests']])}
       />,
     );
-    await waitFor(() => expect(screen.getByText(/Running tests/)).toBeDefined());
+    await waitFor(() =>
+      expect(screen.getByText(/Running tests/)).toBeDefined(),
+    );
 
     rerender(
       <PRPanel
@@ -793,7 +803,9 @@ describe('PRPanel — PipelineStageBadge', () => {
         prPipelineStages={new Map([[8, 'awaiting_review']])}
       />,
     );
-    await waitFor(() => expect(screen.getByText(/Awaiting review/)).toBeDefined());
+    await waitFor(() =>
+      expect(screen.getByText(/Awaiting review/)).toBeDefined(),
+    );
   });
 
   it('badge clears when review_started drives stage to null', async () => {
@@ -806,7 +818,9 @@ describe('PRPanel — PipelineStageBadge', () => {
         prPipelineStages={new Map([[9, 'awaiting_review']])}
       />,
     );
-    await waitFor(() => expect(screen.getByText(/Awaiting review/)).toBeDefined());
+    await waitFor(() =>
+      expect(screen.getByText(/Awaiting review/)).toBeDefined(),
+    );
 
     rerender(
       <PRPanel

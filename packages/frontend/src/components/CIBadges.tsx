@@ -92,7 +92,9 @@ export function PipelineStageBadge({
 
   return (
     <span className={className} title={title}>
-      {isRunning && <span className={styles.pipelineSpinner} aria-hidden="true" />}
+      {isRunning && (
+        <span className={styles.pipelineSpinner} aria-hidden="true" />
+      )}
       {text}
     </span>
   );

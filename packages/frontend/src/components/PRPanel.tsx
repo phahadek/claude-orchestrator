@@ -623,9 +623,7 @@ export function PRPanel({
                     <div className={styles.pipelineBadgeRow}>
                       <PipelineStageBadge
                         stage={localPipelineStages.get(prNumber) ?? null}
-                        prState={
-                          item.type === 'pr' ? item.state : undefined
-                        }
+                        prState={item.type === 'pr' ? item.state : undefined}
                       />
                     </div>
                   )}

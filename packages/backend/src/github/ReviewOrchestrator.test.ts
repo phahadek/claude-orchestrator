@@ -3292,7 +3292,11 @@ describe('ReviewOrchestrator — pipeline stage events and persistence', () => {
 
     expect(emitted).toContain('verify_pipeline_started');
     expect(emitted).toContain('verify_pipeline_complete');
-    expect(vi.mocked(setPreReviewStage)).toHaveBeenCalledWith(1, 'owner/repo', 'verify');
+    expect(vi.mocked(setPreReviewStage)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'verify',
+    );
   });
 
   it('emits test_pipeline_started / complete and sets awaiting_review stage when tests are configured', async () => {
@@ -3331,8 +3335,16 @@ describe('ReviewOrchestrator — pipeline stage events and persistence', () => {
 
     expect(emitted).toContain('test_pipeline_started');
     expect(emitted).toContain('test_pipeline_complete');
-    expect(vi.mocked(setPreReviewStage)).toHaveBeenCalledWith(1, 'owner/repo', 'tests');
-    expect(vi.mocked(setPreReviewStage)).toHaveBeenCalledWith(1, 'owner/repo', 'awaiting_review');
+    expect(vi.mocked(setPreReviewStage)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'tests',
+    );
+    expect(vi.mocked(setPreReviewStage)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'awaiting_review',
+    );
   });
 
   it('clears pre_review_stage to null before emitting review_started', async () => {
@@ -3347,7 +3359,9 @@ describe('ReviewOrchestrator — pipeline stage events and persistence', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     const setPreReviewStageCalls = vi.mocked(setPreReviewStage).mock.calls;
-    const nullCall = setPreReviewStageCalls.find(([, , stage]) => stage === null);
+    const nullCall = setPreReviewStageCalls.find(
+      ([, , stage]) => stage === null,
+    );
     expect(nullCall).toBeDefined();
   });
 

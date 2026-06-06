@@ -498,9 +498,7 @@ export function useSessionStore() {
         repo: msg.repo,
         receivedAt: Date.now(),
       });
-      setPrPipelineStages((prev) =>
-        new Map(prev).set(msg.prNumber, 'autofix'),
-      );
+      setPrPipelineStages((prev) => new Map(prev).set(msg.prNumber, 'autofix'));
     }
     if (msg.type === 'autofix_complete') {
       setLastAutofixEvent({
@@ -513,17 +511,13 @@ export function useSessionStore() {
       });
     }
     if (msg.type === 'verify_pipeline_started') {
-      setPrPipelineStages((prev) =>
-        new Map(prev).set(msg.prNumber, 'verify'),
-      );
+      setPrPipelineStages((prev) => new Map(prev).set(msg.prNumber, 'verify'));
     }
     if (msg.type === 'verify_pipeline_complete') {
       // stage will be updated again by test_pipeline_started; no explicit clear
     }
     if (msg.type === 'test_pipeline_started') {
-      setPrPipelineStages((prev) =>
-        new Map(prev).set(msg.prNumber, 'tests'),
-      );
+      setPrPipelineStages((prev) => new Map(prev).set(msg.prNumber, 'tests'));
     }
     if (msg.type === 'test_pipeline_complete') {
       setPrPipelineStages((prev) =>
