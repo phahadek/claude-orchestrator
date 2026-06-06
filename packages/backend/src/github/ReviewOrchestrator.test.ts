@@ -3002,17 +3002,38 @@ describe('ReviewOrchestrator — concurrent drain pool', () => {
         .mockImplementationOnce(async () => {
           started.push(1);
           await blockers[0];
-          return { prNumber: 1, repo: 'owner/repo', verdict: 'approved', dimensions: [], summary: 'ok', reviewedAt: '' };
+          return {
+            prNumber: 1,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
         })
         .mockImplementationOnce(async () => {
           started.push(2);
           await blockers[1];
-          return { prNumber: 2, repo: 'owner/repo', verdict: 'approved', dimensions: [], summary: 'ok', reviewedAt: '' };
+          return {
+            prNumber: 2,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
         })
         .mockImplementationOnce(async () => {
           started.push(3);
           await blockers[2];
-          return { prNumber: 3, repo: 'owner/repo', verdict: 'approved', dimensions: [], summary: 'ok', reviewedAt: '' };
+          return {
+            prNumber: 3,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
         }),
       sendReReview: vi.fn(),
       reReviewPR: vi.fn(),
@@ -3057,12 +3078,26 @@ describe('ReviewOrchestrator — concurrent drain pool', () => {
         .mockImplementationOnce(async () => {
           started.push(1);
           await blockers[0];
-          return { prNumber: 1, repo: 'owner/repo', verdict: 'approved', dimensions: [], summary: 'ok', reviewedAt: '' };
+          return {
+            prNumber: 1,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
         })
         .mockImplementationOnce(async () => {
           started.push(2);
           await blockers[1];
-          return { prNumber: 2, repo: 'owner/repo', verdict: 'approved', dimensions: [], summary: 'ok', reviewedAt: '' };
+          return {
+            prNumber: 2,
+            repo: 'owner/repo',
+            verdict: 'approved',
+            dimensions: [],
+            summary: 'ok',
+            reviewedAt: '',
+          };
         }),
       sendReReview: vi.fn(),
       reReviewPR: vi.fn(),

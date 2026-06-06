@@ -1,4 +1,8 @@
-import { getProjectByGithubRepo, getProjectById, runtimeSettings } from '../config';
+import {
+  getProjectByGithubRepo,
+  getProjectById,
+  runtimeSettings,
+} from '../config';
 import {
   setPRReviewResult,
   getSetting,
@@ -254,7 +258,10 @@ export class ReviewOrchestrator {
 
   async drain(): Promise<void> {
     await this.bootReady;
-    while (this.running < runtimeSettings.auto_review_concurrency && this.queue.length > 0) {
+    while (
+      this.running < runtimeSettings.auto_review_concurrency &&
+      this.queue.length > 0
+    ) {
       // Find the first job not blocked by per-PR serialization.
       let jobIndex = -1;
       for (let i = 0; i < this.queue.length; i++) {
