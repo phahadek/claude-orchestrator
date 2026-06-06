@@ -593,4 +593,37 @@ describe('<pr-body> marker — backend push before createPR', () => {
     expect(ghClient.createPR).not.toHaveBeenCalled();
     expect(ghClient.updatePR).toHaveBeenCalledTimes(1);
   });
+
+  it('records pr_creation_failed (stage branch) and re-prompts when worktree is in detached HEAD', async () => {
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === 'git branch --show-current') return ''; // detached HEAD
+      if (cmd === 'git remote get-url origin')
+        return 'https://github.com/owner/repo.git\n';
+      throw new Error(`unexpected execSync: ${cmd}`);
+    });
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+
+    const runner = (
+      session as unknown as {
+        runner: { sendMessage: ReturnType<typeof vi.fn> };
+      }
+    ).runner;
+
+    emitAssistantWithMarker(session, VALID_BODY, 'msg_detached');
+
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).not.toHaveBeenCalled();
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'pr_creation_failed',
+        payload: expect.objectContaining({ stage: 'branch' }),
+      }),
+    );
+    expect(runner.sendMessage).toHaveBeenCalledWith(
+      expect.stringContaining('detached HEAD'),
+    );
+  });
 });
