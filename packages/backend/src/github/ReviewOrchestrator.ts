@@ -71,15 +71,21 @@ interface LocalBranchJob {
 
 type QueuedJob = (ReviewJob & { type?: 'pr' }) | LocalBranchJob;
 
+const STALL_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+const STALL_CHECK_INTERVAL_MS = 5 * 60 * 1000; // check every 5 minutes
+
 export class ReviewOrchestrator {
   private queue: QueuedJob[] = [];
   private running = 0;
   /** PR keys ("prNumber:repo") for reviews currently executing — enforces per-PR serialization. */
   private inFlightPRKeys = new Set<string>();
+  /** Start timestamps (ms) for in-flight reviews keyed by "prNumber:repo" — used by stall detector. */
+  private inFlightStartTimes = new Map<string, number>();
   /** In-flight post-revert worktree sync promises, keyed by "prNumber:repo". */
   private pendingSyncs = new Map<string, Promise<void>>();
   /** Resolves once all incomplete pending_review_sync rows from the previous run are retried. */
   readonly bootReady: Promise<void>;
+  private stallDetectorInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private reviewService: PRReviewService,
@@ -87,6 +93,8 @@ export class ReviewOrchestrator {
     private maxConcurrency: number = getReviewConcurrency(),
     private enabled: boolean = true,
     private github?: GitHubClient,
+    stallCheckIntervalMs: number = STALL_CHECK_INTERVAL_MS,
+    stallTimeoutMs: number = STALL_TIMEOUT_MS,
   ) {
     sessionManager.on('pr_opened', (job: ReviewJob) => this.onPrOpened(job));
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
@@ -105,6 +113,36 @@ export class ReviewOrchestrator {
       },
     );
     this.bootReady = this.rehydratePendingSyncs();
+    this.startStallDetector(stallCheckIntervalMs, stallTimeoutMs);
+  }
+
+  /** Release all background timers. Call when shutting down the server. */
+  destroy(): void {
+    if (this.stallDetectorInterval) {
+      clearInterval(this.stallDetectorInterval);
+      this.stallDetectorInterval = null;
+    }
+  }
+
+  private startStallDetector(intervalMs: number, timeoutMs: number): void {
+    const handle = setInterval(() => {
+      const now = Date.now();
+      for (const [key, startTime] of this.inFlightStartTimes) {
+        const elapsedMs = now - startTime;
+        if (elapsedMs > timeoutMs) {
+          console.error(
+            `[ReviewOrchestrator] STALL DETECTED for ${key} — review has been running for ${Math.round(elapsedMs / 60000)} min. Force-clearing slot.`,
+          );
+          this.inFlightPRKeys.delete(key);
+          this.inFlightStartTimes.delete(key);
+          this.running = Math.max(0, this.running - 1);
+          void this.drain();
+        }
+      }
+    }, intervalMs);
+    // Don't keep the Node process alive for the stall detector alone.
+    handle.unref();
+    this.stallDetectorInterval = handle;
   }
 
   /**
@@ -161,13 +199,21 @@ export class ReviewOrchestrator {
   }
 
   private onPrOpened(job: ReviewJob): void {
-    if (!this.enabled) return;
+    if (!this.enabled) {
+      console.log(
+        `[ReviewOrchestrator] pr_opened received for PR #${job.prNumber} (${job.repo}) — orchestrator disabled, skipping`,
+      );
+      return;
+    }
     if (!job.taskId) {
       console.warn(
         `[ReviewOrchestrator] PR #${job.prNumber} has no Notion task — skipping`,
       );
       return;
     }
+    console.log(
+      `[ReviewOrchestrator] pr_opened received for PR #${job.prNumber} (${job.repo}) — queueing (queue depth before: ${this.queue.length})`,
+    );
     this.queue.push(job);
     void this.drain();
   }
@@ -235,7 +281,22 @@ export class ReviewOrchestrator {
       const key = this.prKey(job);
 
       this.running++;
-      if (key !== null) this.inFlightPRKeys.add(key);
+      if (key !== null) {
+        this.inFlightPRKeys.add(key);
+        this.inFlightStartTimes.set(key, Date.now());
+      }
+
+      if (job.type === 'local_branch') {
+        const lbJob = job as LocalBranchJob;
+        console.log(
+          `[ReviewOrchestrator] drain: starting local-branch review for ${lbJob.branchName} (running: ${this.running}/${this.maxConcurrency})`,
+        );
+      } else {
+        const prJob = job as ReviewJob;
+        console.log(
+          `[ReviewOrchestrator] drain: starting review for PR #${prJob.prNumber} (${prJob.repo}) (running: ${this.running}/${this.maxConcurrency})`,
+        );
+      }
 
       void (async () => {
         try {
@@ -259,7 +320,10 @@ export class ReviewOrchestrator {
           }
         } finally {
           this.running--;
-          if (key !== null) this.inFlightPRKeys.delete(key);
+          if (key !== null) {
+            this.inFlightPRKeys.delete(key);
+            this.inFlightStartTimes.delete(key);
+          }
           void this.drain();
         }
       })();
@@ -581,11 +645,18 @@ export class ReviewOrchestrator {
   }
 
   private async executeReview(job: ReviewJob): Promise<void> {
+    console.log(
+      `[ReviewOrchestrator] executeReview: entered for PR #${job.prNumber} (${job.repo}) taskId=${job.taskId ?? 'none'}`,
+    );
+
     // Await any in-flight post-revert worktree sync before fetching the diff,
     // so the review sees the canonical file state, not the contaminated version.
     const syncKey = `${job.prNumber}:${job.repo}`;
     const pendingSync = this.pendingSyncs.get(syncKey);
     if (pendingSync) {
+      console.log(
+        `[ReviewOrchestrator] executeReview: awaiting pending revert sync for PR #${job.prNumber}`,
+      );
       this.pendingSyncs.delete(syncKey);
       await pendingSync;
     }
