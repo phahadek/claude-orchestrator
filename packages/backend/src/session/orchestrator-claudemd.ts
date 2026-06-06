@@ -185,15 +185,15 @@ ${
 > already been injected by the orchestrator. Proceed directly to implementation.
 
 1. Read the **Task Spec** section below — it contains the full task specification.
-2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
+2. The orchestrator creates the worktree on a named feature branch. Verify with \`git branch --show-current\` — it should output \`feature/<task-name>\`.`
     : taskBackend === 'local'
       ? `> ⚠️ **YAML task source**: Task context comes from \`tasks.yaml\` in the project root.
 > Skip the remote fetch step and instead read \`tasks.yaml\` for task context.
 
 1. Read \`tasks.yaml\` in the project root for task context (skip remote fetch).
-2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
+2. The orchestrator creates the worktree on a named feature branch. Verify with \`git branch --show-current\` — it should output \`feature/<task-name>\`.`
       : `1. ${fetchInstruction(taskBackend)} Fetch only the task listed above — do NOT browse the board for other tasks.
-2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
+2. The orchestrator creates the worktree on a named feature branch. Verify with \`git branch --show-current\` — it should output \`feature/<task-name>\`.`
 }
 3. Implement the task per the acceptance criteria.
 4. Pass the pre-PR gate (see Pre-PR Gate section below).
