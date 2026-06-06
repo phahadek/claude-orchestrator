@@ -339,12 +339,13 @@ export class ReviewOrchestrator {
     prNumber: number,
     repo: string,
     taskId: string | null,
-  ): Promise<void> {
+  ): Promise<{ success: boolean; summary: string }> {
     const project = getProjectByGithubRepo(repo);
-    if (!project) return;
+    if (!project) return { success: true, summary: 'no project — skipped' };
 
     const autofixCommands = loadAutofixCommands(project.projectDir);
-    if (autofixCommands.length === 0) return;
+    if (autofixCommands.length === 0)
+      return { success: true, summary: 'no autofix commands — skipped' };
 
     this.sessionManager.emit('message', {
       type: 'autofix_started',
@@ -420,9 +421,11 @@ export class ReviewOrchestrator {
 
     if (!autofixSuccess) {
       console.warn(
-        `[ReviewOrchestrator] autofix failed for PR #${prNumber} (fail open): ${autofixSummary}`,
+        `[ReviewOrchestrator] autofix failed for PR #${prNumber}: ${autofixSummary}`,
       );
     }
+
+    return { success: autofixSuccess, summary: autofixSummary };
   }
 
   /**
@@ -445,12 +448,12 @@ export class ReviewOrchestrator {
     repo: string,
     headSha: string,
     worktreePath: string,
-    commands: string[],
+    commands: string[] | undefined,
     timeoutSec: number,
     maxRssMb = 0,
     failFast = true,
   ): Promise<void> {
-    if (commands.length === 0) return;
+    if (!commands?.length) return;
     if (!headSha) return;
 
     if (hasTestResultForSha(prNumber, repo, headSha)) {
@@ -644,6 +647,53 @@ export class ReviewOrchestrator {
     }
   }
 
+  private async routeGateFailureToSession(
+    job: ReviewJob,
+    kind: 'verify' | 'autofix',
+    detail: { failedCommand?: string; truncatedOutput?: string; summary: string },
+  ): Promise<void> {
+    const prRow = getPRByNumber(job.prNumber, job.repo);
+
+    setPRReviewResult(
+      job.prNumber,
+      job.repo,
+      JSON.stringify({
+        verdict: kind === 'verify' ? 'verify_failed' : 'autofix_failed',
+        summary: detail.summary,
+        dimensions: [],
+      }),
+    );
+
+    this.sessionManager.emit('message', {
+      type: 'pr_review_blocked_by_gate',
+      prNumber: job.prNumber,
+      repo: job.repo,
+      kind,
+      failedCommand: detail.failedCommand,
+      summary: detail.summary,
+    });
+
+    const sessionId = prRow?.session_id;
+    if (!sessionId) return;
+
+    const message =
+      kind === 'verify'
+        ? formatCIFailureFeedback({
+            source: 'verify',
+            failedCommand: detail.failedCommand,
+            truncatedOutput: detail.truncatedOutput,
+          })
+        : `## Autofix Gate Failure\n\nThe autofix pipeline failed and could not produce a clean commit.\n\n**Error:** ${detail.summary}\n\nPlease fix the issue and re-push.`;
+
+    try {
+      await this.sessionManager.sendOrResume(sessionId, message);
+    } catch (e) {
+      console.warn(
+        `[ReviewOrchestrator] gate failure routing failed for PR #${job.prNumber}: ${e}`,
+      );
+    }
+  }
+
   private async executeReview(job: ReviewJob): Promise<void> {
     console.log(
       `[ReviewOrchestrator] executeReview: entered for PR #${job.prNumber} (${job.repo}) taskId=${job.taskId ?? 'none'}`,
@@ -685,8 +735,50 @@ export class ReviewOrchestrator {
       return;
     }
 
-    // ── Autofix + file-pollution-check step ──────────────────────────────────
-    await this.runAutofixPipeline(job.prNumber, job.repo, job.taskId ?? null);
+    // ── Gate 1: Autofix + file-pollution-check step ──────────────────────────
+    const autofixResult = await this.runAutofixPipeline(
+      job.prNumber,
+      job.repo,
+      job.taskId ?? null,
+    );
+    if (!autofixResult.success) {
+      console.log(
+        `[ReviewOrchestrator] executeReview: gate failure (kind=autofix) for PR #${job.prNumber}`,
+      );
+      await this.routeGateFailureToSession(job, 'autofix', {
+        summary: autofixResult.summary,
+      });
+      return;
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Gate 2: Verify ───────────────────────────────────────────────────────
+    {
+      const gatePrRow = getPRByNumber(job.prNumber, job.repo);
+      const gateWorktreePath = gatePrRow?.session_id
+        ? (getSession(gatePrRow.session_id)?.worktree_path ?? '')
+        : '';
+      if (gateWorktreePath) {
+        const verifyConfig = loadOrchestratorConfig(project.projectDir);
+        const verifyResult = await runVerifyAsGate(
+          gateWorktreePath,
+          verifyConfig.verify,
+        );
+        if (!verifyResult.passed) {
+          console.log(
+            `[ReviewOrchestrator] executeReview: gate failure (kind=verify) for PR #${job.prNumber}`,
+          );
+          await this.routeGateFailureToSession(job, 'verify', {
+            failedCommand: verifyResult.failedCommand,
+            truncatedOutput: verifyResult.truncatedOutput,
+            summary: verifyResult.failedCommand
+              ? `verify failed: ${verifyResult.failedCommand}`
+              : 'verify failed',
+          });
+          return;
+        }
+      }
+    }
     // ─────────────────────────────────────────────────────────────────────────
 
     // ── Orchestrator-run tests (per head-SHA, deduped) ────────────────────────

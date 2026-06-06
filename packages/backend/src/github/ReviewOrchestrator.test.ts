@@ -80,6 +80,10 @@ vi.mock('../session/orchestrator-config.js', () => ({
     allowed_tools: [],
     bash_rules: [],
     bootstrap_script: '',
+    test: [],
+    test_timeout_sec: 60,
+    test_max_rss_mb: 0,
+    test_fail_fast: true,
   }),
 }));
 
@@ -1818,6 +1822,12 @@ describe('ReviewOrchestrator — verify-gate autofix-first', () => {
 // ── registerRevertSync / pendingSyncs mutex ───────────────────────────────────
 
 describe('ReviewOrchestrator — registerRevertSync pendingSyncs mutex', () => {
+  beforeEach(() => {
+    vi.mocked(loadAutofixCommands).mockReturnValue([]);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
+    vi.mocked(getSession).mockReturnValue(undefined);
+  });
+
   it('executeReview awaits a pending sync before calling reviewService.reviewPR', async () => {
     vi.mocked(getPRByNumber).mockReturnValue({
       ...basePRRow,
@@ -1948,6 +1958,11 @@ describe('ReviewOrchestrator — registerRevertSync pendingSyncs mutex', () => {
 // ── Autofix → file pollution check wiring ────────────────────────────────────
 
 describe('ReviewOrchestrator — file pollution check after autofix', () => {
+  beforeEach(() => {
+    vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
+    vi.mocked(getSession).mockReturnValue(undefined);
+  });
+
   function makeGitHubClient(): GitHubClient {
     return {
       markPRReady: vi.fn().mockResolvedValue(undefined),
@@ -2381,6 +2396,241 @@ describe('ReviewOrchestrator — runAutofixPipeline helper', () => {
   });
 });
 
+// ── executeReview: gate failure short-circuits ────────────────────────────────
+
+describe('ReviewOrchestrator — executeReview gate failures', () => {
+  it('verify failure: no reviewPR call; sendOrResume called with CI failure payload', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue([]);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({
+      passed: false,
+      failedCommand: 'npm test',
+      truncatedOutput: 'FAIL src/foo.test.ts',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+    expect(vi.mocked(sm.sendOrResume)).toHaveBeenCalledWith(
+      basePRRow.session_id,
+      expect.stringContaining('verify gate'),
+    );
+  });
+
+  it('verify failure: persists verify_failed verdict before routing', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue([]);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({
+      passed: false,
+      failedCommand: 'npm run build',
+      truncatedOutput: 'tsc error',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      expect.stringContaining('"verify_failed"'),
+    );
+  });
+
+  it('verify failure: broadcasts pr_review_blocked_by_gate with kind=verify', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue([]);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({
+      passed: false,
+      failedCommand: 'npm run build',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    const blocked = messages.find(
+      (m: any) => m.type === 'pr_review_blocked_by_gate',
+    );
+    expect(blocked).toMatchObject({
+      type: 'pr_review_blocked_by_gate',
+      prNumber: 1,
+      repo: 'owner/repo',
+      kind: 'verify',
+    });
+  });
+
+  it('verify failure: does not increment review_iteration', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue([]);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({
+      passed: false,
+      failedCommand: 'npm run build',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    const { incrementReviewIteration } = await import('../db/queries');
+    expect(vi.mocked(incrementReviewIteration)).not.toHaveBeenCalled();
+  });
+
+  it('autofix failure: no reviewPR call; sendOrResume called with autofix failure message', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: false,
+      summary: 'git commit failed (exit 1)',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+    expect(vi.mocked(sm.sendOrResume)).toHaveBeenCalledWith(
+      basePRRow.session_id,
+      expect.stringContaining('Autofix Gate Failure'),
+    );
+  });
+
+  it('autofix failure: persists autofix_failed verdict before routing', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: false,
+      summary: 'ruff check failed',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      expect.stringContaining('"autofix_failed"'),
+    );
+  });
+
+  it('autofix failure: broadcasts pr_review_blocked_by_gate with kind=autofix', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: false,
+      summary: 'ruff check failed',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    const blocked = messages.find(
+      (m: any) => m.type === 'pr_review_blocked_by_gate',
+    );
+    expect(blocked).toMatchObject({
+      type: 'pr_review_blocked_by_gate',
+      prNumber: 1,
+      repo: 'owner/repo',
+      kind: 'autofix',
+    });
+  });
+
+  it('autofix failure: does not increment review_iteration', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: false,
+      summary: 'ruff check failed',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    const { incrementReviewIteration } = await import('../db/queries');
+    expect(vi.mocked(incrementReviewIteration)).not.toHaveBeenCalled();
+  });
+
+  it('both gates pass: review session spawns as before', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    // autofix succeeds
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({ success: true, summary: 'clean' });
+    // verify passes
+    vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, 1, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalledOnce();
+  });
+});
+
 // ── reviewLocalBranch: sendOrResume + verdict_routing_failed ─────────────────
 
 describe('ReviewOrchestrator — reviewLocalBranch: sendOrResume + audit logging', () => {
@@ -2559,6 +2809,12 @@ describe('ReviewOrchestrator — reviewLocalBranch: sendOrResume + audit logging
 // ── Concurrent drain pool ─────────────────────────────────────────────────────
 
 describe('ReviewOrchestrator — concurrent drain pool', () => {
+  beforeEach(() => {
+    vi.mocked(loadAutofixCommands).mockReturnValue([]);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
+    vi.mocked(getSession).mockReturnValue(undefined);
+  });
+
   it('dispatches two independent PRs concurrently when maxConcurrency=2', async () => {
     const started: number[] = [];
     let resolveFirst!: () => void;

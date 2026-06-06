@@ -56,6 +56,38 @@ vi.mock('../config.js', () => ({
   runtimeSettings: {},
 }));
 
+vi.mock('../orchestration/verifyRunner.js', () => ({
+  runVerifyAsGate: vi.fn().mockResolvedValue({ passed: true }),
+}));
+
+vi.mock('../session/autofix-runner.js', () => ({
+  loadAutofixCommands: vi.fn().mockReturnValue([]),
+  runAutofix: vi.fn().mockResolvedValue({ success: true, summary: 'clean' }),
+}));
+
+vi.mock('../session/filePollutionCheck.js', () => ({
+  runFilePollutionCheck: vi
+    .fn()
+    .mockResolvedValue({ headSha: null, revertCommitSha: null }),
+}));
+
+vi.mock('../session/orchestrator-config.js', () => ({
+  loadOrchestratorConfig: vi.fn().mockReturnValue({
+    verify: [],
+    autofix: [],
+    ci_check_name: [],
+    allowed_tools: [],
+    bash_rules: [],
+    bootstrap_script: '',
+    test: [],
+    test_timeout_sec: 300,
+    test_max_rss_mb: 0,
+    test_fail_fast: true,
+  }),
+}));
+
+vi.mock('../audit/AuditLog.js', () => ({ recordEvent: vi.fn() }));
+
 // ── Imports after mocks ────────────────────────────────────────────────────────
 
 import { ReviewOrchestrator } from '../github/ReviewOrchestrator.js';
@@ -69,6 +101,8 @@ import type { PullRequestRow } from '../db/types.js';
 import type { GitHubClient } from '../github/GitHubClient.js';
 import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend.js';
 import type { PRReviewResult } from '../github/PRReviewService.js';
+import { runVerifyAsGate } from '../orchestration/verifyRunner.js';
+import { loadAutofixCommands, runAutofix } from '../session/autofix-runner.js';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -821,5 +855,180 @@ describe('shouldAutoReview', () => {
         3,
       ),
     ).toBe(true);
+  });
+});
+
+// ── 7. Gate failure routing — implementing session receives feedback ──────────
+
+describe('ReviewOrchestrator gate failures route feedback to implementing session', () => {
+  function makeOrchestrator(sessionManager: MockSessionManager) {
+    const github = makeMockGitHub();
+    const taskBackend = makeMockTaskBackend();
+    const reviewService = new PRReviewService(
+      github,
+      taskBackend,
+      sessionManager as unknown as InstanceType<
+        typeof import('../session/SessionManager.js').SessionManager
+      >,
+    );
+    return new ReviewOrchestrator(
+      reviewService,
+      sessionManager as unknown as InstanceType<
+        typeof import('../session/SessionManager.js').SessionManager
+      >,
+      1,
+      true,
+    );
+  }
+
+  it('implementing session receives feedback message on verify failure', async () => {
+    const sessionManager = new MockSessionManager();
+    makeOrchestrator(sessionManager);
+
+    const prRow = makePRRow({ review_session_id: null });
+    vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
+    vi.mocked(queries.getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({
+      passed: false,
+      failedCommand: 'npm run build',
+      truncatedOutput: 'tsc: error TS2345',
+    });
+
+    sessionManager.sendOrResume = vi.fn().mockResolvedValue(CODE_SESSION_ID);
+
+    sessionManager.emit('pr_opened', {
+      prNumber: PR_NUMBER,
+      repo: REPO,
+      taskId: 'task-id',
+      contextUrl: '',
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(sessionManager.sendOrResume).toHaveBeenCalledWith(
+      CODE_SESSION_ID,
+      expect.stringContaining('verify gate'),
+    );
+  });
+
+  it('verify failure: setPRReviewResult called with verify_failed verdict', async () => {
+    const sessionManager = new MockSessionManager();
+    makeOrchestrator(sessionManager);
+
+    const prRow = makePRRow({ review_session_id: null });
+    vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
+    vi.mocked(queries.getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({
+      passed: false,
+      failedCommand: 'npm run build',
+    });
+
+    sessionManager.emit('pr_opened', {
+      prNumber: PR_NUMBER,
+      repo: REPO,
+      taskId: 'task-id',
+      contextUrl: '',
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(queries.setPRReviewResult)).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      expect.stringContaining('"verify_failed"'),
+    );
+  });
+
+  it('implementing session receives feedback message on autofix failure', async () => {
+    const sessionManager = new MockSessionManager();
+    makeOrchestrator(sessionManager);
+
+    const prRow = makePRRow({ review_session_id: null });
+    vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
+    vi.mocked(queries.getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: false,
+      summary: 'git commit failed (exit 1)',
+    });
+
+    sessionManager.sendOrResume = vi.fn().mockResolvedValue(CODE_SESSION_ID);
+
+    sessionManager.emit('pr_opened', {
+      prNumber: PR_NUMBER,
+      repo: REPO,
+      taskId: 'task-id',
+      contextUrl: '',
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(sessionManager.sendOrResume).toHaveBeenCalledWith(
+      CODE_SESSION_ID,
+      expect.stringContaining('Autofix Gate Failure'),
+    );
+  });
+
+  it('autofix failure: setPRReviewResult called with autofix_failed verdict', async () => {
+    const sessionManager = new MockSessionManager();
+    makeOrchestrator(sessionManager);
+
+    const prRow = makePRRow({ review_session_id: null });
+    vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
+    vi.mocked(queries.getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: false,
+      summary: 'git commit failed (exit 1)',
+    });
+
+    sessionManager.emit('pr_opened', {
+      prNumber: PR_NUMBER,
+      repo: REPO,
+      taskId: 'task-id',
+      contextUrl: '',
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(queries.setPRReviewResult)).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      expect.stringContaining('"autofix_failed"'),
+    );
+  });
+
+  it('gate failures do not increment review_iteration', async () => {
+    const sessionManager = new MockSessionManager();
+    makeOrchestrator(sessionManager);
+
+    const prRow = makePRRow({ review_session_id: null });
+    vi.mocked(queries.getPRByNumber).mockReturnValue(prRow);
+    vi.mocked(queries.getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({
+      passed: false,
+      failedCommand: 'npm run build',
+    });
+
+    sessionManager.emit('pr_opened', {
+      prNumber: PR_NUMBER,
+      repo: REPO,
+      taskId: 'task-id',
+      contextUrl: '',
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(queries.incrementReviewIteration)).not.toHaveBeenCalled();
   });
 });

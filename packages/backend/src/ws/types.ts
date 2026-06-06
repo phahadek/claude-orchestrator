@@ -261,6 +261,14 @@ export type ServerMessage =
     }
   | { type: 'review_started'; prNumber: number; sessionId: string }
   | {
+      type: 'pr_review_blocked_by_gate';
+      prNumber: number;
+      repo: string;
+      kind: 'verify' | 'autofix';
+      failedCommand?: string;
+      summary: string;
+    }
+  | {
       type: 'local_branch_submitted';
       projectId: string;
       sessionId: string;

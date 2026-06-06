@@ -1162,6 +1162,12 @@ export function getPRByNumber(
     .get({ pr_number: prNumber, repo }) as PullRequestRow | null;
 }
 
+/**
+ * Persist a JSON-encoded review result for a PR. Valid verdict values are:
+ * 'approved' | 'needs_changes' | 'incomplete' | 'error' | 'verify_failed' | 'autofix_failed'
+ * Gate failure verdicts (verify_failed, autofix_failed) are set by ReviewOrchestrator
+ * before any review session is spawned and do not consume a review iteration.
+ */
 export function setPRReviewResult(
   prNumber: number,
   repo: string,
