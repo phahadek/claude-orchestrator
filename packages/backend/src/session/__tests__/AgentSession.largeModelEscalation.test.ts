@@ -310,7 +310,8 @@ describe('AgentSession — large-model escalation on context overflow', () => {
               onEvent({
                 type: 'result',
                 is_error: true,
-                result: 'Prompt is too long: 210000 tokens exceeds 200000 limit',
+                result:
+                  'Prompt is too long: 210000 tokens exceeds 200000 limit',
                 stop_reason: null,
                 duration_ms: 100,
                 usage: { input_tokens: 0, output_tokens: 0 },
