@@ -3282,7 +3282,7 @@ describe('ReviewOrchestrator — pipeline stage events and persistence', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     const emitted: string[] = [];
     sm.on('message', (msg: { type: string }) => emitted.push(msg.type));
@@ -3325,7 +3325,7 @@ describe('ReviewOrchestrator — pipeline stage events and persistence', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     const emitted: string[] = [];
     sm.on('message', (msg: { type: string }) => emitted.push(msg.type));
@@ -3353,7 +3353,7 @@ describe('ReviewOrchestrator — pipeline stage events and persistence', () => {
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
-    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    new ReviewOrchestrator(rs, sm as any, true);
 
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 50));
