@@ -15,6 +15,26 @@ const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
 const CODE_TYPE = '💻 Code';
 const MIN_POLL_INTERVAL_MS = 5_000;
+const FETCH_TIMEOUT_MS = 30_000;
+
+export class AutoLauncherFetchTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AutoLauncherFetchTimeoutError';
+  }
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new AutoLauncherFetchTimeoutError(`${label} timed out after ${ms}ms`)),
+        ms,
+      ),
+    ),
+  ]);
+}
 
 /**
  * Backend service that polls each enabled project's milestone for Ready 💻 Code
@@ -28,6 +48,8 @@ export class AutoLauncher {
   private timer: NodeJS.Timeout | null = null;
   private polling = false;
   private stopped = true;
+  private pollLastStartedAt: number | null = null;
+  private cycleCounter = 0;
 
   constructor(
     private readonly sessionManager: SessionManager,
@@ -67,6 +89,17 @@ export class AutoLauncher {
 
   private scheduleNext(): void {
     if (this.stopped) return;
+    // Backstop: if a previous pollOnce silently hung past 2× interval, force-reset.
+    if (
+      this.polling &&
+      this.pollLastStartedAt !== null &&
+      Date.now() - this.pollLastStartedAt > 2 * runtimeSettings.auto_launch_poll_interval_ms
+    ) {
+      console.warn(
+        `[AutoLauncher] poll STALL DETECTED — force-resetting (age=${Date.now() - this.pollLastStartedAt}ms)`,
+      );
+      this.polling = false;
+    }
     const interval = Math.max(
       MIN_POLL_INTERVAL_MS,
       runtimeSettings.auto_launch_poll_interval_ms,
@@ -84,27 +117,42 @@ export class AutoLauncher {
   async pollOnce(): Promise<void> {
     if (this.polling) return;
     this.polling = true;
+    const cycleId = ++this.cycleCounter;
+    this.pollLastStartedAt = Date.now();
+    console.log(`[AutoLauncher] poll start cycle=${cycleId}`);
+    let eligibleCount = 0;
+    let launchedCount = 0;
+    let skippedCount = 0;
     try {
       const listProjects = this.options.listProjects ?? getAllProjects;
       const projects = listProjects().filter((p) => p.autoLaunchEnabled);
       for (const project of projects) {
         try {
-          await this.processProject(project);
+          const counts = await this.processProject(project);
+          eligibleCount += counts.eligible;
+          launchedCount += counts.launched;
+          skippedCount += counts.skipped;
         } catch (err) {
           console.error(`[AutoLauncher] project ${project.id} failed:`, err);
         }
       }
     } finally {
       this.polling = false;
+      const elapsedMs = Date.now() - (this.pollLastStartedAt ?? Date.now());
+      console.log(
+        `[AutoLauncher] poll complete cycle=${cycleId} (eligible=${eligibleCount}, launched=${launchedCount}, skipped=${skippedCount}) durationMs=${elapsedMs}`,
+      );
     }
   }
 
-  private async processProject(project: ProjectConfig): Promise<void> {
+  private async processProject(
+    project: ProjectConfig,
+  ): Promise<{ eligible: number; launched: number; skipped: number }> {
     const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
     const backend = resolveBackend(project.id);
 
     if (backend.type === 'local') {
-      return;
+      return { eligible: 0, launched: 0, skipped: 0 };
     }
 
     let milestoneId: string | null = null;
@@ -114,13 +162,14 @@ export class AutoLauncher {
         console.warn(
           `[AutoLauncher] project ${project.id}: no milestone configured — skipping`,
         );
-        return;
+        return { eligible: 0, launched: 0, skipped: 0 };
       }
     }
 
-    const milestoneTasks = await backend.fetchReadyTasks(
-      milestoneId,
-      backend.type === 'notion' ? true : undefined,
+    const milestoneTasks = await withTimeout(
+      backend.fetchReadyTasks(milestoneId, backend.type === 'notion' ? true : undefined),
+      FETCH_TIMEOUT_MS,
+      `fetchReadyTasks(${project.id})`,
     );
 
     // Also fetch non-milestone tasks and merge into the eligible pool.
@@ -154,7 +203,11 @@ export class AutoLauncher {
           `[AutoLauncher] task "${resolved.task.title}" (${resolved.task.id}) skipped — PR #${mergedPR.pr_number} (${mergedPR.pr_url}) is already merged; updating task status to Done`,
         );
         try {
-          await backend.updateStatus(resolved.task.id, DONE_STATUS);
+          await withTimeout(
+            backend.updateStatus(resolved.task.id, DONE_STATUS),
+            FETCH_TIMEOUT_MS,
+            `updateStatus(${resolved.task.id})`,
+          );
         } catch (err) {
           console.warn(
             `[AutoLauncher] failed to update task ${resolved.task.id} to Done: ${err}`,
@@ -164,21 +217,28 @@ export class AutoLauncher {
     }
 
     const candidates = allTasks.filter((t) => this.isLaunchCandidate(t));
-    if (candidates.length === 0) return;
+    if (candidates.length === 0) return { eligible: 0, launched: 0, skipped: 0 };
 
+    let launched = 0;
     for (const candidate of candidates) {
       if (!this.hasCapacity()) {
-        return;
+        break;
       }
       // Non-milestone tasks have no milestoneId — they branch off dev directly.
       const isNonMilestone = nonMilestoneTasks.includes(candidate);
-      this.launchTask(
-        project,
-        candidate,
-        isNonMilestone ? null : milestoneId,
-        isNonMilestone ? 'non_milestone' : 'milestone',
-      );
+      if (
+        this.launchTask(
+          project,
+          candidate,
+          isNonMilestone ? null : milestoneId,
+          isNonMilestone ? 'non_milestone' : 'milestone',
+        )
+      ) {
+        launched++;
+      }
     }
+
+    return { eligible: candidates.length, launched, skipped: candidates.length - launched };
   }
 
   /**
@@ -241,7 +301,7 @@ export class AutoLauncher {
     resolved: ResolvedTask,
     milestoneId: string | null = null,
     taskKind: 'milestone' | 'non_milestone' = 'milestone',
-  ): void {
+  ): boolean {
     const task = resolved.task;
     const taskUrl =
       task.notionUrl || `https://www.notion.so/${task.id.replace(/-/g, '')}`;
@@ -250,8 +310,8 @@ export class AutoLauncher {
     // in-memory SessionManager (catches launches whose Notion status update
     // hasn't propagated back yet) and the DB (catches sessions in any
     // non-terminal state, including ones temporarily missing from memory).
-    if (this.sessionManager.hasLiveSessionForTask(task.id)) return;
-    if (hasActiveSessionForTask(task.id)) return;
+    if (this.sessionManager.hasLiveSessionForTask(task.id)) return false;
+    if (hasActiveSessionForTask(task.id)) return false;
 
     try {
       const sessionId = this.sessionManager.start(taskUrl, project.contextUrl, {
@@ -271,10 +331,12 @@ export class AutoLauncher {
         taskTitle: task.title || task.id,
         sessionId,
       });
+      return true;
     } catch (err) {
       console.warn(
         `[AutoLauncher] failed to launch task ${task.id} for project ${project.id}: ${(err as Error).message}`,
       );
+      return false;
     }
   }
 }
