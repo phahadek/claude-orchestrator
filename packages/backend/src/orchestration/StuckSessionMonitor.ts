@@ -116,18 +116,20 @@ export class StuckSessionMonitor {
       for (const row of rows) {
         // If the session already has an open PR, transition to idle and notify the
         // operator rather than marking done — the task is still in review.
-        if (row.pr_url) {
-          const pr = getPRBySessionId(row.session_id);
-          if (pr && (pr.state === 'open' || pr.state === 'draft')) {
-            markSessionIdle(row.session_id, row.last_ts, row.pr_url);
-            this.broadcast({
-              type: 'stuck_session_idle_open_pr',
-              sessionId: row.session_id,
-              taskId: row.task_id ?? null,
-              prUrl: row.pr_url,
-            });
-            continue;
-          }
+        // Check pull_requests table directly to catch the race where handlePRBodyMarker
+        // has already called upsertPullRequest but markSessionIdle hasn't run yet
+        // (so sessions.pr_url is still null).
+        const pr = getPRBySessionId(row.session_id);
+        if (pr && (pr.state === 'open' || pr.state === 'draft')) {
+          const prUrl = row.pr_url ?? pr.pr_url;
+          markSessionIdle(row.session_id, row.last_ts, prUrl);
+          this.broadcast({
+            type: 'stuck_session_idle_open_pr',
+            sessionId: row.session_id,
+            taskId: row.task_id ?? null,
+            prUrl,
+          });
+          continue;
         }
 
         markSessionDone(row.session_id, row.last_ts, row.pr_url ?? null);

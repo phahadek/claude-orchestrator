@@ -185,6 +185,8 @@ describe('StuckSessionMonitor.scanForStuckSessions() — idle+open-PR path', () 
   it('falls through to done + recoverSession when session has no PR URL', async () => {
     insertStuckSession('sess-no-pr', 'proj-1', 10 * 60 * 1000);
 
+    vi.mocked(queries.getPRBySessionId).mockReturnValue(null);
+
     const sm = makeMockSessionManager();
     const monitor = new StuckSessionMonitor(sm, vi.fn());
     await monitor.scanForStuckSessions();
@@ -237,6 +239,36 @@ describe('StuckSessionMonitor.scanForStuckSessions() — idle+open-PR path', () 
       .prepare('SELECT status FROM sessions WHERE session_id = ?')
       .get('sess-orphan-pr') as { status: string } | undefined;
     expect(row?.status).toBe('done');
+  });
+
+  it('transitions to idle when PR is in pull_requests but sessions.pr_url is null (marker-PR race)', async () => {
+    // Race: handlePRBodyMarker called upsertPullRequest but markSessionIdle hasn't run yet,
+    // so sessions.pr_url is null while pull_requests has an open PR for this session.
+    insertStuckSession('sess-race-pr', 'proj-1', 10 * 60 * 1000); // no pr_url in sessions
+
+    const pr = makeOpenPrRow(
+      'sess-race-pr',
+      'https://github.com/owner/repo/pull/99',
+    );
+    vi.mocked(queries.getPRBySessionId).mockReturnValue(pr);
+
+    const broadcast = vi.fn();
+    const sm = makeMockSessionManager();
+    const monitor = new StuckSessionMonitor(sm, broadcast);
+    await monitor.scanForStuckSessions();
+
+    const row = db
+      .prepare('SELECT status FROM sessions WHERE session_id = ?')
+      .get('sess-race-pr') as { status: string } | undefined;
+    expect(row?.status).toBe('idle');
+    expect(recoverSession).not.toHaveBeenCalled();
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'stuck_session_idle_open_pr',
+        sessionId: 'sess-race-pr',
+        prUrl: 'https://github.com/owner/repo/pull/99',
+      }),
+    );
   });
 
   it('handles draft PR state as open (transitions to idle)', async () => {
