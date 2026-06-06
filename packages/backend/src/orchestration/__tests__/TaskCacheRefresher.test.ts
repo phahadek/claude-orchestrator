@@ -21,7 +21,7 @@ vi.mock('../../projects/ProjectService.js', () => ({
   },
 }));
 
-import { getAllProjects, runtimeSettings } from '../../config.js';
+import { getAllProjects } from '../../config.js';
 import { getTaskBackend } from '../../tasks/TaskBackend.js';
 import { ProjectService } from '../../projects/ProjectService.js';
 import { TaskCacheRefresher } from '../TaskCacheRefresher.js';

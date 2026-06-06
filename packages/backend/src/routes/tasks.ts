@@ -449,10 +449,11 @@ export function createTasksRouter(): Router {
       return;
     }
 
-    let taskIds: string[] = [];
+    let taskIds: string[];
     try {
-      const tasks = JSON.parse(boardCacheRow.raw_json) as NotionTask[];
-      taskIds = tasks.map((t) => t.id);
+      taskIds = (JSON.parse(boardCacheRow.raw_json) as NotionTask[]).map(
+        (t) => t.id,
+      );
     } catch {
       taskIds = [];
     }
