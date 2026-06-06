@@ -31,7 +31,10 @@ import type { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { squashMergeLocal } from '../orchestration/localMergeRunner';
 import { detectMergeConflict } from '../orchestration/localBranchHelpers';
-import { formatMergeConflictFeedback } from './reviewUtils';
+import {
+  formatMergeConflictFeedback,
+  formatBaseBranchModifiedFeedback,
+} from './reviewUtils';
 
 const MIN_POLL_INTERVAL_MS = 5_000;
 
@@ -544,6 +547,27 @@ export class AutoMerger {
           category = null;
         }
         if (category?.category === 'conflict') {
+          if (category.rawMergeableState === 'behind') {
+            // "Base branch was modified" race — pause and notify the code session.
+            // clearStalePauses() will retry automatically after the configured delay.
+            if (this.sessions && pr.session_id) {
+              this.sessions
+                .sendOrResume(
+                  pr.session_id,
+                  formatBaseBranchModifiedFeedback({
+                    prNumber: pr.pr_number,
+                    baseBranch: pr.base_branch ?? 'dev',
+                  }),
+                )
+                .catch((err: unknown) =>
+                  console.warn(
+                    `[AutoMerger] PR #${pr.pr_number}: sendOrResume failed: ${(err as Error).message}`,
+                  ),
+                );
+            }
+            await this.pauseWithReason(pr, 'auto_merge_failed');
+            return;
+          }
           console.log(
             `[AutoMerger] PR #${pr.pr_number}: merge failed — conflict, leaving to existing handling`,
           );
