@@ -123,7 +123,9 @@ describe('TaskCacheRefresher', () => {
         makeMilestone('m1', 'src-1'),
       ]);
       const backend = makeBackend({
-        fetchReadyTasks: vi.fn().mockResolvedValue([{ task: { id: 't1' } }, { task: { id: 't2' } }]),
+        fetchReadyTasks: vi
+          .fn()
+          .mockResolvedValue([{ task: { id: 't1' } }, { task: { id: 't2' } }]),
       });
       vi.mocked(getTaskBackend).mockReturnValue(backend);
 
@@ -238,7 +240,9 @@ describe('TaskCacheRefresher', () => {
       const refresher = new TaskCacheRefresher(undefined, {
         listProjects: getAllProjects,
       });
-      await expect(refresher.refreshProjectById('unknown')).resolves.not.toThrow();
+      await expect(
+        refresher.refreshProjectById('unknown'),
+      ).resolves.not.toThrow();
       expect(getTaskBackend).not.toHaveBeenCalled();
     });
   });

@@ -132,7 +132,14 @@ describe('WS fetch_tasks — cache-only path (never calls backend)', () => {
 
   it('returns tasks_ready with resolved tasks when cache is warm — never calls backend', () => {
     const cachedTasks = [
-      { id: 'notion:task-1', title: 'Task 1', status: '🗂️ Ready', dependsOn: [], type: '💻 Code', notionUrl: '' },
+      {
+        id: 'notion:task-1',
+        title: 'Task 1',
+        status: '🗂️ Ready',
+        dependsOn: [],
+        type: '💻 Code',
+        notionUrl: '',
+      },
     ];
     vi.mocked(getTaskCache).mockReturnValue({
       task_id: `board:${NOTION_SOURCE_ID}`,
@@ -169,7 +176,9 @@ describe('WS fetch_tasks — cache-only path (never calls backend)', () => {
       makeFakeSessions(),
     );
 
-    expect(vi.mocked(getTaskCache)).toHaveBeenCalledWith(`board:${NOTION_SOURCE_ID}`);
+    expect(vi.mocked(getTaskCache)).toHaveBeenCalledWith(
+      `board:${NOTION_SOURCE_ID}`,
+    );
   });
 
   it('returns tasks_ready with [] when milestone has no sourceId', () => {

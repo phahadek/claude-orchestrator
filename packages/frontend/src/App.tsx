@@ -429,7 +429,9 @@ export default function App() {
     if (activeBoardId === NON_MILESTONE_BOARD_ID) {
       url = `/api/tasks/non-milestone?projectId=${encodeURIComponent(activeProjectId)}`;
       fetch(url)
-        .then((r) => (r.ok ? (r.json() as Promise<TaskView[]>) : Promise.resolve([])))
+        .then((r) =>
+          r.ok ? (r.json() as Promise<TaskView[]>) : Promise.resolve([]),
+        )
         .then((data) => {
           setTaskViews(data);
           setTaskCacheCold(false);
@@ -443,7 +445,11 @@ export default function App() {
       if (activeBoardId) params.set('boardId', activeBoardId);
       url = `/api/tasks/active?${params.toString()}`;
       fetch(url)
-        .then((r) => (r.ok ? (r.json() as Promise<TasksActiveResponse>) : Promise.resolve(null)))
+        .then((r) =>
+          r.ok
+            ? (r.json() as Promise<TasksActiveResponse>)
+            : Promise.resolve(null),
+        )
         .then((data) => {
           if (data) {
             setTaskViews(data.tasks);
@@ -540,7 +546,9 @@ export default function App() {
           setTaskCacheCold(data.coldCache);
         }
       })
-      .catch(() => {/* ignore */});
+      .catch(() => {
+        /* ignore */
+      });
   }, [lastCacheUpdatedEvent, activeProjectId, activeBoardId]);
 
   // Passed to TaskList so it can apply optimistic status updates without a full re-fetch
@@ -574,7 +582,9 @@ export default function App() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ projectId: activeProjectId }),
-        }).catch(() => {/* ignore */});
+        }).catch(() => {
+          /* ignore */
+        });
         // Also re-read current cache to show any already-populated data
         const params = new URLSearchParams({ projectId: activeProjectId });
         if (activeBoardId) params.set('boardId', activeBoardId);
@@ -1144,8 +1154,14 @@ export default function App() {
             >
               <div className={styles.leftPanel}>
                 {taskCacheCold && !taskViewsLoading && (
-                  <div className={styles.coldCacheBanner} data-testid="cold-cache-banner">
-                    Warming cache for {projects.find((p) => p.id === activeProjectId)?.name ?? activeProjectId}…
+                  <div
+                    className={styles.coldCacheBanner}
+                    data-testid="cold-cache-banner"
+                  >
+                    Warming cache for{' '}
+                    {projects.find((p) => p.id === activeProjectId)?.name ??
+                      activeProjectId}
+                    …
                   </div>
                 )}
                 <TaskList
