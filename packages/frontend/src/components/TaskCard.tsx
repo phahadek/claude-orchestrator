@@ -57,6 +57,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'PR merged but Notion status update failed repeatedly — update Notion to Done manually and clear the pause.',
   launch_failed:
     'Launch failed repeatedly — fix the underlying issue (e.g. delete the stale branch) then restart the backend.',
+  diverged_branch:
+    'Branch has diverged from origin — manual reconciliation needed before auto-push can resume.',
 };
 
 function verdictLabel(verdict: string): string {

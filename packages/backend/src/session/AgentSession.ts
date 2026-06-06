@@ -1432,6 +1432,70 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
    * with prNumber and repo included.
    */
   private async handlePushDetected(): Promise<void> {
+    // Auto-push any local commits ahead of origin before signalling.
+    if (this.worktreePath) {
+      try {
+        const branch = execSync('git rev-parse --abbrev-ref HEAD', {
+          cwd: this.worktreePath,
+        })
+          .toString()
+          .trim();
+        const localHead = execSync('git rev-parse HEAD', {
+          cwd: this.worktreePath,
+        })
+          .toString()
+          .trim();
+        const remoteHead =
+          execSync(`git ls-remote origin ${branch}`, { cwd: this.worktreePath })
+            .toString()
+            .split(/\s+/)[0]
+            ?.trim() || '';
+
+        if (localHead && localHead !== remoteHead) {
+          const aheadBehind = execSync(
+            `git rev-list --left-right --count origin/${branch}...HEAD`,
+            { cwd: this.worktreePath },
+          )
+            .toString()
+            .trim();
+          const [behind, ahead] = aheadBehind.split(/\s+/).map(Number);
+          if (ahead > 0 && behind === 0) {
+            sessionLog(
+              this.sessionId,
+              `auto-pushing ${ahead} local commit(s) on ${branch} (origin was at ${remoteHead.slice(0, 7)}, local at ${localHead.slice(0, 7)})`,
+            );
+            execSync(`git push origin ${branch}`, { cwd: this.worktreePath });
+            this.broadcast({
+              type: 'session_auto_pushed',
+              sessionId: this.sessionId,
+              branch,
+              commits: ahead,
+            });
+          } else if (behind > 0) {
+            sessionLog(
+              this.sessionId,
+              `auto-push skipped: branch ${branch} has diverged (ahead=${ahead}, behind=${behind}) — manual reconciliation needed`,
+            );
+            const pr = getPRBySessionId(this.sessionId);
+            if (pr) {
+              setPauseReason(pr.pr_number, pr.repo, 'diverged_branch');
+            }
+            this.broadcast({
+              type: 'session_auto_pushed',
+              sessionId: this.sessionId,
+              branch,
+              commits: 0,
+            });
+          }
+        }
+      } catch (err) {
+        sessionLog(
+          this.sessionId,
+          `auto-push check failed (non-fatal): ${(err as Error).message}`,
+        );
+      }
+    }
+
     this.emit('push_detected', { sessionId: this.sessionId });
     const pr = getPRBySessionId(this.sessionId);
     if (pr) {
