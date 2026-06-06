@@ -14,6 +14,7 @@ import {
   slugify,
 } from './branchModel';
 import { loadOrchestratorConfig } from './orchestrator-config';
+import { WorktreeSetupError } from './WorktreeSetupError';
 import { CliSessionRunner } from './CliSessionRunner';
 import { ApiSessionRunner } from './ApiSessionRunner';
 import type { ISessionRunner } from './SessionRunner';
@@ -599,10 +600,15 @@ export class SessionManager extends EventEmitter {
         );
       }
     } catch (err) {
+      const e = err as { stderr?: string | Buffer; message: string };
+      const stderr = e.stderr ? e.stderr.toString() : '';
+      const fullMsg = `${e.message}${stderr ? `\nstderr: ${stderr}` : ''}`.trim();
       console.error(
-        `[SessionManager] failed to create worktree for ${sessionId}: ${err}`,
+        `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
       );
-      throw err;
+      throw new WorktreeSetupError(fullMsg, {
+        isBranchAlreadyExists: /A branch named .* already exists/.test(stderr),
+      });
     }
 
     const isUnixStylePath =

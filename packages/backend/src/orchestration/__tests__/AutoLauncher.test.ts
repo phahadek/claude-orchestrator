@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ResolvedTask } from '../../notion/types';
 import type { ProjectConfig } from '../../config';
+import { WorktreeSetupError } from '../../session/WorktreeSetupError.js';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -1137,6 +1138,190 @@ describe('AutoLauncher — Notion Done-update backoff', () => {
       ),
     ).toBe(true);
 
+    warnSpy.mockRestore();
+  });
+});
+
+// ── Launch-failure tracking tests ─────────────────────────────────────────────
+
+describe('AutoLauncher — launch failure tracking', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
+    vi.mocked(getMergedPRForTask).mockReturnValue(null);
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 2;
+  });
+
+  function makeFailingBackend(task = makeResolvedTask()) {
+    return {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue([task]),
+    };
+  }
+
+  it('3 consecutive failures pause the task and broadcast auto_launch_paused on the 3rd', async () => {
+    const task = makeResolvedTask({ id: 'task-fail' });
+    const backend = makeFailingBackend(task);
+    const sessionManager = makeSessionManager(0);
+    const broadcastMsgs: unknown[] = [];
+    const broadcast = vi.fn((msg: unknown) => broadcastMsgs.push(msg));
+
+    const worktreeErr = new WorktreeSetupError(
+      "Command failed: git worktree add -b\nstderr: fatal: A branch named 'feature/test-task' already exists.",
+      { isBranchAlreadyExists: true },
+    );
+    sessionManager.start.mockImplementation(() => {
+      throw worktreeErr;
+    });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const launcher = new AutoLauncher(sessionManager as never, broadcast, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    // Cycle 1 — failure 1, no broadcast yet
+    await launcher.pollOnce();
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'auto_launch_paused' }),
+    );
+
+    // Cycle 2 — failure 2, no broadcast yet
+    backend.fetchReadyTasks.mockResolvedValue([task]);
+    await launcher.pollOnce();
+    expect(broadcast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'auto_launch_paused' }),
+    );
+
+    // Cycle 3 — failure 3, pause + broadcast
+    backend.fetchReadyTasks.mockResolvedValue([task]);
+    await launcher.pollOnce();
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'auto_launch_paused',
+        taskId: 'task-fail',
+        reason: 'launch_failed',
+      }),
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it('task is not retried after reaching MAX_FAILURES_BEFORE_PAUSE', async () => {
+    const task = makeResolvedTask({ id: 'task-blocked' });
+    const backend = makeFailingBackend(task);
+    const sessionManager = makeSessionManager(0);
+    sessionManager.start.mockImplementation(() => {
+      throw new WorktreeSetupError('Command failed', { isBranchAlreadyExists: true });
+    });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    // Exhaust the limit
+    for (let i = 0; i < 3; i++) {
+      backend.fetchReadyTasks.mockResolvedValue([task]);
+      await launcher.pollOnce();
+    }
+
+    const callsBefore = sessionManager.start.mock.calls.length;
+
+    // 4th cycle — task should be skipped
+    backend.fetchReadyTasks.mockResolvedValue([task]);
+    await launcher.pollOnce();
+    expect(sessionManager.start.mock.calls.length).toBe(callsBefore);
+
+    warnSpy.mockRestore();
+  });
+
+  it('successful launch clears failure count so subsequent failure starts fresh', async () => {
+    const task = makeResolvedTask({ id: 'task-reset' });
+    const backend = makeFailingBackend(task);
+    const sessionManager = makeSessionManager(0);
+    const broadcastMsgs: { type: string }[] = [];
+    const broadcast = vi.fn((msg: { type: string }) => broadcastMsgs.push(msg));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    sessionManager.start
+      .mockImplementationOnce(() => {
+        throw new WorktreeSetupError('Command failed', { isBranchAlreadyExists: true });
+      })
+      .mockImplementationOnce(() => {
+        throw new WorktreeSetupError('Command failed', { isBranchAlreadyExists: true });
+      })
+      .mockImplementationOnce(() => 'session-ok') // success clears count
+      .mockImplementation(() => {
+        throw new WorktreeSetupError('Command failed', { isBranchAlreadyExists: true });
+      });
+
+    const launcher = new AutoLauncher(sessionManager as never, broadcast, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    // 2 failures
+    for (let i = 0; i < 2; i++) {
+      backend.fetchReadyTasks.mockResolvedValue([task]);
+      await launcher.pollOnce();
+    }
+
+    // 1 success — resets count
+    backend.fetchReadyTasks.mockResolvedValue([task]);
+    await launcher.pollOnce();
+    expect(broadcastMsgs.filter((m) => m.type === 'auto_launch_paused')).toHaveLength(0);
+
+    // Now 2 more failures — not yet at limit again (count reset to 1 after success)
+    for (let i = 0; i < 2; i++) {
+      backend.fetchReadyTasks.mockResolvedValue([task]);
+      await launcher.pollOnce();
+    }
+    expect(broadcastMsgs.filter((m) => m.type === 'auto_launch_paused')).toHaveLength(0);
+
+    // 3rd failure after reset — hits limit
+    backend.fetchReadyTasks.mockResolvedValue([task]);
+    await launcher.pollOnce();
+    expect(broadcastMsgs.filter((m) => m.type === 'auto_launch_paused')).toHaveLength(1);
+
+    warnSpy.mockRestore();
+  });
+
+  it('warn log includes full stderr when a WorktreeSetupError is thrown', async () => {
+    const task = makeResolvedTask({ id: 'task-stderr' });
+    const backend = makeFailingBackend(task);
+    const sessionManager = makeSessionManager(0);
+    const stderrMsg = "fatal: A branch named 'feature/my-task' already exists.";
+    sessionManager.start.mockImplementation(() => {
+      throw new WorktreeSetupError(
+        `Command failed: git worktree add -b\nstderr: ${stderrMsg}`,
+        { isBranchAlreadyExists: true },
+      );
+    });
+
+    const warnCalls: string[] = [];
+    const warnSpy = vi
+      .spyOn(console, 'warn')
+      .mockImplementation((...args) => warnCalls.push(String(args[0])));
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+
+    expect(warnCalls.some((w) => w.includes(stderrMsg))).toBe(true);
     warnSpy.mockRestore();
   });
 });

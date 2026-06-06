@@ -243,6 +243,12 @@ export type ServerMessage =
       sessionId: string;
     }
   | {
+      type: 'auto_launch_paused';
+      taskId: string;
+      reason: 'launch_failed';
+      detail: string;
+    }
+  | {
       type: 'github_rate_limit_hit';
       resetAt: string; // ISO-8601
       limit: number;
