@@ -420,6 +420,62 @@ describe('<pr-body> marker — createPR transient retry', () => {
       'pr_creation_failed',
     );
   });
+
+  it('retries on "fetch failed" (classified as transient) and succeeds on second attempt', async () => {
+    let calls = 0;
+    const successResponse = {
+      number: 42,
+      html_url: PR_URL,
+      title: 'feat: my-task',
+      body: VALID_BODY,
+      head: { ref: 'feature/my-task', sha: 'abc123' },
+      base: { ref: 'dev' },
+      state: 'open',
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+      draft: true,
+    };
+    const ghClient = makeGithubClient({
+      createPR: vi.fn().mockImplementation(() => {
+        calls++;
+        if (calls < 2) return Promise.reject(new Error('fetch failed'));
+        return Promise.resolve(successResponse);
+      }),
+    });
+
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await vi.runAllTimersAsync();
+
+    expect(ghClient.createPR).toHaveBeenCalledTimes(2);
+    expect(upsertPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ pr_number: 42 }),
+    );
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'pr_creation_failed' }),
+    );
+  });
+
+  it('records pr_creation_failed(stage create) after 3 "fetch failed" errors, no PR row', async () => {
+    const ghClient = makeGithubClient({
+      createPR: vi.fn().mockRejectedValue(new Error('fetch failed')),
+    });
+
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await vi.runAllTimersAsync();
+
+    expect(ghClient.createPR).toHaveBeenCalledTimes(3);
+    expect(upsertPullRequest).not.toHaveBeenCalled();
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'pr_creation_failed',
+        payload: expect.objectContaining({ stage: 'create' }),
+      }),
+    );
+  });
 });
 
 // ── createPR 422 handling ─────────────────────────────────────────────────────

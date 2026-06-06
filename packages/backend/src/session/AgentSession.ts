@@ -1259,10 +1259,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           return;
         }
 
-        // Transient error (5xx / network / timeout) — retry with backoff.
+        // Transient error (5xx / network / timeout / fetch) — retry with backoff.
         const isTransient =
           /5\d\d/.test(msg) ||
-          /ECONNRESET|ETIMEDOUT|ENOTFOUND|network|socket|timeout/i.test(msg);
+          /ECONNRESET|ETIMEDOUT|ENOTFOUND|network|socket|timeout|fetch failed/i.test(msg);
 
         if (!isTransient || attempt === MAX_ATTEMPTS - 1) {
           console.error(
