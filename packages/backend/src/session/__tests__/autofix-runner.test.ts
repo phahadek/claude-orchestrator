@@ -2,12 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Hoisted mocks — must be declared before vi.mock calls ─────────────────────
 
-const { mockExistsSync, mockReadFileSync } = vi.hoisted(
-  () => ({
-    mockExistsSync: vi.fn().mockReturnValue(false),
-    mockReadFileSync: vi.fn().mockReturnValue(''),
-  }),
-);
+const { mockExistsSync, mockReadFileSync } = vi.hoisted(() => ({
+  mockExistsSync: vi.fn().mockReturnValue(false),
+  mockReadFileSync: vi.fn().mockReturnValue(''),
+}));
 
 const { mockYamlLoad } = vi.hoisted(() => ({
   mockYamlLoad: vi.fn().mockReturnValue(null),
@@ -261,7 +259,6 @@ describe('runAutofix — diff produced → commit + push', () => {
     expect(capturedEnv?.GIT_COMMITTER_NAME).toBe('claude-orchestrator');
     expect(capturedEnv?.GIT_COMMITTER_EMAIL).toBe('bot@claude-code.internal');
   });
-
 });
 
 // ── runAutofix — fail open ─────────────────────────────────────────────────────
