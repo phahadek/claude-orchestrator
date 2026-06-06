@@ -17,7 +17,11 @@ describe('runWithConcurrency', () => {
   });
 
   it('processes all items and returns results in original order', async () => {
-    const results = await runWithConcurrency([1, 2, 3, 4, 5], 3, async (x) => x * 2);
+    const results = await runWithConcurrency(
+      [1, 2, 3, 4, 5],
+      3,
+      async (x) => x * 2,
+    );
     expect(results).toEqual([2, 4, 6, 8, 10]);
   });
 
@@ -63,7 +67,9 @@ describe('runWithConcurrency', () => {
   });
 
   it('handles a single item', async () => {
-    const results = await runWithConcurrency(['only'], 5, async (s) => s.toUpperCase());
+    const results = await runWithConcurrency(['only'], 5, async (s) =>
+      s.toUpperCase(),
+    );
     expect(results).toEqual(['ONLY']);
   });
 });

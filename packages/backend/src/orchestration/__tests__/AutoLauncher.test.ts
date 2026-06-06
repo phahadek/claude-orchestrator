@@ -1389,7 +1389,9 @@ describe('AutoLauncher — parallel project iteration', () => {
     vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
     vi.mocked(getMergedPRForTask).mockReturnValue(null);
     vi.mocked(getTaskPauseReason).mockReturnValue(null);
-    (runtimeSettings as { auto_launch_concurrency: number }).auto_launch_concurrency = 2;
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 2;
   });
 
   it('project[0] rejection does not block project[1] and project[2] in the same cycle', async () => {
@@ -1442,7 +1444,10 @@ describe('AutoLauncher — parallel project iteration', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [makeProject({ id: 'proj-1' }), makeProject({ id: 'proj-2' })],
+      listProjects: () => [
+        makeProject({ id: 'proj-1' }),
+        makeProject({ id: 'proj-2' }),
+      ],
       resolveBackend: () => failBackend,
       pollOnStart: false,
     });
@@ -1461,7 +1466,9 @@ describe('AutoLauncher — parallel merged-PR catch-up', () => {
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
     vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
     vi.mocked(getTaskPauseReason).mockReturnValue(null);
-    (runtimeSettings as { auto_launch_concurrency: number }).auto_launch_concurrency = 2;
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 2;
   });
 
   it('10 merged-PR tasks run with at most UPDATE_CONCURRENCY=3 concurrent updateStatus calls', async () => {
@@ -1499,11 +1506,15 @@ describe('AutoLauncher — parallel merged-PR catch-up', () => {
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    const launcher = new AutoLauncher(makeSessionManager(0) as never, undefined, {
-      listProjects: () => [makeProject()],
-      resolveBackend: () => notionBackend as never,
-      pollOnStart: false,
-    });
+    const launcher = new AutoLauncher(
+      makeSessionManager(0) as never,
+      undefined,
+      {
+        listProjects: () => [makeProject()],
+        resolveBackend: () => notionBackend as never,
+        pollOnStart: false,
+      },
+    );
 
     await launcher.pollOnce();
 
