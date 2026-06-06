@@ -246,7 +246,10 @@ describe('StuckSessionMonitor.scanForStuckSessions() — idle+open-PR path', () 
     // so sessions.pr_url is null while pull_requests has an open PR for this session.
     insertStuckSession('sess-race-pr', 'proj-1', 10 * 60 * 1000); // no pr_url in sessions
 
-    const pr = makeOpenPrRow('sess-race-pr', 'https://github.com/owner/repo/pull/99');
+    const pr = makeOpenPrRow(
+      'sess-race-pr',
+      'https://github.com/owner/repo/pull/99',
+    );
     vi.mocked(queries.getPRBySessionId).mockReturnValue(pr);
 
     const broadcast = vi.fn();
