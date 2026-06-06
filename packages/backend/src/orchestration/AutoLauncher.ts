@@ -16,12 +16,15 @@ import {
   clearTaskPauseReason,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
+import { runWithConcurrency } from '../utils/concurrency.js';
 
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
 const CODE_TYPE = '💻 Code';
 const MIN_POLL_INTERVAL_MS = 5_000;
 const FETCH_TIMEOUT_MS = 30_000;
+const PROJECT_CONCURRENCY = 5;
+const UPDATE_CONCURRENCY = 3;
 
 export class AutoLauncherFetchTimeoutError extends Error {
   constructor(message: string) {
@@ -154,15 +157,19 @@ export class AutoLauncher {
     try {
       const listProjects = this.options.listProjects ?? getAllProjects;
       const projects = listProjects().filter((p) => p.autoLaunchEnabled);
-      for (const project of projects) {
-        try {
-          const counts = await this.processProject(project);
-          eligibleCount += counts.eligible;
-          launchedCount += counts.launched;
-          skippedCount += counts.skipped;
-        } catch (err) {
-          console.error(`[AutoLauncher] project ${project.id} failed:`, err);
-        }
+      const projectResults = await runWithConcurrency(
+        projects,
+        PROJECT_CONCURRENCY,
+        (project) =>
+          this.processProject(project).catch((err) => {
+            console.error(`[AutoLauncher] project ${project.id} failed:`, err);
+            return { eligible: 0, launched: 0, skipped: 0 };
+          }),
+      );
+      for (const counts of projectResults) {
+        eligibleCount += counts.eligible;
+        launchedCount += counts.launched;
+        skippedCount += counts.skipped;
       }
     } finally {
       this.polling = false;
@@ -223,63 +230,66 @@ export class AutoLauncher {
 
     // Catch-up pass: if a task is still Ready in Notion but its PR was already
     // merged (the merge-handler fired silently), mark it Done now and skip launch.
-    for (const resolved of allTasks) {
-      // Idempotency guard: tasks already at Done are present in `allTasks` only
-      // for dependency resolution. Re-writing Done to Notion every cycle was a
-      // runaway (thousands of redundant API writes), so skip already-Done tasks.
-      if (resolved.task.status === DONE_STATUS) continue;
-      const mergedPR = getMergedPRForTask(resolved.task.id);
-      if (!mergedPR) continue;
-
-      // Backoff: skip this cycle if still in cooldown from a previous failure.
+    // Idempotency guard: already-Done tasks are skipped to avoid runaway writes.
+    // Backoff guard: tasks still in cooldown from a previous failure are skipped.
+    const catchUpTasks = allTasks.filter((resolved) => {
+      if (resolved.task.status === DONE_STATUS) return false;
+      if (!getMergedPRForTask(resolved.task.id)) return false;
       const attempt = this.notionUpdateAttempts.get(resolved.task.id);
-      if (attempt && Date.now() < attempt.nextRetryAt) continue;
-
-      console.warn(
-        `[AutoLauncher] task "${resolved.task.title}" (${resolved.task.id}) skipped — PR #${mergedPR.pr_number} (${mergedPR.pr_url}) is already merged; updating task status to Done`,
-      );
-      try {
-        await withTimeout(
-          backend.updateStatus(resolved.task.id, DONE_STATUS),
-          FETCH_TIMEOUT_MS,
-          `updateStatus(${resolved.task.id})`,
-        );
-        this.notionUpdateAttempts.delete(resolved.task.id);
-      } catch (err) {
-        const next = attempt ? attempt.count + 1 : 1;
-        const backoffMs =
-          AutoLauncher.BACKOFF_SCHEDULE_MS[
-            Math.min(next - 1, AutoLauncher.BACKOFF_SCHEDULE_MS.length - 1)
-          ];
-        this.notionUpdateAttempts.set(resolved.task.id, {
-          count: next,
-          nextRetryAt: Date.now() + backoffMs,
-          lastError: String(err),
-        });
+      return !(attempt && Date.now() < attempt.nextRetryAt);
+    });
+    await runWithConcurrency(
+      catchUpTasks,
+      UPDATE_CONCURRENCY,
+      async (resolved) => {
+        const mergedPR = getMergedPRForTask(resolved.task.id)!;
+        const attempt = this.notionUpdateAttempts.get(resolved.task.id);
         console.warn(
-          `[AutoLauncher] failed to update task ${resolved.task.id} to Done (attempt ${next}, next retry in ${backoffMs / 1000}s): ${err}`,
+          `[AutoLauncher] task "${resolved.task.title}" (${resolved.task.id}) skipped — PR #${mergedPR.pr_number} (${mergedPR.pr_url}) is already merged; updating task status to Done`,
         );
-        if (next === AutoLauncher.MAX_ATTEMPTS_BEFORE_AUDIT) {
-          recordEvent({
-            event_type: 'auto_launch_done_update_stuck',
-            actor_type: 'system',
-            actor_id: null,
-            project_id: project.id,
-            task_id: resolved.task.id,
-            payload: {
-              pr_number: mergedPR.pr_number,
-              last_error: String(err),
-              attempts: next,
-            },
-          });
-          setPauseReason(
-            mergedPR.pr_number,
-            mergedPR.repo,
-            'notion_done_update_stuck',
+        try {
+          await withTimeout(
+            backend.updateStatus(resolved.task.id, DONE_STATUS),
+            FETCH_TIMEOUT_MS,
+            `updateStatus(${resolved.task.id})`,
           );
+          this.notionUpdateAttempts.delete(resolved.task.id);
+        } catch (err) {
+          const next = attempt ? attempt.count + 1 : 1;
+          const backoffMs =
+            AutoLauncher.BACKOFF_SCHEDULE_MS[
+              Math.min(next - 1, AutoLauncher.BACKOFF_SCHEDULE_MS.length - 1)
+            ];
+          this.notionUpdateAttempts.set(resolved.task.id, {
+            count: next,
+            nextRetryAt: Date.now() + backoffMs,
+            lastError: String(err),
+          });
+          console.warn(
+            `[AutoLauncher] failed to update task ${resolved.task.id} to Done (attempt ${next}, next retry in ${backoffMs / 1000}s): ${err}`,
+          );
+          if (next === AutoLauncher.MAX_ATTEMPTS_BEFORE_AUDIT) {
+            recordEvent({
+              event_type: 'auto_launch_done_update_stuck',
+              actor_type: 'system',
+              actor_id: null,
+              project_id: project.id,
+              task_id: resolved.task.id,
+              payload: {
+                pr_number: mergedPR.pr_number,
+                last_error: String(err),
+                attempts: next,
+              },
+            });
+            setPauseReason(
+              mergedPR.pr_number,
+              mergedPR.repo,
+              'notion_done_update_stuck',
+            );
+          }
         }
-      }
-    }
+      },
+    );
 
     const candidates = allTasks.filter((t) => this.isLaunchCandidate(t));
     if (candidates.length === 0)
