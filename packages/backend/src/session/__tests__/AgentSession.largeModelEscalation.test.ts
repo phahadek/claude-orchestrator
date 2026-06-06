@@ -395,9 +395,7 @@ describe('AgentSession — large-model escalation on context overflow', () => {
     // Session ends in error with context_overflow reason.
     const ended = messages.find((m) => m.type === 'session_ended');
     expect(ended).toBeDefined();
-    expect(
-      (ended as { status?: string } | undefined)?.status,
-    ).toBe('error');
+    expect((ended as { status?: string } | undefined)?.status).toBe('error');
   });
 
   it('escalates when subprocess hangs after emitting "Prompt is too long" (endSession unblocks run)', async () => {
