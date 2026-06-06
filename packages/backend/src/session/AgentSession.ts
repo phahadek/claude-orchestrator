@@ -205,6 +205,10 @@ export class AgentSession extends EventEmitter {
   private inSessionApiErrorFired = false;
   /** Set when a context-overflow result event is detected; suppresses generic retry. */
   private contextOverflowDetected = false;
+  /** Set by tryEscalateForOverflow() — target model for the escalated spawn. */
+  private _escalationModel: string | undefined = undefined;
+  /** Set by tryEscalateForOverflow() — disableAutoCompact override for the escalated spawn. */
+  private _escalationDisableAutoCompact: boolean | null = null;
   /** One-cycle injection skip lock set by PRFileReverter.
    *  Each entry is consumed (deleted) the first time injectContextFile checks it,
    *  blocking exactly one injection attempt per reverted file before resetting. */
@@ -325,10 +329,9 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         ? runtimeSettings.review_session_model
         : runtimeSettings.code_session_model;
 
-    // Per-iteration overrides set by the large-model escalation path (T3b).
-    // null = use the default computed value; non-null = use the override.
-    let escalationModel: string | undefined;
-    let escalationDisableAutoCompact: boolean | null = null;
+    // Per-iteration overrides set by tryEscalateForOverflow() (T3b).
+    // Instance fields _escalationModel and _escalationDisableAutoCompact hold these
+    // so they're accessible from the helper without parameter threading.
 
     // Loop is exited by an explicit return on every terminal path: clean exit,
     // kill/spawn error, or non-transient failure. Only a transient API error
@@ -353,13 +356,13 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         resumeIdForSpawn,
         {
           worktreePath: this.worktreePath,
-          model: escalationModel ?? (modelSetting || undefined),
+          model: this._escalationModel ?? (modelSetting || undefined),
           allowedTools: [...ALLOWED_TOOLS, ...this.extraAllowedTools],
           systemPrompt: this.systemPromptContent,
           mcpConfigPath: this.mcpConfigPath,
           disableAutoCompact:
-            escalationDisableAutoCompact !== null
-              ? escalationDisableAutoCompact
+            this._escalationDisableAutoCompact !== null
+              ? this._escalationDisableAutoCompact
               : !!runtimeSettings.large_task_model,
         },
         (event) => this.handleRawEvent(event),
@@ -372,66 +375,15 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       )
         return;
 
-      if (exitCode === 0) {
-        this.retryCount = 0;
-        await this.handleCleanExit();
-        return;
+      // Check overflow FIRST — clean exit must not bypass escalation.
+      if (await this.tryEscalateForOverflow()) {
+        resumeIdForSpawn = this.sessionId;
+        continue;
       }
 
-      // Non-zero exit — context overflow takes priority: attempt large-model escalation,
-      // or surface as a distinct error if escalation is not possible.
+      // Overflow detected but escalation not possible (no model or already on it)
+      // — error the session regardless of exit code.
       if (this.contextOverflowDetected) {
-        const largeModel = runtimeSettings.large_task_model;
-
-        if (largeModel && this.model !== largeModel) {
-          // Escalate: restart on the 1M-context model with autocompaction re-enabled.
-          sessionLog(
-            this.sessionId,
-            `context overflow — escalating to large model ${largeModel} (was: ${this.model ?? 'unknown'})`,
-          );
-
-          const currentTags = getSessionTags(this.sessionId);
-          const updatedTags = currentTags.includes('large-model')
-            ? currentTags
-            : [...currentTags, 'large-model'];
-          setSessionTags(this.sessionId, updatedTags);
-          this.broadcast({
-            type: 'session_updated',
-            sessionId: this.sessionId,
-            tags: updatedTags,
-          });
-
-          // Signal escalation so listeners (e.g. PRMergeWatcher) can reset timeouts.
-          this.broadcast({
-            type: 'large_model_escalation_started',
-            sessionId: this.sessionId,
-          });
-
-          // Reset state for the escalated spawn
-          this.contextOverflowDetected = false;
-          // Reset model so the escalated session's first assistant event updates it.
-          this.model = null;
-          escalationModel = largeModel;
-          escalationDisableAutoCompact = false; // re-enable autocompaction on 1M model
-          this._pendingEscalationNudge =
-            "You exceeded the previous model's context window and have been resumed on a 1M-context model. Continue the task from where you left off.";
-          resumeIdForSpawn = this.sessionId;
-
-          this.broadcast({
-            type: 'session_status',
-            sessionId: this.sessionId,
-            status: 'running',
-          });
-          continue;
-        }
-
-        // No escalation: large_task_model not set, or already on the large model.
-        sessionLog(
-          this.sessionId,
-          largeModel
-            ? `context overflow — already on large model ${largeModel}, no re-escalation`
-            : 'context overflow — large_task_model not configured, exiting without retry',
-        );
         if (!this.hasEnded) {
           this.sessionManager?.markSessionErrored?.(
             this.sessionId,
@@ -448,6 +400,12 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             });
           }
         }
+        return;
+      }
+
+      if (exitCode === 0) {
+        this.retryCount = 0;
+        await this.handleCleanExit();
         return;
       }
 
@@ -1537,6 +1495,60 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     if (revertCommitSha) {
       this.lastFilePollutionRevertSha = revertCommitSha;
     }
+  }
+
+  /**
+   * If a context overflow was detected this run, attempt to escalate to the large model.
+   * Returns true (caller should `continue` the run loop) when escalation is initiated.
+   * Returns false when no overflow was detected OR when overflow was detected but escalation
+   * is not possible (no large_task_model configured, or already on the large model).
+   * In the false+overflow case, `this.contextOverflowDetected` remains true so the caller
+   * can error the session regardless of exit code.
+   */
+  private async tryEscalateForOverflow(): Promise<boolean> {
+    if (!this.contextOverflowDetected) return false;
+    const largeModel = runtimeSettings.large_task_model;
+    if (!largeModel || this.model === largeModel) {
+      sessionLog(
+        this.sessionId,
+        largeModel
+          ? `context overflow — already on large model ${largeModel}, no re-escalation`
+          : 'context overflow — large_task_model not configured, exiting without retry',
+      );
+      return false;
+    }
+    sessionLog(
+      this.sessionId,
+      `context overflow — escalating to large model ${largeModel} (was: ${this.model ?? 'unknown'})`,
+    );
+    const currentTags = getSessionTags(this.sessionId);
+    const updatedTags = currentTags.includes('large-model')
+      ? currentTags
+      : [...currentTags, 'large-model'];
+    setSessionTags(this.sessionId, updatedTags);
+    this.broadcast({
+      type: 'session_updated',
+      sessionId: this.sessionId,
+      tags: updatedTags,
+    });
+    // Signal escalation so listeners (e.g. PRMergeWatcher) can reset timeouts.
+    this.broadcast({
+      type: 'large_model_escalation_started',
+      sessionId: this.sessionId,
+    });
+    // Reset overflow flag and model; set escalation overrides for the next spawn.
+    this.contextOverflowDetected = false;
+    this.model = null;
+    this._escalationModel = largeModel;
+    this._escalationDisableAutoCompact = false;
+    this._pendingEscalationNudge =
+      "You exceeded the previous model's context window and have been resumed on a 1M-context model. Continue the task from where you left off.";
+    this.broadcast({
+      type: 'session_status',
+      sessionId: this.sessionId,
+      status: 'running',
+    });
+    return true;
   }
 
   private async handleCleanExit(): Promise<void> {
