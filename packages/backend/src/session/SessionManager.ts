@@ -883,7 +883,11 @@ export class SessionManager extends EventEmitter {
     // PR-attribution guard: warn when a session opens a PR for a different task
     // than the one it was dispatched for, then still forward so the PR is tracked.
     session.on('pr_opened', (job: unknown) => {
-      const prJob = job as { taskId?: string; prNumber?: number; repo?: string };
+      const prJob = job as {
+        taskId?: string;
+        prNumber?: number;
+        repo?: string;
+      };
       console.log(
         `[SessionManager] forwarding pr_opened for PR #${prJob.prNumber ?? '?'} (${prJob.repo ?? '?'}) from session ${sessionId.slice(0, 8)}`,
       );

@@ -2756,7 +2756,15 @@ describe('ReviewOrchestrator — stall detector', () => {
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService();
     // Pass tiny intervals so we don't hold real timers open
-    const orch = new ReviewOrchestrator(rs, sm as any, 1, true, undefined, 60_000, 30 * 60_000);
+    const orch = new ReviewOrchestrator(
+      rs,
+      sm as any,
+      1,
+      true,
+      undefined,
+      60_000,
+      30 * 60_000,
+    );
     expect((orch as any).stallDetectorInterval).not.toBeNull();
     orch.destroy();
     expect((orch as any).stallDetectorInterval).toBeNull();
@@ -2776,21 +2784,43 @@ describe('ReviewOrchestrator — stall detector', () => {
         session_id: null, // no session → worktreePath stays '' → runTestPipeline skipped
       } as any);
       vi.mocked(loadAutofixCommands).mockReturnValue([]);
-      vi.mocked(loadOrchestratorConfig).mockReturnValue({ verify: [], test: [], test_timeout_sec: 60, test_max_rss_mb: 0, test_fail_fast: true } as any);
+      vi.mocked(loadOrchestratorConfig).mockReturnValue({
+        verify: [],
+        test: [],
+        test_timeout_sec: 60,
+        test_max_rss_mb: 0,
+        test_fail_fast: true,
+      } as any);
       vi.mocked(getAllPendingReviewSyncs).mockReturnValue([]);
 
       let resolveStuck!: () => void;
-      const stuckDone = new Promise<void>((r) => { resolveStuck = r; });
+      const stuckDone = new Promise<void>((r) => {
+        resolveStuck = r;
+      });
 
       const rs = {
         reviewPR: vi
           .fn()
           .mockImplementationOnce(async () => {
             await stuckDone; // PR 1 blocks until explicitly released
-            return { prNumber: 1, repo: 'owner/repo', verdict: 'approved', dimensions: [], summary: 'ok', reviewedAt: '' };
+            return {
+              prNumber: 1,
+              repo: 'owner/repo',
+              verdict: 'approved',
+              dimensions: [],
+              summary: 'ok',
+              reviewedAt: '',
+            };
           })
           .mockImplementationOnce(async () => {
-            return { prNumber: 2, repo: 'owner/repo', verdict: 'approved', dimensions: [], summary: 'ok', reviewedAt: '' };
+            return {
+              prNumber: 2,
+              repo: 'owner/repo',
+              verdict: 'approved',
+              dimensions: [],
+              summary: 'ok',
+              reviewedAt: '',
+            };
           }),
         sendReReview: vi.fn(),
         reReviewPR: vi.fn(),
@@ -2799,7 +2829,15 @@ describe('ReviewOrchestrator — stall detector', () => {
       const sm = makeMockSessionManager();
 
       // concurrency=1, stall check every 200 ms, stall threshold 500 ms
-      const orch = new ReviewOrchestrator(rs, sm as any, 1, true, undefined, 200, 500);
+      const orch = new ReviewOrchestrator(
+        rs,
+        sm as any,
+        1,
+        true,
+        undefined,
+        200,
+        500,
+      );
 
       // Start PR 1 (fills the single concurrency slot and blocks)
       sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
