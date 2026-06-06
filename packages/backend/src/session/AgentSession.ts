@@ -1122,7 +1122,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         actor_id: this.sessionId,
         project_id: this.projectId || null,
         task_id: this.taskId || null,
-        payload: { stage: 'branch', error: 'detached HEAD — no current branch' },
+        payload: {
+          stage: 'branch',
+          error: 'detached HEAD — no current branch',
+        },
       });
       this.sendMessage(
         `The worktree is in detached HEAD state — there is no current branch, so I cannot open a PR.\n\n` +
