@@ -315,7 +315,13 @@ export type ServerMessage =
   | { type: 'session_archived'; sessionId: string }
   | { type: 'context_overflow_detected'; sessionId: string }
   | { type: 'large_model_escalation_started'; sessionId: string }
-  | { type: 'missed_pr_nudge'; sessionId: string };
+  | { type: 'missed_pr_nudge'; sessionId: string }
+  | {
+      type: 'session_auto_pushed';
+      sessionId: string;
+      branch: string;
+      commits: number;
+    };
 
 // ── Client → Server ──────────────────────────────────────────────
 export type ClientMessage =
