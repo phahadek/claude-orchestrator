@@ -795,6 +795,13 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           type: 'context_overflow_detected',
           sessionId: this.sessionId,
         });
+        // The 'prompt is too long' variant (is_error=true) causes the CLI to emit
+        // the error result then hang waiting for more stdin input.  Close stdin now
+        // so the subprocess exits and runner.run() returns, allowing the escalation
+        // path to fire.
+        if (event.is_error === true) {
+          this.runner.endSession();
+        }
       }
     }
 

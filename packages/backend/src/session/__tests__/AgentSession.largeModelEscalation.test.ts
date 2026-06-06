@@ -124,6 +124,7 @@ vi.mock('../CliSessionRunner', () => ({
 }));
 
 import { AgentSession } from '../AgentSession';
+import { CliSessionRunner } from '../CliSessionRunner';
 import * as queries from '../../db/queries';
 import type { ServerMessage } from '../../ws/types';
 
@@ -277,5 +278,71 @@ describe('AgentSession — large-model escalation on context overflow', () => {
     await session.run();
     expect(runCalls[0].options.model).toBe(SMALL_MODEL);
     expect(runCalls[1].options.model).toBe(LARGE_MODEL);
+  });
+
+  it('escalates when subprocess hangs after emitting "Prompt is too long" (endSession unblocks run)', async () => {
+    mockRuntimeSettings.large_task_model = LARGE_MODEL;
+
+    // Pre-create the hanging promise so resolveFirstRun is assigned before onEvent fires.
+    let resolveFirstRun!: (exitCode: number) => void;
+    const firstRunPromise = new Promise<number>((resolve) => {
+      resolveFirstRun = resolve;
+    });
+    const mockEndSession = vi.fn().mockImplementation(() => {
+      resolveFirstRun(1);
+    });
+
+    vi.mocked(CliSessionRunner).mockImplementationOnce(() => ({
+      run: vi
+        .fn()
+        .mockImplementation(
+          (
+            _prompt: unknown,
+            _resume: unknown,
+            options: SessionRunnerOptions,
+            onEvent: (e: Record<string, unknown>) => void,
+          ) => {
+            const callIndex = runCalls.length;
+            runCalls.push({ options, onEvent });
+
+            if (callIndex === 0) {
+              // Emit "Prompt is too long" error result then hang (don't resolve).
+              onEvent({
+                type: 'result',
+                is_error: true,
+                result: 'Prompt is too long: 210000 tokens exceeds 200000 limit',
+                stop_reason: null,
+                duration_ms: 100,
+                usage: { input_tokens: 0, output_tokens: 0 },
+              });
+              return firstRunPromise;
+            }
+
+            // Escalated run: emit one event, exit cleanly.
+            onEvent({ type: 'system', subtype: 'init' });
+            return Promise.resolve(0);
+          },
+        ),
+      sendMessage: mockSendMessage,
+      endSession: mockEndSession,
+      kill: vi.fn().mockResolvedValue(undefined),
+      hasSpawnError: false,
+    }));
+
+    const session = makeSession('standard');
+    const messages: ServerMessage[] = [];
+    session.on('message', (m: ServerMessage) => messages.push(m));
+
+    await session.run();
+
+    // endSession was called to unblock the hanging subprocess.
+    expect(mockEndSession).toHaveBeenCalled();
+
+    // Escalation fired: two runner spawns, second uses large model.
+    expect(runCalls).toHaveLength(2);
+    expect(runCalls[1].options.model).toBe(LARGE_MODEL);
+    expect(
+      messages.find((m) => m.type === 'large_model_escalation_started'),
+    ).toBeDefined();
   });
 });
