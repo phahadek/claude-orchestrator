@@ -280,6 +280,124 @@ describe('AgentSession — large-model escalation on context overflow', () => {
     expect(runCalls[1].options.model).toBe(LARGE_MODEL);
   });
 
+  it('escalates on clean exit (exitCode 0) when overflow detected and large model configured', async () => {
+    mockRuntimeSettings.large_task_model = LARGE_MODEL;
+
+    vi.mocked(CliSessionRunner).mockImplementationOnce(() => ({
+      run: vi
+        .fn()
+        .mockImplementation(
+          (
+            _prompt: unknown,
+            _resume: unknown,
+            options: SessionRunnerOptions,
+            onEvent: (e: Record<string, unknown>) => void,
+          ) => {
+            const callIndex = runCalls.length;
+            runCalls.push({ options, onEvent });
+
+            if (callIndex === 0) {
+              // Emit overflow event, then exit cleanly (exit code 0).
+              onEvent({
+                type: 'result',
+                stop_reason: 'model_context_window_exceeded',
+                is_error: false,
+                result: '',
+                duration_ms: 100,
+                usage: { input_tokens: 0, output_tokens: 0 },
+              });
+              return Promise.resolve(0);
+            }
+
+            // Escalated run: exit cleanly.
+            onEvent({ type: 'system', subtype: 'init' });
+            return Promise.resolve(0);
+          },
+        ),
+      sendMessage: mockSendMessage,
+      endSession: vi.fn(),
+      kill: vi.fn().mockResolvedValue(undefined),
+      hasSpawnError: false,
+    }));
+
+    const session = makeSession('standard');
+    const messages: ServerMessage[] = [];
+    session.on('message', (m: ServerMessage) => messages.push(m));
+
+    await session.run();
+
+    // Escalated: two runner spawns, second uses large model.
+    expect(runCalls).toHaveLength(2);
+    expect(runCalls[1].options.model).toBe(LARGE_MODEL);
+    expect(runCalls[1].options.disableAutoCompact).toBe(false);
+
+    // Nudge sent.
+    expect(mockSendMessage).toHaveBeenCalledTimes(1);
+    expect(mockSendMessage.mock.calls[0][0]).toContain('1M-context model');
+
+    // large-model tag written.
+    expect(queries.setSessionTags).toHaveBeenCalledWith(
+      'test-session-overflow',
+      expect.arrayContaining(['large-model']),
+    );
+
+    // large_model_escalation_started broadcast.
+    expect(
+      messages.find((m) => m.type === 'large_model_escalation_started'),
+    ).toBeDefined();
+  });
+
+  it('errors with context_overflow on clean exit when overflow detected but large model not configured', async () => {
+    mockRuntimeSettings.large_task_model = '';
+
+    vi.mocked(CliSessionRunner).mockImplementationOnce(() => ({
+      run: vi
+        .fn()
+        .mockImplementation(
+          (
+            _prompt: unknown,
+            _resume: unknown,
+            options: SessionRunnerOptions,
+            onEvent: (e: Record<string, unknown>) => void,
+          ) => {
+            runCalls.push({ options, onEvent });
+            // Emit overflow event, then exit cleanly (exit code 0).
+            onEvent({
+              type: 'result',
+              stop_reason: 'model_context_window_exceeded',
+              is_error: false,
+              result: '',
+              duration_ms: 100,
+              usage: { input_tokens: 0, output_tokens: 0 },
+            });
+            return Promise.resolve(0);
+          },
+        ),
+      sendMessage: mockSendMessage,
+      endSession: vi.fn(),
+      kill: vi.fn().mockResolvedValue(undefined),
+      hasSpawnError: false,
+    }));
+
+    const session = makeSession('standard');
+    const messages: ServerMessage[] = [];
+    session.on('message', (m: ServerMessage) => messages.push(m));
+
+    await session.run();
+
+    // Only one spawn — no escalation.
+    expect(runCalls).toHaveLength(1);
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(
+      messages.find((m) => m.type === 'large_model_escalation_started'),
+    ).toBeUndefined();
+
+    // Session ends in error with context_overflow reason.
+    const ended = messages.find((m) => m.type === 'session_ended');
+    expect(ended).toBeDefined();
+    expect((ended as { status?: string } | undefined)?.status).toBe('error');
+  });
+
   it('escalates when subprocess hangs after emitting "Prompt is too long" (endSession unblocks run)', async () => {
     mockRuntimeSettings.large_task_model = LARGE_MODEL;
 
