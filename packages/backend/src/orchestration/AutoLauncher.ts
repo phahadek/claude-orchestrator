@@ -16,7 +16,7 @@ import {
   clearTaskPauseReason,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
-import { runWithConcurrency } from '../utils/concurrency.js';
+import { runWithConcurrency } from '../utils/concurrency';
 
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
