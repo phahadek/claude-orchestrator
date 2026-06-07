@@ -350,6 +350,7 @@ export class SessionManager extends EventEmitter {
    */
   private _taskIdForMessage(msg: ServerMessage): string | null {
     switch (msg.type) {
+      case 'session_starting':
       case 'session_started':
       case 'session_ended':
       case 'session_status':
@@ -463,11 +464,9 @@ export class SessionManager extends EventEmitter {
     const {
       taskType,
       sessionType = 'standard',
-      customPrompt,
       projectId = '',
       taskName,
       sessionId: providedSessionId,
-      milestoneId = null,
       taskKind,
       taskId: precomputedTaskId,
     } = options ?? {};
@@ -534,11 +533,6 @@ export class SessionManager extends EventEmitter {
     }
 
     const sessionId = providedSessionId ?? crypto.randomUUID();
-    this.pendingStarts.set(sessionId, { sessionType });
-    console.log(
-      `[SessionManager] start ${sessionId} project=${projectId} sessionType=${sessionType}`,
-    );
-
     const projectDir = normalizePath(project.projectDir);
     const worktreePath = path.join(
       projectDir,
@@ -546,242 +540,16 @@ export class SessionManager extends EventEmitter {
       'worktrees',
       sessionId,
     );
-
-    const isLocalOnly = project.gitMode === 'local-only';
-
-    // Resolve the starting point for the detached worktree.
-    const { startingPoint, milestoneSlug } = resolveStartingPoint(
-      project,
-      milestoneId,
-    );
-
-    if (!isLocalOnly) {
-      if (milestoneSlug) {
-        // ensureMilestoneBranch fetches origin/<baseBranch> internally when needed.
-        try {
-          ensureMilestoneBranch(milestoneSlug, projectDir, project.baseBranch);
-        } catch (err) {
-          console.warn(
-            `[SessionManager] ensureMilestoneBranch failed (continuing): ${err}`,
-          );
-        }
-      } else {
-        try {
-          // Fetch latest base branch so sessions don't start from a stale local ref.
-          await exec(`git fetch origin ${project.baseBranch}`, {
-            cwd: projectDir,
-            timeout: 30_000,
-          });
-        } catch (err) {
-          console.warn(
-            `[SessionManager] git fetch origin ${project.baseBranch} failed (continuing with local ref): ${err}`,
-          );
-        }
-      }
-    }
-
-    // For github projects: use origin/<baseBranch> when starting from baseBranch, or the local
-    // milestone branch ref (guaranteed to exist after ensureMilestoneBranch).
-    const worktreeBase =
-      isLocalOnly || startingPoint !== project.baseBranch
-        ? startingPoint
-        : `origin/${project.baseBranch}`;
-
-    const featureBranch = taskName ? `feature/${slugify(taskName)}` : null;
-    try {
-      if (featureBranch) {
-        await exec(
-          `git worktree add -b "${featureBranch}" "${worktreePath}" ${worktreeBase}`,
-          { cwd: projectDir },
-        );
-      } else {
-        await exec(
-          `git worktree add --detach "${worktreePath}" ${worktreeBase}`,
-          {
-            cwd: projectDir,
-          },
-        );
-      }
-    } catch (err) {
-      const e = err as { stderr?: string | Buffer; message: string };
-      const stderr = e.stderr ? e.stderr.toString() : '';
-      const fullMsg =
-        `${e.message}${stderr ? `\nstderr: ${stderr}` : ''}`.trim();
-      console.error(
-        `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
-      );
-      throw new WorktreeSetupError(fullMsg, {
-        isBranchAlreadyExists: /A branch named .* already exists/.test(stderr),
-      });
-    }
-
-    const isUnixStylePath =
-      worktreePath.startsWith('/c/') || worktreePath.startsWith('/C/');
-    console.log(
-      `[SessionManager] worktree created: path=${worktreePath} startingPoint=${startingPoint}` +
-        (isUnixStylePath
-          ? ' [WARNING: Unix-style path detected — may not resolve correctly on Windows]'
-          : ''),
-    );
-
-    // Load per-project orchestrator config (fresh read — no restart needed).
-    const orchConfig = loadOrchestratorConfig(projectDir);
-
-    // Run bootstrap script if configured (after worktree creation, before session spawn).
-    // cwd is the main project root so git rev-parse --show-toplevel resolves correctly.
-    // The worktree path is passed as $1 so the script can operate on it.
-    if (orchConfig.bootstrap_script) {
-      try {
-        await exec(`bash ${orchConfig.bootstrap_script} "${worktreePath}"`, {
-          cwd: projectDir,
-          timeout: 120_000,
-        });
-        console.log(
-          `[SessionManager] bootstrap script completed for ${sessionId.slice(0, 8)}`,
-        );
-      } catch (err) {
-        console.warn(
-          `[SessionManager] bootstrap script failed for ${sessionId.slice(0, 8)} (continuing): ${err}`,
-        );
-      }
-    }
-
-    // Resolve the opaque task ID for this session. Callers with a pre-formatted
-    // task ID (AutoLauncher, PRReviewService) pass it via options.taskId to avoid
-    // URL-based re-parsing. Other callers (WS dispatch) provide only taskUrl and
-    // rely on the project's task_source to derive the correct format.
     const sessionTaskId =
       precomputedTaskId ??
       deriveTaskId(project.taskSource ?? 'notion', taskUrl);
-    const sessionMode = runtimeSettings.session_mode;
-    const runner =
-      sessionMode === 'api'
-        ? new ApiSessionRunner(sessionId)
-        : getCorporateMode().gates.dockerMandatory
-          ? new DockerSessionRunner(sessionId)
-          : new CliSessionRunner(sessionId);
 
-    // Pre-fetch task content from Notion so sessions skip Notion calls entirely.
-    // This is async — the session card is shown immediately, context is written
-    // before the AgentSession is created and run() is called.
-    const launchSession = async () => {
-      let taskContent: string | undefined;
-      if (sessionType !== 'review' && sessionTaskId) {
-        try {
-          taskContent =
-            await getTaskBackend(projectId).fetchTaskPage(sessionTaskId);
-          console.log(
-            `[SessionManager] pre-fetched task content for ${sessionId.slice(0, 8)} (${taskContent.length} chars)`,
-          );
-        } catch (err) {
-          console.warn(
-            `[SessionManager] failed to pre-fetch task content for ${sessionId.slice(0, 8)} — session will fetch from task backend: ${err}`,
-          );
-        }
-      }
+    console.log(
+      `[SessionManager] start ${sessionId} project=${projectId} sessionType=${sessionType}`,
+    );
 
-      // Pre-read files listed in the task spec so the session can skip exploration.
-      if (taskContent) {
-        try {
-          const fileSnippets = readTaskFiles(taskContent, projectDir);
-          if (fileSnippets) {
-            taskContent += '\n\n' + fileSnippets;
-            console.log(
-              `[SessionManager] appended file snippets for ${sessionId.slice(0, 8)}`,
-            );
-          }
-        } catch (err) {
-          console.warn(
-            `[SessionManager] failed to read task files for ${sessionId.slice(0, 8)}: ${err}`,
-          );
-        }
-      }
-
-      // Build the session context to inject into the worktree's CLAUDE.md.
-      let sessionContextContent: string | undefined;
-      if (sessionType === 'review') {
-        sessionContextContent = buildReviewClaudeMd(taskName ?? taskUrl);
-      } else {
-        try {
-          sessionContextContent = buildSessionContext({
-            taskName: taskName ?? taskUrl,
-            taskUrl,
-            projectContextUrl,
-            targetBranch: startingPoint,
-            projectDir,
-            worktreePath,
-            verify:
-              orchConfig.verify.length > 0 ? orchConfig.verify : undefined,
-            bashRules:
-              orchConfig.bash_rules.length > 0
-                ? orchConfig.bash_rules
-                : undefined,
-            taskBackend:
-              project.taskSource === 'yaml'
-                ? 'local'
-                : project.taskSource === 'github'
-                  ? 'github'
-                  : 'notion',
-            taskContent,
-            gitMode: project.gitMode,
-          });
-        } catch (err) {
-          console.error(
-            `[SessionManager] failed to build session context for ${sessionId}: ${err}`,
-          );
-        }
-      }
-
-      const mcpConfigPath = writeMcpConfig(
-        worktreePath,
-        orchConfig.mcp_servers,
-      );
-      if (mcpConfigPath) {
-        console.log(
-          `[SessionManager] wrote MCP config to ${mcpConfigPath} for ${sessionId.slice(0, 8)}`,
-        );
-      }
-
-      const session = new AgentSession(
-        sessionId,
-        taskUrl,
-        projectContextUrl,
-        undefined, // taskBackendOverride — production resolves via getTaskBackend(projectId)
-        worktreePath,
-        sessionTaskId,
-        undefined,
-        customPrompt,
-        sessionType,
-        this,
-        this.githubClient,
-        orchConfig.allowed_tools,
-        sessionMode === 'api' ? sessionContextContent : undefined,
-        runner,
-        projectId,
-        mcpConfigPath,
-      );
-
-      if (sessionMode === 'cli' && sessionContextContent) {
-        // Write orchestrator content to root CLAUDE.md in the worktree via injectContextFile
-        // so that the per-session revert lock is honoured (new sessions always have an empty
-        // lock, so this always proceeds on first launch).
-        // No assume-unchanged (blocked rebase/checkout). No .claude/CLAUDE.md
-        // (worktrees don't resolve project-level CLAUDE.md correctly).
-        session.injectContextFile('CLAUDE.md', sessionContextContent);
-        console.log(
-          `[SessionManager] orchestrator CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`,
-        );
-      }
-
-      this.pendingStarts.delete(sessionId);
-      this.sessions.set(sessionId, session);
-      this.wireSession(sessionId, session, projectDir, worktreePath);
-    };
-
-    // Insert session into SQLite BEFORE launching the subprocess so FK
-    // constraints on session_events are never violated by events that arrive
-    // before the row exists (review sessions have no awaits in launchSession,
-    // so the CLI can spawn and emit events within the same tick).
+    // Insert session into SQLite before firing background chain so FK constraints
+    // on session_events are never violated.
     const startedAt = Date.now();
     insertSession({
       session_id: sessionId,
@@ -811,12 +579,50 @@ export class SessionManager extends EventEmitter {
       },
     });
 
-    // Launch async — session card is already visible to the frontend via the broadcast below.
-    launchSession().catch((err) => {
+    this.pendingStarts.set(sessionId, { sessionType });
+
+    // Look up the PR for review sessions so the card can display "Review of #N".
+    const reviewPr =
+      sessionType === 'review' && sessionTaskId
+        ? (getPRByNotionTaskId(sessionTaskId) ?? undefined)
+        : undefined;
+    const reviewPrNumber = reviewPr?.pr_number;
+    const reviewCodeSessionId = reviewPr?.session_id ?? undefined;
+
+    // Broadcast session_starting immediately — caller-observed completion is ~50ms.
+    this.emit('message', {
+      type: 'session_starting',
+      sessionId,
+      taskName: taskName ?? taskUrl,
+      notionTaskUrl: taskUrl,
+      ...(taskType != null && { taskType }),
+      ...(sessionType !== 'standard' && { sessionType }),
+      ...(reviewPrNumber != null && { prNumber: reviewPrNumber }),
+      ...(reviewCodeSessionId != null && {
+        codeSessionId: reviewCodeSessionId,
+      }),
+      started_at: startedAt,
+      project_id: projectId,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      ...(sessionTaskId && { taskId: sessionTaskId }),
+    } satisfies ServerMessage);
+
+    // Fire-and-forget the heavy chain (git fetch → worktree add → bootstrap → spawn).
+    // Caller-observed start() completion time is <100ms for the common case.
+    void this.completeStart(
+      sessionId,
+      taskUrl,
+      projectContextUrl,
+      options ?? {},
+      startedAt,
+    ).catch(async (err) => {
       this.pendingStarts.delete(sessionId);
       console.error(
-        `[SessionManager] launchSession failed for ${sessionId}: ${err}`,
+        `[SessionManager] completeStart failed for ${sessionId}:`,
+        err,
       );
+      await this.cleanupPartialWorktree(sessionId);
       this.markSessionErrored(sessionId, 'error', 'launch_failed');
       this.emit('message', {
         type: 'error',
@@ -824,6 +630,239 @@ export class SessionManager extends EventEmitter {
       } satisfies ServerMessage);
     });
 
+    return sessionId;
+  }
+
+  /**
+   * Background chain: git fetch → worktree add → bootstrap → spawn runner.
+   * Dispatched fire-and-forget from start(). Broadcasts session_started on success.
+   * On failure, the catch handler in start() calls cleanupPartialWorktree + markSessionErrored.
+   */
+  private async completeStart(
+    sessionId: string,
+    taskUrl: string,
+    projectContextUrl: string,
+    options: StartOptions,
+    startedAt: number,
+  ): Promise<void> {
+    const {
+      taskType,
+      sessionType = 'standard',
+      customPrompt,
+      projectId = '',
+      taskName,
+      milestoneId = null,
+      taskId: precomputedTaskId,
+    } = options;
+
+    const project = getProjectById(projectId)!;
+    const projectDir = normalizePath(project.projectDir);
+    const worktreePath = path.join(
+      projectDir,
+      '.claude',
+      'worktrees',
+      sessionId,
+    );
+    const isLocalOnly = project.gitMode === 'local-only';
+    const { startingPoint, milestoneSlug } = resolveStartingPoint(
+      project,
+      milestoneId,
+    );
+    const sessionTaskId =
+      precomputedTaskId ??
+      deriveTaskId(project.taskSource ?? 'notion', taskUrl);
+
+    if (!isLocalOnly) {
+      if (milestoneSlug) {
+        try {
+          ensureMilestoneBranch(milestoneSlug, projectDir, project.baseBranch);
+        } catch (err) {
+          console.warn(
+            `[SessionManager] ensureMilestoneBranch failed (continuing): ${err}`,
+          );
+        }
+      } else {
+        try {
+          await exec(`git fetch origin ${project.baseBranch}`, {
+            cwd: projectDir,
+            timeout: 30_000,
+          });
+        } catch (err) {
+          console.warn(
+            `[SessionManager] git fetch origin ${project.baseBranch} failed (continuing with local ref): ${err}`,
+          );
+        }
+      }
+    }
+
+    const worktreeBase =
+      isLocalOnly || startingPoint !== project.baseBranch
+        ? startingPoint
+        : `origin/${project.baseBranch}`;
+
+    const featureBranch = taskName ? `feature/${slugify(taskName)}` : null;
+    try {
+      if (featureBranch) {
+        await exec(
+          `git worktree add -b "${featureBranch}" "${worktreePath}" ${worktreeBase}`,
+          { cwd: projectDir },
+        );
+      } else {
+        await exec(
+          `git worktree add --detach "${worktreePath}" ${worktreeBase}`,
+          { cwd: projectDir },
+        );
+      }
+    } catch (err) {
+      const e = err as { stderr?: string | Buffer; message: string };
+      const stderr = e.stderr ? e.stderr.toString() : '';
+      const fullMsg =
+        `${e.message}${stderr ? `\nstderr: ${stderr}` : ''}`.trim();
+      console.error(
+        `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
+      );
+      throw new WorktreeSetupError(fullMsg, {
+        isBranchAlreadyExists: /A branch named .* already exists/.test(stderr),
+      });
+    }
+
+    const isUnixStylePath =
+      worktreePath.startsWith('/c/') || worktreePath.startsWith('/C/');
+    console.log(
+      `[SessionManager] worktree created: path=${worktreePath} startingPoint=${startingPoint}` +
+        (isUnixStylePath
+          ? ' [WARNING: Unix-style path detected — may not resolve correctly on Windows]'
+          : ''),
+    );
+
+    const orchConfig = loadOrchestratorConfig(projectDir);
+
+    if (orchConfig.bootstrap_script) {
+      try {
+        await exec(`bash ${orchConfig.bootstrap_script} "${worktreePath}"`, {
+          cwd: projectDir,
+          timeout: 120_000,
+        });
+        console.log(
+          `[SessionManager] bootstrap script completed for ${sessionId.slice(0, 8)}`,
+        );
+      } catch (err) {
+        console.warn(
+          `[SessionManager] bootstrap script failed for ${sessionId.slice(0, 8)} (continuing): ${err}`,
+        );
+      }
+    }
+
+    const sessionMode = runtimeSettings.session_mode;
+    const runner =
+      sessionMode === 'api'
+        ? new ApiSessionRunner(sessionId)
+        : getCorporateMode().gates.dockerMandatory
+          ? new DockerSessionRunner(sessionId)
+          : new CliSessionRunner(sessionId);
+
+    let taskContent: string | undefined;
+    if (sessionType !== 'review' && sessionTaskId) {
+      try {
+        taskContent =
+          await getTaskBackend(projectId).fetchTaskPage(sessionTaskId);
+        console.log(
+          `[SessionManager] pre-fetched task content for ${sessionId.slice(0, 8)} (${taskContent.length} chars)`,
+        );
+      } catch (err) {
+        console.warn(
+          `[SessionManager] failed to pre-fetch task content for ${sessionId.slice(0, 8)} — session will fetch from task backend: ${err}`,
+        );
+      }
+    }
+
+    if (taskContent) {
+      try {
+        const fileSnippets = readTaskFiles(taskContent, projectDir);
+        if (fileSnippets) {
+          taskContent += '\n\n' + fileSnippets;
+          console.log(
+            `[SessionManager] appended file snippets for ${sessionId.slice(0, 8)}`,
+          );
+        }
+      } catch (err) {
+        console.warn(
+          `[SessionManager] failed to read task files for ${sessionId.slice(0, 8)}: ${err}`,
+        );
+      }
+    }
+
+    let sessionContextContent: string | undefined;
+    if (sessionType === 'review') {
+      sessionContextContent = buildReviewClaudeMd(taskName ?? taskUrl);
+    } else {
+      try {
+        sessionContextContent = buildSessionContext({
+          taskName: taskName ?? taskUrl,
+          taskUrl,
+          projectContextUrl,
+          targetBranch: startingPoint,
+          projectDir,
+          worktreePath,
+          verify: orchConfig.verify.length > 0 ? orchConfig.verify : undefined,
+          bashRules:
+            orchConfig.bash_rules.length > 0
+              ? orchConfig.bash_rules
+              : undefined,
+          taskBackend:
+            project.taskSource === 'yaml'
+              ? 'local'
+              : project.taskSource === 'github'
+                ? 'github'
+                : 'notion',
+          taskContent,
+          gitMode: project.gitMode,
+        });
+      } catch (err) {
+        console.error(
+          `[SessionManager] failed to build session context for ${sessionId}: ${err}`,
+        );
+      }
+    }
+
+    const mcpConfigPath = writeMcpConfig(worktreePath, orchConfig.mcp_servers);
+    if (mcpConfigPath) {
+      console.log(
+        `[SessionManager] wrote MCP config to ${mcpConfigPath} for ${sessionId.slice(0, 8)}`,
+      );
+    }
+
+    const session = new AgentSession(
+      sessionId,
+      taskUrl,
+      projectContextUrl,
+      undefined,
+      worktreePath,
+      sessionTaskId,
+      undefined,
+      customPrompt,
+      sessionType,
+      this,
+      this.githubClient,
+      orchConfig.allowed_tools,
+      sessionMode === 'api' ? sessionContextContent : undefined,
+      runner,
+      projectId,
+      mcpConfigPath,
+    );
+
+    if (sessionMode === 'cli' && sessionContextContent) {
+      session.injectContextFile('CLAUDE.md', sessionContextContent);
+      console.log(
+        `[SessionManager] orchestrator CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`,
+      );
+    }
+
+    this.pendingStarts.delete(sessionId);
+    this.sessions.set(sessionId, session);
+    this.wireSession(sessionId, session, projectDir, worktreePath);
+
+    // Update task status to In Progress (fire-and-forget; failures logged, not thrown).
     if (sessionType === 'standard') {
       getTaskBackend(projectId)
         .updateStatus(sessionTaskId, '🔄 In Progress', {
@@ -847,7 +886,7 @@ export class SessionManager extends EventEmitter {
         });
     }
 
-    // Look up the PR for review sessions so the card can display "Review of #N" and link to code session
+    // Look up the PR for review sessions so session_started carries prNumber.
     const reviewPr =
       sessionType === 'review' && sessionTaskId
         ? (getPRByNotionTaskId(sessionTaskId) ?? undefined)
@@ -855,7 +894,7 @@ export class SessionManager extends EventEmitter {
     const reviewPrNumber = reviewPr?.pr_number;
     const reviewCodeSessionId = reviewPr?.session_id ?? undefined;
 
-    // Broadcast session_started so connected frontends see the card immediately
+    // Broadcast session_started — git + bootstrap complete, runner spawned.
     this.emit('message', {
       type: 'session_started',
       sessionId,
@@ -873,8 +912,51 @@ export class SessionManager extends EventEmitter {
       totalOutputTokens: 0,
       ...(sessionTaskId && { taskId: sessionTaskId }),
     } satisfies ServerMessage);
+  }
 
-    return sessionId;
+  /**
+   * Remove a partially-created worktree and its feature branch after a failed
+   * completeStart(). Safe to call even if nothing was created (idempotent).
+   */
+  private async cleanupPartialWorktree(sessionId: string): Promise<void> {
+    const row = getSession(sessionId);
+    if (!row) return;
+
+    const project = getProjectById(row.project_id ?? '');
+    if (!project) return;
+
+    const projectDir = normalizePath(project.projectDir);
+    const worktreePath = row.worktree_path;
+    if (!worktreePath) return;
+
+    if (fs.existsSync(worktreePath)) {
+      try {
+        await exec(`git worktree remove --force "${worktreePath}"`, {
+          cwd: projectDir,
+        });
+        console.log(
+          `[SessionManager] cleanupPartialWorktree: removed worktree for ${sessionId.slice(0, 8)}`,
+        );
+      } catch (err) {
+        console.warn(
+          `[SessionManager] cleanupPartialWorktree: worktree remove failed for ${sessionId.slice(0, 8)}: ${err}`,
+        );
+      }
+    }
+
+    const featureBranch = row.task_name
+      ? `feature/${slugify(row.task_name)}`
+      : null;
+    if (featureBranch) {
+      try {
+        await exec(`git branch -D "${featureBranch}"`, { cwd: projectDir });
+        console.log(
+          `[SessionManager] cleanupPartialWorktree: deleted branch ${featureBranch} for ${sessionId.slice(0, 8)}`,
+        );
+      } catch {
+        // Branch does not exist — idempotent no-op
+      }
+    }
   }
 
   /**

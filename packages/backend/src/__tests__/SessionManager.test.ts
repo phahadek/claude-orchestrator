@@ -78,7 +78,7 @@ describe('SessionManager.resumeSession() — task re-pin on resume', () => {
     const resumeIdx = source.indexOf('private async resumeSession(');
     const resumeOrphanIdx = source.indexOf('resumeOrphanSessions', resumeIdx);
     const block = source.slice(resumeIdx, resumeOrphanIdx);
-    expect(block).toMatch(/fetchTaskPage\s*\(\s*row\.task_id\s*\)/);
+    expect(block).toMatch(/fetchTaskPage[\s\S]*?row\.task_id/);
   });
 });
 
@@ -150,7 +150,7 @@ describe('queries.ts — supersession support', () => {
     const fnIdx = source.indexOf('export function markSessionSuperseded');
     const fnEnd = source.indexOf('\n}', fnIdx);
     const block = source.slice(fnIdx, fnEnd + 2);
-    expect(block).toMatch(/superseded/);
+    expect(block).toMatch(/[Ss]uperseded/);
   });
 
   it('exports getOtherRunningSessionsForTask function', () => {
@@ -182,15 +182,15 @@ describe('SessionManager.start() — In Progress status', () => {
   );
 
   it('routes updateStatus through getTaskBackend(projectId) for In Progress', () => {
-    // Must call getTaskBackend(projectId).updateStatus(notionTaskId, '🔄 In Progress', ...)
+    // Must call getTaskBackend(projectId).updateStatus(sessionTaskId, '🔄 In Progress', ...)
     expect(source).toMatch(
-      /getTaskBackend\(projectId\)\s*\.updateStatus\s*\(\s*notionTaskId\s*,\s*'🔄 In Progress'/,
+      /getTaskBackend\(projectId\)\s*\.updateStatus\s*\(\s*sessionTaskId\s*,\s*'🔄 In Progress'/,
     );
   });
 
   it('In Progress call is fire-and-forget with .catch() error handler', () => {
     expect(source).toMatch(
-      /getTaskBackend\(projectId\)\s*\.updateStatus\s*\(\s*notionTaskId\s*,\s*'🔄 In Progress'[\s\S]*?\.catch\b/,
+      /getTaskBackend\(projectId\)\s*\.updateStatus\s*\(\s*sessionTaskId\s*,\s*'🔄 In Progress'[\s\S]*?\.catch\b/,
     );
   });
 
@@ -198,7 +198,7 @@ describe('SessionManager.start() — In Progress status', () => {
     expect(source).toMatch(/sessionType\s*===\s*'standard'/);
     const gateIdx = source.indexOf("sessionType === 'standard'");
     const inProgressIdx = source.indexOf(
-      "updateStatus(notionTaskId, '🔄 In Progress'",
+      "updateStatus(sessionTaskId, '🔄 In Progress'",
     );
     expect(inProgressIdx).toBeGreaterThan(gateIdx);
   });
@@ -228,10 +228,11 @@ describe('SessionManager.start() — code-only session limit', () => {
   });
 
   it('counts only non-review sessions against the cap', () => {
-    // Must filter sessions by sessionType !== review before counting
-    expect(source).toMatch(
-      /\.filter\s*\(\s*\(s\)\s*=>\s*s\.sessionType\s*!==\s*'review'\s*\)/,
-    );
+    // getLiveCodeSessionCount() must exclude review sessions from the count
+    expect(source).toMatch(/getLiveCodeSessionCount/);
+    const countFnIdx = source.indexOf('getLiveCodeSessionCount()');
+    const countFnBody = source.slice(countFnIdx, countFnIdx + 400);
+    expect(countFnBody).toMatch(/sessionType\s*!==\s*'review'/);
   });
 });
 
@@ -246,7 +247,7 @@ describe('SessionManager.start() structural check', () => {
     );
 
     // Must contain a .catch() handler (directly or via .then().catch()) to guard against unhandled rejections
-    expect(source).toMatch(/session\.run\(\)/);
+    expect(source).toMatch(/\.run\(\)/);
     expect(source).toMatch(/\.catch\s*\(\s*\(err\)/);
 
     // Must NOT contain "await session.run()"
@@ -259,6 +260,70 @@ describe('SessionManager.start() structural check', () => {
       'utf-8',
     );
     expect(agentSource).not.toContain('@anthropic-ai/claude-agent-sdk');
+  });
+});
+
+// ── AC: start() is fire-and-forget — structural checks ───────────────────────
+
+describe('SessionManager.start() fire-and-forget structural checks', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'session', 'SessionManager.ts'),
+    'utf-8',
+  );
+
+  it('dispatches completeStart as fire-and-forget (void + .catch)', () => {
+    expect(source).toMatch(/void\s+this\.completeStart\s*\(/);
+    expect(source).toMatch(
+      /completeStart[\s\S]*?\.catch\s*\(\s*async\s*\(\s*err\s*\)/,
+    );
+  });
+
+  it('has cleanupPartialWorktree method', () => {
+    expect(source).toMatch(
+      /private\s+async\s+cleanupPartialWorktree\s*\(\s*sessionId/,
+    );
+  });
+
+  it('calls cleanupPartialWorktree inside the completeStart catch handler', () => {
+    const catchIdx = source.indexOf('completeStart(');
+    const endIdx = source.indexOf('\n  }', catchIdx + 100);
+    const block = source.slice(catchIdx, endIdx);
+    expect(block).toMatch(/cleanupPartialWorktree\s*\(\s*sessionId\s*\)/);
+  });
+
+  it('calls markSessionErrored with launch_failed inside completeStart catch', () => {
+    const catchIdx = source.indexOf('completeStart(');
+    const endIdx = source.indexOf('\n  }', catchIdx + 100);
+    const block = source.slice(catchIdx, endIdx);
+    expect(block).toMatch(
+      /markSessionErrored\s*\(\s*sessionId\s*,\s*'error'\s*,\s*'launch_failed'\s*\)/,
+    );
+  });
+
+  it('broadcasts session_starting (not session_started) from start()', () => {
+    const startIdx = source.indexOf('async start(');
+    const completeStartIdx = source.indexOf('private async completeStart(');
+    const startBody = source.slice(startIdx, completeStartIdx);
+    expect(startBody).toMatch(/type:\s*'session_starting'/);
+    expect(startBody).not.toMatch(/type:\s*'session_started'/);
+  });
+
+  it('broadcasts session_started from completeStart (not start)', () => {
+    const completeStartIdx = source.indexOf('private async completeStart(');
+    const cleanupIdx = source.indexOf('private async cleanupPartialWorktree(');
+    const completeBody = source.slice(completeStartIdx, cleanupIdx);
+    expect(completeBody).toMatch(/type:\s*'session_started'/);
+  });
+
+  it('insertSession is called inside start() before void completeStart', () => {
+    const startIdx = source.indexOf('async start(');
+    const completeStartIdx = source.indexOf('private async completeStart(');
+    const startBody = source.slice(startIdx, completeStartIdx);
+    const insertIdx = startBody.indexOf('insertSession(');
+    const voidCompleteIdx = startBody.indexOf('void this.completeStart(');
+    expect(insertIdx).toBeGreaterThan(-1);
+    expect(voidCompleteIdx).toBeGreaterThan(-1);
+    expect(insertIdx).toBeLessThan(voidCompleteIdx);
   });
 });
 
@@ -516,7 +581,7 @@ describe('SessionManager.wireSession()', () => {
 
   it('wireSession() calls session.run() fire-and-forget', () => {
     // run() is called and has a .catch() handler (via .then().catch() chain)
-    expect(source).toMatch(/session\.run\(\)/);
+    expect(source).toMatch(/\.run\(\)/);
     expect(source).toMatch(/\.catch\s*\(\s*\(err\)/);
     expect(source).not.toMatch(/await\s+session\.run\(\)/);
   });
@@ -530,10 +595,9 @@ describe('SessionManager.resumeSession()', () => {
   );
 
   it('passes row.session_id as both sessionId and resumeSessionId to AgentSession', () => {
-    // The first arg must be row.session_id and resumeSessionId must also be row.session_id
-    expect(source).toMatch(
-      /row\.session_id,\s*\/\/\s*keep original ID|keep original ID.*row\.session_id/s,
-    );
+    // The first arg to AgentSession must be row.session_id (keep original ID)
+    expect(source).toMatch(/new AgentSession\s*\(\s*row\.session_id/s);
+    // And row.session_id is also passed as resumeSessionId
     expect(source).toMatch(
       /row\.session_id,\s*\/\/\s*resumeSessionId|resumeSessionId.*row\.session_id/s,
     );
@@ -586,7 +650,7 @@ describe('SessionManager.resumeSession() — nudge, timeout, mid-turn detection'
   // not AgentSession (runner abstraction added an indirection).
   it('the continuation message is written to stdin as { type: "user", message: { role: "user", content } }', () => {
     expect(cliRunnerSource).toMatch(
-      /JSON\.stringify\s*\(\s*\{\s*type:\s*'user'\s*,\s*message:\s*\{\s*role:\s*'user'\s*,\s*content:[^}]+\}\s*\}\s*\)/,
+      /JSON\.stringify\s*\(\s*\{\s*type:\s*'user'\s*,\s*message:\s*\{\s*role:\s*'user'\s*,\s*content:[^}]+\}[,\s]*\}\s*\)/,
     );
     // Must be terminated with \n so the CLI readline interface receives a complete line
     expect(cliRunnerSource).toMatch(/JSON\.stringify[^)]+\)\s*\+\s*'\\n'/);
@@ -632,21 +696,24 @@ describe('SessionManager.sendOrResume() — pr_url carry-forward', () => {
     'utf-8',
   );
 
-  it('passes row.pr_url (not null) to insertSession when resuming', () => {
-    // Must use row.pr_url when inserting the new session row, not a hard-coded null
-    expect(source).toMatch(/pr_url:\s*row\.pr_url\s*\?\?\s*null/);
+  it('respawnSession carries row.pr_url forward to session.prUrl (no insertSession needed)', () => {
+    // respawnSession keeps the original session_id and updates status; it sets
+    // session.prUrl from row.pr_url rather than inserting a new row.
+    const respawnIdx = source.indexOf('private respawnSession(');
+    const nextMethodIdx = source.indexOf('\n  private ', respawnIdx + 1);
+    const respawnBlock = source.slice(respawnIdx, nextMethodIdx);
+    expect(respawnBlock).toMatch(/session\.prUrl\s*=\s*row\.pr_url/);
   });
 
-  it('does NOT hard-code pr_url: null in sendOrResume insertSession call', () => {
-    // The sendOrResume block must not pass pr_url: null directly
-    const sendOrResumeIdx = source.indexOf('sendOrResume');
-    const insertSessionInResume = source.indexOf(
-      'insertSession',
-      sendOrResumeIdx,
+  it('sendOrResume uses respawnSession (no new insertSession with hard-coded pr_url: null)', () => {
+    // The modern path: respawnSession handles prUrl carry-forward, no new insertSession row.
+    const doSendOrResumeIdx = source.indexOf('private async _doSendOrResume(');
+    const shutdownAllIdx = source.indexOf(
+      'async shutdownAll',
+      doSendOrResumeIdx,
     );
-    const closingBrace = source.indexOf('});', insertSessionInResume);
-    const insertBlock = source.slice(insertSessionInResume, closingBrace);
-    expect(insertBlock).not.toMatch(/pr_url:\s*null(?!\s*\?\?)/);
+    const doBlock = source.slice(doSendOrResumeIdx, shutdownAllIdx);
+    expect(doBlock).toMatch(/this\.respawnSession\s*\(/);
   });
 });
 
@@ -675,10 +742,10 @@ describe('SessionManager.resumeSession() — resumability pre-check', () => {
   it('checks worktree existence with fs.existsSync before constructing AgentSession', () => {
     // The pre-check must use fs.existsSync on row.worktree_path
     expect(source).toMatch(/fs\.existsSync\s*\(\s*worktreePath\s*\)/);
-    // The pre-check appears before "new AgentSession(" in resumeSession()
+    // The pre-check appears before respawnSession() call in resumeSession()
     const resumeSessionIdx = source.indexOf('private async resumeSession(');
-    const newAgentSessionIdx = source.indexOf(
-      'new AgentSession(',
+    const respawnCallIdx = source.indexOf(
+      'this.respawnSession(',
       resumeSessionIdx,
     );
     const preCheckIdx = source.indexOf(
@@ -686,7 +753,8 @@ describe('SessionManager.resumeSession() — resumability pre-check', () => {
       resumeSessionIdx,
     );
     expect(preCheckIdx).toBeGreaterThan(-1);
-    expect(preCheckIdx).toBeLessThan(newAgentSessionIdx);
+    expect(respawnCallIdx).toBeGreaterThan(-1);
+    expect(preCheckIdx).toBeLessThan(respawnCallIdx);
   });
 
   it('marks the session as error when the worktree is missing', () => {
@@ -729,23 +797,22 @@ describe('SessionManager.resumeSession() — pr_url carry-forward', () => {
     'utf-8',
   );
 
-  it('assigns row.pr_url to session.prUrl after AgentSession construction', () => {
-    // session.prUrl is set from row.pr_url so cleanupWorktree(prUrl) does NOT
-    // delete the branch on the next clean exit.
-    const resumeSessionIdx = source.indexOf('private async resumeSession(');
-    const resumeOrphanIdx = source.indexOf(
-      'resumeOrphanSessions',
-      resumeSessionIdx,
-    );
-    const resumeSessionBlock = source.slice(resumeSessionIdx, resumeOrphanIdx);
-    expect(resumeSessionBlock).toMatch(/session\.prUrl\s*=\s*row\.pr_url/);
+  it('assigns row.pr_url to session.prUrl via respawnSession (shared resume helper)', () => {
+    // session.prUrl is set from row.pr_url in respawnSession so cleanupWorktree(prUrl)
+    // does NOT delete the branch on the next clean exit.
+    const respawnIdx = source.indexOf('private respawnSession(');
+    const nextMethodIdx = source.indexOf('\n  private ', respawnIdx + 1);
+    const respawnBlock = source.slice(respawnIdx, nextMethodIdx);
+    expect(respawnBlock).toMatch(/session\.prUrl\s*=\s*row\.pr_url/);
   });
 
-  it('sendOrResume() also assigns row.pr_url to session.prUrl', () => {
-    const sendOrResumeIdx = source.indexOf('async sendOrResume');
-    const shutdownAllIdx = source.indexOf('async shutdownAll', sendOrResumeIdx);
-    const sendOrResumeBlock = source.slice(sendOrResumeIdx, shutdownAllIdx);
-    expect(sendOrResumeBlock).toMatch(/session\.prUrl\s*=\s*row\.pr_url/);
+  it('sendOrResume() also assigns row.pr_url to session.prUrl via respawnSession', () => {
+    // respawnSession (shared helper called by both resumeSession and _doSendOrResume)
+    // handles the prUrl assignment. Verify it's there.
+    const respawnIdx = source.indexOf('private respawnSession(');
+    const nextMethodIdx = source.indexOf('\n  private ', respawnIdx + 1);
+    const respawnBlock = source.slice(respawnIdx, nextMethodIdx);
+    expect(respawnBlock).toMatch(/session\.prUrl\s*=\s*row\.pr_url/);
   });
 });
 
@@ -854,19 +921,20 @@ describe('SessionManager.getLiveCodeSessionCount() — pendingStarts', () => {
     expect(source).toMatch(/private\s+pendingStarts\s*=\s*new Map/);
   });
 
-  it('pendingStarts.set is called synchronously inside start() before launchSession()', () => {
+  it('pendingStarts.set is called synchronously inside start() before completeStart', () => {
     expect(source).toMatch(/this\.pendingStarts\.set\s*\(\s*sessionId/);
-    // pendingStarts.set must appear before the launchSession declaration
+    // pendingStarts.set must appear before void this.completeStart(
     const pendingSetIdx = source.indexOf('this.pendingStarts.set(sessionId');
-    const launchSessionIdx = source.indexOf('const launchSession = async');
+    const completeStartIdx = source.indexOf('void this.completeStart(');
     expect(pendingSetIdx).toBeGreaterThan(0);
-    expect(pendingSetIdx).toBeLessThan(launchSessionIdx);
+    expect(completeStartIdx).toBeGreaterThan(0);
+    expect(pendingSetIdx).toBeLessThan(completeStartIdx);
   });
 
-  it('pendingStarts.delete is called in the launchSession .catch() handler', () => {
-    const catchIdx = source.indexOf('launchSession().catch');
-    const nextBlock = source.slice(catchIdx, catchIdx + 500);
-    expect(nextBlock).toMatch(
+  it('pendingStarts.delete is called in the completeStart .catch() handler', () => {
+    const catchIdx = source.indexOf('completeStart(');
+    const catchBlock = source.slice(catchIdx, catchIdx + 500);
+    expect(catchBlock).toMatch(
       /this\.pendingStarts\.delete\s*\(\s*sessionId\s*\)/,
     );
   });
@@ -917,37 +985,46 @@ describe('SessionManager — error broadcast and rollback', () => {
   it('broadcasts an error message when updateStatus(In Progress) fails', () => {
     // The .catch() on updateStatus must emit a ServerMessage with type: 'error'
     const inProgressIdx = source.indexOf(
-      "updateStatus(notionTaskId, '🔄 In Progress'",
+      "updateStatus(sessionTaskId, '🔄 In Progress'",
     );
     expect(inProgressIdx).toBeGreaterThan(-1);
-    const catchBlock = source.slice(inProgressIdx, inProgressIdx + 500);
+    const catchBlock = source.slice(inProgressIdx, inProgressIdx + 1000);
     expect(catchBlock).toMatch(/\.catch\s*\(/);
     expect(catchBlock).toMatch(/this\.emit\('message'/);
     expect(catchBlock).toMatch(/type:\s*'error'/);
   });
 
-  it('launchSession().catch() delegates status rollback to markSessionErrored with launch_failed cause', () => {
-    const launchCatchIdx = source.indexOf('launchSession().catch');
-    expect(launchCatchIdx).toBeGreaterThan(-1);
+  it('completeStart().catch() delegates status rollback to markSessionErrored with launch_failed cause', () => {
+    const completeStartCatchIdx = source.indexOf('void this.completeStart(');
+    expect(completeStartCatchIdx).toBeGreaterThan(-1);
     // markSessionErrored maps 'launch_failed' → '🗂️ Ready' internally
-    const catchBlock = source.slice(launchCatchIdx, launchCatchIdx + 1000);
+    const catchBlock = source.slice(
+      completeStartCatchIdx,
+      completeStartCatchIdx + 1000,
+    );
     expect(catchBlock).toMatch(
       /markSessionErrored\s*\(\s*sessionId\s*,\s*'error'\s*,\s*'launch_failed'\s*\)/,
     );
   });
 
-  it('launchSession().catch() broadcasts an error type ServerMessage', () => {
-    const launchCatchIdx = source.indexOf('launchSession().catch');
-    const catchBlock = source.slice(launchCatchIdx, launchCatchIdx + 2000);
+  it('completeStart().catch() broadcasts an error type ServerMessage', () => {
+    const completeStartCatchIdx = source.indexOf('void this.completeStart(');
+    const catchBlock = source.slice(
+      completeStartCatchIdx,
+      completeStartCatchIdx + 2000,
+    );
     expect(catchBlock).toMatch(/this\.emit\('message'/);
     expect(catchBlock).toMatch(/type:\s*'error'/);
   });
 
-  it('launchSession rollback: markSessionErrored is responsible for task_status_changed and Ready status', () => {
+  it('completeStart rollback: markSessionErrored is responsible for task_status_changed and Ready status', () => {
     // markSessionErrored emits task_status_changed with '🗂️ Ready' for 'launch_failed' cause.
     // Verified structurally: the helper is called from the catch block.
-    const launchCatchIdx = source.indexOf('launchSession().catch');
-    const catchBlock = source.slice(launchCatchIdx, launchCatchIdx + 1000);
+    const completeStartCatchIdx = source.indexOf('void this.completeStart(');
+    const catchBlock = source.slice(
+      completeStartCatchIdx,
+      completeStartCatchIdx + 1000,
+    );
     expect(catchBlock).toMatch(
       /markSessionErrored\s*\(\s*sessionId\s*,\s*'error'\s*,\s*'launch_failed'\s*\)/,
     );

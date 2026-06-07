@@ -226,7 +226,7 @@ describe('SessionManager — updateStatus("In Progress") failure broadcasts erro
     expect(errorMsgs.some((m) => m.message.includes('In Progress'))).toBe(true);
   });
 
-  it('emits session_started before updateStatus rejects', async () => {
+  it('emits session_starting during start() and session_started after completeStart', async () => {
     fakeBackend.updateStatus.mockRejectedValue(new Error('task not found'));
 
     const sm = new SessionManager();
@@ -239,7 +239,11 @@ describe('SessionManager — updateStatus("In Progress") failure broadcasts erro
       taskKind: 'milestone',
     });
 
-    // session_started is broadcast during start() execution, before return
+    // session_starting is broadcast synchronously inside start(), before return
+    expect(msgs.find((m) => m.type === 'session_starting')).toBeDefined();
+
+    // session_started fires from completeStart() in the background — flush microtasks
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(msgs.find((m) => m.type === 'session_started')).toBeDefined();
   });
 });
@@ -392,6 +396,9 @@ describe('SessionManager — YAML task dispatch integration', () => {
       taskKind: 'milestone',
     });
 
+    // session_started fires from completeStart() in background — flush microtasks
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
     const started = msgs.find((m) => m.type === 'session_started') as
       | { type: 'session_started'; notionTaskUrl: string }
       | undefined;
@@ -411,6 +418,9 @@ describe('SessionManager — YAML task dispatch integration', () => {
       taskKind: 'milestone',
     });
 
+    // Flush completeStart() microtasks before checking for errors
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
     expect(msgs.filter((m) => m.type === 'error')).toHaveLength(0);
   });
 
@@ -424,6 +434,9 @@ describe('SessionManager — YAML task dispatch integration', () => {
       projectId: PROJECT_ID,
       taskKind: 'milestone',
     });
+
+    // session_started fires from completeStart() in background — flush microtasks
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(msgs.find((m) => m.type === 'session_started')).toBeDefined();
     expect(msgs.filter((m) => m.type === 'error')).toHaveLength(0);

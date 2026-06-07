@@ -192,7 +192,7 @@ ${
 
 1. Read \`tasks.yaml\` in the project root for task context (skip remote fetch).
 2. The orchestrator creates the worktree on a named feature branch. Verify with \`git branch --show-current\` — it should output \`feature/<task-name>\`.`
-      : `1. ${fetchInstruction(taskBackend)} Fetch only the task listed above — do NOT browse the board for other tasks.
+      : `1. ${fetchInstruction(taskBackend)} Retrieve only the pre-assigned task above — do NOT browse the board to pick up additional work.
 2. The orchestrator creates the worktree on a named feature branch. Verify with \`git branch --show-current\` — it should output \`feature/<task-name>\`.`
 }
 3. Implement the task per the acceptance criteria.

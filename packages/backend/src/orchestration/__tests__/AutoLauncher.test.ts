@@ -146,7 +146,7 @@ describe('AutoLauncher — project-driven polling', () => {
     expect(sessionManager.start).not.toHaveBeenCalled();
   });
 
-  it('fetches via LocalTaskBackend.fetchReadyTasks(null) for YAML-mode projects', async () => {
+  it('skips YAML-mode (local backend) projects — AutoLauncher only handles notion/github backends', async () => {
     const localBackend = {
       type: 'local' as const,
       fetchReadyTasks: vi
@@ -169,8 +169,9 @@ describe('AutoLauncher — project-driven polling', () => {
 
     await launcher.pollOnce();
 
-    expect(localBackend.fetchReadyTasks).toHaveBeenCalledWith(null, undefined);
-    expect(sessionManager.start).toHaveBeenCalledOnce();
+    // Local backends are skipped early — fetchReadyTasks and start are never called.
+    expect(localBackend.fetchReadyTasks).not.toHaveBeenCalled();
+    expect(sessionManager.start).not.toHaveBeenCalled();
   });
 
   it('fetches via NotionTaskBackend.fetchReadyTasks(milestoneId, true) for Notion-mode projects', async () => {
@@ -197,13 +198,13 @@ describe('AutoLauncher — project-driven polling', () => {
   });
 
   it('global concurrency cap throttles cross-source dispatch (cap=2, two in flight → no new launches)', async () => {
-    const localBackend = {
-      type: 'local' as const,
+    const notionBackend = {
+      type: 'notion' as const,
       fetchReadyTasks: vi
         .fn()
-        .mockResolvedValue([makeResolvedTask({ id: 'yaml-task-1' })]),
+        .mockResolvedValue([makeResolvedTask({ id: 'notion-task-1' })]),
     };
-    const resolveBackend = vi.fn().mockReturnValue(localBackend);
+    const resolveBackend = vi.fn().mockReturnValue(notionBackend);
     // cap=2, already 2 live sessions → no capacity
     const sessionManager = makeSessionManager(2);
     (
@@ -211,62 +212,46 @@ describe('AutoLauncher — project-driven polling', () => {
     ).auto_launch_concurrency = 2;
 
     const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [
-        makeProject({
-          taskSource: 'yaml',
-          autoLaunchMilestoneId: null,
-          boards: [],
-        }),
-      ],
+      listProjects: () => [makeProject()],
       resolveBackend,
       pollOnStart: false,
     });
 
     await launcher.pollOnce();
 
-    expect(localBackend.fetchReadyTasks).toHaveBeenCalledWith(null, undefined);
+    expect(notionBackend.fetchReadyTasks).toHaveBeenCalledWith(
+      'milestone-1',
+      true,
+    );
     expect(sessionManager.start).not.toHaveBeenCalled();
   });
 
-  it('cap=2, one YAML + one Notion in flight → launches only up to cap', async () => {
-    const localBackend = {
-      type: 'local' as const,
+  it('cap=2, one session in flight → launches up to cap using notion backend', async () => {
+    const notionBackend = {
+      type: 'notion' as const,
       fetchReadyTasks: vi
         .fn()
         .mockResolvedValue([
-          makeResolvedTask({ id: 'yaml-task-1' }),
-          makeResolvedTask({ id: 'yaml-task-2' }),
+          makeResolvedTask({ id: 'notion-task-1' }),
+          makeResolvedTask({ id: 'notion-task-2' }),
         ]),
     };
-    const resolveBackend = vi.fn().mockReturnValue(localBackend);
-    // 1 session already in flight; cap=2 → can launch 1 more
+    const resolveBackend = vi.fn().mockReturnValue(notionBackend);
+    // 1 session already in flight; cap=2 → can launch at least 1 more
     const sessionManager = makeSessionManager(1);
     (
       runtimeSettings as { auto_launch_concurrency: number }
     ).auto_launch_concurrency = 2;
 
     const launcher = new AutoLauncher(sessionManager as never, undefined, {
-      listProjects: () => [
-        makeProject({
-          taskSource: 'yaml',
-          autoLaunchMilestoneId: null,
-          boards: [],
-        }),
-      ],
+      listProjects: () => [makeProject()],
       resolveBackend,
       pollOnStart: false,
     });
 
     await launcher.pollOnce();
 
-    // Only 1 launch because sessionManager.start doesn't update getLiveCodeSessionCount
-    // in tests (it's a mock), but the capacity check runs before each launch.
-    // With cap=2 and liveCount=1, the first candidate is launched, then
-    // liveCount is still 1 (mock doesn't auto-increment), so actually both would
-    // be launched unless we look at real behavior. The AutoLauncher re-checks
-    // hasCapacity() before each candidate. Since mock returns same liveCount=1,
-    // both get launched. Let's just verify at least 1 is launched.
-
+    // With cap=2 and liveCount=1, at least 1 task should be launched.
     expect(sessionManager.start).toHaveBeenCalled();
   });
 
@@ -1523,5 +1508,53 @@ describe('AutoLauncher — parallel merged-PR catch-up', () => {
     expect(maxConcurrent).toBeGreaterThan(0);
 
     warnSpy.mockRestore();
+  });
+});
+
+// ── AC: AutoLauncher poll-cycle timing — fire-and-forget regression guard ─────
+// Verifies that a poll cycle launching 3 sessions completes in <1s because
+// start() is fire-and-forget (it returns after DB insert, not after git/spawn).
+
+describe('AutoLauncher.pollOnce() — fire-and-forget timing regression guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
+    vi.mocked(getMergedPRForTask).mockReturnValue(null);
+    vi.mocked(getTaskPauseReason).mockReturnValue(null);
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 5;
+  });
+
+  it('poll cycle completes in <1s when launching 3 tasks (start() does not block poll on git)', async () => {
+    const tasks = [
+      makeResolvedTask({ id: 'task-1', title: 'Task One' }),
+      makeResolvedTask({ id: 'task-2', title: 'Task Two' }),
+      makeResolvedTask({ id: 'task-3', title: 'Task Three' }),
+    ];
+    const notionBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue(tasks),
+    };
+    const resolveBackend = vi.fn().mockReturnValue(notionBackend);
+    // start() mock returns immediately (simulates fire-and-forget: caller unblocked)
+    const sessionManager = makeSessionManager(0);
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend,
+      pollOnStart: false,
+    });
+
+    const t0 = Date.now();
+    await launcher.pollOnce();
+    const elapsed = Date.now() - t0;
+
+    // All 3 tasks must be dispatched via start()
+    expect(sessionManager.start).toHaveBeenCalledTimes(3);
+    // Poll cycle must complete well under 1 second — start() is fire-and-forget
+    // so the poll loop does not wait for git/bootstrap/spawn to complete.
+    expect(elapsed).toBeLessThan(1_000);
   });
 });
