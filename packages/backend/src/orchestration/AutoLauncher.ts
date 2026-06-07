@@ -303,7 +303,7 @@ export class AutoLauncher {
       // Non-milestone tasks have no milestoneId — they branch off dev directly.
       const isNonMilestone = nonMilestoneTasks.includes(candidate);
       if (
-        this.launchTask(
+        await this.launchTask(
           project,
           candidate,
           isNonMilestone ? null : milestoneId,
@@ -382,12 +382,12 @@ export class AutoLauncher {
     return this.sessionManager.getLiveCodeSessionCount();
   }
 
-  private launchTask(
+  private async launchTask(
     project: ProjectConfig,
     resolved: ResolvedTask,
     milestoneId: string | null = null,
     taskKind: 'milestone' | 'non_milestone' = 'milestone',
-  ): boolean {
+  ): Promise<boolean> {
     const task = resolved.task;
     const taskUrl =
       task.notionUrl || `https://www.notion.so/${task.id.replace(/-/g, '')}`;
@@ -400,7 +400,7 @@ export class AutoLauncher {
     if (hasActiveSessionForTask(task.id)) return false;
 
     try {
-      const sessionId = this.sessionManager.start(taskUrl, project.contextUrl, {
+      const sessionId = await this.sessionManager.start(taskUrl, project.contextUrl, {
         projectId: project.id,
         taskName: task.title || taskUrl,
         milestoneId,

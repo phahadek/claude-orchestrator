@@ -240,7 +240,7 @@ export class NoOpInvestigator {
     );
 
     try {
-      this.sessionManager.start(taskUrl, projectContextUrl, {
+      await this.sessionManager.start(taskUrl, projectContextUrl, {
         sessionId: investigatorSessionId,
         sessionType: 'review',
         customPrompt: prompt,

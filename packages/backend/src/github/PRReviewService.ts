@@ -349,7 +349,7 @@ export class PRReviewService {
       // 2. Start session with the pre-generated ID. For review sessions, taskUrl
       // is used only for display/storage; the actual task association is carried
       // by taskId so it works for any backend (github, notion, etc.).
-      this.sessionManager.start(projectContextUrl, projectContextUrl, {
+      await this.sessionManager.start(projectContextUrl, projectContextUrl, {
         sessionId,
         sessionType: 'review',
         customPrompt: prompt,
@@ -457,7 +457,7 @@ export class PRReviewService {
       syntheticRepo,
     );
 
-    this.sessionManager.start(projectContextUrl, projectContextUrl, {
+    await this.sessionManager.start(projectContextUrl, projectContextUrl, {
       sessionId,
       sessionType: 'review',
       customPrompt: prompt,
