@@ -215,6 +215,24 @@ describe('SessionManager.start() fire-and-forget timing', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
+  it('returns <100ms even when git worktree add simulates a 5-second delay', async () => {
+    // Simulate a 5-second git worktree add by never resolving the exec callback.
+    // This is equivalent to — and stronger than — a fixed 5-second delay: proves
+    // that start() caller isolation is unconditional, not just "fast enough".
+    vi.mocked(execCb).mockImplementation(() => {
+      // Intentionally never calls the callback — simulates a hung git operation.
+      // completeStart() will be permanently stalled in the background;
+      // start() must still return in <100ms.
+      return {} as never;
+    });
+
+    const sm = new SessionManager();
+    const t0 = Date.now();
+    await sm.start(TASK_URL, CTX_URL, START_OPTS);
+    expect(Date.now() - t0).toBeLessThan(100);
+    // Test ends here. The stalled background promise is abandoned — no 5-second wait.
+  });
+
   it('emits session_starting synchronously before returning', async () => {
     const sm = new SessionManager();
     const msgs: ServerMessage[] = [];

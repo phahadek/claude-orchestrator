@@ -1510,3 +1510,49 @@ describe('AutoLauncher — parallel merged-PR catch-up', () => {
     warnSpy.mockRestore();
   });
 });
+
+// ── AC: AutoLauncher poll-cycle timing — fire-and-forget regression guard ─────
+// Verifies that a poll cycle launching 3 sessions completes in <1s because
+// start() is fire-and-forget (it returns after DB insert, not after git/spawn).
+
+describe('AutoLauncher.pollOnce() — fire-and-forget timing regression guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
+    vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
+    vi.mocked(getMergedPRForTask).mockReturnValue(null);
+    vi.mocked(getTaskPauseReason).mockReturnValue(null);
+    (runtimeSettings as { auto_launch_concurrency: number }).auto_launch_concurrency = 5;
+  });
+
+  it('poll cycle completes in <1s when launching 3 tasks (start() does not block poll on git)', async () => {
+    const tasks = [
+      makeResolvedTask({ id: 'task-1', title: 'Task One' }),
+      makeResolvedTask({ id: 'task-2', title: 'Task Two' }),
+      makeResolvedTask({ id: 'task-3', title: 'Task Three' }),
+    ];
+    const notionBackend = {
+      type: 'notion' as const,
+      fetchReadyTasks: vi.fn().mockResolvedValue(tasks),
+    };
+    const resolveBackend = vi.fn().mockReturnValue(notionBackend);
+    // start() mock returns immediately (simulates fire-and-forget: caller unblocked)
+    const sessionManager = makeSessionManager(0);
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend,
+      pollOnStart: false,
+    });
+
+    const t0 = Date.now();
+    await launcher.pollOnce();
+    const elapsed = Date.now() - t0;
+
+    // All 3 tasks must be dispatched via start()
+    expect(sessionManager.start).toHaveBeenCalledTimes(3);
+    // Poll cycle must complete well under 1 second — start() is fire-and-forget
+    // so the poll loop does not wait for git/bootstrap/spawn to complete.
+    expect(elapsed).toBeLessThan(1_000);
+  });
+});
