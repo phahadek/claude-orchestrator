@@ -326,6 +326,13 @@ export type ServerMessage =
       sessionId: string;
       branch: string;
       commits: number;
+    }
+  | {
+      type: 'task_cache_updated';
+      projectId: string;
+      boardId: string;
+      taskCount: number;
+      refreshedAt: number;
     };
 
 // ── Client → Server ──────────────────────────────────────────────

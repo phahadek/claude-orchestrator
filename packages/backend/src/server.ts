@@ -26,7 +26,12 @@ import {
   setSessionManager,
 } from './routes/sessions';
 import { createPrsRouter, setPRBroadcast } from './routes/prs';
-import { createTasksRouter, setTaskBroadcast } from './routes/tasks';
+import {
+  createTasksRouter,
+  setTaskBroadcast,
+  setTaskCacheRefresher,
+} from './routes/tasks';
+import { TaskCacheRefresher } from './orchestration/TaskCacheRefresher';
 import { analyticsRouter } from './routes/analytics';
 import { projectsRouter, setAutoMerger } from './routes/projects';
 import { requireDeviceAuth, validateWsToken } from './auth/DeviceAuth';
@@ -244,6 +249,13 @@ wss.on('connection', (ws, req) => {
 // reservations (orphan resume reserves slots from this.sessions.size).
 const autoLauncher = new AutoLauncher(sessionManager, broadcast);
 
+// TaskCacheRefresher: background loop that keeps per-project board caches warm.
+// Handlers always serve from cache; the refresher populates it on an interval.
+const taskCacheRefresher = new TaskCacheRefresher(broadcast);
+setTaskCacheRefresher((projectId) =>
+  taskCacheRefresher.refreshProjectById(projectId),
+);
+
 // Auto-updater: polls GitHub Releases on startup + every 24h
 const updateChecker = new UpdateChecker(broadcast);
 setUpdateChecker(updateChecker, broadcast);
@@ -308,6 +320,7 @@ jsonlReader
     orphanedTaskSweeper.start();
     concludedSessionArchiver.start();
     updateChecker.start();
+    taskCacheRefresher.start();
 
     server.listen(PORT, '0.0.0.0', () => {
       console.log(`[server] listening on port ${PORT}`);
@@ -322,6 +335,7 @@ jsonlReader
 async function gracefulShutdown(signal: string) {
   console.log(`[server] ${signal} received — shutting down`);
   autoLauncher.stop();
+  taskCacheRefresher.stop();
   stuckSessionMonitor.stop();
   orphanedTaskSweeper.stop();
   concludedSessionArchiver.stop();

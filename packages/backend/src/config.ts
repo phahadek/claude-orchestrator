@@ -250,6 +250,8 @@ export interface RuntimeSettings {
   auto_archive_sweep_interval_minutes: number;
   /** Model used for large-context task escalation; empty string = feature off. */
   large_task_model: string;
+  /** TaskCacheRefresher: how often (ms) to refresh per-project board caches in background. */
+  task_cache_refresh_interval_ms: number;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -294,4 +296,7 @@ export const runtimeSettings: RuntimeSettings = {
     process.env.AUTO_ARCHIVE_SWEEP_INTERVAL_MINUTES ?? 5,
   ),
   large_task_model: '',
+  task_cache_refresh_interval_ms: Number(
+    process.env.TASK_CACHE_REFRESH_INTERVAL_MS ?? 60_000,
+  ),
 };

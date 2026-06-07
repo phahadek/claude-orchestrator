@@ -92,6 +92,7 @@ function baseStoreReturn(sessions: object[] = []) {
     lastCiBillingBlockedEvent: null,
     lastSessionStartedEvent: null,
     lastSessionEndedEvent: null,
+    lastCacheUpdatedEvent: null,
     prPipelineStages: new Map(),
   };
 }

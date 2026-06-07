@@ -1,18 +1,17 @@
 /**
- * Integration test: WS router fetch_tasks → backend resolution boundary.
+ * Integration test: WS router fetch_tasks cache-only behaviour.
  *
- * Pins the invariant that the router passes msg.milestoneId (a dashboard UUID)
- * directly to the backend without translating it to source_id first. Each backend
- * is responsible for its own resolution:
- *   - NotionTaskBackend: UUID → row.sourceId → NotionClient.fetchReadyTasks(sourceId)
- *   - GithubTaskSourceProvider: UUID → row.sourceId → parseInt → listIssues(milestone: N)
+ * After the background-cache-refresh task the WS fetch_tasks handler no longer
+ * calls any backend directly. It serves from the DB task_cache table:
+ *   - cold cache (null row) → tasks_ready { tasks: [] }
+ *   - warm cache → tasks_ready with resolved ResolvedTask[]
  *
- * Regression guard for commit e57e1e8 which introduced double-resolution.
+ * This is the regression guard that the handler NEVER calls backend.fetchReadyTasks.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// ── DB mock (must hoist before any transitive db import) ──────────────────────
+// ── DB mock ───────────────────────────────────────────────────────────────────
 
 vi.mock('../db/db.js', async () => {
   const { setupTestDb } = await import('../../test/helpers/setupTestDb.js');
@@ -24,6 +23,7 @@ vi.mock('../db/db.js', async () => {
 vi.mock('../db/queries.js', () => ({
   upsertTaskCache: vi.fn(),
   getTasksByStatusFromCache: vi.fn().mockReturnValue([]),
+  getTaskCache: vi.fn(),
 }));
 
 vi.mock('../projects/ProjectService.js', () => ({
@@ -57,19 +57,16 @@ vi.mock('../audit/AuditLog.js', () => ({
 // ── Imports ───────────────────────────────────────────────────────────────────
 
 import { handleMessage } from '../ws/router.js';
-import { NotionTaskBackend } from '../tasks/NotionTaskBackend.js';
-import { GithubTaskSourceProvider } from '../tasks/GithubTaskSourceProvider.js';
 import { ProjectService } from '../projects/ProjectService.js';
 import { getProjectById } from '../config.js';
 import { getTaskBackend } from '../tasks/TaskBackend.js';
-import type { GitHubClient } from '../github/GitHubClient.js';
+import { getTaskCache } from '../db/queries.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const PROJECT_ID = 'proj-test';
 const MILESTONE_UUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
 const NOTION_SOURCE_ID = 'notion-db-deadbeef';
-const GITHUB_SOURCE_ID = '7'; // GitHub milestone number as string
 
 function makeProject() {
   return { id: PROJECT_ID, name: 'Test Project', taskSource: 'notion' };
@@ -95,29 +92,27 @@ function makeFakeSessions() {
   return {} as never;
 }
 
-// ── Notion path ───────────────────────────────────────────────────────────────
+function parseSent(ws: ReturnType<typeof makeFakeWs>): unknown {
+  const calls = vi.mocked(ws.send).mock.calls;
+  if (calls.length === 0) return null;
+  return JSON.parse(calls[0][0] as string);
+}
 
-describe('WS fetch_tasks → NotionTaskBackend: router passes UUID, backend calls NotionClient with source_id', () => {
-  let notionFetchReadyTasks: ReturnType<typeof vi.fn>;
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
+describe('WS fetch_tasks — cache-only path (never calls backend)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-
     vi.mocked(getProjectById).mockReturnValue(makeProject() as never);
     vi.mocked(ProjectService.getMilestone).mockReturnValue(
       makeMilestoneRow(NOTION_SOURCE_ID) as never,
     );
-
-    notionFetchReadyTasks = vi.fn().mockResolvedValue([]);
-    const mockNotionClient = {
-      fetchReadyTasks: notionFetchReadyTasks,
-    } as never;
-
-    const backend = new NotionTaskBackend(mockNotionClient);
-    vi.mocked(getTaskBackend).mockReturnValue(backend as never);
+    vi.mocked(getTaskCache).mockReturnValue(null); // cold by default
   });
 
-  it('NotionClient.fetchReadyTasks is called with milestone source_id, not the UUID', async () => {
+  it('returns tasks_ready with [] when cache is cold — never calls backend', () => {
+    vi.mocked(getTaskCache).mockReturnValue(null);
+
     const ws = makeFakeWs();
     handleMessage(
       ws,
@@ -129,46 +124,68 @@ describe('WS fetch_tasks → NotionTaskBackend: router passes UUID, backend call
       makeFakeSessions(),
     );
 
-    await vi.waitFor(() => expect(notionFetchReadyTasks).toHaveBeenCalled());
+    const sent = parseSent(ws) as { type: string; tasks: unknown[] };
+    expect(sent.type).toBe('tasks_ready');
+    expect(sent.tasks).toEqual([]);
+    expect(getTaskBackend).not.toHaveBeenCalled();
+  });
 
-    // Backend receives the UUID and resolves it itself
-    expect(ProjectService.getMilestone).toHaveBeenCalledWith(MILESTONE_UUID);
-    expect(ProjectService.getMilestone).not.toHaveBeenCalledWith(
-      NOTION_SOURCE_ID,
+  it('returns tasks_ready with resolved tasks when cache is warm — never calls backend', () => {
+    const cachedTasks = [
+      {
+        id: 'notion:task-1',
+        title: 'Task 1',
+        status: '🗂️ Ready',
+        dependsOn: [],
+        type: '💻 Code',
+        notionUrl: '',
+      },
+    ];
+    vi.mocked(getTaskCache).mockReturnValue({
+      task_id: `board:${NOTION_SOURCE_ID}`,
+      fetched_at: Date.now(),
+      raw_json: JSON.stringify(cachedTasks),
+    });
+
+    const ws = makeFakeWs();
+    handleMessage(
+      ws,
+      JSON.stringify({
+        type: 'fetch_tasks',
+        projectId: PROJECT_ID,
+        milestoneId: MILESTONE_UUID,
+      }),
+      makeFakeSessions(),
     );
 
-    // NotionClient ends up with source_id (correct resolution path)
-    expect(notionFetchReadyTasks).toHaveBeenCalledWith(
-      NOTION_SOURCE_ID,
-      undefined,
+    const sent = parseSent(ws) as { type: string; tasks: unknown[] };
+    expect(sent.type).toBe('tasks_ready');
+    expect(sent.tasks).toHaveLength(1);
+    expect(getTaskBackend).not.toHaveBeenCalled();
+  });
+
+  it('reads cache with board:<sourceId> key', () => {
+    const ws = makeFakeWs();
+    handleMessage(
+      ws,
+      JSON.stringify({
+        type: 'fetch_tasks',
+        projectId: PROJECT_ID,
+        milestoneId: MILESTONE_UUID,
+      }),
+      makeFakeSessions(),
+    );
+
+    expect(vi.mocked(getTaskCache)).toHaveBeenCalledWith(
+      `board:${NOTION_SOURCE_ID}`,
     );
   });
-});
 
-// ── GitHub path ───────────────────────────────────────────────────────────────
-
-describe('WS fetch_tasks → GithubTaskSourceProvider: router passes UUID, backend calls listIssues with integer', () => {
-  let listIssues: ReturnType<typeof vi.fn>;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-
-    vi.mocked(getProjectById).mockReturnValue(makeProject() as never);
+  it('returns tasks_ready with [] when milestone has no sourceId', () => {
     vi.mocked(ProjectService.getMilestone).mockReturnValue(
-      makeMilestoneRow(GITHUB_SOURCE_ID) as never,
+      makeMilestoneRow(null) as never,
     );
 
-    listIssues = vi.fn().mockResolvedValue([]);
-    const mockGitHubClient = { listIssues } as unknown as GitHubClient;
-
-    const backend = new GithubTaskSourceProvider(mockGitHubClient, {
-      owner: 'owner',
-      repo: 'repo',
-    });
-    vi.mocked(getTaskBackend).mockReturnValue(backend as never);
-  });
-
-  it('listIssues is called with the parsed integer milestone number', async () => {
     const ws = makeFakeWs();
     handleMessage(
       ws,
@@ -180,28 +197,27 @@ describe('WS fetch_tasks → GithubTaskSourceProvider: router passes UUID, backe
       makeFakeSessions(),
     );
 
-    await vi.waitFor(() => expect(listIssues).toHaveBeenCalled());
-
-    expect(ProjectService.getMilestone).toHaveBeenCalledWith(MILESTONE_UUID);
-    expect(listIssues).toHaveBeenCalledWith('owner/repo', {
-      labels: ['status:ready'],
-      milestone: 7,
-      state: 'open',
-    });
+    const sent = parseSent(ws) as { type: string; tasks: unknown[] };
+    expect(sent.type).toBe('tasks_ready');
+    expect(sent.tasks).toEqual([]);
   });
 
-  it('throws for unknown UUID (not found) without attempting parseInt on the ID itself', async () => {
+  it('returns tasks_ready with [] when milestone is not found', () => {
     vi.mocked(ProjectService.getMilestone).mockReturnValue(undefined as never);
 
-    const mockGitHubClient = { listIssues: vi.fn() } as unknown as GitHubClient;
-    const backend = new GithubTaskSourceProvider(mockGitHubClient, {
-      owner: 'owner',
-      repo: 'repo',
-    });
-
-    await expect(backend.fetchReadyTasks(MILESTONE_UUID)).rejects.toThrow(
-      `milestone not found: ${MILESTONE_UUID}`,
+    const ws = makeFakeWs();
+    handleMessage(
+      ws,
+      JSON.stringify({
+        type: 'fetch_tasks',
+        projectId: PROJECT_ID,
+        milestoneId: MILESTONE_UUID,
+      }),
+      makeFakeSessions(),
     );
-    expect(mockGitHubClient.listIssues).not.toHaveBeenCalled();
+
+    const sent = parseSent(ws) as { type: string; tasks: unknown[] };
+    expect(sent.type).toBe('tasks_ready');
+    expect(sent.tasks).toEqual([]);
   });
 });
