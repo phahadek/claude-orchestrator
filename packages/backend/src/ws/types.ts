@@ -91,6 +91,7 @@ export interface TaskView {
 }
 
 export type ServerMessage =
+  | ({ type: 'session_starting' } & SessionState)
   | ({ type: 'session_started' } & SessionState)
   | {
       type: 'session_event';
