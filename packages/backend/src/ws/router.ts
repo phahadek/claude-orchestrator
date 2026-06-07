@@ -8,11 +8,11 @@ import { ProjectService } from '../projects/ProjectService';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import type { NotionTask } from '../notion/types';
 
-export function handleMessage(
+export async function handleMessage(
   ws: WebSocket,
   raw: string,
   sessions: SessionManager,
-): void {
+): Promise<void> {
   let msg: ClientMessage;
   try {
     msg = JSON.parse(raw) as ClientMessage;
@@ -32,7 +32,7 @@ export function handleMessage(
         );
         break;
       }
-      msg.tasks.forEach((t) => {
+      for (const t of msg.tasks) {
         if (!t.taskUrl) {
           ws.send(
             JSON.stringify({
@@ -40,30 +40,30 @@ export function handleMessage(
               message: 'dispatch task requires a non-empty taskUrl',
             }),
           );
-          return;
+          continue;
         }
-        sessions
-          .start(t.taskUrl, t.projectContextUrl, {
+        try {
+          await sessions.start(t.taskUrl, t.projectContextUrl, {
             taskType: t.taskType,
             projectId: t.projectId,
             milestoneId: t.milestoneId,
             taskKind: t.taskKind ?? 'milestone',
             taskName: t.taskName,
-          })
-          .catch((e) => {
-            const err = e as Error & { alreadyRunning?: boolean };
-            if (err.alreadyRunning) {
-              ws.send(
-                JSON.stringify({
-                  type: 'error',
-                  message: `Task already has an active session — no duplicate launched.`,
-                }),
-              );
-            } else {
-              ws.send(JSON.stringify({ type: 'error', message: String(e) }));
-            }
           });
-      });
+        } catch (e) {
+          const err = e as Error & { alreadyRunning?: boolean };
+          if (err.alreadyRunning) {
+            ws.send(
+              JSON.stringify({
+                type: 'error',
+                message: `Task already has an active session — no duplicate launched.`,
+              }),
+            );
+          } else {
+            ws.send(JSON.stringify({ type: 'error', message: String(e) }));
+          }
+        }
+      }
       break;
     case 'approve':
       // The claude CLI --print mode does not support mid-session permission approval.
