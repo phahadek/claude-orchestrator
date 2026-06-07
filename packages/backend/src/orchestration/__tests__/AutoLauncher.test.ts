@@ -1522,7 +1522,9 @@ describe('AutoLauncher.pollOnce() — fire-and-forget timing regression guard', 
     vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
     vi.mocked(getMergedPRForTask).mockReturnValue(null);
     vi.mocked(getTaskPauseReason).mockReturnValue(null);
-    (runtimeSettings as { auto_launch_concurrency: number }).auto_launch_concurrency = 5;
+    (
+      runtimeSettings as { auto_launch_concurrency: number }
+    ).auto_launch_concurrency = 5;
   });
 
   it('poll cycle completes in <1s when launching 3 tasks (start() does not block poll on git)', async () => {
