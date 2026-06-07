@@ -273,11 +273,15 @@ describe('SessionManager.start() fire-and-forget structural checks', () => {
 
   it('dispatches completeStart as fire-and-forget (void + .catch)', () => {
     expect(source).toMatch(/void\s+this\.completeStart\s*\(/);
-    expect(source).toMatch(/completeStart[\s\S]*?\.catch\s*\(\s*async\s*\(\s*err\s*\)/);
+    expect(source).toMatch(
+      /completeStart[\s\S]*?\.catch\s*\(\s*async\s*\(\s*err\s*\)/,
+    );
   });
 
   it('has cleanupPartialWorktree method', () => {
-    expect(source).toMatch(/private\s+async\s+cleanupPartialWorktree\s*\(\s*sessionId/);
+    expect(source).toMatch(
+      /private\s+async\s+cleanupPartialWorktree\s*\(\s*sessionId/,
+    );
   });
 
   it('calls cleanupPartialWorktree inside the completeStart catch handler', () => {
@@ -291,7 +295,9 @@ describe('SessionManager.start() fire-and-forget structural checks', () => {
     const catchIdx = source.indexOf('completeStart(');
     const endIdx = source.indexOf('\n  }', catchIdx + 100);
     const block = source.slice(catchIdx, endIdx);
-    expect(block).toMatch(/markSessionErrored\s*\(\s*sessionId\s*,\s*'error'\s*,\s*'launch_failed'\s*\)/);
+    expect(block).toMatch(
+      /markSessionErrored\s*\(\s*sessionId\s*,\s*'error'\s*,\s*'launch_failed'\s*\)/,
+    );
   });
 
   it('broadcasts session_starting (not session_started) from start()', () => {
@@ -702,7 +708,10 @@ describe('SessionManager.sendOrResume() — pr_url carry-forward', () => {
   it('sendOrResume uses respawnSession (no new insertSession with hard-coded pr_url: null)', () => {
     // The modern path: respawnSession handles prUrl carry-forward, no new insertSession row.
     const doSendOrResumeIdx = source.indexOf('private async _doSendOrResume(');
-    const shutdownAllIdx = source.indexOf('async shutdownAll', doSendOrResumeIdx);
+    const shutdownAllIdx = source.indexOf(
+      'async shutdownAll',
+      doSendOrResumeIdx,
+    );
     const doBlock = source.slice(doSendOrResumeIdx, shutdownAllIdx);
     expect(doBlock).toMatch(/this\.respawnSession\s*\(/);
   });
@@ -735,7 +744,10 @@ describe('SessionManager.resumeSession() — resumability pre-check', () => {
     expect(source).toMatch(/fs\.existsSync\s*\(\s*worktreePath\s*\)/);
     // The pre-check appears before respawnSession() call in resumeSession()
     const resumeSessionIdx = source.indexOf('private async resumeSession(');
-    const respawnCallIdx = source.indexOf('this.respawnSession(', resumeSessionIdx);
+    const respawnCallIdx = source.indexOf(
+      'this.respawnSession(',
+      resumeSessionIdx,
+    );
     const preCheckIdx = source.indexOf(
       'resumability pre-check',
       resumeSessionIdx,
@@ -986,7 +998,10 @@ describe('SessionManager — error broadcast and rollback', () => {
     const completeStartCatchIdx = source.indexOf('void this.completeStart(');
     expect(completeStartCatchIdx).toBeGreaterThan(-1);
     // markSessionErrored maps 'launch_failed' → '🗂️ Ready' internally
-    const catchBlock = source.slice(completeStartCatchIdx, completeStartCatchIdx + 1000);
+    const catchBlock = source.slice(
+      completeStartCatchIdx,
+      completeStartCatchIdx + 1000,
+    );
     expect(catchBlock).toMatch(
       /markSessionErrored\s*\(\s*sessionId\s*,\s*'error'\s*,\s*'launch_failed'\s*\)/,
     );
@@ -994,7 +1009,10 @@ describe('SessionManager — error broadcast and rollback', () => {
 
   it('completeStart().catch() broadcasts an error type ServerMessage', () => {
     const completeStartCatchIdx = source.indexOf('void this.completeStart(');
-    const catchBlock = source.slice(completeStartCatchIdx, completeStartCatchIdx + 2000);
+    const catchBlock = source.slice(
+      completeStartCatchIdx,
+      completeStartCatchIdx + 2000,
+    );
     expect(catchBlock).toMatch(/this\.emit\('message'/);
     expect(catchBlock).toMatch(/type:\s*'error'/);
   });
@@ -1003,7 +1021,10 @@ describe('SessionManager — error broadcast and rollback', () => {
     // markSessionErrored emits task_status_changed with '🗂️ Ready' for 'launch_failed' cause.
     // Verified structurally: the helper is called from the catch block.
     const completeStartCatchIdx = source.indexOf('void this.completeStart(');
-    const catchBlock = source.slice(completeStartCatchIdx, completeStartCatchIdx + 1000);
+    const catchBlock = source.slice(
+      completeStartCatchIdx,
+      completeStartCatchIdx + 1000,
+    );
     expect(catchBlock).toMatch(
       /markSessionErrored\s*\(\s*sessionId\s*,\s*'error'\s*,\s*'launch_failed'\s*\)/,
     );

@@ -534,9 +534,15 @@ export class SessionManager extends EventEmitter {
 
     const sessionId = providedSessionId ?? crypto.randomUUID();
     const projectDir = normalizePath(project.projectDir);
-    const worktreePath = path.join(projectDir, '.claude', 'worktrees', sessionId);
+    const worktreePath = path.join(
+      projectDir,
+      '.claude',
+      'worktrees',
+      sessionId,
+    );
     const sessionTaskId =
-      precomputedTaskId ?? deriveTaskId(project.taskSource ?? 'notion', taskUrl);
+      precomputedTaskId ??
+      deriveTaskId(project.taskSource ?? 'notion', taskUrl);
 
     console.log(
       `[SessionManager] start ${sessionId} project=${projectId} sessionType=${sessionType}`,
@@ -592,7 +598,9 @@ export class SessionManager extends EventEmitter {
       ...(taskType != null && { taskType }),
       ...(sessionType !== 'standard' && { sessionType }),
       ...(reviewPrNumber != null && { prNumber: reviewPrNumber }),
-      ...(reviewCodeSessionId != null && { codeSessionId: reviewCodeSessionId }),
+      ...(reviewCodeSessionId != null && {
+        codeSessionId: reviewCodeSessionId,
+      }),
       started_at: startedAt,
       project_id: projectId,
       totalInputTokens: 0,
@@ -649,14 +657,20 @@ export class SessionManager extends EventEmitter {
 
     const project = getProjectById(projectId)!;
     const projectDir = normalizePath(project.projectDir);
-    const worktreePath = path.join(projectDir, '.claude', 'worktrees', sessionId);
+    const worktreePath = path.join(
+      projectDir,
+      '.claude',
+      'worktrees',
+      sessionId,
+    );
     const isLocalOnly = project.gitMode === 'local-only';
     const { startingPoint, milestoneSlug } = resolveStartingPoint(
       project,
       milestoneId,
     );
     const sessionTaskId =
-      precomputedTaskId ?? deriveTaskId(project.taskSource ?? 'notion', taskUrl);
+      precomputedTaskId ??
+      deriveTaskId(project.taskSource ?? 'notion', taskUrl);
 
     if (!isLocalOnly) {
       if (milestoneSlug) {
@@ -790,8 +804,7 @@ export class SessionManager extends EventEmitter {
           targetBranch: startingPoint,
           projectDir,
           worktreePath,
-          verify:
-            orchConfig.verify.length > 0 ? orchConfig.verify : undefined,
+          verify: orchConfig.verify.length > 0 ? orchConfig.verify : undefined,
           bashRules:
             orchConfig.bash_rules.length > 0
               ? orchConfig.bash_rules
@@ -890,7 +903,9 @@ export class SessionManager extends EventEmitter {
       ...(taskType != null && { taskType }),
       ...(sessionType !== 'standard' && { sessionType }),
       ...(reviewPrNumber != null && { prNumber: reviewPrNumber }),
-      ...(reviewCodeSessionId != null && { codeSessionId: reviewCodeSessionId }),
+      ...(reviewCodeSessionId != null && {
+        codeSessionId: reviewCodeSessionId,
+      }),
       started_at: startedAt,
       project_id: projectId,
       totalInputTokens: 0,

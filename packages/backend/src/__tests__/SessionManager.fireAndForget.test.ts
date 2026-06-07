@@ -291,7 +291,9 @@ describe('SessionManager.completeStart() failure handling', () => {
       type: 'error';
       message: string;
     }>;
-    expect(errorMsgs.some((m) => m.message.includes('Session launch failed'))).toBe(true);
+    expect(
+      errorMsgs.some((m) => m.message.includes('Session launch failed')),
+    ).toBe(true);
   });
 });
 
@@ -303,8 +305,9 @@ describe('SessionManager.cleanupPartialWorktree() idempotency', () => {
 
     const sm = new SessionManager();
     await expect(
-      (sm as never as { cleanupPartialWorktree(id: string): Promise<void> })
-        .cleanupPartialWorktree('no-such-session'),
+      (
+        sm as never as { cleanupPartialWorktree(id: string): Promise<void> }
+      ).cleanupPartialWorktree('no-such-session'),
     ).resolves.toBeUndefined();
   });
 
@@ -319,8 +322,9 @@ describe('SessionManager.cleanupPartialWorktree() idempotency', () => {
 
     const sm = new SessionManager();
     await expect(
-      (sm as never as { cleanupPartialWorktree(id: string): Promise<void> })
-        .cleanupPartialWorktree('session-123'),
+      (
+        sm as never as { cleanupPartialWorktree(id: string): Promise<void> }
+      ).cleanupPartialWorktree('session-123'),
     ).resolves.toBeUndefined();
 
     // No git exec calls for removal since worktree_path is null
@@ -342,8 +346,9 @@ describe('SessionManager.cleanupPartialWorktree() idempotency', () => {
 
     const sm = new SessionManager();
     await expect(
-      (sm as never as { cleanupPartialWorktree(id: string): Promise<void> })
-        .cleanupPartialWorktree('session-xyz'),
+      (
+        sm as never as { cleanupPartialWorktree(id: string): Promise<void> }
+      ).cleanupPartialWorktree('session-xyz'),
     ).resolves.toBeUndefined();
 
     // git worktree remove should NOT be called when existsSync is false

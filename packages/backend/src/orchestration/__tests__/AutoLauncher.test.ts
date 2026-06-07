@@ -219,7 +219,10 @@ describe('AutoLauncher — project-driven polling', () => {
 
     await launcher.pollOnce();
 
-    expect(notionBackend.fetchReadyTasks).toHaveBeenCalledWith('milestone-1', true);
+    expect(notionBackend.fetchReadyTasks).toHaveBeenCalledWith(
+      'milestone-1',
+      true,
+    );
     expect(sessionManager.start).not.toHaveBeenCalled();
   });
 
