@@ -14,6 +14,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('child_process', () => ({
   execSync: vi.fn().mockReturnValue('dev\n'),
+  exec: vi
+    .fn()
+    .mockImplementation(
+      (
+        _cmd: string,
+        _opts: unknown,
+        cb: (err: null, result: { stdout: string; stderr: string }) => void,
+      ) => {
+        const callback = typeof _opts === 'function' ? _opts : cb;
+        process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+      },
+    ),
+  execFile: vi.fn(),
 }));
 
 vi.mock('fs', async () => {
@@ -196,9 +209,9 @@ beforeEach(() => {
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 describe('SessionManager dedup — 2026-05-28 incident: AutoLauncher + WS dispatch', () => {
-  it('first start() succeeds and returns a session ID', () => {
+  it('first start() succeeds and returns a session ID', async () => {
     const sm = new SessionManager();
-    const id = sm.start(TASK_URL, CTX_URL, {
+    const id = await sm.start(TASK_URL, CTX_URL, {
       sessionType: 'standard',
       projectId: PROJECT_ID,
       taskKind: 'milestone',
@@ -207,14 +220,14 @@ describe('SessionManager dedup — 2026-05-28 incident: AutoLauncher + WS dispat
     expect(id.length).toBeGreaterThan(0);
   });
 
-  it('second start() for the same task throws with alreadyRunning=true', () => {
+  it('second start() for the same task throws with alreadyRunning=true', async () => {
     // First call → no existing session in DB
     vi.mocked(queries.hasActiveSessionForTask).mockReturnValueOnce(false);
     // Subsequent calls → DB shows session is 'starting'
     vi.mocked(queries.hasActiveSessionForTask).mockReturnValue(true);
 
     const sm = new SessionManager();
-    sm.start(TASK_URL, CTX_URL, {
+    await sm.start(TASK_URL, CTX_URL, {
       sessionType: 'standard',
       projectId: PROJECT_ID,
       taskKind: 'milestone',
@@ -222,7 +235,7 @@ describe('SessionManager dedup — 2026-05-28 incident: AutoLauncher + WS dispat
 
     let caughtErr: (Error & { alreadyRunning?: boolean }) | undefined;
     try {
-      sm.start(TASK_URL, CTX_URL, {
+      await sm.start(TASK_URL, CTX_URL, {
         sessionType: 'standard',
         projectId: PROJECT_ID,
         taskKind: 'milestone',
@@ -235,19 +248,19 @@ describe('SessionManager dedup — 2026-05-28 incident: AutoLauncher + WS dispat
     expect(caughtErr!.alreadyRunning).toBe(true);
   });
 
-  it('writes exactly one session_launched audit entry across both start() calls', () => {
+  it('writes exactly one session_launched audit entry across both start() calls', async () => {
     vi.mocked(queries.hasActiveSessionForTask).mockReturnValueOnce(false);
     vi.mocked(queries.hasActiveSessionForTask).mockReturnValue(true);
 
     const sm = new SessionManager();
-    sm.start(TASK_URL, CTX_URL, {
+    await sm.start(TASK_URL, CTX_URL, {
       sessionType: 'standard',
       projectId: PROJECT_ID,
       taskKind: 'milestone',
     });
 
     try {
-      sm.start(TASK_URL, CTX_URL, {
+      await sm.start(TASK_URL, CTX_URL, {
         sessionType: 'standard',
         projectId: PROJECT_ID,
         taskKind: 'milestone',
@@ -265,19 +278,19 @@ describe('SessionManager dedup — 2026-05-28 incident: AutoLauncher + WS dispat
     expect(launchedCalls).toHaveLength(1);
   });
 
-  it('second start() does not call insertSession (no duplicate DB row)', () => {
+  it('second start() does not call insertSession (no duplicate DB row)', async () => {
     vi.mocked(queries.hasActiveSessionForTask).mockReturnValueOnce(false);
     vi.mocked(queries.hasActiveSessionForTask).mockReturnValue(true);
 
     const sm = new SessionManager();
-    sm.start(TASK_URL, CTX_URL, {
+    await sm.start(TASK_URL, CTX_URL, {
       sessionType: 'standard',
       projectId: PROJECT_ID,
       taskKind: 'milestone',
     });
 
     try {
-      sm.start(TASK_URL, CTX_URL, {
+      await sm.start(TASK_URL, CTX_URL, {
         sessionType: 'standard',
         projectId: PROJECT_ID,
         taskKind: 'milestone',
@@ -290,14 +303,14 @@ describe('SessionManager dedup — 2026-05-28 incident: AutoLauncher + WS dispat
     expect(queries.insertSession).toHaveBeenCalledTimes(1);
   });
 
-  it('dedup also triggers via in-memory sessions map (hasLiveSessionForTask)', () => {
+  it('dedup also triggers via in-memory sessions map (hasLiveSessionForTask)', async () => {
     // Simulate: session is already live in the sessions map (AgentSession is in
     // this.sessions). hasActiveSessionForTask stays false — dedup fires via
     // hasLiveSessionForTask alone.
     vi.mocked(queries.hasActiveSessionForTask).mockReturnValue(false);
 
     const sm = new SessionManager();
-    const firstId = sm.start(TASK_URL, CTX_URL, {
+    const firstId = await sm.start(TASK_URL, CTX_URL, {
       sessionType: 'standard',
       projectId: PROJECT_ID,
       taskKind: 'milestone',
@@ -315,7 +328,7 @@ describe('SessionManager dedup — 2026-05-28 incident: AutoLauncher + WS dispat
 
     let caughtErr: (Error & { alreadyRunning?: boolean }) | undefined;
     try {
-      sm.start(TASK_URL, CTX_URL, {
+      await sm.start(TASK_URL, CTX_URL, {
         sessionType: 'standard',
         projectId: PROJECT_ID,
         taskKind: 'milestone',

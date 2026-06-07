@@ -46,6 +46,18 @@ vi.mock('child_process', () => ({
   spawn: vi.fn(() => mockProc.proc),
   execSync: vi.fn(() => ''),
   execFile: vi.fn(),
+  exec: vi
+    .fn()
+    .mockImplementation(
+      (
+        _cmd: string,
+        _opts: unknown,
+        cb: (err: null, result: { stdout: string; stderr: string }) => void,
+      ) => {
+        const callback = typeof _opts === 'function' ? _opts : cb;
+        process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+      },
+    ),
 }));
 
 // fs is mocked so existsSync can be controlled per-test; readFileSync /
@@ -518,15 +530,14 @@ describe('resumeOrphanSessions() — spawn arg contract: --resume <session_id>',
     vi.mocked(execSync).mockReturnValue('');
 
     const sm = new SessionManager();
-    sm.start('https://notion.so/task', 'https://notion.so/ctx', {
+    await sm.start('https://notion.so/task', 'https://notion.so/ctx', {
       projectId: 'test-project',
       sessionId: SESSION_UUID,
       taskKind: 'milestone',
     });
 
-    // launchSession() is async — it awaits fetchTaskPage() before calling
-    // wireSession(). A single setImmediate drains all pending microtasks so
-    // the spawn happens before we assert.
+    // launchSession() is fire-and-forget — setImmediate drains its microtasks
+    // so the spawn happens before we assert.
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(spawn).toHaveBeenCalledTimes(1);

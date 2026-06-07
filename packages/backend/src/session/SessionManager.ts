@@ -1,7 +1,10 @@
 import path from 'path';
 import fs from 'fs';
-import { execSync } from 'child_process';
+import { execSync, exec as execCb } from 'child_process';
+import { promisify } from 'util';
 import { EventEmitter } from 'events';
+
+const exec = promisify(execCb);
 import { recordEvent } from '../audit/AuditLog';
 import { scrubSecrets } from '../security/scrubSecrets';
 import { AgentSession, parseNotionPageIdDashed } from './AgentSession';
@@ -452,11 +455,11 @@ export class SessionManager extends EventEmitter {
       );
   }
 
-  start(
+  async start(
     taskUrl: string,
     projectContextUrl: string,
     options?: StartOptions,
-  ): string {
+  ): Promise<string> {
     const {
       taskType,
       sessionType = 'standard',
@@ -565,7 +568,7 @@ export class SessionManager extends EventEmitter {
       } else {
         try {
           // Fetch latest base branch so sessions don't start from a stale local ref.
-          execSync(`git fetch origin ${project.baseBranch}`, {
+          await exec(`git fetch origin ${project.baseBranch}`, {
             cwd: projectDir,
             timeout: 30_000,
           });
@@ -587,12 +590,12 @@ export class SessionManager extends EventEmitter {
     const featureBranch = taskName ? `feature/${slugify(taskName)}` : null;
     try {
       if (featureBranch) {
-        execSync(
+        await exec(
           `git worktree add -b "${featureBranch}" "${worktreePath}" ${worktreeBase}`,
           { cwd: projectDir },
         );
       } else {
-        execSync(
+        await exec(
           `git worktree add --detach "${worktreePath}" ${worktreeBase}`,
           {
             cwd: projectDir,
@@ -629,10 +632,9 @@ export class SessionManager extends EventEmitter {
     // The worktree path is passed as $1 so the script can operate on it.
     if (orchConfig.bootstrap_script) {
       try {
-        execSync(`bash ${orchConfig.bootstrap_script} "${worktreePath}"`, {
+        await exec(`bash ${orchConfig.bootstrap_script} "${worktreePath}"`, {
           cwd: projectDir,
           timeout: 120_000,
-          stdio: 'pipe',
         });
         console.log(
           `[SessionManager] bootstrap script completed for ${sessionId.slice(0, 8)}`,

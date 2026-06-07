@@ -12,6 +12,18 @@ vi.mock('child_process', async (importOriginal) => {
   return {
     ...actual,
     execSync: vi.fn().mockReturnValue('dev\n'),
+    exec: vi
+      .fn()
+      .mockImplementation(
+        (
+          _cmd: string,
+          _opts: unknown,
+          cb: (err: null, result: { stdout: string; stderr: string }) => void,
+        ) => {
+          const callback = typeof _opts === 'function' ? _opts : cb;
+          process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+        },
+      ),
   };
 });
 
@@ -198,7 +210,7 @@ describe('SessionManager — updateStatus("In Progress") failure broadcasts erro
     const msgs: ServerMessage[] = [];
     sm.on('message', (m: ServerMessage) => msgs.push(m));
 
-    sm.start(YAML_TASK_ID, CTX_URL, {
+    await sm.start(YAML_TASK_ID, CTX_URL, {
       sessionType: 'standard',
       projectId: PROJECT_ID,
       taskKind: 'milestone',
@@ -214,20 +226,20 @@ describe('SessionManager — updateStatus("In Progress") failure broadcasts erro
     expect(errorMsgs.some((m) => m.message.includes('In Progress'))).toBe(true);
   });
 
-  it('still emits session_started synchronously even when updateStatus will reject', () => {
+  it('emits session_started before updateStatus rejects', async () => {
     fakeBackend.updateStatus.mockRejectedValue(new Error('task not found'));
 
     const sm = new SessionManager();
     const msgs: ServerMessage[] = [];
     sm.on('message', (m: ServerMessage) => msgs.push(m));
 
-    sm.start(YAML_TASK_ID, CTX_URL, {
+    await sm.start(YAML_TASK_ID, CTX_URL, {
       sessionType: 'standard',
       projectId: PROJECT_ID,
       taskKind: 'milestone',
     });
 
-    // session_started is broadcast synchronously before any async rejection
+    // session_started is broadcast during start() execution, before return
     expect(msgs.find((m) => m.type === 'session_started')).toBeDefined();
   });
 });
@@ -368,12 +380,12 @@ describe('SessionManager — YAML task dispatch integration', () => {
     );
   });
 
-  it('dispatching YAML task ID "t2-ready-unblocked" emits session_started immediately', () => {
+  it('dispatching YAML task ID "t2-ready-unblocked" emits session_started', async () => {
     const sm = new SessionManager();
     const msgs: ServerMessage[] = [];
     sm.on('message', (m: ServerMessage) => msgs.push(m));
 
-    sm.start(YAML_TASK_ID, CTX_URL, {
+    await sm.start(YAML_TASK_ID, CTX_URL, {
       sessionType: 'standard',
       projectId: PROJECT_ID,
       taskType: '💻 Code',
@@ -387,12 +399,12 @@ describe('SessionManager — YAML task dispatch integration', () => {
     expect(started!.notionTaskUrl).toBe(YAML_TASK_ID);
   });
 
-  it('dispatching a YAML task ID emits no synchronous errors', () => {
+  it('dispatching a YAML task ID emits no errors', async () => {
     const sm = new SessionManager();
     const msgs: ServerMessage[] = [];
     sm.on('message', (m: ServerMessage) => msgs.push(m));
 
-    sm.start(YAML_TASK_ID, CTX_URL, {
+    await sm.start(YAML_TASK_ID, CTX_URL, {
       sessionType: 'standard',
       projectId: PROJECT_ID,
       taskType: '💻 Code',
@@ -402,12 +414,12 @@ describe('SessionManager — YAML task dispatch integration', () => {
     expect(msgs.filter((m) => m.type === 'error')).toHaveLength(0);
   });
 
-  it('Notion task URL dispatch also emits session_started without errors (regression)', () => {
+  it('Notion task URL dispatch also emits session_started without errors (regression)', async () => {
     const sm = new SessionManager();
     const msgs: ServerMessage[] = [];
     sm.on('message', (m: ServerMessage) => msgs.push(m));
 
-    sm.start(NOTION_TASK_URL, CTX_URL, {
+    await sm.start(NOTION_TASK_URL, CTX_URL, {
       sessionType: 'standard',
       projectId: PROJECT_ID,
       taskKind: 'milestone',

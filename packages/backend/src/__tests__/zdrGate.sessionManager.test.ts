@@ -12,6 +12,18 @@ vi.mock('child_process', async (importOriginal) => {
   return {
     ...actual,
     execSync: vi.fn().mockReturnValue('dev\n'),
+    exec: vi
+      .fn()
+      .mockImplementation(
+        (
+          _cmd: string,
+          _opts: unknown,
+          cb: (err: null, result: { stdout: string; stderr: string }) => void,
+        ) => {
+          const callback = typeof _opts === 'function' ? _opts : cb;
+          process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+        },
+      ),
   };
 });
 
@@ -213,32 +225,32 @@ describe('SessionManager.start() ZDR gate — corporate mode, data_residency_con
     vi.mocked(getProjectById).mockReturnValue(makeProject(false) as never);
   });
 
-  it('throws synchronously with a ZDR error message', () => {
+  it('throws with a ZDR error message', async () => {
     const sm = new SessionManager();
-    expect(() =>
+    await expect(
       sm.start(TASK_URL, CTX_URL, {
         sessionType: 'standard',
         projectId: PROJECT_ID,
         taskKind: 'milestone',
       }),
-    ).toThrow(/Session launch refused/);
+    ).rejects.toThrow(/Session launch refused/);
   });
 
-  it('error message mentions Zero Data Retention or ZDR', () => {
+  it('error message mentions Zero Data Retention or ZDR', async () => {
     const sm = new SessionManager();
-    expect(() =>
+    await expect(
       sm.start(TASK_URL, CTX_URL, {
         sessionType: 'standard',
         projectId: PROJECT_ID,
         taskKind: 'milestone',
       }),
-    ).toThrow(/Zero Data Retention|ZDR/);
+    ).rejects.toThrow(/Zero Data Retention|ZDR/);
   });
 
-  it('records a session_launch_refused_zdr audit event', () => {
+  it('records a session_launch_refused_zdr audit event', async () => {
     const sm = new SessionManager();
     try {
-      sm.start(TASK_URL, CTX_URL, {
+      await sm.start(TASK_URL, CTX_URL, {
         sessionType: 'standard',
         projectId: PROJECT_ID,
         taskKind: 'milestone',
@@ -258,22 +270,19 @@ describe('SessionManager.start() ZDR gate — corporate mode, data_residency_con
     vi.mocked(getProjectById).mockReturnValue(makeProject(true) as never);
   });
 
-  it('does not throw and returns a session ID string', () => {
+  it('does not throw and returns a session ID string', async () => {
     const sm = new SessionManager();
-    let sessionId: string | undefined;
-    expect(() => {
-      sessionId = sm.start(TASK_URL, CTX_URL, {
-        sessionType: 'standard',
-        projectId: PROJECT_ID,
-        taskKind: 'milestone',
-      });
-    }).not.toThrow();
+    const sessionId = await sm.start(TASK_URL, CTX_URL, {
+      sessionType: 'standard',
+      projectId: PROJECT_ID,
+      taskKind: 'milestone',
+    });
     expect(typeof sessionId).toBe('string');
   });
 
-  it('does not call recordEvent with session_launch_refused_zdr', () => {
+  it('does not call recordEvent with session_launch_refused_zdr', async () => {
     const sm = new SessionManager();
-    sm.start(TASK_URL, CTX_URL, {
+    await sm.start(TASK_URL, CTX_URL, {
       sessionType: 'standard',
       projectId: PROJECT_ID,
       taskKind: 'milestone',
@@ -295,20 +304,20 @@ describe('SessionManager.start() ZDR gate — non-corporate mode, flag NOT check
     vi.mocked(getProjectById).mockReturnValue(makeProject(false) as never);
   });
 
-  it('proceeds even when data_residency_confirmed=false in non-corporate mode', () => {
+  it('proceeds even when data_residency_confirmed=false in non-corporate mode', async () => {
     const sm = new SessionManager();
-    expect(() =>
+    await expect(
       sm.start(TASK_URL, CTX_URL, {
         sessionType: 'standard',
         projectId: PROJECT_ID,
         taskKind: 'milestone',
       }),
-    ).not.toThrow();
+    ).resolves.toBeDefined();
   });
 
-  it('does not record a session_launch_refused_zdr event', () => {
+  it('does not record a session_launch_refused_zdr event', async () => {
     const sm = new SessionManager();
-    sm.start(TASK_URL, CTX_URL, {
+    await sm.start(TASK_URL, CTX_URL, {
       sessionType: 'standard',
       projectId: PROJECT_ID,
       taskKind: 'milestone',
