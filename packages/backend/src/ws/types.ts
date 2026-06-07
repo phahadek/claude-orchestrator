@@ -76,6 +76,7 @@ export interface TaskView {
     state: string;
     draft: boolean;
     mergeState: string | null;
+    preReviewStage?: string | null;
   } | null;
   review: {
     sessionId: string;
@@ -265,6 +266,10 @@ export type ServerMessage =
       success: boolean;
       summary?: string;
     }
+  | { type: 'verify_pipeline_started'; prNumber: number; repo: string }
+  | { type: 'verify_pipeline_complete'; prNumber: number; repo: string }
+  | { type: 'test_pipeline_started'; prNumber: number; repo: string }
+  | { type: 'test_pipeline_complete'; prNumber: number; repo: string }
   | { type: 'review_started'; prNumber: number; sessionId: string }
   | {
       type: 'pr_review_blocked_by_gate';

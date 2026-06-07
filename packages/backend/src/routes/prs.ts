@@ -180,6 +180,7 @@ export function createPrsRouter(
       mergeState: pr.merge_state ?? null,
       failingChecks: parseFailingChecks(pr.failing_checks),
       pauseReason: pr.pause_reason ?? null,
+      preReviewStage: pr.pre_review_stage ?? null,
       autoMergeEnabled,
     }));
     res.json(items);

@@ -93,6 +93,7 @@ function baseStoreReturn(sessions: object[] = []) {
     lastSessionStartedEvent: null,
     lastSessionEndedEvent: null,
     lastCacheUpdatedEvent: null,
+    prPipelineStages: new Map(),
   };
 }
 

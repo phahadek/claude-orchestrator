@@ -948,6 +948,7 @@ export function upsertPullRequest(
     | 'pause_reason'
     | 'pause_reason_set_at'
     | 'ci_remediation_attempted_sha'
+    | 'pre_review_stage'
   > & {
     review_session_id?: string | null;
     review_iteration?: number;
@@ -1214,6 +1215,16 @@ export function updatePRState(
     UPDATE pull_requests SET state = @state WHERE pr_number = @pr_number AND repo = @repo
   `,
   ).run({ pr_number: prNumber, repo, state });
+}
+
+export function setPreReviewStage(
+  prNumber: number,
+  repo: string,
+  stage: string | null,
+): void {
+  db.prepare<{ pr_number: number; repo: string; stage: string | null }>(
+    `UPDATE pull_requests SET pre_review_stage = @stage WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({ pr_number: prNumber, repo, stage });
 }
 
 export function deletePR(prNumber: number, repo: string): boolean {
@@ -1672,6 +1683,7 @@ export interface TaskAggregateRow {
   pr_review_iteration: number | null;
   pr_merge_state: string | null;
   pr_pause_reason: string | null;
+  pr_pre_review_stage: string | null;
   session_pr_creation_failed_pause_reason: string | null;
 }
 
@@ -1748,6 +1760,7 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       pr.review_iteration    AS pr_review_iteration,
       pr.merge_state         AS pr_merge_state,
       pr.pause_reason        AS pr_pause_reason,
+      pr.pre_review_stage    AS pr_pre_review_stage,
       CASE
         WHEN pr.pr_number IS NULL
           AND cs.pause_reason IN ('pr_creation_failed', 'stalled_idle')

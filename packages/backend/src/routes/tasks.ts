@@ -122,6 +122,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
       state: row.pr_state ?? '',
       draft: row.pr_draft === 1,
       mergeState: row.pr_merge_state ?? null,
+      preReviewStage: row.pr_pre_review_stage ?? null,
     };
   }
 

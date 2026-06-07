@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
-import { CIBadges } from '../CIBadges';
+import { CIBadges, PipelineStageBadge } from '../CIBadges';
 
 describe('CIBadges', () => {
   it('renders ❌ CI failing when mergeState is ci_failed', () => {
@@ -91,5 +91,83 @@ describe('CIBadges', () => {
       <CIBadges mergeState="ci_running" prState="merged" />,
     );
     expect(container.firstChild).toBeNull();
+  });
+});
+
+describe('PipelineStageBadge', () => {
+  it('renders running autofix badge', () => {
+    render(<PipelineStageBadge stage="autofix" />);
+    expect(screen.getByText(/Running autofix/)).toBeDefined();
+  });
+
+  it('renders running verify badge', () => {
+    render(<PipelineStageBadge stage="verify" />);
+    expect(screen.getByText(/Running verify/)).toBeDefined();
+  });
+
+  it('renders running tests badge', () => {
+    render(<PipelineStageBadge stage="tests" />);
+    expect(screen.getByText(/Running tests/)).toBeDefined();
+  });
+
+  it('renders awaiting review badge', () => {
+    render(<PipelineStageBadge stage="awaiting_review" />);
+    expect(screen.getByText(/Awaiting review/)).toBeDefined();
+  });
+
+  it('renders blocked by autofix gate badge', () => {
+    render(<PipelineStageBadge stage="blocked_autofix" />);
+    expect(screen.getByText(/Blocked by autofix gate/)).toBeDefined();
+  });
+
+  it('renders blocked by verify gate badge', () => {
+    render(<PipelineStageBadge stage="blocked_verify" />);
+    expect(screen.getByText(/Blocked by verify gate/)).toBeDefined();
+  });
+
+  it('renders compact label when compact=true', () => {
+    render(<PipelineStageBadge stage="tests" compact />);
+    expect(screen.getByText(/🧪 Tests/)).toBeDefined();
+    expect(screen.queryByText(/Running tests/)).toBeNull();
+  });
+
+  it('renders nothing when stage is null', () => {
+    const { container } = render(<PipelineStageBadge stage={null} />);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('renders nothing when prState is merged', () => {
+    const { container } = render(
+      <PipelineStageBadge stage="autofix" prState="merged" />,
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('renders nothing when prState is closed', () => {
+    const { container } = render(
+      <PipelineStageBadge stage="tests" prState="closed" />,
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('renders title with failedCommand for blocked stages', () => {
+    render(
+      <PipelineStageBadge
+        stage="blocked_verify"
+        failedCommand="npx tsc --noEmit"
+      />,
+    );
+    const badge = screen.getByTitle(/npx tsc --noEmit/);
+    expect(badge).toBeDefined();
+  });
+
+  it('shows spinner for running stages (autofix)', () => {
+    render(<PipelineStageBadge stage="autofix" />);
+    expect(document.querySelector('[aria-hidden="true"]')).not.toBeNull();
+  });
+
+  it('does not show spinner for awaiting_review stage', () => {
+    render(<PipelineStageBadge stage="awaiting_review" />);
+    expect(document.querySelector('[aria-hidden="true"]')).toBeNull();
   });
 });

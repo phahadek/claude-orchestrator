@@ -61,6 +61,7 @@ export interface TaskView {
     state: string;
     draft: boolean;
     mergeState: string | null;
+    preReviewStage?: string | null;
   } | null;
   review: {
     sessionId: string;
