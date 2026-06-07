@@ -400,13 +400,17 @@ export class AutoLauncher {
     if (hasActiveSessionForTask(task.id)) return false;
 
     try {
-      const sessionId = await this.sessionManager.start(taskUrl, project.contextUrl, {
-        projectId: project.id,
-        taskName: task.title || taskUrl,
-        milestoneId,
-        taskKind,
-        taskId: task.id,
-      });
+      const sessionId = await this.sessionManager.start(
+        taskUrl,
+        project.contextUrl,
+        {
+          projectId: project.id,
+          taskName: task.title || taskUrl,
+          milestoneId,
+          taskKind,
+          taskId: task.id,
+        },
+      );
       this.launchFailures.delete(task.id);
       clearTaskPauseReason(task.id);
       console.log(

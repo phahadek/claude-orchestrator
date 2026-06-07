@@ -14,10 +14,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('child_process', () => ({
   execSync: vi.fn().mockReturnValue('dev\n'),
-  exec: vi.fn().mockImplementation((_cmd: string, _opts: unknown, cb: (err: null, result: { stdout: string; stderr: string }) => void) => {
-    const callback = typeof _opts === 'function' ? _opts : cb;
-    process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
-  }),
+  exec: vi
+    .fn()
+    .mockImplementation(
+      (
+        _cmd: string,
+        _opts: unknown,
+        cb: (err: null, result: { stdout: string; stderr: string }) => void,
+      ) => {
+        const callback = typeof _opts === 'function' ? _opts : cb;
+        process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+      },
+    ),
   execFile: vi.fn(),
 }));
 
