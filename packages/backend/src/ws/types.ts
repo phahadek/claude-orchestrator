@@ -218,7 +218,7 @@ export type ServerMessage =
       type: 'stuck_session_idle_open_pr';
       sessionId: string;
       taskId: string | null;
-      prUrl: string;
+      prUrl: string | null;
     }
   | {
       type: 'api_overloaded_paused';

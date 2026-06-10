@@ -46,12 +46,15 @@ import type { SessionManager } from '../session/SessionManager';
 import { recoverSession } from '../session/sessionRecovery';
 import { db } from '../db/db.js';
 
-function makeMockSessionManager(): SessionManager {
+function makeMockSessionManager(isAlive = false): SessionManager {
   const sm = new EventEmitter() as unknown as SessionManager;
   (sm as unknown as { send: ReturnType<typeof vi.fn> }).send = vi.fn();
   (sm as unknown as { kill: ReturnType<typeof vi.fn> }).kill = vi
     .fn()
     .mockResolvedValue(undefined);
+  (sm as unknown as { isAlive: ReturnType<typeof vi.fn> }).isAlive = vi
+    .fn()
+    .mockReturnValue(isAlive);
   return sm;
 }
 

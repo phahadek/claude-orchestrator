@@ -1,4 +1,5 @@
 import { db } from './db';
+import { recordEvent } from '../audit/AuditLog';
 import type {
   Session,
   NewSession,
@@ -190,12 +191,32 @@ export function getOtherRunningSessionsForTask(
  * write. Preferred over updateSessionStatus for clean-exit paths because it
  * also persists pr_url without a second round-trip.
  * pr_url is only overwritten when non-null — existing value is preserved otherwise.
+ *
+ * Advisory guard: if the current session status is 'running', emits a
+ * session_marked_done_while_running audit event to surface premature transitions
+ * in production data. The write proceeds regardless (advisory only).
  */
 export function markSessionDone(
   sessionId: string,
   endedAt: number,
   prUrl?: string | null,
+  callSite?: string,
 ): void {
+  const current = stmtGetSession.get({ session_id: sessionId }) as
+    | { status: string; task_id: string | null }
+    | undefined;
+  if (current?.status === 'running') {
+    console.warn(
+      `[markSessionDone] running→done for ${sessionId.slice(0, 8)} call_site=${callSite ?? 'unknown'} — emitting audit event`,
+    );
+    recordEvent({
+      event_type: 'session_marked_done_while_running',
+      actor_type: 'system',
+      actor_id: sessionId,
+      task_id: current.task_id ?? null,
+      payload: { call_site: callSite ?? 'unknown', status_before: 'running' },
+    });
+  }
   stmtMarkSessionDone.run({
     session_id: sessionId,
     ended_at: endedAt,

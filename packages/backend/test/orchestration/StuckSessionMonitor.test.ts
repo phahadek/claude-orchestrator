@@ -21,6 +21,9 @@ function makeMockSessionManager(): MockSessionManager {
   const sm = new EventEmitter() as unknown as MockSessionManager;
   sm.send = vi.fn();
   sm.kill = vi.fn().mockResolvedValue(undefined);
+  (sm as unknown as { isAlive: ReturnType<typeof vi.fn> }).isAlive = vi
+    .fn()
+    .mockReturnValue(false);
   return sm;
 }
 

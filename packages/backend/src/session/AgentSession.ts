@@ -1291,12 +1291,13 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     this.prUrl = prUrl;
     this.prDetectedLive = true;
 
+    let upsertSucceeded = true;
     if (this.sessionType === 'standard') {
       this.taskBackend()
         .attachPR(this.taskId, prUrl)
         .catch((e) => console.error(`[AgentSession] attachPR failed: ${e}`));
 
-      upsertPullRequest({
+      const upsertResult = upsertPullRequest({
         pr_number: prNumber,
         pr_url: prUrl,
         task_id: this.taskId,
@@ -1316,6 +1317,15 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         node_id: null,
         head_sha: prShape.head?.sha ?? null,
       });
+      if (upsertResult === null) {
+        // Repo not configured — no PR row written. Skip pr_created broadcast
+        // and pr_opened emit so StuckSessionMonitor sees no PR row and routes
+        // correctly (idle, not done) when the subprocess is still alive.
+        console.warn(
+          `[AgentSession] handlePRDetected: upsertPullRequest rejected for repo "${repo}" — skipping pr_created broadcast`,
+        );
+        upsertSucceeded = false;
+      }
 
       // If head_sha was missing from the tool response, fetch it from GitHub
       // so shouldAutoReview() can compare SHAs on the first re-review attempt.
@@ -1398,6 +1408,8 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         })();
       }
     }
+
+    if (!upsertSucceeded) return;
 
     this.broadcast({
       type: 'pr_created',
