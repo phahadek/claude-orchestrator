@@ -49,6 +49,8 @@ import {
   getRunningSessionsWithMergedOrClosedPR,
   hasActiveSessionForTask,
   getOtherRunningSessionsForTask,
+  setSessionPauseReason,
+  setSessionLastErrorDetail,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
 import { eventKind } from './eventKind';
@@ -622,11 +624,20 @@ export class SessionManager extends EventEmitter {
         `[SessionManager] completeStart failed for ${sessionId}:`,
         err,
       );
+      const errorDetail = err instanceof Error ? err.message : String(err);
+      // Persist the error context so review-verdict construction can surface the
+      // real cause instead of the generic "no output to parse" fallback.
+      try {
+        setSessionPauseReason(sessionId, 'launch_failed');
+        setSessionLastErrorDetail(sessionId, errorDetail);
+      } catch {
+        // Best-effort — DB may be unavailable or mocked without these functions.
+      }
       await this.cleanupPartialWorktree(sessionId);
       this.markSessionErrored(sessionId, 'error', 'launch_failed');
       this.emit('message', {
         type: 'error',
-        message: `Session launch failed: ${err instanceof Error ? err.message : String(err)}`,
+        message: `Session launch failed: ${errorDetail}`,
       } satisfies ServerMessage);
     });
 

@@ -120,6 +120,15 @@ export function setSessionPauseReason(sessionId: string, reason: string): void {
   ).run({ session_id: sessionId, pause_reason: reason });
 }
 
+export function setSessionLastErrorDetail(
+  sessionId: string,
+  detail: string,
+): void {
+  db.prepare<{ session_id: string; last_error_detail: string }>(
+    `UPDATE sessions SET last_error_detail = @last_error_detail WHERE session_id = @session_id`,
+  ).run({ session_id: sessionId, last_error_detail: detail });
+}
+
 const stmtMarkSessionDone = db.prepare<{
   session_id: string;
   ended_at: number;

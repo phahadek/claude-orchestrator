@@ -775,4 +775,10 @@ export function runMigrations(target: Database.Database): void {
       `);
     }
   }
+
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN last_error_detail TEXT`);
+  } catch {
+    /* already exists */
+  }
 }

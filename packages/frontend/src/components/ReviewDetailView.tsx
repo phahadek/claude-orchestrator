@@ -13,6 +13,7 @@ export interface ReviewResult {
   verdict: 'approved' | 'needs_changes' | 'incomplete' | 'error';
   dimensions: ReviewDimension[];
   summary: string;
+  errorDetail?: string;
 }
 
 // ── Client-side review result parser ─────────────────────────────
@@ -176,6 +177,9 @@ export function ReviewDetailView({ session }: Props) {
               >
                 {result.summary}
               </p>
+            )}
+            {result.errorDetail && (
+              <pre className={styles.errorDetail}>{result.errorDetail}</pre>
             )}
           </>
         ) : isActive ? (
