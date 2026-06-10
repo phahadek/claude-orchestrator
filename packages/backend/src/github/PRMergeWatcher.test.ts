@@ -3928,7 +3928,12 @@ describe('PRMergeWatcher.poll() — clearStalePauses wiring', () => {
     const github = makeMockGitHub();
     const autoMerger = makeMockAutoMerger();
 
-    const watcher = new PRMergeWatcher(github, makeMockSessions(), undefined, () => {});
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
     watcher.setAutoMerger(autoMerger);
 
     await watcher.poll();
@@ -3942,7 +3947,12 @@ describe('PRMergeWatcher.poll() — clearStalePauses wiring', () => {
     vi.mocked(getAllOpenPRs).mockReturnValue([]);
     const github = makeMockGitHub();
 
-    const watcher = new PRMergeWatcher(github, makeMockSessions(), undefined, () => {});
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
     await expect(watcher.poll()).resolves.toBeUndefined();
   });
 
@@ -3969,7 +3979,12 @@ describe('PRMergeWatcher.poll() — clearStalePauses wiring', () => {
       }),
     } as unknown as AutoMerger;
 
-    const watcher = new PRMergeWatcher(github, makeMockSessions(), undefined, () => {});
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
     watcher.setAutoMerger(autoMerger);
 
     await watcher.poll();
