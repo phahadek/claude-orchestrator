@@ -77,6 +77,8 @@ vi.mock('../db/queries', () => ({
   markSessionSuperseded: vi.fn(),
   markSessionDone: vi.fn(),
   updateSessionWorktreePath: vi.fn(),
+  incrementTaskCrashCount: vi.fn().mockReturnValue(1),
+  setTaskPauseReason: vi.fn(),
 }));
 
 vi.mock('../tasks/TaskBackend', () => ({
@@ -114,6 +116,11 @@ vi.mock('../session/branchModel', () => ({
   slugify: vi
     .fn()
     .mockImplementation((s: string) => s.toLowerCase().replace(/\s+/g, '-')),
+  deriveBranchSlug: vi
+    .fn()
+    .mockImplementation(
+      (s: string) => `feature/${s.toLowerCase().replace(/\s+/g, '-')}`,
+    ),
 }));
 
 vi.mock('../routes/tasks', () => ({
@@ -132,6 +139,9 @@ vi.mock('../session/CliSessionRunner', () => ({
   CliSessionRunner: vi.fn().mockImplementation(() => ({
     sendMessage: vi.fn(),
     endSession: vi.fn(),
+    // Never resolves so wireSession's run() fires session_status (resolving firstEvent)
+    // but never completes, avoiding asynchronous markSessionErrored('run_error') noise.
+    run: vi.fn().mockReturnValue(new Promise(() => {})),
   })),
 }));
 
@@ -331,5 +341,206 @@ describe('sendOrResume() short-circuit: already-errored session', () => {
       .mocked(execSync)
       .mock.calls.filter((c) => (c[0] as string).includes('worktree add'));
     expect(worktreeCalls).toHaveLength(0);
+  });
+});
+
+// ── Prune + reattach ─────────────────────────────────────────────────────────
+
+describe('sendOrResume() prune + reattach', () => {
+  it('calls git worktree prune before attempting to add the worktree', async () => {
+    vi.mocked(execSync).mockReturnValue('' as never);
+
+    const sm = new SessionManager();
+    await sm.sendOrResume(SESSION_ID, 'fix this');
+
+    const calls = vi.mocked(execSync).mock.calls.map((c) => c[0] as string);
+    const pruneIdx = calls.findIndex((c) => c.includes('worktree prune'));
+    const addIdx = calls.findIndex((c) => c.includes('worktree add'));
+    expect(pruneIdx).toBeGreaterThanOrEqual(0);
+    expect(addIdx).toBeGreaterThanOrEqual(0);
+    expect(pruneIdx).toBeLessThan(addIdx);
+  });
+
+  it('reattaches successfully after prune when branch "already checked out"', async () => {
+    let attachAttempt = 0;
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      const cmdStr = cmd as string;
+      if (cmdStr.includes('worktree add') && !cmdStr.includes('-b')) {
+        attachAttempt++;
+        if (attachAttempt === 1) {
+          // First attach fails: stale "already checked out" error
+          throw makeWorktreeError(
+            "fatal: 'feature/my-feature-task' is already checked out at '/deleted/path'",
+          );
+        }
+        // Second attach (after prune) succeeds
+        return '' as never;
+      }
+      return '' as never;
+    });
+
+    const sm = new SessionManager();
+    const msgs: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => msgs.push(m));
+
+    const result = await sm.sendOrResume(SESSION_ID, 'fix this');
+    expect(result).toBe(SESSION_ID);
+    // Reattach succeeded → no worktree_recreate_failed broadcast.
+    expect(
+      msgs.find(
+        (m) =>
+          m.type === 'session_action_failed' &&
+          (m as { reason: string }).reason === 'worktree_recreate_failed',
+      ),
+    ).toBeUndefined();
+    // A second (post-prune) attach was attempted.
+    expect(attachAttempt).toBe(2);
+    // Session was respawned to running (reattach proceeded past worktree setup).
+    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+      SESSION_ID,
+      'running',
+    );
+  });
+
+  it('succeeds when -b also fails with "already exists" by pruning + reattaching', async () => {
+    let attachAttempt = 0;
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      const cmdStr = cmd as string;
+      if (cmdStr.includes('worktree add') && !cmdStr.includes('-b')) {
+        attachAttempt++;
+        if (attachAttempt === 1) {
+          // First attach: branch not found
+          throw makeWorktreeError('fatal: invalid reference: feature/my-feature-task');
+        }
+        // Second attempt (after prune triggered by -b "already exists"): success
+        return '' as never;
+      }
+      if (cmdStr.includes('worktree add') && cmdStr.includes('-b')) {
+        // -b fails: branch already exists
+        throw makeWorktreeError(
+          "fatal: A branch named 'feature/my-feature-task' already exists.",
+        );
+      }
+      return '' as never;
+    });
+
+    const sm = new SessionManager();
+    const msgs: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => msgs.push(m));
+
+    const result = await sm.sendOrResume(SESSION_ID, 'fix this');
+    expect(result).toBe(SESSION_ID);
+    expect(
+      msgs.find(
+        (m) =>
+          m.type === 'session_action_failed' &&
+          (m as { reason: string }).reason === 'worktree_recreate_failed',
+      ),
+    ).toBeUndefined();
+    // Final reattach after -b failure succeeded.
+    expect(attachAttempt).toBe(2);
+    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+      SESSION_ID,
+      'running',
+    );
+  });
+});
+
+// ── Crash budget: worktree_recreate_failed counts ────────────────────────────
+
+describe('sendOrResume() crash budget for worktree_recreate_failed', () => {
+  it('increments crash counter when worktree recreation fails', async () => {
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if ((cmd as string).includes('worktree add')) {
+        throw makeWorktreeError('fatal: some unrecoverable error');
+      }
+      return '' as never;
+    });
+
+    const sm = new SessionManager();
+    await sm.sendOrResume(SESSION_ID, 'fix this');
+
+    expect(queries.incrementTaskCrashCount).toHaveBeenCalledWith(
+      IDLE_SESSION_ROW.task_id,
+    );
+  });
+
+  it('does not write task_pause_reasons on first crash (counter=1)', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if ((cmd as string).includes('worktree add')) {
+        throw makeWorktreeError('fatal: some error');
+      }
+      return '' as never;
+    });
+
+    const sm = new SessionManager();
+    await sm.sendOrResume(SESSION_ID, 'fix this');
+
+    expect(queries.setTaskPauseReason).not.toHaveBeenCalled();
+  });
+
+  it('writes task_pause_reasons and marks Blocked on second consecutive crash', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(2);
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if ((cmd as string).includes('worktree add')) {
+        throw makeWorktreeError('fatal: some error');
+      }
+      return '' as never;
+    });
+
+    const sm = new SessionManager();
+    await sm.sendOrResume(SESSION_ID, 'fix this');
+
+    expect(queries.setTaskPauseReason).toHaveBeenCalledWith(
+      IDLE_SESSION_ROW.task_id,
+      'launch_failed',
+      'worktree_recreate_failed',
+    );
+  });
+});
+
+// ── Integration: stale registration → reattach (2026-06-10 scenario) ─────────
+
+describe('sendOrResume() integration: stale-registration reattach', () => {
+  it('does not create a new session row when reattaching to existing branch', async () => {
+    // Branch is registered to a deleted worktree dir; prune clears it, second attach succeeds.
+    let attachAttempt = 0;
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      const cmdStr = cmd as string;
+      if (cmdStr.includes('worktree add') && !cmdStr.includes('-b')) {
+        attachAttempt++;
+        if (attachAttempt === 1) {
+          throw makeWorktreeError(
+            "fatal: 'feature/my-feature-task' is already checked out at '/old/stale/path'",
+          );
+        }
+        // Second attempt after prune succeeds
+        return '' as never;
+      }
+      return '' as never;
+    });
+
+    const sm = new SessionManager();
+    const msgs: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => msgs.push(m));
+
+    await sm.sendOrResume(SESSION_ID, 'review feedback');
+
+    // No new session inserted — reusing existing row (same branch, PR commits intact).
+    expect(queries.insertSession).not.toHaveBeenCalled();
+    // No worktree_recreate_failed loop — reattach succeeded.
+    expect(
+      msgs.find(
+        (m) =>
+          m.type === 'session_action_failed' &&
+          (m as { reason: string }).reason === 'worktree_recreate_failed',
+      ),
+    ).toBeUndefined();
+    // Session respawned in place (running), not a fresh launch.
+    expect(queries.updateSessionStatus).toHaveBeenCalledWith(
+      SESSION_ID,
+      'running',
+    );
   });
 });
