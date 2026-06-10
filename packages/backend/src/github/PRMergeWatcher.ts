@@ -933,7 +933,12 @@ export class PRMergeWatcher {
     // Mark the code session done — it was idle (process exited, PR open) and
     // the PR just merged, so this is the terminal done transition.
     if (pr.session_id) {
-      markSessionDone(pr.session_id, Date.now(), pr.pr_url ?? null, 'pr_merge_watcher');
+      markSessionDone(
+        pr.session_id,
+        Date.now(),
+        pr.pr_url ?? null,
+        'pr_merge_watcher',
+      );
     }
 
     // End coding session gracefully (stdin close → clean CLI exit).

@@ -147,7 +147,12 @@ export class StuckSessionMonitor {
           continue;
         }
 
-        markSessionDone(row.session_id, row.last_ts, row.pr_url ?? null, 'stuck_session_no_pr_periodic');
+        markSessionDone(
+          row.session_id,
+          row.last_ts,
+          row.pr_url ?? null,
+          'stuck_session_no_pr_periodic',
+        );
         let taskBackend;
         try {
           taskBackend = row.project_id ? getTaskBackend(row.project_id) : null;

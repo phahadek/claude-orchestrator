@@ -88,7 +88,9 @@ function getAuditRows(
   eventType: string,
 ): Array<{ event_type: string; actor_id: string; payload: string }> {
   return db
-    .prepare('SELECT event_type, actor_id, payload FROM audit_log WHERE event_type = ?')
+    .prepare(
+      'SELECT event_type, actor_id, payload FROM audit_log WHERE event_type = ?',
+    )
     .all(eventType) as Array<{
     event_type: string;
     actor_id: string;
