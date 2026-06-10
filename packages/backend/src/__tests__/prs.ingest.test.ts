@@ -239,6 +239,8 @@ describe('POST /api/prs/ingest', () => {
 
     expect(queries.upsertPullRequest).toHaveBeenCalledOnce();
     const upsertArg = vi.mocked(queries.upsertPullRequest).mock.calls[0][0];
+    // pr.id is GitHub's PR number; verify it is stored as pr_number (not the request body prNumber directly)
+    expect(upsertArg.pr_number).toBe(99); // mockGitHubPR.id === 99 === prNumber
     expect(upsertArg.task_id).toBe(NOTION_TASK_ID);
     expect(upsertArg.session_id).toBe('session-abc');
     expect(upsertArg.head_sha).toBe('abc123');
