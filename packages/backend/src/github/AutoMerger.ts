@@ -16,6 +16,7 @@ import {
   getSession,
   getOrphanMergeablePRs,
   getStaleAutoMergeFailedPRs,
+  getConflictNudgeCandidates,
   upsertActiveMerge,
   deleteActiveMerge,
   getAllActiveMerges,
@@ -33,7 +34,7 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import { squashMergeLocal } from '../orchestration/localMergeRunner';
 import { detectMergeConflict } from '../orchestration/localBranchHelpers';
 import { formatMergeConflictFeedback } from './reviewUtils';
-import { sendConflictNudge } from './conflictNudge';
+import { sendConflictNudge, type ConflictNudgeCause } from './conflictNudge';
 
 const MIN_POLL_INTERVAL_MS = 5_000;
 
@@ -86,6 +87,9 @@ export class AutoMerger {
    * mergeable + clean state but received no event post-restart. These rows are
    * missed by the event-driven path because AutoMerger only fires on fresh
    * verdict=approved events or ci_failing → clean transitions.
+   *
+   * Also fires conflictNudgeSweep() asynchronously to re-nudge sessions for
+   * conflict/auto_merge_failed PRs that were missed before this notifier existed.
    */
   bootSweep(): void {
     const orphans = getOrphanMergeablePRs();
@@ -100,6 +104,11 @@ export class AutoMerger {
         `[AutoMerger] boot sweep complete — triggered ${orphans.length} orphan PR(s)`,
       );
     }
+    void this.conflictNudgeSweep().catch((err: unknown) =>
+      console.warn(
+        `[AutoMerger] conflictNudgeSweep error on boot: ${(err as Error).message}`,
+      ),
+    );
   }
 
   /**
@@ -118,6 +127,66 @@ export class AutoMerger {
       );
       setPauseReason(row.pr_number, row.repo, null);
       this.attempt(row.pr_number, row.repo);
+    }
+  }
+
+  /**
+   * Re-nudge sessions for PRs that are still conflicted/blocked but whose
+   * conflict notification was never delivered — either because the pause
+   * predates the notifier (auto_merge_failed rows with no conflict_nudge_sha)
+   * or because PRMergeWatcher recorded the conflict while the session was
+   * not being polled (merge_state='dirty'/'blocked', no pause).
+   *
+   * Guards: session must be idle; GitHub mergeability is re-checked so PRs
+   * whose conflict resolved while the backend was down are not re-nudged.
+   * SHA dedup in sendConflictNudge prevents double-nudging.
+   */
+  async conflictNudgeSweep(): Promise<void> {
+    if (!this.sessions) return;
+    const candidates = getConflictNudgeCandidates();
+    if (candidates.length === 0) return;
+
+    console.log(
+      `[AutoMerger] conflictNudgeSweep: checking ${candidates.length} candidate(s)`,
+    );
+    let nudged = 0;
+
+    for (const { pr_number, repo } of candidates) {
+      const pr = getPRByNumber(pr_number, repo);
+      if (!pr?.session_id) continue;
+
+      const session = getSession(pr.session_id);
+      if (!session || session.status !== 'idle') continue;
+
+      let category;
+      try {
+        category = await this.github.categorizeMergeability(pr_number, repo);
+      } catch (err) {
+        console.warn(
+          `[AutoMerger] conflictNudgeSweep: categorizeMergeability failed for PR #${pr_number}: ${(err as Error).message}`,
+        );
+        continue;
+      }
+
+      if (category.category !== 'conflict' && category.category !== 'blocked')
+        continue;
+
+      const cause: ConflictNudgeCause =
+        category.category === 'conflict' &&
+        category.rawMergeableState === 'behind'
+          ? 'behind'
+          : category.category === 'blocked'
+            ? 'blocked'
+            : 'conflict';
+
+      await sendConflictNudge(this.sessions, pr, cause);
+      nudged++;
+    }
+
+    if (nudged > 0) {
+      console.log(
+        `[AutoMerger] conflictNudgeSweep complete — nudged ${nudged} session(s)`,
+      );
     }
   }
 
@@ -145,6 +214,8 @@ export class AutoMerger {
     for (const row of approvedLocalBranches) {
       await this.handleLocalBranchMerge(row);
     }
+
+    await this.conflictNudgeSweep();
   }
 
   private async handleLocalBranchMerge(
