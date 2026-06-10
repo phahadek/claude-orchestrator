@@ -588,6 +588,29 @@ export function setSessionMetadata(
 
 // ─── session_events ────────────────────────────────────────────────────────
 
+export const MAX_EVENT_PAYLOAD_BYTES = 262144;
+const HEAD_BYTES = 8192;
+
+function capEventPayload(payload: string): string {
+  if (Buffer.byteLength(payload, 'utf8') <= MAX_EVENT_PAYLOAD_BYTES)
+    return payload;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    parsed = null;
+  }
+  const rec =
+    parsed != null && typeof parsed === 'object'
+      ? (parsed as Record<string, unknown>)
+      : {};
+  const truncated: Record<string, unknown> = { truncated: true };
+  if ('type' in rec) truncated.type = rec.type;
+  if ('usage' in rec) truncated.usage = rec.usage;
+  truncated.head = payload.slice(0, HEAD_BYTES);
+  return JSON.stringify(truncated);
+}
+
 const stmtInsertEvent = db.prepare<
   NewSessionEvent & { message_id: string | null }
 >(`
@@ -615,11 +638,19 @@ const stmtGetEventsBySession = db.prepare<{ session_id: string }>(`
 `);
 
 export function insertEvent(e: NewSessionEvent): void {
-  stmtInsertEvent.run({ message_id: null, ...e });
+  stmtInsertEvent.run({
+    message_id: null,
+    ...e,
+    payload: capEventPayload(e.payload),
+  });
 }
 
 export function insertEventOrIgnore(e: NewSessionEvent): void {
-  stmtInsertEventOrIgnore.run({ message_id: null, ...e });
+  stmtInsertEventOrIgnore.run({
+    message_id: null,
+    ...e,
+    payload: capEventPayload(e.payload),
+  });
 }
 
 /**
@@ -635,10 +666,11 @@ export function upsertSessionEvent(
   e: NewSessionEvent & { message_id?: string | null },
   existingId?: number,
 ): number {
+  const cappedPayload = capEventPayload(e.payload);
   if (existingId != null) {
     stmtUpdateEventPayload.run({
       id: existingId,
-      payload: e.payload,
+      payload: cappedPayload,
       timestamp: e.timestamp,
     });
     return existingId;
@@ -650,7 +682,11 @@ export function upsertSessionEvent(
     );
     return -1;
   }
-  const result = stmtInsertEvent.run({ message_id: null, ...e });
+  const result = stmtInsertEvent.run({
+    message_id: null,
+    ...e,
+    payload: cappedPayload,
+  });
   return result.lastInsertRowid as number;
 }
 
