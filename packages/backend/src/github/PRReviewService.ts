@@ -739,10 +739,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
           cleanup();
           // If the session ended in error before producing output, surface the real cause.
           const sessionRow = getSession(sessionId);
-          if (
-            sessionRow?.status === 'error' &&
-            sessionRow.last_error_detail
-          ) {
+          if (sessionRow?.status === 'error' && sessionRow.last_error_detail) {
             resolve({
               prNumber,
               repo,

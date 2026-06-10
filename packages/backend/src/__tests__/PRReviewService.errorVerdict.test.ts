@@ -132,11 +132,13 @@ function makeMockTaskBackend(): TaskTrackerBackend {
  * session_ended event on the mock session manager. Returns the resolved result.
  */
 async function runReviewWithSessionEnded(
-  sessionRow: {
-    status: string;
-    pause_reason: string | null;
-    last_error_detail: string | null;
-  } | undefined,
+  sessionRow:
+    | {
+        status: string;
+        pause_reason: string | null;
+        last_error_detail: string | null;
+      }
+    | undefined,
   storedEvents: { payload: string; event_type: string }[] = [],
 ): Promise<import('../github/PRReviewService.js').PRReviewResult> {
   const sessionManager = new MockSessionManager();
