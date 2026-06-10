@@ -121,7 +121,10 @@ import { createPrsRouter } from '../routes/prs.js';
 import { ReviewOrchestrator } from '../github/ReviewOrchestrator.js';
 import * as queries from '../db/queries.js';
 import type { GitHubClient } from '../github/GitHubClient.js';
-import type { PRReviewService, PRReviewResult } from '../github/PRReviewService.js';
+import type {
+  PRReviewService,
+  PRReviewResult,
+} from '../github/PRReviewService.js';
 import type { SessionManager } from '../session/SessionManager.js';
 import type { PullRequest } from '../github/types.js';
 
@@ -191,7 +194,10 @@ function makeMockGitHub(): GitHubClient {
     fetchPR: vi.fn().mockResolvedValue(mockGitHubPR),
     fetchDiff: vi
       .fn()
-      .mockResolvedValue({ diff: 'diff --git a/foo.ts b/foo.ts', filesChanged: ['foo.ts'] }),
+      .mockResolvedValue({
+        diff: 'diff --git a/foo.ts b/foo.ts',
+        filesChanged: ['foo.ts'],
+      }),
     mergePR: vi.fn(),
     markPRReady: vi.fn().mockResolvedValue(undefined),
     getMergeability: vi
@@ -236,7 +242,8 @@ beforeEach(() => {
 
 describe('POST /api/prs/ingest — end-to-end review chain', () => {
   it('ingest → pr_opened → ReviewOrchestrator queues job → reviewPR called → verdict persisted', async () => {
-    const sessionManager = new MockSessionManager() as unknown as SessionManager;
+    const sessionManager =
+      new MockSessionManager() as unknown as SessionManager;
     const github = makeMockGitHub();
     const prReviewService = makeMockPRReviewService();
 
@@ -247,7 +254,9 @@ describe('POST /api/prs/ingest — end-to-end review chain', () => {
     // Subsequent calls: ReviewOrchestrator iteration check etc. see the inserted row.
     vi.mocked(queries.getPRByNumber)
       .mockReturnValueOnce(null)
-      .mockReturnValue(prRowAfterIngest as ReturnType<typeof queries.getPRByNumber>);
+      .mockReturnValue(
+        prRowAfterIngest as ReturnType<typeof queries.getPRByNumber>,
+      );
 
     const app = express();
     app.use(express.json());
@@ -276,6 +285,10 @@ describe('POST /api/prs/ingest — end-to-end review chain', () => {
     // Verify the review chain fired
     expect(prReviewService.reviewPR).toHaveBeenCalledOnce();
     const reviewCallArgs = vi.mocked(prReviewService.reviewPR).mock.calls[0];
-    expect(reviewCallArgs[0]).toMatchObject({ type: 'pr', prNumber: PR_NUMBER, repo: REPO });
+    expect(reviewCallArgs[0]).toMatchObject({
+      type: 'pr',
+      prNumber: PR_NUMBER,
+      repo: REPO,
+    });
   });
 });
