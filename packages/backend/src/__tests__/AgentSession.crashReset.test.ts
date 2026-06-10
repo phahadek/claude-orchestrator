@@ -171,7 +171,9 @@ describe('AgentSession — crash counter reset on healthy completion', () => {
             type: 'tool_use',
             id: toolUseId,
             name: 'Bash',
-            input: { command: 'gh pr create --title "feat: foo" --body "body"' },
+            input: {
+              command: 'gh pr create --title "feat: foo" --body "body"',
+            },
           },
         ],
       },

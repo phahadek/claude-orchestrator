@@ -2416,7 +2416,9 @@ export function getTaskCrashCount(taskId: string): number {
   const row = db
     .prepare<{
       task_id: string;
-    }>(`SELECT consecutive_crashes FROM task_crash_counts WHERE task_id = @task_id`)
+    }>(
+      `SELECT consecutive_crashes FROM task_crash_counts WHERE task_id = @task_id`,
+    )
     .get({ task_id: taskId }) as { consecutive_crashes: number } | undefined;
   return row?.consecutive_crashes ?? 0;
 }
