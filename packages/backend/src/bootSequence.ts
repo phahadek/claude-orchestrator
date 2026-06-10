@@ -81,7 +81,10 @@ export async function runBootSequence(deps: BootDeps): Promise<void> {
   try {
     stuckSessionMonitor.rehydrate();
   } catch (err) {
-    console.error('[server] BOOT FAILURE in StuckSessionMonitor.rehydrate:', err);
+    console.error(
+      '[server] BOOT FAILURE in StuckSessionMonitor.rehydrate:',
+      err,
+    );
     process.exit(1);
   }
 
