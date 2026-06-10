@@ -111,9 +111,9 @@ vi.mock('../session/branchModel', () => ({
     milestoneSlug: null,
   }),
   ensureMilestoneBranch: vi.fn(),
-  slugify: vi.fn().mockImplementation((s: string) =>
-    s.toLowerCase().replace(/\s+/g, '-'),
-  ),
+  slugify: vi
+    .fn()
+    .mockImplementation((s: string) => s.toLowerCase().replace(/\s+/g, '-')),
 }));
 
 vi.mock('../routes/tasks', () => ({
@@ -155,7 +155,9 @@ vi.mock('../audit/AuditLog', () => ({
 }));
 
 vi.mock('../config/corporateMode', () => ({
-  getCorporateMode: vi.fn().mockReturnValue({ gates: { dockerMandatory: false } }),
+  getCorporateMode: vi
+    .fn()
+    .mockReturnValue({ gates: { dockerMandatory: false } }),
 }));
 
 import { execSync } from 'child_process';
@@ -202,7 +204,9 @@ describe('sendOrResume() worktree-recreate failure: no rethrow', () => {
     });
 
     const sm = new SessionManager();
-    await expect(sm.sendOrResume(SESSION_ID, 'fix this')).resolves.not.toThrow();
+    await expect(
+      sm.sendOrResume(SESSION_ID, 'fix this'),
+    ).resolves.not.toThrow();
   });
 
   it('returns the session ID when worktree recreation fails', async () => {
