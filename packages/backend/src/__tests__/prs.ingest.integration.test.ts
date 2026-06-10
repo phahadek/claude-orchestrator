@@ -192,12 +192,10 @@ function makeMockGitHub(): GitHubClient {
     listOpenPRs: vi.fn().mockResolvedValue([]),
     getPRState: vi.fn().mockResolvedValue({ state: 'open', headSha: null }),
     fetchPR: vi.fn().mockResolvedValue(mockGitHubPR),
-    fetchDiff: vi
-      .fn()
-      .mockResolvedValue({
-        diff: 'diff --git a/foo.ts b/foo.ts',
-        filesChanged: ['foo.ts'],
-      }),
+    fetchDiff: vi.fn().mockResolvedValue({
+      diff: 'diff --git a/foo.ts b/foo.ts',
+      filesChanged: ['foo.ts'],
+    }),
     mergePR: vi.fn(),
     markPRReady: vi.fn().mockResolvedValue(undefined),
     getMergeability: vi

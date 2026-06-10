@@ -3,8 +3,8 @@
  *
  * AC coverage:
  * - Helper exists and is the single owner of DB status + Notion task status + WS broadcast
- * - Per-cause target Notion status: runner_non_zero → Blocked, user_kill → Ready,
- *   pre-check failures → Ready
+ * - BLOCKED_REASONS causes use crash budget: crash #1 → 🗂️ Ready, crash #2+ → 🚫 Blocked
+ * - Non-BLOCKED_REASONS causes (user_kill, launch_failed) → 🗂️ Ready, counter untouched
  * - session_ended WS broadcast fires from the helper
  * - audit_log event captures the cause
  * - Notion updateStatus failures are logged but not re-thrown
@@ -70,6 +70,8 @@ vi.mock('../db/queries', () => ({
   hasActiveSessionForTask: vi.fn().mockReturnValue(false),
   getSetting: vi.fn().mockReturnValue(null),
   getStuckResultSessionRows: vi.fn().mockReturnValue([]),
+  incrementTaskCrashCount: vi.fn().mockReturnValue(1),
+  resetTaskCrashCount: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog', () => ({
@@ -286,14 +288,28 @@ describe('SessionManager.markSessionErrored() — per-cause Notion status', () =
     vi.mocked(queries.getSession).mockReturnValue(makeSessionRow() as never);
   });
 
-  it('sets Notion status to 🔴 Blocked for runner_non_zero', async () => {
+  it('sets Notion status to 🗂️ Ready for runner_non_zero (first crash)', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
     const mockUpdate = setupFakeBackend();
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
     await new Promise((r) => setTimeout(r, 0));
     expect(mockUpdate).toHaveBeenCalledWith(
       'notion-task-id',
-      '🔴 Blocked',
+      '🗂️ Ready',
+      expect.anything(),
+    );
+  });
+
+  it('sets Notion status to 🚫 Blocked for runner_non_zero (second consecutive crash)', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(2);
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockUpdate).toHaveBeenCalledWith(
+      'notion-task-id',
+      '🚫 Blocked',
       expect.anything(),
     );
   });
@@ -334,14 +350,15 @@ describe('SessionManager.markSessionErrored() — per-cause Notion status', () =
     );
   });
 
-  it('sets Notion status to 🔴 Blocked for run_error', async () => {
+  it('sets Notion status to 🗂️ Ready for run_error (first crash)', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
     const mockUpdate = setupFakeBackend();
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'error', 'run_error');
     await new Promise((r) => setTimeout(r, 0));
     expect(mockUpdate).toHaveBeenCalledWith(
       'notion-task-id',
-      '🔴 Blocked',
+      '🗂️ Ready',
       expect.anything(),
     );
   });
@@ -432,7 +449,8 @@ describe('SessionManager.markSessionErrored() — task_status_changed + emitTask
     vi.mocked(queries.getSession).mockReturnValue(makeSessionRow() as never);
   });
 
-  it('broadcasts task_status_changed after Notion update resolves', async () => {
+  it('broadcasts task_status_changed with 🚫 Blocked on second crash', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(2);
     setupFakeBackend();
     const sm = new SessionManager();
     const messages: ServerMessage[] = [];
@@ -445,7 +463,24 @@ describe('SessionManager.markSessionErrored() — task_status_changed + emitTask
       | { newStatus: string }
       | undefined;
     expect(changed).toBeDefined();
-    expect(changed!.newStatus).toBe('🔴 Blocked');
+    expect(changed!.newStatus).toBe('🚫 Blocked');
+  });
+
+  it('broadcasts task_status_changed with 🗂️ Ready on first crash', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
+    setupFakeBackend();
+    const sm = new SessionManager();
+    const messages: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => messages.push(m));
+
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+    await new Promise((r) => setTimeout(r, 0));
+
+    const changed = messages.find((m) => m.type === 'task_status_changed') as
+      | { newStatus: string }
+      | undefined;
+    expect(changed).toBeDefined();
+    expect(changed!.newStatus).toBe('🗂️ Ready');
   });
 
   it('calls emitTaskUpdated after Notion update resolves', async () => {
@@ -455,5 +490,73 @@ describe('SessionManager.markSessionErrored() — task_status_changed + emitTask
     await new Promise((r) => setTimeout(r, 0));
 
     expect(emitTaskUpdated).toHaveBeenCalledWith('notion-task-id');
+  });
+});
+
+describe('SessionManager.markSessionErrored() — crash budget counter', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getSession).mockReturnValue(makeSessionRow() as never);
+    setupFakeBackend();
+  });
+
+  it('increments crash counter for BLOCKED_REASONS causes', () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+    expect(queries.incrementTaskCrashCount).toHaveBeenCalledWith(
+      'notion-task-id',
+    );
+  });
+
+  it('does NOT increment crash counter for non-BLOCKED_REASONS causes', () => {
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'killed', 'user_kill');
+    expect(queries.incrementTaskCrashCount).not.toHaveBeenCalled();
+  });
+
+  it('does NOT increment crash counter for launch_failed', () => {
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'error', 'launch_failed');
+    expect(queries.incrementTaskCrashCount).not.toHaveBeenCalled();
+  });
+
+  it('first runner_non_zero crash → 🗂️ Ready (counter = 1)', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockUpdate).toHaveBeenCalledWith(
+      'notion-task-id',
+      '🗂️ Ready',
+      expect.anything(),
+    );
+  });
+
+  it('second consecutive runner_non_zero crash → 🚫 Blocked (counter = 2)', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(2);
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockUpdate).toHaveBeenCalledWith(
+      'notion-task-id',
+      '🚫 Blocked',
+      expect.anything(),
+    );
+  });
+
+  it('counter at 3+ still maps to 🚫 Blocked', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(3);
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'error', 'sendOrResume_run_error');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockUpdate).toHaveBeenCalledWith(
+      'notion-task-id',
+      '🚫 Blocked',
+      expect.anything(),
+    );
   });
 });
