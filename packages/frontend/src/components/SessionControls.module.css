@@ -6,6 +6,16 @@
   flex-wrap: wrap;
 }
 
+/* Admin chrome wrapper — transparent at desktop so children are flex items */
+.adminChrome {
+  display: contents;
+}
+
+/* Compact disclosure toggle — hidden at desktop, shown at ≤768px */
+.disclosureToggle {
+  display: none;
+}
+
 .modelBadge {
   font-size: 0.75rem;
   color: var(--text-faint);
@@ -262,4 +272,45 @@
 
 .tagInput:focus {
   border-bottom-color: #89b4fa;
+}
+
+/* ── Mobile: compact disclosure at ≤768px ───────────────────────── */
+@media (max-width: 768px) {
+  .disclosureToggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    background: transparent;
+    border: 1px solid rgba(166, 173, 200, 0.3);
+    border-radius: var(--radius-sm);
+    color: var(--text-faint);
+    cursor: pointer;
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    flex-shrink: 0;
+    transition: color 0.15s, border-color 0.15s;
+  }
+
+  .disclosureToggle:hover {
+    color: var(--text-primary);
+    border-color: rgba(166, 173, 200, 0.5);
+  }
+
+  /* Admin chrome groups hidden by default; restored when disclosure is open */
+  .adminChrome {
+    display: none;
+  }
+
+  .adminChrome--open {
+    display: contents;
+  }
+
+  /* Note + tag area hidden by default; restored when disclosure is open */
+  .noteTagArea {
+    display: none;
+  }
+
+  .noteTagArea--open {
+    display: flex;
+  }
 }

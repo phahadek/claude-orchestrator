@@ -42,11 +42,13 @@ export function SessionControls({
   const [editingNote, setEditingNote] = useState(false);
   const [noteValue, setNoteValue] = useState('');
   const [tagInput, setTagInput] = useState('');
+  const [compactOpen, setCompactOpen] = useState(false);
 
   useEffect(() => {
     setEditingNote(false);
     setNoteValue(session?.note ?? '');
     setTagInput('');
+    setCompactOpen(false);
     // Reset local state only on session switch — intentionally excludes session?.note
     // to avoid resetting the input while the user is editing
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -156,6 +158,8 @@ export function SessionControls({
     });
   }
 
+  const adminChromeClass = `${styles.adminChrome} ${compactOpen ? styles['adminChrome--open'] : ''}`;
+
   return (
     <>
       <div className={styles.headerControls}>
@@ -173,30 +177,35 @@ export function SessionControls({
           compactionCount={session.compaction_count}
           model={session.model}
         />
-        {(session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0) >
-          0 && (
-          <span className={styles.tokenCount}>
-            {sessionMode === 'api'
-              ? formatCost(
-                  calculateCost(
-                    session.totalInputTokens ?? 0,
-                    session.totalOutputTokens ?? 0,
-                    session.model,
-                  ),
-                )
-              : `${formatTokenCount((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0))} tokens (~${formatCost(calculateCost(session.totalInputTokens ?? 0, session.totalOutputTokens ?? 0, session.model))} est.)`}
-          </span>
-        )}
-        <button
-          className={`${styles.favoriteButton} ${session.favorited ? styles['favoriteButton--active'] : ''}`}
-          onClick={() => void handleToggleFavorite()}
-          aria-label={
-            session.favorited ? 'Unfavorite session' : 'Favorite session'
-          }
-          title={session.favorited ? 'Unfavorite' : 'Favorite'}
-        >
-          {session.favorited ? '★' : '☆'}
-        </button>
+
+        {/* Admin chrome group A: cost + favorite — CSS-hidden on mobile until disclosure opens */}
+        <div className={adminChromeClass}>
+          {(session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0) >
+            0 && (
+            <span className={styles.tokenCount}>
+              {sessionMode === 'api'
+                ? formatCost(
+                    calculateCost(
+                      session.totalInputTokens ?? 0,
+                      session.totalOutputTokens ?? 0,
+                      session.model,
+                    ),
+                  )
+                : `${formatTokenCount((session.totalInputTokens ?? 0) + (session.totalOutputTokens ?? 0))} tokens (~${formatCost(calculateCost(session.totalInputTokens ?? 0, session.totalOutputTokens ?? 0, session.model))} est.)`}
+            </span>
+          )}
+          <button
+            className={`${styles.favoriteButton} ${session.favorited ? styles['favoriteButton--active'] : ''}`}
+            onClick={() => void handleToggleFavorite()}
+            aria-label={
+              session.favorited ? 'Unfavorite session' : 'Favorite session'
+            }
+            title={session.favorited ? 'Unfavorite' : 'Favorite'}
+          >
+            {session.favorited ? '★' : '☆'}
+          </button>
+        </div>
+
         {session.isRateLimited && onResume && (
           <button
             className={styles.resumeButton}
@@ -215,7 +224,12 @@ export function SessionControls({
             {getTaskSourceLinkLabel(project?.taskSource ?? 'notion')}
           </a>
         )}
-        <ElapsedTime session={session} />
+
+        {/* Admin chrome group B: elapsed time — CSS-hidden on mobile until disclosure opens */}
+        <div className={adminChromeClass}>
+          <ElapsedTime session={session} />
+        </div>
+
         {isActive && (
           <button
             className={styles.endSessionButton}
@@ -229,33 +243,47 @@ export function SessionControls({
             Kill
           </button>
         )}
-        {!isActive &&
-          (session.archived ? (
-            <button
-              className={styles.archiveButton}
-              onClick={() => void handleUnarchive()}
-              disabled={archiving}
-            >
-              {archiving ? '…' : 'Unarchive'}
-            </button>
-          ) : (
-            <button
-              className={styles.archiveButton}
-              onClick={() => void handleArchive()}
-              disabled={archiving}
-            >
-              {archiving ? '…' : 'Archive'}
-            </button>
-          ))}
+
+        {/* Admin chrome group C: archive + delete (inactive sessions) — CSS-hidden on mobile */}
         {!isActive && (
-          <button
-            className={styles.deleteButton}
-            onClick={() => void handleDelete()}
-            disabled={deleting}
-          >
-            {deleting ? '…' : 'Delete'}
-          </button>
+          <div className={adminChromeClass}>
+            {session.archived ? (
+              <button
+                className={styles.archiveButton}
+                onClick={() => void handleUnarchive()}
+                disabled={archiving}
+              >
+                {archiving ? '…' : 'Unarchive'}
+              </button>
+            ) : (
+              <button
+                className={styles.archiveButton}
+                onClick={() => void handleArchive()}
+                disabled={archiving}
+              >
+                {archiving ? '…' : 'Archive'}
+              </button>
+            )}
+            <button
+              className={styles.deleteButton}
+              onClick={() => void handleDelete()}
+              disabled={deleting}
+            >
+              {deleting ? '…' : 'Delete'}
+            </button>
+          </div>
         )}
+
+        {/* Compact disclosure toggle — CSS shows only on narrow viewports (≤768px) */}
+        <button
+          className={styles.disclosureToggle}
+          aria-expanded={compactOpen}
+          aria-label={compactOpen ? 'Hide session details' : 'Show session details'}
+          onClick={() => setCompactOpen((o) => !o)}
+        >
+          {compactOpen ? '− details' : '⋯ details'}
+        </button>
+
         {onClose && (
           <button
             className={styles.closeButton}
@@ -267,7 +295,9 @@ export function SessionControls({
         )}
       </div>
 
-      <div className={styles.noteTagArea}>
+      <div
+        className={`${styles.noteTagArea} ${compactOpen ? styles['noteTagArea--open'] : ''}`}
+      >
         <div className={styles.noteRow}>
           {editingNote ? (
             <input
