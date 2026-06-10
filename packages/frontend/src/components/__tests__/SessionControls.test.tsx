@@ -562,6 +562,126 @@ describe('SessionControls — compact disclosure toggle', () => {
   });
 });
 
+describe('SessionControls — embedded mode', () => {
+  it('renders disclosure toggle when embedded=true', () => {
+    render(<SessionControls session={makeSession()} {...defaultProps} embedded />);
+    expect(screen.getByLabelText('Show session details')).toBeTruthy();
+  });
+
+  it('starts collapsed in embedded mode (aria-expanded=false)', () => {
+    render(<SessionControls session={makeSession()} {...defaultProps} embedded />);
+    const toggle = screen.getByLabelText('Show session details');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('expands on click in embedded mode (aria-expanded=true)', () => {
+    render(<SessionControls session={makeSession()} {...defaultProps} embedded />);
+    fireEvent.click(screen.getByLabelText('Show session details'));
+    expect(
+      screen.getByLabelText('Hide session details').getAttribute('aria-expanded'),
+    ).toBe('true');
+  });
+
+  it('archive handler fires after expanding disclosure in embedded mode', async () => {
+    const setSessionArchived = vi.fn();
+    render(
+      <SessionControls
+        session={makeSession({ status: 'done' })}
+        {...defaultProps}
+        setSessionArchived={setSessionArchived}
+        embedded
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Show session details'));
+    fireEvent.click(screen.getByText('Archive'));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1/archive', {
+        method: 'PATCH',
+      });
+      expect(setSessionArchived).toHaveBeenCalledWith('sess-1', true);
+    });
+  });
+
+  it('delete handler fires after expanding disclosure in embedded mode', async () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
+    const onDeleted = vi.fn();
+    render(
+      <SessionControls
+        session={makeSession({ status: 'done' })}
+        {...defaultProps}
+        onDeleted={onDeleted}
+        embedded
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Show session details'));
+    fireEvent.click(screen.getByText('Delete'));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1', {
+        method: 'DELETE',
+      });
+      expect(onDeleted).toHaveBeenCalledWith('sess-1');
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it('Notion link is in DOM in embedded collapsed state', () => {
+    render(
+      <SessionControls
+        session={makeSession({ notionTaskUrl: 'https://notion.so/task' })}
+        {...defaultProps}
+        embedded
+      />,
+    );
+    expect(screen.getByText('Notion ↗')).toBeTruthy();
+  });
+
+  it('review session (status=done) in embedded mode starts collapsed', () => {
+    render(
+      <SessionControls
+        session={makeSession({ status: 'done' })}
+        {...defaultProps}
+        embedded
+      />,
+    );
+    expect(
+      screen.getByLabelText('Show session details').getAttribute('aria-expanded'),
+    ).toBe('false');
+  });
+
+  it('standalone (no embedded prop) renders Archive/Delete accessible without toggle', () => {
+    render(
+      <SessionControls session={makeSession({ status: 'done' })} {...defaultProps} />,
+    );
+    expect(screen.getByText('Archive')).toBeTruthy();
+    expect(screen.getByText('Delete')).toBeTruthy();
+  });
+
+  it('resets to collapsed when session changes in embedded mode', () => {
+    const { rerender } = render(
+      <SessionControls
+        session={makeSession({ sessionId: 'sess-1' })}
+        {...defaultProps}
+        embedded
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Show session details'));
+    expect(
+      screen.getByLabelText('Hide session details').getAttribute('aria-expanded'),
+    ).toBe('true');
+
+    rerender(
+      <SessionControls
+        session={makeSession({ sessionId: 'sess-2' })}
+        {...defaultProps}
+        embedded
+      />,
+    );
+    expect(
+      screen.getByLabelText('Show session details').getAttribute('aria-expanded'),
+    ).toBe('false');
+  });
+});
+
 describe('SessionControls — Close button', () => {
   it('renders close button when onClose is provided', () => {
     render(
