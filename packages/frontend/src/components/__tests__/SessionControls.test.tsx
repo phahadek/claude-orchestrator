@@ -564,21 +564,29 @@ describe('SessionControls — compact disclosure toggle', () => {
 
 describe('SessionControls — embedded mode', () => {
   it('renders disclosure toggle when embedded=true', () => {
-    render(<SessionControls session={makeSession()} {...defaultProps} embedded />);
+    render(
+      <SessionControls session={makeSession()} {...defaultProps} embedded />,
+    );
     expect(screen.getByLabelText('Show session details')).toBeTruthy();
   });
 
   it('starts collapsed in embedded mode (aria-expanded=false)', () => {
-    render(<SessionControls session={makeSession()} {...defaultProps} embedded />);
+    render(
+      <SessionControls session={makeSession()} {...defaultProps} embedded />,
+    );
     const toggle = screen.getByLabelText('Show session details');
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('expands on click in embedded mode (aria-expanded=true)', () => {
-    render(<SessionControls session={makeSession()} {...defaultProps} embedded />);
+    render(
+      <SessionControls session={makeSession()} {...defaultProps} embedded />,
+    );
     fireEvent.click(screen.getByLabelText('Show session details'));
     expect(
-      screen.getByLabelText('Hide session details').getAttribute('aria-expanded'),
+      screen
+        .getByLabelText('Hide session details')
+        .getAttribute('aria-expanded'),
     ).toBe('true');
   });
 
@@ -644,13 +652,18 @@ describe('SessionControls — embedded mode', () => {
       />,
     );
     expect(
-      screen.getByLabelText('Show session details').getAttribute('aria-expanded'),
+      screen
+        .getByLabelText('Show session details')
+        .getAttribute('aria-expanded'),
     ).toBe('false');
   });
 
   it('standalone (no embedded prop) renders Archive/Delete accessible without toggle', () => {
     render(
-      <SessionControls session={makeSession({ status: 'done' })} {...defaultProps} />,
+      <SessionControls
+        session={makeSession({ status: 'done' })}
+        {...defaultProps}
+      />,
     );
     expect(screen.getByText('Archive')).toBeTruthy();
     expect(screen.getByText('Delete')).toBeTruthy();
@@ -666,7 +679,9 @@ describe('SessionControls — embedded mode', () => {
     );
     fireEvent.click(screen.getByLabelText('Show session details'));
     expect(
-      screen.getByLabelText('Hide session details').getAttribute('aria-expanded'),
+      screen
+        .getByLabelText('Hide session details')
+        .getAttribute('aria-expanded'),
     ).toBe('true');
 
     rerender(
@@ -677,7 +692,9 @@ describe('SessionControls — embedded mode', () => {
       />,
     );
     expect(
-      screen.getByLabelText('Show session details').getAttribute('aria-expanded'),
+      screen
+        .getByLabelText('Show session details')
+        .getAttribute('aria-expanded'),
     ).toBe('false');
   });
 });
