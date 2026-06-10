@@ -942,7 +942,10 @@ describe('PRMergeWatcher first-poll-after-boot suppression', () => {
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     vi.mocked(getProjectByGithubRepo).mockReturnValue({} as never);
     const github = makeMockGitHub();
-    vi.mocked(github.getPRState).mockResolvedValue({ state: 'merged', headSha: null });
+    vi.mocked(github.getPRState).mockResolvedValue({
+      state: 'merged',
+      headSha: null,
+    });
 
     const messages: ServerMessage[] = [];
     const watcher = new PRMergeWatcher(
@@ -956,7 +959,11 @@ describe('PRMergeWatcher first-poll-after-boot suppression', () => {
     watcher.start(Number.MAX_SAFE_INTEGER);
     await pollSpy.mock.results[0].value;
 
-    expect(vi.mocked(updatePRState)).toHaveBeenCalledWith(42, 'owner/repo', 'merged');
+    expect(vi.mocked(updatePRState)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'merged',
+    );
     expect(messages.filter((m) => m.type === 'pr_merged')).toHaveLength(0);
 
     watcher.stop();
@@ -3704,7 +3711,10 @@ describe('PRMergeWatcher.start()', () => {
     expect(() => watcher.start(60_000)).not.toThrow();
     await vi.runAllTimersAsync();
 
-    expect(warnSpy).toHaveBeenCalledWith('[PRMergeWatcher] poll error:', 'boom');
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[PRMergeWatcher] poll error:',
+      'boom',
+    );
     warnSpy.mockRestore();
     watcher.stop();
     vi.useRealTimers();
