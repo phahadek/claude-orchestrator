@@ -60,35 +60,37 @@ class FailingSessionManager extends EventEmitter {
   isAlive = vi.fn().mockReturnValue(false);
   kill = vi.fn().mockResolvedValue(undefined);
 
-  start = vi.fn().mockImplementation(
-    async (
-      _contextUrl: string,
-      _projectContextUrl: string,
-      opts: { sessionId: string; [key: string]: unknown },
-    ) => {
-      // Simulate completeStart rejection: write the errored session row first.
-      const { db } = await import('../db/db.js');
-      db.prepare(
-        `INSERT INTO sessions
+  start = vi
+    .fn()
+    .mockImplementation(
+      async (
+        _contextUrl: string,
+        _projectContextUrl: string,
+        opts: { sessionId: string; [key: string]: unknown },
+      ) => {
+        // Simulate completeStart rejection: write the errored session row first.
+        const { db } = await import('../db/db.js');
+        db.prepare(
+          `INSERT INTO sessions
          (session_id, status, started_at, session_type, pause_reason, last_error_detail)
          VALUES (@session_id, 'error', @started_at, 'review', 'launch_failed', @last_error_detail)`,
-      ).run({
-        session_id: opts.sessionId,
-        started_at: Date.now(),
-        last_error_detail: WORKTREE_ERROR,
-      });
-
-      // Emit session_ended after the current microtask queue drains, matching
-      // the real SessionManager.markSessionErrored behaviour.
-      process.nextTick(() => {
-        this.emit('message', {
-          type: 'session_ended',
-          sessionId: opts.sessionId,
-          status: 'error',
+        ).run({
+          session_id: opts.sessionId,
+          started_at: Date.now(),
+          last_error_detail: WORKTREE_ERROR,
         });
-      });
-    },
-  );
+
+        // Emit session_ended after the current microtask queue drains, matching
+        // the real SessionManager.markSessionErrored behaviour.
+        process.nextTick(() => {
+          this.emit('message', {
+            type: 'session_ended',
+            sessionId: opts.sessionId,
+            status: 'error',
+          });
+        });
+      },
+    );
 }
 
 function makeMockGitHub(): GitHubClient {
