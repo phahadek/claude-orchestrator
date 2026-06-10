@@ -205,10 +205,7 @@ const ALWAYS_GUARDED_BRANCHES = new Set(['dev', 'main']);
  * All other causes increment the per-task consecutive crash counter; reaching
  * 2+ consecutive counted failures → 🚫 Blocked (circuit breaker).
  */
-const UNCOUNTED_REASONS = new Set([
-  'user_kill',
-  'pr_closed',
-]);
+const UNCOUNTED_REASONS = new Set(['user_kill', 'pr_closed']);
 
 /**
  * Delete the local session/<sessionId> branch if it exists and conditions are met:
@@ -751,8 +748,9 @@ export class SessionManager extends EventEmitter {
       } catch (err) {
         const e = err as { stderr?: string | Buffer; message: string };
         const stderr = e.stderr ? e.stderr.toString() : '';
-        const isBranchAlreadyExists =
-          /A branch named .* already exists/.test(stderr);
+        const isBranchAlreadyExists = /A branch named .* already exists/.test(
+          stderr,
+        );
 
         if (isBranchAlreadyExists && getPRByNotionTaskId(sessionTaskId)) {
           // Branch carries PR commits; prune stale worktree registration and reattach.
@@ -769,14 +767,19 @@ export class SessionManager extends EventEmitter {
               { cwd: projectDir },
             );
           } catch (reattachErr) {
-            const re = reattachErr as { stderr?: string | Buffer; message: string };
+            const re = reattachErr as {
+              stderr?: string | Buffer;
+              message: string;
+            };
             const reattachStderr = re.stderr ? re.stderr.toString() : '';
             const fullMsg =
               `${re.message}${reattachStderr ? `\nstderr: ${reattachStderr}` : ''}`.trim();
             console.error(
               `[SessionManager] failed to reattach worktree for ${sessionId}: ${fullMsg}`,
             );
-            throw new WorktreeSetupError(fullMsg, { isBranchAlreadyExists: true });
+            throw new WorktreeSetupError(fullMsg, {
+              isBranchAlreadyExists: true,
+            });
           }
         } else {
           const fullMsg =
@@ -1889,10 +1892,13 @@ export class SessionManager extends EventEmitter {
           );
         } catch (attachErr) {
           const attachStderr =
-            (attachErr as { stderr?: string | Buffer })?.stderr?.toString() ?? '';
+            (attachErr as { stderr?: string | Buffer })?.stderr?.toString() ??
+            '';
           // "already checked out" → branch is registered to a deleted worktree dir.
           // Prune the stale registration and retry the attach.
-          const isAlreadyCheckedOut = attachStderr.includes('already checked out');
+          const isAlreadyCheckedOut = attachStderr.includes(
+            'already checked out',
+          );
           if (isAlreadyCheckedOut) {
             try {
               execSync(`git worktree prune`, { cwd: projectDir });
@@ -1912,7 +1918,9 @@ export class SessionManager extends EventEmitter {
               );
             } catch (createErr) {
               const createStderr =
-                (createErr as { stderr?: string | Buffer })?.stderr?.toString() ?? '';
+                (
+                  createErr as { stderr?: string | Buffer }
+                )?.stderr?.toString() ?? '';
               if (/A branch named .* already exists/.test(createStderr)) {
                 // -b failed: branch exists but attach failed with unrelated error.
                 // Prune and reattach — the branch carries PR commits; never recreate.

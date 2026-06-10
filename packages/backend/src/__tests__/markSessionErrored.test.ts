@@ -560,14 +560,18 @@ describe('SessionManager.markSessionErrored() — crash budget counter', () => {
     vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'error', 'launch_failed');
-    expect(queries.incrementTaskCrashCount).toHaveBeenCalledWith('notion-task-id');
+    expect(queries.incrementTaskCrashCount).toHaveBeenCalledWith(
+      'notion-task-id',
+    );
   });
 
   it('DOES increment crash counter for worktree_recreate_failed', () => {
     vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'error', 'worktree_recreate_failed');
-    expect(queries.incrementTaskCrashCount).toHaveBeenCalledWith('notion-task-id');
+    expect(queries.incrementTaskCrashCount).toHaveBeenCalledWith(
+      'notion-task-id',
+    );
   });
 
   it('first runner_non_zero crash → 🗂️ Ready (counter = 1)', async () => {
@@ -662,7 +666,12 @@ describe('SessionManager.markSessionErrored() — blocked path side-effects', ()
     sm.markSessionErrored('test-session', 'error', 'worktree_recreate_failed');
 
     const pausedMsg = msgs.find((m) => m.type === 'auto_launch_paused') as
-      | { type: 'auto_launch_paused'; taskId: string; reason: string; detail: string }
+      | {
+          type: 'auto_launch_paused';
+          taskId: string;
+          reason: string;
+          detail: string;
+        }
       | undefined;
     expect(pausedMsg).toBeDefined();
     expect(pausedMsg!.taskId).toBe('notion-task-id');

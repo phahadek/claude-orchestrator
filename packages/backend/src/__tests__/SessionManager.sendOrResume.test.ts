@@ -410,7 +410,9 @@ describe('sendOrResume() prune + reattach', () => {
         attachAttempt++;
         if (attachAttempt === 1) {
           // First attach: branch not found
-          throw makeWorktreeError('fatal: invalid reference: feature/my-feature-task');
+          throw makeWorktreeError(
+            'fatal: invalid reference: feature/my-feature-task',
+          );
         }
         // Second attempt (after prune triggered by -b "already exists"): success
         return '' as never;
