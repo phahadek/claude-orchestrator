@@ -604,7 +604,13 @@ describe('ReviewOrchestrator — incomplete verdict', () => {
       prNumber: 1,
       repo: 'owner/repo',
       verdict: 'incomplete',
-      dimensions: [{ name: 'Diff vs Acceptance Criteria', passed: false, notes: 'Could not read tests' }],
+      dimensions: [
+        {
+          name: 'Diff vs Acceptance Criteria',
+          passed: false,
+          notes: 'Could not read tests',
+        },
+      ],
       summary: 'Could not assess the PR.',
       reviewedAt: new Date().toISOString(),
     });

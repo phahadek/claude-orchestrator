@@ -2331,7 +2331,10 @@ describe('PRMergeWatcher — incomplete verdict + push triggers re-review', () =
       }),
     });
     const reviewOrchestrator = makeMockReviewOrchestrator();
-    const reviewService = makeMockPRReviewService({ verdict: 'approved', summary: 'LGTM' });
+    const reviewService = makeMockPRReviewService({
+      verdict: 'approved',
+      summary: 'LGTM',
+    });
     const github = makeMockGitHub();
     vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
       headSha: 'sha-new',
@@ -2442,7 +2445,13 @@ describe('PRMergeWatcher — incomplete verdict + push triggers re-review', () =
     const reviewService = makeMockPRReviewService({
       verdict: 'incomplete',
       summary: 'Still cannot assess.',
-      dimensions: [{ name: 'Diff vs Acceptance Criteria', passed: false, notes: 'Tests unreadable' }],
+      dimensions: [
+        {
+          name: 'Diff vs Acceptance Criteria',
+          passed: false,
+          notes: 'Tests unreadable',
+        },
+      ],
     });
     const github = makeMockGitHub();
     vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
