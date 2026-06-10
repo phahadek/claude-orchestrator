@@ -138,6 +138,15 @@ export function parseNotionPageIdDashed(url: string): string {
 }
 
 /**
+ * Attempt to extract an existing PR number from a GitHub 422 "already exists" error
+ * body or message. Returns null when the number cannot be parsed.
+ */
+function extractPRNumberFromError(msg: string): number | null {
+  const m = msg.match(/pull\/(\d+)/i);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+/**
  * Merge assistant message content blocks so that text blocks emitted in earlier
  * streaming events are not lost when later streaming events contain only tool_use
  * blocks. The Claude CLI can stream multiple `assistant` events for the same message
@@ -990,7 +999,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     if (!validation.valid) {
       sessionLog(
         this.sessionId,
-        `<pr-body> validation failed — missing: ${validation.missingSections.join(', ')}`,
+        `PR creation failed: validation — missing required sections: ${validation.missingSections.join(', ')}`,
       );
       const missing = validation.missingSections
         .map((s) => `\`${s}\``)
@@ -1064,15 +1073,17 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       );
       repo = repoMatch ? repoMatch[1] : GITHUB_REPO;
     } catch (e) {
-      console.warn(
-        `[AgentSession] handlePRBodyMarker: git info failed — ${(e as Error).message}`,
+      sessionLog(
+        this.sessionId,
+        `PR creation failed: could not read git info — ${(e as Error).message}`,
       );
       return;
     }
 
     if (!branch) {
-      console.warn(
-        `[AgentSession] handlePRBodyMarker: empty branch name (detached HEAD) — re-prompting`,
+      sessionLog(
+        this.sessionId,
+        `PR creation failed: detached HEAD — no current branch. Run git checkout -b feature/<task-name> first.`,
       );
       recordEvent({
         event_type: 'pr_creation_failed',
@@ -1103,6 +1114,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       });
     } catch (e) {
       const msg = (e as Error).message;
+      sessionLog(
+        this.sessionId,
+        `PR creation failed: git push of branch "${branch}" to origin rejected — ${msg.slice(0, 200)}`,
+      );
       console.error(
         `[AgentSession] git push for <pr-body> marker failed: ${msg}`,
       );
@@ -1169,6 +1184,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         };
 
         await this.handlePRDetected(created.html_url, prShape);
+        sessionLog(
+          this.sessionId,
+          `PR creation succeeded: PR #${created.number} at ${created.html_url}`,
+        );
         return;
       } catch (e) {
         const msg = (e as Error).message;
@@ -1176,11 +1195,14 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         // 422 "A pull request already exists" → divert to update path.
         if (/422/.test(msg) && /pull request already exists/i.test(msg)) {
           const existingPR = getPRBySessionId(this.sessionId);
+          const parsedNum = extractPRNumberFromError(msg);
+          const existingNum = existingPR?.pr_number ?? parsedNum;
+          sessionLog(
+            this.sessionId,
+            `PR creation failed: duplicate PR on branch "${branch}" (existing PR #${existingNum ?? '?'}). ` +
+              `If the existing PR is stale, the operator must close it before this session can create a new one.`,
+          );
           if (existingPR) {
-            sessionLog(
-              this.sessionId,
-              `createPR 422 already-exists — updating existing PR #${existingPR.pr_number}`,
-            );
             try {
               await this.githubClient!.updatePR(
                 existingPR.repo,
@@ -1200,6 +1222,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 
         // 422 "head branch not found" → divert to push-failure path.
         if (/422/.test(msg) && /head.*not found|head branch/i.test(msg)) {
+          sessionLog(
+            this.sessionId,
+            `PR creation failed: branch "${branch}" not found on origin — GitHub rejected the head ref. Did the prior push step succeed?`,
+          );
           console.error(
             `[AgentSession] createPR 422 head-not-found — diverting to push-failure path: ${msg}`,
           );
@@ -1227,7 +1253,49 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 
         // Any other 422 is a terminal client error — don't retry.
         if (/422/.test(msg)) {
+          sessionLog(
+            this.sessionId,
+            `PR creation failed: GitHub 422 client error — ${msg.slice(0, 300)}`,
+          );
           console.error(`[AgentSession] createPR terminal 422: ${msg}`);
+          recordEvent({
+            event_type: 'pr_creation_failed',
+            actor_type: 'system',
+            actor_id: this.sessionId,
+            project_id: this.projectId || null,
+            task_id: this.taskId || null,
+            payload: { stage: 'create', error: msg },
+          });
+          setSessionPauseReason(this.sessionId, 'pr_creation_failed');
+          return;
+        }
+
+        // 404 — branch or repo not found on GitHub.
+        if (/\b404\b/.test(msg)) {
+          sessionLog(
+            this.sessionId,
+            `PR creation failed: branch "${branch}" not found on origin (GitHub 404). Did the prior push step succeed?`,
+          );
+          console.error(`[AgentSession] createPR 404 not-found: ${msg}`);
+          recordEvent({
+            event_type: 'pr_creation_failed',
+            actor_type: 'system',
+            actor_id: this.sessionId,
+            project_id: this.projectId || null,
+            task_id: this.taskId || null,
+            payload: { stage: 'create', error: msg },
+          });
+          setSessionPauseReason(this.sessionId, 'pr_creation_failed');
+          return;
+        }
+
+        // 401/403 auth errors — terminal, never retry.
+        if (/\b40[13]\b/.test(msg)) {
+          sessionLog(
+            this.sessionId,
+            `PR creation failed: GitHub auth/permission denied (${msg.slice(0, 200)}). Check GITHUB_TOKEN scope.`,
+          );
+          console.error(`[AgentSession] createPR auth error: ${msg}`);
           recordEvent({
             event_type: 'pr_creation_failed',
             actor_type: 'system',
@@ -1248,6 +1316,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           );
 
         if (!isTransient || attempt === MAX_ATTEMPTS - 1) {
+          sessionLog(
+            this.sessionId,
+            `PR creation failed with unexpected error: ${msg.slice(0, 300)}`,
+          );
           console.error(
             `[AgentSession] createPR via <pr-body> marker failed (attempt ${attempt + 1}/${MAX_ATTEMPTS}): ${msg}`,
           );
@@ -1263,6 +1335,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           return;
         }
 
+        sessionLog(
+          this.sessionId,
+          `PR creation failed: GitHub server error (transient, attempt ${attempt + 1}/${MAX_ATTEMPTS}). Retrying in ${BACKOFF_MS[attempt]}ms.`,
+        );
         console.warn(
           `[AgentSession] createPR transient error (attempt ${attempt + 1}/${MAX_ATTEMPTS}), retrying in ${BACKOFF_MS[attempt]}ms: ${msg}`,
         );

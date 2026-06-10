@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
 
@@ -18,7 +18,10 @@ vi.mock('../../db/queries', () => ({
   getPRBySessionId: vi.fn().mockReturnValue(null),
   setHeadSha: vi.fn(),
   setPauseReason: vi.fn(),
+  setSessionPauseReason: vi.fn(),
   insertPauseInterval: vi.fn(),
+  getSessionTags: vi.fn().mockReturnValue([]),
+  setSessionTags: vi.fn(),
 }));
 
 vi.mock('../../config', () => ({
@@ -461,6 +464,261 @@ describe('<pr-body> marker — clean-exit ordering', () => {
       expect.any(Number),
       PR_URL,
     );
+  });
+});
+
+describe('<pr-body> marker — structured logging', () => {
+  let consoleSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.mocked(upsertPullRequest).mockClear();
+    vi.mocked(recordEvent).mockClear();
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: true,
+      missingSections: [],
+    });
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === 'git branch --show-current') return 'feature/my-task\n';
+      if (cmd === 'git remote get-url origin')
+        return 'https://github.com/owner/repo.git\n';
+      if (cmd === 'git symbolic-ref refs/remotes/origin/HEAD')
+        return 'refs/remotes/origin/dev\n';
+      if (cmd === 'git push -u origin feature/my-task') return '';
+      throw new Error(`unexpected execSync: ${cmd}`);
+    });
+  });
+
+  afterEach(() => {
+    consoleSpy.mockRestore();
+  });
+
+  function loggedMessages(): string[] {
+    return consoleSpy.mock.calls
+      .filter(
+        (args) =>
+          typeof args[1] === 'string' &&
+          (args[1].startsWith('PR creation') || args[1].startsWith('<pr-body>')),
+      )
+      .map((args) => args.slice(1).join(' '));
+  }
+
+  it('logs "PR creation succeeded" with PR number on success', async () => {
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY);
+
+    await new Promise((r) => setImmediate(r));
+
+    const msgs = loggedMessages();
+    expect(msgs.some((m) => m.startsWith('PR creation succeeded:'))).toBe(true);
+    expect(msgs.some((m) => m.includes('#42'))).toBe(true);
+  });
+
+  it('logs "PR creation failed: validation" with missing section names', async () => {
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: false,
+      missingSections: ['## Summary', '## Files Changed'],
+    });
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, 'bad body', 'msg_val_log');
+
+    await new Promise((r) => setImmediate(r));
+
+    const msgs = loggedMessages();
+    expect(
+      msgs.some(
+        (m) =>
+          m.startsWith('PR creation failed: validation') &&
+          m.includes('## Summary') &&
+          m.includes('## Files Changed'),
+      ),
+    ).toBe(true);
+  });
+
+  it('logs "PR creation failed: duplicate PR" with existing PR number on 422 already-exists', async () => {
+    // First call (in handlePRBodyMarker) returns null so we proceed to createPR.
+    // Second call (inside createPRWithRetry after 422) returns the known PR.
+    vi.mocked(getPRBySessionId)
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce({
+        pr_number: 7,
+        repo: 'owner/repo',
+        base_branch: 'dev',
+      } as never);
+
+    const ghClient = makeGithubClient({
+      createPR: vi
+        .fn()
+        .mockRejectedValue(
+          new Error(
+            'GitHub API error 422: A pull request already exists for owner:feature/my-task.',
+          ),
+        ),
+    });
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY, 'msg_dup');
+
+    await new Promise((r) => setImmediate(r));
+
+    const msgs = loggedMessages();
+    expect(
+      msgs.some(
+        (m) =>
+          m.startsWith('PR creation failed: duplicate PR') &&
+          m.includes('#7'),
+      ),
+    ).toBe(true);
+  });
+
+  it('logs "PR creation failed: duplicate PR" with #? when no DB record exists for 422 already-exists', async () => {
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+
+    const ghClient = makeGithubClient({
+      createPR: vi
+        .fn()
+        .mockRejectedValue(
+          new Error(
+            'GitHub API error 422: A pull request already exists for owner:feature/my-task.',
+          ),
+        ),
+    });
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY, 'msg_dup_no_db');
+
+    await new Promise((r) => setImmediate(r));
+
+    const msgs = loggedMessages();
+    expect(
+      msgs.some(
+        (m) =>
+          m.startsWith('PR creation failed: duplicate PR') &&
+          m.includes('feature/my-task'),
+      ),
+    ).toBe(true);
+  });
+
+  it('logs "PR creation failed: branch ... not found on origin" on 404', async () => {
+    const ghClient = makeGithubClient({
+      createPR: vi
+        .fn()
+        .mockRejectedValue(new Error('GitHub API error 404: Not Found')),
+    });
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY, 'msg_404');
+
+    await new Promise((r) => setImmediate(r));
+
+    const msgs = loggedMessages();
+    expect(
+      msgs.some(
+        (m) =>
+          m.startsWith('PR creation failed: branch') &&
+          m.includes('feature/my-task') &&
+          m.includes('not found on origin'),
+      ),
+    ).toBe(true);
+  });
+
+  it('logs "PR creation failed: GitHub auth/permission denied" and mentions GITHUB_TOKEN on 401', async () => {
+    const ghClient = makeGithubClient({
+      createPR: vi
+        .fn()
+        .mockRejectedValue(
+          new Error('GitHub API error 401: Requires authentication'),
+        ),
+    });
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY, 'msg_401');
+
+    await new Promise((r) => setImmediate(r));
+
+    const msgs = loggedMessages();
+    expect(
+      msgs.some(
+        (m) =>
+          m.startsWith('PR creation failed: GitHub auth/permission denied') &&
+          m.includes('GITHUB_TOKEN'),
+      ),
+    ).toBe(true);
+  });
+
+  it('logs "PR creation failed: GitHub auth/permission denied" on 403', async () => {
+    const ghClient = makeGithubClient({
+      createPR: vi
+        .fn()
+        .mockRejectedValue(
+          new Error('GitHub API error 403: Forbidden'),
+        ),
+    });
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY, 'msg_403');
+
+    await new Promise((r) => setImmediate(r));
+
+    const msgs = loggedMessages();
+    expect(
+      msgs.some(
+        (m) =>
+          m.startsWith('PR creation failed: GitHub auth/permission denied') &&
+          m.includes('GITHUB_TOKEN'),
+      ),
+    ).toBe(true);
+  });
+
+  it('logs "PR creation failed: GitHub server error (transient" on 5xx and retries', async () => {
+    let callCount = 0;
+    const ghClient = makeGithubClient({
+      createPR: vi.fn().mockImplementation(() => {
+        callCount++;
+        return Promise.reject(
+          new Error('GitHub API error 503: Service Unavailable'),
+        );
+      }),
+    });
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY, 'msg_5xx');
+
+    // Let enough microtasks pass for at least the first attempt + log
+    await new Promise((r) => setImmediate(r));
+
+    const msgs = loggedMessages();
+    expect(
+      msgs.some((m) =>
+        m.startsWith('PR creation failed: GitHub server error (transient'),
+      ),
+    ).toBe(true);
+  });
+
+  it('logs "PR creation failed: git push" with branch name when push fails', async () => {
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === 'git branch --show-current') return 'feature/my-task\n';
+      if (cmd === 'git remote get-url origin')
+        return 'https://github.com/owner/repo.git\n';
+      if (cmd === 'git symbolic-ref refs/remotes/origin/HEAD')
+        return 'refs/remotes/origin/dev\n';
+      if (cmd === 'git push -u origin feature/my-task')
+        throw new Error('remote: Repository not found.');
+      throw new Error(`unexpected execSync: ${cmd}`);
+    });
+
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+    emitAssistantWithMarker(session, VALID_BODY, 'msg_push_fail');
+
+    await new Promise((r) => setImmediate(r));
+
+    const msgs = loggedMessages();
+    expect(
+      msgs.some(
+        (m) =>
+          m.startsWith('PR creation failed: git push') &&
+          m.includes('feature/my-task'),
+      ),
+    ).toBe(true);
   });
 });
 
