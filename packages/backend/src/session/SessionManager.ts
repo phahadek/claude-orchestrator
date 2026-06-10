@@ -52,6 +52,7 @@ import {
   setSessionPauseReason,
   setSessionLastErrorDetail,
   incrementTaskCrashCount,
+  setTaskPauseReason,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
 import { eventKind } from './eventKind';
@@ -199,14 +200,12 @@ const TERMINAL_STATUSES = new Set(['done', 'error', 'killed', 'superseded']);
 const ALWAYS_GUARDED_BRANCHES = new Set(['dev', 'main']);
 
 /**
- * Error causes that indicate the runner crashed and the task needs human attention
- * before it can be retried → Blocked. All other causes map to Ready (can retry).
+ * Error causes that are operator-intentional and should NOT count against the
+ * crash budget (user explicitly killed the session or the PR was closed).
+ * All other causes increment the per-task consecutive crash counter; reaching
+ * 2+ consecutive counted failures → 🚫 Blocked (circuit breaker).
  */
-const BLOCKED_REASONS = new Set([
-  'runner_non_zero',
-  'run_error',
-  'sendOrResume_run_error',
-]);
+const UNCOUNTED_REASONS = new Set(['user_kill', 'pr_closed']);
 
 /**
  * Delete the local session/<sessionId> branch if it exists and conditions are met:
@@ -437,9 +436,30 @@ export class SessionManager extends EventEmitter {
     const projectId = row.project_id ?? '';
 
     let notionStatus: string;
-    if (BLOCKED_REASONS.has(reason)) {
+    if (!UNCOUNTED_REASONS.has(reason)) {
       const crashCount = incrementTaskCrashCount(notionTaskId);
-      notionStatus = crashCount >= 2 ? '🚫 Blocked' : '🗂️ Ready';
+      if (crashCount >= 2) {
+        notionStatus = '🚫 Blocked';
+        // Persist the block so AutoLauncher skips this task across restarts.
+        setTaskPauseReason(notionTaskId, 'launch_failed', reason);
+        // Emit audit + broadcast so the dashboard reflects the block immediately.
+        recordEvent({
+          event_type: 'auto_launch_paused',
+          actor_type: 'system',
+          actor_id: sessionId,
+          project_id: projectId || null,
+          task_id: notionTaskId,
+          payload: { reason, sessionId, crashCount },
+        });
+        this.emit('message', {
+          type: 'auto_launch_paused',
+          taskId: notionTaskId,
+          reason: 'launch_failed',
+          detail: reason,
+        } satisfies ServerMessage);
+      } else {
+        notionStatus = '🗂️ Ready';
+      }
     } else {
       notionStatus = '🗂️ Ready';
     }
@@ -719,29 +739,73 @@ export class SessionManager extends EventEmitter {
         : `origin/${project.baseBranch}`;
 
     const featureBranch = taskName ? deriveBranchSlug(taskName) : null;
-    try {
-      if (featureBranch) {
+    if (featureBranch) {
+      try {
         await exec(
           `git worktree add -b "${featureBranch}" "${worktreePath}" ${worktreeBase}`,
           { cwd: projectDir },
         );
-      } else {
+      } catch (err) {
+        const e = err as { stderr?: string | Buffer; message: string };
+        const stderr = e.stderr ? e.stderr.toString() : '';
+        const isBranchAlreadyExists = /A branch named .* already exists/.test(
+          stderr,
+        );
+
+        if (isBranchAlreadyExists && getPRByNotionTaskId(sessionTaskId)) {
+          // Branch carries PR commits; prune stale worktree registration and reattach.
+          try {
+            execSync(`git worktree prune`, { cwd: projectDir });
+          } catch (pruneErr) {
+            console.warn(
+              `[SessionManager] completeStart: git worktree prune failed (continuing): ${pruneErr}`,
+            );
+          }
+          try {
+            await exec(
+              `git worktree add "${worktreePath}" "${featureBranch}"`,
+              { cwd: projectDir },
+            );
+          } catch (reattachErr) {
+            const re = reattachErr as {
+              stderr?: string | Buffer;
+              message: string;
+            };
+            const reattachStderr = re.stderr ? re.stderr.toString() : '';
+            const fullMsg =
+              `${re.message}${reattachStderr ? `\nstderr: ${reattachStderr}` : ''}`.trim();
+            console.error(
+              `[SessionManager] failed to reattach worktree for ${sessionId}: ${fullMsg}`,
+            );
+            throw new WorktreeSetupError(fullMsg, {
+              isBranchAlreadyExists: true,
+            });
+          }
+        } else {
+          const fullMsg =
+            `${e.message}${stderr ? `\nstderr: ${stderr}` : ''}`.trim();
+          console.error(
+            `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
+          );
+          throw new WorktreeSetupError(fullMsg, { isBranchAlreadyExists });
+        }
+      }
+    } else {
+      try {
         await exec(
           `git worktree add --detach "${worktreePath}" ${worktreeBase}`,
           { cwd: projectDir },
         );
+      } catch (err) {
+        const e = err as { stderr?: string | Buffer; message: string };
+        const stderr = e.stderr ? e.stderr.toString() : '';
+        const fullMsg =
+          `${e.message}${stderr ? `\nstderr: ${stderr}` : ''}`.trim();
+        console.error(
+          `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
+        );
+        throw new WorktreeSetupError(fullMsg, { isBranchAlreadyExists: false });
       }
-    } catch (err) {
-      const e = err as { stderr?: string | Buffer; message: string };
-      const stderr = e.stderr ? e.stderr.toString() : '';
-      const fullMsg =
-        `${e.message}${stderr ? `\nstderr: ${stderr}` : ''}`.trim();
-      console.error(
-        `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
-      );
-      throw new WorktreeSetupError(fullMsg, {
-        isBranchAlreadyExists: /A branch named .* already exists/.test(stderr),
-      });
     }
 
     const isUnixStylePath =
@@ -1806,29 +1870,79 @@ export class SessionManager extends EventEmitter {
     const resumeFeatureBranch = row.task_name
       ? deriveBranchSlug(row.task_name)
       : null;
+
+    // Prune stale worktree registrations before attempting re-attach.
+    // This handles the common case where the worktree dir was deleted but the
+    // branch is still marked as "checked out" in git's internal tracking.
+    try {
+      execSync(`git worktree prune`, { cwd: projectDir });
+    } catch (pruneErr) {
+      console.warn(
+        `[SessionManager] sendOrResume: git worktree prune failed (continuing): ${pruneErr}`,
+      );
+    }
+
     try {
       if (resumeFeatureBranch) {
         try {
-          // Attach to existing branch when the session resumes with an open PR.
+          // Attach to existing branch — preserves all PR commits.
           execSync(
             `git worktree add "${worktreePath}" "${resumeFeatureBranch}"`,
-            {
-              cwd: projectDir,
-            },
-          );
-        } catch {
-          // Branch doesn't exist locally (e.g. was cleaned up) — recreate it.
-          execSync(
-            `git worktree add -b "${resumeFeatureBranch}" "${worktreePath}" ${worktreeBase}`,
             { cwd: projectDir },
           );
+        } catch (attachErr) {
+          const attachStderr =
+            (attachErr as { stderr?: string | Buffer })?.stderr?.toString() ??
+            '';
+          // "already checked out" → branch is registered to a deleted worktree dir.
+          // Prune the stale registration and retry the attach.
+          const isAlreadyCheckedOut = attachStderr.includes(
+            'already checked out',
+          );
+          if (isAlreadyCheckedOut) {
+            try {
+              execSync(`git worktree prune`, { cwd: projectDir });
+            } catch {
+              // best-effort
+            }
+            execSync(
+              `git worktree add "${worktreePath}" "${resumeFeatureBranch}"`,
+              { cwd: projectDir },
+            );
+          } else {
+            // Branch doesn't exist locally (cleaned up) — try to recreate with -b.
+            try {
+              execSync(
+                `git worktree add -b "${resumeFeatureBranch}" "${worktreePath}" ${worktreeBase}`,
+                { cwd: projectDir },
+              );
+            } catch (createErr) {
+              const createStderr =
+                (
+                  createErr as { stderr?: string | Buffer }
+                )?.stderr?.toString() ?? '';
+              if (/A branch named .* already exists/.test(createStderr)) {
+                // -b failed: branch exists but attach failed with unrelated error.
+                // Prune and reattach — the branch carries PR commits; never recreate.
+                try {
+                  execSync(`git worktree prune`, { cwd: projectDir });
+                } catch {
+                  // best-effort
+                }
+                execSync(
+                  `git worktree add "${worktreePath}" "${resumeFeatureBranch}"`,
+                  { cwd: projectDir },
+                );
+              } else {
+                throw createErr;
+              }
+            }
+          }
         }
       } else {
         execSync(
           `git worktree add --detach "${worktreePath}" ${worktreeBase}`,
-          {
-            cwd: projectDir,
-          },
+          { cwd: projectDir },
         );
       }
     } catch (err) {

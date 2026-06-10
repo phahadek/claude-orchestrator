@@ -3,8 +3,9 @@
  *
  * AC coverage:
  * - Helper exists and is the single owner of DB status + Notion task status + WS broadcast
- * - BLOCKED_REASONS causes use crash budget: crash #1 → 🗂️ Ready, crash #2+ → 🚫 Blocked
- * - Non-BLOCKED_REASONS causes (user_kill, launch_failed) → 🗂️ Ready, counter untouched
+ * - All causes except user_kill/pr_closed use crash budget: crash #1 → 🗂️ Ready, crash #2+ → 🚫 Blocked
+ * - Uncounted causes (user_kill, pr_closed) → 🗂️ Ready, counter untouched
+ * - Blocked path writes task_pause_reasons row + emits auto_launch_paused broadcast + audit
  * - session_ended WS broadcast fires from the helper
  * - audit_log event captures the cause
  * - Notion updateStatus failures are logged but not re-thrown
@@ -15,10 +16,15 @@ import type { ServerMessage } from '../ws/types';
 
 // ── Module mocks ─────────────────────────────────────────────────────────────
 
-vi.mock('child_process', () => ({
-  execSync: vi.fn().mockReturnValue('dev\n'),
-  spawn: vi.fn(),
-}));
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>();
+  return {
+    ...actual,
+    execSync: vi.fn().mockReturnValue('dev\n'),
+    execFile: vi.fn(),
+    spawn: vi.fn(),
+  };
+});
 
 vi.mock('fs', async () => {
   const actual = await vi.importActual<typeof import('fs')>('fs');
@@ -72,6 +78,7 @@ vi.mock('../db/queries', () => ({
   getStuckResultSessionRows: vi.fn().mockReturnValue([]),
   incrementTaskCrashCount: vi.fn().mockReturnValue(1),
   resetTaskCrashCount: vi.fn(),
+  setTaskPauseReason: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog', () => ({
@@ -146,6 +153,7 @@ import * as queries from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { emitTaskUpdated } from '../routes/tasks';
 import { getTaskBackend } from '../tasks/TaskBackend';
+import type { ServerMessage } from '../ws/types';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -326,7 +334,8 @@ describe('SessionManager.markSessionErrored() — per-cause Notion status', () =
     );
   });
 
-  it('sets Notion status to 🗂️ Ready for worktree_missing (pre-check failure)', async () => {
+  it('sets Notion status to 🗂️ Ready for worktree_missing (first crash)', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
     const mockUpdate = setupFakeBackend();
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'error', 'worktree_missing');
@@ -338,10 +347,36 @@ describe('SessionManager.markSessionErrored() — per-cause Notion status', () =
     );
   });
 
-  it('sets Notion status to 🗂️ Ready for launch_failed (pre-check failure)', async () => {
+  it('sets Notion status to 🗂️ Ready for launch_failed (first crash)', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
     const mockUpdate = setupFakeBackend();
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'error', 'launch_failed');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockUpdate).toHaveBeenCalledWith(
+      'notion-task-id',
+      '🗂️ Ready',
+      expect.anything(),
+    );
+  });
+
+  it('sets Notion status to 🚫 Blocked for launch_failed (second consecutive crash)', async () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(2);
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'error', 'launch_failed');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockUpdate).toHaveBeenCalledWith(
+      'notion-task-id',
+      '🚫 Blocked',
+      expect.anything(),
+    );
+  });
+
+  it('sets Notion status to 🗂️ Ready for pr_closed (operator-intentional)', async () => {
+    const mockUpdate = setupFakeBackend();
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'error', 'pr_closed');
     await new Promise((r) => setTimeout(r, 0));
     expect(mockUpdate).toHaveBeenCalledWith(
       'notion-task-id',
@@ -509,16 +544,34 @@ describe('SessionManager.markSessionErrored() — crash budget counter', () => {
     );
   });
 
-  it('does NOT increment crash counter for non-BLOCKED_REASONS causes', () => {
+  it('does NOT increment crash counter for user_kill (operator-intentional)', () => {
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'killed', 'user_kill');
     expect(queries.incrementTaskCrashCount).not.toHaveBeenCalled();
   });
 
-  it('does NOT increment crash counter for launch_failed', () => {
+  it('does NOT increment crash counter for pr_closed (operator-intentional)', () => {
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'error', 'pr_closed');
+    expect(queries.incrementTaskCrashCount).not.toHaveBeenCalled();
+  });
+
+  it('DOES increment crash counter for launch_failed', () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'error', 'launch_failed');
-    expect(queries.incrementTaskCrashCount).not.toHaveBeenCalled();
+    expect(queries.incrementTaskCrashCount).toHaveBeenCalledWith(
+      'notion-task-id',
+    );
+  });
+
+  it('DOES increment crash counter for worktree_recreate_failed', () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'error', 'worktree_recreate_failed');
+    expect(queries.incrementTaskCrashCount).toHaveBeenCalledWith(
+      'notion-task-id',
+    );
   });
 
   it('first runner_non_zero crash → 🗂️ Ready (counter = 1)', async () => {
@@ -558,5 +611,93 @@ describe('SessionManager.markSessionErrored() — crash budget counter', () => {
       '🚫 Blocked',
       expect.anything(),
     );
+  });
+});
+
+// ── Blocked path: task_pause_reasons + auto_launch_paused ────────────────────
+
+describe('SessionManager.markSessionErrored() — blocked path side-effects', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(queries.getSession).mockReturnValue(makeSessionRow() as never);
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(2);
+    setupFakeBackend();
+  });
+
+  it('writes task_pause_reasons row on 2nd consecutive crash', () => {
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'error', 'worktree_recreate_failed');
+    expect(queries.setTaskPauseReason).toHaveBeenCalledWith(
+      'notion-task-id',
+      'launch_failed',
+      'worktree_recreate_failed',
+    );
+  });
+
+  it('writes task_pause_reasons row for launch_failed on 2nd consecutive crash', () => {
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'error', 'launch_failed');
+    expect(queries.setTaskPauseReason).toHaveBeenCalledWith(
+      'notion-task-id',
+      'launch_failed',
+      'launch_failed',
+    );
+  });
+
+  it('does NOT write task_pause_reasons on 1st crash', () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'error', 'launch_failed');
+    expect(queries.setTaskPauseReason).not.toHaveBeenCalled();
+  });
+
+  it('does NOT write task_pause_reasons for user_kill', () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(999);
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'killed', 'user_kill');
+    expect(queries.setTaskPauseReason).not.toHaveBeenCalled();
+  });
+
+  it('emits auto_launch_paused broadcast on 2nd consecutive crash', () => {
+    const sm = new SessionManager();
+    const msgs: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => msgs.push(m));
+
+    sm.markSessionErrored('test-session', 'error', 'worktree_recreate_failed');
+
+    const pausedMsg = msgs.find((m) => m.type === 'auto_launch_paused') as
+      | {
+          type: 'auto_launch_paused';
+          taskId: string;
+          reason: string;
+          detail: string;
+        }
+      | undefined;
+    expect(pausedMsg).toBeDefined();
+    expect(pausedMsg!.taskId).toBe('notion-task-id');
+    expect(pausedMsg!.reason).toBe('launch_failed');
+    expect(pausedMsg!.detail).toBe('worktree_recreate_failed');
+  });
+
+  it('emits auto_launch_paused audit event on 2nd consecutive crash', () => {
+    const sm = new SessionManager();
+    sm.markSessionErrored('test-session', 'error', 'launch_failed');
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'auto_launch_paused',
+        task_id: 'notion-task-id',
+      }),
+    );
+  });
+
+  it('does NOT emit auto_launch_paused on 1st crash', () => {
+    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
+    const sm = new SessionManager();
+    const msgs: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => msgs.push(m));
+
+    sm.markSessionErrored('test-session', 'error', 'launch_failed');
+
+    expect(msgs.find((m) => m.type === 'auto_launch_paused')).toBeUndefined();
   });
 });
