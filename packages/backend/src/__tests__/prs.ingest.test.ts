@@ -255,7 +255,10 @@ describe('POST /api/prs/ingest', () => {
   });
 
   it('inserts PR row with task_id=null and emits pr_opened when body has no Notion URL', async () => {
-    const prNoNotion: PullRequest = { ...mockGitHubPR, body: 'No notion link here' };
+    const prNoNotion: PullRequest = {
+      ...mockGitHubPR,
+      body: 'No notion link here',
+    };
     const github = makeMockGitHub(() => Promise.resolve(prNoNotion));
     const { app, sessionManager } = buildApp(github);
     const res = await supertest(app)
@@ -270,7 +273,11 @@ describe('POST /api/prs/ingest', () => {
 
     expect(sessionManager.emit).toHaveBeenCalledWith(
       'pr_opened',
-      expect.objectContaining({ prNumber: 99, repo: 'owner/repo', taskId: null }),
+      expect.objectContaining({
+        prNumber: 99,
+        repo: 'owner/repo',
+        taskId: null,
+      }),
     );
   });
 

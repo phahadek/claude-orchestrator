@@ -875,9 +875,7 @@ export function createPrsRouter(
       pr = await github.fetchPR(repo, prNumber);
     } catch (err) {
       if (err instanceof GitHubApiError && err.status === 404) {
-        res
-          .status(404)
-          .json({ error: `PR #${prNumber} not found on GitHub.` });
+        res.status(404).json({ error: `PR #${prNumber} not found on GitHub.` });
         return;
       }
       throw err;
