@@ -1546,6 +1546,36 @@ export function getStaleAutoMergeFailedPRs(thresholdMs: number): Array<{
 }
 
 /**
+ * Open PRs that may need a catch-up conflict/rebase nudge:
+ * - pause_reason='auto_merge_failed': stalled by a blocked/behind merge that
+ *   may not have been notified (e.g. pre-fix pauses or failed deliveries).
+ * - pause_reason IS NULL, merge_state IN ('dirty','blocked'): PRMergeWatcher
+ *   recorded the conflict but the transition-gated nudge was never sent.
+ * Both cases require session_id, head_sha, and that the current head_sha has
+ * not already been nudged (dedup via conflict_nudge_sha).
+ */
+export function getConflictNudgeCandidates(): Array<{
+  pr_number: number;
+  repo: string;
+}> {
+  return db
+    .prepare(
+      `
+    SELECT pr_number, repo FROM pull_requests
+    WHERE state = 'open'
+      AND session_id IS NOT NULL
+      AND head_sha IS NOT NULL
+      AND (conflict_nudge_sha IS NULL OR head_sha != conflict_nudge_sha)
+      AND (
+        pause_reason = 'auto_merge_failed'
+        OR (pause_reason IS NULL AND merge_state IN ('dirty', 'blocked'))
+      )
+  `,
+    )
+    .all() as Array<{ pr_number: number; repo: string }>;
+}
+
+/**
  * Returns the pause_reason of the most recent PR for the given task id,
  * or null if no PR exists or the PR is not paused. Used by auto-runner
  * components to skip tasks paused by stuck_timeout (or any other reason).

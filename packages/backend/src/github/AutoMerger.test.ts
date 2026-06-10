@@ -34,6 +34,7 @@ vi.mock('../db/queries.js', () => ({
   getSession: vi.fn(),
   getOrphanMergeablePRs: vi.fn().mockReturnValue([]),
   getStaleAutoMergeFailedPRs: vi.fn().mockReturnValue([]),
+  getConflictNudgeCandidates: vi.fn().mockReturnValue([]),
   upsertActiveMerge: vi.fn(),
   deleteActiveMerge: vi.fn(),
   getAllActiveMerges: vi.fn().mockReturnValue([]),
@@ -101,6 +102,7 @@ import {
   getSession,
   getOrphanMergeablePRs,
   getStaleAutoMergeFailedPRs,
+  getConflictNudgeCandidates,
   setConflictNudgeSha,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
@@ -1628,5 +1630,251 @@ describe('AutoMerger conflict nudge', () => {
       'owner/repo',
       'sha-abc',
     );
+  });
+});
+
+// ── conflictNudgeSweep() — catch-up sweep ─────────────────────────────────────
+
+describe('AutoMerger.conflictNudgeSweep()', () => {
+  it('nudges idle session with un-nudged auto_merge_failed pause', async () => {
+    const sessions = makeMockSessions();
+    vi.mocked(getConflictNudgeCandidates).mockReturnValue([
+      { pr_number: 42, repo: 'owner/repo' },
+    ]);
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({
+        session_id: 'coding-session',
+        head_sha: 'sha-abc',
+        conflict_nudge_sha: null,
+        pause_reason: 'auto_merge_failed',
+      }),
+    );
+    vi.mocked(getSession).mockReturnValue(
+      makeSessionRow({ status: 'idle' }),
+    );
+    const github = makeMockGitHub([]);
+    vi.mocked(github.categorizeMergeability).mockResolvedValue({
+      category: 'blocked',
+      mergeState: 'blocked',
+      rawMergeableState: 'blocked',
+      failingChecks: [],
+      headSha: 'sha-abc',
+    });
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(
+      github,
+      watcher,
+      () => {},
+      sessions as unknown as import('../session/SessionManager').SessionManager,
+    );
+
+    await merger.conflictNudgeSweep();
+
+    expect(github.categorizeMergeability).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(sessions.sendOrResume).toHaveBeenCalledWith(
+      'coding-session',
+      expect.stringContaining('Rebase'),
+    );
+    expect(setConflictNudgeSha).toHaveBeenCalledWith(42, 'owner/repo', 'sha-abc');
+  });
+
+  it('nudges idle session for conflict-state PR with no pause row', async () => {
+    const sessions = makeMockSessions();
+    vi.mocked(getConflictNudgeCandidates).mockReturnValue([
+      { pr_number: 42, repo: 'owner/repo' },
+    ]);
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({
+        session_id: 'coding-session',
+        head_sha: 'sha-abc',
+        conflict_nudge_sha: null,
+        pause_reason: null,
+        merge_state: 'dirty',
+      }),
+    );
+    vi.mocked(getSession).mockReturnValue(
+      makeSessionRow({ status: 'idle' }),
+    );
+    const github = makeMockGitHub([]);
+    vi.mocked(github.categorizeMergeability).mockResolvedValue({
+      category: 'conflict',
+      mergeState: 'dirty',
+      rawMergeableState: 'dirty',
+      failingChecks: [],
+      headSha: 'sha-abc',
+    });
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(
+      github,
+      watcher,
+      () => {},
+      sessions as unknown as import('../session/SessionManager').SessionManager,
+    );
+
+    await merger.conflictNudgeSweep();
+
+    expect(sessions.sendOrResume).toHaveBeenCalledWith(
+      'coding-session',
+      expect.stringContaining('Rebase'),
+    );
+    expect(setConflictNudgeSha).toHaveBeenCalledWith(42, 'owner/repo', 'sha-abc');
+  });
+
+  it('skips already-nudged PRs (dedup honored via conflict_nudge_sha)', async () => {
+    const sessions = makeMockSessions();
+    vi.mocked(getConflictNudgeCandidates).mockReturnValue([
+      { pr_number: 42, repo: 'owner/repo' },
+    ]);
+    // DB row has conflict_nudge_sha matching head_sha — already nudged
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({
+        session_id: 'coding-session',
+        head_sha: 'sha-abc',
+        conflict_nudge_sha: 'sha-abc',
+        pause_reason: 'auto_merge_failed',
+      }),
+    );
+    vi.mocked(getSession).mockReturnValue(
+      makeSessionRow({ status: 'idle' }),
+    );
+    const github = makeMockGitHub([]);
+    vi.mocked(github.categorizeMergeability).mockResolvedValue({
+      category: 'blocked',
+      mergeState: 'blocked',
+      rawMergeableState: 'blocked',
+      failingChecks: [],
+      headSha: 'sha-abc',
+    });
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(
+      github,
+      watcher,
+      () => {},
+      sessions as unknown as import('../session/SessionManager').SessionManager,
+    );
+
+    await merger.conflictNudgeSweep();
+
+    // sendConflictNudge sees head_sha === conflict_nudge_sha and short-circuits
+    expect(sessions.sendOrResume).not.toHaveBeenCalled();
+  });
+
+  it('does NOT nudge when conflict has resolved (clean on re-check)', async () => {
+    const sessions = makeMockSessions();
+    vi.mocked(getConflictNudgeCandidates).mockReturnValue([
+      { pr_number: 42, repo: 'owner/repo' },
+    ]);
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({
+        session_id: 'coding-session',
+        head_sha: 'sha-abc',
+        conflict_nudge_sha: null,
+        pause_reason: 'auto_merge_failed',
+      }),
+    );
+    vi.mocked(getSession).mockReturnValue(
+      makeSessionRow({ status: 'idle' }),
+    );
+    const github = makeMockGitHub([]);
+    // Conflict resolved while backend was down
+    vi.mocked(github.categorizeMergeability).mockResolvedValue(
+      makeMergeability('clean'),
+    );
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(
+      github,
+      watcher,
+      () => {},
+      sessions as unknown as import('../session/SessionManager').SessionManager,
+    );
+
+    await merger.conflictNudgeSweep();
+
+    expect(sessions.sendOrResume).not.toHaveBeenCalled();
+    expect(setConflictNudgeSha).not.toHaveBeenCalled();
+  });
+
+  it('skips non-idle sessions (running, error, done)', async () => {
+    const sessions = makeMockSessions();
+    vi.mocked(getConflictNudgeCandidates).mockReturnValue([
+      { pr_number: 42, repo: 'owner/repo' },
+    ]);
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({
+        session_id: 'coding-session',
+        head_sha: 'sha-abc',
+        conflict_nudge_sha: null,
+        pause_reason: 'auto_merge_failed',
+      }),
+    );
+    vi.mocked(getSession).mockReturnValue(
+      makeSessionRow({ status: 'running' }),
+    );
+    const github = makeMockGitHub([]);
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(
+      github,
+      watcher,
+      () => {},
+      sessions as unknown as import('../session/SessionManager').SessionManager,
+    );
+
+    await merger.conflictNudgeSweep();
+
+    // Session not idle — skip before API call
+    expect(github.categorizeMergeability).not.toHaveBeenCalled();
+    expect(sessions.sendOrResume).not.toHaveBeenCalled();
+  });
+
+  it('sweep is idempotent across consecutive invocations', async () => {
+    const sessions = makeMockSessions();
+    vi.mocked(getConflictNudgeCandidates).mockReturnValue([
+      { pr_number: 42, repo: 'owner/repo' },
+    ]);
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
+    const github = makeMockGitHub([]);
+    vi.mocked(github.categorizeMergeability).mockResolvedValue({
+      category: 'blocked',
+      mergeState: 'blocked',
+      rawMergeableState: 'blocked',
+      failingChecks: [],
+      headSha: 'sha-abc',
+    });
+
+    // Default mock returns already-nudged row so the constructor's bootSweep
+    // fires a sweep that dedup-skips (head_sha === conflict_nudge_sha), keeping
+    // sendOrResume clean for the assertions below.
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({
+        session_id: 'coding-session',
+        head_sha: 'sha-abc',
+        conflict_nudge_sha: 'sha-abc',
+        pause_reason: 'auto_merge_failed',
+      }),
+    );
+
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(
+      github,
+      watcher,
+      () => {},
+      sessions as unknown as import('../session/SessionManager').SessionManager,
+    );
+
+    // First sweep: override to un-nudged row → nudge sent
+    vi.mocked(getPRByNumber).mockReturnValueOnce(
+      makePRRow({
+        session_id: 'coding-session',
+        head_sha: 'sha-abc',
+        conflict_nudge_sha: null,
+        pause_reason: 'auto_merge_failed',
+      }),
+    );
+    await merger.conflictNudgeSweep();
+    expect(sessions.sendOrResume).toHaveBeenCalledTimes(1);
+
+    // Second sweep: back to already-nudged default → dedup skips
+    await merger.conflictNudgeSweep();
+    expect(sessions.sendOrResume).toHaveBeenCalledTimes(1); // still only 1
   });
 });
