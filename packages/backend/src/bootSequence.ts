@@ -2,6 +2,7 @@ import http from 'http';
 import { GitHubClient } from './github/GitHubClient';
 import { runPRBootSweep } from './github/PRBootSweep';
 import { runBootIdleReconciliation } from './session/bootIdleReconciliation';
+import { runBootWorktreeReconciliation } from './orchestration/WorktreeReconciler';
 
 interface BootDeps {
   jsonlReader: {
@@ -102,6 +103,10 @@ export async function runBootSequence(deps: BootDeps): Promise<void> {
 
   stuckSessionMonitor.startScan();
   autoMerger.rehydrate();
+
+  await runBootWorktreeReconciliation().catch((err: unknown) =>
+    console.warn('[server] WorktreeReconciler boot sweep failed:', err),
+  );
 
   void runPRBootSweep(githubClient)
     .then(() => runBootIdleReconciliation())
