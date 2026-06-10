@@ -184,7 +184,7 @@ export function CIBadges({
       )}
       {awaitingReReview && (
         <span
-          className={styles.pipelineAwaitingBadge}
+          className={styles.awaitingReReviewBadge}
           title="A fix was pushed — the pipeline will re-run review when ready."
         >
           ⏳ Fix pushed — awaiting re-review
