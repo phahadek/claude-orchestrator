@@ -271,9 +271,11 @@ copied with their `table_row` children intact.
 - **Hook config:** `~/.claude/settings.json` → `hooks.PreToolUse`, with
   matchers for `mcp__claude_ai_Notion__notion-create-pages` and
   `mcp__claude_ai_Notion__notion-update-page`.
-- **Script:** `~/.claude/scripts/check-task-status.mjs` (copy).
-  **Source:** `scripts/check-task-status.mjs` in this repo. Edit the repo
-  source and re-copy; never edit the global copy directly.
+- **Script:** `~/.claude/scripts/check-task-status.mjs` — **canonical
+  location; deliberately NOT in this repo.** The hook is personal harness
+  config that applies across all Notion-task projects on this host, not
+  project tooling (unlike `notion-query.mjs` / `notion-move-tasks.mjs`).
+  Edit it in place at the global path.
 - **Behavior (v1 — create-only enforcement):** blocks any `notion-create-pages`
   call where a page's `Status` is set and ≠ `🔲 Backlog` (hook exits 2; stderr
   is fed back to the session so it can self-correct and re-issue at Backlog).
