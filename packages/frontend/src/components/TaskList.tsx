@@ -324,6 +324,7 @@ export function TaskList({
     syncPendingRef.current = false;
     if (syncTimeoutRef.current) {
       clearTimeout(syncTimeoutRef.current);
+      // eslint-disable-next-line react-hooks/immutability
       syncTimeoutRef.current = null;
     }
     setSyncing(false);
