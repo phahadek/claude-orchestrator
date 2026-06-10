@@ -378,6 +378,70 @@ describe('GET /api/prs', () => {
   });
 });
 
+// ── GET /api/prs — awaitingReReview mapper ───────────────────────────────────
+
+describe('GET /api/prs — awaitingReReview computation', () => {
+  it('is true for blocked_autofix when pending_push=1', async () => {
+    const row = {
+      ...mockPRRow,
+      pre_review_stage: 'blocked_autofix',
+      pending_push: 1,
+    };
+    vi.mocked(queries.getPRs).mockReturnValue([row]);
+    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body[0].awaitingReReview).toBe(true);
+  });
+
+  it('is true for blocked_verify when head_sha differs from last_reviewed_sha', async () => {
+    const row = {
+      ...mockPRRow,
+      pre_review_stage: 'blocked_verify',
+      pending_push: 0,
+      head_sha: 'new-sha',
+      last_reviewed_sha: 'old-sha',
+    };
+    vi.mocked(queries.getPRs).mockReturnValue([row]);
+    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body[0].awaitingReReview).toBe(true);
+  });
+
+  it('is false for blocked_autofix when pending_push=0 and head_sha matches', async () => {
+    const row = {
+      ...mockPRRow,
+      pre_review_stage: 'blocked_autofix',
+      pending_push: 0,
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-abc',
+    };
+    vi.mocked(queries.getPRs).mockReturnValue([row]);
+    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body[0].awaitingReReview).toBe(false);
+  });
+
+  it('is false when pre_review_stage is null', async () => {
+    const row = { ...mockPRRow, pre_review_stage: null, pending_push: 1 };
+    vi.mocked(queries.getPRs).mockReturnValue([row]);
+    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body[0].awaitingReReview).toBe(false);
+  });
+
+  it('is false for non-gate-failure stage (awaiting_review) even with pending_push', async () => {
+    const row = {
+      ...mockPRRow,
+      pre_review_stage: 'awaiting_review',
+      pending_push: 1,
+    };
+    vi.mocked(queries.getPRs).mockReturnValue([row]);
+    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body[0].awaitingReReview).toBe(false);
+  });
+});
+
 // ── GET /api/prs — local-only unified payload ─────────────────────────────────
 
 describe('GET /api/prs — local-only project returns local_branch items', () => {

@@ -115,14 +115,26 @@ describe('PipelineStageBadge', () => {
     expect(screen.getByText(/Awaiting review/)).toBeDefined();
   });
 
-  it('renders blocked by autofix gate badge', () => {
+  it('renders autofix failed badge', () => {
     render(<PipelineStageBadge stage="blocked_autofix" />);
-    expect(screen.getByText(/Blocked by autofix gate/)).toBeDefined();
+    expect(screen.getByText(/Autofix failed/)).toBeDefined();
   });
 
-  it('renders blocked by verify gate badge', () => {
+  it('renders verify failed badge', () => {
     render(<PipelineStageBadge stage="blocked_verify" />);
-    expect(screen.getByText(/Blocked by verify gate/)).toBeDefined();
+    expect(screen.getByText(/Verify failed/)).toBeDefined();
+  });
+
+  it('does not render "Blocked" compact label for blocked_autofix', () => {
+    render(<PipelineStageBadge stage="blocked_autofix" compact />);
+    expect(screen.queryByText(/Blocked/)).toBeNull();
+    expect(screen.getByText(/❌ Autofix/)).toBeDefined();
+  });
+
+  it('does not render "Blocked" compact label for blocked_verify', () => {
+    render(<PipelineStageBadge stage="blocked_verify" compact />);
+    expect(screen.queryByText(/Blocked/)).toBeNull();
+    expect(screen.getByText(/❌ Verify/)).toBeDefined();
   });
 
   it('renders compact label when compact=true', () => {
@@ -169,5 +181,59 @@ describe('PipelineStageBadge', () => {
   it('does not show spinner for awaiting_review stage', () => {
     render(<PipelineStageBadge stage="awaiting_review" />);
     expect(document.querySelector('[aria-hidden="true"]')).toBeNull();
+  });
+});
+
+describe('CIBadges — awaiting re-review state', () => {
+  it('renders Fix pushed — awaiting re-review when awaitingReReview is true', () => {
+    render(<CIBadges mergeState={null} awaitingReReview={true} />);
+    expect(screen.getByText(/Fix pushed — awaiting re-review/)).toBeDefined();
+  });
+
+  it('does not render Fix pushed badge when awaitingReReview is false', () => {
+    const { container } = render(
+      <CIBadges mergeState={null} awaitingReReview={false} />,
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('does not render Fix pushed badge when awaitingReReview is omitted', () => {
+    const { container } = render(<CIBadges mergeState={null} />);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('gate-failure + newer push → awaiting re-review badge renders', () => {
+    // awaitingReReview=true represents: gate-failure verdict + pending push
+    render(<CIBadges mergeState={null} awaitingReReview={true} />);
+    expect(screen.getByText(/Fix pushed — awaiting re-review/)).toBeDefined();
+  });
+
+  it('gate-failure + no newer push → failure badge (PipelineStageBadge shows Autofix failed)', () => {
+    // awaitingReReview=false: CIBadges shows nothing; PipelineStageBadge shows the failure label
+    render(<PipelineStageBadge stage="blocked_autofix" />);
+    expect(screen.getByText(/Autofix failed/)).toBeDefined();
+    expect(screen.queryByText(/Fix pushed/)).toBeNull();
+  });
+
+  it('suppresses Fix pushed badge when prState is merged', () => {
+    const { container } = render(
+      <CIBadges mergeState={null} awaitingReReview={true} prState="merged" />,
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('suppresses Fix pushed badge when prState is closed', () => {
+    const { container } = render(
+      <CIBadges mergeState={null} awaitingReReview={true} prState="closed" />,
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('no regression — ci_failing badge still renders alongside awaitingReReview', () => {
+    render(<CIBadges mergeState="ci_failed" awaitingReReview={true} />);
+    expect(screen.getByText('❌ CI failing')).toBeDefined();
+    expect(
+      screen.getByText('⏳ Fix pushed — awaiting re-review'),
+    ).toBeDefined();
   });
 });
