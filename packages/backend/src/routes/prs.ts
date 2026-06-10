@@ -434,6 +434,27 @@ export function createPrsRouter(
       }
 
       try {
+        // Draft → ready: flip before merging (GitHub returns 405 on draft PRs).
+        if (prRow?.draft === 1) {
+          let flipErr: Error | null = null;
+          for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+              await github.markPRReady(repo, prNumber);
+              flipErr = null;
+              break;
+            } catch (e) {
+              flipErr = e as Error;
+            }
+          }
+          if (flipErr) {
+            res
+              .status(422)
+              .json({ error: `could not mark PR ready: ${flipErr.message}` });
+            return;
+          }
+          updatePRDraftStatus(prNumber, repo, 0);
+        }
+
         const result = await github.mergePR(prNumber, commitTitle, repo);
         updatePRState(prNumber, repo, 'merged');
 
