@@ -11,8 +11,14 @@ import {
   getPRBySessionId,
   getLocalBranchBySession,
   setSessionPauseReason,
+  getLatestSessionEventTimestamp,
 } from '../db/queries';
-import { recordEvent, countNudgeEvents } from '../audit/AuditLog';
+import {
+  recordEvent,
+  countNudgeEvents,
+  getLatestNudgeTimestamp,
+  countNudgeEventsSince,
+} from '../audit/AuditLog';
 import type { Session } from '../db/types';
 
 const IN_PROGRESS_STATUS = '🔄 In Progress';
@@ -23,6 +29,10 @@ const ANTI_RACE_MS = 5 * 60 * 1000;
 const POST_CLEAN_EXIT_GRACE_MS = 2 * 60 * 1000;
 /** Max nudge attempts before surfacing to the operator. */
 const NUDGE_LIMIT = 2;
+/** Skip nudge if the session emitted a session_events row less than this many ms ago. */
+const RECENCY_GATE_MS = 10 * 60 * 1000;
+/** Skip nudge if the previous nudge was less than this many ms ago. */
+const MIN_NUDGE_SPACING_MS = 15 * 60 * 1000;
 /** Nudge message sent to a stalled idle session that hasn't opened a PR. */
 const IDLE_NUDGE_MESSAGE =
   'You appear to have finished your work but no PR was opened. Please open a draft PR now so your changes can be reviewed. If you are done with your task, follow the PR format in CLAUDE.md and emit the <pr-body>…</pr-body> marker.';
@@ -50,6 +60,10 @@ export class OrphanedTaskSweeper {
       intervalMs?: number;
       /** Shared nudge path — calls SessionManager.sendOrResume under the hood. */
       sendOrResume?: (sessionId: string, text: string) => Promise<string>;
+      /** Override recency gate threshold (ms). Defaults to RECENCY_GATE_MS. */
+      recencyGateMs?: number;
+      /** Override minimum nudge spacing (ms). Defaults to MIN_NUDGE_SPACING_MS. */
+      minNudgeSpacingMs?: number;
     } = {},
   ) {}
 
@@ -241,10 +255,33 @@ export class OrphanedTaskSweeper {
       return;
     }
 
-    const nudgesAlready = countNudgeEvents(session_id);
+    // Working-recency gate: skip if the session emitted events recently.
+    // Covers escalation/resume windows where the session is legitimately mid-task.
+    const latestEventTs = getLatestSessionEventTimestamp(session_id);
+    const recencyGateMs = this.options.recencyGateMs ?? RECENCY_GATE_MS;
+    if (latestEventTs !== null && Date.now() - latestEventTs < recencyGateMs) {
+      return;
+    }
+
+    // Minimum nudge spacing: skip if the last nudge was too recent.
+    const latestNudgeTs = getLatestNudgeTimestamp(session_id);
+    const minNudgeSpacingMs = this.options.minNudgeSpacingMs ?? MIN_NUDGE_SPACING_MS;
+    if (latestNudgeTs !== null && Date.now() - latestNudgeTs < minNudgeSpacingMs) {
+      return;
+    }
+
+    // Episode-scoped nudge count: only count nudges newer than the last session activity.
+    // A nudge the session responded to (session_events after it) no longer counts.
+    const nudgesAlready =
+      latestEventTs !== null
+        ? countNudgeEventsSince(session_id, latestEventTs)
+        : countNudgeEvents(session_id);
 
     if (nudgesAlready >= NUDGE_LIMIT) {
-      // Nudge budget exhausted — surface to operator, never revert.
+      // Surface-once: skip if the session is already marked stalled_idle.
+      if (session.pause_reason === 'stalled_idle') {
+        return;
+      }
       this.surfaceToOperator(
         session_id,
         taskId,
