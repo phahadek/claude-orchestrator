@@ -925,6 +925,58 @@ describe('TaskDetail', () => {
     expect(reviewHeader.getAttribute('aria-expanded')).toBe('false');
   });
 
+  // ── Mobile accordion — PR reachability ──
+
+  it('mobile: PULL REQUEST header accessible without hidden flag when review is expanded', () => {
+    isMobileValue = true;
+    const pr = makePr();
+    const review = makeReview({ verdict: 'approved' });
+    render(
+      <TaskDetail
+        task={makeTask({ pr, review })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    // Review is expanded by default; PR header should be findable without hidden:true
+    const prHeader = screen.getByRole('button', { name: /pull request/i });
+    expect(prHeader).toBeTruthy();
+    expect(prHeader.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('mobile: tapping PR header from review-open state expands PR and collapses review', () => {
+    isMobileValue = true;
+    const pr = makePr();
+    const review = makeReview({ verdict: 'approved' });
+    render(
+      <TaskDetail
+        task={makeTask({ pr, review })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={[]}
+      />,
+    );
+    // Review is expanded by default
+    expect(screen.getByText('Review transcript not available.')).toBeTruthy();
+    const prHeader = screen.getByRole('button', { name: /pull request/i });
+    fireEvent.click(prHeader);
+    // PR is now expanded, review is collapsed
+    expect(screen.getByText('#42')).toBeTruthy();
+    expect(screen.queryByText('Review transcript not available.')).toBeNull();
+  });
+
+  // ── Review dead-space: CSS cap applied ──
+
+  it('TaskDetail.module.css reviewBody uses max-height cap (no flex:1 dead space)', () => {
+    const cssPath = path.join(__dirname, '../TaskDetail.module.css');
+    const css = fs.readFileSync(cssPath, 'utf-8');
+    const reviewBodyMatch = css.match(/\.reviewBody\s*\{([^}]+)\}/);
+    expect(reviewBodyMatch).toBeTruthy();
+    const reviewBodyBlock = reviewBodyMatch![1];
+    expect(reviewBodyBlock).not.toContain('flex: 1');
+    expect(reviewBodyBlock).toContain('max-height');
+  });
+
   // ── Shared task-views source — detail pane AC tests ──
 
   it('renders task data when the task prop is provided', () => {

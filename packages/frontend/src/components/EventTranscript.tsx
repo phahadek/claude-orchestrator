@@ -520,7 +520,7 @@ export function EventTranscript({
 
   return (
     <div className={styles.transcriptSection}>
-      <div className={styles.transcriptHeader}>
+      <div className={styles.transcriptOverlay}>
         {!isAtBottom && (
           <button className={styles.goToEndButton} onClick={handleGoToEnd}>
             Go to End ↓
