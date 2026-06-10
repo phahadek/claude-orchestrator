@@ -29,11 +29,14 @@ vi.mock('../db/queries.js', () => ({
   getPRBySessionId: vi.fn(() => null),
   getLocalBranchBySession: vi.fn(() => undefined),
   setSessionPauseReason: vi.fn(),
+  getLatestSessionEventTimestamp: vi.fn(() => null),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
   recordEvent: vi.fn(),
   countNudgeEvents: vi.fn(() => 0),
+  getLatestNudgeTimestamp: vi.fn(() => null),
+  countNudgeEventsSince: vi.fn(() => 0),
 }));
 
 vi.mock('../config.js', () => ({
@@ -50,8 +53,14 @@ import {
   getPRBySessionId,
   getLocalBranchBySession,
   setSessionPauseReason,
+  getLatestSessionEventTimestamp,
 } from '../db/queries.js';
-import { recordEvent, countNudgeEvents } from '../audit/AuditLog.js';
+import {
+  recordEvent,
+  countNudgeEvents,
+  getLatestNudgeTimestamp,
+  countNudgeEventsSince,
+} from '../audit/AuditLog.js';
 import { getAllProjects } from '../config.js';
 import { OrphanedTaskSweeper } from '../orchestration/OrphanedTaskSweeper.js';
 import type { ServerMessage } from '../ws/types.js';
@@ -128,6 +137,9 @@ describe('OrphanedTaskSweeper', () => {
     vi.mocked(setSessionPauseReason).mockClear();
     vi.mocked(recordEvent).mockClear();
     vi.mocked(countNudgeEvents).mockReturnValue(0);
+    vi.mocked(getLatestSessionEventTimestamp).mockReturnValue(null);
+    vi.mocked(getLatestNudgeTimestamp).mockReturnValue(null);
+    vi.mocked(countNudgeEventsSince).mockReturnValue(0);
     vi.mocked(fs.existsSync).mockReturnValue(true);
     broadcast.mockClear();
   });
@@ -628,6 +640,242 @@ describe('OrphanedTaskSweeper', () => {
     expect(sendOrResume).not.toHaveBeenCalled();
     // Treat as a genuine orphan — revert to Ready
     expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
+  });
+
+  // ── Recency gate (AC1 / AC2) ──────────────────────────────────────────────
+
+  it('does not nudge when session has recent events (recency gate)', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 30 * 60 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('idle', 60 * 60 * 1000, endedAt) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    // Last event was 5 minutes ago — under 10-minute recency gate
+    vi.mocked(getLatestSessionEventTimestamp).mockReturnValue(
+      Date.now() - 5 * 60 * 1000,
+    );
+    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      sendOrResume,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(sendOrResume).not.toHaveBeenCalled();
+    expect(backend.updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('nudges when session events are stale (beyond recency gate)', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 30 * 60 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('idle', 60 * 60 * 1000, endedAt) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    // Last event was 15 minutes ago — beyond 10-minute recency gate
+    vi.mocked(getLatestSessionEventTimestamp).mockReturnValue(
+      Date.now() - 15 * 60 * 1000,
+    );
+    // Episode-scoped: no nudges since last event
+    vi.mocked(countNudgeEventsSince).mockReturnValue(0);
+    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      sendOrResume,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(sendOrResume).toHaveBeenCalledWith(
+      'sess-1',
+      expect.stringContaining('PR'),
+    );
+  });
+
+  // ── Minimum nudge spacing (AC6) ───────────────────────────────────────────
+
+  it('skips nudge when last nudge was too recent (minimum spacing)', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 30 * 60 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('idle', 60 * 60 * 1000, endedAt) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    vi.mocked(getLatestSessionEventTimestamp).mockReturnValue(
+      Date.now() - 20 * 60 * 1000,
+    );
+    // Last nudge was only 5 minutes ago — under 15-minute spacing
+    vi.mocked(getLatestNudgeTimestamp).mockReturnValue(
+      Date.now() - 5 * 60 * 1000,
+    );
+    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      sendOrResume,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(sendOrResume).not.toHaveBeenCalled();
+  });
+
+  it('two sweep ticks 60s apart produce at most one nudge (spacing enforced)', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 30 * 60 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('idle', 60 * 60 * 1000, endedAt) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    vi.mocked(getLatestSessionEventTimestamp).mockReturnValue(
+      Date.now() - 30 * 60 * 1000,
+    );
+    vi.mocked(getLatestNudgeTimestamp).mockReturnValue(null);
+    vi.mocked(countNudgeEventsSince).mockReturnValue(0);
+    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      sendOrResume,
+    });
+
+    // First tick nudges
+    await sweeper.sweepOnce();
+    expect(sendOrResume).toHaveBeenCalledTimes(1);
+
+    // Simulate 60s elapsed — nudge was recorded 60s ago (under 15-min spacing)
+    vi.mocked(getLatestNudgeTimestamp).mockReturnValue(Date.now() - 60 * 1000);
+
+    // Second tick is blocked by spacing gate
+    await sweeper.sweepOnce();
+    expect(sendOrResume).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Episode-scoped counting (AC4) ─────────────────────────────────────────
+
+  it('episode-scoped: nudge followed by session activity resets the episode count', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 30 * 60 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('idle', 60 * 60 * 1000, endedAt) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    vi.mocked(getLatestSessionEventTimestamp).mockReturnValue(
+      Date.now() - 20 * 60 * 1000,
+    );
+    // countNudgeEvents returns 2 (would hit limit naively)
+    vi.mocked(countNudgeEvents).mockReturnValue(2);
+    // But episode-scoped count (nudges after last event) is 0 — session responded
+    vi.mocked(countNudgeEventsSince).mockReturnValue(0);
+    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      sendOrResume,
+    });
+
+    await sweeper.sweepOnce();
+
+    // Should nudge (not surface) because episode count is 0
+    expect(sendOrResume).toHaveBeenCalledWith(
+      'sess-1',
+      expect.stringContaining('PR'),
+    );
+    expect(setSessionPauseReason).not.toHaveBeenCalled();
+  });
+
+  // ── Genuine stall still surfaces (AC5) ───────────────────────────────────
+
+  it('genuinely stalled session surfaces to operator after episode nudge limit', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 60 * 60 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('idle', 90 * 60 * 1000, endedAt) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+    vi.mocked(getLatestSessionEventTimestamp).mockReturnValue(
+      Date.now() - 60 * 60 * 1000,
+    );
+    // 2 nudges in the current episode — limit reached
+    vi.mocked(countNudgeEventsSince).mockReturnValue(2);
+    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      sendOrResume,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(sendOrResume).not.toHaveBeenCalled();
+    expect(setSessionPauseReason).toHaveBeenCalledWith(
+      'sess-1',
+      'stalled_idle',
+    );
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_surfaced' }),
+    );
+  });
+
+  // ── Surface-once (AC7) ────────────────────────────────────────────────────
+
+  it('task_orphan_surfaced not emitted again when session already paused stalled_idle', async () => {
+    const backend = makeBackend([makeTask('notion:abc')]);
+    const endedAt = Date.now() - 60 * 60 * 1000;
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue({
+      ...makeSession('idle', 90 * 60 * 1000, endedAt),
+      pause_reason: 'stalled_idle',
+    } as ReturnType<typeof getLatestCodeSessionByNotionTaskId>);
+    vi.mocked(getLatestSessionEventTimestamp).mockReturnValue(
+      Date.now() - 60 * 60 * 1000,
+    );
+    vi.mocked(countNudgeEventsSince).mockReturnValue(2);
+    const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+      sendOrResume,
+    });
+
+    await sweeper.sweepOnce();
+    await sweeper.sweepOnce();
+    await sweeper.sweepOnce();
+
+    expect(setSessionPauseReason).not.toHaveBeenCalled();
+    expect(recordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_surfaced' }),
+    );
   });
 
   it('skips (open PR) is still respected for idle sessions', async () => {
