@@ -57,9 +57,8 @@ import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiv
 import { deleteGhostSessions, getPRBySessionId } from './db/queries';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
-import { runPRBootSweep } from './github/PRBootSweep';
-import { runBootIdleReconciliation } from './session/bootIdleReconciliation';
 import setupRouter, { createSetupModeGuard } from './routes/setup';
+import { runBootSequence } from './bootSequence';
 
 runMigrations(db);
 loadRuntimeSettingsFromDb();
@@ -281,56 +280,22 @@ const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast, {
 // in a terminal state longer than the configured grace period.
 const concludedSessionArchiver = new ConcludedSessionArchiver(broadcast);
 
-jsonlReader
-  .importAll()
-  .then(async () => {
-    jsonlReader.backfillTokens();
-
-    await sessionManager
-      .resumeOrphanSessions()
-      .catch((err: unknown) =>
-        console.warn(
-          '[server] orphan session resume failed:',
-          (err as Error).message,
-        ),
-      );
-
-    stuckSessionMonitor.rehydrate();
-    stuckSessionMonitor.startScan();
-    autoMerger.rehydrate();
-
-    runPRBootSweep(githubClient)
-      .then(() => runBootIdleReconciliation())
-      .catch((err: unknown) =>
-        console.warn('[server] PR boot sweep failed:', (err as Error).message),
-      );
-
-    prMergeWatcher.start();
-    reviewerCommentsWatcher.start();
-
-    await autoLauncher
-      .start()
-      .catch((err: unknown) =>
-        console.warn(
-          '[server] auto-launcher start failed:',
-          (err as Error).message,
-        ),
-      );
-
-    orphanedTaskSweeper.start();
-    concludedSessionArchiver.start();
-    updateChecker.start();
-    taskCacheRefresher.start();
-
-    server.listen(PORT, '0.0.0.0', () => {
-      console.log(`[server] listening on port ${PORT}`);
-      console.log('[server] LAN access enabled — device auth required');
-    });
-  })
-  .catch((err: unknown) => {
-    console.error('[server] JSONL import failed:', err);
-    process.exit(1);
-  });
+void runBootSequence({
+  jsonlReader,
+  sessionManager,
+  stuckSessionMonitor,
+  autoMerger,
+  githubClient,
+  prMergeWatcher,
+  reviewerCommentsWatcher,
+  autoLauncher,
+  orphanedTaskSweeper,
+  concludedSessionArchiver,
+  updateChecker,
+  taskCacheRefresher,
+  server,
+  port: PORT,
+});
 
 async function gracefulShutdown(signal: string) {
   console.log(`[server] ${signal} received — shutting down`);
