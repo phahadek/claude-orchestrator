@@ -211,7 +211,9 @@ describe('SessionPanel — transcript overlay', () => {
   it('code session transcript has Copy button present in DOM', () => {
     render(
       <SessionPanel
-        session={makeSession({ events: [{ eventType: 'text', content: 'hello', timestamp: 1 }] })}
+        session={makeSession({
+          events: [{ eventType: 'text', content: 'hello', timestamp: 1 }],
+        })}
         {...defaultProps}
       />,
     );
