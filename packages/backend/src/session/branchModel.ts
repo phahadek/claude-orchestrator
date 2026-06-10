@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { execSync } from 'child_process';
 import { runtimeSettings } from '../config';
 import { ProjectService } from '../projects/ProjectService';
@@ -18,6 +19,35 @@ export function slugify(name: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
+}
+
+const MAX_BRANCH_SLUG_LEN = 80;
+const HASH_SUFFIX_LEN = 8;
+
+/**
+ * Derives a git branch name from a task title, capped at MAX_BRANCH_SLUG_LEN
+ * chars (the part after the prefix slash) for Windows MAX_PATH safety.
+ * When the slug exceeds the cap, a deterministic 8-char SHA1 suffix is appended
+ * so retries for the same task always reproduce the same branch name.
+ */
+export function deriveBranchSlug(taskTitle: string, prefix = 'feature'): string {
+  const fullSlug = slugify(taskTitle);
+  if (fullSlug.length <= MAX_BRANCH_SLUG_LEN) {
+    return `${prefix}/${fullSlug}`;
+  }
+  const truncateAt = MAX_BRANCH_SLUG_LEN - HASH_SUFFIX_LEN - 1;
+  let truncated = fullSlug.slice(0, truncateAt);
+  // Trim at last word boundary to avoid cutting mid-word
+  const lastDash = truncated.lastIndexOf('-');
+  if (lastDash > 0) {
+    truncated = truncated.slice(0, lastDash);
+  }
+  const hash = crypto
+    .createHash('sha1')
+    .update(fullSlug)
+    .digest('hex')
+    .slice(0, HASH_SUFFIX_LEN);
+  return `${prefix}/${truncated}-${hash}`;
 }
 
 /**
