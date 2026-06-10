@@ -254,3 +254,36 @@ try {
 } catch {
   /* already exists */
 }
+// events_pruned_at: epoch-ms timestamp marking when system event payloads were pruned for this session.
+try {
+  db.exec(`ALTER TABLE sessions ADD COLUMN events_pruned_at INTEGER`);
+} catch {
+  /* already exists */
+}
+
+// Enable incremental auto_vacuum once — guards against write-blocking full VACUUMs.
+// SQLite requires a full VACUUM to switch auto_vacuum mode; this runs at most once ever
+// (guarded by a settings row) and is skipped for in-memory test databases.
+(function enableIncrementalAutoVacuum() {
+  if (dbPath === ':memory:') return;
+  const currentMode = (db.pragma('auto_vacuum') as { auto_vacuum: number }[])[0]
+    ?.auto_vacuum;
+  // 0 = NONE, 1 = FULL, 2 = INCREMENTAL
+  if (currentMode === 2) return;
+  try {
+    const already = db
+      .prepare(`SELECT value FROM settings WHERE key = 'auto_vacuum_incremental_done'`)
+      .get() as { value: string } | undefined;
+    if (already) return;
+    console.log('[db] Enabling incremental auto_vacuum (one-time VACUUM — may take a moment)');
+    db.pragma('auto_vacuum = INCREMENTAL');
+    db.exec('VACUUM');
+    db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`).run(
+      'auto_vacuum_incremental_done',
+      '1',
+    );
+    console.log('[db] incremental auto_vacuum enabled');
+  } catch (err) {
+    console.warn('[db] auto_vacuum enablement failed (non-fatal):', err);
+  }
+})();

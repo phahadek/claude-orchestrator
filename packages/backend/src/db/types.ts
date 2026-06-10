@@ -35,6 +35,7 @@ export interface Session {
   review_result: string | null; // JSON — verdict stored for local-only review sessions
   pause_reason: string | null;
   last_error_detail: string | null;
+  events_pruned_at: number | null;
 }
 
 export type NewSession = Omit<
@@ -57,6 +58,7 @@ export type NewSession = Omit<
   | 'review_result'
   | 'pause_reason'
   | 'last_error_detail'
+  | 'events_pruned_at'
 > & {
   ended_at?: number | null;
   pr_url?: string | null;
