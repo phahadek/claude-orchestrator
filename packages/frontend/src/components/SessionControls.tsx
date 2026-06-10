@@ -278,7 +278,9 @@ export function SessionControls({
         <button
           className={styles.disclosureToggle}
           aria-expanded={compactOpen}
-          aria-label={compactOpen ? 'Hide session details' : 'Show session details'}
+          aria-label={
+            compactOpen ? 'Hide session details' : 'Show session details'
+          }
           onClick={() => setCompactOpen((o) => !o)}
         >
           {compactOpen ? '− details' : '⋯ details'}

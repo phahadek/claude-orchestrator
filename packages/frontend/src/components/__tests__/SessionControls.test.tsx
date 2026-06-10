@@ -447,7 +447,11 @@ describe('SessionControls — compact disclosure toggle', () => {
     render(<SessionControls session={makeSession()} {...defaultProps} />);
     const toggle = screen.getByLabelText('Show session details');
     fireEvent.click(toggle);
-    expect(screen.getByLabelText('Hide session details').getAttribute('aria-expanded')).toBe('true');
+    expect(
+      screen
+        .getByLabelText('Hide session details')
+        .getAttribute('aria-expanded'),
+    ).toBe('true');
   });
 
   it('collapses again on second click', () => {
@@ -455,20 +459,38 @@ describe('SessionControls — compact disclosure toggle', () => {
     const toggle = screen.getByLabelText('Show session details');
     fireEvent.click(toggle);
     fireEvent.click(screen.getByLabelText('Hide session details'));
-    expect(screen.getByLabelText('Show session details').getAttribute('aria-expanded')).toBe('false');
+    expect(
+      screen
+        .getByLabelText('Show session details')
+        .getAttribute('aria-expanded'),
+    ).toBe('false');
   });
 
   it('resets to collapsed when session changes', () => {
     const { rerender } = render(
-      <SessionControls session={makeSession({ sessionId: 'sess-1' })} {...defaultProps} />,
+      <SessionControls
+        session={makeSession({ sessionId: 'sess-1' })}
+        {...defaultProps}
+      />,
     );
     fireEvent.click(screen.getByLabelText('Show session details'));
-    expect(screen.getByLabelText('Hide session details').getAttribute('aria-expanded')).toBe('true');
+    expect(
+      screen
+        .getByLabelText('Hide session details')
+        .getAttribute('aria-expanded'),
+    ).toBe('true');
 
     rerender(
-      <SessionControls session={makeSession({ sessionId: 'sess-2' })} {...defaultProps} />,
+      <SessionControls
+        session={makeSession({ sessionId: 'sess-2' })}
+        {...defaultProps}
+      />,
     );
-    expect(screen.getByLabelText('Show session details').getAttribute('aria-expanded')).toBe('false');
+    expect(
+      screen
+        .getByLabelText('Show session details')
+        .getAttribute('aria-expanded'),
+    ).toBe('false');
   });
 
   it('archive handler fires even when disclosure is closed (DOM always present)', async () => {
@@ -512,7 +534,10 @@ describe('SessionControls — compact disclosure toggle', () => {
   it('status/model badges and Notion link are in DOM regardless of disclosure state', () => {
     render(
       <SessionControls
-        session={makeSession({ model: 'claude-opus-4-5', notionTaskUrl: 'https://notion.so/task' })}
+        session={makeSession({
+          model: 'claude-opus-4-5',
+          notionTaskUrl: 'https://notion.so/task',
+        })}
         {...defaultProps}
       />,
     );
@@ -529,7 +554,11 @@ describe('SessionControls — compact disclosure toggle', () => {
     const toggle = screen.getByLabelText('Show session details');
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(toggle);
-    expect(screen.getByLabelText('Hide session details').getAttribute('aria-expanded')).toBe('true');
+    expect(
+      screen
+        .getByLabelText('Hide session details')
+        .getAttribute('aria-expanded'),
+    ).toBe('true');
   });
 });
 

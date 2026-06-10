@@ -288,7 +288,9 @@
     font-size: 0.75rem;
     padding: 2px 8px;
     flex-shrink: 0;
-    transition: color 0.15s, border-color 0.15s;
+    transition:
+      color 0.15s,
+      border-color 0.15s;
   }
 
   .disclosureToggle:hover {
