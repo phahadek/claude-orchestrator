@@ -129,6 +129,9 @@ export class PRMergeWatcher {
         console.warn('[PRMergeWatcher] poll error:', (err as Error).message),
       );
     }, intervalMs);
+    this.poll().catch((err: unknown) =>
+      console.warn('[PRMergeWatcher] poll error:', (err as Error).message),
+    );
     console.log(`[PRMergeWatcher] started (interval=${intervalMs}ms)`);
   }
 
