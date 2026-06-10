@@ -54,6 +54,7 @@ import { AutoLauncher } from './orchestration/AutoLauncher';
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
 import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
 import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiver';
+import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
 import { deleteGhostSessions, getPRBySessionId } from './db/queries';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
@@ -280,6 +281,8 @@ const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast, {
 // in a terminal state longer than the configured grace period.
 const concludedSessionArchiver = new ConcludedSessionArchiver(broadcast);
 
+const sessionEventsPruner = new SessionEventsPruner();
+
 void runBootSequence({
   jsonlReader,
   sessionManager,
@@ -293,6 +296,7 @@ void runBootSequence({
   concludedSessionArchiver,
   updateChecker,
   taskCacheRefresher,
+  sessionEventsPruner,
   server,
   port: PORT,
 });
@@ -304,6 +308,7 @@ async function gracefulShutdown(signal: string) {
   stuckSessionMonitor.stop();
   orphanedTaskSweeper.stop();
   concludedSessionArchiver.stop();
+  sessionEventsPruner.stop();
   updateChecker.stop();
   reviewerCommentsWatcher.stop();
   wss.close();

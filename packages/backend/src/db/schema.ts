@@ -787,4 +787,9 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN events_pruned_at INTEGER`);
+  } catch {
+    /* already exists */
+  }
 }

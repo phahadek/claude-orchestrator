@@ -2709,3 +2709,85 @@ export function getTestResult(
     )
     .get({ pr_number: prNumber, repo, sha }) as TestResultRow | undefined;
 }
+
+// ─── session_events pruner ──────────────────────────────────────────────────
+
+export interface PruneEligibleSession {
+  session_id: string;
+  total_input_tokens: number;
+  total_output_tokens: number;
+}
+
+/**
+ * Returns sessions eligible for payload pruning: archived, ended before the
+ * retention cutoff, and not yet pruned.
+ */
+export function getPruneEligibleSessions(
+  endedAtCutoff: number,
+  limit: number,
+): PruneEligibleSession[] {
+  return db
+    .prepare<{ cutoff: number; limit: number }>(
+      `SELECT session_id, total_input_tokens, total_output_tokens
+       FROM sessions
+       WHERE archived = 1
+         AND ended_at IS NOT NULL
+         AND ended_at < @cutoff
+         AND events_pruned_at IS NULL
+       ORDER BY ended_at ASC
+       LIMIT @limit`,
+    )
+    .all({ cutoff: endedAtCutoff, limit }) as PruneEligibleSession[];
+}
+
+/**
+ * Returns system event IDs and payloads for a session in a paginated batch,
+ * for use in the pruner's batched update loop.
+ */
+export function getSystemEventBatch(
+  sessionId: string,
+  afterId: number,
+  limit: number,
+): { id: number; payload: string }[] {
+  return db
+    .prepare<{ session_id: string; after_id: number; limit: number }>(
+      `SELECT id, payload FROM session_events
+       WHERE session_id = @session_id
+         AND event_type = 'system'
+         AND id > @after_id
+       ORDER BY id ASC
+       LIMIT @limit`,
+    )
+    .all({ session_id: sessionId, after_id: afterId, limit }) as {
+    id: number;
+    payload: string;
+  }[];
+}
+
+/**
+ * Bulk-updates a batch of system event rows to their pruned stub payloads.
+ * Runs in a single transaction to keep write locks short.
+ */
+export function pruneSystemEventBatch(
+  updates: { id: number; payload: string }[],
+): void {
+  const stmt = db.prepare<{ id: number; payload: string }>(
+    `UPDATE session_events SET payload = @payload WHERE id = @id`,
+  );
+  const tx = db.transaction((rows: { id: number; payload: string }[]) => {
+    for (const row of rows) {
+      stmt.run(row);
+    }
+  });
+  tx(updates);
+}
+
+/** Marks a session's events as pruned. */
+export function markSessionEventsPruned(
+  sessionId: string,
+  prunedAt: number,
+): void {
+  db.prepare<{ session_id: string; pruned_at: number }>(
+    `UPDATE sessions SET events_pruned_at = @pruned_at WHERE session_id = @session_id`,
+  ).run({ session_id: sessionId, pruned_at: prunedAt });
+}

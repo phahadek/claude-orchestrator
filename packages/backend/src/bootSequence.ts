@@ -40,6 +40,10 @@ interface BootDeps {
   taskCacheRefresher: {
     start(): void;
   };
+  sessionEventsPruner: {
+    runAtBoot(): Promise<void>;
+    start(): void;
+  };
   server: http.Server;
   port: number;
 }
@@ -58,6 +62,7 @@ export async function runBootSequence(deps: BootDeps): Promise<void> {
     concludedSessionArchiver,
     updateChecker,
     taskCacheRefresher,
+    sessionEventsPruner,
     server,
     port,
   } = deps;
@@ -70,6 +75,13 @@ export async function runBootSequence(deps: BootDeps): Promise<void> {
   }
 
   jsonlReader.backfillTokens();
+
+  void sessionEventsPruner
+    .runAtBoot()
+    .catch((err: unknown) =>
+      console.warn('[server] SessionEventsPruner boot run failed:', err),
+    );
+  sessionEventsPruner.start();
 
   try {
     await sessionManager.resumeOrphanSessions();
