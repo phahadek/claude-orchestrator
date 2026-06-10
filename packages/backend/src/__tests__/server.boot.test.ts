@@ -13,17 +13,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import http from 'http';
 import { EventEmitter } from 'events';
 
-vi.mock('../github/PRBootSweep.js', () => ({
+vi.mock('../github/PRBootSweep', () => ({
   runPRBootSweep: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('../session/bootIdleReconciliation.js', () => ({
+vi.mock('../session/bootIdleReconciliation', () => ({
   runBootIdleReconciliation: vi.fn().mockResolvedValue(undefined),
 }));
 
 function makeDeps(
   overrides: Partial<
-    Parameters<(typeof import('../bootSequence.js'))['runBootSequence']>[0]
+    Parameters<(typeof import('../bootSequence'))['runBootSequence']>[0]
   > = {},
 ) {
   const server = Object.assign(new EventEmitter(), {
@@ -46,7 +46,7 @@ function makeDeps(
       rehydrate: vi.fn(),
     },
     githubClient: {} as Parameters<
-      (typeof import('../bootSequence.js'))['runBootSequence']
+      (typeof import('../bootSequence'))['runBootSequence']
     >[0]['githubClient'],
     prMergeWatcher: { start: vi.fn() },
     reviewerCommentsWatcher: { start: vi.fn() },
@@ -73,7 +73,7 @@ describe('runBootSequence — per-step boot catches', () => {
   });
 
   it('logs BOOT FAILURE in JSONL import with full error and exits when importAll throws', async () => {
-    const { runBootSequence } = await import('../bootSequence.js');
+    const { runBootSequence } = await import('../bootSequence');
     const err = new Error('FK constraint violation');
     const deps = makeDeps({
       jsonlReader: {
@@ -93,7 +93,7 @@ describe('runBootSequence — per-step boot catches', () => {
   });
 
   it('stack trace is preserved (error is second arg, not interpolated) for JSONL import failure', async () => {
-    const { runBootSequence } = await import('../bootSequence.js');
+    const { runBootSequence } = await import('../bootSequence');
     const err = new Error('FK constraint violation');
     err.stack =
       'Error: FK constraint violation\n    at SomeQuery (queries.ts:2384)';
@@ -113,7 +113,7 @@ describe('runBootSequence — per-step boot catches', () => {
   });
 
   it('logs BOOT FAILURE in resumeOrphanSessions with full error and exits when it throws', async () => {
-    const { runBootSequence } = await import('../bootSequence.js');
+    const { runBootSequence } = await import('../bootSequence');
     const err = new Error('SQLITE_CONSTRAINT_FOREIGNKEY');
     const deps = makeDeps({
       sessionManager: { resumeOrphanSessions: vi.fn().mockRejectedValue(err) },
@@ -130,7 +130,7 @@ describe('runBootSequence — per-step boot catches', () => {
   });
 
   it('stack trace is preserved for resumeOrphanSessions failure', async () => {
-    const { runBootSequence } = await import('../bootSequence.js');
+    const { runBootSequence } = await import('../bootSequence');
     const err = new Error('SQLITE_CONSTRAINT_FOREIGNKEY');
     err.stack =
       'Error: SQLITE_CONSTRAINT_FOREIGNKEY\n    at insertPauseInterval (queries.ts:2384)';
@@ -147,7 +147,7 @@ describe('runBootSequence — per-step boot catches', () => {
   });
 
   it('logs BOOT FAILURE in StuckSessionMonitor.rehydrate with full error and exits when it throws', async () => {
-    const { runBootSequence } = await import('../bootSequence.js');
+    const { runBootSequence } = await import('../bootSequence');
     const err = new Error('SQLITE_CONSTRAINT_FOREIGNKEY');
     const deps = makeDeps({
       stuckSessionMonitor: {
@@ -169,7 +169,7 @@ describe('runBootSequence — per-step boot catches', () => {
   });
 
   it('stack trace is preserved for StuckSessionMonitor.rehydrate failure', async () => {
-    const { runBootSequence } = await import('../bootSequence.js');
+    const { runBootSequence } = await import('../bootSequence');
     const err = new Error('SQLITE_CONSTRAINT_FOREIGNKEY');
     err.stack =
       'Error: SQLITE_CONSTRAINT_FOREIGNKEY\n    at StuckSessionMonitor.rehydrate (StuckSessionMonitor.ts:42)';
@@ -193,7 +193,7 @@ describe('runBootSequence — per-step boot catches', () => {
   });
 
   it('continues boot when all steps succeed', async () => {
-    const { runBootSequence } = await import('../bootSequence.js');
+    const { runBootSequence } = await import('../bootSequence');
     const deps = makeDeps();
 
     await expect(runBootSequence(deps)).resolves.toBeUndefined();

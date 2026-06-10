@@ -1,7 +1,7 @@
 import http from 'http';
-import { GitHubClient } from './github/GitHubClient.js';
-import { runPRBootSweep } from './github/PRBootSweep.js';
-import { runBootIdleReconciliation } from './session/bootIdleReconciliation.js';
+import { GitHubClient } from './github/GitHubClient';
+import { runPRBootSweep } from './github/PRBootSweep';
+import { runBootIdleReconciliation } from './session/bootIdleReconciliation';
 
 interface BootDeps {
   jsonlReader: {
