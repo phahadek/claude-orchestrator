@@ -124,6 +124,10 @@ function makeMockSessions(): SessionManager {
     endSession: vi.fn(),
     sendOrResume: vi.fn().mockResolvedValue('session-id'),
     markSessionErrored: vi.fn(),
+    markForBranchDeletion: vi.fn(),
+    on: vi.fn(),
+    off: vi.fn(),
+    emit: vi.fn(),
   } as unknown as SessionManager;
 }
 
@@ -2307,6 +2311,205 @@ describe('PRMergeWatcher.handlePushDetected() — push pipeline', () => {
     expect(
       vi.mocked(reviewService.reReviewPR as ReturnType<typeof vi.fn>),
     ).toHaveBeenCalled();
+  });
+});
+
+// ── incomplete verdict + push re-review ──────────────────────────────────────
+
+describe('PRMergeWatcher — incomplete verdict + push triggers re-review', () => {
+  it('fires reReviewPR when head_sha != last_reviewed_sha and verdict is incomplete', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-incomplete',
+      review_iteration: 1,
+      review_session_id: 'review-session',
+      session_id: 'coding-session',
+      review_result: JSON.stringify({
+        verdict: 'incomplete',
+        summary: 'Could not assess the PR.',
+        dimensions: [],
+      }),
+    });
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const reviewService = makeMockPRReviewService({
+      verdict: 'approved',
+      summary: 'LGTM',
+    });
+    const github = makeMockGitHub();
+    vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
+      headSha: 'sha-new',
+    });
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setPRReviewService(reviewService);
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(
+      vi.mocked(reviewService.reReviewPR as ReturnType<typeof vi.fn>),
+    ).toHaveBeenCalled();
+  });
+
+  it('does NOT fire reReviewPR when head_sha equals last_reviewed_sha (terminal stale)', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-same',
+      last_reviewed_sha: 'sha-same',
+      review_iteration: 1,
+      review_session_id: 'review-session',
+      session_id: 'coding-session',
+      review_result: JSON.stringify({
+        verdict: 'incomplete',
+        summary: 'Could not assess the PR.',
+        dimensions: [],
+      }),
+    });
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const reviewService = makeMockPRReviewService();
+    const github = makeMockGitHub();
+    vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
+      headSha: 'sha-same',
+    });
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setPRReviewService(reviewService);
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(
+      vi.mocked(reviewService.reReviewPR as ReturnType<typeof vi.fn>),
+    ).not.toHaveBeenCalled();
+  });
+
+  it('fires review_escalated instead of re-review when iteration cap is reached', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 3, // at the default cap of 3
+      review_session_id: 'review-session',
+      session_id: 'coding-session',
+      review_result: JSON.stringify({
+        verdict: 'incomplete',
+        summary: 'Could not assess.',
+        dimensions: [],
+      }),
+    });
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const reviewService = makeMockPRReviewService();
+    const github = makeMockGitHub();
+    vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
+      headSha: 'sha-new',
+    });
+    const messages: ServerMessage[] = [];
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      (m) => messages.push(m),
+    );
+    watcher.setPRReviewService(reviewService);
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(
+      vi.mocked(reviewService.reReviewPR as ReturnType<typeof vi.fn>),
+    ).not.toHaveBeenCalled();
+    expect(messages.some((m) => m.type === 'review_escalated')).toBe(true);
+  });
+
+  it('calls sendOrResume on implementing session when re-review returns incomplete', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 1,
+      review_session_id: 'review-session',
+      session_id: 'coding-session',
+    });
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const reviewService = makeMockPRReviewService({
+      verdict: 'incomplete',
+      summary: 'Still cannot assess.',
+      dimensions: [
+        {
+          name: 'Diff vs Acceptance Criteria',
+          passed: false,
+          notes: 'Tests unreadable',
+        },
+      ],
+    });
+    const github = makeMockGitHub();
+    vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
+      headSha: 'sha-new',
+    });
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setPRReviewService(reviewService);
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledWith(
+      'coding-session',
+      expect.stringContaining('Incomplete'),
+    );
+  });
+
+  it('still broadcasts review_incomplete WS event when re-review returns incomplete', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 1,
+      review_session_id: 'review-session',
+      session_id: 'coding-session',
+    });
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const reviewService = makeMockPRReviewService({
+      verdict: 'incomplete',
+      summary: 'Still cannot assess.',
+      dimensions: [],
+    });
+    const github = makeMockGitHub();
+    vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
+      headSha: 'sha-new',
+    });
+    const messages: ServerMessage[] = [];
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      (m) => messages.push(m),
+    );
+    watcher.setPRReviewService(reviewService);
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(messages.some((m) => m.type === 'review_incomplete')).toBe(true);
   });
 });
 

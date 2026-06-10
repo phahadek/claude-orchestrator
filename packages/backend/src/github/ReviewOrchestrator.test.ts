@@ -593,8 +593,59 @@ describe('ReviewOrchestrator — iteration cap escalation', () => {
 // ── Incomplete verdict handling ───────────────────────────────────────────────
 
 describe('ReviewOrchestrator — incomplete verdict', () => {
-  it('broadcasts review_incomplete and does NOT call sendFeedbackToCodingSession when verdict is incomplete', async () => {
-    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+  it('broadcasts review_incomplete AND notifies implementing session when verdict is incomplete', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      session_id: 'coding-session-id',
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService({
+      prNumber: 1,
+      repo: 'owner/repo',
+      verdict: 'incomplete',
+      dimensions: [
+        {
+          name: 'Diff vs Acceptance Criteria',
+          passed: false,
+          notes: 'Could not read tests',
+        },
+      ],
+      summary: 'Could not assess the PR.',
+      reviewedAt: new Date().toISOString(),
+    });
+
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    const messages: object[] = [];
+    sm.on('message', (msg: object) => messages.push(msg));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Must broadcast review_incomplete (operator visibility)
+    const incompleteMsg = messages.find(
+      (m: any) => m.type === 'review_incomplete',
+    );
+    expect(incompleteMsg).toBeDefined();
+    expect(incompleteMsg).toMatchObject({
+      type: 'review_incomplete',
+      prNumber: 1,
+      repo: 'owner/repo',
+    });
+
+    // Must also notify the implementing session so it knows to push a clearer version
+    expect(vi.mocked(sm.sendOrResume)).toHaveBeenCalledWith(
+      'coding-session-id',
+      expect.stringContaining('Incomplete'),
+    );
+  });
+
+  it('does not call sendOrResume when incomplete verdict has no session_id', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      session_id: null,
+    } as any);
 
     const sm = makeMockSessionManager();
     const rs = makeMockReviewService({
@@ -608,25 +659,10 @@ describe('ReviewOrchestrator — incomplete verdict', () => {
 
     new ReviewOrchestrator(rs, sm as any, true);
 
-    const messages: object[] = [];
-    sm.on('message', (msg: object) => messages.push(msg));
-
     sm.emit('pr_opened', baseJob);
     await new Promise((r) => setTimeout(r, 30));
 
-    // Must NOT send feedback to coding session
     expect(vi.mocked(sm.sendOrResume)).not.toHaveBeenCalled();
-
-    // Must broadcast review_incomplete
-    const incompleteMsg = messages.find(
-      (m: any) => m.type === 'review_incomplete',
-    );
-    expect(incompleteMsg).toBeDefined();
-    expect(incompleteMsg).toMatchObject({
-      type: 'review_incomplete',
-      prNumber: 1,
-      repo: 'owner/repo',
-    });
   });
 });
 

@@ -939,6 +939,31 @@ export class ReviewOrchestrator {
         repo: job.repo,
         message,
       });
+      // Notify the implementing session so it knows to push a clearer version.
+      if (prRow?.session_id) {
+        try {
+          await this.sessionManager.sendOrResume(
+            prRow.session_id,
+            formatReviewFeedback(result, 0),
+          );
+        } catch (e) {
+          recordEvent({
+            event_type: 'verdict_routing_failed',
+            actor_type: 'system',
+            actor_id: prRow.session_id,
+            project_id: project.id ?? null,
+            task_id: prRow.task_id ?? null,
+            payload: {
+              pr_number: job.prNumber,
+              repo: job.repo,
+              error: String(e),
+            },
+          });
+          console.warn(
+            `[ReviewOrchestrator] incomplete verdict routing failed for PR #${job.prNumber}: ${e}`,
+          );
+        }
+      }
     }
 
     // After the initial review, check if a push arrived during the review window.

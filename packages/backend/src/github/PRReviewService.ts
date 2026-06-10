@@ -626,9 +626,39 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       expectedSize,
     );
 
+    // Surface the prior incomplete reason so the reviewer knows what to focus on.
+    const priorResult = (() => {
+      try {
+        return pr.review_result
+          ? (JSON.parse(pr.review_result) as Partial<PRReviewResult>)
+          : null;
+      } catch {
+        return null;
+      }
+    })();
+    const priorIncompleteLines: string[] = [];
+    if (priorResult?.verdict === 'incomplete') {
+      priorIncompleteLines.push('');
+      priorIncompleteLines.push('### Prior Review Context');
+      priorIncompleteLines.push(
+        `The previous review returned an **incomplete** verdict: "${priorResult.summary ?? ''}"`,
+      );
+      for (const d of (priorResult.dimensions ?? []).filter(
+        (d) => !(d as ReviewDimension).passed,
+      )) {
+        priorIncompleteLines.push(
+          `- **${(d as ReviewDimension).name}**: ${(d as ReviewDimension).notes}`,
+        );
+      }
+      priorIncompleteLines.push(
+        'When reviewing the new commits, focus on whether these dimensions are now assessable.',
+      );
+    }
+
     const followUp = [
       `The code session has pushed new commits to PR #${prNumber}.`,
       `Please re-review the updated diff against the same task spec.`,
+      ...priorIncompleteLines,
       ``,
       `### Updated PR Metadata`,
       `Title: ${prData.title}`,

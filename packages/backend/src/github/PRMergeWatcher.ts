@@ -864,6 +864,18 @@ export class PRMergeWatcher {
               repo: prRow.repo,
               message,
             });
+            // Notify the implementing session so it knows to push a clearer version.
+            try {
+              await this.sessions.sendOrResume(
+                sessionId,
+                formatReviewFeedback(result, iteration),
+              );
+            } catch (e) {
+              console.warn(
+                `[PRMergeWatcher] Failed to deliver incomplete review feedback to session ${sessionId}:`,
+                e,
+              );
+            }
           }
         } finally {
           this.pendingReReviews.delete(sessionId);
