@@ -382,7 +382,11 @@ describe('GET /api/prs', () => {
 
 describe('GET /api/prs — awaitingReReview computation', () => {
   it('is true for blocked_autofix when pending_push=1', async () => {
-    const row = { ...mockPRRow, pre_review_stage: 'blocked_autofix', pending_push: 1 };
+    const row = {
+      ...mockPRRow,
+      pre_review_stage: 'blocked_autofix',
+      pending_push: 1,
+    };
     vi.mocked(queries.getPRs).mockReturnValue([row]);
     const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
     expect(res.status).toBe(200);
@@ -426,7 +430,11 @@ describe('GET /api/prs — awaitingReReview computation', () => {
   });
 
   it('is false for non-gate-failure stage (awaiting_review) even with pending_push', async () => {
-    const row = { ...mockPRRow, pre_review_stage: 'awaiting_review', pending_push: 1 };
+    const row = {
+      ...mockPRRow,
+      pre_review_stage: 'awaiting_review',
+      pending_push: 1,
+    };
     vi.mocked(queries.getPRs).mockReturnValue([row]);
     const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
     expect(res.status).toBe(200);
