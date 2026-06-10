@@ -8,6 +8,7 @@ import {
   getPRByNumber,
   setPauseReason,
   updateMergeState,
+  updatePRDraftStatus,
   getApprovedOpenPRs,
   getApprovedLocalBranches,
   markLocalBranchMerged,
@@ -528,6 +529,50 @@ export class AutoMerger {
         `[AutoMerger] PR #${pr.pr_number}: squash-merged to ${pr.base_branch ?? 'dev'}`,
       );
     } catch (err) {
+      // Still-draft retry: 405 "Pull Request is still a draft" → markPRReady then retry once.
+      if (
+        err instanceof GitHubApiError &&
+        err.status === 405 &&
+        /still a draft/i.test(err.body)
+      ) {
+        console.warn(
+          `[AutoMerger] PR #${pr.pr_number}: 405 still-draft — retrying markPRReady then merge`,
+        );
+        try {
+          await this.github.markPRReady(pr.repo, pr.pr_number);
+          updatePRDraftStatus(pr.pr_number, pr.repo, 0);
+          const retryResult = await this.github.mergePR(
+            pr.pr_number,
+            commitTitle,
+            pr.repo,
+          );
+          await this.mergeWatcher.handleMerged(pr, retryResult.sha ?? null);
+          recordEvent({
+            event_type: 'pr_merged',
+            actor_type: 'system',
+            actor_id: null,
+            project_id: getProjectByGithubRepo(pr.repo)?.id ?? null,
+            task_id: pr.task_id ?? null,
+            payload: {
+              pr_number: pr.pr_number,
+              repo: pr.repo,
+              merge_sha: retryResult.sha ?? null,
+            },
+          });
+          console.log(
+            `[AutoMerger] PR #${pr.pr_number}: squash-merged to ${pr.base_branch ?? 'dev'}`,
+          );
+          return;
+        } catch (retryErr) {
+          console.error(
+            `[AutoMerger] PR #${pr.pr_number}: retry after markPRReady failed:`,
+            retryErr,
+          );
+          await this.pauseWithReason(pr, 'auto_merge_failed');
+          return;
+        }
+      }
+
       const status: number | null =
         err instanceof GitHubApiError
           ? err.status
