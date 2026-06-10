@@ -7,7 +7,7 @@ import os from 'os';
 import { runMigrations } from './db/schema';
 import { db } from './db/db';
 import { SessionManager } from './session/SessionManager';
-import { handleMessage } from './ws/router';
+import { handleMessage, setWsRouterRefreshFn } from './ws/router';
 import { sendInitialStateBurst } from './ws/initialStateBurst';
 import { JsonlReader, DEFAULT_SESSIONS_DIR } from './session/JsonlReader';
 import type { ServerMessage } from './ws/types';
@@ -253,6 +253,9 @@ const autoLauncher = new AutoLauncher(sessionManager, broadcast);
 // Handlers always serve from cache; the refresher populates it on an interval.
 const taskCacheRefresher = new TaskCacheRefresher(broadcast);
 setTaskCacheRefresher((projectId) =>
+  taskCacheRefresher.refreshProjectById(projectId),
+);
+setWsRouterRefreshFn((projectId) =>
   taskCacheRefresher.refreshProjectById(projectId),
 );
 

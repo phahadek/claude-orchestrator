@@ -8,6 +8,14 @@ import { ProjectService } from '../projects/ProjectService';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import type { NotionTask } from '../notion/types';
 
+let refreshProjectFn: ((projectId: string) => Promise<void>) | null = null;
+
+export function setWsRouterRefreshFn(
+  fn: (projectId: string) => Promise<void>,
+): void {
+  refreshProjectFn = fn;
+}
+
 export async function handleMessage(
   ws: WebSocket,
   raw: string,
@@ -141,6 +149,9 @@ export async function handleMessage(
       const cacheRow = getTaskCache(`board:${milestone.sourceId}`);
       if (!cacheRow) {
         ws.send(JSON.stringify({ type: 'tasks_ready', tasks: [] }));
+        if (msg.skipCache && refreshProjectFn) {
+          void refreshProjectFn(msg.projectId);
+        }
         break;
       }
       try {
@@ -150,6 +161,12 @@ export async function handleMessage(
         ws.send(JSON.stringify({ type: 'tasks_ready', tasks: resolved }));
       } catch {
         ws.send(JSON.stringify({ type: 'tasks_ready', tasks: [] }));
+      }
+      // skipCache: true → trigger a background refresh so the cache gets fresh
+      // data from Notion. The refresher broadcasts task_cache_updated on completion,
+      // which the frontend uses to re-render and clear the Sync spinner.
+      if (msg.skipCache && refreshProjectFn) {
+        void refreshProjectFn(msg.projectId);
       }
       break;
     }
