@@ -364,4 +364,5 @@ export interface PullRequestRow {
   pause_reason_set_at: number | null; // Unix ms timestamp of when pause_reason was last set
   ci_remediation_attempted_sha: string | null; // last head_sha for which CI remediation was attempted
   pre_review_stage: string | null;
+  conflict_nudge_sha: string | null; // SHA for which a conflict nudge was last sent (dedup key)
 }

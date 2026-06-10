@@ -34,8 +34,8 @@ import { squashMergeLocal } from '../orchestration/localMergeRunner';
 import { detectMergeConflict } from '../orchestration/localBranchHelpers';
 import {
   formatMergeConflictFeedback,
-  formatBaseBranchModifiedFeedback,
 } from './reviewUtils';
+import { sendConflictNudge } from './conflictNudge';
 
 const MIN_POLL_INTERVAL_MS = 5_000;
 
@@ -482,6 +482,9 @@ export class AutoMerger {
           );
           return;
         case 'blocked':
+          if (this.sessions) {
+            await sendConflictNudge(this.sessions, row, 'blocked');
+          }
           await this.pauseWithReason(row, 'auto_merge_failed');
           return;
         case 'unknown':
@@ -568,6 +571,9 @@ export class AutoMerger {
             `[AutoMerger] PR #${pr.pr_number}: retry after markPRReady failed:`,
             retryErr,
           );
+          if (this.sessions) {
+            await sendConflictNudge(this.sessions, pr, 'draft_failed');
+          }
           await this.pauseWithReason(pr, 'auto_merge_failed');
           return;
         }
@@ -595,20 +601,8 @@ export class AutoMerger {
           if (category.rawMergeableState === 'behind') {
             // "Base branch was modified" race — pause and notify the code session.
             // clearStalePauses() will retry automatically after the configured delay.
-            if (this.sessions && pr.session_id) {
-              this.sessions
-                .sendOrResume(
-                  pr.session_id,
-                  formatBaseBranchModifiedFeedback({
-                    prNumber: pr.pr_number,
-                    baseBranch: pr.base_branch ?? 'dev',
-                  }),
-                )
-                .catch((err: unknown) =>
-                  console.warn(
-                    `[AutoMerger] PR #${pr.pr_number}: sendOrResume failed: ${(err as Error).message}`,
-                  ),
-                );
+            if (this.sessions) {
+              await sendConflictNudge(this.sessions, pr, 'behind');
             }
             await this.pauseWithReason(pr, 'auto_merge_failed');
             return;

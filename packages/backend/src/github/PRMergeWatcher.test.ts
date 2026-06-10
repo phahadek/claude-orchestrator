@@ -21,6 +21,7 @@ vi.mock('../db/queries.js', () => ({
   getTestResult: vi.fn().mockReturnValue(undefined),
   markSessionDone: vi.fn(),
   setPreReviewStage: vi.fn(),
+  setConflictNudgeSha: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
@@ -59,6 +60,7 @@ import {
   getTestResult,
   markSessionDone,
   setPendingPush,
+  setConflictNudgeSha,
 } from '../db/queries';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
@@ -493,11 +495,13 @@ describe('PRMergeWatcher dirty-transition sendOrResume', () => {
     ).mockResolvedValue(value);
   }
 
-  it('calls sendOrResume when merge_state transitions to dirty', async () => {
+  it('calls sendOrResume when conflict detected (SHA-keyed dedup, not transition-gated)', async () => {
     const pr = makePRRow({
       merge_state: 'clean',
       session_id: 'coding-session',
       base_branch: 'dev',
+      head_sha: 'sha-abc',
+      conflict_nudge_sha: null,
     });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeMockGitHub();
@@ -519,14 +523,17 @@ describe('PRMergeWatcher dirty-transition sendOrResume', () => {
 
     expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledWith(
       'coding-session',
-      'PR #42 has merge conflicts with the base branch. Rebase onto `dev`, resolve the conflicts, and push the fixed branch.',
+      expect.stringContaining('Rebase'),
     );
+    expect(vi.mocked(setConflictNudgeSha)).toHaveBeenCalledWith(42, 'owner/repo', 'sha-abc');
   });
 
-  it('does NOT call sendOrResume when merge_state is already dirty', async () => {
+  it('does NOT call sendOrResume when conflict_nudge_sha matches head_sha (SHA dedup)', async () => {
     const pr = makePRRow({
       merge_state: 'dirty',
       session_id: 'coding-session',
+      head_sha: 'sha-abc',
+      conflict_nudge_sha: 'sha-abc',
     });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeMockGitHub();
@@ -3718,5 +3725,173 @@ describe('PRMergeWatcher.start()', () => {
     warnSpy.mockRestore();
     watcher.stop();
     vi.useRealTimers();
+  });
+});
+
+// ── conflict nudge: shared helper, SHA dedup, audit on failure ────────────────
+
+describe('PRMergeWatcher conflict nudge', () => {
+  function mockCategorizeConflict(github: GitHubClient): void {
+    vi.mocked(
+      (github as unknown as { categorizeMergeability: () => Promise<unknown> }).categorizeMergeability,
+    ).mockResolvedValue({
+      category: 'conflict',
+      mergeState: 'dirty',
+      rawMergeableState: 'dirty',
+      failingChecks: [],
+      headSha: 'sha-abc',
+    });
+  }
+
+  it('nudges session even when already dirty (no stateChanged gate — first-poll case)', async () => {
+    const pr = makePRRow({
+      merge_state: 'dirty',
+      session_id: 'coding-session',
+      head_sha: 'sha-abc',
+      conflict_nudge_sha: null,
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getPRByNumber).mockReturnValue({ ...pr });
+    const github = makeMockGitHub();
+    mockCategorizeConflict(github);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(github, sessions, undefined, () => {});
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/tmp',
+    } as ReturnType<typeof getProjectByGithubRepo>);
+    await watcher.poll();
+
+    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledWith(
+      'coding-session',
+      expect.stringContaining('Rebase'),
+    );
+    expect(vi.mocked(setConflictNudgeSha)).toHaveBeenCalledWith(42, 'owner/repo', 'sha-abc');
+  });
+
+  it('failed conflict nudge delivery emits audit event (conflict_nudge_delivery_failed)', async () => {
+    const pr = makePRRow({
+      merge_state: 'clean',
+      session_id: 'coding-session',
+      head_sha: 'sha-abc',
+      conflict_nudge_sha: null,
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getPRByNumber).mockReturnValue({ ...pr });
+    const github = makeMockGitHub();
+    vi.mocked(
+      (github as unknown as { categorizeMergeability: () => Promise<unknown> }).categorizeMergeability,
+    ).mockResolvedValue({
+      category: 'conflict',
+      mergeState: 'dirty',
+      rawMergeableState: 'dirty',
+      failingChecks: [],
+      headSha: 'sha-abc',
+    });
+    const sessions = makeMockSessions();
+    vi.mocked(sessions.sendOrResume).mockRejectedValueOnce(new Error('session gone'));
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/tmp',
+    } as ReturnType<typeof getProjectByGithubRepo>);
+
+    const watcher = new PRMergeWatcher(github, sessions, undefined, () => {});
+    await watcher.poll();
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'conflict_nudge_delivery_failed',
+        payload: expect.objectContaining({
+          pr_number: 42,
+          session_id: 'coding-session',
+          cause: 'conflict',
+        }),
+      }),
+    );
+  });
+
+  it('integration: conflicted PR is paused → session nudged → new push still-conflicting → re-nudged', async () => {
+    // First poll: PR is clean, no nudge
+    const pr1 = makePRRow({
+      merge_state: 'clean',
+      session_id: 'coding-session',
+      head_sha: 'sha-v1',
+      conflict_nudge_sha: null,
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr1]);
+    vi.mocked(getPRByNumber).mockReturnValue({ ...pr1 });
+    const github = makeMockGitHub();
+    vi.mocked(
+      (github as unknown as { categorizeMergeability: () => Promise<unknown> }).categorizeMergeability,
+    ).mockResolvedValue({
+      category: 'conflict',
+      mergeState: 'dirty',
+      rawMergeableState: 'dirty',
+      failingChecks: [],
+      headSha: 'sha-v1',
+    });
+    const sessions = makeMockSessions();
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/tmp',
+    } as ReturnType<typeof getProjectByGithubRepo>);
+
+    const watcher = new PRMergeWatcher(github, sessions, undefined, () => {});
+    await watcher.poll();
+
+    // First poll: nudge sent for sha-v1
+    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(setConflictNudgeSha)).toHaveBeenCalledWith(42, 'owner/repo', 'sha-v1');
+
+    vi.clearAllMocks();
+
+    // Second poll: same SHA, nudge sha matches — no re-nudge (clearStalePauses re-fail)
+    const pr2 = { ...pr1, conflict_nudge_sha: 'sha-v1' };
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr2]);
+    vi.mocked(getPRByNumber).mockReturnValue(pr2);
+    vi.mocked(
+      (github as unknown as { categorizeMergeability: () => Promise<unknown> }).categorizeMergeability,
+    ).mockResolvedValue({
+      category: 'conflict',
+      mergeState: 'dirty',
+      rawMergeableState: 'dirty',
+      failingChecks: [],
+      headSha: 'sha-v1',
+    });
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/tmp',
+    } as ReturnType<typeof getProjectByGithubRepo>);
+
+    await watcher.poll();
+    expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+
+    // Third poll: new push (sha-v2) still conflicted → re-nudge
+    const pr3 = { ...pr1, head_sha: 'sha-v2', conflict_nudge_sha: 'sha-v1' };
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr3]);
+    vi.mocked(getPRByNumber).mockReturnValue(pr3);
+    vi.mocked(
+      (github as unknown as { categorizeMergeability: () => Promise<unknown> }).categorizeMergeability,
+    ).mockResolvedValue({
+      category: 'conflict',
+      mergeState: 'dirty',
+      rawMergeableState: 'dirty',
+      failingChecks: [],
+      headSha: 'sha-v2',
+    });
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/tmp',
+    } as ReturnType<typeof getProjectByGithubRepo>);
+
+    await watcher.poll();
+    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(setConflictNudgeSha)).toHaveBeenCalledWith(42, 'owner/repo', 'sha-v2');
   });
 });

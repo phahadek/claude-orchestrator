@@ -255,7 +255,8 @@ export function runMigrations(target: Database.Database): void {
       pause_reason                 TEXT,
       failing_checks               TEXT,
       ci_remediation_attempted_sha TEXT,
-      pause_reason_set_at          INTEGER
+      pause_reason_set_at          INTEGER,
+      conflict_nudge_sha           TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events(session_id, id DESC);
@@ -789,6 +790,11 @@ export function runMigrations(target: Database.Database): void {
   }
   try {
     target.exec(`ALTER TABLE sessions ADD COLUMN events_pruned_at INTEGER`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(`ALTER TABLE pull_requests ADD COLUMN conflict_nudge_sha TEXT`);
   } catch {
     /* already exists */
   }

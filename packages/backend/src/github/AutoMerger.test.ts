@@ -37,6 +37,7 @@ vi.mock('../db/queries.js', () => ({
   upsertActiveMerge: vi.fn(),
   deleteActiveMerge: vi.fn(),
   getAllActiveMerges: vi.fn().mockReturnValue([]),
+  setConflictNudgeSha: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
@@ -100,7 +101,9 @@ import {
   getSession,
   getOrphanMergeablePRs,
   getStaleAutoMergeFailedPRs,
+  setConflictNudgeSha,
 } from '../db/queries';
+import { recordEvent } from '../audit/AuditLog';
 import { squashMergeLocal } from '../orchestration/localMergeRunner';
 import { detectMergeConflict } from '../orchestration/localBranchHelpers';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -1352,5 +1355,232 @@ describe('AutoMerger.attemptMerge() — 405 still-draft retry', () => {
       'owner/repo',
       'auto_merge_failed',
     );
+  });
+});
+
+// ── conflict nudge (sendConflictNudge shared helper) ─────────────────────────
+
+describe('AutoMerger conflict nudge', () => {
+  it('blocked category: sends rebase nudge and pauses with auto_merge_failed', async () => {
+    const sessions = makeMockSessions();
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ session_id: 'coding-session', head_sha: 'sha-abc', conflict_nudge_sha: null }),
+    );
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('blocked'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {}, sessions);
+
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(sessions.sendOrResume).toHaveBeenCalledWith(
+      'coding-session',
+      expect.stringContaining('Rebase'),
+    );
+    expect(setPauseReason).toHaveBeenCalledWith(42, 'owner/repo', 'auto_merge_failed');
+    expect(setConflictNudgeSha).toHaveBeenCalledWith(42, 'owner/repo', 'sha-abc');
+  });
+
+  it('blocked category: SHA dedup prevents re-nudge when conflict_nudge_sha matches head_sha', async () => {
+    const sessions = makeMockSessions();
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({
+        session_id: 'coding-session',
+        head_sha: 'sha-abc',
+        conflict_nudge_sha: 'sha-abc',
+      }),
+    );
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('blocked'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {}, sessions);
+
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Paused but NOT nudged — same SHA was already nudged
+    expect(setPauseReason).toHaveBeenCalledWith(42, 'owner/repo', 'auto_merge_failed');
+    expect(sessions.sendOrResume).not.toHaveBeenCalled();
+  });
+
+  it('blocked category: new push with different SHA re-nudges', async () => {
+    const sessions = makeMockSessions();
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({
+        session_id: 'coding-session',
+        head_sha: 'sha-new',
+        conflict_nudge_sha: 'sha-old',
+      }),
+    );
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('blocked'),
+        headSha: 'sha-new',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {}, sessions);
+
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(sessions.sendOrResume).toHaveBeenCalledTimes(1);
+    expect(setConflictNudgeSha).toHaveBeenCalledWith(42, 'owner/repo', 'sha-new');
+  });
+
+  it('markPRReady retry failure sends draft_failed nudge', async () => {
+    const sessions = makeMockSessions();
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ session_id: 'coding-session', head_sha: 'sha-abc', conflict_nudge_sha: null }),
+    );
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const { GitHubApiError } = await import('./types.js');
+    vi.mocked(github.mergePR).mockRejectedValueOnce(
+      new GitHubApiError(405, 'Pull Request is still a draft'),
+    );
+    vi.mocked(github.markPRReady).mockResolvedValueOnce(undefined);
+    vi.mocked(github.mergePR).mockRejectedValueOnce(
+      new GitHubApiError(405, 'Pull Request is still a draft'),
+    );
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {}, sessions);
+
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(setPauseReason).toHaveBeenCalledWith(42, 'owner/repo', 'auto_merge_failed');
+    expect(sessions.sendOrResume).toHaveBeenCalledWith(
+      'coding-session',
+      expect.stringContaining('Could Not Be Marked Ready'),
+    );
+  });
+
+  it('failed nudge delivery emits audit event instead of just console.warn', async () => {
+    const sessions = makeMockSessions();
+    vi.mocked(sessions.sendOrResume).mockRejectedValueOnce(new Error('session gone'));
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({
+        session_id: 'coding-session',
+        head_sha: 'sha-abc',
+        conflict_nudge_sha: null,
+        task_id: 'notion:task-abc',
+      }),
+    );
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('blocked'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {}, sessions);
+
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'conflict_nudge_delivery_failed',
+        payload: expect.objectContaining({
+          pr_number: 42,
+          session_id: 'coding-session',
+          cause: 'blocked',
+        }),
+      }),
+    );
+    // pause_reason still set (no regression)
+    expect(setPauseReason).toHaveBeenCalledWith(42, 'owner/repo', 'auto_merge_failed');
+  });
+
+  it('non-actionable failure causes (ci_failed, pr_closed) do not send conflict nudge', async () => {
+    const sessions = makeMockSessions();
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ session_id: 'coding-session', head_sha: 'sha-abc' }),
+    );
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('ci_failed'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {}, sessions);
+
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(sessions.sendOrResume).not.toHaveBeenCalled();
+    expect(setPauseReason).toHaveBeenCalledWith(42, 'owner/repo', 'ci_failing');
+  });
+
+  it('behind-base race uses shared helper (nudges and sets conflict_nudge_sha)', async () => {
+    const sessions = makeMockSessions();
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ session_id: 'coding-session', head_sha: 'sha-abc', conflict_nudge_sha: null }),
+    );
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const { GitHubApiError } = await import('./types.js');
+    vi.mocked(github.mergePR).mockRejectedValueOnce(
+      new GitHubApiError(405, 'Base branch was modified'),
+    );
+    vi.mocked(github.categorizeMergeability).mockResolvedValueOnce({
+      category: 'conflict',
+      mergeState: 'dirty',
+      rawMergeableState: 'behind',
+      failingChecks: [],
+      headSha: 'sha-abc',
+    });
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {}, sessions);
+
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(setPauseReason).toHaveBeenCalledWith(42, 'owner/repo', 'auto_merge_failed');
+    expect(sessions.sendOrResume).toHaveBeenCalledWith(
+      'coding-session',
+      expect.stringContaining('Base Branch Modified'),
+    );
+    expect(setConflictNudgeSha).toHaveBeenCalledWith(42, 'owner/repo', 'sha-abc');
   });
 });

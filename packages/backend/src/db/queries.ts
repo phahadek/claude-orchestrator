@@ -1463,6 +1463,16 @@ export function setCiRemediationAttemptedSha(
   ).run(sha, prNumber, repo);
 }
 
+export function setConflictNudgeSha(
+  prNumber: number,
+  repo: string,
+  sha: string,
+): void {
+  db.prepare(
+    `UPDATE pull_requests SET conflict_nudge_sha = ? WHERE pr_number = ? AND repo = ?`,
+  ).run(sha, prNumber, repo);
+}
+
 export function setPauseReason(
   prNumber: number,
   repo: string,

@@ -19,6 +19,7 @@ import {
   shouldAutoReview,
   formatReviewFeedback,
 } from './reviewUtils';
+import { sendConflictNudge } from './conflictNudge';
 import { isTerminalStalePR } from './pollUtils';
 import {
   getAllOpenPRs,
@@ -430,6 +431,16 @@ export class PRMergeWatcher {
       }
     }
 
+    // Conflict path: SHA-deduped nudge runs regardless of stateChanged.
+    // PRs already conflicted at first poll (or whose transition happened during
+    // a backend restart) are correctly nudged because dedup is state-based.
+    if (category.category === 'conflict') {
+      console.log(
+        `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has merge conflicts`,
+      );
+      await sendConflictNudge(this.sessions, pr, 'conflict');
+    }
+
     // Only update + broadcast if something actually changed.
     if (!stateChanged && !failingChecksChanged) {
       this.tryCIFailingRecovery(pr, category);
@@ -459,26 +470,7 @@ export class PRMergeWatcher {
 
     this.tryCIFailingRecovery(pr, category);
 
-    // Conflict and blocked messages are still gated on state transition.
-    if (!stateChanged) return;
-
-    if (category.category === 'conflict') {
-      console.log(
-        `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has merge conflicts`,
-      );
-      if (pr.session_id) {
-        const baseBranch = pr.base_branch ?? 'dev';
-        const msg = `PR #${pr.pr_number} has merge conflicts with the base branch. Rebase onto \`${baseBranch}\`, resolve the conflicts, and push the fixed branch.`;
-        this.sessions
-          .sendOrResume(pr.session_id, msg)
-          .catch((err: unknown) =>
-            console.warn(
-              `[PRMergeWatcher] sendOrResume failed for session ${pr.session_id}:`,
-              (err as Error).message,
-            ),
-          );
-      }
-    } else if (category.category === 'blocked') {
+    if (stateChanged && category.category === 'blocked') {
       console.log(
         `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} is blocked by branch protection`,
       );

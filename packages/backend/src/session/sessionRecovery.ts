@@ -178,6 +178,7 @@ export async function recoverSession(
               synced_at: now,
               node_id: null,
               head_sha: headSha,
+              conflict_nudge_sha: null,
             });
             // pr_opened emission is skipped for periodic scope or phantom URLs.
             if (upserted && !prDetectedLive && scope !== 'periodic') {
