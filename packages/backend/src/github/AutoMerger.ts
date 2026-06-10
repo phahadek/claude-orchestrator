@@ -32,9 +32,7 @@ import type { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { squashMergeLocal } from '../orchestration/localMergeRunner';
 import { detectMergeConflict } from '../orchestration/localBranchHelpers';
-import {
-  formatMergeConflictFeedback,
-} from './reviewUtils';
+import { formatMergeConflictFeedback } from './reviewUtils';
 import { sendConflictNudge } from './conflictNudge';
 
 const MIN_POLL_INTERVAL_MS = 5_000;

@@ -13,7 +13,10 @@ export type ConflictNudgeCause =
   | 'blocked'
   | 'draft_failed';
 
-function buildNudgeMessage(pr: PullRequestRow, cause: ConflictNudgeCause): string {
+function buildNudgeMessage(
+  pr: PullRequestRow,
+  cause: ConflictNudgeCause,
+): string {
   const baseBranch = pr.base_branch ?? 'dev';
   const headBranch = pr.head_branch ?? `feature/pr-${pr.pr_number}`;
   switch (cause) {

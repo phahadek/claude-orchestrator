@@ -1364,7 +1364,11 @@ describe('AutoMerger conflict nudge', () => {
   it('blocked category: sends rebase nudge and pauses with auto_merge_failed', async () => {
     const sessions = makeMockSessions();
     vi.mocked(getPRByNumber).mockReturnValue(
-      makePRRow({ session_id: 'coding-session', head_sha: 'sha-abc', conflict_nudge_sha: null }),
+      makePRRow({
+        session_id: 'coding-session',
+        head_sha: 'sha-abc',
+        conflict_nudge_sha: null,
+      }),
     );
     const github = makeMockGitHub([
       {
@@ -1385,8 +1389,16 @@ describe('AutoMerger conflict nudge', () => {
       'coding-session',
       expect.stringContaining('Rebase'),
     );
-    expect(setPauseReason).toHaveBeenCalledWith(42, 'owner/repo', 'auto_merge_failed');
-    expect(setConflictNudgeSha).toHaveBeenCalledWith(42, 'owner/repo', 'sha-abc');
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'auto_merge_failed',
+    );
+    expect(setConflictNudgeSha).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-abc',
+    );
   });
 
   it('blocked category: SHA dedup prevents re-nudge when conflict_nudge_sha matches head_sha', async () => {
@@ -1414,7 +1426,11 @@ describe('AutoMerger conflict nudge', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     // Paused but NOT nudged — same SHA was already nudged
-    expect(setPauseReason).toHaveBeenCalledWith(42, 'owner/repo', 'auto_merge_failed');
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'auto_merge_failed',
+    );
     expect(sessions.sendOrResume).not.toHaveBeenCalled();
   });
 
@@ -1443,13 +1459,21 @@ describe('AutoMerger conflict nudge', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     expect(sessions.sendOrResume).toHaveBeenCalledTimes(1);
-    expect(setConflictNudgeSha).toHaveBeenCalledWith(42, 'owner/repo', 'sha-new');
+    expect(setConflictNudgeSha).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-new',
+    );
   });
 
   it('markPRReady retry failure sends draft_failed nudge', async () => {
     const sessions = makeMockSessions();
     vi.mocked(getPRByNumber).mockReturnValue(
-      makePRRow({ session_id: 'coding-session', head_sha: 'sha-abc', conflict_nudge_sha: null }),
+      makePRRow({
+        session_id: 'coding-session',
+        head_sha: 'sha-abc',
+        conflict_nudge_sha: null,
+      }),
     );
     const github = makeMockGitHub([
       {
@@ -1474,7 +1498,11 @@ describe('AutoMerger conflict nudge', () => {
     merger.attempt(42, 'owner/repo');
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(setPauseReason).toHaveBeenCalledWith(42, 'owner/repo', 'auto_merge_failed');
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'auto_merge_failed',
+    );
     expect(sessions.sendOrResume).toHaveBeenCalledWith(
       'coding-session',
       expect.stringContaining('Could Not Be Marked Ready'),
@@ -1483,7 +1511,9 @@ describe('AutoMerger conflict nudge', () => {
 
   it('failed nudge delivery emits audit event instead of just console.warn', async () => {
     const sessions = makeMockSessions();
-    vi.mocked(sessions.sendOrResume).mockRejectedValueOnce(new Error('session gone'));
+    vi.mocked(sessions.sendOrResume).mockRejectedValueOnce(
+      new Error('session gone'),
+    );
     vi.mocked(getPRByNumber).mockReturnValue(
       makePRRow({
         session_id: 'coding-session',
@@ -1518,7 +1548,11 @@ describe('AutoMerger conflict nudge', () => {
       }),
     );
     // pause_reason still set (no regression)
-    expect(setPauseReason).toHaveBeenCalledWith(42, 'owner/repo', 'auto_merge_failed');
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'auto_merge_failed',
+    );
   });
 
   it('non-actionable failure causes (ci_failed, pr_closed) do not send conflict nudge', async () => {
@@ -1548,7 +1582,11 @@ describe('AutoMerger conflict nudge', () => {
   it('behind-base race uses shared helper (nudges and sets conflict_nudge_sha)', async () => {
     const sessions = makeMockSessions();
     vi.mocked(getPRByNumber).mockReturnValue(
-      makePRRow({ session_id: 'coding-session', head_sha: 'sha-abc', conflict_nudge_sha: null }),
+      makePRRow({
+        session_id: 'coding-session',
+        head_sha: 'sha-abc',
+        conflict_nudge_sha: null,
+      }),
     );
     const github = makeMockGitHub([
       {
@@ -1576,11 +1614,19 @@ describe('AutoMerger conflict nudge', () => {
     merger.attempt(42, 'owner/repo');
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(setPauseReason).toHaveBeenCalledWith(42, 'owner/repo', 'auto_merge_failed');
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'auto_merge_failed',
+    );
     expect(sessions.sendOrResume).toHaveBeenCalledWith(
       'coding-session',
       expect.stringContaining('Base Branch Modified'),
     );
-    expect(setConflictNudgeSha).toHaveBeenCalledWith(42, 'owner/repo', 'sha-abc');
+    expect(setConflictNudgeSha).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-abc',
+    );
   });
 });

@@ -525,7 +525,11 @@ describe('PRMergeWatcher dirty-transition sendOrResume', () => {
       'coding-session',
       expect.stringContaining('Rebase'),
     );
-    expect(vi.mocked(setConflictNudgeSha)).toHaveBeenCalledWith(42, 'owner/repo', 'sha-abc');
+    expect(vi.mocked(setConflictNudgeSha)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-abc',
+    );
   });
 
   it('does NOT call sendOrResume when conflict_nudge_sha matches head_sha (SHA dedup)', async () => {
@@ -3733,7 +3737,8 @@ describe('PRMergeWatcher.start()', () => {
 describe('PRMergeWatcher conflict nudge', () => {
   function mockCategorizeConflict(github: GitHubClient): void {
     vi.mocked(
-      (github as unknown as { categorizeMergeability: () => Promise<unknown> }).categorizeMergeability,
+      (github as unknown as { categorizeMergeability: () => Promise<unknown> })
+        .categorizeMergeability,
     ).mockResolvedValue({
       category: 'conflict',
       mergeState: 'dirty',
@@ -3768,7 +3773,11 @@ describe('PRMergeWatcher conflict nudge', () => {
       'coding-session',
       expect.stringContaining('Rebase'),
     );
-    expect(vi.mocked(setConflictNudgeSha)).toHaveBeenCalledWith(42, 'owner/repo', 'sha-abc');
+    expect(vi.mocked(setConflictNudgeSha)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-abc',
+    );
   });
 
   it('failed conflict nudge delivery emits audit event (conflict_nudge_delivery_failed)', async () => {
@@ -3783,7 +3792,8 @@ describe('PRMergeWatcher conflict nudge', () => {
     vi.mocked(getPRByNumber).mockReturnValue({ ...pr });
     const github = makeMockGitHub();
     vi.mocked(
-      (github as unknown as { categorizeMergeability: () => Promise<unknown> }).categorizeMergeability,
+      (github as unknown as { categorizeMergeability: () => Promise<unknown> })
+        .categorizeMergeability,
     ).mockResolvedValue({
       category: 'conflict',
       mergeState: 'dirty',
@@ -3792,7 +3802,9 @@ describe('PRMergeWatcher conflict nudge', () => {
       headSha: 'sha-abc',
     });
     const sessions = makeMockSessions();
-    vi.mocked(sessions.sendOrResume).mockRejectedValueOnce(new Error('session gone'));
+    vi.mocked(sessions.sendOrResume).mockRejectedValueOnce(
+      new Error('session gone'),
+    );
     vi.mocked(getProjectByGithubRepo).mockReturnValue({
       id: 'proj-1',
       projectDir: '/tmp',
@@ -3826,7 +3838,8 @@ describe('PRMergeWatcher conflict nudge', () => {
     vi.mocked(getPRByNumber).mockReturnValue({ ...pr1 });
     const github = makeMockGitHub();
     vi.mocked(
-      (github as unknown as { categorizeMergeability: () => Promise<unknown> }).categorizeMergeability,
+      (github as unknown as { categorizeMergeability: () => Promise<unknown> })
+        .categorizeMergeability,
     ).mockResolvedValue({
       category: 'conflict',
       mergeState: 'dirty',
@@ -3845,7 +3858,11 @@ describe('PRMergeWatcher conflict nudge', () => {
 
     // First poll: nudge sent for sha-v1
     expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(setConflictNudgeSha)).toHaveBeenCalledWith(42, 'owner/repo', 'sha-v1');
+    expect(vi.mocked(setConflictNudgeSha)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-v1',
+    );
 
     vi.clearAllMocks();
 
@@ -3854,7 +3871,8 @@ describe('PRMergeWatcher conflict nudge', () => {
     vi.mocked(getAllOpenPRs).mockReturnValue([pr2]);
     vi.mocked(getPRByNumber).mockReturnValue(pr2);
     vi.mocked(
-      (github as unknown as { categorizeMergeability: () => Promise<unknown> }).categorizeMergeability,
+      (github as unknown as { categorizeMergeability: () => Promise<unknown> })
+        .categorizeMergeability,
     ).mockResolvedValue({
       category: 'conflict',
       mergeState: 'dirty',
@@ -3877,7 +3895,8 @@ describe('PRMergeWatcher conflict nudge', () => {
     vi.mocked(getAllOpenPRs).mockReturnValue([pr3]);
     vi.mocked(getPRByNumber).mockReturnValue(pr3);
     vi.mocked(
-      (github as unknown as { categorizeMergeability: () => Promise<unknown> }).categorizeMergeability,
+      (github as unknown as { categorizeMergeability: () => Promise<unknown> })
+        .categorizeMergeability,
     ).mockResolvedValue({
       category: 'conflict',
       mergeState: 'dirty',
@@ -3892,6 +3911,10 @@ describe('PRMergeWatcher conflict nudge', () => {
 
     await watcher.poll();
     expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(setConflictNudgeSha)).toHaveBeenCalledWith(42, 'owner/repo', 'sha-v2');
+    expect(vi.mocked(setConflictNudgeSha)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-v2',
+    );
   });
 });
