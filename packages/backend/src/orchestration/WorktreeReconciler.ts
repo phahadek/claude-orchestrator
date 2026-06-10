@@ -7,7 +7,8 @@ import { getSession, getPRBySessionId } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 
 const TERMINAL_STATUSES = new Set(['done', 'error', 'killed']);
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function normalizeSlashes(p: string): string {
   return p.replace(/\\/g, '/');
@@ -88,7 +89,8 @@ export async function runBootWorktreeReconciliation(options?: {
         });
 
         const pr = getPRBySessionId(sessionId);
-        const deleteBranch = !pr || pr.state === 'merged' || pr.state === 'closed';
+        const deleteBranch =
+          !pr || pr.state === 'merged' || pr.state === 'closed';
         if (deleteBranch && branchName) {
           try {
             execSync(`git branch -D "${branchName}"`, {

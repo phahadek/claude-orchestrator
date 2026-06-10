@@ -139,7 +139,10 @@ function setupWorktreeDir(sessionIds: string[]) {
 }
 
 /** Register a worktree path in the git worktree list mock output. */
-function gitWorktreeListOutput(wtPath: string, branch = 'feature/test'): string {
+function gitWorktreeListOutput(
+  wtPath: string,
+  branch = 'feature/test',
+): string {
   return `worktree ${wtPath}\nHEAD abc123\nbranch refs/heads/${branch}\n\n`;
 }
 
@@ -150,8 +153,12 @@ beforeEach(() => {
     return '' as never; // worktree list → empty (no registered worktrees by default)
   });
   // Default: empty worktrees dir
-  mockedReaddirSync.mockReturnValue([] as unknown as ReturnType<typeof fs.readdirSync>);
-  mockedStatSync.mockReturnValue({ isDirectory: () => true } as ReturnType<typeof fs.statSync>);
+  mockedReaddirSync.mockReturnValue(
+    [] as unknown as ReturnType<typeof fs.readdirSync>,
+  );
+  mockedStatSync.mockReturnValue({ isDirectory: () => true } as ReturnType<
+    typeof fs.statSync
+  >);
 });
 
 // ── Terminal sessions removed (registered path → git-remove) ─────────────────
@@ -257,7 +264,10 @@ describe('runBootWorktreeReconciliation — live sessions skipped', () => {
 // ── Branch handling ─────────────────────────────────────────────────────────
 
 describe('runBootWorktreeReconciliation — branch deletion', () => {
-  function setupRegisteredTerminal(status = 'done', pr: ReturnType<typeof makePR> | null = null) {
+  function setupRegisteredTerminal(
+    status = 'done',
+    pr: ReturnType<typeof makePR> | null = null,
+  ) {
     const wtPath = `${WORKTREES_DIR}/sess-1`;
     mockedExecSync.mockImplementation((cmd: string) => {
       if (String(cmd).includes('worktree list'))
@@ -472,7 +482,9 @@ describe('runBootWorktreeReconciliation — eligibility from registrations', () 
     setupWorktreeDir([UUID_1]);
     mockedGetSession.mockReturnValue(makeSession('done') as never);
 
-    await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
 
     expect(mockedExecSync).not.toHaveBeenCalledWith(
       expect.stringContaining('git worktree remove'),
@@ -488,12 +500,14 @@ describe('runBootWorktreeReconciliation — orphaned dir sweep', () => {
     setupWorktreeDir([UUID_1]);
     mockedGetSession.mockReturnValue(makeSession('done') as never);
 
-    await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
 
-    expect(mockedRmSync).toHaveBeenCalledWith(
-      expect.stringContaining(UUID_1),
-      { recursive: true, force: true },
-    );
+    expect(mockedRmSync).toHaveBeenCalledWith(expect.stringContaining(UUID_1), {
+      recursive: true,
+      force: true,
+    });
     expect(mockedExecSync).not.toHaveBeenCalledWith(
       expect.stringContaining('git worktree remove'),
       expect.anything(),
@@ -504,12 +518,14 @@ describe('runBootWorktreeReconciliation — orphaned dir sweep', () => {
     setupWorktreeDir([UUID_1]);
     mockedGetSession.mockReturnValue(undefined);
 
-    await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
 
-    expect(mockedRmSync).toHaveBeenCalledWith(
-      expect.stringContaining(UUID_1),
-      { recursive: true, force: true },
-    );
+    expect(mockedRmSync).toHaveBeenCalledWith(expect.stringContaining(UUID_1), {
+      recursive: true,
+      force: true,
+    });
   });
 
   it.each(['running', 'idle', 'starting', 'needs_permission'] as const)(
@@ -518,7 +534,9 @@ describe('runBootWorktreeReconciliation — orphaned dir sweep', () => {
       setupWorktreeDir([UUID_1]);
       mockedGetSession.mockReturnValue(makeSession(status) as never);
 
-      await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+      await runBootWorktreeReconciliation({
+        listProjects: () => [makeProject()],
+      });
 
       expect(mockedRmSync).not.toHaveBeenCalled();
       expect(mockedExecSync).not.toHaveBeenCalledWith(
@@ -532,7 +550,9 @@ describe('runBootWorktreeReconciliation — orphaned dir sweep', () => {
     setupWorktreeDir(['not-a-uuid', 'sess-1', 'orphan-uuid', 'random-name']);
     mockedGetSession.mockReturnValue(makeSession('done') as never);
 
-    await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
 
     expect(mockedRmSync).not.toHaveBeenCalled();
     expect(mockedExecSync).not.toHaveBeenCalledWith(
@@ -545,7 +565,9 @@ describe('runBootWorktreeReconciliation — orphaned dir sweep', () => {
     setupWorktreeDir([UUID_1]);
     mockedGetSession.mockReturnValue(makeSession('done') as never);
 
-    await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
 
     expect(mockedExecSync).toHaveBeenCalledWith(
       'git worktree prune',
@@ -574,7 +596,9 @@ describe('runBootWorktreeReconciliation — mixed fixture', () => {
     });
     mockedGetPR.mockReturnValue(null);
 
-    await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
 
     // No spurious audit events
     expect(mockedRecordEvent).not.toHaveBeenCalledWith(
@@ -605,8 +629,12 @@ describe('runBootWorktreeReconciliation — mixed fixture', () => {
   it('idempotent second boot is a no-op', async () => {
     // Nothing registered, nothing on disk
 
-    await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
-    await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
 
     expect(mockedExecSync).not.toHaveBeenCalledWith(
       expect.stringContaining('git worktree remove'),
