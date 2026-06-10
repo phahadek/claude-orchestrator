@@ -1649,9 +1649,7 @@ describe('AutoMerger.conflictNudgeSweep()', () => {
         pause_reason: 'auto_merge_failed',
       }),
     );
-    vi.mocked(getSession).mockReturnValue(
-      makeSessionRow({ status: 'idle' }),
-    );
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
     const github = makeMockGitHub([]);
     vi.mocked(github.categorizeMergeability).mockResolvedValue({
       category: 'blocked',
@@ -1670,12 +1668,19 @@ describe('AutoMerger.conflictNudgeSweep()', () => {
 
     await merger.conflictNudgeSweep();
 
-    expect(github.categorizeMergeability).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(github.categorizeMergeability).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
     expect(sessions.sendOrResume).toHaveBeenCalledWith(
       'coding-session',
       expect.stringContaining('Rebase'),
     );
-    expect(setConflictNudgeSha).toHaveBeenCalledWith(42, 'owner/repo', 'sha-abc');
+    expect(setConflictNudgeSha).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-abc',
+    );
   });
 
   it('nudges idle session for conflict-state PR with no pause row', async () => {
@@ -1692,9 +1697,7 @@ describe('AutoMerger.conflictNudgeSweep()', () => {
         merge_state: 'dirty',
       }),
     );
-    vi.mocked(getSession).mockReturnValue(
-      makeSessionRow({ status: 'idle' }),
-    );
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
     const github = makeMockGitHub([]);
     vi.mocked(github.categorizeMergeability).mockResolvedValue({
       category: 'conflict',
@@ -1717,7 +1720,11 @@ describe('AutoMerger.conflictNudgeSweep()', () => {
       'coding-session',
       expect.stringContaining('Rebase'),
     );
-    expect(setConflictNudgeSha).toHaveBeenCalledWith(42, 'owner/repo', 'sha-abc');
+    expect(setConflictNudgeSha).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-abc',
+    );
   });
 
   it('skips already-nudged PRs (dedup honored via conflict_nudge_sha)', async () => {
@@ -1734,9 +1741,7 @@ describe('AutoMerger.conflictNudgeSweep()', () => {
         pause_reason: 'auto_merge_failed',
       }),
     );
-    vi.mocked(getSession).mockReturnValue(
-      makeSessionRow({ status: 'idle' }),
-    );
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
     const github = makeMockGitHub([]);
     vi.mocked(github.categorizeMergeability).mockResolvedValue({
       category: 'blocked',
@@ -1772,9 +1777,7 @@ describe('AutoMerger.conflictNudgeSweep()', () => {
         pause_reason: 'auto_merge_failed',
       }),
     );
-    vi.mocked(getSession).mockReturnValue(
-      makeSessionRow({ status: 'idle' }),
-    );
+    vi.mocked(getSession).mockReturnValue(makeSessionRow({ status: 'idle' }));
     const github = makeMockGitHub([]);
     // Conflict resolved while backend was down
     vi.mocked(github.categorizeMergeability).mockResolvedValue(

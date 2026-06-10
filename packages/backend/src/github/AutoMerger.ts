@@ -168,10 +168,12 @@ export class AutoMerger {
         continue;
       }
 
-      if (category.category !== 'conflict' && category.category !== 'blocked') continue;
+      if (category.category !== 'conflict' && category.category !== 'blocked')
+        continue;
 
       const cause: ConflictNudgeCause =
-        category.category === 'conflict' && category.rawMergeableState === 'behind'
+        category.category === 'conflict' &&
+        category.rawMergeableState === 'behind'
           ? 'behind'
           : category.category === 'blocked'
             ? 'blocked'
