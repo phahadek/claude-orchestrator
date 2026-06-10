@@ -669,9 +669,11 @@ describe('<pr-body> marker — structured logging', () => {
 
   it('logs "PR creation failed: GitHub server error (transient" on 5xx and retries', async () => {
     const ghClient = makeGithubClient({
-      createPR: vi.fn().mockRejectedValue(
-        new Error('GitHub API error 503: Service Unavailable'),
-      ),
+      createPR: vi
+        .fn()
+        .mockRejectedValue(
+          new Error('GitHub API error 503: Service Unavailable'),
+        ),
     });
     const session = makeSession(ghClient);
     emitAssistantWithMarker(session, VALID_BODY, 'msg_5xx');
