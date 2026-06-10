@@ -345,6 +345,68 @@ describe('sendOrResume() short-circuit: already-errored session', () => {
   });
 });
 
+// ── Terminal session: session_action_failed broadcast ────────────────────────
+
+describe('sendOrResume() terminal session: session_action_failed broadcast', () => {
+  it('broadcasts session_action_failed when session is in terminal error state', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      ...IDLE_SESSION_ROW,
+      status: 'error',
+    } as never);
+
+    const sm = new SessionManager();
+    const msgs: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => msgs.push(m));
+
+    await sm.sendOrResume(SESSION_ID, 'fix this');
+
+    const failedMsg = msgs.find((m) => m.type === 'session_action_failed') as
+      | {
+          type: 'session_action_failed';
+          sessionId: string;
+          action: string;
+          reason: string;
+        }
+      | undefined;
+    expect(failedMsg).toBeDefined();
+    expect(failedMsg?.sessionId).toBe(SESSION_ID);
+    expect(failedMsg?.action).toBe('send_message');
+    expect(failedMsg?.reason).toBe('terminal_session');
+  });
+
+  it('broadcasts session_action_failed when session is in done state', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      ...IDLE_SESSION_ROW,
+      status: 'done',
+    } as never);
+
+    const sm = new SessionManager();
+    const msgs: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => msgs.push(m));
+
+    await sm.sendOrResume(SESSION_ID, 'fix this');
+
+    const failedMsg = msgs.find((m) => m.type === 'session_action_failed');
+    expect(failedMsg).toBeDefined();
+  });
+
+  it('broadcasts session_action_failed when session is in killed state', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      ...IDLE_SESSION_ROW,
+      status: 'killed',
+    } as never);
+
+    const sm = new SessionManager();
+    const msgs: ServerMessage[] = [];
+    sm.on('message', (m: ServerMessage) => msgs.push(m));
+
+    await sm.sendOrResume(SESSION_ID, 'fix this');
+
+    const failedMsg = msgs.find((m) => m.type === 'session_action_failed');
+    expect(failedMsg).toBeDefined();
+  });
+});
+
 // ── Prune + reattach ─────────────────────────────────────────────────────────
 
 describe('sendOrResume() prune + reattach', () => {

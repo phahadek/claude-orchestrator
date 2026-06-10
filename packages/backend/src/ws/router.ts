@@ -86,7 +86,13 @@ export async function handleMessage(
       );
       break;
     case 'send_message':
-      sessions.send(msg.sessionId, msg.message);
+      void sessions
+        .sendOrResume(msg.sessionId, msg.message)
+        .catch((err: unknown) => {
+          console.error(
+            `[router] sendOrResume failed for session ${msg.sessionId}: ${String(err)}`,
+          );
+        });
       break;
     case 'kill':
       sessions.kill(msg.sessionId);

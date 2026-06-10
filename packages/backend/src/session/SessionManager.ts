@@ -1811,6 +1811,13 @@ export class SessionManager extends EventEmitter {
       console.warn(
         `[SessionManager] sendOrResume: refusing to respawn terminal session ${sessionId} (status=${row.status})`,
       );
+      this.emit('message', {
+        type: 'session_action_failed',
+        sessionId,
+        action: 'send_message',
+        reason: 'terminal_session',
+        detail: `Session is in terminal state: ${row.status}`,
+      } satisfies ServerMessage);
       return sessionId;
     }
 
