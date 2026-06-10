@@ -232,6 +232,8 @@ describe('CIBadges — awaiting re-review state', () => {
   it('no regression — ci_failing badge still renders alongside awaitingReReview', () => {
     render(<CIBadges mergeState="ci_failed" awaitingReReview={true} />);
     expect(screen.getByText('❌ CI failing')).toBeDefined();
-    expect(screen.getByText('⏳ Fix pushed — awaiting re-review')).toBeDefined();
+    expect(
+      screen.getByText('⏳ Fix pushed — awaiting re-review'),
+    ).toBeDefined();
   });
 });
