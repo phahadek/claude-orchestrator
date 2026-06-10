@@ -627,3 +627,72 @@ describe('<pr-body> marker — backend push before createPR', () => {
     );
   });
 });
+
+// ── Integration test: upsertPullRequest returns null ──────────────────────────
+// When the repo is not configured in any project, upsertPullRequest returns null.
+// handlePRDetected must NOT broadcast pr_created or emit pr_opened in that case,
+// so StuckSessionMonitor sees no PR row and routes to idle (not done) when the
+// subprocess is still alive — closing the premature-markSessionDone path.
+
+describe('<pr-body> marker — upsertPullRequest returns null (repo not configured)', () => {
+  beforeEach(() => {
+    vi.mocked(upsertPullRequest).mockReturnValue(null);
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: true,
+      missingSections: [],
+    });
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd === 'git branch --show-current') return 'feature/my-task\n';
+      if (cmd === 'git remote get-url origin')
+        return 'https://github.com/owner/repo.git\n';
+      if (cmd === 'git symbolic-ref refs/remotes/origin/HEAD')
+        return 'refs/remotes/origin/dev\n';
+      if (cmd === 'git push -u origin feature/my-task') return '';
+      throw new Error(`unexpected execSync: ${cmd}`);
+    });
+  });
+
+  it('does NOT broadcast pr_created when upsertPullRequest returns null', async () => {
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+
+    const broadcastedTypes: string[] = [];
+    session.on('message', (msg: { type: string }) =>
+      broadcastedTypes.push(msg.type),
+    );
+
+    emitAssistantWithMarker(session, VALID_BODY);
+    await new Promise((r) => setImmediate(r));
+
+    expect(broadcastedTypes).not.toContain('pr_created');
+  });
+
+  it('does NOT emit pr_opened when upsertPullRequest returns null', async () => {
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+
+    const prOpenedSpy = vi.fn();
+    session.on('pr_opened', prOpenedSpy);
+
+    emitAssistantWithMarker(session, VALID_BODY);
+    await new Promise((r) => setImmediate(r));
+
+    expect(prOpenedSpy).not.toHaveBeenCalled();
+  });
+
+  it('still calls githubClient.createPR even when upsert will reject the insert', async () => {
+    // The PR creation itself succeeds on GitHub-side; only our DB upsert returns null.
+    // The PR remains accessible on GitHub but is not tracked in our DB.
+    const ghClient = makeGithubClient();
+    const session = makeSession(ghClient);
+
+    emitAssistantWithMarker(session, VALID_BODY);
+    await new Promise((r) => setImmediate(r));
+
+    expect(ghClient.createPR).toHaveBeenCalledTimes(1);
+    expect(upsertPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ pr_number: 42 }),
+    );
+  });
+});

@@ -27,7 +27,7 @@ export function runBootIdleReconciliation(): void {
   const now = Date.now();
   for (const row of rows) {
     if (row.pr_state === 'merged') {
-      markSessionDone(row.session_id, now, row.pr_url);
+      markSessionDone(row.session_id, now, row.pr_url, 'boot_idle_merged_pr');
       console.log(
         `[BootIdleReconciliation] ${row.session_id.slice(0, 8)} idle→done (PR #${row.pr_number} ${row.repo} merged)`,
       );

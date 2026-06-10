@@ -1292,7 +1292,12 @@ export class SessionManager extends EventEmitter {
         `[SessionManager] recovering ${stuckRows.length} stuck session(s) from running→done`,
       );
       for (const row of stuckRows) {
-        markSessionDone(row.session_id, row.last_ts, row.pr_url ?? null);
+        markSessionDone(
+          row.session_id,
+          row.last_ts,
+          row.pr_url ?? null,
+          'boot_orphan_result_event',
+        );
         let taskBackend;
         try {
           taskBackend = row.project_id ? getTaskBackend(row.project_id) : null;
@@ -1331,7 +1336,12 @@ export class SessionManager extends EventEmitter {
         `[SessionManager] reaping ${mergedPrRows.length} session(s) with merged/closed PR`,
       );
       for (const row of mergedPrRows) {
-        markSessionDone(row.session_id, row.last_ts, row.pr_url ?? null);
+        markSessionDone(
+          row.session_id,
+          row.last_ts,
+          row.pr_url ?? null,
+          'boot_merged_or_closed_pr',
+        );
         let taskBackend;
         try {
           taskBackend = row.project_id ? getTaskBackend(row.project_id) : null;

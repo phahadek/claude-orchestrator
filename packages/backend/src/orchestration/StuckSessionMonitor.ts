@@ -132,7 +132,27 @@ export class StuckSessionMonitor {
           continue;
         }
 
-        markSessionDone(row.session_id, row.last_ts, row.pr_url ?? null);
+        // Guard: if the subprocess is still alive in-memory, the session is not
+        // truly done — it's idle (result arrived but process hasn't been cleaned
+        // up yet, or the pr_body upsert failed leaving no PR row). Route to idle
+        // so the operator can nudge via the composer per Task 10.
+        if (this.sessionManager.isAlive(row.session_id)) {
+          markSessionIdle(row.session_id, row.last_ts, row.pr_url ?? null);
+          this.broadcast({
+            type: 'stuck_session_idle_open_pr',
+            sessionId: row.session_id,
+            taskId: row.task_id ?? null,
+            prUrl: row.pr_url ?? null,
+          });
+          continue;
+        }
+
+        markSessionDone(
+          row.session_id,
+          row.last_ts,
+          row.pr_url ?? null,
+          'stuck_session_no_pr_periodic',
+        );
         let taskBackend;
         try {
           taskBackend = row.project_id ? getTaskBackend(row.project_id) : null;

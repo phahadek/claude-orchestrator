@@ -30,7 +30,8 @@ export type EventType =
   | 'pr_attribution_mismatch'
   | 'pr_creation_failed'
   | 'session_aborted'
-  | 'auto_launch_done_update_stuck';
+  | 'auto_launch_done_update_stuck'
+  | 'session_marked_done_while_running';
 
 export type ActorType = 'ai' | 'human' | 'system';
 
