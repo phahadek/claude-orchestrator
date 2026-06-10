@@ -14,7 +14,7 @@ import { buildReviewClaudeMd } from './orchestrator-claudemd';
 import {
   resolveStartingPoint,
   ensureMilestoneBranch,
-  slugify,
+  deriveBranchSlug,
 } from './branchModel';
 import { loadOrchestratorConfig } from './orchestrator-config';
 import { WorktreeSetupError } from './WorktreeSetupError';
@@ -700,7 +700,7 @@ export class SessionManager extends EventEmitter {
         ? startingPoint
         : `origin/${project.baseBranch}`;
 
-    const featureBranch = taskName ? `feature/${slugify(taskName)}` : null;
+    const featureBranch = taskName ? deriveBranchSlug(taskName) : null;
     try {
       if (featureBranch) {
         await exec(
@@ -945,7 +945,7 @@ export class SessionManager extends EventEmitter {
     }
 
     const featureBranch = row.task_name
-      ? `feature/${slugify(row.task_name)}`
+      ? deriveBranchSlug(row.task_name)
       : null;
     if (featureBranch) {
       try {
@@ -1776,7 +1776,7 @@ export class SessionManager extends EventEmitter {
         : `origin/${project.baseBranch}`;
 
     const resumeFeatureBranch = row.task_name
-      ? `feature/${slugify(row.task_name)}`
+      ? deriveBranchSlug(row.task_name)
       : null;
     try {
       if (resumeFeatureBranch) {
