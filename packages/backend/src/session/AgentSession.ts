@@ -1395,6 +1395,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         synced_at: now,
         node_id: null,
         head_sha: prShape.head?.sha ?? null,
+        conflict_nudge_sha: null,
       });
       if (upsertResult === null) {
         // Repo not configured — no PR row written. Skip pr_created broadcast

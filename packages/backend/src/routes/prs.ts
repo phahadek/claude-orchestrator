@@ -263,6 +263,7 @@ export function createPrsRouter(
           node_id: pr.nodeId,
           merge_state: pr.mergeableState,
           merge_state_checked_at: now,
+          conflict_nudge_sha: null,
         });
         if (sessionMatch) {
           console.log(
@@ -925,6 +926,7 @@ export function createPrsRouter(
       node_id: pr.nodeId,
       merge_state: pr.mergeableState,
       merge_state_checked_at: now,
+      conflict_nudge_sha: null,
     });
 
     sessionManager.emit('pr_opened', {
