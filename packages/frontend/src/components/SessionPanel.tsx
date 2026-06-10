@@ -58,6 +58,7 @@ export function SessionPanel({
           </span>
         )}
         <SessionControls
+          embedded
           session={session}
           send={send}
           sessionMode={sessionMode}

@@ -24,6 +24,7 @@ interface Props {
   onDeleted?: (sessionId: string) => void;
   onResume?: (sessionId: string) => void;
   onClose?: () => void;
+  embedded?: boolean;
 }
 
 export function SessionControls({
@@ -36,6 +37,7 @@ export function SessionControls({
   onDeleted,
   onResume,
   onClose,
+  embedded = false,
 }: Props) {
   const [deleting, setDeleting] = useState(false);
   const [archiving, setArchiving] = useState(false);
@@ -159,10 +161,11 @@ export function SessionControls({
   }
 
   const adminChromeClass = `${styles.adminChrome} ${compactOpen ? styles['adminChrome--open'] : ''}`;
+  const headerControlsClass = `${styles.headerControls}${embedded ? ` ${styles['headerControls--embedded']}` : ''}`;
 
   return (
     <>
-      <div className={styles.headerControls}>
+      <div className={headerControlsClass}>
         <StatusBadge
           status={session.status}
           isRateLimited={session.isRateLimited}

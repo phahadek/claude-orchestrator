@@ -274,6 +274,68 @@
   border-bottom-color: #89b4fa;
 }
 
+/* ── Compact disclosure toggle shared styles ─────────────────────── */
+.disclosureToggle--visible {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: transparent;
+  border: 1px solid rgba(166, 173, 200, 0.3);
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  flex-shrink: 0;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+
+.disclosureToggle--visible:hover {
+  color: var(--text-primary);
+  border-color: rgba(166, 173, 200, 0.5);
+}
+
+/* ── Embedded mode: compact disclosure at all viewport widths ───── */
+.headerControls--embedded .disclosureToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: transparent;
+  border: 1px solid rgba(166, 173, 200, 0.3);
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 2px 8px;
+  flex-shrink: 0;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+
+.headerControls--embedded .disclosureToggle:hover {
+  color: var(--text-primary);
+  border-color: rgba(166, 173, 200, 0.5);
+}
+
+.headerControls--embedded .adminChrome {
+  display: none;
+}
+
+.headerControls--embedded .adminChrome--open {
+  display: contents;
+}
+
+.headerControls--embedded + .noteTagArea {
+  display: none;
+}
+
+.headerControls--embedded + .noteTagArea.noteTagArea--open {
+  display: flex;
+}
+
 /* ── Mobile: compact disclosure at ≤768px ───────────────────────── */
 @media (max-width: 768px) {
   .disclosureToggle {
