@@ -206,6 +206,11 @@ export function createPrsRouter(
       failingChecks: parseFailingChecks(pr.failing_checks),
       pauseReason: pr.pause_reason ?? null,
       preReviewStage: pr.pre_review_stage ?? null,
+      awaitingReReview:
+        (pr.pre_review_stage === 'blocked_autofix' ||
+          pr.pre_review_stage === 'blocked_verify') &&
+        (pr.pending_push === 1 ||
+          (!!pr.head_sha && pr.head_sha !== pr.last_reviewed_sha)),
       autoMergeEnabled,
     }));
     res.json(items);

@@ -38,14 +38,14 @@ const STAGE_CONFIG: Record<
   },
   blocked_autofix: {
     emoji: '❌',
-    label: 'Blocked by autofix gate',
-    compactLabel: 'Blocked',
+    label: 'Autofix failed',
+    compactLabel: 'Autofix',
     styleKey: 'blocked',
   },
   blocked_verify: {
     emoji: '❌',
-    label: 'Blocked by verify gate',
-    compactLabel: 'Blocked',
+    label: 'Verify failed',
+    compactLabel: 'Verify',
     styleKey: 'blocked',
   },
 };
@@ -106,6 +106,7 @@ export interface CIBadgesProps {
   prState?: string;
   ciChecksUrl?: string;
   failingChecks?: string[];
+  awaitingReReview?: boolean;
 }
 
 export function CIBadges({
@@ -114,6 +115,7 @@ export function CIBadges({
   prState,
   ciChecksUrl,
   failingChecks = [],
+  awaitingReReview = false,
 }: CIBadgesProps) {
   if (prState === 'merged' || prState === 'closed') return null;
 
@@ -123,7 +125,13 @@ export function CIBadges({
   const showUnstable = mergeState === 'unstable';
   const showRunning = mergeState === 'ci_running';
 
-  if (!showCiFailing && !showBillingBlocked && !showUnstable && !showRunning)
+  if (
+    !showCiFailing &&
+    !showBillingBlocked &&
+    !showUnstable &&
+    !showRunning &&
+    !awaitingReReview
+  )
     return null;
 
   const ciFailingTitle =
@@ -172,6 +180,14 @@ export function CIBadges({
         <span className={styles.runningBadge} title="CI checks are in progress">
           <span className={styles.spinner} aria-hidden="true" />
           CI running
+        </span>
+      )}
+      {awaitingReReview && (
+        <span
+          className={styles.pipelineAwaitingBadge}
+          title="A fix was pushed — the pipeline will re-run review when ready."
+        >
+          ⏳ Fix pushed — awaiting re-review
         </span>
       )}
     </>

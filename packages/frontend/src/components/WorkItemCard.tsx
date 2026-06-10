@@ -40,6 +40,7 @@ export interface PRWorkItem {
   failingChecks?: string[] | null;
   pauseReason?: string | null;
   preReviewStage?: string | null;
+  awaitingReReview?: boolean;
   autoMergeEnabled: boolean;
 }
 
@@ -350,6 +351,7 @@ function PRWorkItemCard({
           prState={pr.state}
           ciChecksUrl={ciChecksUrl}
           failingChecks={failingChecks}
+          awaitingReReview={pr.awaitingReReview ?? false}
         />
         {hasConflicts && (
           <span
