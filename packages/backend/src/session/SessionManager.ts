@@ -1804,10 +1804,22 @@ export class SessionManager extends EventEmitter {
         );
       }
     } catch (err) {
-      console.error(
-        `[SessionManager] sendOrResume: failed to create worktree: ${err}`,
-      );
-      throw err;
+      const stderr =
+        (err as { stderr?: string | Buffer })?.stderr?.toString() ?? '';
+      const msg = `sendOrResume: worktree recreation failed for session ${sessionId.slice(0, 8)}: ${(err as Error).message}\nstderr: ${stderr}`;
+      console.error(`[SessionManager] ${msg}`);
+
+      this.markSessionErrored(sessionId, 'error', 'worktree_recreate_failed');
+
+      this.emit('message', {
+        type: 'session_action_failed',
+        sessionId,
+        action: 'sendOrResume',
+        reason: 'worktree_recreate_failed',
+        detail: stderr || (err as Error).message,
+      } satisfies ServerMessage);
+
+      return sessionId;
     }
 
     const isUnixStylePath =

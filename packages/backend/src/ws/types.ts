@@ -334,6 +334,13 @@ export type ServerMessage =
       boardId: string;
       taskCount: number;
       refreshedAt: number;
+    }
+  | {
+      type: 'session_action_failed';
+      sessionId: string;
+      action: string;
+      reason: string;
+      detail: string;
     };
 
 // ── Client → Server ──────────────────────────────────────────────
