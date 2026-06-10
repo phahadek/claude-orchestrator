@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('../db/db.js', async () => {
   const { setupTestDb } = await import('../../test/helpers/setupTestDb.js');
@@ -11,7 +11,6 @@ import {
   insertEventOrIgnore,
   getSession,
   getEventsBySession,
-  markSessionEventsPruned,
   getPruneEligibleSessions,
 } from '../db/queries.js';
 import {
