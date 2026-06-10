@@ -22,6 +22,7 @@ vi.mock('../../db/queries', () => ({
   insertPauseInterval: vi.fn(),
   getSessionTags: vi.fn().mockReturnValue([]),
   setSessionTags: vi.fn(),
+  resetTaskCrashCount: vi.fn(),
 }));
 
 vi.mock('../../config', () => ({
@@ -91,10 +92,12 @@ import {
   getPRBySessionId,
   markSessionDone,
   markSessionIdle,
+  setPauseReason,
 } from '../../db/queries';
 import { validatePRBody } from '../../github/PRBodyValidator';
 import { recordEvent } from '../../audit/AuditLog';
 import { execSync } from 'child_process';
+import { runtimeSettings } from '../../config';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -142,6 +145,7 @@ function makeGithubClient(overrides: Record<string, unknown> = {}) {
     fetchPR: vi.fn().mockResolvedValue({ headSha: 'abc123', nodeId: 'node1' }),
     ensureLabelExists: vi.fn().mockResolvedValue(undefined),
     addLabelToPR: vi.fn().mockResolvedValue(undefined),
+    createIssueComment: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -947,6 +951,183 @@ describe('<pr-body> marker — upsertPullRequest returns null (repo not configur
     expect(ghClient.createPR).toHaveBeenCalledTimes(1);
     expect(upsertPullRequest).toHaveBeenCalledWith(
       expect.objectContaining({ pr_number: 42 }),
+    );
+  });
+});
+
+// ── Live-detection path: body validation ─────────────────────────────────────
+// Regression tests for the false positive where handlePRDetected validated
+// prShape.body (empty on the gh pr create stream path) instead of the real
+// GitHub body — mirroring the PR #347 incident of 2026-06-10.
+
+function makeFreshPR(body: string | null) {
+  return {
+    nodeId: 'node1',
+    id: 42,
+    title: 'feat: my-task',
+    body,
+    url: PR_URL,
+    apiUrl: 'https://api.github.com/repos/owner/repo/pulls/42',
+    headBranch: 'feature/my-task',
+    headSha: 'abc123',
+    baseBranch: 'dev',
+    state: 'open',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    mergeableState: null,
+    draft: true,
+  };
+}
+
+function emitLiveDetectedPR(
+  session: AgentSession,
+  prUrl = PR_URL,
+  toolUseId = 'toolu_ghcreate',
+) {
+  sendEvent(session, {
+    type: 'assistant',
+    message: {
+      id: 'msg_gh_create',
+      content: [
+        {
+          type: 'tool_use',
+          id: toolUseId,
+          name: 'Bash',
+          input: { command: 'gh pr create --title "feat: my-task" --body-file /tmp/body.md' },
+        },
+      ],
+    },
+  });
+  sendEvent(session, {
+    type: 'tool_result',
+    tool_use_id: toolUseId,
+    content: prUrl + '\n',
+  });
+}
+
+describe('live-detected PR — PR body validation', () => {
+  beforeEach(() => {
+    vi.mocked(upsertPullRequest).mockReturnValue(1 as never);
+    vi.mocked(recordEvent).mockClear();
+    vi.mocked(setPauseReason).mockClear();
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(validatePRBody).mockReturnValue({ valid: true, missingSections: [] });
+    (runtimeSettings as { corporate_mode_enabled: boolean }).corporate_mode_enabled = false;
+  });
+
+  afterEach(() => {
+    (runtimeSettings as { corporate_mode_enabled: boolean }).corporate_mode_enabled = false;
+  });
+
+  it('does NOT record pr_body_invalid_warning when fetched GitHub body is compliant (regression: PR #347)', async () => {
+    const ghClient = makeGithubClient({
+      fetchPR: vi.fn().mockResolvedValue(makeFreshPR(VALID_BODY)),
+    });
+    // Simulate the old bug: validatePRBody(null) returns all-missing, but
+    // validatePRBody(VALID_BODY) returns valid — fix ensures the fetched body is used.
+    vi.mocked(validatePRBody).mockImplementation((body) => {
+      if (!body) {
+        return {
+          valid: false,
+          missingSections: [
+            '## Summary',
+            '## Notion Task',
+            '## Automated Tests',
+            '## Files Changed',
+          ],
+        };
+      }
+      return { valid: true, missingSections: [] };
+    });
+
+    const session = makeSession(ghClient);
+    emitLiveDetectedPR(session);
+
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    const bodyInvalidCalls = vi.mocked(recordEvent).mock.calls.filter(
+      (args) =>
+        args[0]?.event_type === 'pr_body_invalid' ||
+        args[0]?.event_type === 'pr_body_invalid_warning',
+    );
+    expect(bodyInvalidCalls).toHaveLength(0);
+  });
+
+  it('records pr_body_invalid_warning with correct missing sections when fetched body is non-compliant', async () => {
+    const missing = ['## Summary', '## Files Changed'];
+    const ghClient = makeGithubClient({
+      fetchPR: vi.fn().mockResolvedValue(makeFreshPR('incomplete body')),
+    });
+    vi.mocked(validatePRBody).mockReturnValue({ valid: false, missingSections: missing });
+
+    const session = makeSession(ghClient);
+    emitLiveDetectedPR(session);
+
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'pr_body_invalid_warning',
+        payload: expect.objectContaining({ missing_sections: missing, pr_number: 42 }),
+      }),
+    );
+  });
+
+  it('does NOT record a violation when GitHub fetch fails (fail-open)', async () => {
+    const ghClient = makeGithubClient({
+      fetchPR: vi.fn().mockRejectedValue(new Error('GitHub API error 503: Service Unavailable')),
+    });
+
+    const session = makeSession(ghClient);
+    emitLiveDetectedPR(session);
+
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    const bodyInvalidCalls = vi.mocked(recordEvent).mock.calls.filter(
+      (args) =>
+        args[0]?.event_type === 'pr_body_invalid' ||
+        args[0]?.event_type === 'pr_body_invalid_warning',
+    );
+    expect(bodyInvalidCalls).toHaveLength(0);
+  });
+
+  it('sets pause reason in corporate mode when fetched body is non-compliant', async () => {
+    const missing = ['## Summary', '## Notion Task'];
+    const ghClient = makeGithubClient({
+      fetchPR: vi.fn().mockResolvedValue(makeFreshPR('incomplete body')),
+    });
+    vi.mocked(validatePRBody).mockReturnValue({ valid: false, missingSections: missing });
+    (runtimeSettings as { corporate_mode_enabled: boolean }).corporate_mode_enabled = true;
+
+    const session = makeSession(ghClient);
+    emitLiveDetectedPR(session);
+
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(42, 'owner/repo', 'pr_body_invalid');
+  });
+
+  it('does NOT set pause reason from empty stream body in corporate mode (false-positive prevention)', async () => {
+    const ghClient = makeGithubClient({
+      fetchPR: vi.fn().mockResolvedValue(makeFreshPR(VALID_BODY)),
+    });
+    vi.mocked(validatePRBody).mockReturnValue({ valid: true, missingSections: [] });
+    (runtimeSettings as { corporate_mode_enabled: boolean }).corporate_mode_enabled = true;
+
+    const session = makeSession(ghClient);
+    emitLiveDetectedPR(session);
+
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'pr_body_invalid',
     );
   });
 });

@@ -1407,55 +1407,100 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         upsertSucceeded = false;
       }
 
-      // If head_sha was missing from the tool response, fetch it from GitHub
-      // so shouldAutoReview() can compare SHAs on the first re-review attempt.
-      if (!prShape.head?.sha && this.githubClient) {
+      // If head_sha or body was missing from the tool response (live-detection path
+      // where gh pr create does not include body in its stream output), fetch the
+      // full PR from GitHub for accurate head_sha backfill and/or body validation.
+      const needsHeadSha = !prShape.head?.sha;
+      const needsBodyValidation = !prShape.body;
+      if ((needsHeadSha || needsBodyValidation) && this.githubClient) {
         const ghClient = this.githubClient;
         void (async () => {
           try {
             const freshPR = await ghClient.fetchPR(repo, prNumber);
-            if (freshPR.headSha) {
+            if (needsHeadSha && freshPR.headSha) {
               setHeadSha(prNumber, repo, freshPR.headSha);
+            }
+            if (needsBodyValidation) {
+              const bodyValidation = validatePRBody(freshPR.body);
+              if (!bodyValidation.valid) {
+                const isCorporate = runtimeSettings.corporate_mode_enabled;
+                recordEvent({
+                  event_type: isCorporate
+                    ? 'pr_body_invalid'
+                    : 'pr_body_invalid_warning',
+                  actor_type: 'ai',
+                  actor_id: this.sessionId,
+                  project_id: this.projectId || null,
+                  task_id: this.taskId || null,
+                  payload: {
+                    pr_number: prNumber,
+                    repo,
+                    missing_sections: bodyValidation.missingSections,
+                  },
+                });
+                if (isCorporate) {
+                  setPauseReason(prNumber, repo, 'pr_body_invalid');
+                  const comment = buildValidationComment(
+                    bodyValidation.missingSections,
+                  );
+                  void ghClient
+                    .createIssueComment(repo, prNumber, comment)
+                    .catch((e) =>
+                      console.warn(
+                        `[AgentSession] createIssueComment failed: ${e}`,
+                      ),
+                    );
+                }
+              }
             }
           } catch (e) {
             console.warn(
-              `[AgentSession] handlePRDetected: failed to fetch head_sha for PR #${prNumber}:`,
+              `[AgentSession] handlePRDetected: failed to fetch PR #${prNumber}:`,
               e,
             );
+            if (needsBodyValidation) {
+              console.warn(
+                `[AgentSession] handlePRDetected: skipping PR body validation for PR #${prNumber} — GitHub fetch failed (fail-open)`,
+              );
+            }
           }
         })();
       }
 
-      // Validate PR body against required template.
-      const bodyValidation = validatePRBody(prShape.body);
-      if (!bodyValidation.valid) {
-        const isCorporate = runtimeSettings.corporate_mode_enabled;
-        recordEvent({
-          event_type: isCorporate
-            ? 'pr_body_invalid'
-            : 'pr_body_invalid_warning',
-          actor_type: 'ai',
-          actor_id: this.sessionId,
-          project_id: this.projectId || null,
-          task_id: this.taskId || null,
-          payload: {
-            pr_number: prNumber,
-            repo,
-            missing_sections: bodyValidation.missingSections,
-          },
-        });
-        if (isCorporate) {
-          setPauseReason(prNumber, repo, 'pr_body_invalid');
-          if (this.githubClient) {
-            const ghClient = this.githubClient;
-            const comment = buildValidationComment(
-              bodyValidation.missingSections,
-            );
-            void ghClient
-              .createIssueComment(repo, prNumber, comment)
-              .catch((e) =>
-                console.warn(`[AgentSession] createIssueComment failed: ${e}`),
+      // Validate PR body against required template (marker path: body present at detection time).
+      if (prShape.body) {
+        const bodyValidation = validatePRBody(prShape.body);
+        if (!bodyValidation.valid) {
+          const isCorporate = runtimeSettings.corporate_mode_enabled;
+          recordEvent({
+            event_type: isCorporate
+              ? 'pr_body_invalid'
+              : 'pr_body_invalid_warning',
+            actor_type: 'ai',
+            actor_id: this.sessionId,
+            project_id: this.projectId || null,
+            task_id: this.taskId || null,
+            payload: {
+              pr_number: prNumber,
+              repo,
+              missing_sections: bodyValidation.missingSections,
+            },
+          });
+          if (isCorporate) {
+            setPauseReason(prNumber, repo, 'pr_body_invalid');
+            if (this.githubClient) {
+              const ghClient = this.githubClient;
+              const comment = buildValidationComment(
+                bodyValidation.missingSections,
               );
+              void ghClient
+                .createIssueComment(repo, prNumber, comment)
+                .catch((e) =>
+                  console.warn(
+                    `[AgentSession] createIssueComment failed: ${e}`,
+                  ),
+                );
+            }
           }
         }
       }
