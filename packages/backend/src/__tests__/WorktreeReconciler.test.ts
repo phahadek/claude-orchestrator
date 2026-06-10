@@ -123,8 +123,12 @@ function makePR(state: 'open' | 'merged' | 'closed') {
 }
 
 function setupWorktreeDir(sessionIds: string[]) {
-  mockedReaddirSync.mockReturnValue(sessionIds as unknown as ReturnType<typeof fs.readdirSync>);
-  mockedStatSync.mockReturnValue({ isDirectory: () => true } as ReturnType<typeof fs.statSync>);
+  mockedReaddirSync.mockReturnValue(
+    sessionIds as unknown as ReturnType<typeof fs.readdirSync>,
+  );
+  mockedStatSync.mockReturnValue({ isDirectory: () => true } as ReturnType<
+    typeof fs.statSync
+  >);
 }
 
 beforeEach(() => {
@@ -148,7 +152,9 @@ describe('runBootWorktreeReconciliation — terminal sessions', () => {
       mockedGetSession.mockReturnValue(makeSession(status) as never);
       mockedGetPR.mockReturnValue(null);
 
-      await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+      await runBootWorktreeReconciliation({
+        listProjects: () => [makeProject()],
+      });
 
       expect(mockedExecSync).toHaveBeenCalledWith(
         expect.stringContaining('git worktree remove --force'),
@@ -162,7 +168,9 @@ describe('runBootWorktreeReconciliation — terminal sessions', () => {
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
 
-    await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
 
     expect(mockedExecSync).toHaveBeenCalledWith(
       'git worktree prune',
@@ -179,7 +187,9 @@ describe('runBootWorktreeReconciliation — no DB row', () => {
     mockedGetSession.mockReturnValue(undefined);
     mockedGetPR.mockReturnValue(null);
 
-    await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
 
     expect(mockedExecSync).toHaveBeenCalledWith(
       expect.stringContaining('git worktree remove --force'),
@@ -197,7 +207,9 @@ describe('runBootWorktreeReconciliation — live sessions skipped', () => {
       setupWorktreeDir(['sess-1']);
       mockedGetSession.mockReturnValue(makeSession(status) as never);
 
-      await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+      await runBootWorktreeReconciliation({
+        listProjects: () => [makeProject()],
+      });
 
       expect(mockedExecSync).not.toHaveBeenCalledWith(
         expect.stringContaining('git worktree remove'),
@@ -215,7 +227,9 @@ describe('runBootWorktreeReconciliation — branch deletion', () => {
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
 
-    await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
 
     expect(mockedExecSync).toHaveBeenCalledWith(
       expect.stringContaining('git branch -D'),
@@ -228,7 +242,9 @@ describe('runBootWorktreeReconciliation — branch deletion', () => {
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(makePR('merged') as never);
 
-    await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
 
     expect(mockedExecSync).toHaveBeenCalledWith(
       expect.stringContaining('git branch -D'),
@@ -241,7 +257,9 @@ describe('runBootWorktreeReconciliation — branch deletion', () => {
     mockedGetSession.mockReturnValue(makeSession('error') as never);
     mockedGetPR.mockReturnValue(makePR('closed') as never);
 
-    await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
 
     expect(mockedExecSync).toHaveBeenCalledWith(
       expect.stringContaining('git branch -D'),
@@ -254,7 +272,9 @@ describe('runBootWorktreeReconciliation — branch deletion', () => {
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(makePR('open') as never);
 
-    await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
 
     expect(mockedExecSync).not.toHaveBeenCalledWith(
       expect.stringContaining('git branch -D'),
@@ -276,7 +296,9 @@ describe('runBootWorktreeReconciliation — failure tolerance', () => {
       return '' as never;
     });
 
-    await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
 
     expect(mockedRecordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'worktree_remove_failed' }),
@@ -298,7 +320,9 @@ describe('runBootWorktreeReconciliation — failure tolerance', () => {
       return '' as never;
     });
 
-    await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
 
     // Second worktree removal should still have been attempted
     expect(callCount).toBe(2);
@@ -324,7 +348,9 @@ describe('runBootWorktreeReconciliation — idempotent / no-op', () => {
       throw err;
     });
 
-    await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
 
     expect(mockedExecSync).not.toHaveBeenCalledWith(
       expect.stringContaining('worktree remove'),
@@ -336,7 +362,9 @@ describe('runBootWorktreeReconciliation — idempotent / no-op', () => {
     setupWorktreeDir(['sess-running']);
     mockedGetSession.mockReturnValue(makeSession('running') as never);
 
-    await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
 
     expect(mockedExecSync).not.toHaveBeenCalledWith(
       expect.stringContaining('worktree remove'),
@@ -349,10 +377,13 @@ describe('runBootWorktreeReconciliation — idempotent / no-op', () => {
     const proj2 = makeProject({ id: 'proj-2', projectDir: '/p2' });
 
     mockedReaddirSync.mockImplementation((dir) => {
-      if (String(dir).includes('p1')) return ['sess-1'] as unknown as ReturnType<typeof fs.readdirSync>;
+      if (String(dir).includes('p1'))
+        return ['sess-1'] as unknown as ReturnType<typeof fs.readdirSync>;
       return [] as unknown as ReturnType<typeof fs.readdirSync>;
     });
-    mockedStatSync.mockReturnValue({ isDirectory: () => true } as ReturnType<typeof fs.statSync>);
+    mockedStatSync.mockReturnValue({ isDirectory: () => true } as ReturnType<
+      typeof fs.statSync
+    >);
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
 
@@ -373,7 +404,9 @@ describe('runBootWorktreeReconciliation — no timer', () => {
     const spy = vi.spyOn(globalThis, 'setInterval');
     setupWorktreeDir([]);
 
-    await runBootWorktreeReconciliation({ listProjects: () => [makeProject()] });
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
 
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();

@@ -70,7 +70,8 @@ export async function runBootWorktreeReconciliation(options?: {
         }
 
         const pr = getPRBySessionId(sessionId);
-        const deleteBranch = !pr || pr.state === 'merged' || pr.state === 'closed';
+        const deleteBranch =
+          !pr || pr.state === 'merged' || pr.state === 'closed';
         if (deleteBranch && branchName) {
           try {
             execSync(`git branch -D "${branchName}"`, {
