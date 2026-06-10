@@ -168,6 +168,7 @@ export class PRMergeWatcher {
     }
     this.sweepStalePendingReReviews();
     this.sweepPendingPushDeadLetters();
+    this.autoMerger?.clearStalePauses();
     const silentMerges = this.firstPollPending;
     const openPRs = getAllOpenPRs();
 
