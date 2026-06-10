@@ -1574,7 +1574,8 @@ export class SessionManager extends EventEmitter {
       });
     } catch (err) {
       const stderr =
-        (err as { stderr?: string | Buffer })?.stderr?.toString() ?? String(err);
+        (err as { stderr?: string | Buffer })?.stderr?.toString() ??
+        String(err);
       console.error(
         `[SessionManager] failed to remove worktree for ${sessionId}: ${err}`,
       );
@@ -1907,9 +1908,15 @@ export class SessionManager extends EventEmitter {
           : getCorporateMode().gates.dockerMandatory
             ? new DockerSessionRunner(sessionId)
             : new CliSessionRunner(sessionId);
-      const mcpConfigPath = writeMcpConfig(recordedPath, orchConfig.mcp_servers);
+      const mcpConfigPath = writeMcpConfig(
+        recordedPath,
+        orchConfig.mcp_servers,
+      );
       if (row.task_id) {
-        const stale = getOtherRunningSessionsForTask(row.task_id, row.session_id);
+        const stale = getOtherRunningSessionsForTask(
+          row.task_id,
+          row.session_id,
+        );
         for (const s of stale) {
           console.log(
             `[SessionManager] sendOrResume: superseding stale session ${s.session_id.slice(0, 8)} for task ${row.task_id}`,
@@ -1917,7 +1924,13 @@ export class SessionManager extends EventEmitter {
           markSessionSuperseded(s.session_id, Date.now());
         }
       }
-      const session = this.respawnSession(row, recordedPath, orchConfig, runner, mcpConfigPath);
+      const session = this.respawnSession(
+        row,
+        recordedPath,
+        orchConfig,
+        runner,
+        mcpConfigPath,
+      );
       const firstEvent = new Promise<void>((resolve) => {
         session.once('message', () => {
           this.send(sessionId, text);

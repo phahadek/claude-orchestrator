@@ -135,7 +135,9 @@ vi.mock('fs', () => ({
   default: {
     // Default: existsSync returns true for all paths EXCEPT those ending in '.git'
     // so the worktree-reuse fast path is not triggered in tests that don't want it.
-    existsSync: vi.fn().mockImplementation((p: string) => !String(p).endsWith('.git')),
+    existsSync: vi
+      .fn()
+      .mockImplementation((p: string) => !String(p).endsWith('.git')),
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
     readdirSync: vi.fn().mockReturnValue([]),
@@ -143,7 +145,9 @@ vi.mock('fs', () => ({
     statSync: vi.fn().mockReturnValue({ isDirectory: () => true }),
     unlinkSync: vi.fn(),
   },
-  existsSync: vi.fn().mockImplementation((p: string) => !String(p).endsWith('.git')),
+  existsSync: vi
+    .fn()
+    .mockImplementation((p: string) => !String(p).endsWith('.git')),
   mkdirSync: vi.fn(),
   writeFileSync: vi.fn(),
   unlinkSync: vi.fn(),
@@ -541,9 +545,11 @@ describe('cleanupWorktree chokepoint guard', () => {
       'https://github.com/org/repo/pull/1',
       PROJECT_DIR,
     );
-    const removeCalls = vi.mocked(execSync).mock.calls.filter(
-      ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
-    );
+    const removeCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
+      );
     expect(removeCalls).toHaveLength(0);
   });
 
@@ -555,9 +561,11 @@ describe('cleanupWorktree chokepoint guard', () => {
       undefined,
       PROJECT_DIR,
     );
-    const removeCalls = vi.mocked(execSync).mock.calls.filter(
-      ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
-    );
+    const removeCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
+      );
     expect(removeCalls).toHaveLength(1);
   });
 
@@ -572,9 +580,11 @@ describe('cleanupWorktree chokepoint guard', () => {
       'https://github.com/org/repo/pull/1',
       PROJECT_DIR,
     );
-    const removeCalls = vi.mocked(execSync).mock.calls.filter(
-      ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
-    );
+    const removeCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
+      );
     expect(removeCalls).toHaveLength(1);
   });
 });
@@ -640,9 +650,11 @@ describe('terminal cleanup for idle sessions (not live)', () => {
 
     sm.endSession(SESSION_ID);
 
-    const removeCalls = vi.mocked(execSync).mock.calls.filter(
-      ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
-    );
+    const removeCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
+      );
     expect(removeCalls).toHaveLength(1);
   });
 
@@ -663,9 +675,11 @@ describe('terminal cleanup for idle sessions (not live)', () => {
     sm.endSession(SESSION_ID);
 
     // endSession on a live session calls session.endSession() — no direct cleanup
-    const removeCalls = vi.mocked(execSync).mock.calls.filter(
-      ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
-    );
+    const removeCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
+      );
     expect(removeCalls).toHaveLength(0);
   });
 
@@ -679,9 +693,11 @@ describe('terminal cleanup for idle sessions (not live)', () => {
 
     sm.markSessionErrored(SESSION_ID, 'error', 'pr_closed');
 
-    const removeCalls = vi.mocked(execSync).mock.calls.filter(
-      ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
-    );
+    const removeCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree remove'),
+      );
     expect(removeCalls).toHaveLength(1);
   });
 });
@@ -700,7 +716,9 @@ describe('sendOrResume — surviving worktree reuse (idle resume fast path)', ()
     vi.mocked(getSession).mockReturnValue(makeDeadRow());
     // Make existsSync return true for the .git file → fast path triggered
     vi.mocked(fsModule.existsSync).mockImplementation(() => true);
-    vi.mocked((fsModule as any).default.existsSync).mockImplementation(() => true);
+    vi.mocked((fsModule as any).default.existsSync).mockImplementation(
+      () => true,
+    );
   });
 
   async function doResume(text = 'hello'): Promise<string> {
@@ -717,9 +735,11 @@ describe('sendOrResume — surviving worktree reuse (idle resume fast path)', ()
 
   it('no git worktree add when recorded worktree has .git file', async () => {
     await doResume();
-    const worktreeAdds = vi.mocked(execSync).mock.calls.filter(
-      ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree add'),
-    );
+    const worktreeAdds = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree add'),
+      );
     expect(worktreeAdds).toHaveLength(0);
   });
 
@@ -765,9 +785,11 @@ describe('sendOrResume — missing worktree falls through to recreation', () => 
     });
     await p;
 
-    const worktreeAdds = vi.mocked(execSync).mock.calls.filter(
-      ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree add'),
-    );
+    const worktreeAdds = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree add'),
+      );
     expect(worktreeAdds.length).toBeGreaterThanOrEqual(1);
   });
 });

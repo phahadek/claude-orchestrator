@@ -157,7 +157,10 @@ describe('ConcludedSessionArchiver', () => {
     // The archiver's only side effects are archiveConcludedSessionsOlderThan,
     // broadcast, and recordEvent — never a SessionManager or git call.
     expect(mockArchive).toHaveBeenCalledOnce();
-    expect(broadcast).toHaveBeenCalledWith({ type: 'session_archived', sessionId: 's1' });
+    expect(broadcast).toHaveBeenCalledWith({
+      type: 'session_archived',
+      sessionId: 's1',
+    });
     // No other mocked functions should have been called (no worktree cleanup)
     expect(mockRecord).toHaveBeenCalledOnce();
   });
