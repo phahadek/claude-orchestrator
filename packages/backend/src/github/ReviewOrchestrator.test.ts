@@ -3664,7 +3664,10 @@ describe('ReviewOrchestrator — enqueueReview and isReviewInFlight', () => {
   it('enqueueReview queues and drains → reviewPR called', async () => {
     // Reset mocks that prior tests in the full suite may have left in a non-default state
     vi.mocked(loadAutofixCommands).mockReturnValue([]);
-    vi.mocked(runAutofix).mockResolvedValue({ success: true, summary: 'no diff' });
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: true,
+      summary: 'no diff',
+    });
     vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
 
     const sm = makeMockSessionManager();

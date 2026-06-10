@@ -628,7 +628,8 @@ export class PRMergeWatcher {
       // dead letter since no initial review is coming to consume it.
       const currentVerdict = parseVerdictFromResult(prRow.review_result);
       const isAfterGateFailure =
-        currentVerdict === 'autofix_failed' || currentVerdict === 'verify_failed';
+        currentVerdict === 'autofix_failed' ||
+        currentVerdict === 'verify_failed';
 
       if (
         isAfterGateFailure &&
@@ -649,7 +650,9 @@ export class PRMergeWatcher {
           return;
         }
         const project = getProjectByGithubRepo(prRow.repo);
-        const session = prRow.session_id ? getSession(prRow.session_id) : undefined;
+        const session = prRow.session_id
+          ? getSession(prRow.session_id)
+          : undefined;
         this.reviewOrchestrator.enqueueReview({
           prNumber: prRow.pr_number,
           repo: prRow.repo,
@@ -955,7 +958,8 @@ export class PRMergeWatcher {
     const prs = getAllOpenPRs();
     for (const pr of prs) {
       if (!pr.pending_push) continue;
-      if (this.reviewOrchestrator.isReviewInFlight(pr.pr_number, pr.repo)) continue;
+      if (this.reviewOrchestrator.isReviewInFlight(pr.pr_number, pr.repo))
+        continue;
       if (pr.session_id && this.pendingReReviews.has(pr.session_id)) continue;
 
       const maxIter = this.getMaxReviewIterations();
@@ -1073,7 +1077,9 @@ export class PRMergeWatcher {
   }
 }
 
-function parseVerdictFromResult(reviewResult: string | null): string | undefined {
+function parseVerdictFromResult(
+  reviewResult: string | null,
+): string | undefined {
   if (!reviewResult) return undefined;
   try {
     return (JSON.parse(reviewResult) as { verdict?: string }).verdict;
