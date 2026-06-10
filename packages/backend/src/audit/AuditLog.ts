@@ -47,7 +47,10 @@ export function getLatestNudgeTimestamp(sessionId: string): number | null {
  * Used for episode-scoped counting: only nudges newer than the session's
  * last activity count toward NUDGE_LIMIT.
  */
-export function countNudgeEventsSince(sessionId: string, sinceTs: number): number {
+export function countNudgeEventsSince(
+  sessionId: string,
+  sinceTs: number,
+): number {
   const row = db
     .prepare<[string, number], { cnt: number }>(
       `SELECT COUNT(*) AS cnt FROM audit_log

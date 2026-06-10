@@ -638,11 +638,14 @@ const stmtGetEventsBySession = db.prepare<{ session_id: string }>(`
 `);
 
 /** Returns the timestamp of the most recent session_events row for the session, or null. */
-export function getLatestSessionEventTimestamp(sessionId: string): number | null {
+export function getLatestSessionEventTimestamp(
+  sessionId: string,
+): number | null {
   const row = db
-    .prepare<[string], { ts: number | null }>(
-      `SELECT MAX(timestamp) AS ts FROM session_events WHERE session_id = ?`,
-    )
+    .prepare<
+      [string],
+      { ts: number | null }
+    >(`SELECT MAX(timestamp) AS ts FROM session_events WHERE session_id = ?`)
     .get(sessionId);
   return row?.ts ?? null;
 }

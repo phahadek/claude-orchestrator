@@ -265,8 +265,12 @@ export class OrphanedTaskSweeper {
 
     // Minimum nudge spacing: skip if the last nudge was too recent.
     const latestNudgeTs = getLatestNudgeTimestamp(session_id);
-    const minNudgeSpacingMs = this.options.minNudgeSpacingMs ?? MIN_NUDGE_SPACING_MS;
-    if (latestNudgeTs !== null && Date.now() - latestNudgeTs < minNudgeSpacingMs) {
+    const minNudgeSpacingMs =
+      this.options.minNudgeSpacingMs ?? MIN_NUDGE_SPACING_MS;
+    if (
+      latestNudgeTs !== null &&
+      Date.now() - latestNudgeTs < minNudgeSpacingMs
+    ) {
       return;
     }
 

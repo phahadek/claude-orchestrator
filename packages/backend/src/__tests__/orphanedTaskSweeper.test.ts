@@ -698,7 +698,10 @@ describe('OrphanedTaskSweeper', () => {
 
     await sweeper.sweepOnce();
 
-    expect(sendOrResume).toHaveBeenCalledWith('sess-1', expect.stringContaining('PR'));
+    expect(sendOrResume).toHaveBeenCalledWith(
+      'sess-1',
+      expect.stringContaining('PR'),
+    );
   });
 
   // ── Minimum nudge spacing (AC6) ───────────────────────────────────────────
@@ -798,7 +801,10 @@ describe('OrphanedTaskSweeper', () => {
     await sweeper.sweepOnce();
 
     // Should nudge (not surface) because episode count is 0
-    expect(sendOrResume).toHaveBeenCalledWith('sess-1', expect.stringContaining('PR'));
+    expect(sendOrResume).toHaveBeenCalledWith(
+      'sess-1',
+      expect.stringContaining('PR'),
+    );
     expect(setSessionPauseReason).not.toHaveBeenCalled();
   });
 
@@ -830,7 +836,10 @@ describe('OrphanedTaskSweeper', () => {
     await sweeper.sweepOnce();
 
     expect(sendOrResume).not.toHaveBeenCalled();
-    expect(setSessionPauseReason).toHaveBeenCalledWith('sess-1', 'stalled_idle');
+    expect(setSessionPauseReason).toHaveBeenCalledWith(
+      'sess-1',
+      'stalled_idle',
+    );
     expect(recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'task_orphan_surfaced' }),
     );
