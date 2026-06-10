@@ -7,6 +7,10 @@
  *   - warm cache → tasks_ready with resolved ResolvedTask[]
  *
  * This is the regression guard that the handler NEVER calls backend.fetchReadyTasks.
+ *
+ * skipCache behaviour (added after the Sync-button no-op fix):
+ *   - skipCache: true  → immediate cached reply + fire-and-forget background refresh
+ *   - skipCache: false / absent → cache-only, no refresh (#590 invariant)
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -56,7 +60,7 @@ vi.mock('../audit/AuditLog.js', () => ({
 
 // ── Imports ───────────────────────────────────────────────────────────────────
 
-import { handleMessage } from '../ws/router.js';
+import { handleMessage, setWsRouterRefreshFn } from '../ws/router.js';
 import { ProjectService } from '../projects/ProjectService.js';
 import { getProjectById } from '../config.js';
 import { getTaskBackend } from '../tasks/TaskBackend.js';
@@ -98,6 +102,24 @@ function parseSent(ws: ReturnType<typeof makeFakeWs>): unknown {
   return JSON.parse(calls[0][0] as string);
 }
 
+function makeWarmCache() {
+  const cachedTasks = [
+    {
+      id: 'notion:task-1',
+      title: 'Task 1',
+      status: '🗂️ Ready',
+      dependsOn: [],
+      type: '💻 Code',
+      notionUrl: '',
+    },
+  ];
+  return {
+    task_id: `board:${NOTION_SOURCE_ID}`,
+    fetched_at: Date.now(),
+    raw_json: JSON.stringify(cachedTasks),
+  };
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('WS fetch_tasks — cache-only path (never calls backend)', () => {
@@ -108,6 +130,8 @@ describe('WS fetch_tasks — cache-only path (never calls backend)', () => {
       makeMilestoneRow(NOTION_SOURCE_ID) as never,
     );
     vi.mocked(getTaskCache).mockReturnValue(null); // cold by default
+    // Reset refresh fn so tests are isolated
+    setWsRouterRefreshFn(() => Promise.resolve());
   });
 
   it('returns tasks_ready with [] when cache is cold — never calls backend', () => {
@@ -131,21 +155,7 @@ describe('WS fetch_tasks — cache-only path (never calls backend)', () => {
   });
 
   it('returns tasks_ready with resolved tasks when cache is warm — never calls backend', () => {
-    const cachedTasks = [
-      {
-        id: 'notion:task-1',
-        title: 'Task 1',
-        status: '🗂️ Ready',
-        dependsOn: [],
-        type: '💻 Code',
-        notionUrl: '',
-      },
-    ];
-    vi.mocked(getTaskCache).mockReturnValue({
-      task_id: `board:${NOTION_SOURCE_ID}`,
-      fetched_at: Date.now(),
-      raw_json: JSON.stringify(cachedTasks),
-    });
+    vi.mocked(getTaskCache).mockReturnValue(makeWarmCache() as never);
 
     const ws = makeFakeWs();
     handleMessage(
@@ -219,5 +229,128 @@ describe('WS fetch_tasks — cache-only path (never calls backend)', () => {
     const sent = parseSent(ws) as { type: string; tasks: unknown[] };
     expect(sent.type).toBe('tasks_ready');
     expect(sent.tasks).toEqual([]);
+  });
+});
+
+describe('WS fetch_tasks — skipCache behaviour', () => {
+  let refreshFn: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getProjectById).mockReturnValue(makeProject() as never);
+    vi.mocked(ProjectService.getMilestone).mockReturnValue(
+      makeMilestoneRow(NOTION_SOURCE_ID) as never,
+    );
+    refreshFn = vi.fn().mockResolvedValue(undefined);
+    setWsRouterRefreshFn(refreshFn);
+  });
+
+  it('skipCache: true with warm cache → immediate tasks_ready + background refresh', async () => {
+    vi.mocked(getTaskCache).mockReturnValue(makeWarmCache() as never);
+
+    const ws = makeFakeWs();
+    await handleMessage(
+      ws,
+      JSON.stringify({
+        type: 'fetch_tasks',
+        projectId: PROJECT_ID,
+        milestoneId: MILESTONE_UUID,
+        skipCache: true,
+      }),
+      makeFakeSessions(),
+    );
+
+    // Immediate cached reply — handler does not block on Notion round-trip
+    const sent = parseSent(ws) as { type: string; tasks: unknown[] };
+    expect(sent.type).toBe('tasks_ready');
+    expect(sent.tasks).toHaveLength(1);
+
+    // Background refresh triggered for the correct project
+    expect(refreshFn).toHaveBeenCalledWith(PROJECT_ID);
+  });
+
+  it('skipCache: true with cold cache → tasks_ready [] + background refresh', async () => {
+    vi.mocked(getTaskCache).mockReturnValue(null);
+
+    const ws = makeFakeWs();
+    await handleMessage(
+      ws,
+      JSON.stringify({
+        type: 'fetch_tasks',
+        projectId: PROJECT_ID,
+        milestoneId: MILESTONE_UUID,
+        skipCache: true,
+      }),
+      makeFakeSessions(),
+    );
+
+    const sent = parseSent(ws) as { type: string; tasks: unknown[] };
+    expect(sent.type).toBe('tasks_ready');
+    expect(sent.tasks).toEqual([]);
+    expect(refreshFn).toHaveBeenCalledWith(PROJECT_ID);
+  });
+
+  it('skipCache absent → no background refresh (#590 invariant)', async () => {
+    vi.mocked(getTaskCache).mockReturnValue(makeWarmCache() as never);
+
+    const ws = makeFakeWs();
+    await handleMessage(
+      ws,
+      JSON.stringify({
+        type: 'fetch_tasks',
+        projectId: PROJECT_ID,
+        milestoneId: MILESTONE_UUID,
+      }),
+      makeFakeSessions(),
+    );
+
+    expect(refreshFn).not.toHaveBeenCalled();
+  });
+
+  it('skipCache: false → no background refresh (#590 invariant)', async () => {
+    vi.mocked(getTaskCache).mockReturnValue(makeWarmCache() as never);
+
+    const ws = makeFakeWs();
+    await handleMessage(
+      ws,
+      JSON.stringify({
+        type: 'fetch_tasks',
+        projectId: PROJECT_ID,
+        milestoneId: MILESTONE_UUID,
+        skipCache: false,
+      }),
+      makeFakeSessions(),
+    );
+
+    expect(refreshFn).not.toHaveBeenCalled();
+  });
+
+  it('handler returns before refresh completes — never blocks on Notion round-trip', async () => {
+    vi.mocked(getTaskCache).mockReturnValue(makeWarmCache() as never);
+    let resolveRefresh!: () => void;
+    refreshFn.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveRefresh = resolve;
+      }),
+    );
+
+    const ws = makeFakeWs();
+    const handlerPromise = handleMessage(
+      ws,
+      JSON.stringify({
+        type: 'fetch_tasks',
+        projectId: PROJECT_ID,
+        milestoneId: MILESTONE_UUID,
+        skipCache: true,
+      }),
+      makeFakeSessions(),
+    );
+
+    // Handler completes immediately — response already sent before refresh finishes
+    await handlerPromise;
+    expect(ws.send).toHaveBeenCalledTimes(1);
+
+    // Resolve the refresh after the handler has already returned
+    resolveRefresh();
   });
 });

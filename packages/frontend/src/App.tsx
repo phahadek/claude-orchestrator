@@ -1175,6 +1175,12 @@ export default function App() {
                   onOptimisticDispatch={handleTaskOptimisticDispatch}
                   onForceRefetch={handleForceRefetch}
                   reviewRefreshTrigger={taskListRefreshTrigger}
+                  cacheUpdatedAt={
+                    lastCacheUpdatedEvent?.projectId === activeProjectId &&
+                    lastCacheUpdatedEvent?.boardId === activeBoardId
+                      ? lastCacheUpdatedEvent.refreshedAt
+                      : undefined
+                  }
                   send={send}
                   project={activeProject}
                 />
