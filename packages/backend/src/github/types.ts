@@ -1,9 +1,13 @@
 export class GitHubApiError extends Error {
   constructor(
-    public status: number,
-    message: string,
+    public readonly status: number,
+    public readonly body: string,
   ) {
-    super(message);
+    super(`GitHub API error ${status}: ${body.slice(0, 500)}`);
+    this.name = 'GitHubApiError';
+  }
+  toJSON() {
+    return { name: this.name, status: this.status, body: this.body, message: this.message };
   }
 }
 

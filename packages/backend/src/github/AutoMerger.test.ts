@@ -26,6 +26,7 @@ vi.mock('../db/queries.js', () => ({
   getPRByNumber: vi.fn(),
   setPauseReason: vi.fn(),
   updateMergeState: vi.fn(),
+  updatePRDraftStatus: vi.fn(),
   getApprovedOpenPRs: vi.fn().mockReturnValue([]),
   getApprovedLocalBranches: vi.fn().mockReturnValue([]),
   markLocalBranchMerged: vi.fn(),
@@ -91,6 +92,7 @@ import {
   getPRByNumber,
   setPauseReason,
   updateMergeState,
+  updatePRDraftStatus,
   getApprovedOpenPRs,
   getApprovedLocalBranches,
   markLocalBranchMerged,
@@ -175,6 +177,7 @@ function makeMockGitHub(
     mergePR: vi
       .fn()
       .mockResolvedValue({ merged: true, message: 'ok', sha: 'merged-sha' }),
+    markPRReady: vi.fn().mockResolvedValue(undefined),
     categorizeMergeability: vi
       .fn()
       .mockResolvedValue(makeMergeability('clean')),
@@ -1187,5 +1190,167 @@ describe('AutoMerger.clearStalePauses()', () => {
 
     expect(setPauseReason).toHaveBeenCalledWith(111, 'owner/repo', null);
     expect(watcher.handleMerged).toHaveBeenCalled();
+  });
+});
+
+// ── attemptMerge() — 405 "still a draft" retry ───────────────────────────────
+
+describe('AutoMerger.attemptMerge() — 405 still-draft retry', () => {
+  it('retries markPRReady + mergePR on 405 "Pull Request is still a draft"; no pause set', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const { GitHubApiError } = await import('./types.js');
+    vi.mocked(github.mergePR)
+      .mockRejectedValueOnce(
+        new GitHubApiError(405, 'Pull Request is still a draft'),
+      )
+      .mockResolvedValueOnce({ merged: true, message: 'ok', sha: 'retry-sha' });
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(github.markPRReady).toHaveBeenCalledWith('owner/repo', 42);
+    expect(updatePRDraftStatus).toHaveBeenCalledWith(42, 'owner/repo', 0);
+    expect(github.mergePR).toHaveBeenCalledTimes(2);
+    expect(watcher.handleMerged).toHaveBeenCalled();
+    expect(setPauseReason).not.toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'auto_merge_failed',
+    );
+  });
+
+  it('pauses with auto_merge_failed when markPRReady retry throws', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const { GitHubApiError } = await import('./types.js');
+    vi.mocked(github.mergePR).mockRejectedValue(
+      new GitHubApiError(405, 'Pull Request is still a draft'),
+    );
+    vi.mocked(github.markPRReady).mockRejectedValueOnce(
+      new GitHubApiError(403, 'Forbidden'),
+    );
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(github.markPRReady).toHaveBeenCalledWith('owner/repo', 42);
+    expect(watcher.handleMerged).not.toHaveBeenCalled();
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'auto_merge_failed',
+    );
+  });
+
+  it('does NOT call markPRReady for 405 "Base branch was modified" — uses existing pause path', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ session_id: 'coding-session' }),
+    );
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const { GitHubApiError } = await import('./types.js');
+    vi.mocked(github.mergePR).mockRejectedValueOnce(
+      new GitHubApiError(405, 'Base branch was modified'),
+    );
+    vi.mocked(github.categorizeMergeability).mockResolvedValueOnce({
+      category: 'conflict',
+      mergeState: 'dirty',
+      rawMergeableState: 'behind',
+      failingChecks: [],
+      headSha: 'sha-abc',
+    });
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(github.markPRReady).not.toHaveBeenCalled();
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'auto_merge_failed',
+    );
+  });
+
+  it('does NOT retry for 422 — uses existing pause path', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const { GitHubApiError } = await import('./types.js');
+    vi.mocked(github.mergePR).mockRejectedValueOnce(
+      new GitHubApiError(422, 'Unprocessable Entity'),
+    );
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(github.markPRReady).not.toHaveBeenCalled();
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'auto_merge_failed',
+    );
+  });
+
+  it('does NOT retry for 500 — uses existing pause path', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('clean'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const { GitHubApiError } = await import('./types.js');
+    vi.mocked(github.mergePR).mockRejectedValueOnce(
+      new GitHubApiError(500, 'Internal Server Error'),
+    );
+    const watcher = makeMockWatcher();
+    const merger = new AutoMerger(github, watcher, () => {});
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 100));
+
+    expect(github.markPRReady).not.toHaveBeenCalled();
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'auto_merge_failed',
+    );
   });
 });
