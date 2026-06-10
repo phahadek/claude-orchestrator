@@ -67,10 +67,6 @@ const stmtGetAllSessionIds = db.prepare(`
   SELECT session_id FROM sessions
 `);
 
-const stmtDeleteSessionEvents = db.prepare<{ session_id: string }>(`
-  DELETE FROM session_events WHERE session_id = @session_id
-`);
-
 const stmtDeleteSession = db.prepare<{ session_id: string }>(`
   DELETE FROM sessions WHERE session_id = @session_id
 `);
@@ -344,7 +340,6 @@ export function insertSessionOrIgnore(s: NewSession): void {
 }
 
 export function deleteSession(sessionId: string): boolean {
-  stmtDeleteSessionEvents.run({ session_id: sessionId });
   const result = stmtDeleteSession.run({ session_id: sessionId });
   return result.changes > 0;
 }

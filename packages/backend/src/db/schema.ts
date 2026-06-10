@@ -610,4 +610,169 @@ export function runMigrations(target: Database.Database): void {
       set_at       INTEGER NOT NULL
     )
   `);
+
+  // Migration: Add ON DELETE CASCADE to all session-FK child tables.
+  // SQLite can't ALTER TABLE to add constraints, so each table is recreated.
+  // Idempotent: checks sqlite_master before running. Orphan rows are discarded.
+  {
+    type TableSqlRow = { sql: string };
+    const getTableSql = (name: string): string =>
+      (
+        target
+          .prepare(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+          )
+          .get(name) as TableSqlRow | undefined
+      )?.sql ?? '';
+
+    if (!getTableSql('session_events').includes('ON DELETE CASCADE')) {
+      target.exec(`
+        BEGIN TRANSACTION;
+        DROP TABLE IF EXISTS session_events__new;
+        CREATE TABLE session_events__new (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id   TEXT    NOT NULL,
+          event_type   TEXT    NOT NULL,
+          payload      TEXT    NOT NULL,
+          timestamp    INTEGER NOT NULL,
+          message_id   TEXT,
+          FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        );
+        INSERT INTO session_events__new (id, session_id, event_type, payload, timestamp, message_id)
+          SELECT id, session_id, event_type, payload, timestamp, message_id
+          FROM session_events
+          WHERE session_id IN (SELECT session_id FROM sessions);
+        DROP TABLE session_events;
+        ALTER TABLE session_events__new RENAME TO session_events;
+        CREATE INDEX idx_session_events_session_id_id ON session_events(session_id, id DESC);
+        CREATE INDEX idx_session_events_session_id_event_type ON session_events(session_id, event_type);
+        CREATE INDEX idx_session_events_timestamp ON session_events(timestamp DESC);
+        COMMIT;
+      `);
+    }
+
+    if (!getTableSql('permission_events').includes('ON DELETE CASCADE')) {
+      target.exec(`
+        BEGIN TRANSACTION;
+        DROP TABLE IF EXISTS permission_events__new;
+        CREATE TABLE permission_events__new (
+          id              INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id      TEXT    NOT NULL,
+          tool_name       TEXT    NOT NULL,
+          proposed_action TEXT,
+          decision        TEXT    NOT NULL,
+          rule_matched    TEXT,
+          decided_at      INTEGER NOT NULL,
+          FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        );
+        INSERT INTO permission_events__new (id, session_id, tool_name, proposed_action, decision, rule_matched, decided_at)
+          SELECT id, session_id, tool_name, proposed_action, decision, rule_matched, decided_at
+          FROM permission_events
+          WHERE session_id IN (SELECT session_id FROM sessions);
+        DROP TABLE permission_events;
+        ALTER TABLE permission_events__new RENAME TO permission_events;
+        COMMIT;
+      `);
+    }
+
+    if (!getTableSql('permission_denials').includes('ON DELETE CASCADE')) {
+      target.exec(`
+        BEGIN TRANSACTION;
+        DROP TABLE IF EXISTS permission_denials__new;
+        CREATE TABLE permission_denials__new (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id  TEXT    NOT NULL,
+          tool_name   TEXT    NOT NULL,
+          tool_use_id TEXT    NOT NULL,
+          tool_input  TEXT    NOT NULL,
+          timestamp   INTEGER NOT NULL,
+          FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        );
+        INSERT INTO permission_denials__new (id, session_id, tool_name, tool_use_id, tool_input, timestamp)
+          SELECT id, session_id, tool_name, tool_use_id, tool_input, timestamp
+          FROM permission_denials
+          WHERE session_id IN (SELECT session_id FROM sessions);
+        DROP TABLE permission_denials;
+        ALTER TABLE permission_denials__new RENAME TO permission_denials;
+        COMMIT;
+      `);
+    }
+
+    if (!getTableSql('session_audits').includes('ON DELETE CASCADE')) {
+      target.exec(`
+        BEGIN TRANSACTION;
+        DROP TABLE IF EXISTS session_audits__new;
+        CREATE TABLE session_audits__new (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id    TEXT NOT NULL,
+          pr_opened     INTEGER NOT NULL DEFAULT 0,
+          pr_targets    TEXT,
+          task_status   TEXT,
+          violations    TEXT NOT NULL DEFAULT '[]',
+          spec_mismatch TEXT,
+          audited_at    TEXT NOT NULL,
+          FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        );
+        INSERT INTO session_audits__new (id, session_id, pr_opened, pr_targets, task_status, violations, spec_mismatch, audited_at)
+          SELECT id, session_id, pr_opened, pr_targets, task_status, violations, spec_mismatch, audited_at
+          FROM session_audits
+          WHERE session_id IN (SELECT session_id FROM sessions);
+        DROP TABLE session_audits;
+        ALTER TABLE session_audits__new RENAME TO session_audits;
+        COMMIT;
+      `);
+    }
+
+    if (!getTableSql('session_pause_intervals').includes('ON DELETE CASCADE')) {
+      target.exec(`
+        BEGIN TRANSACTION;
+        DROP TABLE IF EXISTS session_pause_intervals__new;
+        CREATE TABLE session_pause_intervals__new (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id   TEXT    NOT NULL,
+          pause_reason TEXT    NOT NULL,
+          paused_at    INTEGER NOT NULL,
+          resumed_at   INTEGER NULL,
+          FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        );
+        INSERT INTO session_pause_intervals__new (id, session_id, pause_reason, paused_at, resumed_at)
+          SELECT id, session_id, pause_reason, paused_at, resumed_at
+          FROM session_pause_intervals
+          WHERE session_id IN (SELECT session_id FROM sessions);
+        DROP TABLE session_pause_intervals;
+        ALTER TABLE session_pause_intervals__new RENAME TO session_pause_intervals;
+        CREATE INDEX idx_session_pause_intervals_session_id ON session_pause_intervals(session_id);
+        COMMIT;
+      `);
+    }
+
+    if (!getTableSql('stuck_session_timers').includes('ON DELETE CASCADE')) {
+      target.exec(`
+        BEGIN TRANSACTION;
+        DROP TABLE IF EXISTS stuck_session_timers__new;
+        CREATE TABLE stuck_session_timers__new (
+          session_id             TEXT    PRIMARY KEY,
+          task_name              TEXT    NOT NULL,
+          notify_deadline        INTEGER NOT NULL DEFAULT 0,
+          pause_deadline         INTEGER NOT NULL DEFAULT 0,
+          hard_stop_deadline     INTEGER NOT NULL DEFAULT 0,
+          hard_stop_armed        INTEGER NOT NULL DEFAULT 0,
+          notify_remaining_ms    INTEGER,
+          pause_remaining_ms     INTEGER,
+          hard_stop_remaining_ms INTEGER,
+          FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        );
+        INSERT INTO stuck_session_timers__new
+          (session_id, task_name, notify_deadline, pause_deadline, hard_stop_deadline,
+           hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms)
+          SELECT session_id, task_name, notify_deadline, pause_deadline, hard_stop_deadline,
+                 hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms
+          FROM stuck_session_timers
+          WHERE session_id IN (SELECT session_id FROM sessions);
+        DROP TABLE stuck_session_timers;
+        ALTER TABLE stuck_session_timers__new RENAME TO stuck_session_timers;
+        COMMIT;
+      `);
+    }
+  }
 }
