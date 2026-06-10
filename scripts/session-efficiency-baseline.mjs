@@ -43,7 +43,7 @@ const M4_DONE = Date.parse('2026-05-22T00:00:00Z');
 const M5_DONE = Date.parse('2026-05-26T00:00:00Z');
 const M6_START = M5_DONE;
 const M7_START = Date.parse('2026-05-30T00:00:00Z');
-const M8_START = Date.parse('2026-06-10T00:00:00Z'); // placeholder; update when M7 done-date is confirmed
+const M8_START = Date.parse('2026-06-02T00:00:00Z');
 
 function eraOf(startedAt) {
   if (startedAt < M4_START) return 'pre-M4';
