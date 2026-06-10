@@ -7,7 +7,12 @@ export class GitHubApiError extends Error {
     this.name = 'GitHubApiError';
   }
   toJSON() {
-    return { name: this.name, status: this.status, body: this.body, message: this.message };
+    return {
+      name: this.name,
+      status: this.status,
+      body: this.body,
+      message: this.message,
+    };
   }
 }
 
