@@ -592,14 +592,18 @@ export const MAX_EVENT_PAYLOAD_BYTES = 262144;
 const HEAD_BYTES = 8192;
 
 function capEventPayload(payload: string): string {
-  if (Buffer.byteLength(payload, 'utf8') <= MAX_EVENT_PAYLOAD_BYTES) return payload;
+  if (Buffer.byteLength(payload, 'utf8') <= MAX_EVENT_PAYLOAD_BYTES)
+    return payload;
   let parsed: unknown;
   try {
     parsed = JSON.parse(payload);
   } catch {
     parsed = null;
   }
-  const rec = parsed != null && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
+  const rec =
+    parsed != null && typeof parsed === 'object'
+      ? (parsed as Record<string, unknown>)
+      : {};
   const truncated: Record<string, unknown> = { truncated: true };
   if ('type' in rec) truncated.type = rec.type;
   if ('usage' in rec) truncated.usage = rec.usage;
@@ -634,11 +638,19 @@ const stmtGetEventsBySession = db.prepare<{ session_id: string }>(`
 `);
 
 export function insertEvent(e: NewSessionEvent): void {
-  stmtInsertEvent.run({ message_id: null, ...e, payload: capEventPayload(e.payload) });
+  stmtInsertEvent.run({
+    message_id: null,
+    ...e,
+    payload: capEventPayload(e.payload),
+  });
 }
 
 export function insertEventOrIgnore(e: NewSessionEvent): void {
-  stmtInsertEventOrIgnore.run({ message_id: null, ...e, payload: capEventPayload(e.payload) });
+  stmtInsertEventOrIgnore.run({
+    message_id: null,
+    ...e,
+    payload: capEventPayload(e.payload),
+  });
 }
 
 /**
@@ -670,7 +682,11 @@ export function upsertSessionEvent(
     );
     return -1;
   }
-  const result = stmtInsertEvent.run({ message_id: null, ...e, payload: cappedPayload });
+  const result = stmtInsertEvent.run({
+    message_id: null,
+    ...e,
+    payload: cappedPayload,
+  });
   return result.lastInsertRowid as number;
 }
 

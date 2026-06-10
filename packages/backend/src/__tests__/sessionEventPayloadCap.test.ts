@@ -32,7 +32,11 @@ function makeLargePayload(type = 'result'): string {
 }
 
 function makeSmallPayload(type = 'system'): string {
-  return JSON.stringify({ type, usage: { input_tokens: 1, output_tokens: 2 }, data: 'small' });
+  return JSON.stringify({
+    type,
+    usage: { input_tokens: 1, output_tokens: 2 },
+    data: 'small',
+  });
 }
 
 function getLastEvent(): { payload: string } {
@@ -58,9 +62,16 @@ describe('MAX_EVENT_PAYLOAD_BYTES', () => {
 describe('insertEvent — payload cap', () => {
   it('stores large payload truncated with required fields', () => {
     const original = makeLargePayload('result');
-    expect(Buffer.byteLength(original, 'utf8')).toBeGreaterThan(MAX_EVENT_PAYLOAD_BYTES);
+    expect(Buffer.byteLength(original, 'utf8')).toBeGreaterThan(
+      MAX_EVENT_PAYLOAD_BYTES,
+    );
 
-    insertEvent({ session_id: SESSION_ID, event_type: 'system', payload: original, timestamp: 1 });
+    insertEvent({
+      session_id: SESSION_ID,
+      event_type: 'system',
+      payload: original,
+      timestamp: 1,
+    });
 
     const stored = JSON.parse(getLastEvent().payload);
     expect(stored.truncated).toBe(true);
@@ -72,7 +83,12 @@ describe('insertEvent — payload cap', () => {
 
   it('stored truncated payload is valid JSON with extractable $.type and $.usage', () => {
     const original = makeLargePayload('result');
-    insertEvent({ session_id: SESSION_ID, event_type: 'system', payload: original, timestamp: 1 });
+    insertEvent({
+      session_id: SESSION_ID,
+      event_type: 'system',
+      payload: original,
+      timestamp: 1,
+    });
 
     const row = db
       .prepare(
@@ -85,16 +101,31 @@ describe('insertEvent — payload cap', () => {
 
   it('stores small payload byte-identical', () => {
     const original = makeSmallPayload('system');
-    expect(Buffer.byteLength(original, 'utf8')).toBeLessThanOrEqual(MAX_EVENT_PAYLOAD_BYTES);
+    expect(Buffer.byteLength(original, 'utf8')).toBeLessThanOrEqual(
+      MAX_EVENT_PAYLOAD_BYTES,
+    );
 
-    insertEvent({ session_id: SESSION_ID, event_type: 'system', payload: original, timestamp: 1 });
+    insertEvent({
+      session_id: SESSION_ID,
+      event_type: 'system',
+      payload: original,
+      timestamp: 1,
+    });
 
     expect(getLastEvent().payload).toBe(original);
   });
 
   it('truncated payload omits usage when original has no $.usage', () => {
-    const noUsage = JSON.stringify({ type: 'ping', data: 'x'.repeat(MAX_EVENT_PAYLOAD_BYTES + 1) });
-    insertEvent({ session_id: SESSION_ID, event_type: 'system', payload: noUsage, timestamp: 1 });
+    const noUsage = JSON.stringify({
+      type: 'ping',
+      data: 'x'.repeat(MAX_EVENT_PAYLOAD_BYTES + 1),
+    });
+    insertEvent({
+      session_id: SESSION_ID,
+      event_type: 'system',
+      payload: noUsage,
+      timestamp: 1,
+    });
 
     const stored = JSON.parse(getLastEvent().payload);
     expect(stored.truncated).toBe(true);
@@ -106,7 +137,12 @@ describe('insertEvent — payload cap', () => {
 describe('insertEventOrIgnore — payload cap', () => {
   it('stores large payload truncated', () => {
     const original = makeLargePayload('system');
-    insertEventOrIgnore({ session_id: SESSION_ID, event_type: 'system', payload: original, timestamp: 2 });
+    insertEventOrIgnore({
+      session_id: SESSION_ID,
+      event_type: 'system',
+      payload: original,
+      timestamp: 2,
+    });
 
     const stored = JSON.parse(getLastEvent().payload);
     expect(stored.truncated).toBe(true);
@@ -115,7 +151,12 @@ describe('insertEventOrIgnore — payload cap', () => {
 
   it('stores small payload byte-identical', () => {
     const original = makeSmallPayload('system');
-    insertEventOrIgnore({ session_id: SESSION_ID, event_type: 'system', payload: original, timestamp: 2 });
+    insertEventOrIgnore({
+      session_id: SESSION_ID,
+      event_type: 'system',
+      payload: original,
+      timestamp: 2,
+    });
     expect(getLastEvent().payload).toBe(original);
   });
 });
@@ -123,7 +164,12 @@ describe('insertEventOrIgnore — payload cap', () => {
 describe('upsertSessionEvent — payload cap', () => {
   it('caps large payload on insert path', () => {
     const original = makeLargePayload('assistant');
-    upsertSessionEvent({ session_id: SESSION_ID, event_type: 'system', payload: original, timestamp: 3 });
+    upsertSessionEvent({
+      session_id: SESSION_ID,
+      event_type: 'system',
+      payload: original,
+      timestamp: 3,
+    });
 
     const stored = JSON.parse(getLastEvent().payload);
     expect(stored.truncated).toBe(true);
@@ -132,10 +178,23 @@ describe('upsertSessionEvent — payload cap', () => {
 
   it('caps large payload on update path (existingId provided)', () => {
     const small = makeSmallPayload('system');
-    const id = upsertSessionEvent({ session_id: SESSION_ID, event_type: 'system', payload: small, timestamp: 3 });
+    const id = upsertSessionEvent({
+      session_id: SESSION_ID,
+      event_type: 'system',
+      payload: small,
+      timestamp: 3,
+    });
 
     const original = makeLargePayload('assistant');
-    upsertSessionEvent({ session_id: SESSION_ID, event_type: 'system', payload: original, timestamp: 4 }, id);
+    upsertSessionEvent(
+      {
+        session_id: SESSION_ID,
+        event_type: 'system',
+        payload: original,
+        timestamp: 4,
+      },
+      id,
+    );
 
     const stored = JSON.parse(getLastEvent().payload);
     expect(stored.truncated).toBe(true);
@@ -144,16 +203,34 @@ describe('upsertSessionEvent — payload cap', () => {
 
   it('stores small payload byte-identical on insert path', () => {
     const original = makeSmallPayload('system');
-    upsertSessionEvent({ session_id: SESSION_ID, event_type: 'system', payload: original, timestamp: 3 });
+    upsertSessionEvent({
+      session_id: SESSION_ID,
+      event_type: 'system',
+      payload: original,
+      timestamp: 3,
+    });
     expect(getLastEvent().payload).toBe(original);
   });
 
   it('stores small payload byte-identical on update path', () => {
     const small = makeSmallPayload('system');
-    const id = upsertSessionEvent({ session_id: SESSION_ID, event_type: 'system', payload: small, timestamp: 3 });
+    const id = upsertSessionEvent({
+      session_id: SESSION_ID,
+      event_type: 'system',
+      payload: small,
+      timestamp: 3,
+    });
 
     const updated = makeSmallPayload('assistant');
-    upsertSessionEvent({ session_id: SESSION_ID, event_type: 'system', payload: updated, timestamp: 4 }, id);
+    upsertSessionEvent(
+      {
+        session_id: SESSION_ID,
+        event_type: 'system',
+        payload: updated,
+        timestamp: 4,
+      },
+      id,
+    );
     expect(getLastEvent().payload).toBe(updated);
   });
 });
