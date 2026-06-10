@@ -38,7 +38,11 @@ describe('router: send_message', () => {
 
     await handleMessage(
       ws,
-      JSON.stringify({ type: 'send_message', sessionId: SESSION_ID, message: MESSAGE }),
+      JSON.stringify({
+        type: 'send_message',
+        sessionId: SESSION_ID,
+        message: MESSAGE,
+      }),
       sessions,
     );
 
@@ -50,14 +54,24 @@ describe('router: send_message', () => {
     let resolved = false;
     const sessions = makeSessions({
       sendOrResume: vi.fn().mockImplementation(
-        () => new Promise<string>((res) => setTimeout(() => { resolved = true; res(SESSION_ID); }, 100)),
+        () =>
+          new Promise<string>((res) =>
+            setTimeout(() => {
+              resolved = true;
+              res(SESSION_ID);
+            }, 100),
+          ),
       ),
     });
     const ws = makeWs();
 
     await handleMessage(
       ws,
-      JSON.stringify({ type: 'send_message', sessionId: SESSION_ID, message: MESSAGE }),
+      JSON.stringify({
+        type: 'send_message',
+        sessionId: SESSION_ID,
+        message: MESSAGE,
+      }),
       sessions,
     );
 
@@ -75,7 +89,11 @@ describe('router: send_message', () => {
     await expect(
       handleMessage(
         ws,
-        JSON.stringify({ type: 'send_message', sessionId: SESSION_ID, message: MESSAGE }),
+        JSON.stringify({
+          type: 'send_message',
+          sessionId: SESSION_ID,
+          message: MESSAGE,
+        }),
         sessions,
       ),
     ).resolves.not.toThrow();
@@ -90,16 +108,18 @@ describe('router: send_message', () => {
 
     await handleMessage(
       ws,
-      JSON.stringify({ type: 'send_message', sessionId: SESSION_ID, message: MESSAGE }),
+      JSON.stringify({
+        type: 'send_message',
+        sessionId: SESSION_ID,
+        message: MESSAGE,
+      }),
       sessions,
     );
 
     // Wait a tick for the catch handler to run
     await new Promise((r) => process.nextTick(r));
 
-    expect(errSpy).toHaveBeenCalledWith(
-      expect.stringContaining(SESSION_ID),
-    );
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining(SESSION_ID));
     errSpy.mockRestore();
   });
 });

@@ -361,7 +361,12 @@ describe('sendOrResume() terminal session: session_action_failed broadcast', () 
     await sm.sendOrResume(SESSION_ID, 'fix this');
 
     const failedMsg = msgs.find((m) => m.type === 'session_action_failed') as
-      | { type: 'session_action_failed'; sessionId: string; action: string; reason: string }
+      | {
+          type: 'session_action_failed';
+          sessionId: string;
+          action: string;
+          reason: string;
+        }
       | undefined;
     expect(failedMsg).toBeDefined();
     expect(failedMsg?.sessionId).toBe(SESSION_ID);
