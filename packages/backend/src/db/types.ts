@@ -33,6 +33,8 @@ export interface Session {
   task_name: string | null;
   metadata: string | null; // JSON blob for small session metadata (e.g. aiTitle)
   review_result: string | null; // JSON — verdict stored for local-only review sessions
+  pause_reason: string | null;
+  last_error_detail: string | null;
 }
 
 export type NewSession = Omit<
@@ -53,6 +55,8 @@ export type NewSession = Omit<
   | 'task_name'
   | 'metadata'
   | 'review_result'
+  | 'pause_reason'
+  | 'last_error_detail'
 > & {
   ended_at?: number | null;
   pr_url?: string | null;

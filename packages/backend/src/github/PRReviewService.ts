@@ -8,6 +8,7 @@ import {
   setLastReviewedSha,
   setLocalBranchReviewResult,
   getLocalBranchById,
+  getSession,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import type { GitHubClient } from './GitHubClient';
@@ -68,6 +69,8 @@ export interface PRReviewResult {
   reviewedAt: string;
   /** Manual-verification items extracted from the task spec — for human review, not AI evaluation. */
   manualItemsForHuman?: string[];
+  /** Full error detail when the session errored before producing output. */
+  errorDetail?: string;
 }
 
 export type WorkItem =
@@ -734,6 +737,20 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
 
         if (msg.type === 'session_ended') {
           cleanup();
+          // If the session ended in error before producing output, surface the real cause.
+          const sessionRow = getSession(sessionId);
+          if (sessionRow?.status === 'error' && sessionRow.last_error_detail) {
+            resolve({
+              prNumber,
+              repo,
+              verdict: 'incomplete',
+              dimensions: [],
+              summary: `Review session errored before producing output: ${sessionRow.pause_reason ?? 'launch_failed'}`,
+              errorDetail: sessionRow.last_error_detail,
+              reviewedAt: new Date().toISOString(),
+            });
+            return;
+          }
           // Fallback: parse from stored events
           const events = getEventsBySession(sessionId);
           const result = this.parseReviewResult(events, prNumber, repo);

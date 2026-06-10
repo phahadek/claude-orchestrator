@@ -12,6 +12,7 @@ export interface PRReviewResult {
   verdict: 'approved' | 'needs_changes' | 'incomplete' | 'error';
   dimensions?: PRReviewDimension[];
   summary: string;
+  errorDetail?: string;
 }
 
 // ── PR work item (GitHub pull request) ────────────────────────────
@@ -187,6 +188,11 @@ function LocalBranchCard({
                   <div className={styles.reviewSummary}>
                     {item.reviewResult.summary}
                   </div>
+                  {item.reviewResult.errorDetail && (
+                    <pre className={styles.reviewErrorDetail}>
+                      {item.reviewResult.errorDetail}
+                    </pre>
+                  )}
                 </>
               )}
             </div>
@@ -492,6 +498,11 @@ function PRWorkItemCard({
                   <div className={styles.reviewSummary}>
                     {pr.reviewResult.summary}
                   </div>
+                  {pr.reviewResult.errorDetail && (
+                    <pre className={styles.reviewErrorDetail}>
+                      {pr.reviewResult.errorDetail}
+                    </pre>
+                  )}
                 </>
               )}
             </div>
