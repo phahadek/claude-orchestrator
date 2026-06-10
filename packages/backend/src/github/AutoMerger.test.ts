@@ -1196,6 +1196,51 @@ describe('AutoMerger.clearStalePauses()', () => {
     expect(setPauseReason).toHaveBeenCalledWith(111, 'owner/repo', null);
     expect(watcher.handleMerged).toHaveBeenCalled();
   });
+
+  it('re-failed retry re-pauses — second clearStalePauses call is a no-op while pause is fresh', async () => {
+    vi.mocked(getOrphanMergeablePRs).mockReturnValue([]);
+    // First call: stale pause exists; second call: fresh pause (not stale yet)
+    vi.mocked(getStaleAutoMergeFailedPRs)
+      .mockReturnValueOnce([{ pr_number: 111, repo: 'owner/repo' }])
+      .mockReturnValue([]);
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRow({ pr_number: 111, pause_reason: null }),
+    );
+
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('blocked'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const watcher = makeMockWatcher();
+
+    const merger = new AutoMerger(github, watcher, () => {});
+
+    // First clearStalePauses: clears, attempt starts, fails → re-pauses
+    merger.clearStalePauses();
+    await new Promise((r) => setTimeout(r, 100));
+
+    const setPauseReasonCalls = vi.mocked(setPauseReason).mock.calls;
+    // Must have cleared (null) and then re-paused (auto_merge_failed)
+    expect(setPauseReasonCalls).toContainEqual([111, 'owner/repo', null]);
+    expect(setPauseReasonCalls).toContainEqual([
+      111,
+      'owner/repo',
+      'auto_merge_failed',
+    ]);
+
+    vi.mocked(setPauseReason).mockClear();
+
+    // Second clearStalePauses: getStaleAutoMergeFailedPRs returns [] — no action
+    merger.clearStalePauses();
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(setPauseReason).not.toHaveBeenCalled();
+  });
 });
 
 // ── attemptMerge() — 405 "still a draft" retry ───────────────────────────────

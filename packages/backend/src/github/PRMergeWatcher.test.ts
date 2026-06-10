@@ -146,6 +146,7 @@ function makeMockNotion(): NotionClient {
 function makeMockAutoMerger(): AutoMerger {
   return {
     attempt: vi.fn(),
+    clearStalePauses: vi.fn(),
   } as unknown as AutoMerger;
 }
 
@@ -3916,5 +3917,78 @@ describe('PRMergeWatcher conflict nudge', () => {
       'owner/repo',
       'sha-v2',
     );
+  });
+});
+
+// ── clearStalePauses wiring ───────────────────────────────────────────────────
+
+describe('PRMergeWatcher.poll() — clearStalePauses wiring', () => {
+  it('calls clearStalePauses on each poll cycle when autoMerger is set', async () => {
+    vi.mocked(getAllOpenPRs).mockReturnValue([]);
+    const github = makeMockGitHub();
+    const autoMerger = makeMockAutoMerger();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    watcher.setAutoMerger(autoMerger);
+
+    await watcher.poll();
+    expect(vi.mocked(autoMerger.clearStalePauses)).toHaveBeenCalledTimes(1);
+
+    await watcher.poll();
+    expect(vi.mocked(autoMerger.clearStalePauses)).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not throw when autoMerger is not set', async () => {
+    vi.mocked(getAllOpenPRs).mockReturnValue([]);
+    const github = makeMockGitHub();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    await expect(watcher.poll()).resolves.toBeUndefined();
+  });
+
+  it('calls clearStalePauses before processing open PRs each poll', async () => {
+    const callOrder: string[] = [];
+    vi.mocked(getAllOpenPRs).mockReturnValue([makePRRow()]);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/tmp',
+    } as ReturnType<typeof getProjectByGithubRepo>);
+
+    const github = makeMockGitHub();
+    vi.mocked(github.getPRState as ReturnType<typeof vi.fn>).mockImplementation(
+      async () => {
+        callOrder.push('getPRState');
+        return { state: 'open', headSha: null };
+      },
+    );
+
+    const autoMerger = {
+      attempt: vi.fn(),
+      clearStalePauses: vi.fn().mockImplementation(() => {
+        callOrder.push('clearStalePauses');
+      }),
+    } as unknown as AutoMerger;
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    watcher.setAutoMerger(autoMerger);
+
+    await watcher.poll();
+
+    expect(callOrder[0]).toBe('clearStalePauses');
   });
 });
