@@ -3635,3 +3635,100 @@ describe('ReviewOrchestrator — gate-failure consumes pending_push', () => {
     expect(pushDetectedEvents).toHaveLength(0);
   });
 });
+
+// ── enqueueReview and isReviewInFlight ────────────────────────────────────────
+
+describe('ReviewOrchestrator — enqueueReview and isReviewInFlight', () => {
+  it('enqueueReview skips when orchestrator is disabled', async () => {
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, false);
+
+    orch.enqueueReview({ ...baseJob });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it('enqueueReview skips when taskId is empty', async () => {
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    orch.enqueueReview({ ...baseJob, taskId: '' });
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(vi.mocked(rs.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it('enqueueReview queues and drains → reviewPR called', async () => {
+    // Reset mocks that prior tests in the full suite may have left in a non-default state
+    vi.mocked(loadAutofixCommands).mockReturnValue([]);
+    vi.mocked(runAutofix).mockResolvedValue({ success: true, summary: 'no diff' });
+    vi.mocked(runVerifyAsGate).mockResolvedValue({ passed: true });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    orch.enqueueReview({ ...baseJob });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(rs.reviewPR)).toHaveBeenCalled();
+  });
+
+  it('isReviewInFlight returns false when no review is running', () => {
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+
+    expect(orch.isReviewInFlight(1, 'owner/repo')).toBe(false);
+  });
+
+  it('isReviewInFlight returns true while review is executing', async () => {
+    const sm = makeMockSessionManager();
+    let holdReview!: () => void;
+    const reviewBlocked = new Promise<never>((_, reject) => {
+      holdReview = () => reject(new Error('done'));
+    });
+    const rs = {
+      reviewPR: vi.fn().mockImplementation(() => reviewBlocked),
+    } as unknown as PRReviewService;
+    vi.mocked(getPRByNumber).mockReturnValue(basePRRow as any);
+
+    const orch = new ReviewOrchestrator(rs, sm as any, true);
+    sm.emit('pr_opened', { ...baseJob, prNumber: 1 });
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(orch.isReviewInFlight(1, 'owner/repo')).toBe(true);
+    holdReview();
+  });
+
+  it('during-review pending_push consumption (consumePendingPushIfSet) is unchanged after enqueueReview added', async () => {
+    // Regression: adding enqueueReview must not disrupt the existing
+    // ReviewOrchestrator.ts:650-653 path that re-emits push_detected
+    // when a push arrives while a review is running.
+    const sm = makeMockSessionManager();
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      pending_push: 1,
+      session_id: 'coding-session-id',
+    } as any);
+
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    const pushEvents: object[] = [];
+    sm.on('push_detected', (e: object) => pushEvents.push(e));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(pushEvents).toHaveLength(1);
+    expect(vi.mocked(setPendingPush)).toHaveBeenCalledWith(1, 'owner/repo', 0);
+  });
+});
