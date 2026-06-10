@@ -2414,9 +2414,9 @@ export function bumpTaskNoOpAttempts(taskId: string): void {
 
 export function getTaskCrashCount(taskId: string): number {
   const row = db
-    .prepare<{ task_id: string }>(
-      `SELECT consecutive_crashes FROM task_crash_counts WHERE task_id = @task_id`,
-    )
+    .prepare<{
+      task_id: string;
+    }>(`SELECT consecutive_crashes FROM task_crash_counts WHERE task_id = @task_id`)
     .get({ task_id: taskId }) as { consecutive_crashes: number } | undefined;
   return row?.consecutive_crashes ?? 0;
 }
@@ -2435,9 +2435,7 @@ export function incrementTaskCrashCount(taskId: string): number {
 }
 
 export function resetTaskCrashCount(taskId: string): void {
-  db.prepare(
-    `DELETE FROM task_crash_counts WHERE task_id = ?`,
-  ).run(taskId);
+  db.prepare(`DELETE FROM task_crash_counts WHERE task_id = ?`).run(taskId);
 }
 
 // ─── session_pause_intervals ────────────────────────────────────────────────

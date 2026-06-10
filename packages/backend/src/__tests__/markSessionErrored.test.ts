@@ -504,7 +504,9 @@ describe('SessionManager.markSessionErrored() — crash budget counter', () => {
     vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
-    expect(queries.incrementTaskCrashCount).toHaveBeenCalledWith('notion-task-id');
+    expect(queries.incrementTaskCrashCount).toHaveBeenCalledWith(
+      'notion-task-id',
+    );
   });
 
   it('does NOT increment crash counter for non-BLOCKED_REASONS causes', () => {
@@ -525,7 +527,11 @@ describe('SessionManager.markSessionErrored() — crash budget counter', () => {
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
     await new Promise((r) => setTimeout(r, 0));
-    expect(mockUpdate).toHaveBeenCalledWith('notion-task-id', '🗂️ Ready', expect.anything());
+    expect(mockUpdate).toHaveBeenCalledWith(
+      'notion-task-id',
+      '🗂️ Ready',
+      expect.anything(),
+    );
   });
 
   it('second consecutive runner_non_zero crash → 🚫 Blocked (counter = 2)', async () => {
@@ -534,7 +540,11 @@ describe('SessionManager.markSessionErrored() — crash budget counter', () => {
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'error', 'runner_non_zero');
     await new Promise((r) => setTimeout(r, 0));
-    expect(mockUpdate).toHaveBeenCalledWith('notion-task-id', '🚫 Blocked', expect.anything());
+    expect(mockUpdate).toHaveBeenCalledWith(
+      'notion-task-id',
+      '🚫 Blocked',
+      expect.anything(),
+    );
   });
 
   it('counter at 3+ still maps to 🚫 Blocked', async () => {
@@ -543,6 +553,10 @@ describe('SessionManager.markSessionErrored() — crash budget counter', () => {
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'error', 'sendOrResume_run_error');
     await new Promise((r) => setTimeout(r, 0));
-    expect(mockUpdate).toHaveBeenCalledWith('notion-task-id', '🚫 Blocked', expect.anything());
+    expect(mockUpdate).toHaveBeenCalledWith(
+      'notion-task-id',
+      '🚫 Blocked',
+      expect.anything(),
+    );
   });
 });
