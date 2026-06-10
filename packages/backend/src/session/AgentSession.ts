@@ -235,6 +235,8 @@ export class AgentSession extends EventEmitter {
   private prBodyMarkerPromise: Promise<void> | null = null;
   /** Continuation nudge to deliver via stdin on the first event of the escalated session. */
   private _pendingEscalationNudge: string | null = null;
+  /** Text that triggered an overflow on this resume; re-delivered to the escalated session. */
+  private _pendingOverflowText: string | null = null;
 
   /** The underlying I/O adapter (CLI subprocess or Agent SDK). */
   private runner: ISessionRunner;
@@ -1699,6 +1701,15 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
   }
 
   /**
+   * Register the feedback text that is being delivered via sendOrResume.
+   * If the session overflows and escalates, this text is re-delivered to the
+   * escalated session so it is never lost.
+   */
+  setPendingOverflowText(text: string): void {
+    this._pendingOverflowText = text;
+  }
+
+  /**
    * If a context overflow was detected this run, attempt to escalate to the large model.
    * Returns true (caller should `continue` the run loop) when escalation is initiated.
    * Returns false when no overflow was detected OR when overflow was detected but escalation
@@ -1742,8 +1753,11 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     this.model = null;
     this._escalationModel = largeModel;
     this._escalationDisableAutoCompact = false;
-    this._pendingEscalationNudge =
-      "You exceeded the previous model's context window and have been resumed on a 1M-context model. Continue the task from where you left off.";
+    const pendingText = this._pendingOverflowText;
+    this._pendingOverflowText = null; // consume — prevent double-delivery on re-escalation
+    this._pendingEscalationNudge = pendingText
+      ? `You exceeded the previous model's context window and have been resumed on a 1M-context model. The following message was pending delivery when the overflow occurred — please process it now:\n\n${pendingText}`
+      : "You exceeded the previous model's context window and have been resumed on a 1M-context model. Continue the task from where you left off.";
     this.broadcast({
       type: 'session_status',
       sessionId: this.sessionId,

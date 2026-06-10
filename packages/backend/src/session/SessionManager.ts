@@ -2009,6 +2009,11 @@ export class SessionManager extends EventEmitter {
       mcpConfigPath,
     );
 
+    // Register the pending text on the session so that if the resumed context
+    // overflows, the escalated spawn re-delivers the original message rather
+    // than dropping it. The session consumes this field in tryEscalateForOverflow().
+    session.setPendingOverflowText(text);
+
     // Register the first-event listener BEFORE wireSession starts run() to
     // avoid a race where the first message arrives before the listener is set.
     const firstEvent = new Promise<void>((resolve) => {

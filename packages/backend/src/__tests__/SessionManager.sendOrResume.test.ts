@@ -172,6 +172,7 @@ vi.mock('../config/corporateMode', () => ({
 
 import { execSync } from 'child_process';
 import { SessionManager } from '../session/SessionManager';
+import { AgentSession } from '../session/AgentSession';
 import * as queries from '../db/queries';
 
 const SESSION_ID = 'aaaabbbb-cccc-dddd-eeee-ffffffffffff';
@@ -544,5 +545,43 @@ describe('sendOrResume() integration: stale-registration reattach', () => {
       SESSION_ID,
       'running',
     );
+  });
+});
+
+// ── Overflow escalation: pending text registered on session ───────────────────
+
+describe('sendOrResume() overflow escalation: setPendingOverflowText', () => {
+  it('registers the feedback text on the session for re-delivery on overflow', async () => {
+    // Worktree setup succeeds; session is spawned and firstEvent resolves from the
+    // session_status broadcast emitted by AgentSession.run() before runner.run() is called.
+    vi.mocked(execSync).mockReturnValue('' as never);
+
+    const spy = vi.spyOn(AgentSession.prototype, 'setPendingOverflowText');
+
+    const sm = new SessionManager();
+    await sm.sendOrResume(SESSION_ID, 'review: please fix the type errors');
+
+    expect(spy).toHaveBeenCalledWith('review: please fix the type errors');
+
+    spy.mockRestore();
+  });
+
+  it('does not register pending text when worktree creation fails', async () => {
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if ((cmd as string).includes('worktree add')) {
+        throw makeWorktreeError('fatal: branch already exists');
+      }
+      return '' as never;
+    });
+
+    const spy = vi.spyOn(AgentSession.prototype, 'setPendingOverflowText');
+
+    const sm = new SessionManager();
+    await sm.sendOrResume(SESSION_ID, 'some feedback');
+
+    // Session was never created — spy should not have been called.
+    expect(spy).not.toHaveBeenCalled();
+
+    spy.mockRestore();
   });
 });
