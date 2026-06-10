@@ -206,20 +206,32 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
 }
 
-.transcriptHeader {
+/* Floating overlay pinned to top-right of the transcript area */
+.transcriptOverlay {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  z-index: 2;
   display: flex;
+  gap: 4px;
   align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-  padding: 4px 12px;
-  border-bottom: 1px solid var(--border);
+}
+
+/* Review-mode outer wrapper: natural height (no flex:1 stretch), overlays toggle */
+.reviewTranscriptOuter {
+  position: relative;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 32px;
 }
 
 .copyButton {
-  background: transparent;
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text-faint);
@@ -242,7 +254,7 @@
 }
 
 .goToEndButton {
-  background: transparent;
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text-faint);
@@ -258,6 +270,9 @@
   color: var(--text-primary);
   border-color: var(--text-faint);
 }
+
+/* keep .transcriptHeader classname in CSS so existing snapshots don't break,
+   but it is no longer used in the component */
 
 .transcript {
   flex: 1;

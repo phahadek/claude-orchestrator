@@ -75,8 +75,8 @@ export function SessionPanel({
         <>
           <ReviewDetailView session={session} />
 
-          <div className={styles.transcriptSection}>
-            <div className={styles.transcriptHeader}>
+          <div className={styles.reviewTranscriptOuter}>
+            <div className={styles.transcriptOverlay}>
               <button
                 className={styles.copyButton}
                 onClick={() => setShowReviewTranscript((v) => !v)}

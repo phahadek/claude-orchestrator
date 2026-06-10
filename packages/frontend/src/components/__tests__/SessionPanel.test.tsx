@@ -194,6 +194,29 @@ describe('SessionPanel — review session', () => {
     );
     expect(screen.getByText('▶ Show session transcript')).toBeTruthy();
   });
+
+  it('review transcript toggle renders as a button (no transcriptHeader wrapper)', () => {
+    render(
+      <SessionPanel
+        session={makeSession({ sessionType: 'review', status: 'done' })}
+        {...defaultProps}
+      />,
+    );
+    const btn = screen.getByText('▶ Show session transcript');
+    expect(btn.tagName).toBe('BUTTON');
+  });
+});
+
+describe('SessionPanel — transcript overlay', () => {
+  it('code session transcript has Copy button present in DOM', () => {
+    render(
+      <SessionPanel
+        session={makeSession({ events: [{ eventType: 'text', content: 'hello', timestamp: 1 }] })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /copy/i })).toBeTruthy();
+  });
 });
 
 describe('SessionPanel — showTaskName prop', () => {
