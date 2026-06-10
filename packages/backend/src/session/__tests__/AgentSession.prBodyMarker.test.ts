@@ -499,7 +499,8 @@ describe('<pr-body> marker — structured logging', () => {
       .filter(
         (args) =>
           typeof args[1] === 'string' &&
-          (args[1].startsWith('PR creation') || args[1].startsWith('<pr-body>')),
+          (args[1].startsWith('PR creation') ||
+            args[1].startsWith('<pr-body>')),
       )
       .map((args) => args.slice(1).join(' '));
   }
@@ -568,8 +569,7 @@ describe('<pr-body> marker — structured logging', () => {
     expect(
       msgs.some(
         (m) =>
-          m.startsWith('PR creation failed: duplicate PR') &&
-          m.includes('#7'),
+          m.startsWith('PR creation failed: duplicate PR') && m.includes('#7'),
       ),
     ).toBe(true);
   });
@@ -650,9 +650,7 @@ describe('<pr-body> marker — structured logging', () => {
     const ghClient = makeGithubClient({
       createPR: vi
         .fn()
-        .mockRejectedValue(
-          new Error('GitHub API error 403: Forbidden'),
-        ),
+        .mockRejectedValue(new Error('GitHub API error 403: Forbidden')),
     });
     const session = makeSession(ghClient);
     emitAssistantWithMarker(session, VALID_BODY, 'msg_403');
