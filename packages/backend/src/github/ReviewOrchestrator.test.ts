@@ -23,6 +23,7 @@ vi.mock('../db/queries.js', () => ({
   hasTestResultForSha: vi.fn().mockReturnValue(false),
   upsertTestResult: vi.fn(),
   setPreReviewStage: vi.fn(),
+  setLastReviewedSha: vi.fn(),
 }));
 
 vi.mock('../session/autofix-runner.js', () => ({
@@ -105,6 +106,8 @@ import {
   consumeAutofixSha as dbConsumeAutofixSha,
   getAllPendingReviewSyncs,
   setPreReviewStage,
+  setPendingPush,
+  setLastReviewedSha,
 } from '../db/queries';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
@@ -3440,5 +3443,195 @@ describe('ReviewOrchestrator — pipeline stage events and persistence', () => {
       'owner/repo',
       'blocked_verify',
     );
+  });
+});
+
+// ── Gate-failure: pending_push consumption and last_reviewed_sha ──────────────
+
+describe('ReviewOrchestrator — gate-failure sets last_reviewed_sha', () => {
+  it('sets last_reviewed_sha to head_sha when autofix gate fails', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      head_sha: 'sha-gate-autofix',
+      last_reviewed_sha: null,
+      pending_push: 0,
+      session_id: 'coding-session-id',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: false,
+      summary: 'lint error',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setLastReviewedSha)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'sha-gate-autofix',
+    );
+  });
+
+  it('sets last_reviewed_sha to head_sha when verify gate fails', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      head_sha: 'sha-gate-verify',
+      last_reviewed_sha: null,
+      pending_push: 0,
+      session_id: 'coding-session-id',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({
+      passed: false,
+      failedCommand: 'npm run build',
+      truncatedOutput: 'build error',
+    });
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      verify: ['npm run build'],
+      autofix: [],
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+      test: [],
+      test_timeout_sec: 60,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setLastReviewedSha)).toHaveBeenCalledWith(
+      1,
+      'owner/repo',
+      'sha-gate-verify',
+    );
+  });
+});
+
+describe('ReviewOrchestrator — gate-failure consumes pending_push', () => {
+  it('consumes pending_push=1 and emits push_detected when autofix gate fails', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      head_sha: 'sha-new',
+      last_reviewed_sha: null,
+      pending_push: 1,
+      session_id: 'coding-session-id',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: false,
+      summary: 'lint error',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    const pushDetectedEvents: object[] = [];
+    sm.on('push_detected', (e: object) => pushDetectedEvents.push(e));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setPendingPush)).toHaveBeenCalledWith(1, 'owner/repo', 0);
+    expect(pushDetectedEvents).toHaveLength(1);
+    expect(pushDetectedEvents[0]).toMatchObject({
+      sessionId: 'coding-session-id',
+    });
+  });
+
+  it('consumes pending_push=1 and emits push_detected when verify gate fails', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      head_sha: 'sha-new',
+      last_reviewed_sha: null,
+      pending_push: 1,
+      session_id: 'coding-session-id',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(runVerifyAsGate).mockResolvedValue({
+      passed: false,
+      failedCommand: 'npm test',
+      truncatedOutput: 'test error',
+    });
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      verify: ['npm test'],
+      autofix: [],
+      ci_check_name: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+      test: [],
+      test_timeout_sec: 60,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    const pushDetectedEvents: object[] = [];
+    sm.on('push_detected', (e: object) => pushDetectedEvents.push(e));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(vi.mocked(setPendingPush)).toHaveBeenCalledWith(1, 'owner/repo', 0);
+    expect(pushDetectedEvents).toHaveLength(1);
+    expect(pushDetectedEvents[0]).toMatchObject({
+      sessionId: 'coding-session-id',
+    });
+  });
+
+  it('does not emit push_detected when pending_push=0 after autofix gate fails', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      head_sha: 'sha-new',
+      last_reviewed_sha: null,
+      pending_push: 0,
+      session_id: 'coding-session-id',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/fake/worktree',
+    } as any);
+    vi.mocked(loadAutofixCommands).mockReturnValue(['npm run lint']);
+    vi.mocked(runAutofix).mockResolvedValue({
+      success: false,
+      summary: 'lint error',
+    });
+
+    const sm = makeMockSessionManager();
+    const rs = makeMockReviewService();
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    const pushDetectedEvents: object[] = [];
+    sm.on('push_detected', (e: object) => pushDetectedEvents.push(e));
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(pushDetectedEvents).toHaveLength(0);
   });
 });

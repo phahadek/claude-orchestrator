@@ -20,6 +20,7 @@ import {
   hasTestResultForSha,
   upsertTestResult,
   setPreReviewStage,
+  setLastReviewedSha,
 } from '../db/queries';
 import { syncToOrigin } from './PRFileReverter';
 import type {
@@ -644,6 +645,19 @@ export class ReviewOrchestrator {
     }
   }
 
+  private consumePendingPushIfSet(prNumber: number, repo: string): void {
+    const row = getPRByNumber(prNumber, repo);
+    if (row?.pending_push && row.session_id) {
+      setPendingPush(prNumber, repo, 0);
+      console.log(
+        `[ReviewOrchestrator] pending_push detected for PR #${prNumber} — triggering re-review`,
+      );
+      this.sessionManager.emit('push_detected', {
+        sessionId: row.session_id,
+      });
+    }
+  }
+
   private async routeGateFailureToSession(
     job: ReviewJob,
     kind: 'verify' | 'autofix',
@@ -664,6 +678,9 @@ export class ReviewOrchestrator {
         dimensions: [],
       }),
     );
+    // Set last_reviewed_sha so the next push is identified as new code and
+    // shouldAutoReview returns true instead of seeing null === null.
+    setLastReviewedSha(job.prNumber, job.repo, prRow?.head_sha ?? null);
 
     this.sessionManager.emit('message', {
       type: 'pr_review_blocked_by_gate',
@@ -754,6 +771,7 @@ export class ReviewOrchestrator {
       await this.routeGateFailureToSession(job, 'autofix', {
         summary: autofixResult.summary,
       });
+      this.consumePendingPushIfSet(job.prNumber, job.repo);
       return;
     }
     // ─────────────────────────────────────────────────────────────────────────
@@ -787,6 +805,7 @@ export class ReviewOrchestrator {
               ? `verify failed: ${verifyResult.failedCommand}`
               : 'verify failed',
           });
+          this.consumePendingPushIfSet(job.prNumber, job.repo);
           return;
         }
         this.sessionManager.emit('message', {
@@ -966,19 +985,6 @@ export class ReviewOrchestrator {
       }
     }
 
-    // After the initial review, check if a push arrived during the review window.
-    // If so, clear the flag and trigger re-review via push_detected so the
-    // standard re-review path (server.ts push_detected handler) handles it,
-    // now that review_session_id is populated.
-    const postReviewRow = getPRByNumber(job.prNumber, job.repo);
-    if (postReviewRow?.pending_push && postReviewRow.session_id) {
-      setPendingPush(job.prNumber, job.repo, 0);
-      console.log(
-        `[ReviewOrchestrator] pending_push detected for PR #${job.prNumber} — triggering re-review`,
-      );
-      this.sessionManager.emit('push_detected', {
-        sessionId: postReviewRow.session_id,
-      });
-    }
+    this.consumePendingPushIfSet(job.prNumber, job.repo);
   }
 }
