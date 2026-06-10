@@ -45,7 +45,8 @@ describe('deriveBranchSlug', () => {
   });
 
   it('is deterministic — same input always produces same output', () => {
-    const title = 'Some Very Long Task Title That Exceeds The Branch Slug Length Limit By Quite A Bit More Words Here';
+    const title =
+      'Some Very Long Task Title That Exceeds The Branch Slug Length Limit By Quite A Bit More Words Here';
     const branch1 = deriveBranchSlug(title);
     const branch2 = deriveBranchSlug(title);
     expect(branch1).toBe(branch2);

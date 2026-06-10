@@ -30,7 +30,10 @@ const HASH_SUFFIX_LEN = 8;
  * When the slug exceeds the cap, a deterministic 8-char SHA1 suffix is appended
  * so retries for the same task always reproduce the same branch name.
  */
-export function deriveBranchSlug(taskTitle: string, prefix = 'feature'): string {
+export function deriveBranchSlug(
+  taskTitle: string,
+  prefix = 'feature',
+): string {
   const fullSlug = slugify(taskTitle);
   if (fullSlug.length <= MAX_BRANCH_SLUG_LEN) {
     return `${prefix}/${fullSlug}`;
