@@ -76,9 +76,11 @@ export async function runBootSequence(deps: BootDeps): Promise<void> {
 
   jsonlReader.backfillTokens();
 
-  void sessionEventsPruner.runAtBoot().catch((err: unknown) =>
-    console.warn('[server] SessionEventsPruner boot run failed:', err),
-  );
+  void sessionEventsPruner
+    .runAtBoot()
+    .catch((err: unknown) =>
+      console.warn('[server] SessionEventsPruner boot run failed:', err),
+    );
   sessionEventsPruner.start();
 
   try {

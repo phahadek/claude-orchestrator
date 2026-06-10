@@ -14,7 +14,10 @@ import {
   markSessionEventsPruned,
   getPruneEligibleSessions,
 } from '../db/queries.js';
-import { SessionEventsPruner, buildPruneStub } from '../orchestration/SessionEventsPruner.js';
+import {
+  SessionEventsPruner,
+  buildPruneStub,
+} from '../orchestration/SessionEventsPruner.js';
 
 const NOW = 1_000_000_000_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -72,7 +75,11 @@ function makePruner(opts: { retentionDays?: number } = {}) {
 describe('buildPruneStub', () => {
   it('preserves $.type and $.usage', () => {
     const stub = buildPruneStub(
-      JSON.stringify({ type: 'result', usage: { input_tokens: 10, output_tokens: 5 }, extra: 'drop' }),
+      JSON.stringify({
+        type: 'result',
+        usage: { input_tokens: 10, output_tokens: 5 },
+        extra: 'drop',
+      }),
     );
     const parsed = JSON.parse(stub);
     expect(parsed.truncated).toBe(true);
@@ -82,7 +89,9 @@ describe('buildPruneStub', () => {
   });
 
   it('omits usage when not present', () => {
-    const stub = buildPruneStub(JSON.stringify({ type: 'system', data: 'big blob' }));
+    const stub = buildPruneStub(
+      JSON.stringify({ type: 'system', data: 'big blob' }),
+    );
     const parsed = JSON.parse(stub);
     expect(parsed.truncated).toBe(true);
     expect(parsed.type).toBe('system');
@@ -99,8 +108,14 @@ describe('SessionEventsPruner', () => {
   describe('eligibility', () => {
     it('prunes system events of archived sessions ended before retention cutoff', async () => {
       makeArchivedSession('prune-elig-1', { endedAt: NOW - 31 * DAY_MS });
-      addEvent('prune-elig-1', 'system', { type: 'system', big: 'data'.repeat(100) });
-      addEvent('prune-elig-1', 'system', { type: 'result', usage: { input_tokens: 5, output_tokens: 2 } });
+      addEvent('prune-elig-1', 'system', {
+        type: 'system',
+        big: 'data'.repeat(100),
+      });
+      addEvent('prune-elig-1', 'system', {
+        type: 'result',
+        usage: { input_tokens: 5, output_tokens: 2 },
+      });
 
       const pruner = makePruner();
       await pruner.pruneOnce();
@@ -129,7 +144,10 @@ describe('SessionEventsPruner', () => {
     });
 
     it('does not prune unarchived sessions', async () => {
-      makeArchivedSession('prune-unarch-1', { endedAt: NOW - 60 * DAY_MS, archived: 0 });
+      makeArchivedSession('prune-unarch-1', {
+        endedAt: NOW - 60 * DAY_MS,
+        archived: 0,
+      });
       addEvent('prune-unarch-1', 'system', { type: 'system', big: 'data' });
 
       const pruner = makePruner();
@@ -154,7 +172,10 @@ describe('SessionEventsPruner', () => {
   describe('text / user_message events untouched', () => {
     it('never prunes text or user_message events', async () => {
       makeArchivedSession('prune-text-1', { endedAt: NOW - 60 * DAY_MS });
-      addEvent('prune-text-1', 'text', { type: 'assistant', message: 'hello world' });
+      addEvent('prune-text-1', 'text', {
+        type: 'assistant',
+        message: 'hello world',
+      });
       addEvent('prune-text-1', 'user_message', { type: 'user', message: 'hi' });
       addEvent('prune-text-1', 'system', { type: 'system', data: 'removeme' });
 
@@ -179,13 +200,18 @@ describe('SessionEventsPruner', () => {
   describe('stub preserves json_extract paths', () => {
     it('stub preserves $.type for stuck-session query shape', async () => {
       makeArchivedSession('prune-type-1', { endedAt: NOW - 60 * DAY_MS });
-      addEvent('prune-type-1', 'system', { type: 'result', subtype: 'success' });
+      addEvent('prune-type-1', 'system', {
+        type: 'result',
+        subtype: 'success',
+      });
 
       const pruner = makePruner();
       await pruner.pruneOnce();
 
       const row = db
-        .prepare(`SELECT json_extract(payload, '$.type') as t FROM session_events WHERE session_id = ?`)
+        .prepare(
+          `SELECT json_extract(payload, '$.type') as t FROM session_events WHERE session_id = ?`,
+        )
         .get('prune-type-1') as { t: string };
       expect(row.t).toBe('result');
     });
@@ -201,15 +227,24 @@ describe('SessionEventsPruner', () => {
       await pruner.pruneOnce();
 
       const row = db
-        .prepare(`SELECT json_extract(payload, '$.usage') as u FROM session_events WHERE session_id = ?`)
+        .prepare(
+          `SELECT json_extract(payload, '$.usage') as u FROM session_events WHERE session_id = ?`,
+        )
         .get('prune-usage-1') as { u: string };
-      expect(JSON.parse(row.u)).toEqual({ input_tokens: 100, output_tokens: 50 });
+      expect(JSON.parse(row.u)).toEqual({
+        input_tokens: 100,
+        output_tokens: 50,
+      });
     });
   });
 
   describe('token backfill before pruning', () => {
     it('backfills zero-token sessions before pruning', async () => {
-      makeArchivedSession('prune-backfill-1', { endedAt: NOW - 60 * DAY_MS, inputTokens: 0, outputTokens: 0 });
+      makeArchivedSession('prune-backfill-1', {
+        endedAt: NOW - 60 * DAY_MS,
+        inputTokens: 0,
+        outputTokens: 0,
+      });
       addEvent('prune-backfill-1', 'system', {
         type: 'result',
         usage: { input_tokens: 42, output_tokens: 21 },
@@ -280,16 +315,17 @@ describe('SessionEventsPruner', () => {
       await pruner.pruneOnce();
 
       // Restore original payload to verify re-run doesn't touch it
-      db.prepare(`UPDATE session_events SET payload = ? WHERE session_id = ?`).run(
-        JSON.stringify({ type: 'system', original: true }),
-        'prune-skip-1',
-      );
+      db.prepare(
+        `UPDATE session_events SET payload = ? WHERE session_id = ?`,
+      ).run(JSON.stringify({ type: 'system', original: true }), 'prune-skip-1');
 
       await pruner.pruneOnce();
 
       // Session was already marked pruned; second run won't re-select it
       const eligible = getPruneEligibleSessions(NOW, 100);
-      expect(eligible.find((s) => s.session_id === 'prune-skip-1')).toBeUndefined();
+      expect(
+        eligible.find((s) => s.session_id === 'prune-skip-1'),
+      ).toBeUndefined();
     });
   });
 
@@ -297,7 +333,11 @@ describe('SessionEventsPruner', () => {
     it('prunes sessions with >500 system events across multiple transactions', async () => {
       makeArchivedSession('prune-batch-1', { endedAt: NOW - 60 * DAY_MS });
       for (let i = 0; i < 550; i++) {
-        addEvent('prune-batch-1', 'system', { type: 'system', index: i, data: 'x'.repeat(10) });
+        addEvent('prune-batch-1', 'system', {
+          type: 'system',
+          index: i,
+          data: 'x'.repeat(10),
+        });
       }
 
       const pruner = makePruner();
@@ -334,12 +374,13 @@ describe('SessionEventsPruner', () => {
   describe('auto_vacuum idempotency', () => {
     it('settings row prevents double-vacuum on second boot', () => {
       // Simulate the guard: if settings row exists, enablement is skipped.
-      db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`).run(
-        'auto_vacuum_incremental_done',
-        '1',
-      );
+      db.prepare(
+        `INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`,
+      ).run('auto_vacuum_incremental_done', '1');
       const row = db
-        .prepare(`SELECT value FROM settings WHERE key = 'auto_vacuum_incremental_done'`)
+        .prepare(
+          `SELECT value FROM settings WHERE key = 'auto_vacuum_incremental_done'`,
+        )
         .get() as { value: string } | undefined;
       expect(row?.value).toBe('1');
     });

@@ -272,16 +272,19 @@ try {
   if (currentMode === 2) return;
   try {
     const already = db
-      .prepare(`SELECT value FROM settings WHERE key = 'auto_vacuum_incremental_done'`)
+      .prepare(
+        `SELECT value FROM settings WHERE key = 'auto_vacuum_incremental_done'`,
+      )
       .get() as { value: string } | undefined;
     if (already) return;
-    console.log('[db] Enabling incremental auto_vacuum (one-time VACUUM — may take a moment)');
+    console.log(
+      '[db] Enabling incremental auto_vacuum (one-time VACUUM — may take a moment)',
+    );
     db.pragma('auto_vacuum = INCREMENTAL');
     db.exec('VACUUM');
-    db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`).run(
-      'auto_vacuum_incremental_done',
-      '1',
-    );
+    db.prepare(
+      `INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`,
+    ).run('auto_vacuum_incremental_done', '1');
     console.log('[db] incremental auto_vacuum enabled');
   } catch (err) {
     console.warn('[db] auto_vacuum enablement failed (non-fatal):', err);
