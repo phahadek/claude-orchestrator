@@ -261,6 +261,29 @@ copied with their `table_row` children intact.
 **Global location:** `~/.claude/scripts/notion-move-tasks.mjs` (symlink).
 **Source:** `scripts/notion-move-tasks.mjs` in this repo.
 
+## Harness-Level Task-Status Gate (PreToolUse hook)
+
+> Interactive sessions repeatedly violated the Task Writing Guidelines by
+> creating Notion tasks directly at `🗂️ Ready`. A Claude Code `PreToolUse`
+> hook now enforces the rule at the harness level — the session cannot
+> disable or bypass it.
+
+- **Hook config:** `~/.claude/settings.json` → `hooks.PreToolUse`, with
+  matchers for `mcp__claude_ai_Notion__notion-create-pages` and
+  `mcp__claude_ai_Notion__notion-update-page`.
+- **Script:** `~/.claude/scripts/check-task-status.mjs` (copy).
+  **Source:** `scripts/check-task-status.mjs` in this repo. Edit the repo
+  source and re-copy; never edit the global copy directly.
+- **Behavior (v1 — create-only enforcement):** blocks any `notion-create-pages`
+  call where a page's `Status` is set and ≠ `🔲 Backlog` (hook exits 2; stderr
+  is fed back to the session so it can self-correct and re-issue at Backlog).
+  `notion-update-page` calls are always allowed — promotion to Ready is
+  trusted to the grooming process + operator-correction loop. The update-page
+  matcher is pre-registered so update-side strictness can be added in the
+  script later without touching settings.
+- **Fail-open:** malformed/unparseable hook input exits 0, so non-task tool
+  calls are never blocked.
+
 ---
 
 ## Stack
