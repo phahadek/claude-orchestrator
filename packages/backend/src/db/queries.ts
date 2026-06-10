@@ -2410,6 +2410,36 @@ export function bumpTaskNoOpAttempts(taskId: string): void {
   ).run(taskId, now);
 }
 
+// ─── task_crash_counts ────────────────────────────────────────────────────────
+
+export function getTaskCrashCount(taskId: string): number {
+  const row = db
+    .prepare<{ task_id: string }>(
+      `SELECT consecutive_crashes FROM task_crash_counts WHERE task_id = @task_id`,
+    )
+    .get({ task_id: taskId }) as { consecutive_crashes: number } | undefined;
+  return row?.consecutive_crashes ?? 0;
+}
+
+/** Increment consecutive_crashes and return the new count. */
+export function incrementTaskCrashCount(taskId: string): number {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO task_crash_counts (task_id, consecutive_crashes, last_crash_at)
+     VALUES (?, 1, ?)
+     ON CONFLICT(task_id) DO UPDATE SET
+       consecutive_crashes = consecutive_crashes + 1,
+       last_crash_at = excluded.last_crash_at`,
+  ).run(taskId, now);
+  return getTaskCrashCount(taskId);
+}
+
+export function resetTaskCrashCount(taskId: string): void {
+  db.prepare(
+    `DELETE FROM task_crash_counts WHERE task_id = ?`,
+  ).run(taskId);
+}
+
 // ─── session_pause_intervals ────────────────────────────────────────────────
 
 export function insertPauseInterval(

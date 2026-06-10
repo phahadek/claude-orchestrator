@@ -27,6 +27,7 @@ import {
   insertPauseInterval,
   getSessionTags,
   setSessionTags,
+  resetTaskCrashCount,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -1367,6 +1368,8 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     this.prUrl = prUrl;
     this.prDetectedLive = true;
 
+    if (this.taskId) resetTaskCrashCount(this.taskId);
+
     let upsertSucceeded = true;
     if (this.sessionType === 'standard') {
       this.taskBackend()
@@ -1765,6 +1768,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     // Using idle (not done) prevents the post-hoc auditor from triggering review
     // on a stale SHA before the PR has been properly reviewed/merged.
     markSessionIdle(this.sessionId, endedAt, prUrl ?? null);
+    if (this.taskId) resetTaskCrashCount(this.taskId);
     recordEvent({
       event_type: 'handle_clean_exit_session_marked_idle',
       actor_type: 'system',

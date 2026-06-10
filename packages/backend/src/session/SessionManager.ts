@@ -51,6 +51,7 @@ import {
   getOtherRunningSessionsForTask,
   setSessionPauseReason,
   setSessionLastErrorDetail,
+  incrementTaskCrashCount,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
 import { eventKind } from './eventKind';
@@ -389,7 +390,8 @@ export class SessionManager extends EventEmitter {
    * - Emits session_ended WS broadcast.
    * - Records an audit_log event capturing the cause.
    * - For standard sessions with a task_id, updates the Notion task status:
-   *   runner_non_zero / run_error → 🔴 Blocked; everything else → 🗂️ Ready.
+   *   BLOCKED_REASONS causes use a crash budget: crash #1 → 🗂️ Ready (retryable),
+   *   crash #2+ consecutive → 🚫 Blocked (circuit breaker). All other causes → 🗂️ Ready.
    * - Notion failures are logged but never re-thrown (matches handleCleanExit pattern).
    */
   markSessionErrored(
@@ -431,11 +433,16 @@ export class SessionManager extends EventEmitter {
     // 7. Update Notion task status for standard sessions
     if (!row || row.session_type !== 'standard' || !row.task_id) return;
 
-    const notionStatus = BLOCKED_REASONS.has(reason)
-      ? '🔴 Blocked'
-      : '🗂️ Ready';
     const notionTaskId = row.task_id;
     const projectId = row.project_id ?? '';
+
+    let notionStatus: string;
+    if (BLOCKED_REASONS.has(reason)) {
+      const crashCount = incrementTaskCrashCount(notionTaskId);
+      notionStatus = crashCount >= 2 ? '🚫 Blocked' : '🗂️ Ready';
+    } else {
+      notionStatus = '🗂️ Ready';
+    }
 
     // Update Notion task status (fire-and-forget; failures logged, not thrown)
     getTaskBackend(projectId)
