@@ -993,7 +993,10 @@ function emitLiveDetectedPR(
           type: 'tool_use',
           id: toolUseId,
           name: 'Bash',
-          input: { command: 'gh pr create --title "feat: my-task" --body-file /tmp/body.md' },
+          input: {
+            command:
+              'gh pr create --title "feat: my-task" --body-file /tmp/body.md',
+          },
         },
       ],
     },
@@ -1011,12 +1014,19 @@ describe('live-detected PR — PR body validation', () => {
     vi.mocked(recordEvent).mockClear();
     vi.mocked(setPauseReason).mockClear();
     vi.mocked(getPRBySessionId).mockReturnValue(null);
-    vi.mocked(validatePRBody).mockReturnValue({ valid: true, missingSections: [] });
-    (runtimeSettings as { corporate_mode_enabled: boolean }).corporate_mode_enabled = false;
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: true,
+      missingSections: [],
+    });
+    (
+      runtimeSettings as { corporate_mode_enabled: boolean }
+    ).corporate_mode_enabled = false;
   });
 
   afterEach(() => {
-    (runtimeSettings as { corporate_mode_enabled: boolean }).corporate_mode_enabled = false;
+    (
+      runtimeSettings as { corporate_mode_enabled: boolean }
+    ).corporate_mode_enabled = false;
   });
 
   it('does NOT record pr_body_invalid_warning when fetched GitHub body is compliant (regression: PR #347)', async () => {
@@ -1046,11 +1056,13 @@ describe('live-detected PR — PR body validation', () => {
     await new Promise((r) => setImmediate(r));
     await new Promise((r) => setImmediate(r));
 
-    const bodyInvalidCalls = vi.mocked(recordEvent).mock.calls.filter(
-      (args) =>
-        args[0]?.event_type === 'pr_body_invalid' ||
-        args[0]?.event_type === 'pr_body_invalid_warning',
-    );
+    const bodyInvalidCalls = vi
+      .mocked(recordEvent)
+      .mock.calls.filter(
+        (args) =>
+          args[0]?.event_type === 'pr_body_invalid' ||
+          args[0]?.event_type === 'pr_body_invalid_warning',
+      );
     expect(bodyInvalidCalls).toHaveLength(0);
   });
 
@@ -1059,7 +1071,10 @@ describe('live-detected PR — PR body validation', () => {
     const ghClient = makeGithubClient({
       fetchPR: vi.fn().mockResolvedValue(makeFreshPR('incomplete body')),
     });
-    vi.mocked(validatePRBody).mockReturnValue({ valid: false, missingSections: missing });
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: false,
+      missingSections: missing,
+    });
 
     const session = makeSession(ghClient);
     emitLiveDetectedPR(session);
@@ -1070,14 +1085,21 @@ describe('live-detected PR — PR body validation', () => {
     expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'pr_body_invalid_warning',
-        payload: expect.objectContaining({ missing_sections: missing, pr_number: 42 }),
+        payload: expect.objectContaining({
+          missing_sections: missing,
+          pr_number: 42,
+        }),
       }),
     );
   });
 
   it('does NOT record a violation when GitHub fetch fails (fail-open)', async () => {
     const ghClient = makeGithubClient({
-      fetchPR: vi.fn().mockRejectedValue(new Error('GitHub API error 503: Service Unavailable')),
+      fetchPR: vi
+        .fn()
+        .mockRejectedValue(
+          new Error('GitHub API error 503: Service Unavailable'),
+        ),
     });
 
     const session = makeSession(ghClient);
@@ -1086,11 +1108,13 @@ describe('live-detected PR — PR body validation', () => {
     await new Promise((r) => setImmediate(r));
     await new Promise((r) => setImmediate(r));
 
-    const bodyInvalidCalls = vi.mocked(recordEvent).mock.calls.filter(
-      (args) =>
-        args[0]?.event_type === 'pr_body_invalid' ||
-        args[0]?.event_type === 'pr_body_invalid_warning',
-    );
+    const bodyInvalidCalls = vi
+      .mocked(recordEvent)
+      .mock.calls.filter(
+        (args) =>
+          args[0]?.event_type === 'pr_body_invalid' ||
+          args[0]?.event_type === 'pr_body_invalid_warning',
+      );
     expect(bodyInvalidCalls).toHaveLength(0);
   });
 
@@ -1099,8 +1123,13 @@ describe('live-detected PR — PR body validation', () => {
     const ghClient = makeGithubClient({
       fetchPR: vi.fn().mockResolvedValue(makeFreshPR('incomplete body')),
     });
-    vi.mocked(validatePRBody).mockReturnValue({ valid: false, missingSections: missing });
-    (runtimeSettings as { corporate_mode_enabled: boolean }).corporate_mode_enabled = true;
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: false,
+      missingSections: missing,
+    });
+    (
+      runtimeSettings as { corporate_mode_enabled: boolean }
+    ).corporate_mode_enabled = true;
 
     const session = makeSession(ghClient);
     emitLiveDetectedPR(session);
@@ -1108,15 +1137,24 @@ describe('live-detected PR — PR body validation', () => {
     await new Promise((r) => setImmediate(r));
     await new Promise((r) => setImmediate(r));
 
-    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(42, 'owner/repo', 'pr_body_invalid');
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'pr_body_invalid',
+    );
   });
 
   it('does NOT set pause reason from empty stream body in corporate mode (false-positive prevention)', async () => {
     const ghClient = makeGithubClient({
       fetchPR: vi.fn().mockResolvedValue(makeFreshPR(VALID_BODY)),
     });
-    vi.mocked(validatePRBody).mockReturnValue({ valid: true, missingSections: [] });
-    (runtimeSettings as { corporate_mode_enabled: boolean }).corporate_mode_enabled = true;
+    vi.mocked(validatePRBody).mockReturnValue({
+      valid: true,
+      missingSections: [],
+    });
+    (
+      runtimeSettings as { corporate_mode_enabled: boolean }
+    ).corporate_mode_enabled = true;
 
     const session = makeSession(ghClient);
     emitLiveDetectedPR(session);
