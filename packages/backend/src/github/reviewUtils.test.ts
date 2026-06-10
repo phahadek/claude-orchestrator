@@ -38,6 +38,14 @@ describe('shouldAutoReview()', () => {
     expect(shouldAutoReview(withCap(0, 'newsha', 'oldsha'), 1)).toBe(true);
     expect(shouldAutoReview(withCap(1, 'newsha', 'oldsha'), 1)).toBe(false);
   });
+
+  it('regression: NULL lastReviewedSha allows re-review when head is set (gate-failure path)', () => {
+    // After a gate failure, last_reviewed_sha is NULL because no review completed.
+    // A subsequent push sets head_sha to a new value. shouldAutoReview must return
+    // true so the re-review fires — it must not treat null === null as "no new code".
+    expect(shouldAutoReview(withCap(0, 'pushed-sha', null), 3)).toBe(true);
+    expect(shouldAutoReview(withCap(1, 'pushed-sha', null), 3)).toBe(true);
+  });
 });
 
 describe('formatCIFailureFeedback() — source: github (regression)', () => {
