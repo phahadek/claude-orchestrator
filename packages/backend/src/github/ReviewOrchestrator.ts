@@ -437,6 +437,25 @@ export class ReviewOrchestrator {
     return dbConsumeAutofixSha(prNumber, repo, sha);
   }
 
+  /** Returns true when a review is actively executing or queued-but-blocked for this PR. */
+  isReviewInFlight(prNumber: number, repo: string): boolean {
+    return this.inFlightPRKeys.has(`${prNumber}:${repo}`);
+  }
+
+  /**
+   * Enqueue a review for the given PR via the same path as pr_opened.
+   * Skips when the orchestrator is disabled or the job has no taskId.
+   */
+  enqueueReview(job: ReviewJob): void {
+    if (!this.enabled) return;
+    if (!job.taskId) return;
+    console.log(
+      `[ReviewOrchestrator] enqueueReview for PR #${job.prNumber} (${job.repo}) — queueing (queue depth before: ${this.queue.length})`,
+    );
+    this.queue.push(job);
+    void this.drain();
+  }
+
   /**
    * Run the configured test: commands for a PR's head SHA.
    * Deduplicates: if a result already exists for this SHA, skips execution.

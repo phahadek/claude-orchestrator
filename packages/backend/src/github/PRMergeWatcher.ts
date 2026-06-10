@@ -163,6 +163,7 @@ export class PRMergeWatcher {
       this.broadcast({ type: 'github_rate_limit_cleared' });
     }
     this.sweepStalePendingReReviews();
+    this.sweepPendingPushDeadLetters();
     const silentMerges = this.firstPollPending;
     const openPRs = getAllOpenPRs();
 
@@ -621,8 +622,52 @@ export class PRMergeWatcher {
     }
 
     if (!prRow.review_session_id) {
-      // Initial review hasn't started yet — queue the push so it triggers
-      // re-review after the initial review session is established.
+      // Gate-failure verdicts (autofix_failed / verify_failed) set review_session_id=NULL
+      // because the gate runs before any review session is spawned. A push arriving after
+      // a gate failure must trigger a fresh review directly — pending_push would be a
+      // dead letter since no initial review is coming to consume it.
+      const currentVerdict = parseVerdictFromResult(prRow.review_result);
+      const isAfterGateFailure =
+        currentVerdict === 'autofix_failed' ||
+        currentVerdict === 'verify_failed';
+
+      if (
+        isAfterGateFailure &&
+        this.reviewOrchestrator &&
+        !this.reviewOrchestrator.isReviewInFlight(prRow.pr_number, prRow.repo)
+      ) {
+        const maxIter = this.getMaxReviewIterations();
+        if (prRow.review_iteration >= maxIter) {
+          const message = `Review loop for PR #${prRow.pr_number} reached ${maxIter} iterations without approval. Manual intervention needed.`;
+          console.warn(`[PRMergeWatcher] ${message}`);
+          setPauseReason(prRow.pr_number, prRow.repo, 'max_reviews');
+          this.broadcast({
+            type: 'review_escalated',
+            prNumber: prRow.pr_number,
+            repo: prRow.repo,
+            message,
+          });
+          return;
+        }
+        const project = getProjectByGithubRepo(prRow.repo);
+        const session = prRow.session_id
+          ? getSession(prRow.session_id)
+          : undefined;
+        this.reviewOrchestrator.enqueueReview({
+          prNumber: prRow.pr_number,
+          repo: prRow.repo,
+          taskId: prRow.task_id ?? '',
+          taskUrl: session?.task_url ?? '',
+          contextUrl: project?.contextUrl ?? '',
+        });
+        console.log(
+          `[PRMergeWatcher] handlePushDetected for PR #${prRow.pr_number}: post-gate-failure push — enqueued review directly`,
+        );
+        return;
+      }
+
+      // Initial review hasn't started yet (or orchestrator unavailable) — queue
+      // the push so it triggers re-review after the initial review is established.
       setPendingPush(prRow.pr_number, prRow.repo, 1);
       console.log(
         `[PRMergeWatcher] handlePushDetected for PR #${prRow.pr_number} before review session established — queued as pending_push`,
@@ -904,6 +949,48 @@ export class PRMergeWatcher {
   }
 
   /**
+   * Heals dead-letter pending_push rows: PRs that have pending_push=1 but no
+   * review in flight (e.g. pushed after gate-failure, or after a backend restart
+   * interrupted the consumption path). Consumes the flag and enqueues a review.
+   */
+  private sweepPendingPushDeadLetters(): void {
+    if (!AUTO_REVIEW_ENABLED || !this.reviewOrchestrator) return;
+    const prs = getAllOpenPRs();
+    for (const pr of prs) {
+      if (!pr.pending_push) continue;
+      if (this.reviewOrchestrator.isReviewInFlight(pr.pr_number, pr.repo))
+        continue;
+      if (pr.session_id && this.pendingReReviews.has(pr.session_id)) continue;
+
+      const maxIter = this.getMaxReviewIterations();
+      const autoReviewOk = shouldAutoReview(
+        {
+          reviewIteration: pr.review_iteration,
+          headSha: pr.head_sha,
+          lastReviewedSha: pr.last_reviewed_sha,
+        },
+        maxIter,
+      );
+      if (!autoReviewOk) continue;
+
+      setPendingPush(pr.pr_number, pr.repo, 0);
+
+      const project = getProjectByGithubRepo(pr.repo);
+      const session = pr.session_id ? getSession(pr.session_id) : undefined;
+      this.reviewOrchestrator.enqueueReview({
+        prNumber: pr.pr_number,
+        repo: pr.repo,
+        taskId: pr.task_id ?? '',
+        taskUrl: session?.task_url ?? '',
+        contextUrl: project?.contextUrl ?? '',
+      });
+      console.log(
+        `[PRMergeWatcher] sweepPendingPushDeadLetters: consumed pending_push for PR #${pr.pr_number} — review enqueued`,
+      );
+    }
+  }
+
+  /**
    * @param options.silent When true, the SQLite state transition still happens
    *   (and sessions/Notion updates run) but the pr_merged broadcast is
    *   suppressed. Used by poll() on the first cycle after boot to avoid
@@ -987,6 +1074,17 @@ export class PRMergeWatcher {
         sha: sha ?? '',
       });
     }
+  }
+}
+
+function parseVerdictFromResult(
+  reviewResult: string | null,
+): string | undefined {
+  if (!reviewResult) return undefined;
+  try {
+    return (JSON.parse(reviewResult) as { verdict?: string }).verdict;
+  } catch {
+    return undefined;
   }
 }
 
