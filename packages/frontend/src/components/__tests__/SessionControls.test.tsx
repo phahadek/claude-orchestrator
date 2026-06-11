@@ -699,6 +699,34 @@ describe('SessionControls — embedded mode', () => {
   });
 });
 
+describe('SessionControls — disclosure toggle inline placement', () => {
+  it('disclosure toggle is a direct child of the badge-row flex container (not a separate block)', () => {
+    render(
+      <SessionControls
+        session={makeSession({ notionTaskUrl: 'https://notion.so/task' })}
+        {...defaultProps}
+      />,
+    );
+    const toggle = screen.getByLabelText('Show session details');
+    const notionLink = screen.getByText('Notion ↗').closest('a')!;
+    // Both elements share the same parent — they are sibling flex items in the badge row
+    expect(toggle.parentElement).toBe(notionLink.parentElement);
+  });
+
+  it('disclosure toggle is adjacent to the Notion link in DOM order', () => {
+    render(
+      <SessionControls
+        session={makeSession({ notionTaskUrl: 'https://notion.so/task' })}
+        {...defaultProps}
+      />,
+    );
+    const toggle = screen.getByLabelText('Show session details');
+    const notionLink = screen.getByText('Notion ↗').closest('a')!;
+    // Toggle should immediately follow the Notion link in DOM order
+    expect(notionLink.nextElementSibling).toBe(toggle);
+  });
+});
+
 describe('SessionControls — Close button', () => {
   it('renders close button when onClose is provided', () => {
     render(

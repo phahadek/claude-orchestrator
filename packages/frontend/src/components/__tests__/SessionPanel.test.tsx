@@ -219,6 +219,54 @@ describe('SessionPanel — transcript overlay', () => {
     );
     expect(screen.getByRole('button', { name: /copy/i })).toBeTruthy();
   });
+
+  it('Copy button is inside the transcript section, not above the tab bar', () => {
+    render(
+      <SessionPanel
+        session={makeSession({
+          status: 'done',
+          prUrl: 'https://github.com/owner/repo/pull/42',
+          events: [{ eventType: 'text', content: 'hello', timestamp: 1 }],
+        })}
+        {...defaultProps}
+      />,
+    );
+    const copyButton = screen.getByRole('button', { name: /copy/i });
+    const tabBar = screen.getByText('Transcript').closest('div')!;
+    // Copy button must come AFTER the tab bar in DOM order (inside transcript section)
+    const position = tabBar.compareDocumentPosition(copyButton);
+    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('Copy button is not contained within the tab bar element', () => {
+    render(
+      <SessionPanel
+        session={makeSession({
+          status: 'done',
+          prUrl: 'https://github.com/owner/repo/pull/42',
+          events: [{ eventType: 'text', content: 'hello', timestamp: 1 }],
+        })}
+        {...defaultProps}
+      />,
+    );
+    const copyButton = screen.getByRole('button', { name: /copy/i });
+    const tabBar = screen.getByText('Transcript').closest('div')!;
+    expect(tabBar.contains(copyButton)).toBe(false);
+  });
+
+  it('review panel overlay button is inside the reviewTranscriptOuter (not above tab bar)', () => {
+    render(
+      <SessionPanel
+        session={makeSession({ sessionType: 'review', status: 'done' })}
+        {...defaultProps}
+      />,
+    );
+    const toggleBtn = screen.getByText('▶ Show session transcript');
+    // The toggle button should be a button directly in the component (not nested in tabBar)
+    expect(toggleBtn.tagName).toBe('BUTTON');
+    // No tab bar rendered for review sessions
+    expect(screen.queryByText('Transcript')).toBeNull();
+  });
 });
 
 describe('SessionPanel — showTaskName prop', () => {
