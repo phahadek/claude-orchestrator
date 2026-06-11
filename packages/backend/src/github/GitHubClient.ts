@@ -805,6 +805,20 @@ export class GitHubClient {
     });
   }
 
+  /** Post a comment on a PR then close it. Used to abandon stale predecessor branches. */
+  async closePRWithComment(
+    repo: string,
+    prNumber: number,
+    comment: string,
+  ): Promise<void> {
+    await this.createIssueComment(repo, prNumber, comment);
+    await this.request(`/repos/${repo}/pulls/${prNumber}`, {
+      method: 'PATCH',
+      headers: { ...this.headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ state: 'closed' }),
+    });
+  }
+
   async deleteBranch(repo: string, branchName: string): Promise<void> {
     await this.request(`/repos/${repo}/git/refs/heads/${branchName}`, {
       method: 'DELETE',

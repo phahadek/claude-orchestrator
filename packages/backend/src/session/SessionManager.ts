@@ -53,6 +53,7 @@ import {
   setSessionLastErrorDetail,
   incrementTaskCrashCount,
   setTaskPauseReason,
+  getTerminalSessionsForTask,
 } from '../db/queries';
 import { recoverSession } from './sessionRecovery';
 import { eventKind } from './eventKind';
@@ -751,39 +752,121 @@ export class SessionManager extends EventEmitter {
         const isBranchAlreadyExists = /A branch named .* already exists/.test(
           stderr,
         );
+        const fullMsg =
+          `${e.message}${stderr ? `\nstderr: ${stderr}` : ''}`.trim();
 
-        if (isBranchAlreadyExists && getPRByNotionTaskId(sessionTaskId)) {
-          // Branch carries PR commits; prune stale worktree registration and reattach.
-          try {
-            execSync(`git worktree prune`, { cwd: projectDir });
-          } catch (pruneErr) {
-            console.warn(
-              `[SessionManager] completeStart: git worktree prune failed (continuing): ${pruneErr}`,
+        if (isBranchAlreadyExists) {
+          // Identify the branch owner: look for a terminal predecessor session of the same task.
+          const predecessors = getTerminalSessionsForTask(sessionTaskId);
+          const predecessor = predecessors[0] ?? null;
+
+          if (predecessor) {
+            // Owned by a terminal predecessor of the same task — abandon and retry fresh.
+            console.log(
+              `[SessionManager] completeStart: stale branch ${featureBranch} from terminal session ${predecessor.session_id.slice(0, 8)} — abandoning`,
             );
-          }
-          try {
-            await exec(
-              `git worktree add "${worktreePath}" "${featureBranch}"`,
-              { cwd: projectDir },
-            );
-          } catch (reattachErr) {
-            const re = reattachErr as {
-              stderr?: string | Buffer;
-              message: string;
-            };
-            const reattachStderr = re.stderr ? re.stderr.toString() : '';
-            const fullMsg =
-              `${re.message}${reattachStderr ? `\nstderr: ${reattachStderr}` : ''}`.trim();
-            console.error(
-              `[SessionManager] failed to reattach worktree for ${sessionId}: ${fullMsg}`,
-            );
-            throw new WorktreeSetupError(fullMsg, {
-              isBranchAlreadyExists: true,
+
+            // Close the predecessor's open PR with a superseded comment (best-effort).
+            let prNumber: number | null = null;
+            let prRepo: string | null = null;
+            const prRow = getPRBySessionId(predecessor.session_id);
+            if (prRow && prRow.state === 'open' && this.githubClient) {
+              prNumber = prRow.pr_number;
+              prRepo = prRow.repo;
+              try {
+                await this.githubClient.closePRWithComment(
+                  prRow.repo,
+                  prRow.pr_number,
+                  "Superseded — task relaunched; this PR's branch was abandoned per fresh-start policy.",
+                );
+                console.log(
+                  `[SessionManager] completeStart: closed predecessor PR #${prRow.pr_number} (${prRow.repo})`,
+                );
+              } catch (closeErr) {
+                console.warn(
+                  `[SessionManager] completeStart: failed to close predecessor PR #${prRow.pr_number}: ${closeErr}`,
+                );
+              }
+            }
+
+            // Prune stale worktree registrations before local branch delete.
+            try {
+              execSync(`git worktree prune`, { cwd: projectDir });
+            } catch {
+              // best-effort
+            }
+
+            // Delete the branch locally (best-effort).
+            try {
+              execSync(`git branch -D "${featureBranch}"`, { cwd: projectDir });
+              console.log(
+                `[SessionManager] completeStart: deleted local branch ${featureBranch}`,
+              );
+            } catch (delLocalErr) {
+              console.warn(
+                `[SessionManager] completeStart: failed to delete local branch ${featureBranch}: ${delLocalErr}`,
+              );
+            }
+
+            // Delete the branch on origin (best-effort).
+            if (this.githubClient && project.githubRepo) {
+              try {
+                await this.githubClient.deleteBranch(
+                  project.githubRepo,
+                  featureBranch,
+                );
+                console.log(
+                  `[SessionManager] completeStart: deleted origin branch ${featureBranch}`,
+                );
+              } catch (delRemoteErr) {
+                console.warn(
+                  `[SessionManager] completeStart: failed to delete origin branch ${featureBranch}: ${delRemoteErr}`,
+                );
+              }
+            }
+
+            // Emit stale_branch_abandoned audit event.
+            recordEvent({
+              event_type: 'stale_branch_abandoned',
+              actor_type: 'system',
+              actor_id: sessionId,
+              project_id: projectId || null,
+              task_id: sessionTaskId || null,
+              payload: {
+                branch: featureBranch,
+                priorSessionId: predecessor.session_id,
+                prNumber,
+                prRepo,
+              },
             });
+
+            // Single retry — if this also fails, propagate normally (no loop).
+            try {
+              await exec(
+                `git worktree add -b "${featureBranch}" "${worktreePath}" ${worktreeBase}`,
+                { cwd: projectDir },
+              );
+            } catch (retryErr) {
+              const re = retryErr as { stderr?: string | Buffer; message: string };
+              const retryStderr = re.stderr ? re.stderr.toString() : '';
+              const retryMsg =
+                `${re.message}${retryStderr ? `\nstderr: ${retryStderr}` : ''}`.trim();
+              console.error(
+                `[SessionManager] completeStart: retry after stale-branch abandonment also failed for ${sessionId}: ${retryMsg}`,
+              );
+              throw new WorktreeSetupError(retryMsg, {
+                isBranchAlreadyExists: false,
+              });
+            }
+          } else {
+            // Branch exists but not attributable to a terminal predecessor of this task.
+            // Keep deterministic failure — crash budget backstop handles it.
+            console.error(
+              `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
+            );
+            throw new WorktreeSetupError(fullMsg, { isBranchAlreadyExists });
           }
         } else {
-          const fullMsg =
-            `${e.message}${stderr ? `\nstderr: ${stderr}` : ''}`.trim();
           console.error(
             `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
           );

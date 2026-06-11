@@ -34,7 +34,8 @@ export type EventType =
   | 'auto_launch_paused'
   | 'session_marked_done_while_running'
   | 'conflict_nudge_delivery_failed'
-  | 'worktree_remove_failed';
+  | 'worktree_remove_failed'
+  | 'stale_branch_abandoned';
 
 export type ActorType = 'ai' | 'human' | 'system';
 

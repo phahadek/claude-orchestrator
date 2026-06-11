@@ -409,6 +409,23 @@ export function getSessionsByStatus(statuses: string[]): Session[] {
  * propagated back from the task backend.
  * Strips hyphens from both sides to normalize UUID format differences.
  */
+/**
+ * Returns terminal (done/error/killed/superseded) standard sessions for a task,
+ * most recent first. Used to identify stale predecessor sessions on fresh launch.
+ */
+export function getTerminalSessionsForTask(taskId: string): Session[] {
+  const norm = taskId.replace(/-/g, '');
+  return db
+    .prepare<{ task_id: string }>(
+      `SELECT * FROM sessions
+       WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
+         AND status IN ('done', 'error', 'killed', 'superseded')
+         AND (session_type = 'standard' OR session_type IS NULL)
+       ORDER BY started_at DESC`,
+    )
+    .all({ task_id: norm }) as Session[];
+}
+
 export function hasActiveSessionForTask(taskId: string): boolean {
   const norm = taskId.replace(/-/g, '');
   const row = db
