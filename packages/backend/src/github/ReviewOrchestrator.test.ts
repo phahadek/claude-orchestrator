@@ -707,12 +707,10 @@ describe('ReviewOrchestrator — error handling', () => {
 
     await new Promise((r) => setTimeout(r, 30));
 
-    // ReviewOrchestrator is the sole writer — verdict must be persisted here
-    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledWith(
-      1,
-      'owner/repo',
-      expect.stringContaining('"needs_changes"'),
-    );
+    // PRReviewService is now the sole writer of the verdict (orchestrator removed
+    // the redundant write). The mock reviewPR doesn't call setPRReviewResult itself,
+    // so it should NOT be called here — orchestrator only broadcasts.
+    expect(vi.mocked(setPRReviewResult)).not.toHaveBeenCalled();
     // Verdict must be routed to the coding session — not silently dropped
     expect(vi.mocked(sm.sendOrResume)).toHaveBeenCalledWith(
       basePRRow.session_id,
@@ -747,6 +745,35 @@ describe('ReviewOrchestrator — error handling', () => {
     };
     expect(stored.verdict).toBe('error');
     expect(Array.isArray(stored.dimensions)).toBe(true);
+  });
+
+  it('catch block does NOT overwrite an already-persisted verdict with error', async () => {
+    // Simulates the scenario where reviewPR threw after PRReviewService already
+    // persisted the verdict — the orchestrator catch must not clobber it.
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...basePRRow,
+      review_result: JSON.stringify({
+        verdict: 'approved',
+        summary: 'Pre-persisted.',
+        dimensions: [],
+      }),
+    } as any);
+
+    const sm = makeMockSessionManager();
+    const rs = {
+      reviewPR: vi
+        .fn()
+        .mockRejectedValue(new Error('unexpected post-persist error')),
+      sendReReview: vi.fn(),
+    } as unknown as PRReviewService;
+
+    new ReviewOrchestrator(rs, sm as any, true);
+
+    sm.emit('pr_opened', baseJob);
+    await new Promise((r) => setTimeout(r, 30));
+
+    // setPRReviewResult must NOT be called — the existing verdict is preserved
+    expect(vi.mocked(setPRReviewResult)).not.toHaveBeenCalled();
   });
 });
 
