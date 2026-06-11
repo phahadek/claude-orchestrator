@@ -9,11 +9,14 @@ type MockSession = EventEmitter & {
   prUrl?: string;
   hasEnded: boolean;
   sessionType: string;
+  taskId?: string;
   run: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
   kill: ReturnType<typeof vi.fn>;
   endSession: ReturnType<typeof vi.fn>;
   gracefulPause: ReturnType<typeof vi.fn>;
+  setPendingOverflowText: ReturnType<typeof vi.fn>;
+  lockFileForNextInjection: ReturnType<typeof vi.fn>;
 };
 
 function makeMockSession(): MockSession {
@@ -26,6 +29,8 @@ function makeMockSession(): MockSession {
   ee.kill = vi.fn().mockResolvedValue(undefined);
   ee.endSession = vi.fn();
   ee.gracefulPause = vi.fn().mockResolvedValue(undefined);
+  ee.setPendingOverflowText = vi.fn();
+  ee.lockFileForNextInjection = vi.fn();
   return ee;
 }
 
@@ -60,6 +65,7 @@ vi.mock('../branchModel', () => ({
     .fn()
     .mockReturnValue({ startingPoint: 'dev', milestoneSlug: null }),
   ensureMilestoneBranch: vi.fn(),
+  deriveBranchSlug: vi.fn().mockReturnValue('feature/my-task'),
 }));
 vi.mock('../orchestrator-config', () => ({
   loadOrchestratorConfig: vi
@@ -117,6 +123,7 @@ vi.mock('../../db/queries', () => ({
   incrementTaskCrashCount: vi.fn().mockReturnValue(1),
   setSessionPauseReason: vi.fn(),
   setSessionLastErrorDetail: vi.fn(),
+  setTaskPauseReason: vi.fn(),
 }));
 
 vi.mock('../../config', () => ({
@@ -181,6 +188,7 @@ function makeDeadRow(sessionId = SESSION_ID) {
   return {
     session_id: sessionId,
     task_id: 'task-1',
+    task_name: 'my-task',
     task_url: 'https://notion.so/task',
     project_context_url: 'https://notion.so/project',
     project_id: PROJECT_ID,

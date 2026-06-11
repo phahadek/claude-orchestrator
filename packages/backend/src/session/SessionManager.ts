@@ -1585,7 +1585,7 @@ export class SessionManager extends EventEmitter {
         actor_id: sessionId,
         project_id: null,
         task_id: null,
-        payload: { worktreePath, stderr },
+        payload: { sessionId, worktreePath, stderr },
       });
     }
 
@@ -2084,11 +2084,11 @@ export class SessionManager extends EventEmitter {
     const isUnixStylePath =
       worktreePath.startsWith('/c/') || worktreePath.startsWith('/C/');
     console.log(
-      `[SessionManager] sendOrResume worktree created: path=${worktreePath} startingPoint=${startingPoint}` +
-        (isUnixStylePath
-          ? ' [WARNING: Unix-style path detected — may not resolve correctly on Windows]'
-          : ''),
-    );
+        `[SessionManager] sendOrResume worktree created: path=${worktreePath} startingPoint=${startingPoint}` +
+          (isUnixStylePath
+            ? ' [WARNING: Unix-style path detected — may not resolve correctly on Windows]'
+            : ''),
+      );
 
     // Load per-project orchestrator config so resumed sessions get the same
     // extra allowed tools (e.g. Bash(dotnet:*)) as freshly spawned ones.
