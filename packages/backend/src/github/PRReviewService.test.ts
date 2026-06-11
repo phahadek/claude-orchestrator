@@ -1994,9 +1994,7 @@ describe('PRReviewService — verdict survives GitHub side-effect failure (#627)
     } as any);
 
     const mockGH = makeMockGitHub();
-    vi.mocked(mockGH.markPRReady).mockRejectedValue(
-      new Error('GitHub outage'),
-    );
+    vi.mocked(mockGH.markPRReady).mockRejectedValue(new Error('GitHub outage'));
 
     const mockSM = makeMockSessionManager();
     (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
