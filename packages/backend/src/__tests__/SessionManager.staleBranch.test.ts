@@ -170,8 +170,7 @@ import * as queries from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { SessionManager } from '../session/SessionManager';
 
-const TASK_URL =
-  'https://www.notion.so/My-Task-abc123def456789012345678901234';
+const TASK_URL = 'https://www.notion.so/My-Task-abc123def456789012345678901234';
 const CTX_URL = 'https://www.notion.so/Context-abc123';
 const START_OPTS = {
   sessionType: 'standard' as const,

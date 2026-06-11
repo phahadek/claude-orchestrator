@@ -847,7 +847,10 @@ export class SessionManager extends EventEmitter {
                 { cwd: projectDir },
               );
             } catch (retryErr) {
-              const re = retryErr as { stderr?: string | Buffer; message: string };
+              const re = retryErr as {
+                stderr?: string | Buffer;
+                message: string;
+              };
               const retryStderr = re.stderr ? re.stderr.toString() : '';
               const retryMsg =
                 `${re.message}${retryStderr ? `\nstderr: ${retryStderr}` : ''}`.trim();
