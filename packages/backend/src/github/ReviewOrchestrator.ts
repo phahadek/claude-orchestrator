@@ -905,26 +905,29 @@ export class ReviewOrchestrator {
         // review_failed was already emitted by PRReviewService; leave review_result null
         return;
       }
-      const summary = String(e);
-      setPRReviewResult(
-        job.prNumber,
-        job.repo,
-        JSON.stringify({ verdict: 'error', summary, dimensions: [] }),
-      );
-      this.sessionManager.emit('message', {
-        type: 'pr_review_complete',
-        prNumber: job.prNumber,
-        repo: job.repo,
-        verdict: 'error',
-        summary,
-      });
+      // PRReviewService persists the verdict immediately after parse, before any
+      // side effects. If reviewPR throws, it means parsing never completed and no
+      // verdict was persisted — write the error sentinel only in that case to avoid
+      // clobbering a verdict that was already successfully stored.
+      const alreadyPersisted = !!getPRByNumber(job.prNumber, job.repo)
+        ?.review_result;
+      if (!alreadyPersisted) {
+        const summary = String(e);
+        setPRReviewResult(
+          job.prNumber,
+          job.repo,
+          JSON.stringify({ verdict: 'error', summary, dimensions: [] }),
+        );
+        this.sessionManager.emit('message', {
+          type: 'pr_review_complete',
+          prNumber: job.prNumber,
+          repo: job.repo,
+          verdict: 'error',
+          summary,
+        });
+      }
       return;
     }
-
-    // Single-owner write+route: persist the verdict here, immediately before
-    // broadcasting and routing, so there is no path where the DB is updated
-    // without the verdict also being dispatched to the coding session.
-    setPRReviewResult(job.prNumber, job.repo, JSON.stringify(result));
 
     // Draft transition and Notion update are handled inside reviewService.reviewPR()
     // via handleApprovedVerdict. Derive draftTransitioned from the pre-review row so

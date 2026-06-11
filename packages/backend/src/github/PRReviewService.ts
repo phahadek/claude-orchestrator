@@ -275,6 +275,9 @@ export class PRReviewService {
           aiResult,
           sizeSignal,
         );
+        // Persist immediately after parse — before any side effects (GitHub/Notion).
+        setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
+        setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
         if (finalResult.verdict === 'approved') {
           await this.handleApprovedVerdict(
             prNumber,
@@ -328,6 +331,9 @@ export class PRReviewService {
           aiResult,
           sizeSignal,
         );
+        // Persist immediately after parse — before any side effects (GitHub/Notion).
+        setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
+        setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
         if (finalResult.verdict === 'approved') {
           await this.handleApprovedVerdict(
             prNumber,
@@ -387,6 +393,10 @@ export class PRReviewService {
         aiResult,
         sizeSignal,
       );
+      // Persist immediately after parse — before any side effects (GitHub/Notion).
+      // setLastReviewedSha was already called above the verdictPromise await for
+      // the race-window guard; the verdict write here is the critical safety net.
+      setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
       if (finalResult.verdict === 'approved') {
         await this.handleApprovedVerdict(
           prNumber,
@@ -516,6 +526,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     projectId?: string,
   ): Promise<boolean> {
     let draftTransitioned = false;
+    const resolvedProjectId = projectId ?? this.defaultProjectId;
     try {
       await this.github.markPRReady(repo, prNumber);
       updatePRDraftStatus(prNumber, repo, 0);
@@ -525,9 +536,21 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         `[PRReviewService] markPRReady skipped for PR #${prNumber}:`,
         e,
       );
+      recordEvent({
+        event_type: 'review_side_effect_failed',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: resolvedProjectId || null,
+        task_id: taskId,
+        payload: {
+          pr_number: prNumber,
+          repo,
+          side_effect: 'markPRReady',
+          error: String(e),
+        },
+      });
     }
     if (taskId) {
-      const resolvedProjectId = projectId ?? this.defaultProjectId;
       try {
         await this.resolveBackend(resolvedProjectId).updateStatus(
           taskId,
@@ -535,6 +558,19 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         );
       } catch (e: unknown) {
         console.error(`[PRReviewService] task backend updateStatus failed:`, e);
+        recordEvent({
+          event_type: 'review_side_effect_failed',
+          actor_type: 'system',
+          actor_id: null,
+          project_id: resolvedProjectId || null,
+          task_id: taskId,
+          payload: {
+            pr_number: prNumber,
+            repo,
+            side_effect: 'updateStatus',
+            error: String(e),
+          },
+        });
       }
     }
     // Trigger an immediate mergeability check so the watcher's DB merge_state and
