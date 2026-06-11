@@ -228,6 +228,19 @@ export function SessionControls({
           </a>
         )}
 
+        {/* Compact disclosure toggle — sits inline next to Notion link so it
+            wraps with the badge row rather than onto a dedicated line below */}
+        <button
+          className={styles.disclosureToggle}
+          aria-expanded={compactOpen}
+          aria-label={
+            compactOpen ? 'Hide session details' : 'Show session details'
+          }
+          onClick={() => setCompactOpen((o) => !o)}
+        >
+          {compactOpen ? '− details' : '⋯ details'}
+        </button>
+
         {/* Admin chrome group B: elapsed time — CSS-hidden on mobile until disclosure opens */}
         <div className={adminChromeClass}>
           <ElapsedTime session={session} />
@@ -276,18 +289,6 @@ export function SessionControls({
             </button>
           </div>
         )}
-
-        {/* Compact disclosure toggle — CSS shows only on narrow viewports (≤768px) */}
-        <button
-          className={styles.disclosureToggle}
-          aria-expanded={compactOpen}
-          aria-label={
-            compactOpen ? 'Hide session details' : 'Show session details'
-          }
-          onClick={() => setCompactOpen((o) => !o)}
-        >
-          {compactOpen ? '− details' : '⋯ details'}
-        </button>
 
         {onClose && (
           <button
