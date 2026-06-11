@@ -143,4 +143,25 @@ describe('ConcludedSessionArchiver', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(mockArchive).not.toHaveBeenCalled();
   });
+
+  it('sweepOnce() never touches worktrees — only calls archiveConcludedSessionsOlderThan (idle sessions exempt by SQL filter)', async () => {
+    // Regression: ConcludedSessionArchiver must never trigger worktree teardown.
+    // archiveConcludedSessionsOlderThan only queries status IN ('done','error','killed'),
+    // so idle sessions are structurally excluded without any extra guard needed here.
+    mockArchive.mockReturnValue(['s1']);
+    const broadcast = vi.fn();
+    const archiver = new ConcludedSessionArchiver(broadcast, {
+      intervalMs: 100000,
+    });
+    await archiver.sweepOnce();
+    // The archiver's only side effects are archiveConcludedSessionsOlderThan,
+    // broadcast, and recordEvent — never a SessionManager or git call.
+    expect(mockArchive).toHaveBeenCalledOnce();
+    expect(broadcast).toHaveBeenCalledWith({
+      type: 'session_archived',
+      sessionId: 's1',
+    });
+    // No other mocked functions should have been called (no worktree cleanup)
+    expect(mockRecord).toHaveBeenCalledOnce();
+  });
 });

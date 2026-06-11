@@ -406,7 +406,13 @@ export class SessionManager extends EventEmitter {
 
     // 2. Set hasEnded on live in-memory session to prevent double-broadcasts
     const liveSession = this.sessions.get(sessionId);
-    if (liveSession) liveSession.hasEnded = true;
+    if (liveSession) {
+      liveSession.hasEnded = true;
+    } else {
+      // Session not live (already idle) — explicitly finalize the worktree now
+      // that a terminal event has fired (e.g. PR closed).
+      this._teardownIdleSessionWorktree(sessionId);
+    }
 
     // 3. Look up session row for taskId (already written by step 1)
     const row = getSession(sessionId);
@@ -1591,6 +1597,15 @@ export class SessionManager extends EventEmitter {
   ): void {
     this.sessions.delete(sessionId);
 
+    // Chokepoint guard: never tear down an idle session's worktree.
+    // The worktree IS the session state for idle sessions — uncommitted WIP must
+    // survive across idle→resume cycles. Teardown is deferred to terminal events
+    // (PR merged/closed, session done/error/killed, explicit delete).
+    const sessionRow = getSession(sessionId);
+    if (sessionRow?.status === 'idle' && sessionRow?.pr_url) {
+      return;
+    }
+
     // Derive the task branch the session created from the worktree's HEAD.
     let branchName: string | undefined;
     try {
@@ -1644,9 +1659,20 @@ export class SessionManager extends EventEmitter {
         cwd: projectDir,
       });
     } catch (err) {
+      const stderr =
+        (err as { stderr?: string | Buffer })?.stderr?.toString() ??
+        String(err);
       console.error(
         `[SessionManager] failed to remove worktree for ${sessionId}: ${err}`,
       );
+      recordEvent({
+        event_type: 'worktree_remove_failed',
+        actor_type: 'system',
+        actor_id: sessionId,
+        project_id: null,
+        task_id: null,
+        payload: { sessionId, worktreePath, stderr },
+      });
     }
 
     const deleteBranch = !prUrl || this._mergedSessionIds.has(sessionId);
@@ -1666,6 +1692,27 @@ export class SessionManager extends EventEmitter {
 
     // Prune the legacy session/<sessionId> branch created by the pre-refactor dist code.
     pruneSessionBranch(sessionId, projectDir);
+  }
+
+  /**
+   * Tear down the worktree for a session whose subprocess already exited (idle)
+   * and that has now transitioned to a terminal state (done/error via PR merge or
+   * PR close). Skips if the worktree path is absent on disk — the chokepoint guard
+   * already protected it during the original run().then() cleanup.
+   */
+  private _teardownIdleSessionWorktree(sessionId: string): void {
+    const row = getSession(sessionId);
+    if (!row?.worktree_path) return;
+    if (!fs.existsSync(row.worktree_path)) return;
+    const project = getProjectById(row.project_id ?? '');
+    if (!project) return;
+    const projectDir = normalizePath(project.projectDir);
+    this.cleanupWorktree(
+      sessionId,
+      row.worktree_path,
+      row.pr_url ?? undefined,
+      projectDir,
+    );
   }
 
   /** Returns true if the session is currently live in the in-memory sessions map. */
@@ -1779,7 +1826,14 @@ export class SessionManager extends EventEmitter {
 
   /** Close stdin on the session process so the CLI can exit cleanly. */
   endSession(sessionId: string): void {
-    this.sessions.get(sessionId)?.endSession();
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.endSession();
+      return;
+    }
+    // Session not live (already idle) — explicitly finalize the worktree now
+    // that a terminal event has fired (PR merged/closed, session done/killed).
+    this._teardownIdleSessionWorktree(sessionId);
   }
 
   /** Mark a session so cleanupWorktree deletes its local branch (used on PR merge). */
@@ -1924,6 +1978,62 @@ export class SessionManager extends EventEmitter {
       'worktrees',
       sessionId,
     );
+
+    // Fast path: if the session's recorded worktree already exists as a live git
+    // worktree (has a .git pointer file), reuse it directly. This is the normal
+    // resume path for idle sessions whose worktrees were preserved by the
+    // chokepoint guard. No git worktree add needed — the session's own uncommitted
+    // WIP is still there.
+    const recordedPath = row.worktree_path ?? worktreePath;
+    if (
+      recordedPath &&
+      fs.existsSync(recordedPath) &&
+      fs.existsSync(path.join(recordedPath, '.git'))
+    ) {
+      console.log(
+        `[SessionManager] sendOrResume reusing surviving worktree: path=${recordedPath}`,
+      );
+      const orchConfig = loadOrchestratorConfig(projectDir);
+      const mode = runtimeSettings.session_mode;
+      const runner =
+        mode === 'api'
+          ? new ApiSessionRunner(sessionId)
+          : getCorporateMode().gates.dockerMandatory
+            ? new DockerSessionRunner(sessionId)
+            : new CliSessionRunner(sessionId);
+      const mcpConfigPath = writeMcpConfig(
+        recordedPath,
+        orchConfig.mcp_servers,
+      );
+      if (row.task_id) {
+        const stale = getOtherRunningSessionsForTask(
+          row.task_id,
+          row.session_id,
+        );
+        for (const s of stale) {
+          console.log(
+            `[SessionManager] sendOrResume: superseding stale session ${s.session_id.slice(0, 8)} for task ${row.task_id}`,
+          );
+          markSessionSuperseded(s.session_id, Date.now());
+        }
+      }
+      const session = this.respawnSession(
+        row,
+        recordedPath,
+        orchConfig,
+        runner,
+        mcpConfigPath,
+      );
+      const firstEvent = new Promise<void>((resolve) => {
+        session.once('message', () => {
+          this.send(sessionId, text);
+          resolve();
+        });
+      });
+      this.wireSession(sessionId, session, projectDir, recordedPath);
+      await firstEvent;
+      return sessionId;
+    }
 
     // Resolve the starting point using dev as the base (no milestoneId available for resumed sessions).
     const { startingPoint, milestoneSlug } = resolveStartingPoint(
