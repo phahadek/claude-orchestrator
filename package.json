@@ -1,6 +1,6 @@
 {
   "name": "claude-orchestrator",
-  "version": "1.1.0",
+  "version": "1.5.0",
   "private": true,
   "description": "A local web dashboard for browsing, managing, and orchestrating Claude Code sessions.",
   "main": "index.js",
@@ -20,7 +20,7 @@
     "dev": "concurrently \"npm run dev -w packages/backend\" \"npm run dev -w packages/frontend\"",
     "build": "npm run build -w packages/frontend && npm run build -w packages/backend",
     "start": "node packages/backend/dist/server.js",
-    "restart": "npx kill-port 3000 && npm run dev",
+    "restart": "npx kill-port 3000 5173 && npm run dev",
     "restart:backend": "npx kill-port 3000 && npm run dev -w packages/backend",
     "format": "prettier --write .",
     "format:write": "prettier --write .",

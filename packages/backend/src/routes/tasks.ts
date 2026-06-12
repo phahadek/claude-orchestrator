@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { getProjectById } from '../config';
+import { getProjectById, runtimeSettings } from '../config';
 import { ProjectService } from '../projects/ProjectService';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import {
@@ -17,6 +17,13 @@ import type { ServerMessage, TaskView } from '../ws/types';
 import type { PauseReason } from '../db/types';
 import yaml from 'js-yaml';
 export type { TaskView } from '../ws/types';
+
+export interface TasksActiveResponse {
+  tasks: TaskView[];
+  lastRefreshedAt: number | null;
+  stale: boolean;
+  coldCache: boolean;
+}
 
 /**
  * The frontend sends milestone row ids as `boardId` after the milestone schema migration.
@@ -46,6 +53,15 @@ let taskBroadcastFn: ((msg: ServerMessage) => void) | null = null;
 
 export function setTaskBroadcast(fn: (msg: ServerMessage) => void): void {
   taskBroadcastFn = fn;
+}
+
+// ── TaskCacheRefresher hook ───────────────────────────────────────────────────
+let cacheRefresherFn: ((projectId: string) => Promise<void>) | null = null;
+
+export function setTaskCacheRefresher(
+  fn: (projectId: string) => Promise<void>,
+): void {
+  cacheRefresherFn = fn;
 }
 
 /** Build a TaskView for a single notionTaskId and broadcast it as task_updated. */
@@ -91,6 +107,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
       context_occupancy_tokens:
         row.code_session_context_occupancy_tokens ?? undefined,
       compaction_count: row.code_session_compaction_count ?? undefined,
+      model: row.code_session_model ?? null,
     };
   }
 
@@ -105,6 +122,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
       state: row.pr_state ?? '',
       draft: row.pr_draft === 1,
       mergeState: row.pr_merge_state ?? null,
+      preReviewStage: row.pr_pre_review_stage ?? null,
     };
   }
 
@@ -134,7 +152,9 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     };
   }
 
-  const pauseReason = (row.pr_pause_reason ?? null) as PauseReason | null;
+  const pauseReason = (row.pr_pause_reason ??
+    row.session_pr_creation_failed_pause_reason ??
+    null) as PauseReason | null;
 
   const displayStatus = deriveDisplayStatus({
     notionStatus,
@@ -417,15 +437,26 @@ export function createTasksRouter(): Router {
     // boardId arrives as the milestone row id; resolve to the underlying source_id.
     const cacheKey = `board:${resolveBoardCacheKey(boardId)}`;
     const boardCacheRow = getTaskCache(cacheKey);
-    let taskIds: string[] = [];
 
-    if (boardCacheRow) {
-      try {
-        const tasks = JSON.parse(boardCacheRow.raw_json) as NotionTask[];
-        taskIds = tasks.map((t) => t.id);
-      } catch {
-        taskIds = [];
-      }
+    // Cold cache: no data yet — return immediately without blocking on Notion.
+    if (!boardCacheRow) {
+      const response: TasksActiveResponse = {
+        tasks: [],
+        lastRefreshedAt: null,
+        stale: false,
+        coldCache: true,
+      };
+      res.json(response);
+      return;
+    }
+
+    let taskIds: string[];
+    try {
+      taskIds = (JSON.parse(boardCacheRow.raw_json) as NotionTask[]).map(
+        (t) => t.id,
+      );
+    } catch {
+      taskIds = [];
     }
 
     const aggregates = getActiveTaskAggregates(taskIds);
@@ -435,28 +466,59 @@ export function createTasksRouter(): Router {
       .filter((v) => !v.notionStatus.includes('Deferred'));
 
     // Resolve blocked status from the full board task list
-    if (boardCacheRow) {
-      try {
-        const allBoardTasks = JSON.parse(
-          boardCacheRow.raw_json,
-        ) as NotionTask[];
-        const resolver = new DependencyResolver();
-        const resolved = resolver.resolve(allBoardTasks);
-        const resolvedMap = new Map(resolved.map((r) => [r.task.id, r]));
-        for (const view of views) {
-          const r = resolvedMap.get(view.taskId);
-          if (r) {
-            view.blocked = r.blocked;
-            view.blockerNames = r.blockers.map((b) => b.title);
-            view.wave = r.wave;
-          }
+    try {
+      const allBoardTasks = JSON.parse(boardCacheRow.raw_json) as NotionTask[];
+      const resolver = new DependencyResolver();
+      const resolved = resolver.resolve(allBoardTasks);
+      const resolvedMap = new Map(resolved.map((r) => [r.task.id, r]));
+      for (const view of views) {
+        const r = resolvedMap.get(view.taskId);
+        if (r) {
+          view.blocked = r.blocked;
+          view.blockerNames = r.blockers.map((b) => b.title);
+          view.wave = r.wave;
         }
-      } catch {
-        // ignore — views retain their default blocked: false
       }
+    } catch {
+      // ignore — views retain their default blocked: false
     }
 
-    res.json(views);
+    const stale =
+      Date.now() - boardCacheRow.fetched_at >
+      runtimeSettings.task_cache_refresh_interval_ms * 2;
+
+    const response: TasksActiveResponse = {
+      tasks: views,
+      lastRefreshedAt: boardCacheRow.fetched_at,
+      stale,
+      coldCache: false,
+    };
+    res.json(response);
+  });
+
+  // ── POST /api/tasks/refresh ──────────────────────────────────────────────
+  router.post('/tasks/refresh', (req: Request, res: Response) => {
+    const body = req.body as { projectId?: unknown };
+    const projectId =
+      typeof body.projectId === 'string' ? body.projectId : null;
+    if (!projectId) {
+      res.status(400).json({ error: 'projectId is required' });
+      return;
+    }
+    const project = getProjectById(projectId);
+    if (!project) {
+      res.status(404).json({ error: `Project '${projectId}' not found` });
+      return;
+    }
+    // Trigger background refresh — returns 202 immediately; broadcasts task_cache_updated when done.
+    if (cacheRefresherFn) {
+      void cacheRefresherFn(projectId).catch((err: unknown) => {
+        console.warn(
+          `[tasks] /refresh background error for ${projectId}: ${String(err)}`,
+        );
+      });
+    }
+    res.status(202).json({ ok: true, message: 'Refresh queued' });
   });
 
   // ── PATCH /api/tasks/:id/status ──────────────────────────────────────────

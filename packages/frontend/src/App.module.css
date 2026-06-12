@@ -217,3 +217,11 @@
     cursor: pointer;
   }
 }
+
+.coldCacheBanner {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-muted, #888);
+  background: var(--surface-alt, rgba(128, 128, 128, 0.08));
+  border-bottom: 1px solid var(--border, rgba(128, 128, 128, 0.15));
+}

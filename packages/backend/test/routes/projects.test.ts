@@ -6,12 +6,8 @@ import * as os from 'os';
 import * as path from 'path';
 
 vi.mock('../../src/db/db.js', async () => {
-  const Database = (await import('better-sqlite3')).default;
-  const memDb = new Database(':memory:');
-  memDb.pragma('foreign_keys = ON');
-  const { applyTestSchema } = await import('../helpers/testDbSchema');
-  applyTestSchema(memDb);
-  return { db: memDb };
+  const { setupTestDb } = await import('../helpers/setupTestDb.js');
+  return { db: setupTestDb() };
 });
 
 import { projectsRouter } from '../../src/routes/projects.js';

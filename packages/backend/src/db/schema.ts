@@ -1,18 +1,31 @@
-import { db } from './db';
+import Database from 'better-sqlite3';
 
-export function runMigrations(): void {
-  db.exec(`
+export function runMigrations(target: Database.Database): void {
+  target.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
-      session_id          TEXT    PRIMARY KEY,
-      task_id             TEXT,
-      task_url            TEXT,
-      project_context_url TEXT,
-      status              TEXT    NOT NULL,
-      started_at          INTEGER NOT NULL,
-      ended_at            INTEGER,
-      pr_url              TEXT,
-      worktree_path       TEXT,
-      favorited           INTEGER NOT NULL DEFAULT 0
+      session_id                TEXT    PRIMARY KEY,
+      task_id                   TEXT,
+      task_url                  TEXT,
+      project_context_url       TEXT,
+      status                    TEXT    NOT NULL,
+      started_at                INTEGER NOT NULL,
+      ended_at                  INTEGER,
+      pr_url                    TEXT,
+      worktree_path             TEXT,
+      archived                  INTEGER NOT NULL DEFAULT 0,
+      project_id                TEXT,
+      session_type              TEXT    NOT NULL DEFAULT 'standard',
+      favorited                 INTEGER NOT NULL DEFAULT 0,
+      note                      TEXT,
+      tags                      TEXT,
+      metadata                  TEXT,
+      total_input_tokens        INTEGER NOT NULL DEFAULT 0,
+      total_output_tokens       INTEGER NOT NULL DEFAULT 0,
+      context_occupancy_tokens  INTEGER NOT NULL DEFAULT 0,
+      model                     TEXT,
+      task_name                 TEXT,
+      review_result             TEXT,
+      compaction_count          INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS session_events (
@@ -154,10 +167,26 @@ export function runMigrations(): void {
       PRIMARY KEY (pr_number, repo, sha)
     );
 
+    CREATE TABLE IF NOT EXISTS orchestrator_test_results (
+      pr_number  INTEGER NOT NULL,
+      repo       TEXT    NOT NULL,
+      sha        TEXT    NOT NULL,
+      passed     INTEGER NOT NULL,
+      output     TEXT    NOT NULL DEFAULT '',
+      ran_at     TEXT    NOT NULL,
+      PRIMARY KEY (pr_number, repo, sha)
+    );
+
     CREATE TABLE IF NOT EXISTS task_no_op_attempts (
       task_id          TEXT PRIMARY KEY,
       retry_count      INTEGER NOT NULL DEFAULT 0,
       last_attempt_at  TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS task_crash_counts (
+      task_id             TEXT    PRIMARY KEY,
+      consecutive_crashes INTEGER NOT NULL DEFAULT 0,
+      last_crash_at       INTEGER NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS pending_review_sync (
@@ -189,6 +218,46 @@ export function runMigrations(): void {
       hard_stop_remaining_ms INTEGER
     );
 
+    CREATE TABLE IF NOT EXISTS active_merges (
+      key        TEXT    PRIMARY KEY,
+      repo       TEXT    NOT NULL,
+      pr_number  INTEGER NOT NULL,
+      started_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS pull_requests (
+      id                           INTEGER PRIMARY KEY AUTOINCREMENT,
+      pr_number                    INTEGER NOT NULL,
+      pr_url                       TEXT    NOT NULL UNIQUE,
+      task_id                      TEXT,
+      session_id                   TEXT,
+      repo                         TEXT    NOT NULL,
+      title                        TEXT,
+      body                         TEXT,
+      head_branch                  TEXT,
+      base_branch                  TEXT,
+      state                        TEXT    NOT NULL DEFAULT 'open',
+      draft                        INTEGER NOT NULL DEFAULT 0,
+      review_result                TEXT,
+      review_at                    TEXT,
+      created_at                   TEXT    NOT NULL,
+      updated_at                   TEXT    NOT NULL,
+      synced_at                    TEXT    NOT NULL,
+      review_session_id            TEXT,
+      review_iteration             INTEGER NOT NULL DEFAULT 0,
+      head_sha                     TEXT,
+      last_reviewed_sha            TEXT,
+      node_id                      TEXT,
+      mergeable                    INTEGER,
+      merge_state                  TEXT,
+      merge_state_checked_at       TEXT,
+      pending_push                 INTEGER NOT NULL DEFAULT 0,
+      pause_reason                 TEXT,
+      failing_checks               TEXT,
+      ci_remediation_attempted_sha TEXT,
+      pause_reason_set_at          INTEGER,
+      conflict_nudge_sha           TEXT
+    );
 
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events(session_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_event_type ON session_events(session_id, event_type);
@@ -200,168 +269,172 @@ export function runMigrations(): void {
 
   // Idempotent column additions for existing databases
   try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN worktree_path TEXT`);
+    target.exec(`ALTER TABLE sessions ADD COLUMN worktree_path TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN project_id TEXT`);
+    target.exec(`ALTER TABLE sessions ADD COLUMN project_id TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE sessions ADD COLUMN session_type TEXT DEFAULT 'standard'`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN note TEXT`);
+    target.exec(`ALTER TABLE sessions ADD COLUMN note TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN tags TEXT`);
+    target.exec(`ALTER TABLE sessions ADD COLUMN tags TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE session_events ADD COLUMN message_id TEXT`);
+    target.exec(`ALTER TABLE session_events ADD COLUMN message_id TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE sessions ADD COLUMN favorited INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE sessions ADD COLUMN total_input_tokens INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE sessions ADD COLUMN total_output_tokens INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE sessions ADD COLUMN context_occupancy_tokens INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN review_session_id TEXT`);
+    target.exec(`ALTER TABLE pull_requests ADD COLUMN review_session_id TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE pull_requests ADD COLUMN review_iteration INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN head_sha TEXT`);
+    target.exec(`ALTER TABLE pull_requests ADD COLUMN head_sha TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN last_reviewed_sha TEXT`);
+    target.exec(`ALTER TABLE pull_requests ADD COLUMN last_reviewed_sha TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE projects ADD COLUMN auto_launch_enabled INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE projects ADD COLUMN auto_launch_milestone_id TEXT`);
+    target.exec(
+      `ALTER TABLE projects ADD COLUMN auto_launch_milestone_id TEXT`,
+    );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN pause_reason TEXT`);
+    target.exec(`ALTER TABLE pull_requests ADD COLUMN pause_reason TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN failing_checks TEXT`);
+    target.exec(`ALTER TABLE pull_requests ADD COLUMN failing_checks TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE projects ADD COLUMN auto_merge_enabled INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN metadata TEXT`);
+    target.exec(`ALTER TABLE sessions ADD COLUMN metadata TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE projects ADD COLUMN git_mode TEXT NOT NULL DEFAULT 'github'`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE sessions ADD COLUMN review_result TEXT`);
+    target.exec(`ALTER TABLE sessions ADD COLUMN review_result TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE local_branches ADD COLUMN pause_reason TEXT`);
+    target.exec(`ALTER TABLE local_branches ADD COLUMN pause_reason TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE local_branches ADD COLUMN merge_commit_sha TEXT`);
+    target.exec(`ALTER TABLE local_branches ADD COLUMN merge_commit_sha TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE projects ADD COLUMN milestone_branching TEXT`);
+    target.exec(`ALTER TABLE projects ADD COLUMN milestone_branching TEXT`);
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE projects ADD COLUMN non_milestone_source_config TEXT`);
+    target.exec(
+      `ALTER TABLE projects ADD COLUMN non_milestone_source_config TEXT`,
+    );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(`ALTER TABLE projects ADD COLUMN task_source_config TEXT`);
+    target.exec(`ALTER TABLE projects ADD COLUMN task_source_config TEXT`);
   } catch {
     /* already exists */
   }
 
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE pull_requests ADD COLUMN ci_remediation_attempted_sha TEXT`,
     );
   } catch {
@@ -369,7 +442,15 @@ export function runMigrations(): void {
   }
 
   try {
-    db.exec(`ALTER TABLE pull_requests ADD COLUMN pause_reason_set_at INTEGER`);
+    target.exec(
+      `ALTER TABLE pull_requests ADD COLUMN pause_reason_set_at INTEGER`,
+    );
+  } catch {
+    /* already exists */
+  }
+
+  try {
+    target.exec(`ALTER TABLE pull_requests ADD COLUMN pre_review_stage TEXT`);
   } catch {
     /* already exists */
   }
@@ -377,7 +458,7 @@ export function runMigrations(): void {
   // ── Double-prefix cleanup (notion:notion: contamination from pre-fix-release) ──
   // Per-task rows with double-prefixed keys are deleted; they re-populate on next fetch.
   // Board-cache JSON is repaired in-place so the route doesn't serve stale IDs.
-  db.exec(`
+  target.exec(`
     DELETE FROM task_cache WHERE task_id LIKE 'notion:notion:%';
 
     UPDATE task_cache
@@ -388,7 +469,7 @@ export function runMigrations(): void {
   // ── Source-prefix backfill (idempotent: NOT LIKE '%:%' guard) ──────────────
   // Prefix sessions.task_id with source based on owning project's task_source.
   // Rows with no project_id default to 'notion:' (all pre-M6 sessions were Notion).
-  db.exec(`
+  target.exec(`
     UPDATE sessions
     SET task_id = 'notion:' || task_id
     WHERE task_id IS NOT NULL AND task_id NOT LIKE '%:%'
@@ -413,14 +494,14 @@ export function runMigrations(): void {
     WHERE task_id NOT LIKE '%:%';
   `);
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE projects ADD COLUMN data_residency_confirmed INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
     /* already exists */
   }
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE sessions ADD COLUMN compaction_count INTEGER NOT NULL DEFAULT 0`,
     );
   } catch {
@@ -429,7 +510,7 @@ export function runMigrations(): void {
 
   // ── Backfill github_repo for GitHub-task-source projects ─────────────────────
   // Idempotent: guarded by github_repo IS NULL, re-running is a no-op.
-  db.exec(`
+  target.exec(`
     UPDATE projects
     SET github_repo = json_extract(task_source_config, '$.owner') || '/' || json_extract(task_source_config, '$.repo')
     WHERE task_source = 'github'
@@ -441,7 +522,7 @@ export function runMigrations(): void {
 
   // ── pull_requests: notion_task_id → task_id ──────────────────────────────────
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE pull_requests RENAME COLUMN notion_task_id TO task_id`,
     );
   } catch {
@@ -449,7 +530,7 @@ export function runMigrations(): void {
   }
   // Backfill: add 'notion:' prefix for legacy unprefixed rows.
   // Delete raw duplicate first to avoid UNIQUE constraint violations.
-  db.exec(`
+  target.exec(`
     DELETE FROM pull_requests
     WHERE task_id IS NOT NULL
       AND task_id NOT LIKE '%:%'
@@ -467,7 +548,9 @@ export function runMigrations(): void {
 
   // Drop old index on notion_task_id (may still exist on pre-D1 databases).
   try {
-    db.exec(`DROP INDEX IF EXISTS idx_pull_requests_notion_task_id_pr_number`);
+    target.exec(
+      `DROP INDEX IF EXISTS idx_pull_requests_notion_task_id_pr_number`,
+    );
   } catch {
     /* ignore */
   }
@@ -479,7 +562,7 @@ export function runMigrations(): void {
   // Guard: LENGTH = 39 means 'notion:' (7) + dashless 32-hex (32) — already-dashed
   // rows are 43 chars and are untouched. Non-notion task_ids (yaml:, jira:) are
   // untouched because they don't match LIKE 'notion:%'.
-  db.exec(`
+  target.exec(`
     UPDATE sessions
     SET task_id = 'notion:' ||
       SUBSTR(task_id, 8, 8) || '-' ||
@@ -512,9 +595,206 @@ export function runMigrations(): void {
   `);
 
   try {
-    db.exec(
+    target.exec(
       `ALTER TABLE projects ADD COLUMN base_branch TEXT NOT NULL DEFAULT 'dev'`,
     );
+  } catch {
+    /* already exists */
+  }
+
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN pause_reason TEXT`);
+  } catch {
+    /* already exists */
+  }
+
+  // Task-level pause reasons for tasks that have never had a PR (e.g. launch_failed).
+  target.exec(`
+    CREATE TABLE IF NOT EXISTS task_pause_reasons (
+      task_id      TEXT    PRIMARY KEY,
+      pause_reason TEXT    NOT NULL,
+      detail       TEXT,
+      set_at       INTEGER NOT NULL
+    )
+  `);
+
+  // Migration: Add ON DELETE CASCADE to all session-FK child tables.
+  // SQLite can't ALTER TABLE to add constraints, so each table is recreated.
+  // Idempotent: checks sqlite_master before running. Orphan rows are discarded.
+  {
+    type TableSqlRow = { sql: string };
+    const getTableSql = (name: string): string =>
+      (
+        target
+          .prepare(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+          )
+          .get(name) as TableSqlRow | undefined
+      )?.sql ?? '';
+
+    if (!getTableSql('session_events').includes('ON DELETE CASCADE')) {
+      target.exec(`
+        BEGIN TRANSACTION;
+        DROP TABLE IF EXISTS session_events__new;
+        CREATE TABLE session_events__new (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id   TEXT    NOT NULL,
+          event_type   TEXT    NOT NULL,
+          payload      TEXT    NOT NULL,
+          timestamp    INTEGER NOT NULL,
+          message_id   TEXT,
+          FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        );
+        INSERT INTO session_events__new (id, session_id, event_type, payload, timestamp, message_id)
+          SELECT id, session_id, event_type, payload, timestamp, message_id
+          FROM session_events
+          WHERE session_id IN (SELECT session_id FROM sessions);
+        DROP TABLE session_events;
+        ALTER TABLE session_events__new RENAME TO session_events;
+        CREATE INDEX idx_session_events_session_id_id ON session_events(session_id, id DESC);
+        CREATE INDEX idx_session_events_session_id_event_type ON session_events(session_id, event_type);
+        CREATE INDEX idx_session_events_timestamp ON session_events(timestamp DESC);
+        COMMIT;
+      `);
+    }
+
+    if (!getTableSql('permission_events').includes('ON DELETE CASCADE')) {
+      target.exec(`
+        BEGIN TRANSACTION;
+        DROP TABLE IF EXISTS permission_events__new;
+        CREATE TABLE permission_events__new (
+          id              INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id      TEXT    NOT NULL,
+          tool_name       TEXT    NOT NULL,
+          proposed_action TEXT,
+          decision        TEXT    NOT NULL,
+          rule_matched    TEXT,
+          decided_at      INTEGER NOT NULL,
+          FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        );
+        INSERT INTO permission_events__new (id, session_id, tool_name, proposed_action, decision, rule_matched, decided_at)
+          SELECT id, session_id, tool_name, proposed_action, decision, rule_matched, decided_at
+          FROM permission_events
+          WHERE session_id IN (SELECT session_id FROM sessions);
+        DROP TABLE permission_events;
+        ALTER TABLE permission_events__new RENAME TO permission_events;
+        COMMIT;
+      `);
+    }
+
+    if (!getTableSql('permission_denials').includes('ON DELETE CASCADE')) {
+      target.exec(`
+        BEGIN TRANSACTION;
+        DROP TABLE IF EXISTS permission_denials__new;
+        CREATE TABLE permission_denials__new (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id  TEXT    NOT NULL,
+          tool_name   TEXT    NOT NULL,
+          tool_use_id TEXT    NOT NULL,
+          tool_input  TEXT    NOT NULL,
+          timestamp   INTEGER NOT NULL,
+          FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        );
+        INSERT INTO permission_denials__new (id, session_id, tool_name, tool_use_id, tool_input, timestamp)
+          SELECT id, session_id, tool_name, tool_use_id, tool_input, timestamp
+          FROM permission_denials
+          WHERE session_id IN (SELECT session_id FROM sessions);
+        DROP TABLE permission_denials;
+        ALTER TABLE permission_denials__new RENAME TO permission_denials;
+        COMMIT;
+      `);
+    }
+
+    if (!getTableSql('session_audits').includes('ON DELETE CASCADE')) {
+      target.exec(`
+        BEGIN TRANSACTION;
+        DROP TABLE IF EXISTS session_audits__new;
+        CREATE TABLE session_audits__new (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id    TEXT NOT NULL,
+          pr_opened     INTEGER NOT NULL DEFAULT 0,
+          pr_targets    TEXT,
+          task_status   TEXT,
+          violations    TEXT NOT NULL DEFAULT '[]',
+          spec_mismatch TEXT,
+          audited_at    TEXT NOT NULL,
+          FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        );
+        INSERT INTO session_audits__new (id, session_id, pr_opened, pr_targets, task_status, violations, spec_mismatch, audited_at)
+          SELECT id, session_id, pr_opened, pr_targets, task_status, violations, spec_mismatch, audited_at
+          FROM session_audits
+          WHERE session_id IN (SELECT session_id FROM sessions);
+        DROP TABLE session_audits;
+        ALTER TABLE session_audits__new RENAME TO session_audits;
+        COMMIT;
+      `);
+    }
+
+    if (!getTableSql('session_pause_intervals').includes('ON DELETE CASCADE')) {
+      target.exec(`
+        BEGIN TRANSACTION;
+        DROP TABLE IF EXISTS session_pause_intervals__new;
+        CREATE TABLE session_pause_intervals__new (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id   TEXT    NOT NULL,
+          pause_reason TEXT    NOT NULL,
+          paused_at    INTEGER NOT NULL,
+          resumed_at   INTEGER NULL,
+          FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        );
+        INSERT INTO session_pause_intervals__new (id, session_id, pause_reason, paused_at, resumed_at)
+          SELECT id, session_id, pause_reason, paused_at, resumed_at
+          FROM session_pause_intervals
+          WHERE session_id IN (SELECT session_id FROM sessions);
+        DROP TABLE session_pause_intervals;
+        ALTER TABLE session_pause_intervals__new RENAME TO session_pause_intervals;
+        CREATE INDEX idx_session_pause_intervals_session_id ON session_pause_intervals(session_id);
+        COMMIT;
+      `);
+    }
+
+    if (!getTableSql('stuck_session_timers').includes('ON DELETE CASCADE')) {
+      target.exec(`
+        BEGIN TRANSACTION;
+        DROP TABLE IF EXISTS stuck_session_timers__new;
+        CREATE TABLE stuck_session_timers__new (
+          session_id             TEXT    PRIMARY KEY,
+          task_name              TEXT    NOT NULL,
+          notify_deadline        INTEGER NOT NULL DEFAULT 0,
+          pause_deadline         INTEGER NOT NULL DEFAULT 0,
+          hard_stop_deadline     INTEGER NOT NULL DEFAULT 0,
+          hard_stop_armed        INTEGER NOT NULL DEFAULT 0,
+          notify_remaining_ms    INTEGER,
+          pause_remaining_ms     INTEGER,
+          hard_stop_remaining_ms INTEGER,
+          FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        );
+        INSERT INTO stuck_session_timers__new
+          (session_id, task_name, notify_deadline, pause_deadline, hard_stop_deadline,
+           hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms)
+          SELECT session_id, task_name, notify_deadline, pause_deadline, hard_stop_deadline,
+                 hard_stop_armed, notify_remaining_ms, pause_remaining_ms, hard_stop_remaining_ms
+          FROM stuck_session_timers
+          WHERE session_id IN (SELECT session_id FROM sessions);
+        DROP TABLE stuck_session_timers;
+        ALTER TABLE stuck_session_timers__new RENAME TO stuck_session_timers;
+        COMMIT;
+      `);
+    }
+  }
+
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN last_error_detail TEXT`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(`ALTER TABLE sessions ADD COLUMN events_pruned_at INTEGER`);
+  } catch {
+    /* already exists */
+  }
+  try {
+    target.exec(`ALTER TABLE pull_requests ADD COLUMN conflict_nudge_sha TEXT`);
   } catch {
     /* already exists */
   }

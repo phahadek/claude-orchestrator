@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { makeEventRow } from '../../test/helpers/eventFixtures';
 import express from 'express';
 import supertest from 'supertest';
 
@@ -54,16 +55,12 @@ const mockSession = {
 
 const mockEvents = [
   {
-    event_type: 'text',
-    payload:
-      '{"type":"assistant","message":{"content":[{"type":"text","text":"Hello"}]}}',
+    ...makeEventRow('text').live,
     timestamp: 1000100,
     message_id: 'msg-1',
   },
   {
-    event_type: 'user_message',
-    payload:
-      '{"type":"user","message":{"content":[{"type":"text","text":"Hi"}]}}',
+    ...makeEventRow('user_message').live,
     timestamp: 1000050,
     message_id: null,
   },

@@ -3,8 +3,13 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { parseSection } from '../notion/NotionClient';
 import type { GitHubClient } from '../github/GitHubClient';
-import { getPRByNotionTaskId, getEventsBySession } from '../db/queries';
+import {
+  getPRByNotionTaskId,
+  getEventsBySession,
+  getDenialsBySession,
+} from '../db/queries';
 import type { WorktreeEscapeViolation, SessionEvent } from '../db/types';
+import { eventKind } from './eventKind';
 
 // ── Public interfaces ────────────────────────────────────────────────────────
 
@@ -21,6 +26,8 @@ export interface SessionAudit {
 /** Minimal interface used to route audit failures back to a live session. */
 export interface ISessionManager {
   send(sessionId: string, message: string): void;
+  /** Returns true when a live process is running for the given session id. */
+  isAlive(sessionId: string): boolean;
   /** Register a Promise that resolves when the post-revert worktree sync completes.
    *  ReviewOrchestrator awaits this before fetching the PR diff for a re-review. */
   registerRevertSync?(
@@ -38,6 +45,40 @@ export interface ISessionManager {
     status: 'error' | 'killed',
     reason: string,
   ): void;
+}
+
+/**
+ * Check a single tool-use block for a worktree escape.
+ * Used in-flight as tool_use events stream in from the session.
+ * Returns a violation if the tool writes outside the worktree, or null if safe.
+ */
+export function detectInFlightEscape(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  worktreePath: string,
+): WorktreeEscapeViolation | null {
+  const block: ToolUseBlock = { name: toolName, input: toolInput };
+  const paths = extractPathsFromBlock(block);
+  const normalizedWorktree = normalizePath(worktreePath);
+  const worktreePrefix = normalizedWorktree.endsWith(path.sep)
+    ? normalizedWorktree
+    : normalizedWorktree + path.sep;
+
+  for (const p of paths) {
+    const resolved = normalizePath(p, worktreePath);
+    if (
+      resolved !== normalizedWorktree &&
+      !resolved.startsWith(worktreePrefix)
+    ) {
+      return {
+        type: 'worktree_escape',
+        tool: toolName,
+        path: p,
+        escapedTo: resolved,
+      };
+    }
+  }
+  return null;
 }
 
 /** Minimal session shape needed by the auditor — avoids a circular import. */
@@ -61,7 +102,7 @@ export class SessionAuditor {
   constructor(
     private notionClientOrProjectId: TaskBackend | string,
     private githubClient?: GitHubClient,
-    private sessionManager?: ISessionManager,
+    _sessionManager?: ISessionManager,
   ) {}
 
   private resolveBackend(): TaskBackend {
@@ -149,15 +190,12 @@ export class SessionAuditor {
             violations.push('PR body missing required section: ## Test plan');
           }
 
-          // 6. PR content matches task spec?
+          // 6. PR content matches task spec? (informational only — not a re-prompt gate)
           specMismatch = await this.compareToSpec(
             repo,
             prNumber,
             session.taskId,
           );
-          if (specMismatch) {
-            violations.push(specMismatch);
-          }
         }
       }
     }
@@ -184,22 +222,22 @@ export class SessionAuditor {
       auditedAt: new Date().toISOString(),
     };
 
-    if (violations.length > 0) {
-      this.routeFailuresToSession(session.sessionId, violations);
-    }
-
     return audit;
   }
 
   /**
    * Scan session_events for tool calls that wrote to paths outside the worktree.
-   * Checks Write/Edit tool file_path inputs and Bash command absolute paths.
+   * Checks Write/Edit tool file_path inputs and Bash command write targets.
+   * Skips tool calls that were denied (permission_denials) — they never executed.
    */
   async auditWorktreeEscape(
     sessionId: string,
     worktreePath: string,
   ): Promise<WorktreeEscapeViolation[]> {
     const events = getEventsBySession(sessionId);
+    const denials = getDenialsBySession(sessionId);
+    const deniedIds = new Set(denials.map((d) => d.tool_use_id));
+
     const violations: WorktreeEscapeViolation[] = [];
     const normalizedWorktree = normalizePath(worktreePath);
     const worktreePrefix = normalizedWorktree.endsWith(path.sep)
@@ -209,6 +247,7 @@ export class SessionAuditor {
     for (const event of events) {
       const blocks = extractToolUseBlocks(event);
       for (const block of blocks) {
+        if (block.id && deniedIds.has(block.id)) continue;
         const paths = extractPathsFromBlock(block);
         for (const p of paths) {
           const resolved = normalizePath(p, worktreePath);
@@ -298,31 +337,6 @@ export class SessionAuditor {
 
     return parts.length > 0 ? parts.join('; ') : null;
   }
-
-  private routeFailuresToSession(
-    sessionId: string,
-    violations: (string | WorktreeEscapeViolation)[],
-  ): void {
-    if (!this.sessionManager) return;
-    const lines = violations.map((v) =>
-      typeof v === 'string'
-        ? `❌ ${v}`
-        : `❌ worktree_escape: ${v.tool} wrote to ${v.path}`,
-    );
-    const message = [
-      'Audit findings for your PR:',
-      '',
-      ...lines,
-      '',
-      'Please address these issues and push a fix.',
-    ].join('\n');
-
-    try {
-      this.sessionManager.send(sessionId, message);
-    } catch {
-      // Session may have already exited — violations still stored in SQLite
-    }
-  }
 }
 
 // ── Private helpers ──────────────────────────────────────────────────────────
@@ -330,6 +344,7 @@ export class SessionAuditor {
 interface ToolUseBlock {
   name: string;
   input: Record<string, unknown>;
+  id?: string;
 }
 
 /** Extract all tool_use blocks from a session event payload. */
@@ -342,11 +357,12 @@ function extractToolUseBlocks(event: SessionEvent): ToolUseBlock[] {
     return blocks;
   }
 
-  if (event.event_type === 'tool_use') {
+  if (eventKind(event) === 'tool_use') {
     const name = payload.name as string | undefined;
+    const id = payload.id as string | undefined;
     const input = (payload.input ?? {}) as Record<string, unknown>;
-    if (name) blocks.push({ name, input });
-  } else if (event.event_type === 'text') {
+    if (name) blocks.push({ name, input, id });
+  } else if (eventKind(event) === 'text') {
     const message = payload.message as Record<string, unknown> | undefined;
     const content = message?.content as
       | Array<Record<string, unknown>>
@@ -357,6 +373,7 @@ function extractToolUseBlocks(event: SessionEvent): ToolUseBlock[] {
           blocks.push({
             name: block.name,
             input: (block.input ?? {}) as Record<string, unknown>,
+            id: block.id as string | undefined,
           });
         }
       }
@@ -375,23 +392,39 @@ function extractPathsFromBlock(block: ToolUseBlock): string[] {
   }
   if (name === 'Bash') {
     const command = input.command as string | undefined;
-    return command ? extractAbsolutePathsFromCommand(command) : [];
+    return command ? extractWriteTargetsFromCommand(command) : [];
   }
   return [];
 }
 
-/** Extract absolute paths embedded in a shell command string. */
-function extractAbsolutePathsFromCommand(command: string): string[] {
-  const paths: string[] = [];
-  // Windows absolute: C:\... or C:/...
-  for (const match of command.matchAll(/[A-Za-z]:[/\\][^\s"'`;\n]*/g)) {
-    paths.push(match[0]);
+/**
+ * Extract only actual write targets from a shell command string.
+ * Handles output redirects (>/>>), tee, and cp/mv destinations.
+ * URLs are stripped first to prevent https:// fragments matching as paths.
+ */
+function extractWriteTargetsFromCommand(command: string): string[] {
+  const stripped = command.replace(/https?:\/\/[^\s"'`;\n]*/gi, '');
+  const targets: string[] = [];
+
+  // Output redirects: > path or >> path
+  for (const match of stripped.matchAll(/>>?\s*([^\s"'`;\n|&]+)/g)) {
+    targets.push(match[1]);
   }
-  // Git-Bash absolute: /c/... (single lowercase letter drive)
-  for (const match of command.matchAll(/\/[a-zA-Z]\/[^\s"'`;\n]*/g)) {
-    paths.push(match[0]);
+  // tee destinations: tee [-flags] path
+  for (const match of stripped.matchAll(
+    /\btee\s+(?:-\S+\s+)*([^\s"'`;\n|&]+)/g,
+  )) {
+    targets.push(match[1]);
   }
-  return paths;
+  // cp/mv destinations: cp/mv [-flags] src dest
+  for (const match of stripped.matchAll(
+    /\b(?:cp|mv)\s+(?:-\S+\s+)*\S+\s+([^\s"'`;\n|&]+)/g,
+  )) {
+    targets.push(match[1]);
+  }
+
+  // /dev/null (and other null sinks) are not real write targets.
+  return targets.filter((t) => t !== '/dev/null');
 }
 
 /**

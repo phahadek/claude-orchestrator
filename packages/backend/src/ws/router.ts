@@ -1,15 +1,26 @@
 import { WebSocket } from 'ws';
 import { ClientMessage } from './types';
 import { SessionManager } from '../session/SessionManager';
-import { getTaskBackend } from '../tasks/TaskBackend';
 import { getProjectById } from '../config';
 import { approveEnrollment } from '../auth/Enrollment';
+import { getTaskCache } from '../db/queries';
+import { ProjectService } from '../projects/ProjectService';
+import { DependencyResolver } from '../notion/DependencyResolver';
+import type { NotionTask } from '../notion/types';
 
-export function handleMessage(
+let refreshProjectFn: ((projectId: string) => Promise<void>) | null = null;
+
+export function setWsRouterRefreshFn(
+  fn: (projectId: string) => Promise<void>,
+): void {
+  refreshProjectFn = fn;
+}
+
+export async function handleMessage(
   ws: WebSocket,
   raw: string,
   sessions: SessionManager,
-): void {
+): Promise<void> {
   let msg: ClientMessage;
   try {
     msg = JSON.parse(raw) as ClientMessage;
@@ -29,7 +40,7 @@ export function handleMessage(
         );
         break;
       }
-      msg.tasks.forEach((t) => {
+      for (const t of msg.tasks) {
         if (!t.taskUrl) {
           ws.send(
             JSON.stringify({
@@ -37,10 +48,10 @@ export function handleMessage(
               message: 'dispatch task requires a non-empty taskUrl',
             }),
           );
-          return;
+          continue;
         }
         try {
-          sessions.start(t.taskUrl, t.projectContextUrl, {
+          await sessions.start(t.taskUrl, t.projectContextUrl, {
             taskType: t.taskType,
             projectId: t.projectId,
             milestoneId: t.milestoneId,
@@ -60,7 +71,7 @@ export function handleMessage(
             ws.send(JSON.stringify({ type: 'error', message: String(e) }));
           }
         }
-      });
+      }
       break;
     case 'approve':
       // The claude CLI --print mode does not support mid-session permission approval.
@@ -75,7 +86,13 @@ export function handleMessage(
       );
       break;
     case 'send_message':
-      sessions.send(msg.sessionId, msg.message);
+      void sessions
+        .sendOrResume(msg.sessionId, msg.message)
+        .catch((err: unknown) => {
+          console.error(
+            `[router] sendOrResume failed for session ${msg.sessionId}: ${String(err)}`,
+          );
+        });
       break;
     case 'kill':
       sessions.kill(msg.sessionId);
@@ -124,21 +141,39 @@ export function handleMessage(
         );
         break;
       }
-      let backend;
-      try {
-        backend = getTaskBackend(msg.projectId);
-      } catch (e) {
-        ws.send(JSON.stringify({ type: 'error', message: String(e) }));
+      // Serve from cache only — never block on a Notion round-trip.
+      const milestone = ProjectService.getMilestone(msg.milestoneId);
+      if (!milestone?.sourceId) {
+        ws.send(
+          JSON.stringify({
+            type: 'tasks_ready',
+            tasks: [],
+          }),
+        );
         break;
       }
-      backend
-        .fetchReadyTasks(msg.milestoneId, msg.skipCache)
-        .then((tasks) =>
-          ws.send(JSON.stringify({ type: 'tasks_ready', tasks })),
-        )
-        .catch((e) =>
-          ws.send(JSON.stringify({ type: 'error', message: String(e) })),
-        );
+      const cacheRow = getTaskCache(`board:${milestone.sourceId}`);
+      if (!cacheRow) {
+        ws.send(JSON.stringify({ type: 'tasks_ready', tasks: [] }));
+        if (msg.skipCache && refreshProjectFn) {
+          void refreshProjectFn(msg.projectId);
+        }
+        break;
+      }
+      try {
+        const notionTasks = JSON.parse(cacheRow.raw_json) as NotionTask[];
+        const resolver = new DependencyResolver();
+        const resolved = resolver.resolve(notionTasks);
+        ws.send(JSON.stringify({ type: 'tasks_ready', tasks: resolved }));
+      } catch {
+        ws.send(JSON.stringify({ type: 'tasks_ready', tasks: [] }));
+      }
+      // skipCache: true → trigger a background refresh so the cache gets fresh
+      // data from Notion. The refresher broadcasts task_cache_updated on completion,
+      // which the frontend uses to re-render and clear the Sync spinner.
+      if (msg.skipCache && refreshProjectFn) {
+        void refreshProjectFn(msg.projectId);
+      }
       break;
     }
     case 'enrollment_approve': {

@@ -81,7 +81,6 @@ export const JIRA_TOKEN = getSecret('JIRA_TOKEN') ?? ''; // API token or PAT
 export const JIRA_EMAIL = process.env.JIRA_EMAIL ?? ''; // email for basic auth (optional)
 
 export const AUTO_REVIEW_ENABLED = _oc.autoReview.enabled;
-export const AUTO_REVIEW_CONCURRENCY = _oc.autoReview.concurrency;
 
 // ── Session Bash output / timeout caps ───────────────────────────────────────
 // Single source for both CLI (spawn) and API (Agent SDK) mode.
@@ -118,7 +117,31 @@ export const ALLOWED_TOOLS = [
   'Bash(sort:*)',
   'Bash(pwd:*)',
   'mcp__claude_ai_Notion__*',
-  'mcp__github__*',
+  // GitHub MCP — explicit allowlist; create_pull_request and merge_pull_request are
+  // backend-owned and must not be available to session agents.
+  'mcp__github__add_issue_comment',
+  'mcp__github__create_branch',
+  'mcp__github__create_issue',
+  'mcp__github__create_or_update_file',
+  'mcp__github__create_pull_request_review',
+  'mcp__github__fork_repository',
+  'mcp__github__get_file_contents',
+  'mcp__github__get_issue',
+  'mcp__github__get_pull_request',
+  'mcp__github__get_pull_request_comments',
+  'mcp__github__get_pull_request_files',
+  'mcp__github__get_pull_request_reviews',
+  'mcp__github__get_pull_request_status',
+  'mcp__github__list_commits',
+  'mcp__github__list_issues',
+  'mcp__github__list_pull_requests',
+  'mcp__github__push_files',
+  'mcp__github__search_code',
+  'mcp__github__search_issues',
+  'mcp__github__search_repositories',
+  'mcp__github__search_users',
+  'mcp__github__update_issue',
+  'mcp__github__update_pull_request_branch',
 ];
 
 function hydrateProject(p: {
@@ -225,6 +248,10 @@ export interface RuntimeSettings {
   auto_archive_grace_minutes: number;
   /** ConcludedSessionArchiver: interval in minutes between archiver sweeps. */
   auto_archive_sweep_interval_minutes: number;
+  /** Model used for large-context task escalation; empty string = feature off. */
+  large_task_model: string;
+  /** TaskCacheRefresher: how often (ms) to refresh per-project board caches in background. */
+  task_cache_refresh_interval_ms: number;
 }
 
 /** Mutable in-memory settings, seeded from env and overridden by DB on startup. */
@@ -232,7 +259,7 @@ export const runtimeSettings: RuntimeSettings = {
   max_concurrent_code_sessions: Number(
     process.env.MAX_CONCURRENT_CODE_SESSIONS ?? 20,
   ),
-  auto_review_concurrency: _oc.autoReview.concurrency,
+  auto_review_concurrency: 20,
   auto_review: _oc.autoReview.enabled,
   card_preview_lines: Number(process.env.CARD_PREVIEW_LINES ?? 3),
   code_session_model: '',
@@ -267,5 +294,9 @@ export const runtimeSettings: RuntimeSettings = {
   ),
   auto_archive_sweep_interval_minutes: Number(
     process.env.AUTO_ARCHIVE_SWEEP_INTERVAL_MINUTES ?? 5,
+  ),
+  large_task_model: '',
+  task_cache_refresh_interval_ms: Number(
+    process.env.TASK_CACHE_REFRESH_INTERVAL_MS ?? 60_000,
   ),
 };

@@ -96,13 +96,28 @@ describe('recoverSession', () => {
     vi.clearAllMocks();
   });
 
-  it('broadcasts session_ended on clean exit with no PR', async () => {
+  it('broadcasts session_ended with idle status on clean_exit scope', async () => {
     const broadcast = vi.fn();
-    await recoverSession('sess-1', baseOpts({ broadcast }));
+    await recoverSession(
+      'sess-1',
+      baseOpts({ broadcast, scope: 'clean_exit' }),
+    );
     expect(broadcast).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'session_ended',
         sessionId: 'sess-1',
+        status: 'idle',
+      }),
+    );
+  });
+
+  it('broadcasts session_ended with done status on boot scope', async () => {
+    const broadcast = vi.fn();
+    await recoverSession('sess-1b', baseOpts({ broadcast, scope: 'boot' }));
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'session_ended',
+        sessionId: 'sess-1b',
         status: 'done',
       }),
     );
@@ -239,6 +254,46 @@ describe('recoverSession', () => {
     expect(broadcast).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'session_audit' }),
     );
+  });
+
+  it('broadcasts missed_pr_nudge (not audit findings) when session has no PR', async () => {
+    const { SessionAuditor } = await import('../session/SessionAuditor');
+    vi.mocked(SessionAuditor).mockImplementationOnce(
+      () =>
+        ({
+          audit: vi.fn(async () => ({
+            sessionId: 'sess-no-pr',
+            prOpened: false,
+            prTargetsBranch: null,
+            taskStatusAfter: null,
+            violations: [],
+            specMismatch: null,
+            auditedAt: new Date().toISOString(),
+          })),
+        }) as any,
+    );
+
+    const broadcast = vi.fn();
+    await recoverSession(
+      'sess-no-pr',
+      baseOpts({ broadcast, sessionType: 'standard' }),
+    );
+    // Wait for the floating audit promise
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'missed_pr_nudge',
+        sessionId: 'sess-no-pr',
+      }),
+    );
+    // Must NOT produce a security-grade audit-findings message
+    const auditFindings = broadcast.mock.calls.find(
+      (c) =>
+        c[0]?.type === 'session_audit' &&
+        JSON.stringify(c[0]?.violations ?? []).includes('audit findings'),
+    );
+    expect(auditFindings).toBeUndefined();
   });
 
   it('skips the SessionAuditor for review sessions', async () => {

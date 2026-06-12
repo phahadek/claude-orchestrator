@@ -1,6 +1,7 @@
 import type { ResolvedTask } from '../notion/types';
 import type { DisplayStatus } from '../tasks/TaskStatusEngine';
 import type { PauseReason } from '../db/types';
+import type { EventKind } from '../session/eventKind';
 
 // ── Server → Client ──────────────────────────────────────────────
 export interface PermissionDenial {
@@ -64,6 +65,7 @@ export interface TaskView {
     outputTokens: number;
     context_occupancy_tokens?: number;
     compaction_count?: number;
+    model?: string | null;
   } | null;
   pr: {
     prNumber: number;
@@ -74,6 +76,7 @@ export interface TaskView {
     state: string;
     draft: boolean;
     mergeState: string | null;
+    preReviewStage?: string | null;
   } | null;
   review: {
     sessionId: string;
@@ -88,16 +91,12 @@ export interface TaskView {
 }
 
 export type ServerMessage =
+  | ({ type: 'session_starting' } & SessionState)
   | ({ type: 'session_started' } & SessionState)
   | {
       type: 'session_event';
       sessionId: string;
-      eventType:
-        | 'text'
-        | 'tool_use'
-        | 'tool_result'
-        | 'system'
-        | 'user_message';
+      eventType: EventKind;
       content: string;
       messageId?: string;
     }
@@ -108,6 +107,7 @@ export type ServerMessage =
         | 'starting'
         | 'running'
         | 'needs_permission'
+        | 'idle'
         | 'done'
         | 'error'
         | 'killed'
@@ -215,6 +215,12 @@ export type ServerMessage =
     }
   | { type: 'stuck_session_killed'; sessionId: string; taskName: string }
   | {
+      type: 'stuck_session_idle_open_pr';
+      sessionId: string;
+      taskId: string | null;
+      prUrl: string | null;
+    }
+  | {
       type: 'api_overloaded_paused';
       sessionId: string;
       prNumber?: number;
@@ -239,6 +245,12 @@ export type ServerMessage =
       sessionId: string;
     }
   | {
+      type: 'auto_launch_paused';
+      taskId: string;
+      reason: 'launch_failed';
+      detail: string;
+    }
+  | {
       type: 'github_rate_limit_hit';
       resetAt: string; // ISO-8601
       limit: number;
@@ -255,7 +267,19 @@ export type ServerMessage =
       success: boolean;
       summary?: string;
     }
+  | { type: 'verify_pipeline_started'; prNumber: number; repo: string }
+  | { type: 'verify_pipeline_complete'; prNumber: number; repo: string }
+  | { type: 'test_pipeline_started'; prNumber: number; repo: string }
+  | { type: 'test_pipeline_complete'; prNumber: number; repo: string }
   | { type: 'review_started'; prNumber: number; sessionId: string }
+  | {
+      type: 'pr_review_blocked_by_gate';
+      prNumber: number;
+      repo: string;
+      kind: 'verify' | 'autofix';
+      failedCommand?: string;
+      summary: string;
+    }
   | {
       type: 'local_branch_submitted';
       projectId: string;
@@ -294,7 +318,30 @@ export type ServerMessage =
       repo: string;
       message: string;
     }
-  | { type: 'session_archived'; sessionId: string };
+  | { type: 'session_archived'; sessionId: string }
+  | { type: 'context_overflow_detected'; sessionId: string }
+  | { type: 'large_model_escalation_started'; sessionId: string }
+  | { type: 'missed_pr_nudge'; sessionId: string }
+  | {
+      type: 'session_auto_pushed';
+      sessionId: string;
+      branch: string;
+      commits: number;
+    }
+  | {
+      type: 'task_cache_updated';
+      projectId: string;
+      boardId: string;
+      taskCount: number;
+      refreshedAt: number;
+    }
+  | {
+      type: 'session_action_failed';
+      sessionId: string;
+      action: string;
+      reason: string;
+      detail: string;
+    };
 
 // ── Client → Server ──────────────────────────────────────────────
 export type ClientMessage =

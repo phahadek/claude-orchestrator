@@ -695,3 +695,141 @@ describe('PRPanel — differential routing (WorkItemCard vs PRHistoryRow)', () =
     });
   });
 });
+
+// ── PipelineStageBadge rendering in PRPanel ───────────────────────────────────
+
+describe('PRPanel — PipelineStageBadge', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function setupFetchWithPRs(prs: PRWorkItem[]) {
+    (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => prs,
+    });
+  }
+
+  it('renders pipeline badge from REST-loaded preReviewStage (initial-state hydration)', async () => {
+    const pr = makePR({
+      prNumber: 5,
+      title: 'Pipeline PR',
+      preReviewStage: 'tests',
+    });
+    setupFetchWithPRs([pr]);
+    render(<PRPanel activeProjectId="proj-1" />);
+    await waitFor(() => {
+      expect(screen.getByText(/Running tests/)).toBeDefined();
+    });
+  });
+
+  it('does not render pipeline badge when preReviewStage is null', async () => {
+    const pr = makePR({
+      prNumber: 6,
+      title: 'No Stage PR',
+      preReviewStage: null,
+    });
+    setupFetchWithPRs([pr]);
+    render(<PRPanel activeProjectId="proj-1" />);
+    await waitFor(() => {
+      expect(screen.getByText('No Stage PR')).toBeDefined();
+    });
+    expect(screen.queryByText(/Running/)).toBeNull();
+    expect(screen.queryByText(/Awaiting/)).toBeNull();
+  });
+
+  it('updates badge when prPipelineStages prop changes (WS-driven update)', async () => {
+    const pr = makePR({ prNumber: 7, title: 'WS PR', preReviewStage: null });
+    setupFetchWithPRs([pr]);
+
+    const { rerender } = render(
+      <PRPanel activeProjectId="proj-1" prPipelineStages={new Map()} />,
+    );
+    await waitFor(() => expect(screen.getByText('WS PR')).toBeDefined());
+
+    rerender(
+      <PRPanel
+        activeProjectId="proj-1"
+        prPipelineStages={new Map([[7, 'awaiting_review']])}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/Awaiting review/)).toBeDefined();
+    });
+  });
+
+  it('progresses through full pipeline: autofix → verify → tests → awaiting_review', async () => {
+    const pr = makePR({ prNumber: 8, title: 'Full Pipeline PR' });
+    setupFetchWithPRs([pr]);
+
+    const { rerender } = render(
+      <PRPanel
+        activeProjectId="proj-1"
+        prPipelineStages={new Map([[8, 'autofix']])}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByText(/Running autofix/)).toBeDefined(),
+    );
+
+    rerender(
+      <PRPanel
+        activeProjectId="proj-1"
+        prPipelineStages={new Map([[8, 'verify']])}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByText(/Running verify/)).toBeDefined(),
+    );
+
+    rerender(
+      <PRPanel
+        activeProjectId="proj-1"
+        prPipelineStages={new Map([[8, 'tests']])}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByText(/Running tests/)).toBeDefined(),
+    );
+
+    rerender(
+      <PRPanel
+        activeProjectId="proj-1"
+        prPipelineStages={new Map([[8, 'awaiting_review']])}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByText(/Awaiting review/)).toBeDefined(),
+    );
+  });
+
+  it('badge clears when review_started drives stage to null', async () => {
+    const pr = makePR({ prNumber: 9, title: 'Clear Stage PR' });
+    setupFetchWithPRs([pr]);
+
+    const { rerender } = render(
+      <PRPanel
+        activeProjectId="proj-1"
+        prPipelineStages={new Map([[9, 'awaiting_review']])}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByText(/Awaiting review/)).toBeDefined(),
+    );
+
+    rerender(
+      <PRPanel
+        activeProjectId="proj-1"
+        prPipelineStages={new Map([[9, null]])}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.queryByText(/Awaiting review/)).toBeNull();
+    });
+  });
+});

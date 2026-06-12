@@ -184,10 +184,12 @@ export function EventRow({ event }: EventRowProps) {
       return <ToolResultRow result={result} />;
     }
 
-    case 'system': {
+    case 'result':
+      return null;
+
+    case 'other': {
       if (isHiddenSystemEvent(payload)) return null;
       const { rawType, display } = extractSystem(payload, event.content);
-      if (rawType === 'result') return null;
       if (!display.trim()) return null;
       if (rawType === 'file-history-snapshot') {
         return <p className={styles.eventSystem}>📄 {display}</p>;
@@ -460,7 +462,10 @@ export function EventTranscript({
         case 'tool_result':
           line = extractToolResult(payload, e.content);
           break;
-        case 'system': {
+        case 'result':
+          break;
+
+        case 'other': {
           if (isHiddenSystemEvent(payload)) break;
           const display = extractSystem(payload, e.content).display;
           if (display.trim()) line = display;
@@ -515,7 +520,7 @@ export function EventTranscript({
 
   return (
     <div className={styles.transcriptSection}>
-      <div className={styles.transcriptHeader}>
+      <div className={styles.transcriptOverlay}>
         {!isAtBottom && (
           <button className={styles.goToEndButton} onClick={handleGoToEnd}>
             Go to End ↓

@@ -1,0 +1,759 @@
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { SessionControls } from '../SessionControls';
+import type { SessionState } from '../../hooks/useSessionStore';
+import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
+
+const fetchMock = vi.fn();
+
+beforeEach(() => {
+  fetchMock.mockReset();
+  fetchMock.mockResolvedValue(new Response(null, { status: 200 }));
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+});
+
+function makeSession(overrides?: Partial<SessionState>): SessionState {
+  return {
+    sessionId: 'sess-1',
+    taskName: 'Test Task',
+    notionTaskUrl: 'https://notion.so/task',
+    status: 'running',
+    events: [],
+    ...overrides,
+  };
+}
+
+const defaultProps = {
+  send: vi.fn() as (msg: ClientMessage) => void,
+  setSessionArchived: vi.fn(),
+  setSessionFavorited: vi.fn(),
+};
+
+describe('SessionControls — active session', () => {
+  it('shows End Session and Kill buttons for running sessions', () => {
+    render(<SessionControls session={makeSession()} {...defaultProps} />);
+    expect(screen.getByText('End Session')).toBeTruthy();
+    expect(screen.getByText('Kill')).toBeTruthy();
+  });
+
+  it('hides Archive and Delete buttons for active sessions', () => {
+    render(<SessionControls session={makeSession()} {...defaultProps} />);
+    expect(screen.queryByText('Archive')).toBeNull();
+    expect(screen.queryByText('Delete')).toBeNull();
+  });
+
+  it('shows End Session and Kill for needs_permission status', () => {
+    render(
+      <SessionControls
+        session={makeSession({ status: 'needs_permission' })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.getByText('End Session')).toBeTruthy();
+    expect(screen.getByText('Kill')).toBeTruthy();
+  });
+});
+
+describe('SessionControls — inactive session', () => {
+  it('shows Archive and Delete buttons for done sessions', () => {
+    render(
+      <SessionControls
+        session={makeSession({ status: 'done' })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.getByText('Archive')).toBeTruthy();
+    expect(screen.getByText('Delete')).toBeTruthy();
+  });
+
+  it('hides End Session and Kill buttons for done sessions', () => {
+    render(
+      <SessionControls
+        session={makeSession({ status: 'done' })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.queryByText('End Session')).toBeNull();
+    expect(screen.queryByText('Kill')).toBeNull();
+  });
+
+  it('shows Unarchive instead of Archive for archived sessions', () => {
+    render(
+      <SessionControls
+        session={makeSession({ status: 'done', archived: true })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.getByText('Unarchive')).toBeTruthy();
+    expect(screen.queryByText('Archive')).toBeNull();
+  });
+});
+
+describe('SessionControls — Kill action', () => {
+  it('sends kill WS message when confirmed', () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
+    const send = vi.fn();
+    render(
+      <SessionControls session={makeSession()} {...defaultProps} send={send} />,
+    );
+    fireEvent.click(screen.getByText('Kill'));
+    expect(send).toHaveBeenCalledWith<[ClientMessage]>({
+      type: 'kill',
+      sessionId: 'sess-1',
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it('does not send kill when confirm is cancelled', () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(false));
+    const send = vi.fn();
+    render(
+      <SessionControls session={makeSession()} {...defaultProps} send={send} />,
+    );
+    fireEvent.click(screen.getByText('Kill'));
+    expect(send).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('SessionControls — End Session action', () => {
+  it('sends end_session WS message when confirmed', () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
+    const send = vi.fn();
+    render(
+      <SessionControls session={makeSession()} {...defaultProps} send={send} />,
+    );
+    fireEvent.click(screen.getByText('End Session'));
+    expect(send).toHaveBeenCalledWith<[ClientMessage]>({
+      type: 'end_session',
+      sessionId: 'sess-1',
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it('does not send end_session when confirm is cancelled', () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(false));
+    const send = vi.fn();
+    render(
+      <SessionControls session={makeSession()} {...defaultProps} send={send} />,
+    );
+    fireEvent.click(screen.getByText('End Session'));
+    expect(send).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('SessionControls — Delete action', () => {
+  it('calls DELETE endpoint and invokes onDeleted when confirmed', async () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
+    const onDeleted = vi.fn();
+    render(
+      <SessionControls
+        session={makeSession({ status: 'done' })}
+        {...defaultProps}
+        onDeleted={onDeleted}
+      />,
+    );
+    fireEvent.click(screen.getByText('Delete'));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1', {
+        method: 'DELETE',
+      });
+      expect(onDeleted).toHaveBeenCalledWith('sess-1');
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it('does not call DELETE when confirm is cancelled', () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(false));
+    render(
+      <SessionControls
+        session={makeSession({ status: 'done' })}
+        {...defaultProps}
+      />,
+    );
+    fireEvent.click(screen.getByText('Delete'));
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('SessionControls — Archive action', () => {
+  it('calls archive endpoint and invokes setSessionArchived(id, true)', async () => {
+    const setSessionArchived = vi.fn();
+    render(
+      <SessionControls
+        session={makeSession({ status: 'done' })}
+        {...defaultProps}
+        setSessionArchived={setSessionArchived}
+      />,
+    );
+    fireEvent.click(screen.getByText('Archive'));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1/archive', {
+        method: 'PATCH',
+      });
+      expect(setSessionArchived).toHaveBeenCalledWith('sess-1', true);
+    });
+  });
+
+  it('calls unarchive endpoint and invokes setSessionArchived(id, false)', async () => {
+    const setSessionArchived = vi.fn();
+    render(
+      <SessionControls
+        session={makeSession({ status: 'done', archived: true })}
+        {...defaultProps}
+        setSessionArchived={setSessionArchived}
+      />,
+    );
+    fireEvent.click(screen.getByText('Unarchive'));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1/unarchive', {
+        method: 'PATCH',
+      });
+      expect(setSessionArchived).toHaveBeenCalledWith('sess-1', false);
+    });
+  });
+});
+
+describe('SessionControls — Favorite action', () => {
+  it('calls favorite endpoint and invokes setSessionFavorited(id, true) when not favorited', async () => {
+    const setSessionFavorited = vi.fn();
+    render(
+      <SessionControls
+        session={makeSession({ favorited: false })}
+        {...defaultProps}
+        setSessionFavorited={setSessionFavorited}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Favorite session'));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1/favorite', {
+        method: 'PATCH',
+      });
+      expect(setSessionFavorited).toHaveBeenCalledWith('sess-1', true);
+    });
+  });
+
+  it('calls unfavorite endpoint and invokes setSessionFavorited(id, false) when favorited', async () => {
+    const setSessionFavorited = vi.fn();
+    render(
+      <SessionControls
+        session={makeSession({ favorited: true })}
+        {...defaultProps}
+        setSessionFavorited={setSessionFavorited}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Unfavorite session'));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/sessions/sess-1/unfavorite',
+        { method: 'PATCH' },
+      );
+      expect(setSessionFavorited).toHaveBeenCalledWith('sess-1', false);
+    });
+  });
+});
+
+describe('SessionControls — Resume action', () => {
+  it('shows Resume button when session is rate-limited and onResume is provided', () => {
+    render(
+      <SessionControls
+        session={makeSession({ isRateLimited: true })}
+        {...defaultProps}
+        onResume={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Resume')).toBeTruthy();
+  });
+
+  it('calls onResume with sessionId when Resume is clicked', () => {
+    const onResume = vi.fn();
+    render(
+      <SessionControls
+        session={makeSession({ isRateLimited: true })}
+        {...defaultProps}
+        onResume={onResume}
+      />,
+    );
+    fireEvent.click(screen.getByText('Resume'));
+    expect(onResume).toHaveBeenCalledWith('sess-1');
+  });
+
+  it('does not show Resume button when isRateLimited is false', () => {
+    render(
+      <SessionControls
+        session={makeSession({ isRateLimited: false })}
+        {...defaultProps}
+        onResume={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText('Resume')).toBeNull();
+  });
+
+  it('does not show Resume button when onResume is not provided', () => {
+    render(
+      <SessionControls
+        session={makeSession({ isRateLimited: true })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.queryByText('Resume')).toBeNull();
+  });
+});
+
+describe('SessionControls — Note editor', () => {
+  it('shows Add a note placeholder when no note is set', () => {
+    render(<SessionControls session={makeSession()} {...defaultProps} />);
+    expect(screen.getByText('+ Add a note...')).toBeTruthy();
+  });
+
+  it('shows existing note text as the placeholder button', () => {
+    render(
+      <SessionControls
+        session={makeSession({ note: 'My note here' })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.getByText('My note here')).toBeTruthy();
+  });
+
+  it('clicking note placeholder shows input', () => {
+    render(<SessionControls session={makeSession()} {...defaultProps} />);
+    fireEvent.click(screen.getByText('+ Add a note...'));
+    expect(screen.getByPlaceholderText('Add a note...')).toBeTruthy();
+  });
+
+  it('commits note via PATCH on Enter', async () => {
+    render(<SessionControls session={makeSession()} {...defaultProps} />);
+    fireEvent.click(screen.getByText('+ Add a note...'));
+    const input = screen.getByPlaceholderText('Add a note...');
+    fireEvent.change(input, { target: { value: 'hello note' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1/note', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: 'hello note' }),
+      });
+    });
+  });
+
+  it('commits note via PATCH on blur', async () => {
+    render(<SessionControls session={makeSession()} {...defaultProps} />);
+    fireEvent.click(screen.getByText('+ Add a note...'));
+    const input = screen.getByPlaceholderText('Add a note...');
+    fireEvent.change(input, { target: { value: 'blur note' } });
+    fireEvent.blur(input);
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1/note', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ note: 'blur note' }),
+      });
+    });
+  });
+
+  it('cancels note editing on Escape without committing', () => {
+    render(
+      <SessionControls
+        session={makeSession({ note: 'original' })}
+        {...defaultProps}
+      />,
+    );
+    fireEvent.click(screen.getByText('original'));
+    const input = screen.getByPlaceholderText('Add a note...');
+    fireEvent.change(input, { target: { value: 'changed' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByPlaceholderText('Add a note...')).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('SessionControls — Tags', () => {
+  it('renders existing tags as pills', () => {
+    render(
+      <SessionControls
+        session={makeSession({ tags: ['alpha', 'beta'] })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.getByText('alpha')).toBeTruthy();
+    expect(screen.getByText('beta')).toBeTruthy();
+  });
+
+  it('adds a tag via PATCH on Enter', async () => {
+    render(
+      <SessionControls session={makeSession({ tags: [] })} {...defaultProps} />,
+    );
+    const input = screen.getByPlaceholderText('Add tag...');
+    fireEvent.change(input, { target: { value: 'newtag' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1/tags', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tags: ['newtag'] }),
+      });
+    });
+  });
+
+  it('removes a tag via PATCH when × is clicked', async () => {
+    render(
+      <SessionControls
+        session={makeSession({ tags: ['keep', 'remove'] })}
+        {...defaultProps}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Remove tag remove'));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1/tags', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tags: ['keep'] }),
+      });
+    });
+  });
+
+  it('does not add a duplicate tag', async () => {
+    render(
+      <SessionControls
+        session={makeSession({ tags: ['existing'] })}
+        {...defaultProps}
+      />,
+    );
+    const input = screen.getByPlaceholderText('Add tag...');
+    fireEvent.change(input, { target: { value: 'existing' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => {
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('SessionControls — compact disclosure toggle', () => {
+  it('renders the disclosure toggle button', () => {
+    render(<SessionControls session={makeSession()} {...defaultProps} />);
+    expect(screen.getByLabelText('Show session details')).toBeTruthy();
+  });
+
+  it('starts collapsed (aria-expanded=false)', () => {
+    render(<SessionControls session={makeSession()} {...defaultProps} />);
+    const toggle = screen.getByLabelText('Show session details');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('expands on click (aria-expanded=true)', () => {
+    render(<SessionControls session={makeSession()} {...defaultProps} />);
+    const toggle = screen.getByLabelText('Show session details');
+    fireEvent.click(toggle);
+    expect(
+      screen
+        .getByLabelText('Hide session details')
+        .getAttribute('aria-expanded'),
+    ).toBe('true');
+  });
+
+  it('collapses again on second click', () => {
+    render(<SessionControls session={makeSession()} {...defaultProps} />);
+    const toggle = screen.getByLabelText('Show session details');
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByLabelText('Hide session details'));
+    expect(
+      screen
+        .getByLabelText('Show session details')
+        .getAttribute('aria-expanded'),
+    ).toBe('false');
+  });
+
+  it('resets to collapsed when session changes', () => {
+    const { rerender } = render(
+      <SessionControls
+        session={makeSession({ sessionId: 'sess-1' })}
+        {...defaultProps}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Show session details'));
+    expect(
+      screen
+        .getByLabelText('Hide session details')
+        .getAttribute('aria-expanded'),
+    ).toBe('true');
+
+    rerender(
+      <SessionControls
+        session={makeSession({ sessionId: 'sess-2' })}
+        {...defaultProps}
+      />,
+    );
+    expect(
+      screen
+        .getByLabelText('Show session details')
+        .getAttribute('aria-expanded'),
+    ).toBe('false');
+  });
+
+  it('archive handler fires even when disclosure is closed (DOM always present)', async () => {
+    const setSessionArchived = vi.fn();
+    render(
+      <SessionControls
+        session={makeSession({ status: 'done' })}
+        {...defaultProps}
+        setSessionArchived={setSessionArchived}
+      />,
+    );
+    fireEvent.click(screen.getByText('Archive'));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1/archive', {
+        method: 'PATCH',
+      });
+      expect(setSessionArchived).toHaveBeenCalledWith('sess-1', true);
+    });
+  });
+
+  it('delete handler fires even when disclosure is closed (DOM always present)', async () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
+    const onDeleted = vi.fn();
+    render(
+      <SessionControls
+        session={makeSession({ status: 'done' })}
+        {...defaultProps}
+        onDeleted={onDeleted}
+      />,
+    );
+    fireEvent.click(screen.getByText('Delete'));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1', {
+        method: 'DELETE',
+      });
+      expect(onDeleted).toHaveBeenCalledWith('sess-1');
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it('status/model badges and Notion link are in DOM regardless of disclosure state', () => {
+    render(
+      <SessionControls
+        session={makeSession({
+          model: 'claude-opus-4-5',
+          notionTaskUrl: 'https://notion.so/task',
+        })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.getByText('Notion ↗')).toBeTruthy();
+  });
+
+  it('review-panel session (status=done) gets same disclosure treatment', () => {
+    render(
+      <SessionControls
+        session={makeSession({ status: 'done' })}
+        {...defaultProps}
+      />,
+    );
+    const toggle = screen.getByLabelText('Show session details');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(toggle);
+    expect(
+      screen
+        .getByLabelText('Hide session details')
+        .getAttribute('aria-expanded'),
+    ).toBe('true');
+  });
+});
+
+describe('SessionControls — embedded mode', () => {
+  it('renders disclosure toggle when embedded=true', () => {
+    render(
+      <SessionControls session={makeSession()} {...defaultProps} embedded />,
+    );
+    expect(screen.getByLabelText('Show session details')).toBeTruthy();
+  });
+
+  it('starts collapsed in embedded mode (aria-expanded=false)', () => {
+    render(
+      <SessionControls session={makeSession()} {...defaultProps} embedded />,
+    );
+    const toggle = screen.getByLabelText('Show session details');
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('expands on click in embedded mode (aria-expanded=true)', () => {
+    render(
+      <SessionControls session={makeSession()} {...defaultProps} embedded />,
+    );
+    fireEvent.click(screen.getByLabelText('Show session details'));
+    expect(
+      screen
+        .getByLabelText('Hide session details')
+        .getAttribute('aria-expanded'),
+    ).toBe('true');
+  });
+
+  it('archive handler fires after expanding disclosure in embedded mode', async () => {
+    const setSessionArchived = vi.fn();
+    render(
+      <SessionControls
+        session={makeSession({ status: 'done' })}
+        {...defaultProps}
+        setSessionArchived={setSessionArchived}
+        embedded
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Show session details'));
+    fireEvent.click(screen.getByText('Archive'));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1/archive', {
+        method: 'PATCH',
+      });
+      expect(setSessionArchived).toHaveBeenCalledWith('sess-1', true);
+    });
+  });
+
+  it('delete handler fires after expanding disclosure in embedded mode', async () => {
+    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
+    const onDeleted = vi.fn();
+    render(
+      <SessionControls
+        session={makeSession({ status: 'done' })}
+        {...defaultProps}
+        onDeleted={onDeleted}
+        embedded
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Show session details'));
+    fireEvent.click(screen.getByText('Delete'));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/sessions/sess-1', {
+        method: 'DELETE',
+      });
+      expect(onDeleted).toHaveBeenCalledWith('sess-1');
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it('Notion link is in DOM in embedded collapsed state', () => {
+    render(
+      <SessionControls
+        session={makeSession({ notionTaskUrl: 'https://notion.so/task' })}
+        {...defaultProps}
+        embedded
+      />,
+    );
+    expect(screen.getByText('Notion ↗')).toBeTruthy();
+  });
+
+  it('review session (status=done) in embedded mode starts collapsed', () => {
+    render(
+      <SessionControls
+        session={makeSession({ status: 'done' })}
+        {...defaultProps}
+        embedded
+      />,
+    );
+    expect(
+      screen
+        .getByLabelText('Show session details')
+        .getAttribute('aria-expanded'),
+    ).toBe('false');
+  });
+
+  it('standalone (no embedded prop) renders Archive/Delete accessible without toggle', () => {
+    render(
+      <SessionControls
+        session={makeSession({ status: 'done' })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.getByText('Archive')).toBeTruthy();
+    expect(screen.getByText('Delete')).toBeTruthy();
+  });
+
+  it('resets to collapsed when session changes in embedded mode', () => {
+    const { rerender } = render(
+      <SessionControls
+        session={makeSession({ sessionId: 'sess-1' })}
+        {...defaultProps}
+        embedded
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Show session details'));
+    expect(
+      screen
+        .getByLabelText('Hide session details')
+        .getAttribute('aria-expanded'),
+    ).toBe('true');
+
+    rerender(
+      <SessionControls
+        session={makeSession({ sessionId: 'sess-2' })}
+        {...defaultProps}
+        embedded
+      />,
+    );
+    expect(
+      screen
+        .getByLabelText('Show session details')
+        .getAttribute('aria-expanded'),
+    ).toBe('false');
+  });
+});
+
+describe('SessionControls — disclosure toggle inline placement', () => {
+  it('disclosure toggle is a direct child of the badge-row flex container (not a separate block)', () => {
+    render(
+      <SessionControls
+        session={makeSession({ notionTaskUrl: 'https://notion.so/task' })}
+        {...defaultProps}
+      />,
+    );
+    const toggle = screen.getByLabelText('Show session details');
+    const notionLink = screen.getByText('Notion ↗').closest('a')!;
+    // Both elements share the same parent — they are sibling flex items in the badge row
+    expect(toggle.parentElement).toBe(notionLink.parentElement);
+  });
+
+  it('disclosure toggle is adjacent to the Notion link in DOM order', () => {
+    render(
+      <SessionControls
+        session={makeSession({ notionTaskUrl: 'https://notion.so/task' })}
+        {...defaultProps}
+      />,
+    );
+    const toggle = screen.getByLabelText('Show session details');
+    const notionLink = screen.getByText('Notion ↗').closest('a')!;
+    // Toggle should immediately follow the Notion link in DOM order
+    expect(notionLink.nextElementSibling).toBe(toggle);
+  });
+});
+
+describe('SessionControls — Close button', () => {
+  it('renders close button when onClose is provided', () => {
+    render(
+      <SessionControls
+        session={makeSession()}
+        {...defaultProps}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByLabelText('Close panel')).toBeTruthy();
+  });
+
+  it('does not render close button when onClose is not provided', () => {
+    render(<SessionControls session={makeSession()} {...defaultProps} />);
+    expect(screen.queryByLabelText('Close panel')).toBeNull();
+  });
+
+  it('calls onClose when close button is clicked', () => {
+    const onClose = vi.fn();
+    render(
+      <SessionControls
+        session={makeSession()}
+        {...defaultProps}
+        onClose={onClose}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Close panel'));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+});

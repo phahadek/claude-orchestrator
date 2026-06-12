@@ -10,6 +10,7 @@ import {
   getAllStuckSessionTimers,
   getStuckResultSessionRows,
   markSessionDone,
+  markSessionIdle,
 } from '../db/queries';
 import type { ServerMessage } from '../ws/types';
 import type { GitHubClient } from '../github/GitHubClient';
@@ -113,7 +114,45 @@ export class StuckSessionMonitor {
     try {
       const rows = getStuckResultSessionRows(PERIODIC_MIN_AGE_MS);
       for (const row of rows) {
-        markSessionDone(row.session_id, row.last_ts, row.pr_url ?? null);
+        // If the session already has an open PR, transition to idle and notify the
+        // operator rather than marking done — the task is still in review.
+        // Check pull_requests table directly to catch the race where handlePRBodyMarker
+        // has already called upsertPullRequest but markSessionIdle hasn't run yet
+        // (so sessions.pr_url is still null).
+        const pr = getPRBySessionId(row.session_id);
+        if (pr && (pr.state === 'open' || pr.state === 'draft')) {
+          const prUrl = row.pr_url ?? pr.pr_url;
+          markSessionIdle(row.session_id, row.last_ts, prUrl);
+          this.broadcast({
+            type: 'stuck_session_idle_open_pr',
+            sessionId: row.session_id,
+            taskId: row.task_id ?? null,
+            prUrl,
+          });
+          continue;
+        }
+
+        // Guard: if the subprocess is still alive in-memory, the session is not
+        // truly done — it's idle (result arrived but process hasn't been cleaned
+        // up yet, or the pr_body upsert failed leaving no PR row). Route to idle
+        // so the operator can nudge via the composer per Task 10.
+        if (this.sessionManager.isAlive(row.session_id)) {
+          markSessionIdle(row.session_id, row.last_ts, row.pr_url ?? null);
+          this.broadcast({
+            type: 'stuck_session_idle_open_pr',
+            sessionId: row.session_id,
+            taskId: row.task_id ?? null,
+            prUrl: row.pr_url ?? null,
+          });
+          continue;
+        }
+
+        markSessionDone(
+          row.session_id,
+          row.last_ts,
+          row.pr_url ?? null,
+          'stuck_session_no_pr_periodic',
+        );
         let taskBackend;
         try {
           taskBackend = row.project_id ? getTaskBackend(row.project_id) : null;
@@ -266,7 +305,6 @@ export class StuckSessionMonitor {
   private onMessage(msg: ServerMessage): void {
     switch (msg.type) {
       case 'session_started':
-        if (msg.sessionType === 'review') return;
         this.startTracking(msg.sessionId, msg.taskName);
         return;
       case 'session_ended':
@@ -290,7 +328,7 @@ export class StuckSessionMonitor {
           this.checkHardStop(msg.sessionId);
           return;
         }
-        if (msg.eventType === 'system') {
+        if (msg.eventType === 'other') {
           this.handleSystemEvent(msg.sessionId, msg.content);
           return;
         }

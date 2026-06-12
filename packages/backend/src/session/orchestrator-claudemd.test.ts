@@ -73,15 +73,21 @@ describe('buildOrchestratorClaudeMd', () => {
     // Section 10: Bash rules
     expect(result).toContain('## Bash Rules (Permission System)');
     expect(result).toContain('One command per Bash call');
-    expect(result).toContain('mcp__github__create_pull_request');
+    // PR creation uses the <pr-body> marker; sessions are told NOT to use the MCP tool
+    expect(result).toContain(
+      'Do NOT use the MCP `mcp__github__create_pull_request`',
+    );
+    expect(result).not.toContain('gh pr create');
   });
 
-  it('Bash Rule 3 mandates the fixed `.claude/.commit-msg` path for multi-line commit messages', () => {
+  it('Bash Rule 3 instructs repeated -m flags for multi-line commit messages', () => {
     const result = buildOrchestratorClaudeMd(defaultParams);
-    // The fixed gitignored path must be present
-    expect(result).toContain('git commit -F .claude/.commit-msg');
-    // The old free-form instruction must NOT be present (would allow session-invented filenames)
-    expect(result).not.toMatch(/git commit -F <file>/);
+    // Repeated -m flag approach must be present
+    expect(result).toContain('repeated `-m` flags');
+    expect(result).toContain('git commit -m "<subject>" -m "<paragraph 2>"');
+    // Old scratch-file approach must NOT be present
+    expect(result).not.toContain('.claude/.commit-msg');
+    expect(result).not.toContain('git commit -F');
   });
 
   it('lists each verify command in the Pre-PR Gate when verify is non-empty', () => {
@@ -222,8 +228,9 @@ describe('buildOrchestratorClaudeMd', () => {
     expect(result).toContain('https://www.notion.so/task-999');
     expect(result).toContain('https://www.notion.so/ctx-888');
     expect(result).toContain('`main`');
-    // targetBranch used in lifecycle and branch rules
-    expect(result).toContain(`from \`main\``);
+    // targetBranch used in lifecycle (PR targeting) and pre-PR gate (rebase)
+    expect(result).toContain(`targeting \`main\``);
+    expect(result).toContain(`Rebase onto \`main\``);
   });
 });
 

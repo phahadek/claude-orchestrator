@@ -3,7 +3,7 @@ import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { useDispatch } from '../hooks/useDispatch';
 import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
-import { CIBadges } from './CIBadges';
+import { CIBadges, PipelineStageBadge } from './CIBadges';
 import { ContextBadge } from './ContextBadge';
 import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
 import styles from './TaskCard.module.css';
@@ -47,6 +47,18 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'PR body missing required sections — update the PR description and resume.',
   attribution_missing:
     'Commit attribution trailer missing — add AI-Authored-By to commits and push.',
+  audit_findings:
+    'Post-session audit found issues — review and address the findings.',
+  pr_creation_failed:
+    "PR creation failed — the session couldn't open its PR. Review and retry.",
+  stalled_idle:
+    'Session stalled without opening a PR — review and resume or abort.',
+  notion_done_update_stuck:
+    'PR merged but Notion status update failed repeatedly — update Notion to Done manually and clear the pause.',
+  launch_failed:
+    'Launch failed repeatedly — fix the underlying issue (e.g. delete the stale branch) then restart the backend.',
+  diverged_branch:
+    'Branch has diverged from origin — manual reconciliation needed before auto-push can resume.',
 };
 
 function verdictLabel(verdict: string): string {
@@ -134,6 +146,7 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
                 <ContextBadge
                   contextOccupancyTokens={codeSession.context_occupancy_tokens}
                   compactionCount={codeSession.compaction_count}
+                  model={codeSession.model}
                 />
               </div>
             )}
@@ -173,6 +186,11 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
                 mergeState={pr.mergeState}
                 pauseReason={task.pauseReason}
                 prState={pr.state}
+              />
+              <PipelineStageBadge
+                stage={pr.preReviewStage ?? null}
+                prState={pr.state}
+                compact
               />
             </div>
           ) : (

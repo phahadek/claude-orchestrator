@@ -25,8 +25,9 @@ export class EnvFileConfigSource implements ConfigSource {
       },
       autoReview: {
         enabled: process.env.AUTO_REVIEW !== 'false',
-        concurrency: Number(process.env.AUTO_REVIEW_CONCURRENCY ?? 1),
+        concurrency: 20,
       },
+      setupComplete: false,
     };
   }
 

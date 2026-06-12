@@ -1,4 +1,5 @@
 import type { SessionManager } from '../session/SessionManager';
+import { WorktreeSetupError } from '../session/WorktreeSetupError';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import { getAllProjects, runtimeSettings } from '../config';
@@ -9,12 +10,44 @@ import {
   hasActiveSessionForTask,
   getPausedPrReasonForTask,
   getMergedPRForTask,
+  setPauseReason,
+  getTaskPauseReason,
+  clearTaskPauseReason,
 } from '../db/queries';
+import { recordEvent } from '../audit/AuditLog';
+import { runWithConcurrency } from '../utils/concurrency';
 
 const READY_STATUS = '🗂️ Ready';
 const DONE_STATUS = '✅ Done';
 const CODE_TYPE = '💻 Code';
 const MIN_POLL_INTERVAL_MS = 5_000;
+const FETCH_TIMEOUT_MS = 30_000;
+const PROJECT_CONCURRENCY = 5;
+const UPDATE_CONCURRENCY = 3;
+
+export class AutoLauncherFetchTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AutoLauncherFetchTimeoutError';
+  }
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () =>
+          reject(
+            new AutoLauncherFetchTimeoutError(
+              `${label} timed out after ${ms}ms`,
+            ),
+          ),
+        ms,
+      ),
+    ),
+  ]);
+}
 
 /**
  * Backend service that polls each enabled project's milestone for Ready 💻 Code
@@ -28,6 +61,19 @@ export class AutoLauncher {
   private timer: NodeJS.Timeout | null = null;
   private polling = false;
   private stopped = true;
+  private pollLastStartedAt: number | null = null;
+  private cycleCounter = 0;
+  private notionUpdateAttempts = new Map<
+    string,
+    { count: number; nextRetryAt: number; lastError: string }
+  >();
+  private static readonly BACKOFF_SCHEDULE_MS = [
+    60_000,
+    5 * 60_000,
+    15 * 60_000,
+    60 * 60_000,
+  ];
+  private static readonly MAX_ATTEMPTS_BEFORE_AUDIT = 5;
 
   constructor(
     private readonly sessionManager: SessionManager,
@@ -67,6 +113,18 @@ export class AutoLauncher {
 
   private scheduleNext(): void {
     if (this.stopped) return;
+    // Backstop: if a previous pollOnce silently hung past 2× interval, force-reset.
+    if (
+      this.polling &&
+      this.pollLastStartedAt !== null &&
+      Date.now() - this.pollLastStartedAt >
+        2 * runtimeSettings.auto_launch_poll_interval_ms
+    ) {
+      console.warn(
+        `[AutoLauncher] poll STALL DETECTED — force-resetting (age=${Date.now() - this.pollLastStartedAt}ms)`,
+      );
+      this.polling = false;
+    }
     const interval = Math.max(
       MIN_POLL_INTERVAL_MS,
       runtimeSettings.auto_launch_poll_interval_ms,
@@ -84,27 +142,46 @@ export class AutoLauncher {
   async pollOnce(): Promise<void> {
     if (this.polling) return;
     this.polling = true;
+    const cycleId = ++this.cycleCounter;
+    this.pollLastStartedAt = Date.now();
+    console.log(`[AutoLauncher] poll start cycle=${cycleId}`);
+    let eligibleCount = 0;
+    let launchedCount = 0;
+    let skippedCount = 0;
     try {
       const listProjects = this.options.listProjects ?? getAllProjects;
       const projects = listProjects().filter((p) => p.autoLaunchEnabled);
-      for (const project of projects) {
-        try {
-          await this.processProject(project);
-        } catch (err) {
-          console.error(`[AutoLauncher] project ${project.id} failed:`, err);
-        }
+      const projectResults = await runWithConcurrency(
+        projects,
+        PROJECT_CONCURRENCY,
+        (project) =>
+          this.processProject(project).catch((err) => {
+            console.error(`[AutoLauncher] project ${project.id} failed:`, err);
+            return { eligible: 0, launched: 0, skipped: 0 };
+          }),
+      );
+      for (const counts of projectResults) {
+        eligibleCount += counts.eligible;
+        launchedCount += counts.launched;
+        skippedCount += counts.skipped;
       }
     } finally {
       this.polling = false;
+      const elapsedMs = Date.now() - (this.pollLastStartedAt ?? Date.now());
+      console.log(
+        `[AutoLauncher] poll complete cycle=${cycleId} (eligible=${eligibleCount}, launched=${launchedCount}, skipped=${skippedCount}) durationMs=${elapsedMs}`,
+      );
     }
   }
 
-  private async processProject(project: ProjectConfig): Promise<void> {
+  private async processProject(
+    project: ProjectConfig,
+  ): Promise<{ eligible: number; launched: number; skipped: number }> {
     const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
     const backend = resolveBackend(project.id);
 
     if (backend.type === 'local') {
-      return;
+      return { eligible: 0, launched: 0, skipped: 0 };
     }
 
     let milestoneId: string | null = null;
@@ -114,13 +191,17 @@ export class AutoLauncher {
         console.warn(
           `[AutoLauncher] project ${project.id}: no milestone configured — skipping`,
         );
-        return;
+        return { eligible: 0, launched: 0, skipped: 0 };
       }
     }
 
-    const milestoneTasks = await backend.fetchReadyTasks(
-      milestoneId,
-      backend.type === 'notion' ? true : undefined,
+    const milestoneTasks = await withTimeout(
+      backend.fetchReadyTasks(
+        milestoneId,
+        backend.type === 'notion' ? true : undefined,
+      ),
+      FETCH_TIMEOUT_MS,
+      `fetchReadyTasks(${project.id})`,
     );
 
     // Also fetch non-milestone tasks and merge into the eligible pool.
@@ -143,38 +224,95 @@ export class AutoLauncher {
 
     // Catch-up pass: if a task is still Ready in Notion but its PR was already
     // merged (the merge-handler fired silently), mark it Done now and skip launch.
-    for (const resolved of allTasks) {
-      const mergedPR = getMergedPRForTask(resolved.task.id);
-      if (mergedPR) {
+    // Idempotency guard: already-Done tasks are skipped to avoid runaway writes.
+    // Backoff guard: tasks still in cooldown from a previous failure are skipped.
+    const catchUpTasks = allTasks.filter((resolved) => {
+      if (resolved.task.status === DONE_STATUS) return false;
+      if (!getMergedPRForTask(resolved.task.id)) return false;
+      const attempt = this.notionUpdateAttempts.get(resolved.task.id);
+      return !(attempt && Date.now() < attempt.nextRetryAt);
+    });
+    await runWithConcurrency(
+      catchUpTasks,
+      UPDATE_CONCURRENCY,
+      async (resolved) => {
+        const mergedPR = getMergedPRForTask(resolved.task.id)!;
+        const attempt = this.notionUpdateAttempts.get(resolved.task.id);
         console.warn(
           `[AutoLauncher] task "${resolved.task.title}" (${resolved.task.id}) skipped — PR #${mergedPR.pr_number} (${mergedPR.pr_url}) is already merged; updating task status to Done`,
         );
         try {
-          await backend.updateStatus(resolved.task.id, DONE_STATUS);
-        } catch (err) {
-          console.warn(
-            `[AutoLauncher] failed to update task ${resolved.task.id} to Done: ${err}`,
+          await withTimeout(
+            backend.updateStatus(resolved.task.id, DONE_STATUS),
+            FETCH_TIMEOUT_MS,
+            `updateStatus(${resolved.task.id})`,
           );
+          this.notionUpdateAttempts.delete(resolved.task.id);
+        } catch (err) {
+          const next = attempt ? attempt.count + 1 : 1;
+          const backoffMs =
+            AutoLauncher.BACKOFF_SCHEDULE_MS[
+              Math.min(next - 1, AutoLauncher.BACKOFF_SCHEDULE_MS.length - 1)
+            ];
+          this.notionUpdateAttempts.set(resolved.task.id, {
+            count: next,
+            nextRetryAt: Date.now() + backoffMs,
+            lastError: String(err),
+          });
+          console.warn(
+            `[AutoLauncher] failed to update task ${resolved.task.id} to Done (attempt ${next}, next retry in ${backoffMs / 1000}s): ${err}`,
+          );
+          if (next === AutoLauncher.MAX_ATTEMPTS_BEFORE_AUDIT) {
+            recordEvent({
+              event_type: 'auto_launch_done_update_stuck',
+              actor_type: 'system',
+              actor_id: null,
+              project_id: project.id,
+              task_id: resolved.task.id,
+              payload: {
+                pr_number: mergedPR.pr_number,
+                last_error: String(err),
+                attempts: next,
+              },
+            });
+            setPauseReason(
+              mergedPR.pr_number,
+              mergedPR.repo,
+              'notion_done_update_stuck',
+            );
+          }
         }
-      }
-    }
+      },
+    );
 
     const candidates = allTasks.filter((t) => this.isLaunchCandidate(t));
-    if (candidates.length === 0) return;
+    if (candidates.length === 0)
+      return { eligible: 0, launched: 0, skipped: 0 };
 
+    let launched = 0;
     for (const candidate of candidates) {
       if (!this.hasCapacity()) {
-        return;
+        break;
       }
       // Non-milestone tasks have no milestoneId — they branch off dev directly.
       const isNonMilestone = nonMilestoneTasks.includes(candidate);
-      this.launchTask(
-        project,
-        candidate,
-        isNonMilestone ? null : milestoneId,
-        isNonMilestone ? 'non_milestone' : 'milestone',
-      );
+      if (
+        await this.launchTask(
+          project,
+          candidate,
+          isNonMilestone ? null : milestoneId,
+          isNonMilestone ? 'non_milestone' : 'milestone',
+        )
+      ) {
+        launched++;
+      }
     }
+
+    return {
+      eligible: candidates.length,
+      launched,
+      skipped: candidates.length - launched,
+    };
   }
 
   /**
@@ -200,6 +338,8 @@ export class AutoLauncher {
     const maybePauseReason = (task as { pause_reason?: string | null })
       .pause_reason;
     if (maybePauseReason != null && maybePauseReason !== '') return false;
+    // Skip tasks blocked by the crash budget (persisted, survives restarts).
+    if (getTaskPauseReason(task.id) != null) return false;
     // Also skip if the task's most recent PR is paused (e.g. stuck_timeout)
     // so we don't relaunch a session that was force-paused.
     if (getPausedPrReasonForTask(task.id) != null) return false;
@@ -232,12 +372,12 @@ export class AutoLauncher {
     return this.sessionManager.getLiveCodeSessionCount();
   }
 
-  private launchTask(
+  private async launchTask(
     project: ProjectConfig,
     resolved: ResolvedTask,
     milestoneId: string | null = null,
     taskKind: 'milestone' | 'non_milestone' = 'milestone',
-  ): void {
+  ): Promise<boolean> {
     const task = resolved.task;
     const taskUrl =
       task.notionUrl || `https://www.notion.so/${task.id.replace(/-/g, '')}`;
@@ -246,17 +386,22 @@ export class AutoLauncher {
     // in-memory SessionManager (catches launches whose Notion status update
     // hasn't propagated back yet) and the DB (catches sessions in any
     // non-terminal state, including ones temporarily missing from memory).
-    if (this.sessionManager.hasLiveSessionForTask(task.id)) return;
-    if (hasActiveSessionForTask(task.id)) return;
+    if (this.sessionManager.hasLiveSessionForTask(task.id)) return false;
+    if (hasActiveSessionForTask(task.id)) return false;
 
     try {
-      const sessionId = this.sessionManager.start(taskUrl, project.contextUrl, {
-        projectId: project.id,
-        taskName: task.title || taskUrl,
-        milestoneId,
-        taskKind,
-        taskId: task.id,
-      });
+      const sessionId = await this.sessionManager.start(
+        taskUrl,
+        project.contextUrl,
+        {
+          projectId: project.id,
+          taskName: task.title || taskUrl,
+          milestoneId,
+          taskKind,
+          taskId: task.id,
+        },
+      );
+      clearTaskPauseReason(task.id);
       console.log(
         `[AutoLauncher] launched session ${sessionId.slice(0, 8)} for task ${task.title || task.id} in project ${project.id}`,
       );
@@ -267,10 +412,17 @@ export class AutoLauncher {
         taskTitle: task.title || task.id,
         sessionId,
       });
+      return true;
     } catch (err) {
+      const fullMsg =
+        err instanceof WorktreeSetupError
+          ? err.message
+          : (err as Error).message;
       console.warn(
-        `[AutoLauncher] failed to launch task ${task.id} for project ${project.id}: ${(err as Error).message}`,
+        `[AutoLauncher] failed to launch task ${task.id}: ${fullMsg}`,
       );
+
+      return false;
     }
   }
 }

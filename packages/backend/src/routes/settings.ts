@@ -3,6 +3,11 @@ import type { Request, Response } from 'express';
 import { getSetting, setSetting, getAllSettings } from '../db/queries';
 import { runtimeSettings } from '../config';
 
+let _reviewOrchestrator: { drain(): Promise<void> } | null = null;
+export function setReviewOrchestrator(orch: { drain(): Promise<void> }): void {
+  _reviewOrchestrator = orch;
+}
+
 const router = Router();
 
 const SETTING_KEYS = [
@@ -25,6 +30,7 @@ const SETTING_KEYS = [
   'auto_archive_enabled',
   'auto_archive_grace_minutes',
   'auto_archive_sweep_interval_minutes',
+  'large_task_model',
 ] as const;
 
 type SettingKey = (typeof SETTING_KEYS)[number];
@@ -34,6 +40,7 @@ function applyToRuntime(key: SettingKey, value: string): void {
     runtimeSettings.max_concurrent_code_sessions = Number(value);
   } else if (key === 'auto_review_concurrency') {
     runtimeSettings.auto_review_concurrency = Number(value);
+    void _reviewOrchestrator?.drain();
   } else if (key === 'auto_review') {
     runtimeSettings.auto_review = value !== 'false';
   } else if (key === 'card_preview_lines') {
@@ -68,6 +75,8 @@ function applyToRuntime(key: SettingKey, value: string): void {
     runtimeSettings.auto_archive_grace_minutes = Number(value);
   } else if (key === 'auto_archive_sweep_interval_minutes') {
     runtimeSettings.auto_archive_sweep_interval_minutes = Number(value);
+  } else if (key === 'large_task_model') {
+    runtimeSettings.large_task_model = value;
   }
 }
 
@@ -85,7 +94,8 @@ export function loadRuntimeSettingsFromDb(): void {
       } else if (
         key === 'code_session_model' ||
         key === 'review_session_model' ||
-        key === 'session_mode'
+        key === 'session_mode' ||
+        key === 'large_task_model'
       ) {
         defaultVal = runtimeSettings[key];
       } else {
@@ -133,6 +143,7 @@ function runtimeSettingsAsRecord(): Record<SettingKey, string> {
     auto_archive_sweep_interval_minutes: String(
       runtimeSettings.auto_archive_sweep_interval_minutes,
     ),
+    large_task_model: runtimeSettings.large_task_model,
   };
 }
 

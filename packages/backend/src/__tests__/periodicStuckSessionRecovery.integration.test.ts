@@ -2,12 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 
 vi.mock('../db/db.js', async () => {
-  const Database = (await import('better-sqlite3')).default;
-  const memDb = new Database(':memory:');
-  memDb.pragma('foreign_keys = ON');
-  const { applyTestSchema } = await import('../../test/helpers/testDbSchema');
-  applyTestSchema(memDb);
-  return { db: memDb };
+  const { setupTestDb } = await import('../../test/helpers/setupTestDb.js');
+  return { db: setupTestDb() };
 });
 
 vi.mock('../session/sessionRecovery', () => ({
@@ -50,12 +46,15 @@ import type { SessionManager } from '../session/SessionManager';
 import { recoverSession } from '../session/sessionRecovery';
 import { db } from '../db/db.js';
 
-function makeMockSessionManager(): SessionManager {
+function makeMockSessionManager(isAlive = false): SessionManager {
   const sm = new EventEmitter() as unknown as SessionManager;
   (sm as unknown as { send: ReturnType<typeof vi.fn> }).send = vi.fn();
   (sm as unknown as { kill: ReturnType<typeof vi.fn> }).kill = vi
     .fn()
     .mockResolvedValue(undefined);
+  (sm as unknown as { isAlive: ReturnType<typeof vi.fn> }).isAlive = vi
+    .fn()
+    .mockReturnValue(isAlive);
   return sm;
 }
 
@@ -75,7 +74,7 @@ function insertStuckSession(
   ).run(sessionId, projectId, startedAt, sessionType);
   db.prepare(
     `INSERT INTO session_events (session_id, event_type, payload, timestamp)
-     VALUES (?, 'result', '{}', ?)`,
+     VALUES (?, 'system', '{"type":"result"}', ?)`,
   ).run(sessionId, lastEventTs);
 }
 

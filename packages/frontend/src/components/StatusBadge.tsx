@@ -4,6 +4,7 @@ const BADGE_CONFIG: Record<string, { label: string; className: string }> = {
   starting: { label: '⏳ Starting', className: styles['badge-starting'] },
   running: { label: '🔄 Running', className: styles['badge-running'] },
   needs_permission: { label: '⚠️ Waiting', className: styles['badge-waiting'] },
+  idle: { label: '⏸️ Idle', className: styles['badge-idle'] },
   done: { label: '✅ Done', className: styles['badge-done'] },
   error: { label: '❌ Error', className: styles['badge-error'] },
   killed: { label: '🛑 Killed', className: styles['badge-killed'] },

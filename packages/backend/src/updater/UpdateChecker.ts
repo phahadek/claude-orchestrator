@@ -2,21 +2,25 @@ import https from 'https';
 import type { IncomingMessage } from 'http';
 import type { GitHubRelease, UpdateInfo } from './types';
 import type { ServerMessage } from '../ws/types';
+import { getSetting } from '../db/queries';
 
 const REPO = 'phahadek/claude-orchestrator';
-const RELEASES_URL = `https://api.github.com/repos/${REPO}/releases/latest`;
+const RELEASES_LATEST_URL = `https://api.github.com/repos/${REPO}/releases/latest`;
+const RELEASES_LIST_URL = `https://api.github.com/repos/${REPO}/releases`;
 const POLL_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h
+
+export type ReleaseChannel = 'stable' | 'beta';
 
 function isDevMode(): boolean {
   return process.env.CO_DEV === '1';
 }
 
-function getCurrentVersion(): string {
+export function getCurrentVersion(): string {
   const pkg = require('../../package.json') as { version: string };
   return pkg.version;
 }
 
-function isNewer(current: string, candidate: string): boolean {
+export function isNewer(current: string, candidate: string): boolean {
   const parse = (v: string) =>
     v
       .replace(/^v/, '')
@@ -29,10 +33,10 @@ function isNewer(current: string, candidate: string): boolean {
   return nc > cc;
 }
 
-function fetchRelease(): Promise<GitHubRelease | null> {
+function fetchJson<T>(url: string): Promise<T | null> {
   return new Promise((resolve) => {
     const req = https.get(
-      RELEASES_URL,
+      url,
       {
         headers: {
           'User-Agent': `claude-orchestrator/${getCurrentVersion()}`,
@@ -48,7 +52,7 @@ function fetchRelease(): Promise<GitHubRelease | null> {
             return;
           }
           try {
-            resolve(JSON.parse(body) as GitHubRelease);
+            resolve(JSON.parse(body) as T);
           } catch {
             resolve(null);
           }
@@ -61,6 +65,25 @@ function fetchRelease(): Promise<GitHubRelease | null> {
       resolve(null);
     });
   });
+}
+
+export function getChannel(): ReleaseChannel {
+  const stored = getSetting('release_channel');
+  return stored === 'beta' ? 'beta' : 'stable';
+}
+
+/** Pick the newest release from a list, optionally including prereleases. */
+export function selectNewest(
+  releases: GitHubRelease[],
+  includePrereleases: boolean,
+): GitHubRelease | null {
+  const candidates = includePrereleases
+    ? releases
+    : releases.filter((r) => !r.prerelease);
+  return candidates.reduce<GitHubRelease | null>((best, r) => {
+    if (!best) return r;
+    return isNewer(best.tag_name, r.tag_name) ? best : r;
+  }, null);
 }
 
 export class UpdateChecker {
@@ -103,15 +126,32 @@ export class UpdateChecker {
   }
 
   private async runCheck(force: boolean): Promise<UpdateInfo | null> {
-    const release = await fetchRelease();
-    if (!release) {
-      console.warn(
-        '[updater] failed to fetch latest release — will retry next cycle',
-      );
-      return null;
+    const channel = getChannel();
+
+    let release: GitHubRelease | null;
+
+    if (channel === 'beta') {
+      const releases = await fetchJson<GitHubRelease[]>(RELEASES_LIST_URL);
+      if (!releases) {
+        console.warn(
+          '[updater] failed to fetch releases list — will retry next cycle',
+        );
+        return null;
+      }
+      release = selectNewest(releases, true);
+    } else {
+      release = await fetchJson<GitHubRelease>(RELEASES_LATEST_URL);
+      if (!release) {
+        console.warn(
+          '[updater] failed to fetch latest release — will retry next cycle',
+        );
+        return null;
+      }
+      // stable: skip prereleases (defence-in-depth; /releases/latest already excludes them)
+      if (release.prerelease) return null;
     }
 
-    if (release.prerelease) return null;
+    if (!release) return null;
 
     const currentVersion = getCurrentVersion();
     const tagVersion = release.tag_name;

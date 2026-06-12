@@ -206,20 +206,32 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
 }
 
-.transcriptHeader {
+/* Floating overlay pinned to top-right of the transcript area */
+.transcriptOverlay {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  z-index: 2;
   display: flex;
+  gap: 4px;
   align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-  padding: 4px 12px;
-  border-bottom: 1px solid var(--border);
+}
+
+/* Review-mode outer wrapper: natural height (no flex:1 stretch), overlays toggle */
+.reviewTranscriptOuter {
+  position: relative;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 32px;
 }
 
 .copyButton {
-  background: transparent;
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text-faint);
@@ -242,7 +254,7 @@
 }
 
 .goToEndButton {
-  background: transparent;
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text-faint);
@@ -258,6 +270,9 @@
   color: var(--text-primary);
   border-color: var(--text-faint);
 }
+
+/* keep .transcriptHeader classname in CSS so existing snapshots don't break,
+   but it is no longer used in the component */
 
 .transcript {
   flex: 1;
@@ -682,63 +697,6 @@
   color: var(--ctp-red);
   font-size: 0.875rem;
   padding: 24px;
-}
-
-/* ── Message composer ────────────────────────────────────────────── */
-.composer {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-secondary);
-  flex-shrink: 0;
-}
-
-.composerInput {
-  flex: 1;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  font-family: var(--font-sans);
-  font-size: 0.875rem;
-  padding: 8px 12px;
-  outline: none;
-  transition: border-color 0.15s;
-  resize: none;
-  overflow-y: auto;
-  max-height: 150px;
-  line-height: 1.5;
-}
-
-.composerInput::placeholder {
-  color: var(--text-faint);
-}
-
-.composerInput:focus {
-  border-color: var(--accent);
-}
-
-.sendButton {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  cursor: pointer;
-  font-size: 0.875rem;
-  padding: 8px 16px;
-  transition: background 0.15s;
-  white-space: nowrap;
-}
-
-.sendButton:hover:not(:disabled) {
-  background: var(--bg-hover);
-}
-
-.sendButton:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
 }
 
 /* ── Mobile overlay: remove left border when rendering as overlay ── */

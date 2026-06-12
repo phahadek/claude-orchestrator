@@ -2,12 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 
 vi.mock('../../src/db/db.js', async () => {
-  const Database = (await import('better-sqlite3')).default;
-  const memDb = new Database(':memory:');
-  memDb.pragma('foreign_keys = ON');
-  const { applyTestSchema } = await import('../helpers/testDbSchema');
-  applyTestSchema(memDb);
-  return { db: memDb };
+  const { setupTestDb } = await import('../helpers/setupTestDb.js');
+  return { db: setupTestDb() };
 });
 
 import { StuckSessionMonitor } from '../../src/orchestration/StuckSessionMonitor';
@@ -25,6 +21,9 @@ function makeMockSessionManager(): MockSessionManager {
   const sm = new EventEmitter() as unknown as MockSessionManager;
   sm.send = vi.fn();
   sm.kill = vi.fn().mockResolvedValue(undefined);
+  (sm as unknown as { isAlive: ReturnType<typeof vi.fn> }).isAlive = vi
+    .fn()
+    .mockReturnValue(false);
   return sm;
 }
 
@@ -41,7 +40,7 @@ function insertPR(sessionId: string, prNumber: number, repo: string): void {
   db.prepare(
     `
     INSERT INTO pull_requests
-      (pr_number, pr_url, notion_task_id, session_id, repo, state,
+      (pr_number, pr_url, task_id, session_id, repo, state,
        created_at, updated_at, synced_at)
     VALUES
       (@pr_number, @pr_url, NULL, @session_id, @repo, 'open',
@@ -92,8 +91,13 @@ function getTimerRow(sessionId: string) {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  db.prepare('DELETE FROM session_pause_intervals').run();
   db.prepare('DELETE FROM pull_requests').run();
   db.prepare('DELETE FROM stuck_session_timers').run();
+  db.prepare('DELETE FROM sessions').run();
+  db.prepare(
+    `INSERT INTO sessions (session_id, status, started_at) VALUES (?, 'running', 0)`,
+  ).run(SESSION_ID);
   runtimeSettings.session_notify_threshold_seconds = 60;
   runtimeSettings.session_pause_threshold_seconds = 120;
   runtimeSettings.session_hard_stop_window_seconds = 30;

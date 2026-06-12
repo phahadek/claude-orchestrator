@@ -6,11 +6,8 @@ import yaml from 'js-yaml';
 
 // In-memory SQLite so the queries module can prepare statements without a real db file.
 vi.mock('../../src/db/db.js', async () => {
-  const { default: Database } = await import('better-sqlite3');
-  const db = new Database(':memory:');
-  const { applyTestSchema } = await import('../helpers/testDbSchema');
-  applyTestSchema(db);
-  return { db };
+  const { setupTestDb } = await import('../helpers/setupTestDb.js');
+  return { db: setupTestDb() };
 });
 
 import { LocalTaskBackend } from '../../src/tasks/LocalTaskBackend';

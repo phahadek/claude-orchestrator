@@ -378,6 +378,70 @@ describe('GET /api/prs', () => {
   });
 });
 
+// ── GET /api/prs — awaitingReReview mapper ───────────────────────────────────
+
+describe('GET /api/prs — awaitingReReview computation', () => {
+  it('is true for blocked_autofix when pending_push=1', async () => {
+    const row = {
+      ...mockPRRow,
+      pre_review_stage: 'blocked_autofix',
+      pending_push: 1,
+    };
+    vi.mocked(queries.getPRs).mockReturnValue([row]);
+    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body[0].awaitingReReview).toBe(true);
+  });
+
+  it('is true for blocked_verify when head_sha differs from last_reviewed_sha', async () => {
+    const row = {
+      ...mockPRRow,
+      pre_review_stage: 'blocked_verify',
+      pending_push: 0,
+      head_sha: 'new-sha',
+      last_reviewed_sha: 'old-sha',
+    };
+    vi.mocked(queries.getPRs).mockReturnValue([row]);
+    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body[0].awaitingReReview).toBe(true);
+  });
+
+  it('is false for blocked_autofix when pending_push=0 and head_sha matches', async () => {
+    const row = {
+      ...mockPRRow,
+      pre_review_stage: 'blocked_autofix',
+      pending_push: 0,
+      head_sha: 'sha-abc',
+      last_reviewed_sha: 'sha-abc',
+    };
+    vi.mocked(queries.getPRs).mockReturnValue([row]);
+    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body[0].awaitingReReview).toBe(false);
+  });
+
+  it('is false when pre_review_stage is null', async () => {
+    const row = { ...mockPRRow, pre_review_stage: null, pending_push: 1 };
+    vi.mocked(queries.getPRs).mockReturnValue([row]);
+    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body[0].awaitingReReview).toBe(false);
+  });
+
+  it('is false for non-gate-failure stage (awaiting_review) even with pending_push', async () => {
+    const row = {
+      ...mockPRRow,
+      pre_review_stage: 'awaiting_review',
+      pending_push: 1,
+    };
+    vi.mocked(queries.getPRs).mockReturnValue([row]);
+    const res = await supertest(buildApp()).get('/api/prs?projectId=proj-1');
+    expect(res.status).toBe(200);
+    expect(res.body[0].awaitingReReview).toBe(false);
+  });
+});
+
 // ── GET /api/prs — local-only unified payload ─────────────────────────────────
 
 describe('GET /api/prs — local-only project returns local_branch items', () => {
@@ -814,6 +878,96 @@ describe('POST /api/prs/:prNumber/merge', () => {
     expect(emitIdx).toBeLessThan(responseIdx);
 
     setPRBroadcast(() => {});
+  });
+});
+
+// ── POST /api/prs/:prNumber/merge — draft → ready flip ───────────────────────
+
+describe('POST /api/prs/:prNumber/merge — draft flip', () => {
+  const draftPRRow: PullRequestRow = { ...mockPRRow, draft: 1 };
+
+  it('flips draft→ready then merges (markPRReady called before mergePR)', async () => {
+    const github = makeMockGitHub();
+    vi.mocked(queries.getPRByNumber).mockReturnValue(draftPRRow);
+    const callOrder: string[] = [];
+    vi.mocked(github.markPRReady).mockImplementation(async () => {
+      callOrder.push('markPRReady');
+    });
+    vi.mocked(github.mergePR).mockImplementation(async () => {
+      callOrder.push('mergePR');
+      return { merged: true, message: 'Merged', sha: 'abc123' };
+    });
+    const res = await supertest(buildApp(github))
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.status).toBe(200);
+    expect(callOrder).toEqual(['markPRReady', 'mergePR']);
+  });
+
+  it('does NOT call markPRReady for non-draft PR', async () => {
+    const github = makeMockGitHub();
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow); // draft: 0
+    const res = await supertest(buildApp(github))
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.status).toBe(200);
+    expect(vi.mocked(github.markPRReady)).not.toHaveBeenCalled();
+  });
+
+  it('updates pull_requests.draft to 0 on successful flip', async () => {
+    const github = makeMockGitHub();
+    vi.mocked(queries.getPRByNumber).mockReturnValue(draftPRRow);
+    const res = await supertest(buildApp(github))
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.status).toBe(200);
+    expect(vi.mocked(queries.updatePRDraftStatus)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      0,
+    );
+  });
+
+  it('returns specific error and does not merge when markPRReady fails after retry', async () => {
+    const github = makeMockGitHub();
+    vi.mocked(queries.getPRByNumber).mockReturnValue(draftPRRow);
+    vi.mocked(github.markPRReady).mockRejectedValue(
+      new Error('GraphQL mutation failed'),
+    );
+    const res = await supertest(buildApp(github))
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(/could not mark PR ready/i);
+    expect(res.body.error).toContain('GraphQL mutation failed');
+    expect(vi.mocked(github.mergePR)).not.toHaveBeenCalled();
+  });
+
+  it('retries markPRReady once on failure before giving up', async () => {
+    const github = makeMockGitHub();
+    vi.mocked(queries.getPRByNumber).mockReturnValue(draftPRRow);
+    vi.mocked(github.markPRReady).mockRejectedValue(new Error('transient'));
+    const res = await supertest(buildApp(github))
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.status).toBe(422);
+    expect(vi.mocked(github.markPRReady)).toHaveBeenCalledTimes(2);
+  });
+
+  it('conflict pre-check path unchanged — still returns 422 conflict for non-mergeable draft PR', async () => {
+    const github = makeMockGitHub();
+    vi.mocked(queries.getPRByNumber).mockReturnValue(draftPRRow);
+    vi.mocked(github.getMergeabilityWithRetry).mockResolvedValue({
+      mergeable: false,
+      mergeableState: 'dirty',
+    });
+    const res = await supertest(buildApp(github))
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.status).toBe(422);
+    expect(res.body.error).toMatch(/merge conflicts/i);
+    expect(vi.mocked(github.markPRReady)).not.toHaveBeenCalled();
+    expect(vi.mocked(github.mergePR)).not.toHaveBeenCalled();
   });
 });
 

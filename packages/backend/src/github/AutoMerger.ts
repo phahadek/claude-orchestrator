@@ -8,6 +8,7 @@ import {
   getPRByNumber,
   setPauseReason,
   updateMergeState,
+  updatePRDraftStatus,
   getApprovedOpenPRs,
   getApprovedLocalBranches,
   markLocalBranchMerged,
@@ -15,6 +16,10 @@ import {
   getSession,
   getOrphanMergeablePRs,
   getStaleAutoMergeFailedPRs,
+  getConflictNudgeCandidates,
+  upsertActiveMerge,
+  deleteActiveMerge,
+  getAllActiveMerges,
 } from '../db/queries';
 import type { GitHubClient, PRReviewDecision } from './GitHubClient';
 import { GitHubApiError, GitHubRateLimitError } from './types';
@@ -29,6 +34,7 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import { squashMergeLocal } from '../orchestration/localMergeRunner';
 import { detectMergeConflict } from '../orchestration/localBranchHelpers';
 import { formatMergeConflictFeedback } from './reviewUtils';
+import { sendConflictNudge, type ConflictNudgeCause } from './conflictNudge';
 
 const MIN_POLL_INTERVAL_MS = 5_000;
 
@@ -81,6 +87,9 @@ export class AutoMerger {
    * mergeable + clean state but received no event post-restart. These rows are
    * missed by the event-driven path because AutoMerger only fires on fresh
    * verdict=approved events or ci_failing → clean transitions.
+   *
+   * Also fires conflictNudgeSweep() asynchronously to re-nudge sessions for
+   * conflict/auto_merge_failed PRs that were missed before this notifier existed.
    */
   bootSweep(): void {
     const orphans = getOrphanMergeablePRs();
@@ -95,6 +104,11 @@ export class AutoMerger {
         `[AutoMerger] boot sweep complete — triggered ${orphans.length} orphan PR(s)`,
       );
     }
+    void this.conflictNudgeSweep().catch((err: unknown) =>
+      console.warn(
+        `[AutoMerger] conflictNudgeSweep error on boot: ${(err as Error).message}`,
+      ),
+    );
   }
 
   /**
@@ -113,6 +127,66 @@ export class AutoMerger {
       );
       setPauseReason(row.pr_number, row.repo, null);
       this.attempt(row.pr_number, row.repo);
+    }
+  }
+
+  /**
+   * Re-nudge sessions for PRs that are still conflicted/blocked but whose
+   * conflict notification was never delivered — either because the pause
+   * predates the notifier (auto_merge_failed rows with no conflict_nudge_sha)
+   * or because PRMergeWatcher recorded the conflict while the session was
+   * not being polled (merge_state='dirty'/'blocked', no pause).
+   *
+   * Guards: session must be idle; GitHub mergeability is re-checked so PRs
+   * whose conflict resolved while the backend was down are not re-nudged.
+   * SHA dedup in sendConflictNudge prevents double-nudging.
+   */
+  async conflictNudgeSweep(): Promise<void> {
+    if (!this.sessions) return;
+    const candidates = getConflictNudgeCandidates();
+    if (candidates.length === 0) return;
+
+    console.log(
+      `[AutoMerger] conflictNudgeSweep: checking ${candidates.length} candidate(s)`,
+    );
+    let nudged = 0;
+
+    for (const { pr_number, repo } of candidates) {
+      const pr = getPRByNumber(pr_number, repo);
+      if (!pr?.session_id) continue;
+
+      const session = getSession(pr.session_id);
+      if (!session || session.status !== 'idle') continue;
+
+      let category;
+      try {
+        category = await this.github.categorizeMergeability(pr_number, repo);
+      } catch (err) {
+        console.warn(
+          `[AutoMerger] conflictNudgeSweep: categorizeMergeability failed for PR #${pr_number}: ${(err as Error).message}`,
+        );
+        continue;
+      }
+
+      if (category.category !== 'conflict' && category.category !== 'blocked')
+        continue;
+
+      const cause: ConflictNudgeCause =
+        category.category === 'conflict' &&
+        category.rawMergeableState === 'behind'
+          ? 'behind'
+          : category.category === 'blocked'
+            ? 'blocked'
+            : 'conflict';
+
+      await sendConflictNudge(this.sessions, pr, cause);
+      nudged++;
+    }
+
+    if (nudged > 0) {
+      console.log(
+        `[AutoMerger] conflictNudgeSweep complete — nudged ${nudged} session(s)`,
+      );
     }
   }
 
@@ -140,6 +214,8 @@ export class AutoMerger {
     for (const row of approvedLocalBranches) {
       await this.handleLocalBranchMerge(row);
     }
+
+    await this.conflictNudgeSweep();
   }
 
   private async handleLocalBranchMerge(
@@ -289,7 +365,46 @@ export class AutoMerger {
     const k = this.key(prNumber, repo);
     if (this.active.has(k)) return;
     this.active.add(k);
-    void this.run(prNumber, repo, options).finally(() => this.active.delete(k));
+    upsertActiveMerge(k, repo, prNumber);
+    void this.run(prNumber, repo, options).finally(() => {
+      this.active.delete(k);
+      deleteActiveMerge(k);
+    });
+  }
+
+  /**
+   * Restore in-flight merge loops from the active_merges table after a restart.
+   * Called from server.ts alongside StuckSessionMonitor.rehydrate().
+   *
+   * Persistence pattern (shared with StuckSessionMonitor.timers and
+   * ReviewOrchestrator.pendingSyncs): a SQLite table acts as the durable store;
+   * rehydrate() re-creates the in-memory state on boot.
+   *
+   * Deliberately NOT persisted:
+   * - SessionManager._lastDisplayStatus — broadcast de-dup cache; empty-on-boot
+   *   is correct (status re-derives on the next incoming message).
+   * - AgentSession tool-call Maps (pendingGHToolUseIds, pendingBashCommands,
+   *   pendingPushFileToolUseIds) — per-session, per-message transient state that
+   *   is correctly discarded on session resume.
+   *
+   * bootSweep() remains as belt-and-suspenders for PRs that became mergeable
+   * while the server was down; rehydrate() handles truly in-flight loops.
+   * The attempt() idempotent guard (active.has(k)) prevents double-runs when
+   * both paths target the same PR.
+   */
+  rehydrate(): void {
+    const rows = getAllActiveMerges();
+    for (const row of rows) {
+      console.log(
+        `[AutoMerger] rehydrate: resuming in-flight merge for PR #${row.pr_number} in ${row.repo}`,
+      );
+      this.attempt(row.pr_number, row.repo);
+    }
+    if (rows.length > 0) {
+      console.log(
+        `[AutoMerger] rehydrate complete — resumed ${rows.length} in-flight merge(s)`,
+      );
+    }
   }
 
   private async run(
@@ -436,6 +551,9 @@ export class AutoMerger {
           );
           return;
         case 'blocked':
+          if (this.sessions) {
+            await sendConflictNudge(this.sessions, row, 'blocked');
+          }
           await this.pauseWithReason(row, 'auto_merge_failed');
           return;
         case 'unknown':
@@ -483,6 +601,53 @@ export class AutoMerger {
         `[AutoMerger] PR #${pr.pr_number}: squash-merged to ${pr.base_branch ?? 'dev'}`,
       );
     } catch (err) {
+      // Still-draft retry: 405 "Pull Request is still a draft" → markPRReady then retry once.
+      if (
+        err instanceof GitHubApiError &&
+        err.status === 405 &&
+        /still a draft/i.test(err.body)
+      ) {
+        console.warn(
+          `[AutoMerger] PR #${pr.pr_number}: 405 still-draft — retrying markPRReady then merge`,
+        );
+        try {
+          await this.github.markPRReady(pr.repo, pr.pr_number);
+          updatePRDraftStatus(pr.pr_number, pr.repo, 0);
+          const retryResult = await this.github.mergePR(
+            pr.pr_number,
+            commitTitle,
+            pr.repo,
+          );
+          await this.mergeWatcher.handleMerged(pr, retryResult.sha ?? null);
+          recordEvent({
+            event_type: 'pr_merged',
+            actor_type: 'system',
+            actor_id: null,
+            project_id: getProjectByGithubRepo(pr.repo)?.id ?? null,
+            task_id: pr.task_id ?? null,
+            payload: {
+              pr_number: pr.pr_number,
+              repo: pr.repo,
+              merge_sha: retryResult.sha ?? null,
+            },
+          });
+          console.log(
+            `[AutoMerger] PR #${pr.pr_number}: squash-merged to ${pr.base_branch ?? 'dev'}`,
+          );
+          return;
+        } catch (retryErr) {
+          console.error(
+            `[AutoMerger] PR #${pr.pr_number}: retry after markPRReady failed:`,
+            retryErr,
+          );
+          if (this.sessions) {
+            await sendConflictNudge(this.sessions, pr, 'draft_failed');
+          }
+          await this.pauseWithReason(pr, 'auto_merge_failed');
+          return;
+        }
+      }
+
       const status: number | null =
         err instanceof GitHubApiError
           ? err.status
@@ -502,6 +667,15 @@ export class AutoMerger {
           category = null;
         }
         if (category?.category === 'conflict') {
+          if (category.rawMergeableState === 'behind') {
+            // "Base branch was modified" race — pause and notify the code session.
+            // clearStalePauses() will retry automatically after the configured delay.
+            if (this.sessions) {
+              await sendConflictNudge(this.sessions, pr, 'behind');
+            }
+            await this.pauseWithReason(pr, 'auto_merge_failed');
+            return;
+          }
           console.log(
             `[AutoMerger] PR #${pr.pr_number}: merge failed — conflict, leaving to existing handling`,
           );

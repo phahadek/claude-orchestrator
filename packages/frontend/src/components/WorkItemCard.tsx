@@ -12,6 +12,7 @@ export interface PRReviewResult {
   verdict: 'approved' | 'needs_changes' | 'incomplete' | 'error';
   dimensions?: PRReviewDimension[];
   summary: string;
+  errorDetail?: string;
 }
 
 // ── PR work item (GitHub pull request) ────────────────────────────
@@ -38,6 +39,8 @@ export interface PRWorkItem {
   mergeState: string | null;
   failingChecks?: string[] | null;
   pauseReason?: string | null;
+  preReviewStage?: string | null;
+  awaitingReReview?: boolean;
   autoMergeEnabled: boolean;
 }
 
@@ -186,6 +189,11 @@ function LocalBranchCard({
                   <div className={styles.reviewSummary}>
                     {item.reviewResult.summary}
                   </div>
+                  {item.reviewResult.errorDetail && (
+                    <pre className={styles.reviewErrorDetail}>
+                      {item.reviewResult.errorDetail}
+                    </pre>
+                  )}
                 </>
               )}
             </div>
@@ -343,6 +351,7 @@ function PRWorkItemCard({
           prState={pr.state}
           ciChecksUrl={ciChecksUrl}
           failingChecks={failingChecks}
+          awaitingReReview={pr.awaitingReReview ?? false}
         />
         {hasConflicts && (
           <span
@@ -491,6 +500,11 @@ function PRWorkItemCard({
                   <div className={styles.reviewSummary}>
                     {pr.reviewResult.summary}
                   </div>
+                  {pr.reviewResult.errorDetail && (
+                    <pre className={styles.reviewErrorDetail}>
+                      {pr.reviewResult.errorDetail}
+                    </pre>
+                  )}
                 </>
               )}
             </div>

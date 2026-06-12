@@ -22,6 +22,14 @@ export interface OrchestratorConfig {
    * Undefined = no override (all user-level servers are inherited).
    */
   mcp_servers?: Record<string, unknown>;
+  /** Commands the orchestrator runs as authoritative tests, per head-SHA. Empty = feature off. */
+  test: string[];
+  /** Per-command timeout in seconds for test commands. Default 300. */
+  test_timeout_sec: number;
+  /** Max RSS in MB for any single test command subprocess. 0 = disabled. Default 0. */
+  test_max_rss_mb: number;
+  /** Stop running subsequent test commands after the first failure. Default true. */
+  test_fail_fast: boolean;
 }
 
 const DEFAULTS: OrchestratorConfig = {
@@ -31,6 +39,10 @@ const DEFAULTS: OrchestratorConfig = {
   allowed_tools: [],
   bash_rules: [],
   bootstrap_script: '',
+  test: [],
+  test_timeout_sec: 300,
+  test_max_rss_mb: 0,
+  test_fail_fast: true,
 };
 
 /**
@@ -67,6 +79,23 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
         typeof parsed.bootstrap_script === 'string'
           ? parsed.bootstrap_script
           : DEFAULTS.bootstrap_script,
+      test: Array.isArray(parsed.test) ? parsed.test : DEFAULTS.test,
+      test_timeout_sec:
+        typeof parsed.test_timeout_sec === 'number' &&
+        Number.isFinite(parsed.test_timeout_sec) &&
+        parsed.test_timeout_sec > 0
+          ? parsed.test_timeout_sec
+          : DEFAULTS.test_timeout_sec,
+      test_max_rss_mb:
+        typeof parsed.test_max_rss_mb === 'number' &&
+        Number.isFinite(parsed.test_max_rss_mb) &&
+        parsed.test_max_rss_mb >= 0
+          ? parsed.test_max_rss_mb
+          : DEFAULTS.test_max_rss_mb,
+      test_fail_fast:
+        typeof parsed.test_fail_fast === 'boolean'
+          ? parsed.test_fail_fast
+          : DEFAULTS.test_fail_fast,
       mcp_servers:
         parsed.mcp_servers !== null &&
         typeof parsed.mcp_servers === 'object' &&

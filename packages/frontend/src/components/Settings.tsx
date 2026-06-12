@@ -26,14 +26,25 @@ interface SettingsValues {
   auto_archive_enabled: string;
   auto_archive_grace_minutes: string;
   auto_archive_sweep_interval_minutes: string;
+  large_task_model: string;
 }
 
 const MIN_POLL_INTERVAL_MS = 5000;
 
-function validateField(
+const NON_NUMERIC_KEYS = new Set<keyof SettingsValues>([
+  'code_session_model',
+  'review_session_model',
+  'session_mode',
+  'large_task_model',
+  'auto_review',
+  'auto_archive_enabled',
+]);
+
+export function validateField(
   key: keyof SettingsValues,
   value: string,
 ): string | null {
+  if (NON_NUMERIC_KEYS.has(key)) return null;
   const num = Number(value);
   if (!Number.isInteger(num) || isNaN(num)) return 'Must be a whole number';
   if (key === 'auto_launch_concurrency' && num < 1) return 'Minimum is 1';
@@ -48,6 +59,14 @@ const MODEL_OPTIONS = [
   { label: 'claude-opus-4-6', value: 'claude-opus-4-6' },
   { label: 'claude-sonnet-4-6', value: 'claude-sonnet-4-6' },
   { label: 'claude-haiku-4-5', value: 'claude-haiku-4-5' },
+];
+
+const LARGE_TASK_MODEL_OPTIONS = [
+  { label: '(off)', value: '' },
+  { label: 'claude-opus-4-8[1m]', value: 'claude-opus-4-8[1m]' },
+  { label: 'claude-opus-4-7[1m]', value: 'claude-opus-4-7[1m]' },
+  { label: 'claude-opus-4-6[1m]', value: 'claude-opus-4-6[1m]' },
+  { label: 'claude-sonnet-4-6[1m]', value: 'claude-sonnet-4-6[1m]' },
 ];
 
 interface Props {
@@ -79,6 +98,9 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
   const [updateCheckResult, setUpdateCheckResult] = useState<string | null>(
     null,
   );
+  const [releaseChannel, setReleaseChannel] = useState<'stable' | 'beta'>(
+    'stable',
+  );
   const [fieldErrors, setFieldErrors] = useState<
     Partial<Record<keyof SettingsValues, string>>
   >({});
@@ -98,6 +120,26 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
       .catch(() => setSaveError('Failed to load settings'))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    fetch('/api/update/channel')
+      .then((r) => r.json() as Promise<{ channel: 'stable' | 'beta' }>)
+      .then((body) => setReleaseChannel(body.channel))
+      .catch(() => {});
+  }, []);
+
+  async function handleChannelChange(channel: 'stable' | 'beta') {
+    setReleaseChannel(channel);
+    try {
+      await fetch('/api/update/channel', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel }),
+      });
+    } catch {
+      setSaveError('Failed to save release channel');
+    }
+  }
 
   async function handleChange(key: keyof SettingsValues, value: string) {
     if (!settings) return;
@@ -333,6 +375,28 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                     ))}
                   </select>
                 </div>
+                <div className={styles.field}>
+                  <label className={styles.label}>
+                    Large-task model
+                    <span className={styles.hint}>
+                      {' '}
+                      (1M-context escalation; empty = off)
+                    </span>
+                  </label>
+                  <select
+                    className={styles.select}
+                    value={settings?.large_task_model ?? ''}
+                    onChange={(e) =>
+                      void handleChange('large_task_model', e.target.value)
+                    }
+                  >
+                    {LARGE_TASK_MODEL_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
                 <h3 className={styles.sectionTitle}>Stuck-session Timer</h3>
                 <p className={styles.hint}>
@@ -406,7 +470,7 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
 
                 <h3 className={styles.sectionTitle}>Auto-archive</h3>
                 <p className={styles.hint}>
-                  Concluded sessions (done/error/killed) are automatically
+                  Concluded sessions (done/error/killed/idle) are automatically
                   archived after the grace period expires.
                 </p>
                 <div className={styles.field}>
@@ -444,6 +508,21 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
                 )}
 
                 <h3 className={styles.sectionTitle}>About</h3>
+                <div className={styles.field}>
+                  <label className={styles.label}>Release channel</label>
+                  <select
+                    className={styles.select}
+                    value={releaseChannel}
+                    onChange={(e) =>
+                      void handleChannelChange(
+                        e.target.value as 'stable' | 'beta',
+                      )
+                    }
+                  >
+                    <option value="stable">Stable</option>
+                    <option value="beta">Beta</option>
+                  </select>
+                </div>
                 <div className={styles.field}>
                   <label className={styles.label}>Check for updates</label>
                   <button

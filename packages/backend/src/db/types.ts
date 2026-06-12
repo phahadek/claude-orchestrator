@@ -4,6 +4,7 @@ export type SessionStatus =
   | 'starting'
   | 'running'
   | 'needs_permission'
+  | 'idle'
   | 'done'
   | 'error'
   | 'killed';
@@ -32,6 +33,9 @@ export interface Session {
   task_name: string | null;
   metadata: string | null; // JSON blob for small session metadata (e.g. aiTitle)
   review_result: string | null; // JSON — verdict stored for local-only review sessions
+  pause_reason: string | null;
+  last_error_detail: string | null;
+  events_pruned_at: number | null;
 }
 
 export type NewSession = Omit<
@@ -52,6 +56,9 @@ export type NewSession = Omit<
   | 'task_name'
   | 'metadata'
   | 'review_result'
+  | 'pause_reason'
+  | 'last_error_detail'
+  | 'events_pruned_at'
 > & {
   ended_at?: number | null;
   pr_url?: string | null;
@@ -73,14 +80,7 @@ export type NewSession = Omit<
 
 // ─── session_events ────────────────────────────────────────────────────────
 
-export type EventType =
-  | 'text'
-  | 'tool_use'
-  | 'tool_result'
-  | 'system'
-  | 'error'
-  | 'user_message'
-  | 'rate_limit';
+export type EventType = 'text' | 'system' | 'user_message' | 'rate_limit';
 
 export interface SessionEvent {
   id: number;
@@ -317,7 +317,13 @@ export type PauseReason =
   | 'awaiting_human_approval'
   | 'human_changes_requested'
   | 'pr_body_invalid'
-  | 'attribution_missing';
+  | 'attribution_missing'
+  | 'audit_findings'
+  | 'pr_creation_failed'
+  | 'stalled_idle'
+  | 'notion_done_update_stuck'
+  | 'launch_failed'
+  | 'diverged_branch';
 
 export interface PullRequestRow {
   id: number;
@@ -357,4 +363,6 @@ export interface PullRequestRow {
   pause_reason: PauseReason | null; // non-null marks the task as needs_attention
   pause_reason_set_at: number | null; // Unix ms timestamp of when pause_reason was last set
   ci_remediation_attempted_sha: string | null; // last head_sha for which CI remediation was attempted
+  pre_review_stage: string | null;
+  conflict_nudge_sha: string | null; // SHA for which a conflict nudge was last sent (dedup key)
 }

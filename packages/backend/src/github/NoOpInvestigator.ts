@@ -9,6 +9,7 @@ import { renderNoOpInvestigationPrompt } from './reviewUtils';
 import type { GitHubClient } from './GitHubClient';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import type { ServerMessage } from '../ws/types';
+import { eventKind } from '../session/eventKind';
 
 export type NoOpVerdict =
   | { kind: 'resolved'; resolvedByPrUrl: string; reason: string }
@@ -74,7 +75,7 @@ export function tryParseNoOpVerdict(text: string): NoOpVerdict | null {
 function extractVerdictFromEvents(sessionId: string): NoOpVerdict | null {
   const events = getEventsBySession(sessionId);
   for (const ev of events) {
-    if (ev.event_type === 'text') {
+    if (eventKind(ev) === 'text') {
       try {
         const parsed = JSON.parse(ev.payload) as Record<string, unknown>;
         if (parsed.type === 'assistant') {
@@ -239,7 +240,7 @@ export class NoOpInvestigator {
     );
 
     try {
-      this.sessionManager.start(taskUrl, projectContextUrl, {
+      await this.sessionManager.start(taskUrl, projectContextUrl, {
         sessionId: investigatorSessionId,
         sessionType: 'review',
         customPrompt: prompt,

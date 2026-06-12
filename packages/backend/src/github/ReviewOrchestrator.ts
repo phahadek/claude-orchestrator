@@ -1,4 +1,8 @@
-import { getProjectByGithubRepo, getProjectById } from '../config';
+import {
+  getProjectByGithubRepo,
+  getProjectById,
+  runtimeSettings,
+} from '../config';
 import {
   setPRReviewResult,
   getSetting,
@@ -13,6 +17,10 @@ import {
   insertPendingReviewSync,
   deletePendingReviewSync,
   getAllPendingReviewSyncs,
+  hasTestResultForSha,
+  upsertTestResult,
+  setPreReviewStage,
+  setLastReviewedSha,
 } from '../db/queries';
 import { syncToOrigin } from './PRFileReverter';
 import type {
@@ -29,11 +37,11 @@ import { formatReviewFeedback, formatCIFailureFeedback } from './reviewUtils';
 import { runVerifyAsGate } from '../orchestration/verifyRunner';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
+import { runTestCommands } from '../session/test-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { recordEvent } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
 
-const REVIEW_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_ITERATIONS = 3;
 
 function getMaxReviewIterations(): number {
@@ -59,20 +67,29 @@ interface LocalBranchJob {
 
 type QueuedJob = (ReviewJob & { type?: 'pr' }) | LocalBranchJob;
 
+const STALL_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+const STALL_CHECK_INTERVAL_MS = 5 * 60 * 1000; // check every 5 minutes
+
 export class ReviewOrchestrator {
   private queue: QueuedJob[] = [];
   private running = 0;
+  /** PR keys ("prNumber:repo") for reviews currently executing — enforces per-PR serialization. */
+  private inFlightPRKeys = new Set<string>();
+  /** Start timestamps (ms) for in-flight reviews keyed by "prNumber:repo" — used by stall detector. */
+  private inFlightStartTimes = new Map<string, number>();
   /** In-flight post-revert worktree sync promises, keyed by "prNumber:repo". */
   private pendingSyncs = new Map<string, Promise<void>>();
   /** Resolves once all incomplete pending_review_sync rows from the previous run are retried. */
   readonly bootReady: Promise<void>;
+  private stallDetectorInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private reviewService: PRReviewService,
     private sessionManager: SessionManager,
-    private maxConcurrency: number = 1,
     private enabled: boolean = true,
     private github?: GitHubClient,
+    stallCheckIntervalMs: number = STALL_CHECK_INTERVAL_MS,
+    stallTimeoutMs: number = STALL_TIMEOUT_MS,
   ) {
     sessionManager.on('pr_opened', (job: ReviewJob) => this.onPrOpened(job));
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
@@ -91,6 +108,36 @@ export class ReviewOrchestrator {
       },
     );
     this.bootReady = this.rehydratePendingSyncs();
+    this.startStallDetector(stallCheckIntervalMs, stallTimeoutMs);
+  }
+
+  /** Release all background timers. Call when shutting down the server. */
+  destroy(): void {
+    if (this.stallDetectorInterval) {
+      clearInterval(this.stallDetectorInterval);
+      this.stallDetectorInterval = null;
+    }
+  }
+
+  private startStallDetector(intervalMs: number, timeoutMs: number): void {
+    const handle = setInterval(() => {
+      const now = Date.now();
+      for (const [key, startTime] of this.inFlightStartTimes) {
+        const elapsedMs = now - startTime;
+        if (elapsedMs > timeoutMs) {
+          console.error(
+            `[ReviewOrchestrator] STALL DETECTED for ${key} — review has been running for ${Math.round(elapsedMs / 60000)} min. Force-clearing slot.`,
+          );
+          this.inFlightPRKeys.delete(key);
+          this.inFlightStartTimes.delete(key);
+          this.running = Math.max(0, this.running - 1);
+          void this.drain();
+        }
+      }
+    }, intervalMs);
+    // Don't keep the Node process alive for the stall detector alone.
+    handle.unref();
+    this.stallDetectorInterval = handle;
   }
 
   /**
@@ -147,13 +194,21 @@ export class ReviewOrchestrator {
   }
 
   private onPrOpened(job: ReviewJob): void {
-    if (!this.enabled) return;
+    if (!this.enabled) {
+      console.log(
+        `[ReviewOrchestrator] pr_opened received for PR #${job.prNumber} (${job.repo}) — orchestrator disabled, skipping`,
+      );
+      return;
+    }
     if (!job.taskId) {
       console.warn(
         `[ReviewOrchestrator] PR #${job.prNumber} has no Notion task — skipping`,
       );
       return;
     }
+    console.log(
+      `[ReviewOrchestrator] pr_opened received for PR #${job.prNumber} (${job.repo}) — queueing (queue depth before: ${this.queue.length})`,
+    );
     this.queue.push(job);
     void this.drain();
   }
@@ -197,34 +252,79 @@ export class ReviewOrchestrator {
     void this.drain();
   }
 
-  private async drain(): Promise<void> {
+  private prKey(job: QueuedJob): string | null {
+    if (job.type === 'local_branch') return null;
+    const prJob = job as ReviewJob;
+    return `${prJob.prNumber}:${prJob.repo}`;
+  }
+
+  async drain(): Promise<void> {
     await this.bootReady;
-    while (this.running < this.maxConcurrency && this.queue.length > 0) {
-      this.running++;
-      const job = this.queue.shift()!;
-      try {
-        if (job.type === 'local_branch') {
-          await this.executeLocalBranchReview(job);
-        } else {
-          await this.executeReview(job as ReviewJob);
+    while (
+      this.running < runtimeSettings.auto_review_concurrency &&
+      this.queue.length > 0
+    ) {
+      // Find the first job not blocked by per-PR serialization.
+      let jobIndex = -1;
+      for (let i = 0; i < this.queue.length; i++) {
+        const key = this.prKey(this.queue[i]);
+        if (key === null || !this.inFlightPRKeys.has(key)) {
+          jobIndex = i;
+          break;
         }
-      } catch (e) {
-        if (job.type === 'local_branch') {
-          console.error(
-            `[ReviewOrchestrator] review failed for local branch ${job.branchName}:`,
-            e,
-          );
-        } else {
-          const prJob = job as ReviewJob;
-          console.error(
-            `[ReviewOrchestrator] review failed for PR #${prJob.prNumber}:`,
-            e,
-          );
-        }
-      } finally {
-        this.running--;
-        void this.drain();
       }
+      if (jobIndex === -1) break; // all remaining jobs are blocked by in-flight reviews
+
+      const [job] = this.queue.splice(jobIndex, 1);
+      const key = this.prKey(job);
+
+      this.running++;
+      if (key !== null) {
+        this.inFlightPRKeys.add(key);
+        this.inFlightStartTimes.set(key, Date.now());
+      }
+
+      if (job.type === 'local_branch') {
+        const lbJob = job as LocalBranchJob;
+        console.log(
+          `[ReviewOrchestrator] drain: starting local-branch review for ${lbJob.branchName} (running: ${this.running}/${runtimeSettings.auto_review_concurrency})`,
+        );
+      } else {
+        const prJob = job as ReviewJob;
+        console.log(
+          `[ReviewOrchestrator] drain: starting review for PR #${prJob.prNumber} (${prJob.repo}) (running: ${this.running}/${runtimeSettings.auto_review_concurrency})`,
+        );
+      }
+
+      void (async () => {
+        try {
+          if (job.type === 'local_branch') {
+            await this.executeLocalBranchReview(job);
+          } else {
+            await this.executeReview(job as ReviewJob);
+          }
+        } catch (e) {
+          if (job.type === 'local_branch') {
+            console.error(
+              `[ReviewOrchestrator] review failed for local branch ${(job as LocalBranchJob).branchName}:`,
+              e,
+            );
+          } else {
+            const prJob = job as ReviewJob;
+            console.error(
+              `[ReviewOrchestrator] review failed for PR #${prJob.prNumber}:`,
+              e,
+            );
+          }
+        } finally {
+          this.running--;
+          if (key !== null) {
+            this.inFlightPRKeys.delete(key);
+            this.inFlightStartTimes.delete(key);
+          }
+          void this.drain();
+        }
+      })();
     }
   }
 
@@ -237,18 +337,20 @@ export class ReviewOrchestrator {
     prNumber: number,
     repo: string,
     taskId: string | null,
-  ): Promise<void> {
+  ): Promise<{ success: boolean; summary: string }> {
     const project = getProjectByGithubRepo(repo);
-    if (!project) return;
+    if (!project) return { success: true, summary: 'no project — skipped' };
 
     const autofixCommands = loadAutofixCommands(project.projectDir);
-    if (autofixCommands.length === 0) return;
+    if (autofixCommands.length === 0)
+      return { success: true, summary: 'no autofix commands — skipped' };
 
     this.sessionManager.emit('message', {
       type: 'autofix_started',
       prNumber,
       repo,
     });
+    setPreReviewStage(prNumber, repo, 'autofix');
 
     const prRow = getPRByNumber(prNumber, repo);
     const worktreePath = prRow?.session_id
@@ -318,9 +420,11 @@ export class ReviewOrchestrator {
 
     if (!autofixSuccess) {
       console.warn(
-        `[ReviewOrchestrator] autofix failed for PR #${prNumber} (fail open): ${autofixSummary}`,
+        `[ReviewOrchestrator] autofix failed for PR #${prNumber}: ${autofixSummary}`,
       );
     }
+
+    return { success: autofixSuccess, summary: autofixSummary };
   }
 
   /**
@@ -331,6 +435,68 @@ export class ReviewOrchestrator {
    */
   consumeAutofixSha(prNumber: number, repo: string, sha: string): boolean {
     return dbConsumeAutofixSha(prNumber, repo, sha);
+  }
+
+  /** Returns true when a review is actively executing or queued-but-blocked for this PR. */
+  isReviewInFlight(prNumber: number, repo: string): boolean {
+    return this.inFlightPRKeys.has(`${prNumber}:${repo}`);
+  }
+
+  /**
+   * Enqueue a review for the given PR via the same path as pr_opened.
+   * Skips when the orchestrator is disabled or the job has no taskId.
+   */
+  enqueueReview(job: ReviewJob): void {
+    if (!this.enabled) return;
+    if (!job.taskId) return;
+    console.log(
+      `[ReviewOrchestrator] enqueueReview for PR #${job.prNumber} (${job.repo}) — queueing (queue depth before: ${this.queue.length})`,
+    );
+    this.queue.push(job);
+    void this.drain();
+  }
+
+  /**
+   * Run the configured test: commands for a PR's head SHA.
+   * Deduplicates: if a result already exists for this SHA, skips execution.
+   * Persists { passed, output } keyed by (prNumber, repo, sha) for F2 to consult.
+   */
+  async runTestPipeline(
+    prNumber: number,
+    repo: string,
+    headSha: string,
+    worktreePath: string,
+    commands: string[] | undefined,
+    timeoutSec: number,
+    maxRssMb = 0,
+    failFast = true,
+  ): Promise<void> {
+    if (!commands?.length || !headSha) return;
+
+    if (hasTestResultForSha(prNumber, repo, headSha)) {
+      console.log(
+        `[ReviewOrchestrator] tests already ran for PR #${prNumber} SHA ${headSha.slice(0, 7)} — skipping`,
+      );
+      return;
+    }
+
+    console.log(
+      `[ReviewOrchestrator] running tests for PR #${prNumber} SHA ${headSha.slice(0, 7)} (timeout ${timeoutSec}s)`,
+    );
+
+    const { passed, output } = await runTestCommands(
+      worktreePath,
+      commands,
+      timeoutSec,
+      (msg) => console.log(`[ReviewOrchestrator] test PR #${prNumber}: ${msg}`),
+      { maxRssMb, failFast },
+    );
+
+    upsertTestResult(prNumber, repo, headSha, passed, output);
+
+    console.log(
+      `[ReviewOrchestrator] tests ${passed ? 'PASSED' : 'FAILED'} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
+    );
   }
 
   private async executeLocalBranchReview(job: LocalBranchJob): Promise<void> {
@@ -447,31 +613,19 @@ export class ReviewOrchestrator {
 
     let result: PRReviewResult;
     try {
-      result = await Promise.race([
-        this.reviewService.reviewPR(
-          workItem,
-          diffSource,
-          job.projectId,
-          job.contextUrl,
-        ),
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () => reject(new Error('Review timed out')),
-            REVIEW_TIMEOUT_MS,
-          ),
-        ),
-      ]);
+      result = await this.reviewService.reviewPR(
+        workItem,
+        diffSource,
+        job.projectId,
+        job.contextUrl,
+      );
     } catch (e) {
-      const summary =
-        e instanceof Error && e.message === 'Review timed out'
-          ? 'Review timed out'
-          : String(e);
       this.sessionManager.emit('message', {
         type: 'pr_review_complete',
         prNumber: job.localBranchId,
         repo: `local/${job.branchName}`,
         verdict: 'error',
-        summary,
+        summary: String(e),
       });
       return;
     }
@@ -510,12 +664,91 @@ export class ReviewOrchestrator {
     }
   }
 
+  private consumePendingPushIfSet(prNumber: number, repo: string): void {
+    const row = getPRByNumber(prNumber, repo);
+    if (row?.pending_push && row.session_id) {
+      setPendingPush(prNumber, repo, 0);
+      console.log(
+        `[ReviewOrchestrator] pending_push detected for PR #${prNumber} — triggering re-review`,
+      );
+      this.sessionManager.emit('push_detected', {
+        sessionId: row.session_id,
+      });
+    }
+  }
+
+  private async routeGateFailureToSession(
+    job: ReviewJob,
+    kind: 'verify' | 'autofix',
+    detail: {
+      failedCommand?: string;
+      truncatedOutput?: string;
+      summary: string;
+    },
+  ): Promise<void> {
+    const prRow = getPRByNumber(job.prNumber, job.repo);
+
+    setPRReviewResult(
+      job.prNumber,
+      job.repo,
+      JSON.stringify({
+        verdict: kind === 'verify' ? 'verify_failed' : 'autofix_failed',
+        summary: detail.summary,
+        dimensions: [],
+      }),
+    );
+    // Set last_reviewed_sha so the next push is identified as new code and
+    // shouldAutoReview returns true instead of seeing null === null.
+    setLastReviewedSha(job.prNumber, job.repo, prRow?.head_sha ?? null);
+
+    this.sessionManager.emit('message', {
+      type: 'pr_review_blocked_by_gate',
+      prNumber: job.prNumber,
+      repo: job.repo,
+      kind,
+      failedCommand: detail.failedCommand,
+      summary: detail.summary,
+    });
+    setPreReviewStage(
+      job.prNumber,
+      job.repo,
+      kind === 'autofix' ? 'blocked_autofix' : 'blocked_verify',
+    );
+
+    const sessionId = prRow?.session_id;
+    if (!sessionId) return;
+
+    const message =
+      kind === 'verify'
+        ? formatCIFailureFeedback({
+            source: 'verify',
+            failedCommand: detail.failedCommand,
+            truncatedOutput: detail.truncatedOutput,
+          })
+        : `## Autofix Gate Failure\n\nThe autofix pipeline failed and could not produce a clean commit.\n\n**Error:** ${detail.summary}\n\nPlease fix the issue and re-push.`;
+
+    try {
+      await this.sessionManager.sendOrResume(sessionId, message);
+    } catch (e) {
+      console.warn(
+        `[ReviewOrchestrator] gate failure routing failed for PR #${job.prNumber}: ${e}`,
+      );
+    }
+  }
+
   private async executeReview(job: ReviewJob): Promise<void> {
+    console.log(
+      `[ReviewOrchestrator] executeReview: entered for PR #${job.prNumber} (${job.repo}) taskId=${job.taskId ?? 'none'}`,
+    );
+
     // Await any in-flight post-revert worktree sync before fetching the diff,
     // so the review sees the canonical file state, not the contaminated version.
     const syncKey = `${job.prNumber}:${job.repo}`;
     const pendingSync = this.pendingSyncs.get(syncKey);
     if (pendingSync) {
+      console.log(
+        `[ReviewOrchestrator] executeReview: awaiting pending revert sync for PR #${job.prNumber}`,
+      );
       this.pendingSyncs.delete(syncKey);
       await pendingSync;
     }
@@ -544,10 +777,101 @@ export class ReviewOrchestrator {
       return;
     }
 
-    // ── Autofix + file-pollution-check step ──────────────────────────────────
-    await this.runAutofixPipeline(job.prNumber, job.repo, job.taskId ?? null);
+    // ── Gate 1: Autofix + file-pollution-check step ──────────────────────────
+    const autofixResult = await this.runAutofixPipeline(
+      job.prNumber,
+      job.repo,
+      job.taskId ?? null,
+    );
+    if (!autofixResult.success) {
+      console.log(
+        `[ReviewOrchestrator] executeReview: gate failure (kind=autofix) for PR #${job.prNumber}`,
+      );
+      await this.routeGateFailureToSession(job, 'autofix', {
+        summary: autofixResult.summary,
+      });
+      this.consumePendingPushIfSet(job.prNumber, job.repo);
+      return;
+    }
     // ─────────────────────────────────────────────────────────────────────────
 
+    // ── Gate 2: Verify ───────────────────────────────────────────────────────
+    {
+      const gatePrRow = getPRByNumber(job.prNumber, job.repo);
+      const gateWorktreePath = gatePrRow?.session_id
+        ? (getSession(gatePrRow.session_id)?.worktree_path ?? '')
+        : '';
+      if (gateWorktreePath) {
+        this.sessionManager.emit('message', {
+          type: 'verify_pipeline_started',
+          prNumber: job.prNumber,
+          repo: job.repo,
+        });
+        setPreReviewStage(job.prNumber, job.repo, 'verify');
+        const verifyConfig = loadOrchestratorConfig(project.projectDir);
+        const verifyResult = await runVerifyAsGate(
+          gateWorktreePath,
+          verifyConfig.verify,
+        );
+        if (!verifyResult.passed) {
+          console.log(
+            `[ReviewOrchestrator] executeReview: gate failure (kind=verify) for PR #${job.prNumber}`,
+          );
+          await this.routeGateFailureToSession(job, 'verify', {
+            failedCommand: verifyResult.failedCommand,
+            truncatedOutput: verifyResult.truncatedOutput,
+            summary: verifyResult.failedCommand
+              ? `verify failed: ${verifyResult.failedCommand}`
+              : 'verify failed',
+          });
+          this.consumePendingPushIfSet(job.prNumber, job.repo);
+          return;
+        }
+        this.sessionManager.emit('message', {
+          type: 'verify_pipeline_complete',
+          prNumber: job.prNumber,
+          repo: job.repo,
+        });
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Orchestrator-run tests (per head-SHA, deduped) ────────────────────────
+    {
+      const freshPrRow = getPRByNumber(job.prNumber, job.repo);
+      const headSha = freshPrRow?.head_sha ?? '';
+      const worktreePath = freshPrRow?.session_id
+        ? (getSession(freshPrRow.session_id)?.worktree_path ?? '')
+        : '';
+      if (headSha && worktreePath) {
+        const config = loadOrchestratorConfig(project.projectDir);
+        this.sessionManager.emit('message', {
+          type: 'test_pipeline_started',
+          prNumber: job.prNumber,
+          repo: job.repo,
+        });
+        setPreReviewStage(job.prNumber, job.repo, 'tests');
+        await this.runTestPipeline(
+          job.prNumber,
+          job.repo,
+          headSha,
+          worktreePath,
+          config.test,
+          config.test_timeout_sec,
+          config.test_max_rss_mb,
+          config.test_fail_fast,
+        );
+        this.sessionManager.emit('message', {
+          type: 'test_pipeline_complete',
+          prNumber: job.prNumber,
+          repo: job.repo,
+        });
+        setPreReviewStage(job.prNumber, job.repo, 'awaiting_review');
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    setPreReviewStage(job.prNumber, job.repo, null);
     this.sessionManager.emit('message', {
       type: 'review_started',
       prNumber: job.prNumber,
@@ -570,41 +894,38 @@ export class ReviewOrchestrator {
 
     let result: PRReviewResult;
     try {
-      result = await Promise.race([
-        this.reviewService.reviewPR(
-          workItem,
-          diffSource,
-          project.id,
-          job.contextUrl,
-        ),
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () => reject(new Error('Review timed out')),
-            REVIEW_TIMEOUT_MS,
-          ),
-        ),
-      ]);
+      result = await this.reviewService.reviewPR(
+        workItem,
+        diffSource,
+        project.id,
+        job.contextUrl,
+      );
     } catch (e) {
       if (e instanceof FetchRetryExhaustedError) {
         // review_failed was already emitted by PRReviewService; leave review_result null
         return;
       }
-      const summary =
-        e instanceof Error && e.message === 'Review timed out'
-          ? 'Review timed out'
-          : String(e);
-      setPRReviewResult(
-        job.prNumber,
-        job.repo,
-        JSON.stringify({ verdict: 'error', summary, dimensions: [] }),
-      );
-      this.sessionManager.emit('message', {
-        type: 'pr_review_complete',
-        prNumber: job.prNumber,
-        repo: job.repo,
-        verdict: 'error',
-        summary,
-      });
+      // PRReviewService persists the verdict immediately after parse, before any
+      // side effects. If reviewPR throws, it means parsing never completed and no
+      // verdict was persisted — write the error sentinel only in that case to avoid
+      // clobbering a verdict that was already successfully stored.
+      const alreadyPersisted = !!getPRByNumber(job.prNumber, job.repo)
+        ?.review_result;
+      if (!alreadyPersisted) {
+        const summary = String(e);
+        setPRReviewResult(
+          job.prNumber,
+          job.repo,
+          JSON.stringify({ verdict: 'error', summary, dimensions: [] }),
+        );
+        this.sessionManager.emit('message', {
+          type: 'pr_review_complete',
+          prNumber: job.prNumber,
+          repo: job.repo,
+          verdict: 'error',
+          summary,
+        });
+      }
       return;
     }
 
@@ -659,21 +980,33 @@ export class ReviewOrchestrator {
         repo: job.repo,
         message,
       });
+      // Notify the implementing session so it knows to push a clearer version.
+      if (prRow?.session_id) {
+        try {
+          await this.sessionManager.sendOrResume(
+            prRow.session_id,
+            formatReviewFeedback(result, 0),
+          );
+        } catch (e) {
+          recordEvent({
+            event_type: 'verdict_routing_failed',
+            actor_type: 'system',
+            actor_id: prRow.session_id,
+            project_id: project.id ?? null,
+            task_id: prRow.task_id ?? null,
+            payload: {
+              pr_number: job.prNumber,
+              repo: job.repo,
+              error: String(e),
+            },
+          });
+          console.warn(
+            `[ReviewOrchestrator] incomplete verdict routing failed for PR #${job.prNumber}: ${e}`,
+          );
+        }
+      }
     }
 
-    // After the initial review, check if a push arrived during the review window.
-    // If so, clear the flag and trigger re-review via push_detected so the
-    // standard re-review path (server.ts push_detected handler) handles it,
-    // now that review_session_id is populated.
-    const postReviewRow = getPRByNumber(job.prNumber, job.repo);
-    if (postReviewRow?.pending_push && postReviewRow.session_id) {
-      setPendingPush(job.prNumber, job.repo, 0);
-      console.log(
-        `[ReviewOrchestrator] pending_push detected for PR #${job.prNumber} — triggering re-review`,
-      );
-      this.sessionManager.emit('push_detected', {
-        sessionId: postReviewRow.session_id,
-      });
-    }
+    this.consumePendingPushIfSet(job.prNumber, job.repo);
   }
 }

@@ -99,9 +99,16 @@ function makeGitHub(
 }
 
 function makeSessionManager(
-  overrides: { send?: ReturnType<typeof vi.fn> } = {},
+  overrides: {
+    send?: ReturnType<typeof vi.fn>;
+    sendOrResume?: ReturnType<typeof vi.fn>;
+  } = {},
 ) {
-  return { send: overrides.send ?? vi.fn() };
+  return {
+    send: overrides.send ?? vi.fn(),
+    sendOrResume:
+      overrides.sendOrResume ?? vi.fn().mockResolvedValue('session-abc'),
+  };
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -158,8 +165,8 @@ describe('ReviewerCommentsWatcher', () => {
 
       await watcher.pollAll();
 
-      expect(sessions.send).toHaveBeenCalledOnce();
-      const [sessionId, message] = sessions.send.mock.calls[0] as [
+      expect(sessions.sendOrResume).toHaveBeenCalledOnce();
+      const [sessionId, message] = sessions.sendOrResume.mock.calls[0] as [
         string,
         string,
       ];
@@ -180,7 +187,7 @@ describe('ReviewerCommentsWatcher', () => {
         github as never,
         sessions as never,
       ).pollAll();
-      expect(sessions.send).not.toHaveBeenCalled();
+      expect(sessions.sendOrResume).not.toHaveBeenCalled();
     });
 
     it('skips PRs paused for non-watchable reasons', async () => {
@@ -204,7 +211,7 @@ describe('ReviewerCommentsWatcher', () => {
         github as never,
         sessions as never,
       ).pollAll();
-      expect(sessions.send).not.toHaveBeenCalled();
+      expect(sessions.sendOrResume).not.toHaveBeenCalled();
     });
   });
 
@@ -257,8 +264,11 @@ describe('ReviewerCommentsWatcher', () => {
         sessions as never,
       ).pollAll();
 
-      expect(sessions.send).toHaveBeenCalledOnce();
-      const [, message] = sessions.send.mock.calls[0] as [string, string];
+      expect(sessions.sendOrResume).toHaveBeenCalledOnce();
+      const [, message] = sessions.sendOrResume.mock.calls[0] as [
+        string,
+        string,
+      ];
       expect(message).toContain('Human comment');
       expect(message).not.toContain('AI comment');
       expect(message).not.toContain('AI inline');
@@ -284,7 +294,7 @@ describe('ReviewerCommentsWatcher', () => {
         github as never,
         sessions as never,
       ).pollAll();
-      expect(sessions.send).not.toHaveBeenCalled();
+      expect(sessions.sendOrResume).not.toHaveBeenCalled();
     });
   });
 
@@ -329,7 +339,7 @@ describe('ReviewerCommentsWatcher', () => {
         github as never,
         sessions as never,
       ).pollAll();
-      expect(sessions.send).not.toHaveBeenCalled();
+      expect(sessions.sendOrResume).not.toHaveBeenCalled();
       expect(markCommentsRouted).not.toHaveBeenCalled();
     });
 
@@ -361,8 +371,11 @@ describe('ReviewerCommentsWatcher', () => {
         sessions as never,
       ).pollAll();
 
-      expect(sessions.send).toHaveBeenCalledOnce();
-      const [, message] = sessions.send.mock.calls[0] as [string, string];
+      expect(sessions.sendOrResume).toHaveBeenCalledOnce();
+      const [, message] = sessions.sendOrResume.mock.calls[0] as [
+        string,
+        string,
+      ];
       expect(message).toContain('New review body');
       expect(message).not.toContain('Old review body');
       expect(markCommentsRouted).toHaveBeenCalledWith(42, 'owner/repo', [
@@ -474,7 +487,85 @@ describe('ReviewerCommentsWatcher', () => {
         github as never,
         sessions as never,
       ).pollAll();
-      expect(sessions.send).not.toHaveBeenCalled();
+      expect(sessions.sendOrResume).not.toHaveBeenCalled();
+      expect(markCommentsRouted).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('idle→running re-entry', () => {
+    it('uses sendOrResume (not send) so idle sessions are respawned to receive feedback', async () => {
+      // Session is idle — exited after submitting PR, not in the live sessions map.
+      vi.mocked(getAllOpenPRs).mockReturnValue([makePR()]);
+      vi.mocked(getSession).mockReturnValue({
+        session_id: 'session-abc',
+        status: 'idle',
+      } as never);
+
+      const github = makeGitHub({
+        reviewComments: [
+          {
+            id: 1,
+            author: 'alice',
+            body: 'Please fix the type error on line 42',
+            createdAt: '',
+            path: 'src/foo.ts',
+            line: 42,
+          },
+        ],
+      });
+
+      const sendOrResume = vi.fn().mockResolvedValue('session-abc');
+      const sessions = makeSessionManager({ sendOrResume });
+
+      await new ReviewerCommentsWatcher(
+        github as never,
+        sessions as never,
+      ).pollAll();
+
+      // sendOrResume must be called so the idle session is respawned
+      expect(sendOrResume).toHaveBeenCalledOnce();
+      const [sid, msg] = sendOrResume.mock.calls[0] as [string, string];
+      expect(sid).toBe('session-abc');
+      expect(msg).toContain('Please fix the type error on line 42');
+
+      // Comments must be marked routed after delivery
+      expect(markCommentsRouted).toHaveBeenCalledWith(42, 'owner/repo', [
+        'rc_1',
+      ]);
+    });
+
+    it('does not mark comments routed when sendOrResume throws', async () => {
+      vi.mocked(getAllOpenPRs).mockReturnValue([makePR()]);
+      vi.mocked(getSession).mockReturnValue({
+        session_id: 'session-abc',
+        status: 'idle',
+      } as never);
+
+      const github = makeGitHub({
+        issueComments: [
+          {
+            id: 5,
+            author: 'bob',
+            body: 'Needs docs',
+            createdAt: '',
+          },
+        ],
+      });
+
+      const sendOrResume = vi
+        .fn()
+        .mockRejectedValue(new Error('worktree creation failed'));
+      const sessions = makeSessionManager({ sendOrResume });
+
+      // pollAll should not throw — errors are caught per-PR
+      await expect(
+        new ReviewerCommentsWatcher(
+          github as never,
+          sessions as never,
+        ).pollAll(),
+      ).resolves.toBeUndefined();
+
+      // Comments must NOT be marked routed because delivery failed
       expect(markCommentsRouted).not.toHaveBeenCalled();
     });
   });

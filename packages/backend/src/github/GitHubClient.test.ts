@@ -281,7 +281,7 @@ describe('GitHubClient.markPRReady()', () => {
     );
     await expect(client.markPRReady('owner/repo', 42)).rejects.toMatchObject({
       status: 422,
-      message: 'PR not found; Unauthorized',
+      body: 'PR not found; Unauthorized',
     });
   });
 });
@@ -1487,5 +1487,39 @@ describe('GitHubClient.fetchIssuesConditional()', () => {
     await expect(
       client.fetchIssuesConditional('owner/repo', null, {}),
     ).rejects.toMatchObject({ status: 401 });
+  });
+});
+
+describe('GitHubApiError — enumerable properties and toJSON', () => {
+  it('status and body are enumerable own properties', () => {
+    const err = new GitHubApiError(405, 'Pull Request is still a draft');
+    const keys = Object.keys(err);
+    expect(keys).toContain('status');
+    expect(keys).toContain('body');
+  });
+
+  it('JSON.stringify reveals status, body, message (not {})', () => {
+    const err = new GitHubApiError(405, 'Pull Request is still a draft');
+    const serialized = JSON.stringify(err);
+    const parsed = JSON.parse(serialized) as Record<string, unknown>;
+    expect(parsed.status).toBe(405);
+    expect(parsed.body).toBe('Pull Request is still a draft');
+    expect(typeof parsed.message).toBe('string');
+    expect(parsed.message).toContain('405');
+    expect(serialized).not.toBe('{}');
+  });
+
+  it('toJSON returns { name, status, body, message }', () => {
+    const err = new GitHubApiError(422, 'Validation Failed');
+    const json = err.toJSON();
+    expect(json.name).toBe('GitHubApiError');
+    expect(json.status).toBe(422);
+    expect(json.body).toBe('Validation Failed');
+    expect(json.message).toBe('GitHub API error 422: Validation Failed');
+  });
+
+  it('message contains the GitHub status code and body prefix', () => {
+    const err = new GitHubApiError(403, 'Forbidden');
+    expect(err.message).toBe('GitHub API error 403: Forbidden');
   });
 });

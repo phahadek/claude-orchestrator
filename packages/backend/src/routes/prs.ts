@@ -45,6 +45,31 @@ function parseFailingChecks(raw: string | null): string[] | null {
   }
 }
 
+/**
+ * Scan a PR body for the first Notion page URL and return its task ID (dashed
+ * UUID) and the raw URL. Returns null when no Notion URL is found.
+ */
+export function extractNotionTaskFromBody(
+  body: string | null,
+): { taskId: string; taskUrl: string } | null {
+  if (!body) return null;
+  const urlMatch = body.match(
+    /https:\/\/(?:www\.notion\.so|app\.notion\.com(?:\/p)?)\/[^\s)>\]"']*/,
+  );
+  if (!urlMatch) return null;
+  const taskUrl = urlMatch[0].replace(/[.,;:!?]+$/, '');
+  // Accept 32-hex dashless ID or dashed UUID anywhere in the URL path
+  const hexMatch = taskUrl.match(/([0-9a-f]{32})(?:[^0-9a-f]|$)/i);
+  const uuidMatch = taskUrl.match(
+    /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i,
+  );
+  const m = hexMatch ?? uuidMatch;
+  if (!m) return null;
+  const raw = m[1].replace(/-/g, '');
+  const taskId = `${raw.slice(0, 8)}-${raw.slice(8, 12)}-${raw.slice(12, 16)}-${raw.slice(16, 20)}-${raw.slice(20)}`;
+  return { taskId, taskUrl };
+}
+
 export function createPrsRouter(
   github: GitHubClient,
   prReviewService: PRReviewService,
@@ -180,6 +205,12 @@ export function createPrsRouter(
       mergeState: pr.merge_state ?? null,
       failingChecks: parseFailingChecks(pr.failing_checks),
       pauseReason: pr.pause_reason ?? null,
+      preReviewStage: pr.pre_review_stage ?? null,
+      awaitingReReview:
+        (pr.pre_review_stage === 'blocked_autofix' ||
+          pr.pre_review_stage === 'blocked_verify') &&
+        (pr.pending_push === 1 ||
+          (!!pr.head_sha && pr.head_sha !== pr.last_reviewed_sha)),
       autoMergeEnabled,
     }));
     res.json(items);
@@ -232,6 +263,7 @@ export function createPrsRouter(
           node_id: pr.nodeId,
           merge_state: pr.mergeableState,
           merge_state_checked_at: now,
+          conflict_nudge_sha: null,
         });
         if (sessionMatch) {
           console.log(
@@ -260,6 +292,7 @@ export function createPrsRouter(
           setTimeout(() => reject(new Error('Review timed out')), 120_000),
         ),
       ]);
+      setPRReviewResult(prNumber, repo, JSON.stringify(result));
       _broadcast({
         type: 'pr_review_complete',
         prNumber,
@@ -401,6 +434,27 @@ export function createPrsRouter(
       }
 
       try {
+        // Draft → ready: flip before merging (GitHub returns 405 on draft PRs).
+        if (prRow?.draft === 1) {
+          let flipErr: Error | null = null;
+          for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+              await github.markPRReady(repo, prNumber);
+              flipErr = null;
+              break;
+            } catch (e) {
+              flipErr = e as Error;
+            }
+          }
+          if (flipErr) {
+            res
+              .status(422)
+              .json({ error: `could not mark PR ready: ${flipErr.message}` });
+            return;
+          }
+          updatePRDraftStatus(prNumber, repo, 0);
+        }
+
         const result = await github.mergePR(prNumber, commitTitle, repo);
         updatePRState(prNumber, repo, 'merged');
 
@@ -611,6 +665,7 @@ export function createPrsRouter(
             setTimeout(() => reject(new Error('Review timed out')), 120_000),
           ),
         ]);
+        setPRReviewResult(prNumber, repo, JSON.stringify(result));
         _broadcast({
           type: 'pr_review_complete',
           prNumber,
@@ -811,6 +866,99 @@ export function createPrsRouter(
     const fixMessage = `PR #${prNumber} review findings — please address the following:\n\n${lines}\n\nOverall: ${reviewResult.summary}`;
     await sessionManager.sendOrResume(prRow.session_id, fixMessage);
     res.json({ sessionId: prRow.session_id });
+  });
+
+  // ── POST /api/prs/ingest ─────────────────────────────────────────────────────
+  // Backfill a PR that exists on GitHub but was never tracked by the orchestrator.
+  router.post('/prs/ingest', async (req: Request, res: Response) => {
+    const { repo, prNumber } = req.body as {
+      repo?: unknown;
+      prNumber?: unknown;
+    };
+
+    if (typeof repo !== 'string' || typeof prNumber !== 'number') {
+      res
+        .status(400)
+        .json({ error: 'repo (string) and prNumber (number) are required' });
+      return;
+    }
+
+    const project = getProjectByGithubRepo(repo);
+    if (!project) {
+      res.status(400).json({
+        error: `No project configured for repo "${repo}". Set github_repo on the project first.`,
+      });
+      return;
+    }
+
+    const existing = getPRByNumber(prNumber, repo);
+    if (existing) {
+      res.status(409).json({ error: `PR #${prNumber} already tracked.` });
+      return;
+    }
+
+    let pr: Awaited<ReturnType<typeof github.fetchPR>>;
+    try {
+      pr = await github.fetchPR(repo, prNumber);
+    } catch (err) {
+      if (err instanceof GitHubApiError && err.status === 404) {
+        res.status(404).json({ error: `PR #${prNumber} not found on GitHub.` });
+        return;
+      }
+      throw err;
+    }
+
+    const notionTask = extractNotionTaskFromBody(pr.body);
+    const taskId = notionTask?.taskId ?? null;
+    const taskUrl = notionTask?.taskUrl ?? null;
+    if (!taskId) {
+      console.warn(
+        `[prs/ingest] PR #${prNumber} (${repo}): no Notion URL found in body — inserting with task_id=null`,
+      );
+    }
+
+    const sessionMatch = lookupSessionByBranch(pr.headBranch);
+    const sessionId = sessionMatch?.session_id ?? null;
+    if (!sessionId) {
+      console.warn(
+        `[prs/ingest] PR #${prNumber} (${repo}): could not derive session_id from branch "${pr.headBranch}" — inserting with session_id=null`,
+      );
+    }
+
+    const now = new Date().toISOString();
+    upsertPullRequest({
+      pr_number: pr.id,
+      pr_url: pr.url,
+      task_id: taskId,
+      session_id: sessionId,
+      repo,
+      title: pr.title,
+      body: pr.body ?? null,
+      head_branch: pr.headBranch,
+      base_branch: pr.baseBranch,
+      state: pr.state,
+      draft: pr.draft ? 1 : 0,
+      review_result: null,
+      review_at: null,
+      created_at: pr.createdAt,
+      updated_at: pr.updatedAt,
+      synced_at: now,
+      head_sha: pr.headSha,
+      node_id: pr.nodeId,
+      merge_state: pr.mergeableState,
+      merge_state_checked_at: now,
+      conflict_nudge_sha: null,
+    });
+
+    sessionManager.emit('pr_opened', {
+      prNumber: pr.id,
+      repo,
+      taskId,
+      taskUrl: taskUrl ?? '',
+      contextUrl: project.contextUrl ?? '',
+    });
+
+    res.status(201).json({ pr_number: pr.id, repo, taskId, sessionId });
   });
 
   return router;

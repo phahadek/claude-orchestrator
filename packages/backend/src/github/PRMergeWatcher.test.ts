@@ -18,6 +18,10 @@ vi.mock('../db/queries.js', () => ({
   setPRReviewResult: vi.fn(),
   setPendingPush: vi.fn(),
   getSetting: vi.fn().mockReturnValue(null),
+  getTestResult: vi.fn().mockReturnValue(undefined),
+  markSessionDone: vi.fn(),
+  setPreReviewStage: vi.fn(),
+  setConflictNudgeSha: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
@@ -26,7 +30,9 @@ vi.mock('../config.js', () => ({
 }));
 
 vi.mock('../session/orchestrator-config.js', () => ({
-  loadOrchestratorConfig: vi.fn().mockReturnValue({ ci_check_name: [] }),
+  loadOrchestratorConfig: vi
+    .fn()
+    .mockReturnValue({ ci_check_name: [], test: [], test_timeout_sec: 300 }),
 }));
 
 vi.mock('../session/autofix-runner.js', () => ({
@@ -51,8 +57,13 @@ import {
   consumeAutofixSha,
   deleteAllAutofixShasForPR,
   setHeadSha,
+  getTestResult,
+  markSessionDone,
+  setPendingPush,
+  setConflictNudgeSha,
 } from '../db/queries';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
+import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { recordEvent } from '../audit/AuditLog';
 import { getProjectByGithubRepo } from '../config';
 import type { AutoMerger } from './AutoMerger';
@@ -108,6 +119,9 @@ function makeMockReviewOrchestrator(): ReviewOrchestrator {
   return {
     runAutofixPipeline: vi.fn().mockResolvedValue(undefined),
     consumeAutofixSha: vi.fn().mockReturnValue(false),
+    runTestPipeline: vi.fn().mockResolvedValue(undefined),
+    isReviewInFlight: vi.fn().mockReturnValue(false),
+    enqueueReview: vi.fn(),
   } as unknown as ReviewOrchestrator;
 }
 
@@ -115,6 +129,11 @@ function makeMockSessions(): SessionManager {
   return {
     endSession: vi.fn(),
     sendOrResume: vi.fn().mockResolvedValue('session-id'),
+    markSessionErrored: vi.fn(),
+    markForBranchDeletion: vi.fn(),
+    on: vi.fn(),
+    off: vi.fn(),
+    emit: vi.fn(),
   } as unknown as SessionManager;
 }
 
@@ -127,6 +146,7 @@ function makeMockNotion(): NotionClient {
 function makeMockAutoMerger(): AutoMerger {
   return {
     attempt: vi.fn(),
+    clearStalePauses: vi.fn(),
   } as unknown as AutoMerger;
 }
 
@@ -395,6 +415,66 @@ describe('PRMergeWatcher.poll()', () => {
   });
 });
 
+// ── PR closed — session terminal transition ───────────────────────────────────
+
+describe('PRMergeWatcher — idle→error session transition on PR close', () => {
+  function makeWatcherForClosedPR(
+    pr: PullRequestRow,
+    sessions: SessionManager,
+  ): PRMergeWatcher {
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    vi.mocked(github.getPRState).mockResolvedValue({
+      state: 'closed',
+      headSha: null,
+    });
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({} as never);
+    return new PRMergeWatcher(github, sessions, undefined, () => {});
+  }
+
+  it('calls markSessionErrored with pr_closed reason for the coding session', async () => {
+    const pr = makePRRow({
+      session_id: 'coding-session',
+      review_session_id: null,
+    });
+    const sessions = makeMockSessions();
+
+    const watcher = makeWatcherForClosedPR(pr, sessions);
+    await watcher.poll();
+
+    expect(vi.mocked(sessions.markSessionErrored)).toHaveBeenCalledWith(
+      'coding-session',
+      'error',
+      'pr_closed',
+    );
+  });
+
+  it('ends review session when PR is closed', async () => {
+    const pr = makePRRow({
+      session_id: 'coding-session',
+      review_session_id: 'review-session',
+    });
+    const sessions = makeMockSessions();
+
+    const watcher = makeWatcherForClosedPR(pr, sessions);
+    await watcher.poll();
+
+    expect(vi.mocked(sessions.endSession)).toHaveBeenCalledWith(
+      'review-session',
+    );
+  });
+
+  it('does not call markSessionErrored when closed PR has no session_id', async () => {
+    const pr = makePRRow({ session_id: null });
+    const sessions = makeMockSessions();
+
+    const watcher = makeWatcherForClosedPR(pr, sessions);
+    await watcher.poll();
+
+    expect(vi.mocked(sessions.markSessionErrored)).not.toHaveBeenCalled();
+  });
+});
+
 // ── checkMergeability / dirty transition ─────────────────────────────────────
 
 describe('PRMergeWatcher dirty-transition sendOrResume', () => {
@@ -416,11 +496,13 @@ describe('PRMergeWatcher dirty-transition sendOrResume', () => {
     ).mockResolvedValue(value);
   }
 
-  it('calls sendOrResume when merge_state transitions to dirty', async () => {
+  it('calls sendOrResume when conflict detected (SHA-keyed dedup, not transition-gated)', async () => {
     const pr = makePRRow({
       merge_state: 'clean',
       session_id: 'coding-session',
       base_branch: 'dev',
+      head_sha: 'sha-abc',
+      conflict_nudge_sha: null,
     });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeMockGitHub();
@@ -442,14 +524,21 @@ describe('PRMergeWatcher dirty-transition sendOrResume', () => {
 
     expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledWith(
       'coding-session',
-      'PR #42 has merge conflicts with the base branch. Rebase onto `dev`, resolve the conflicts, and push the fixed branch.',
+      expect.stringContaining('Rebase'),
+    );
+    expect(vi.mocked(setConflictNudgeSha)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-abc',
     );
   });
 
-  it('does NOT call sendOrResume when merge_state is already dirty', async () => {
+  it('does NOT call sendOrResume when conflict_nudge_sha matches head_sha (SHA dedup)', async () => {
     const pr = makePRRow({
       merge_state: 'dirty',
       session_id: 'coding-session',
+      head_sha: 'sha-abc',
+      conflict_nudge_sha: 'sha-abc',
     });
     vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
     const github = makeMockGitHub();
@@ -767,6 +856,39 @@ describe('PRMergeWatcher.handleMerged()', () => {
     );
     expect(messages.filter((m) => m.type === 'pr_merged')).toHaveLength(0);
   });
+
+  it('calls markSessionDone for the code session on merge (idle → done)', async () => {
+    const pr = makePRRow({
+      session_id: 'sess-idle-123',
+      pr_url: 'https://github.com/owner/repo/pull/42',
+    });
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.handleMerged(pr, 'abc123');
+
+    expect(vi.mocked(markSessionDone)).toHaveBeenCalledWith(
+      'sess-idle-123',
+      expect.any(Number),
+      'https://github.com/owner/repo/pull/42',
+    );
+  });
+
+  it('does not call markSessionDone when session_id is null', async () => {
+    const pr = makePRRow({ session_id: null });
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.handleMerged(pr, 'abc123');
+
+    expect(vi.mocked(markSessionDone)).not.toHaveBeenCalled();
+  });
 });
 
 // ── first-poll-after-boot suppression ────────────────────────────────────────
@@ -820,6 +942,43 @@ describe('PRMergeWatcher first-poll-after-boot suppression', () => {
     await watcher.poll();
 
     expect(messages.filter((m) => m.type === 'pr_merged')).toHaveLength(1);
+  });
+
+  it('start() immediate poll acts as first-poll-after-boot — suppresses pr_merged for pre-merged PRs', async () => {
+    const pr = makePRRow({
+      task_id: null,
+      head_branch: 'main',
+      session_id: null,
+      review_session_id: null,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({} as never);
+    const github = makeMockGitHub();
+    vi.mocked(github.getPRState).mockResolvedValue({
+      state: 'merged',
+      headSha: null,
+    });
+
+    const messages: ServerMessage[] = [];
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      (msg) => messages.push(msg),
+    );
+
+    const pollSpy = vi.spyOn(watcher, 'poll');
+    watcher.start(Number.MAX_SAFE_INTEGER);
+    await pollSpy.mock.results[0].value;
+
+    expect(vi.mocked(updatePRState)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'merged',
+    );
+    expect(messages.filter((m) => m.type === 'pr_merged')).toHaveLength(0);
+
+    watcher.stop();
   });
 });
 
@@ -2205,5 +2364,1631 @@ describe('PRMergeWatcher.handlePushDetected() — push pipeline', () => {
     expect(
       vi.mocked(reviewService.reReviewPR as ReturnType<typeof vi.fn>),
     ).toHaveBeenCalled();
+  });
+});
+
+// ── incomplete verdict + push re-review ──────────────────────────────────────
+
+describe('PRMergeWatcher — incomplete verdict + push triggers re-review', () => {
+  it('fires reReviewPR when head_sha != last_reviewed_sha and verdict is incomplete', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-incomplete',
+      review_iteration: 1,
+      review_session_id: 'review-session',
+      session_id: 'coding-session',
+      review_result: JSON.stringify({
+        verdict: 'incomplete',
+        summary: 'Could not assess the PR.',
+        dimensions: [],
+      }),
+    });
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const reviewService = makeMockPRReviewService({
+      verdict: 'approved',
+      summary: 'LGTM',
+    });
+    const github = makeMockGitHub();
+    vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
+      headSha: 'sha-new',
+    });
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setPRReviewService(reviewService);
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(
+      vi.mocked(reviewService.reReviewPR as ReturnType<typeof vi.fn>),
+    ).toHaveBeenCalled();
+  });
+
+  it('does NOT fire reReviewPR when head_sha equals last_reviewed_sha (terminal stale)', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-same',
+      last_reviewed_sha: 'sha-same',
+      review_iteration: 1,
+      review_session_id: 'review-session',
+      session_id: 'coding-session',
+      review_result: JSON.stringify({
+        verdict: 'incomplete',
+        summary: 'Could not assess the PR.',
+        dimensions: [],
+      }),
+    });
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const reviewService = makeMockPRReviewService();
+    const github = makeMockGitHub();
+    vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
+      headSha: 'sha-same',
+    });
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setPRReviewService(reviewService);
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(
+      vi.mocked(reviewService.reReviewPR as ReturnType<typeof vi.fn>),
+    ).not.toHaveBeenCalled();
+  });
+
+  it('fires review_escalated instead of re-review when iteration cap is reached', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 3, // at the default cap of 3
+      review_session_id: 'review-session',
+      session_id: 'coding-session',
+      review_result: JSON.stringify({
+        verdict: 'incomplete',
+        summary: 'Could not assess.',
+        dimensions: [],
+      }),
+    });
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const reviewService = makeMockPRReviewService();
+    const github = makeMockGitHub();
+    vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
+      headSha: 'sha-new',
+    });
+    const messages: ServerMessage[] = [];
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      (m) => messages.push(m),
+    );
+    watcher.setPRReviewService(reviewService);
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(
+      vi.mocked(reviewService.reReviewPR as ReturnType<typeof vi.fn>),
+    ).not.toHaveBeenCalled();
+    expect(messages.some((m) => m.type === 'review_escalated')).toBe(true);
+  });
+
+  it('calls sendOrResume on implementing session when re-review returns incomplete', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 1,
+      review_session_id: 'review-session',
+      session_id: 'coding-session',
+    });
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const reviewService = makeMockPRReviewService({
+      verdict: 'incomplete',
+      summary: 'Still cannot assess.',
+      dimensions: [
+        {
+          name: 'Diff vs Acceptance Criteria',
+          passed: false,
+          notes: 'Tests unreadable',
+        },
+      ],
+    });
+    const github = makeMockGitHub();
+    vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
+      headSha: 'sha-new',
+    });
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setPRReviewService(reviewService);
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledWith(
+      'coding-session',
+      expect.stringContaining('Incomplete'),
+    );
+  });
+
+  it('still broadcasts review_incomplete WS event when re-review returns incomplete', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 1,
+      review_session_id: 'review-session',
+      session_id: 'coding-session',
+    });
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const reviewService = makeMockPRReviewService({
+      verdict: 'incomplete',
+      summary: 'Still cannot assess.',
+      dimensions: [],
+    });
+    const github = makeMockGitHub();
+    vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
+      headSha: 'sha-new',
+    });
+    const messages: ServerMessage[] = [];
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      (m) => messages.push(m),
+    );
+    watcher.setPRReviewService(reviewService);
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(messages.some((m) => m.type === 'review_incomplete')).toBe(true);
+  });
+});
+
+// ── pendingReReviews leak recovery ────────────────────────────────────────────
+
+describe('PRMergeWatcher — pendingReReviews leak recovery', () => {
+  it('cleans up pendingReReviews when runAutofixPipeline throws', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 0,
+      review_session_id: 'review-session',
+      session_id: 'coding-session',
+    });
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    vi.mocked(
+      reviewOrchestrator.runAutofixPipeline as ReturnType<typeof vi.fn>,
+    ).mockRejectedValue(new Error('autofix failed'));
+    const github = makeMockGitHub();
+    vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
+      headSha: 'sha-new',
+    });
+    const reviewService = makeMockPRReviewService();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setPRReviewService(reviewService);
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect((watcher as any).pendingReReviews.has('coding-session')).toBe(false);
+  });
+
+  it('cleans up pendingReReviews when runTestPipeline throws', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 0,
+      review_session_id: 'review-session',
+      session_id: 'coding-session',
+    });
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_timeout_sec: 60,
+      test_max_rss_mb: 0,
+      test_fail_fast: false,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/wt/session',
+    } as any);
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    vi.mocked(
+      reviewOrchestrator.runTestPipeline as ReturnType<typeof vi.fn>,
+    ).mockRejectedValue(new Error('test pipeline failed'));
+    const github = makeMockGitHub();
+    vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
+      headSha: 'sha-new',
+    });
+    const reviewService = makeMockPRReviewService();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setPRReviewService(reviewService);
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect((watcher as any).pendingReReviews.has('coding-session')).toBe(false);
+  });
+
+  it('sweepStalePendingReReviews removes entries older than TTL and emits warn', () => {
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const staleTimestamp = Date.now() - 6 * 60 * 1000; // 6 min > 5 min TTL
+    (watcher as any).pendingReReviews.set(
+      'stale-session-id-abc',
+      staleTimestamp,
+    );
+
+    (watcher as any).sweepStalePendingReReviews();
+
+    expect((watcher as any).pendingReReviews.has('stale-session-id-abc')).toBe(
+      false,
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        '[PRMergeWatcher] sweeping stale pendingReReview for session stale-se',
+      ),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('second handlePushDetected for same session proceeds after previous cleanup', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 0,
+      review_session_id: 'review-session',
+      session_id: 'coding-session',
+    });
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    vi.mocked(
+      reviewOrchestrator.runAutofixPipeline as ReturnType<typeof vi.fn>,
+    ).mockRejectedValueOnce(new Error('autofix failed'));
+    const github = makeMockGitHub();
+    vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
+      headSha: 'sha-new',
+    });
+    const reviewService = makeMockPRReviewService();
+    vi.mocked(
+      reviewService.reReviewPR as ReturnType<typeof vi.fn>,
+    ).mockResolvedValue({
+      verdict: 'approved',
+      summary: 'LGTM',
+      dimensions: [],
+      prNumber: 42,
+      repo: 'owner/repo',
+      reviewedAt: new Date().toISOString(),
+    });
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setPRReviewService(reviewService);
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    // First call — runAutofixPipeline throws; pendingReReviews must be cleaned up
+    await watcher.handlePushDetected(pr);
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Second call — must NOT be blocked by the pendingReReviews guard
+    await watcher.handlePushDetected(pr);
+    await new Promise((r) => setTimeout(r, 50));
+
+    // runAutofixPipeline called twice: once (throw), once (success)
+    expect(
+      vi.mocked(
+        reviewOrchestrator.runAutofixPipeline as ReturnType<typeof vi.fn>,
+      ),
+    ).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── Orchestrator-run test gate (F2) ──────────────────────────────────────────
+
+describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getProjectByGithubRepo).mockReturnValue(null);
+    vi.mocked(getTestResult).mockReturnValue(undefined);
+  });
+
+  function mockCategorizeClean(github: GitHubClient): void {
+    vi.mocked((github as any).categorizeMergeability).mockResolvedValue({
+      category: 'clean',
+      mergeState: 'clean',
+      rawMergeableState: 'clean',
+      failingChecks: [],
+    });
+  }
+
+  it('pauses with ci_failing and routes test output to session when latest-SHA test fails', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-fail',
+      session_id: 'coding-session',
+      ci_remediation_attempted_sha: null,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getTestResult).mockReturnValue({
+      pr_number: 42,
+      repo: 'owner/repo',
+      sha: 'sha-fail',
+      passed: 0,
+      output: 'FAIL src/foo.test.ts\n  ● test name\n    expected 1 to equal 2',
+      ran_at: '2026-01-01T00:00:00Z',
+    } as any);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(setCiRemediationAttemptedSha)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-fail',
+    );
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'ci_failing',
+    );
+    const sent = vi.mocked(sessions.sendOrResume).mock.calls[0]?.[1] as string;
+    expect(sent).toMatch(/## CI Failure — PR #42/);
+    expect(sent).toContain('FAIL src/foo.test.ts');
+    // GitHub mergeability was NOT consulted — returned early after test gate
+    expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
+  });
+
+  it('proceeds to review/merge when latest-SHA test passes (no gate)', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-pass',
+      session_id: 'coding-session',
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getTestResult).mockReturnValue({
+      pr_number: 42,
+      repo: 'owner/repo',
+      sha: 'sha-pass',
+      passed: 1,
+      output: 'All tests passed',
+      ran_at: '2026-01-01T00:00:00Z',
+    } as any);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    // No pause, no remediation
+    expect(vi.mocked(setPauseReason)).not.toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'ci_failing',
+    );
+    expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
+    // GitHub mergeability was consulted (normal flow)
+    expect(vi.mocked(github.categorizeMergeability)).toHaveBeenCalled();
+  });
+
+  it('does not re-remediate when ci_remediation_attempted_sha matches head_sha', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-fail',
+      session_id: 'coding-session',
+      ci_remediation_attempted_sha: 'sha-fail', // already remediated
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getTestResult).mockReturnValue({
+      pr_number: 42,
+      repo: 'owner/repo',
+      sha: 'sha-fail',
+      passed: 0,
+      output: 'Test failed',
+      ran_at: '2026-01-01T00:00:00Z',
+    } as any);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    // Dedup: no re-remediation for the same SHA
+    expect(vi.mocked(setCiRemediationAttemptedSha)).not.toHaveBeenCalled();
+    expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
+    // Still returns early (gated on failing tests)
+    expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
+  });
+
+  it('re-gates and remediates when a new head_sha has a failing test result', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-new',
+      session_id: 'coding-session',
+      ci_remediation_attempted_sha: 'sha-old', // remediated for old SHA only
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getTestResult).mockReturnValue({
+      pr_number: 42,
+      repo: 'owner/repo',
+      sha: 'sha-new',
+      passed: 0,
+      output: 'Fix failed',
+      ran_at: '2026-01-01T00:00:00Z',
+    } as any);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      sessions,
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    expect(vi.mocked(setCiRemediationAttemptedSha)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-new',
+    );
+    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledWith(
+      'coding-session',
+      expect.stringMatching(/## CI Failure — PR #42/),
+    );
+  });
+
+  it('skips test gate when no test: commands configured', async () => {
+    const pr = makePRRow({ head_sha: 'sha-abc', session_id: 'coding-session' });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    const github = makeMockGitHub();
+    mockCategorizeClean(github);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: [],
+      test_timeout_sec: 300,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getTestResult).mockReturnValue({
+      passed: 0,
+      output: 'irrelevant',
+    } as any);
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.poll();
+
+    // Gate not engaged — falls through to GitHub mergeability
+    expect(vi.mocked(github.categorizeMergeability)).toHaveBeenCalled();
+  });
+
+  it('runs runTestPipeline for a new push SHA in the re-review path', async () => {
+    const pr = makePRRow({
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 0,
+      review_session_id: 'review-session',
+      session_id: 'coding-session',
+    });
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/proj',
+    } as any);
+    vi.mocked(loadOrchestratorConfig).mockReturnValue({
+      ci_check_name: [],
+      test: ['npm test'],
+      test_timeout_sec: 60,
+      test_max_rss_mb: 0,
+      test_fail_fast: true,
+      autofix: [],
+      verify: [],
+      allowed_tools: [],
+      bash_rules: [],
+      bootstrap_script: '',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      worktree_path: '/wt/session',
+    } as any);
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const reviewService = makeMockPRReviewService();
+    vi.mocked(
+      reviewService.reReviewPR as ReturnType<typeof vi.fn>,
+    ).mockResolvedValue({
+      verdict: 'approved',
+      summary: 'LGTM',
+      dimensions: [],
+      prNumber: 42,
+      repo: 'owner/repo',
+      reviewedAt: new Date().toISOString(),
+    });
+    const github = makeMockGitHub();
+    vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
+      headSha: 'sha-new',
+    });
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setPRReviewService(reviewService);
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(
+      vi.mocked(reviewOrchestrator.runTestPipeline as ReturnType<typeof vi.fn>),
+    ).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-new',
+      '/wt/session',
+      ['npm test'],
+      60,
+      0,
+      true,
+    );
+  });
+});
+
+// ── handlePushDetected — post-gate-failure direct enqueue ─────────────────────
+
+describe('PRMergeWatcher.handlePushDetected() — post-gate-failure enqueue', () => {
+  it('push after autofix_failed with review_session_id=null → enqueueReview called, not setPendingPush', async () => {
+    const pr = makePRRow({
+      review_session_id: null,
+      review_result: JSON.stringify({
+        verdict: 'autofix_failed',
+        summary: 'lint failed',
+        dimensions: [],
+      }),
+      head_sha: 'sha-fix',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 0,
+    });
+    vi.mocked(getSession).mockReturnValue({
+      task_url: 'https://notion.so/task-1',
+    } as any);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      contextUrl: 'https://notion.so/ctx',
+    } as any);
+
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+
+    expect(
+      vi.mocked(reviewOrchestrator.enqueueReview as ReturnType<typeof vi.fn>),
+    ).toHaveBeenCalledWith({
+      prNumber: 42,
+      repo: 'owner/repo',
+      taskId: 'notion:task-abc',
+      taskUrl: 'https://notion.so/task-1',
+      contextUrl: 'https://notion.so/ctx',
+    });
+    expect(vi.mocked(setPendingPush)).not.toHaveBeenCalled();
+  });
+
+  it('push after verify_failed with review_session_id=null → enqueueReview called', async () => {
+    const pr = makePRRow({
+      review_session_id: null,
+      review_result: JSON.stringify({
+        verdict: 'verify_failed',
+        summary: 'build failed',
+        dimensions: [],
+      }),
+      head_sha: 'sha-fix',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 0,
+    });
+    vi.mocked(getSession).mockReturnValue({ task_url: '' } as any);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      contextUrl: '',
+    } as any);
+
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+
+    expect(
+      vi.mocked(reviewOrchestrator.enqueueReview as ReturnType<typeof vi.fn>),
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 42, repo: 'owner/repo' }),
+    );
+    expect(vi.mocked(setPendingPush)).not.toHaveBeenCalled();
+  });
+
+  it('push after autofix_failed with review in flight → falls back to setPendingPush', async () => {
+    const pr = makePRRow({
+      review_session_id: null,
+      review_result: JSON.stringify({
+        verdict: 'autofix_failed',
+        summary: 'lint failed',
+        dimensions: [],
+      }),
+      head_sha: 'sha-fix',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 0,
+    });
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      contextUrl: '',
+    } as any);
+
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    vi.mocked(
+      reviewOrchestrator.isReviewInFlight as ReturnType<typeof vi.fn>,
+    ).mockReturnValue(true);
+
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+
+    expect(
+      vi.mocked(reviewOrchestrator.enqueueReview as ReturnType<typeof vi.fn>),
+    ).not.toHaveBeenCalled();
+    expect(vi.mocked(setPendingPush)).toHaveBeenCalledWith(42, 'owner/repo', 1);
+  });
+
+  it('push after autofix_failed but orchestrator not set → falls back to setPendingPush', async () => {
+    const pr = makePRRow({
+      review_session_id: null,
+      review_result: JSON.stringify({
+        verdict: 'autofix_failed',
+        summary: 'lint failed',
+        dimensions: [],
+      }),
+      head_sha: 'sha-fix',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 0,
+    });
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      contextUrl: '',
+    } as any);
+
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    // No orchestrator set
+
+    await watcher.handlePushDetected(pr);
+
+    expect(vi.mocked(setPendingPush)).toHaveBeenCalledWith(42, 'owner/repo', 1);
+  });
+
+  it('push after autofix_failed but iteration cap reached → escalates, does not enqueue', async () => {
+    const messages: ServerMessage[] = [];
+    const pr = makePRRow({
+      review_session_id: null,
+      review_result: JSON.stringify({
+        verdict: 'autofix_failed',
+        summary: 'lint failed',
+        dimensions: [],
+      }),
+      head_sha: 'sha-fix',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 3, // at cap (default max = 3)
+    });
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      contextUrl: '',
+    } as any);
+
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      undefined,
+      (m) => messages.push(m),
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+
+    expect(
+      vi.mocked(reviewOrchestrator.enqueueReview as ReturnType<typeof vi.fn>),
+    ).not.toHaveBeenCalled();
+    expect(vi.mocked(setPendingPush)).not.toHaveBeenCalled();
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'max_reviews',
+    );
+    expect(messages.some((m) => m.type === 'review_escalated')).toBe(true);
+  });
+
+  it('push with null review_result and review_session_id=null → original setPendingPush behavior', async () => {
+    const pr = makePRRow({
+      review_session_id: null,
+      review_result: null,
+      head_sha: 'sha-fix',
+      last_reviewed_sha: null,
+      review_iteration: 0,
+    });
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      contextUrl: '',
+    } as any);
+
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+
+    expect(
+      vi.mocked(reviewOrchestrator.enqueueReview as ReturnType<typeof vi.fn>),
+    ).not.toHaveBeenCalled();
+    expect(vi.mocked(setPendingPush)).toHaveBeenCalledWith(42, 'owner/repo', 1);
+  });
+
+  it('push with non-gate verdict (needs_changes) and review_session_id=null → setPendingPush', async () => {
+    const pr = makePRRow({
+      review_session_id: null,
+      review_result: JSON.stringify({
+        verdict: 'needs_changes',
+        summary: 'fix it',
+        dimensions: [],
+      }),
+      head_sha: 'sha-fix',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 0,
+    });
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      contextUrl: '',
+    } as any);
+
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+
+    expect(
+      vi.mocked(reviewOrchestrator.enqueueReview as ReturnType<typeof vi.fn>),
+    ).not.toHaveBeenCalled();
+    expect(vi.mocked(setPendingPush)).toHaveBeenCalledWith(42, 'owner/repo', 1);
+  });
+
+  it('during-review push (review_session_id set) still uses original re-review path (regression)', async () => {
+    const pr = makePRRow({
+      review_session_id: 'review-session',
+      review_result: JSON.stringify({
+        verdict: 'autofix_failed',
+        summary: 'lint',
+        dimensions: [],
+      }),
+      head_sha: 'sha-fix',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 0,
+    });
+    const reviewService = makeMockPRReviewService({ verdict: 'approved' });
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const github = makeMockGitHub();
+    vi.mocked(github.fetchPR as ReturnType<typeof vi.fn>).mockResolvedValue({
+      headSha: 'sha-fix',
+    });
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      contextUrl: '',
+    } as any);
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    watcher.setPRReviewService(reviewService);
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.handlePushDetected(pr);
+    await new Promise((r) => setTimeout(r, 50));
+
+    // enqueueReview should NOT be called — the original re-review path runs
+    expect(
+      vi.mocked(reviewOrchestrator.enqueueReview as ReturnType<typeof vi.fn>),
+    ).not.toHaveBeenCalled();
+    expect(
+      vi.mocked(reviewService.reReviewPR as ReturnType<typeof vi.fn>),
+    ).toHaveBeenCalled();
+  });
+});
+
+// ── sweepPendingPushDeadLetters (via poll) ─────────────────────────────────────
+
+describe('PRMergeWatcher — sweepPendingPushDeadLetters', () => {
+  it('pending_push=1, no review in flight, shouldAutoReview=true → clears flag and enqueues', async () => {
+    const pr = makePRRow({
+      pending_push: 1,
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 0,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      contextUrl: 'https://ctx',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({ task_url: 'https://task' } as any);
+
+    const github = makeMockGitHub();
+    vi.mocked(github.getPRState).mockResolvedValue({
+      state: 'open',
+      headSha: 'sha-new',
+    });
+
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.poll();
+
+    expect(vi.mocked(setPendingPush)).toHaveBeenCalledWith(42, 'owner/repo', 0);
+    expect(
+      vi.mocked(reviewOrchestrator.enqueueReview as ReturnType<typeof vi.fn>),
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prNumber: 42,
+        repo: 'owner/repo',
+        contextUrl: 'https://ctx',
+      }),
+    );
+  });
+
+  it('pending_push=1, review in flight → skips sweep', async () => {
+    const pr = makePRRow({
+      pending_push: 1,
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 0,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      contextUrl: '',
+    } as any);
+
+    const github = makeMockGitHub();
+    vi.mocked(github.getPRState).mockResolvedValue({
+      state: 'open',
+      headSha: 'sha-new',
+    });
+
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    vi.mocked(
+      reviewOrchestrator.isReviewInFlight as ReturnType<typeof vi.fn>,
+    ).mockReturnValue(true);
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.poll();
+
+    expect(vi.mocked(setPendingPush)).not.toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      0,
+    );
+    expect(
+      vi.mocked(reviewOrchestrator.enqueueReview as ReturnType<typeof vi.fn>),
+    ).not.toHaveBeenCalled();
+  });
+
+  it('pending_push=0 → not swept', async () => {
+    const pr = makePRRow({
+      pending_push: 0,
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 0,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      contextUrl: '',
+    } as any);
+
+    const github = makeMockGitHub();
+    vi.mocked(github.getPRState).mockResolvedValue({
+      state: 'open',
+      headSha: 'sha-new',
+    });
+
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.poll();
+
+    expect(
+      vi.mocked(reviewOrchestrator.enqueueReview as ReturnType<typeof vi.fn>),
+    ).not.toHaveBeenCalled();
+  });
+
+  it('pending_push=1 but head_sha === last_reviewed_sha → shouldAutoReview=false, skips', async () => {
+    const pr = makePRRow({
+      pending_push: 1,
+      head_sha: 'sha-same',
+      last_reviewed_sha: 'sha-same',
+      review_iteration: 0,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      contextUrl: '',
+    } as any);
+
+    const github = makeMockGitHub();
+    vi.mocked(github.getPRState).mockResolvedValue({
+      state: 'open',
+      headSha: 'sha-same',
+    });
+
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.poll();
+
+    expect(
+      vi.mocked(reviewOrchestrator.enqueueReview as ReturnType<typeof vi.fn>),
+    ).not.toHaveBeenCalled();
+    expect(vi.mocked(setPendingPush)).not.toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      0,
+    );
+  });
+
+  it('pending_push=1, iteration cap reached → shouldAutoReview=false, skips', async () => {
+    const pr = makePRRow({
+      pending_push: 1,
+      head_sha: 'sha-new',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 3, // at default cap
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      contextUrl: '',
+    } as any);
+
+    const github = makeMockGitHub();
+    vi.mocked(github.getPRState).mockResolvedValue({
+      state: 'open',
+      headSha: 'sha-new',
+    });
+
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.poll();
+
+    expect(
+      vi.mocked(reviewOrchestrator.enqueueReview as ReturnType<typeof vi.fn>),
+    ).not.toHaveBeenCalled();
+  });
+
+  it('sweeps multiple pending_push PRs in one poll cycle', async () => {
+    const pr1 = makePRRow({
+      id: 1,
+      pr_number: 10,
+      pending_push: 1,
+      head_sha: 'sha-a',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 0,
+    });
+    const pr2 = makePRRow({
+      id: 2,
+      pr_number: 20,
+      pending_push: 1,
+      head_sha: 'sha-b',
+      last_reviewed_sha: 'sha-old',
+      review_iteration: 0,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr1, pr2]);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      contextUrl: '',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({ task_url: '' } as any);
+
+    const github = makeMockGitHub();
+    vi.mocked(github.getPRState).mockResolvedValue({
+      state: 'open',
+      headSha: null,
+    });
+
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    await watcher.poll();
+
+    expect(vi.mocked(setPendingPush)).toHaveBeenCalledWith(10, 'owner/repo', 0);
+    expect(vi.mocked(setPendingPush)).toHaveBeenCalledWith(20, 'owner/repo', 0);
+    expect(
+      vi.mocked(reviewOrchestrator.enqueueReview as ReturnType<typeof vi.fn>),
+    ).toHaveBeenCalledTimes(2);
+  });
+
+  it('integration: gate failure → push after exit → review fires without operator intervention (#608 ordering)', async () => {
+    // Step 1: PR is in autofix_failed state (gate ran, review_session_id=NULL)
+    const prAfterGateFailure = makePRRow({
+      review_session_id: null,
+      review_result: JSON.stringify({
+        verdict: 'autofix_failed',
+        summary: 'lint exit 1',
+        dimensions: [],
+      }),
+      head_sha: 'sha-d8ff855',
+      last_reviewed_sha: 'sha-d8ff855',
+      review_iteration: 0,
+      pending_push: 0,
+    });
+
+    // Step 2: Implementing session pushes a fix — head_sha changes to new commit
+    const prAfterFix = {
+      ...prAfterGateFailure,
+      head_sha: 'sha-b47c5ca',
+      last_reviewed_sha: 'sha-d8ff855',
+    };
+
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      contextUrl: 'https://ctx',
+    } as any);
+    vi.mocked(getSession).mockReturnValue({
+      task_url: 'https://task',
+      worktree_path: '/wt',
+    } as any);
+
+    const reviewOrchestrator = makeMockReviewOrchestrator();
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    watcher.setReviewOrchestrator(reviewOrchestrator);
+
+    // handlePushDetected fires when the fix is pushed — review_session_id=NULL, gate-failure verdict
+    await watcher.handlePushDetected(prAfterFix);
+
+    // Review is enqueued directly — no pending_push dead letter
+    expect(
+      vi.mocked(reviewOrchestrator.enqueueReview as ReturnType<typeof vi.fn>),
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 42, repo: 'owner/repo' }),
+    );
+    expect(vi.mocked(setPendingPush)).not.toHaveBeenCalled();
+  });
+});
+
+// ── start() — immediate first poll ────────────────────────────────────────────
+
+describe('PRMergeWatcher.start()', () => {
+  it('fires one poll immediately on start before any interval tick', () => {
+    vi.useFakeTimers();
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    const pollSpy = vi.spyOn(watcher, 'poll').mockResolvedValue(undefined);
+
+    watcher.start(60_000);
+
+    expect(pollSpy).toHaveBeenCalledTimes(1);
+    watcher.stop();
+    vi.useRealTimers();
+  });
+
+  it('second start() is a no-op — no extra immediate poll or extra timer', () => {
+    vi.useFakeTimers();
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    const pollSpy = vi.spyOn(watcher, 'poll').mockResolvedValue(undefined);
+
+    watcher.start(60_000);
+    watcher.start(60_000);
+
+    expect(pollSpy).toHaveBeenCalledTimes(1);
+    watcher.stop();
+    vi.useRealTimers();
+  });
+
+  it('poll error in the immediate call is caught and logged, not thrown', async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    vi.spyOn(watcher, 'poll').mockRejectedValue(new Error('boom'));
+
+    expect(() => watcher.start(60_000)).not.toThrow();
+    await vi.runAllTimersAsync();
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[PRMergeWatcher] poll error:',
+      'boom',
+    );
+    warnSpy.mockRestore();
+    watcher.stop();
+    vi.useRealTimers();
+  });
+});
+
+// ── conflict nudge: shared helper, SHA dedup, audit on failure ────────────────
+
+describe('PRMergeWatcher conflict nudge', () => {
+  function mockCategorizeConflict(github: GitHubClient): void {
+    vi.mocked(
+      (github as unknown as { categorizeMergeability: () => Promise<unknown> })
+        .categorizeMergeability,
+    ).mockResolvedValue({
+      category: 'conflict',
+      mergeState: 'dirty',
+      rawMergeableState: 'dirty',
+      failingChecks: [],
+      headSha: 'sha-abc',
+    });
+  }
+
+  it('nudges session even when already dirty (no stateChanged gate — first-poll case)', async () => {
+    const pr = makePRRow({
+      merge_state: 'dirty',
+      session_id: 'coding-session',
+      head_sha: 'sha-abc',
+      conflict_nudge_sha: null,
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getPRByNumber).mockReturnValue({ ...pr });
+    const github = makeMockGitHub();
+    mockCategorizeConflict(github);
+    const sessions = makeMockSessions();
+
+    const watcher = new PRMergeWatcher(github, sessions, undefined, () => {});
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/tmp',
+    } as ReturnType<typeof getProjectByGithubRepo>);
+    await watcher.poll();
+
+    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledWith(
+      'coding-session',
+      expect.stringContaining('Rebase'),
+    );
+    expect(vi.mocked(setConflictNudgeSha)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-abc',
+    );
+  });
+
+  it('failed conflict nudge delivery emits audit event (conflict_nudge_delivery_failed)', async () => {
+    const pr = makePRRow({
+      merge_state: 'clean',
+      session_id: 'coding-session',
+      head_sha: 'sha-abc',
+      conflict_nudge_sha: null,
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr]);
+    vi.mocked(getPRByNumber).mockReturnValue({ ...pr });
+    const github = makeMockGitHub();
+    vi.mocked(
+      (github as unknown as { categorizeMergeability: () => Promise<unknown> })
+        .categorizeMergeability,
+    ).mockResolvedValue({
+      category: 'conflict',
+      mergeState: 'dirty',
+      rawMergeableState: 'dirty',
+      failingChecks: [],
+      headSha: 'sha-abc',
+    });
+    const sessions = makeMockSessions();
+    vi.mocked(sessions.sendOrResume).mockRejectedValueOnce(
+      new Error('session gone'),
+    );
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/tmp',
+    } as ReturnType<typeof getProjectByGithubRepo>);
+
+    const watcher = new PRMergeWatcher(github, sessions, undefined, () => {});
+    await watcher.poll();
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'conflict_nudge_delivery_failed',
+        payload: expect.objectContaining({
+          pr_number: 42,
+          session_id: 'coding-session',
+          cause: 'conflict',
+        }),
+      }),
+    );
+  });
+
+  it('integration: conflicted PR is paused → session nudged → new push still-conflicting → re-nudged', async () => {
+    // First poll: PR is clean, no nudge
+    const pr1 = makePRRow({
+      merge_state: 'clean',
+      session_id: 'coding-session',
+      head_sha: 'sha-v1',
+      conflict_nudge_sha: null,
+      review_result: JSON.stringify({ verdict: 'approved' }),
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr1]);
+    vi.mocked(getPRByNumber).mockReturnValue({ ...pr1 });
+    const github = makeMockGitHub();
+    vi.mocked(
+      (github as unknown as { categorizeMergeability: () => Promise<unknown> })
+        .categorizeMergeability,
+    ).mockResolvedValue({
+      category: 'conflict',
+      mergeState: 'dirty',
+      rawMergeableState: 'dirty',
+      failingChecks: [],
+      headSha: 'sha-v1',
+    });
+    const sessions = makeMockSessions();
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/tmp',
+    } as ReturnType<typeof getProjectByGithubRepo>);
+
+    const watcher = new PRMergeWatcher(github, sessions, undefined, () => {});
+    await watcher.poll();
+
+    // First poll: nudge sent for sha-v1
+    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(setConflictNudgeSha)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-v1',
+    );
+
+    vi.clearAllMocks();
+
+    // Second poll: same SHA, nudge sha matches — no re-nudge (clearStalePauses re-fail)
+    const pr2 = { ...pr1, conflict_nudge_sha: 'sha-v1' };
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr2]);
+    vi.mocked(getPRByNumber).mockReturnValue(pr2);
+    vi.mocked(
+      (github as unknown as { categorizeMergeability: () => Promise<unknown> })
+        .categorizeMergeability,
+    ).mockResolvedValue({
+      category: 'conflict',
+      mergeState: 'dirty',
+      rawMergeableState: 'dirty',
+      failingChecks: [],
+      headSha: 'sha-v1',
+    });
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/tmp',
+    } as ReturnType<typeof getProjectByGithubRepo>);
+
+    await watcher.poll();
+    expect(vi.mocked(sessions.sendOrResume)).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+
+    // Third poll: new push (sha-v2) still conflicted → re-nudge
+    const pr3 = { ...pr1, head_sha: 'sha-v2', conflict_nudge_sha: 'sha-v1' };
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr3]);
+    vi.mocked(getPRByNumber).mockReturnValue(pr3);
+    vi.mocked(
+      (github as unknown as { categorizeMergeability: () => Promise<unknown> })
+        .categorizeMergeability,
+    ).mockResolvedValue({
+      category: 'conflict',
+      mergeState: 'dirty',
+      rawMergeableState: 'dirty',
+      failingChecks: [],
+      headSha: 'sha-v2',
+    });
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/tmp',
+    } as ReturnType<typeof getProjectByGithubRepo>);
+
+    await watcher.poll();
+    expect(vi.mocked(sessions.sendOrResume)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(setConflictNudgeSha)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      'sha-v2',
+    );
+  });
+});
+
+// ── clearStalePauses wiring ───────────────────────────────────────────────────
+
+describe('PRMergeWatcher.poll() — clearStalePauses wiring', () => {
+  it('calls clearStalePauses on each poll cycle when autoMerger is set', async () => {
+    vi.mocked(getAllOpenPRs).mockReturnValue([]);
+    const github = makeMockGitHub();
+    const autoMerger = makeMockAutoMerger();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    watcher.setAutoMerger(autoMerger);
+
+    await watcher.poll();
+    expect(vi.mocked(autoMerger.clearStalePauses)).toHaveBeenCalledTimes(1);
+
+    await watcher.poll();
+    expect(vi.mocked(autoMerger.clearStalePauses)).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not throw when autoMerger is not set', async () => {
+    vi.mocked(getAllOpenPRs).mockReturnValue([]);
+    const github = makeMockGitHub();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    await expect(watcher.poll()).resolves.toBeUndefined();
+  });
+
+  it('calls clearStalePauses before processing open PRs each poll', async () => {
+    const callOrder: string[] = [];
+    vi.mocked(getAllOpenPRs).mockReturnValue([makePRRow()]);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue({
+      id: 'proj-1',
+      projectDir: '/tmp',
+    } as ReturnType<typeof getProjectByGithubRepo>);
+
+    const github = makeMockGitHub();
+    vi.mocked(github.getPRState as ReturnType<typeof vi.fn>).mockImplementation(
+      async () => {
+        callOrder.push('getPRState');
+        return { state: 'open', headSha: null };
+      },
+    );
+
+    const autoMerger = {
+      attempt: vi.fn(),
+      clearStalePauses: vi.fn().mockImplementation(() => {
+        callOrder.push('clearStalePauses');
+      }),
+    } as unknown as AutoMerger;
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      undefined,
+      () => {},
+    );
+    watcher.setAutoMerger(autoMerger);
+
+    await watcher.poll();
+
+    expect(callOrder[0]).toBe('clearStalePauses');
   });
 });

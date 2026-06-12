@@ -8,6 +8,7 @@ import {
   setLastReviewedSha,
   setLocalBranchReviewResult,
   getLocalBranchById,
+  getSession,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import type { GitHubClient } from './GitHubClient';
@@ -68,6 +69,8 @@ export interface PRReviewResult {
   reviewedAt: string;
   /** Manual-verification items extracted from the task spec — for human review, not AI evaluation. */
   manualItemsForHuman?: string[];
+  /** Full error detail when the session errored before producing output. */
+  errorDetail?: string;
 }
 
 export type WorkItem =
@@ -272,7 +275,9 @@ export class PRReviewService {
           aiResult,
           sizeSignal,
         );
+        // Persist immediately after parse — before any side effects (GitHub/Notion).
         setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
+        setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
         if (finalResult.verdict === 'approved') {
           await this.handleApprovedVerdict(
             prNumber,
@@ -326,7 +331,9 @@ export class PRReviewService {
           aiResult,
           sizeSignal,
         );
+        // Persist immediately after parse — before any side effects (GitHub/Notion).
         setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
+        setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
         if (finalResult.verdict === 'approved') {
           await this.handleApprovedVerdict(
             prNumber,
@@ -351,7 +358,7 @@ export class PRReviewService {
       // 2. Start session with the pre-generated ID. For review sessions, taskUrl
       // is used only for display/storage; the actual task association is carried
       // by taskId so it works for any backend (github, notion, etc.).
-      this.sessionManager.start(projectContextUrl, projectContextUrl, {
+      await this.sessionManager.start(projectContextUrl, projectContextUrl, {
         sessionId,
         sessionType: 'review',
         customPrompt: prompt,
@@ -386,6 +393,9 @@ export class PRReviewService {
         aiResult,
         sizeSignal,
       );
+      // Persist immediately after parse — before any side effects (GitHub/Notion).
+      // setLastReviewedSha was already called above the verdictPromise await for
+      // the race-window guard; the verdict write here is the critical safety net.
       setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
       if (finalResult.verdict === 'approved') {
         await this.handleApprovedVerdict(
@@ -460,7 +470,7 @@ export class PRReviewService {
       syntheticRepo,
     );
 
-    this.sessionManager.start(projectContextUrl, projectContextUrl, {
+    await this.sessionManager.start(projectContextUrl, projectContextUrl, {
       sessionId,
       sessionType: 'review',
       customPrompt: prompt,
@@ -516,6 +526,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     projectId?: string,
   ): Promise<boolean> {
     let draftTransitioned = false;
+    const resolvedProjectId = projectId ?? this.defaultProjectId;
     try {
       await this.github.markPRReady(repo, prNumber);
       updatePRDraftStatus(prNumber, repo, 0);
@@ -525,9 +536,21 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         `[PRReviewService] markPRReady skipped for PR #${prNumber}:`,
         e,
       );
+      recordEvent({
+        event_type: 'review_side_effect_failed',
+        actor_type: 'system',
+        actor_id: null,
+        project_id: resolvedProjectId || null,
+        task_id: taskId,
+        payload: {
+          pr_number: prNumber,
+          repo,
+          side_effect: 'markPRReady',
+          error: String(e),
+        },
+      });
     }
     if (taskId) {
-      const resolvedProjectId = projectId ?? this.defaultProjectId;
       try {
         await this.resolveBackend(resolvedProjectId).updateStatus(
           taskId,
@@ -535,6 +558,19 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         );
       } catch (e: unknown) {
         console.error(`[PRReviewService] task backend updateStatus failed:`, e);
+        recordEvent({
+          event_type: 'review_side_effect_failed',
+          actor_type: 'system',
+          actor_id: null,
+          project_id: resolvedProjectId || null,
+          task_id: taskId,
+          payload: {
+            pr_number: prNumber,
+            repo,
+            side_effect: 'updateStatus',
+            error: String(e),
+          },
+        });
       }
     }
     // Trigger an immediate mergeability check so the watcher's DB merge_state and
@@ -629,9 +665,39 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       expectedSize,
     );
 
+    // Surface the prior incomplete reason so the reviewer knows what to focus on.
+    const priorResult = (() => {
+      try {
+        return pr.review_result
+          ? (JSON.parse(pr.review_result) as Partial<PRReviewResult>)
+          : null;
+      } catch {
+        return null;
+      }
+    })();
+    const priorIncompleteLines: string[] = [];
+    if (priorResult?.verdict === 'incomplete') {
+      priorIncompleteLines.push('');
+      priorIncompleteLines.push('### Prior Review Context');
+      priorIncompleteLines.push(
+        `The previous review returned an **incomplete** verdict: "${priorResult.summary ?? ''}"`,
+      );
+      for (const d of (priorResult.dimensions ?? []).filter(
+        (d) => !(d as ReviewDimension).passed,
+      )) {
+        priorIncompleteLines.push(
+          `- **${(d as ReviewDimension).name}**: ${(d as ReviewDimension).notes}`,
+        );
+      }
+      priorIncompleteLines.push(
+        'When reviewing the new commits, focus on whether these dimensions are now assessable.',
+      );
+    }
+
     const followUp = [
       `The code session has pushed new commits to PR #${prNumber}.`,
       `Please re-review the updated diff against the same task spec.`,
+      ...priorIncompleteLines,
       ``,
       `### Updated PR Metadata`,
       `Title: ${prData.title}`,
@@ -707,6 +773,20 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
 
         if (msg.type === 'session_ended') {
           cleanup();
+          // If the session ended in error before producing output, surface the real cause.
+          const sessionRow = getSession(sessionId);
+          if (sessionRow?.status === 'error' && sessionRow.last_error_detail) {
+            resolve({
+              prNumber,
+              repo,
+              verdict: 'incomplete',
+              dimensions: [],
+              summary: `Review session errored before producing output: ${sessionRow.pause_reason ?? 'launch_failed'}`,
+              errorDetail: sessionRow.last_error_detail,
+              reviewedAt: new Date().toISOString(),
+            });
+            return;
+          }
           // Fallback: parse from stored events
           const events = getEventsBySession(sessionId);
           const result = this.parseReviewResult(events, prNumber, repo);

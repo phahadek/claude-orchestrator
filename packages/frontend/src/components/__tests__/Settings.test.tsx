@@ -1,6 +1,6 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Settings } from '../Settings';
+import { Settings, validateField } from '../Settings';
 
 vi.mock('../Settings/ProjectsSettingsPanel', () => ({
   ProjectsSettingsPanel: () => <div>ProjectsSettingsPanel</div>,
@@ -21,6 +21,11 @@ const defaultSettings = {
   session_hard_stop_window_seconds: '300',
   ci_poll_interval_seconds: '30',
   ci_poll_max_minutes: '60',
+  max_review_iterations: '3',
+  auto_archive_enabled: 'false',
+  auto_archive_grace_minutes: '10',
+  auto_archive_sweep_interval_minutes: '5',
+  large_task_model: '',
 };
 
 function makeFetch(getBody: object = defaultSettings, patchBody: object = {}) {
@@ -177,5 +182,101 @@ describe('Settings — auto-launch inputs', () => {
         'auto_launch_concurrency' in JSON.parse(opts.body as string),
     );
     expect(patchCall).toBeUndefined();
+  });
+});
+
+describe('validateField — non-numeric keys', () => {
+  it('returns null for code_session_model with a model string', () => {
+    expect(validateField('code_session_model', 'claude-opus-4-6')).toBeNull();
+  });
+
+  it('returns null for review_session_model with a model string', () => {
+    expect(
+      validateField('review_session_model', 'claude-sonnet-4-6'),
+    ).toBeNull();
+  });
+
+  it('returns null for large_task_model with a model string', () => {
+    expect(validateField('large_task_model', 'claude-opus-4-8[1m]')).toBeNull();
+  });
+
+  it('returns null for auto_review with "true"', () => {
+    expect(validateField('auto_review', 'true')).toBeNull();
+  });
+
+  it('returns null for auto_archive_enabled with "false"', () => {
+    expect(validateField('auto_archive_enabled', 'false')).toBeNull();
+  });
+
+  it('returns null for session_mode with "api"', () => {
+    expect(validateField('session_mode', 'api')).toBeNull();
+  });
+
+  it('still returns an error for a numeric field given a non-integer', () => {
+    expect(validateField('max_concurrent_code_sessions', 'abc')).toBe(
+      'Must be a whole number',
+    );
+  });
+
+  it('still returns minimum error for auto_launch_concurrency set to 0', () => {
+    expect(validateField('auto_launch_concurrency', '0')).toBe('Minimum is 1');
+  });
+});
+
+describe('Settings — non-numeric settings PATCH', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', makeFetch());
+    vi.stubGlobal('localStorage', {
+      getItem: vi.fn().mockReturnValue(null),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    });
+  });
+
+  it('fires PATCH when the auto_review toggle is clicked', async () => {
+    const fetchMock = makeFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Settings />);
+
+    const toggles = await screen.findAllByRole('button', { name: 'Off' });
+    fireEvent.click(toggles[0]);
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([, opts]) =>
+          opts &&
+          opts.method === 'PATCH' &&
+          JSON.parse(opts.body as string).auto_review === 'true',
+      );
+      expect(patchCall).toBeDefined();
+    });
+  });
+
+  it('fires PATCH when a large_task_model is selected', async () => {
+    const fetchMock = makeFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<Settings />);
+
+    await screen.findByText('(off)');
+    const selects = screen.getAllByRole('combobox');
+    const largeTaskSelect = selects.find((el) =>
+      Array.from((el as HTMLSelectElement).options).some(
+        (o) => o.text === '(off)',
+      ),
+    )!;
+    fireEvent.change(largeTaskSelect, {
+      target: { value: 'claude-opus-4-8[1m]' },
+    });
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([, opts]) =>
+          opts &&
+          opts.method === 'PATCH' &&
+          JSON.parse(opts.body as string).large_task_model ===
+            'claude-opus-4-8[1m]',
+      );
+      expect(patchCall).toBeDefined();
+    });
   });
 });

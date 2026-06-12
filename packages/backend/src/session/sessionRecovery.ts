@@ -45,7 +45,7 @@ export interface RecoverSessionOpts {
 }
 
 /**
- * Executes the post-markSessionDone side-effect chain for a session.
+ * Executes the post-session-end side-effect chain for a session.
  * Extracted from AgentSession.handleCleanExit so the same chain can be
  * invoked by StuckSessionMonitor for periodic stuck-session recovery.
  *
@@ -178,6 +178,7 @@ export async function recoverSession(
               synced_at: now,
               node_id: null,
               head_sha: headSha,
+              conflict_nudge_sha: null,
             });
             // pr_opened emission is skipped for periodic scope or phantom URLs.
             if (upserted && !prDetectedLive && scope !== 'periodic') {
@@ -270,7 +271,9 @@ export async function recoverSession(
   broadcast({
     type: 'session_ended',
     sessionId,
-    status: 'done',
+    // Process-exit sets idle (waiting for PR merge); boot/periodic scopes
+    // operate on already-done sessions persisted before a restart.
+    status: scope === 'clean_exit' ? 'idle' : 'done',
     ...(prUrl ? { prUrl } : {}),
     ...(taskId && { taskId }),
   });
@@ -302,6 +305,10 @@ export async function recoverSession(
           specMismatch: audit.specMismatch,
           auditedAt: audit.auditedAt,
         });
+        // Light nudge when session completed without opening a PR.
+        if (!audit.prOpened) {
+          broadcast({ type: 'missed_pr_nudge', sessionId: audit.sessionId });
+        }
       })
       .catch((err) => {
         console.error(`[recoverSession] audit failed for ${sessionId}: ${err}`);

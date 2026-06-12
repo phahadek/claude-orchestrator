@@ -669,4 +669,24 @@ describe('TaskCard', () => {
     );
     expect(screen.getByText('50% ctx')).toBeDefined();
   });
+
+  // ── PAUSE_REASON_LABELS: pr_creation_failed ───────────────────────────────
+
+  it('renders non-empty title for pr_creation_failed pause reason', () => {
+    render(
+      <TaskCard
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          pauseReason: 'pr_creation_failed',
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    const badge = screen.getByText('⚠️ Needs Attention');
+    expect(badge.getAttribute('title')).toBeTruthy();
+    expect(badge.getAttribute('title')).toContain('PR creation failed');
+  });
 });

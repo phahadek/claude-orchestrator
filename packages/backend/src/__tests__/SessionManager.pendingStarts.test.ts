@@ -11,6 +11,18 @@ vi.mock('child_process', async (importOriginal) => {
   return {
     ...actual,
     execSync: vi.fn().mockReturnValue('dev\n'),
+    exec: vi
+      .fn()
+      .mockImplementation(
+        (
+          _cmd: string,
+          _opts: unknown,
+          cb: (err: null, result: { stdout: string; stderr: string }) => void,
+        ) => {
+          const callback = typeof _opts === 'function' ? _opts : cb;
+          process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+        },
+      ),
   };
 });
 
@@ -193,21 +205,23 @@ describe('SessionManager.getLiveCodeSessionCount() — behavioral pendingStarts 
   });
 
   it('AC #2: returns 0 after launchSession rejects (simulated worktree failure)', async () => {
-    // Make AgentSession throw for this test only — simulates worktree failure
-    // inside launchSession(). The .catch() handler deletes from pendingStarts.
-    vi.mocked(AgentSession).mockImplementationOnce(() => {
+    // Use mockImplementation (not Once) so concurrent sessions from other tests
+    // don't consume the throw before this session reaches AgentSession.
+    vi.mocked(AgentSession).mockImplementation(() => {
       throw new Error('simulated worktree failure');
     });
 
     const sm = new SessionManager();
-    sm.start(TASK_URL, CTX_URL, {
+    // await so start() completes its exec chain; launchSession() is still pending
+    // (fire-and-forget) so pendingStarts still has the entry.
+    await sm.start(TASK_URL, CTX_URL, {
       sessionType: 'standard',
       projectId: 'test-proj',
       taskName: 'Test Task',
       taskKind: 'milestone',
     });
 
-    // Count is 1 right after start() — rejection hasn't settled yet
+    // Count is 1 right after start() — launchSession hasn't settled yet
     expect(sm.getLiveCodeSessionCount()).toBe(1);
 
     // Flush microtasks: fetchTaskPage resolves → launchSession continues →

@@ -147,7 +147,6 @@ describe('EnvFileConfigSource', () => {
     'DB_PATH',
     'SESSIONS_DIR',
     'AUTO_REVIEW',
-    'AUTO_REVIEW_CONCURRENCY',
   ] as const;
 
   beforeEach(() => {
@@ -173,7 +172,7 @@ describe('EnvFileConfigSource', () => {
     expect(cfg.db.path).toBe('./dashboard.db');
     expect(cfg.sessions.dir).toBe('');
     expect(cfg.autoReview.enabled).toBe(true);
-    expect(cfg.autoReview.concurrency).toBe(1);
+    expect(cfg.autoReview.concurrency).toBe(20);
   });
 
   it('reads values from env vars', () => {
@@ -184,7 +183,6 @@ describe('EnvFileConfigSource', () => {
     process.env.DB_PATH = '/tmp/test.db';
     process.env.SESSIONS_DIR = '~/.sessions';
     process.env.AUTO_REVIEW = 'false';
-    process.env.AUTO_REVIEW_CONCURRENCY = '3';
     const cfg = new EnvFileConfigSource().read();
     expect(cfg.notion.apiKey).toBe('ntn-env');
     expect(cfg.github.token).toBe('ghp-env');
@@ -193,7 +191,7 @@ describe('EnvFileConfigSource', () => {
     expect(cfg.db.path).toBe('/tmp/test.db');
     expect(cfg.sessions.dir).toBe('~/.sessions');
     expect(cfg.autoReview.enabled).toBe(false);
-    expect(cfg.autoReview.concurrency).toBe(3);
+    expect(cfg.autoReview.concurrency).toBe(20);
   });
 
   it('write() throws', () => {

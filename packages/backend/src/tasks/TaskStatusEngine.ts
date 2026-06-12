@@ -3,6 +3,7 @@ import {
   getLatestCodeSessionByNotionTaskId,
   getSetting,
   getTaskCache,
+  getTaskPauseReason,
 } from '../db/queries';
 import type { PauseReason } from '../db/types';
 
@@ -17,7 +18,7 @@ export type DisplayStatus =
 
 export interface TaskStatusInput {
   notionStatus: string; // raw Notion status string
-  codeSessionStatus: string | null; // 'running' | 'done' | 'error' | null
+  codeSessionStatus: string | null; // 'running' | 'idle' | 'done' | 'error' | null
   prState: string | null; // 'open' | 'merged' | 'closed' | null
   prDraft: boolean; // true if PR is draft
   reviewVerdict: string | null; // 'approved' | 'needs_changes' | 'incomplete' | null
@@ -36,8 +37,10 @@ export interface TaskStatusInput {
 export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
   const { notionStatus, prState, reviewVerdict, pauseReason } = input;
 
-  // 1. done — PR merged or closed (terminal override, takes precedence over Notion)
-  if (prState === 'merged' || prState === 'closed') {
+  // 1. done — PR merged (terminal override, takes precedence over Notion)
+  // Closed-without-merge is NOT terminal: Notion status remains the source of truth
+  // so a retired PR doesn't hide an In Progress task still being re-worked.
+  if (prState === 'merged') {
     return 'done';
   }
 
@@ -113,6 +116,7 @@ export function deriveDisplayStatusFromDb(notionTaskId: string): DisplayStatus {
     reviewVerdict,
     reviewIterationCount: prRow?.review_iteration ?? 0,
     reviewIterationCap: getReviewIterationCap(),
-    pauseReason: prRow?.pause_reason ?? null,
+    pauseReason:
+      prRow?.pause_reason ?? getTaskPauseReason(notionTaskId) ?? null,
   });
 }

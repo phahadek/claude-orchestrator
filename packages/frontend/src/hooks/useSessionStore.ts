@@ -188,6 +188,15 @@ export function useSessionStore() {
     status: string;
     prUrl?: string;
   } | null>(null);
+  const [lastCacheUpdatedEvent, setLastCacheUpdatedEvent] = useState<{
+    projectId: string;
+    boardId: string;
+    taskCount: number;
+    refreshedAt: number;
+  } | null>(null);
+  const [prPipelineStages, setPrPipelineStages] = useState<
+    Map<number, string | null>
+  >(new Map());
 
   const dispatch = useCallback((msg: ServerMessage) => {
     setSynced(true);
@@ -495,6 +504,7 @@ export function useSessionStore() {
         repo: msg.repo,
         receivedAt: Date.now(),
       });
+      setPrPipelineStages((prev) => new Map(prev).set(msg.prNumber, 'autofix'));
     }
     if (msg.type === 'autofix_complete') {
       setLastAutofixEvent({
@@ -506,11 +516,52 @@ export function useSessionStore() {
         receivedAt: Date.now(),
       });
     }
+    if (msg.type === 'verify_pipeline_started') {
+      setPrPipelineStages((prev) => new Map(prev).set(msg.prNumber, 'verify'));
+    }
+    if (msg.type === 'verify_pipeline_complete') {
+      // stage will be updated again by test_pipeline_started; no explicit clear
+    }
+    if (msg.type === 'test_pipeline_started') {
+      setPrPipelineStages((prev) => new Map(prev).set(msg.prNumber, 'tests'));
+    }
+    if (msg.type === 'test_pipeline_complete') {
+      setPrPipelineStages((prev) =>
+        new Map(prev).set(msg.prNumber, 'awaiting_review'),
+      );
+    }
+    if (msg.type === 'pr_review_blocked_by_gate') {
+      setPrPipelineStages((prev) =>
+        new Map(prev).set(
+          msg.prNumber,
+          msg.kind === 'autofix' ? 'blocked_autofix' : 'blocked_verify',
+        ),
+      );
+    }
     if (msg.type === 'review_started') {
       setLastReviewStartedEvent({
         prNumber: msg.prNumber,
         sessionId: msg.sessionId,
         receivedAt: Date.now(),
+      });
+      setPrPipelineStages((prev) => {
+        const next = new Map(prev);
+        next.set(msg.prNumber, null);
+        return next;
+      });
+    }
+    if (msg.type === 'pr_merged') {
+      setPrPipelineStages((prev) => {
+        const next = new Map(prev);
+        next.delete(msg.prNumber);
+        return next;
+      });
+    }
+    if (msg.type === 'pr_closed') {
+      setPrPipelineStages((prev) => {
+        const next = new Map(prev);
+        next.delete(msg.prNumber);
+        return next;
       });
     }
     if (msg.type === 'api_overloaded_paused') {
@@ -529,6 +580,14 @@ export function useSessionStore() {
         receivedAt: Date.now(),
       });
       setPrRefreshTrigger((n) => n + 1);
+    }
+    if (msg.type === 'task_cache_updated') {
+      setLastCacheUpdatedEvent({
+        projectId: msg.projectId,
+        boardId: msg.boardId,
+        taskCount: msg.taskCount,
+        refreshedAt: msg.refreshedAt,
+      });
     }
   }, []);
 
@@ -655,5 +714,7 @@ export function useSessionStore() {
     lastCiBillingBlockedEvent,
     lastSessionStartedEvent,
     lastSessionEndedEvent,
+    lastCacheUpdatedEvent,
+    prPipelineStages,
   };
 }

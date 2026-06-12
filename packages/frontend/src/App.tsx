@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { EnrollmentFlow } from './auth/EnrollmentFlow';
+import { SetupWizard } from './wizard/SetupWizard';
 import type { ConnectionState } from './hooks/useWebSocket';
 import { useSessionStore } from './hooks/useSessionStore';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -29,7 +30,10 @@ import type { NotificationItem } from './components/Notifications';
 import type { ServerMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { calculateCost } from '@claude-orchestrator/backend/src/utils/usage';
-import type { TaskView } from '@claude-orchestrator/backend/src/routes/tasks';
+import type {
+  TaskView,
+  TasksActiveResponse,
+} from '@claude-orchestrator/backend/src/routes/tasks';
 import type {
   Session,
   EventType,
@@ -77,6 +81,19 @@ function resolveActiveBoardId(project: ProjectConfig): string {
 
 export default function App() {
   const [needsEnrollment, setNeedsEnrollment] = useState(false);
+  const [setupNeeded, setSetupNeeded] = useState(false);
+  const [wizardGoToSettings, setWizardGoToSettings] = useState(false);
+
+  useEffect(() => {
+    fetch('/api/setup/status')
+      .then((r) => r.json())
+      .then((data: { setupNeeded: boolean }) => {
+        if (data.setupNeeded) setSetupNeeded(true);
+      })
+      .catch(() => {
+        /* keep showing dashboard on failure */
+      });
+  }, []);
 
   useEffect(() => {
     const handler = () => setNeedsEnrollment(true);
@@ -116,6 +133,8 @@ export default function App() {
     lastCiBillingBlockedEvent,
     lastSessionStartedEvent,
     lastSessionEndedEvent,
+    lastCacheUpdatedEvent,
+    prPipelineStages,
   } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -202,17 +221,21 @@ export default function App() {
   const detailWidthRef = useRef(detailWidthPct);
 
   const [topView, setTopView] = useState<TopView>('tasks');
+
+  useEffect(() => {
+    if (wizardGoToSettings) setTopView('settings');
+  }, [wizardGoToSettings]);
+
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [sessionOverlayOpen, setSessionOverlayOpen] = useState(false);
   const [taskViews, setTaskViews] = useState<TaskView[]>([]);
   const [taskViewsLoading, setTaskViewsLoading] = useState(true);
+  const [taskCacheCold, setTaskCacheCold] = useState(false);
   const settingsInitialTab = 'general' as const;
   const isMobile = useIsMobile();
 
   const { pushView } = useNavigationHistory({
     setSelectedTaskId,
     setSelectedId,
-    setSessionOverlayOpen,
   });
 
   const handleSelectTask = useCallback(
@@ -232,12 +255,6 @@ export default function App() {
     },
     [selectedId, pushView],
   );
-
-  const handleOpenSessionOverlay = useCallback(() => {
-    if (!selectedTaskId) return;
-    pushView({ type: 'sessionOverlay', taskId: selectedTaskId });
-    setSessionOverlayOpen(true);
-  }, [selectedTaskId, pushView]);
 
   useEffect(() => {
     detailWidthRef.current = detailWidthPct;
@@ -269,7 +286,10 @@ export default function App() {
   const handleArchiveAll = useCallback(async () => {
     await fetch('/api/sessions/archive-finished', { method: 'POST' });
     for (const s of sessions) {
-      if (!s.archived && ['done', 'error', 'killed'].includes(s.status)) {
+      if (
+        !s.archived &&
+        ['done', 'error', 'killed', 'idle'].includes(s.status)
+      ) {
         setSessionArchived(s.sessionId, true);
       }
     }
@@ -401,6 +421,7 @@ export default function App() {
   useEffect(() => {
     if (!activeProjectId) {
       setTaskViews([]);
+      setTaskCacheCold(false);
       setTaskViewsLoading(false);
       return;
     }
@@ -408,22 +429,42 @@ export default function App() {
     let url: string;
     if (activeBoardId === NON_MILESTONE_BOARD_ID) {
       url = `/api/tasks/non-milestone?projectId=${encodeURIComponent(activeProjectId)}`;
+      fetch(url)
+        .then((r) =>
+          r.ok ? (r.json() as Promise<TaskView[]>) : Promise.resolve([]),
+        )
+        .then((data) => {
+          setTaskViews(data);
+          setTaskCacheCold(false);
+          setTaskViewsLoading(false);
+        })
+        .catch(() => {
+          setTaskViewsLoading(false);
+        });
     } else {
       const params = new URLSearchParams({ projectId: activeProjectId });
       if (activeBoardId) params.set('boardId', activeBoardId);
       url = `/api/tasks/active?${params.toString()}`;
+      fetch(url)
+        .then((r) =>
+          r.ok
+            ? (r.json() as Promise<TasksActiveResponse>)
+            : Promise.resolve(null),
+        )
+        .then((data) => {
+          if (data) {
+            setTaskViews(data.tasks);
+            setTaskCacheCold(data.coldCache);
+          } else {
+            setTaskViews([]);
+            setTaskCacheCold(false);
+          }
+          setTaskViewsLoading(false);
+        })
+        .catch(() => {
+          setTaskViewsLoading(false);
+        });
     }
-    fetch(url)
-      .then((r) =>
-        r.ok ? (r.json() as Promise<TaskView[]>) : Promise.resolve([]),
-      )
-      .then((data) => {
-        setTaskViews(data);
-        setTaskViewsLoading(false);
-      })
-      .catch(() => {
-        setTaskViewsLoading(false);
-      });
   }, [activeProjectId, activeBoardId, tasksReady, taskListRefreshTrigger]);
 
   // Merge a single task update in-place so TaskDetail sees live changes without a full re-fetch
@@ -487,6 +528,30 @@ export default function App() {
     });
   }, [lastSessionEndedEvent]);
 
+  // Re-fetch task list when the background refresher signals that the cache was updated
+  // for the active project/board, clearing the cold-cache banner when it fires.
+  useEffect(() => {
+    if (!lastCacheUpdatedEvent || !activeProjectId || !activeBoardId) return;
+    if (
+      lastCacheUpdatedEvent.projectId !== activeProjectId ||
+      lastCacheUpdatedEvent.boardId !== activeBoardId
+    )
+      return;
+    const params = new URLSearchParams({ projectId: activeProjectId });
+    params.set('boardId', activeBoardId);
+    fetch(`/api/tasks/active?${params.toString()}`)
+      .then((r) => (r.ok ? (r.json() as Promise<TasksActiveResponse>) : null))
+      .then((data) => {
+        if (data) {
+          setTaskViews(data.tasks);
+          setTaskCacheCold(data.coldCache);
+        }
+      })
+      .catch(() => {
+        /* ignore */
+      });
+  }, [lastCacheUpdatedEvent, activeProjectId, activeBoardId]);
+
   // Passed to TaskList so it can apply optimistic status updates without a full re-fetch
   const handleTaskOptimisticDispatch = useCallback((taskIds: string[]) => {
     setTaskViews((prev) =>
@@ -502,21 +567,35 @@ export default function App() {
     );
   }, []);
 
-  // Used by TaskList's Sync button for non-milestone views (WS sync not supported there)
+  // Used by TaskList's Sync button. For milestone boards, triggers a background refresh;
+  // for non-milestone views, re-fetches from cache directly.
   const handleForceRefetch = useCallback(async () => {
     if (!activeProjectId) return;
     setTaskViewsLoading(true);
     try {
-      let url: string;
       if (activeBoardId === NON_MILESTONE_BOARD_ID) {
-        url = `/api/tasks/non-milestone?projectId=${encodeURIComponent(activeProjectId)}`;
+        const url = `/api/tasks/non-milestone?projectId=${encodeURIComponent(activeProjectId)}`;
+        const res = await fetch(url);
+        if (res.ok) setTaskViews((await res.json()) as TaskView[]);
       } else {
+        // Trigger background refresh via POST — returns 202 immediately
+        await fetch('/api/tasks/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ projectId: activeProjectId }),
+        }).catch(() => {
+          /* ignore */
+        });
+        // Also re-read current cache to show any already-populated data
         const params = new URLSearchParams({ projectId: activeProjectId });
         if (activeBoardId) params.set('boardId', activeBoardId);
-        url = `/api/tasks/active?${params.toString()}`;
+        const res = await fetch(`/api/tasks/active?${params.toString()}`);
+        if (res.ok) {
+          const data = (await res.json()) as TasksActiveResponse;
+          setTaskViews(data.tasks);
+          setTaskCacheCold(data.coldCache);
+        }
       }
-      const res = await fetch(url);
-      if (res.ok) setTaskViews((await res.json()) as TaskView[]);
     } catch {
       /* ignore */
     } finally {
@@ -1010,6 +1089,17 @@ export default function App() {
     },
   });
 
+  if (setupNeeded) {
+    return (
+      <SetupWizard
+        onComplete={(goToSettings) => {
+          setSetupNeeded(false);
+          if (goToSettings) setWizardGoToSettings(true);
+        }}
+      />
+    );
+  }
+
   return (
     <div
       className={`${styles.appContainer}${anyDragging ? ` ${styles.dragging}` : ''}`}
@@ -1064,6 +1154,17 @@ export default function App() {
               className={`${styles.contentArea}${selectedTaskId ? ` ${styles.contentAreaHasDetail}` : ''}`}
             >
               <div className={styles.leftPanel}>
+                {taskCacheCold && !taskViewsLoading && (
+                  <div
+                    className={styles.coldCacheBanner}
+                    data-testid="cold-cache-banner"
+                  >
+                    Warming cache for{' '}
+                    {projects.find((p) => p.id === activeProjectId)?.name ??
+                      activeProjectId}
+                    …
+                  </div>
+                )}
                 <TaskList
                   activeProjectId={activeProjectId}
                   boardId={activeBoardId}
@@ -1074,6 +1175,12 @@ export default function App() {
                   onOptimisticDispatch={handleTaskOptimisticDispatch}
                   onForceRefetch={handleForceRefetch}
                   reviewRefreshTrigger={taskListRefreshTrigger}
+                  cacheUpdatedAt={
+                    lastCacheUpdatedEvent?.projectId === activeProjectId &&
+                    lastCacheUpdatedEvent?.boardId === activeBoardId
+                      ? lastCacheUpdatedEvent.refreshedAt
+                      : undefined
+                  }
                   send={send}
                   project={activeProject}
                 />
@@ -1116,8 +1223,6 @@ export default function App() {
                           send={send}
                           sessions={sessions}
                           onClose={() => history.back()}
-                          sessionOverlayOpen={sessionOverlayOpen}
-                          onOpenSessionOverlay={handleOpenSessionOverlay}
                           projectId={activeProjectId ?? undefined}
                           project={
                             projects.find((p) => p.id === activeProjectId) ??
@@ -1131,6 +1236,8 @@ export default function App() {
                             projects.find((p) => p.id === activeProjectId)
                               ?.autoMergeEnabled ?? false
                           }
+                          setSessionArchived={setSessionArchived}
+                          setSessionFavorited={setSessionFavorited}
                         />
                       </ErrorBoundary>
                     );
@@ -1269,22 +1376,12 @@ export default function App() {
                       session={selectedSession}
                       send={send}
                       onClose={() => history.back()}
-                      onDelete={(sessionId) => {
+                      setSessionArchived={setSessionArchived}
+                      setSessionFavorited={setSessionFavorited}
+                      onDeleted={(sessionId) => {
                         deleteSession(sessionId);
                         window.history.back();
                       }}
-                      onArchive={(sessionId) =>
-                        setSessionArchived(sessionId, true)
-                      }
-                      onUnarchive={(sessionId) =>
-                        setSessionArchived(sessionId, false)
-                      }
-                      onFavorite={(sessionId) =>
-                        setSessionFavorited(sessionId, true)
-                      }
-                      onUnfavorite={(sessionId) =>
-                        setSessionFavorited(sessionId, false)
-                      }
                       onResume={handleResume}
                       sessionMode={sessionMode}
                       project={
@@ -1322,6 +1419,7 @@ export default function App() {
                 prMergeabilityChangedEvent={lastPrMergeabilityChangedEvent}
                 autofixEvent={lastAutofixEvent}
                 reviewStartedEvent={lastReviewStartedEvent}
+                prPipelineStages={prPipelineStages}
               />
             </div>
           </ErrorBoundary>

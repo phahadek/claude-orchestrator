@@ -1,12 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('../db/db.js', async () => {
-  const { default: Database } = await import('better-sqlite3');
-  const memDb = new Database(':memory:');
-  memDb.pragma('foreign_keys = ON');
-  const { applyTestSchema } = await import('../../test/helpers/testDbSchema');
-  applyTestSchema(memDb);
-  return { db: memDb };
+  const { setupTestDb } = await import('../../test/helpers/setupTestDb.js');
+  return { db: setupTestDb() };
 });
 
 import { db } from '../db/db.js';
@@ -93,6 +89,22 @@ describe('archiveConcludedSessionsOlderThan', () => {
 
     const ids = archiveConcludedSessionsOlderThan(CUTOFF);
     expect(ids).toHaveLength(0);
+  });
+
+  it('does not archive idle sessions even when ended_at is in the past (idle is resumable)', () => {
+    insertSession({
+      session_id: 'old-idle',
+      status: 'idle',
+      ended_at: CUTOFF - 1,
+    });
+
+    const ids = archiveConcludedSessionsOlderThan(CUTOFF);
+    expect(ids).toHaveLength(0);
+
+    const row = db
+      .prepare(`SELECT archived FROM sessions WHERE session_id = 'old-idle'`)
+      .get() as { archived: number };
+    expect(row.archived).toBe(0);
   });
 
   it('does not touch active (running) sessions', () => {

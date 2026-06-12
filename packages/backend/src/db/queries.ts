@@ -1,4 +1,5 @@
 import { db } from './db';
+import { recordEvent } from '../audit/AuditLog';
 import type {
   Session,
   NewSession,
@@ -67,10 +68,6 @@ const stmtGetAllSessionIds = db.prepare(`
   SELECT session_id FROM sessions
 `);
 
-const stmtDeleteSessionEvents = db.prepare<{ session_id: string }>(`
-  DELETE FROM session_events WHERE session_id = @session_id
-`);
-
 const stmtDeleteSession = db.prepare<{ session_id: string }>(`
   DELETE FROM sessions WHERE session_id = @session_id
 `);
@@ -118,6 +115,21 @@ export function updateSessionWorktreePath(
   });
 }
 
+export function setSessionPauseReason(sessionId: string, reason: string): void {
+  db.prepare<{ session_id: string; pause_reason: string }>(
+    `UPDATE sessions SET pause_reason = @pause_reason WHERE session_id = @session_id`,
+  ).run({ session_id: sessionId, pause_reason: reason });
+}
+
+export function setSessionLastErrorDetail(
+  sessionId: string,
+  detail: string,
+): void {
+  db.prepare<{ session_id: string; last_error_detail: string }>(
+    `UPDATE sessions SET last_error_detail = @last_error_detail WHERE session_id = @session_id`,
+  ).run({ session_id: sessionId, last_error_detail: detail });
+}
+
 const stmtMarkSessionDone = db.prepare<{
   session_id: string;
   ended_at: number;
@@ -128,18 +140,110 @@ const stmtMarkSessionDone = db.prepare<{
   WHERE session_id = @session_id
 `);
 
+const stmtMarkSessionIdle = db.prepare<{
+  session_id: string;
+  ended_at: number;
+  pr_url: string | null;
+}>(`
+  UPDATE sessions
+  SET status = 'idle', ended_at = @ended_at, pr_url = COALESCE(@pr_url, pr_url)
+  WHERE session_id = @session_id
+`);
+
+const stmtMarkSessionSuperseded = db.prepare<{
+  session_id: string;
+  ended_at: number;
+}>(`
+  UPDATE sessions
+  SET status = 'superseded', ended_at = @ended_at
+  WHERE session_id = @session_id
+`);
+
+/**
+ * Mark a session as superseded — used when sendOrResume creates a continuation
+ * and another running row for the same task_id exists and must be retired.
+ * Superseded rows are treated as terminal: excluded from active-session checks
+ * and not resumed on next boot.
+ */
+export function markSessionSuperseded(
+  sessionId: string,
+  endedAt: number,
+): void {
+  stmtMarkSessionSuperseded.run({ session_id: sessionId, ended_at: endedAt });
+}
+
+/**
+ * Returns other standard (non-review) sessions in status='running' for the same
+ * task_id, excluding the given session. Used by sendOrResume to reconcile zombie
+ * rows before respawning.
+ */
+export function getOtherRunningSessionsForTask(
+  taskId: string,
+  excludeSessionId: string,
+): Session[] {
+  const norm = taskId.replace(/-/g, '');
+  return db
+    .prepare<{ task_id: string; session_id: string }>(
+      `
+    SELECT * FROM sessions
+    WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
+      AND session_id != @session_id
+      AND status = 'running'
+      AND (session_type = 'standard' OR session_type IS NULL)
+  `,
+    )
+    .all({ task_id: norm, session_id: excludeSessionId }) as Session[];
+}
+
 /**
  * Atomically mark a session as done, setting ended_at and pr_url in a single
  * write. Preferred over updateSessionStatus for clean-exit paths because it
  * also persists pr_url without a second round-trip.
  * pr_url is only overwritten when non-null — existing value is preserved otherwise.
+ *
+ * Advisory guard: if the current session status is 'running', emits a
+ * session_marked_done_while_running audit event to surface premature transitions
+ * in production data. The write proceeds regardless (advisory only).
  */
 export function markSessionDone(
   sessionId: string,
   endedAt: number,
   prUrl?: string | null,
+  callSite?: string,
 ): void {
+  const current = stmtGetSession.get({ session_id: sessionId }) as
+    | { status: string; task_id: string | null }
+    | undefined;
+  if (current?.status === 'running') {
+    console.warn(
+      `[markSessionDone] running→done for ${sessionId.slice(0, 8)} call_site=${callSite ?? 'unknown'} — emitting audit event`,
+    );
+    recordEvent({
+      event_type: 'session_marked_done_while_running',
+      actor_type: 'system',
+      actor_id: sessionId,
+      task_id: current.task_id ?? null,
+      payload: { call_site: callSite ?? 'unknown', status_before: 'running' },
+    });
+  }
   stmtMarkSessionDone.run({
+    session_id: sessionId,
+    ended_at: endedAt,
+    pr_url: prUrl ?? null,
+  });
+}
+
+/**
+ * Atomically mark a session as idle (process exited, PR open, waiting for
+ * review/merge). Sets ended_at and pr_url in a single write. The session
+ * remains resumable via sendOrResume; it becomes done only when the PR merges.
+ */
+export function markSessionIdle(
+  sessionId: string,
+  endedAt: number,
+  prUrl?: string | null,
+): void {
+  stmtMarkSessionIdle.run({
     session_id: sessionId,
     ended_at: endedAt,
     pr_url: prUrl ?? null,
@@ -160,7 +264,9 @@ export interface StuckResultSessionRow {
 
 /**
  * Query sessions stuck at status='running' whose last recorded event is a
- * 'result' event (the CLI's clean-exit signal). Does NOT update the DB.
+ * result event (the CLI's clean-exit signal). Does NOT update the DB.
+ * Matches production storage: result events are persisted with event_type='system'
+ * and payload.type='result' (i.e. eventKind(row) === 'result'), NOT event_type='result'.
  * If minAgeMs is provided, only returns sessions older than that threshold.
  */
 export function getStuckResultSessionRows(
@@ -177,7 +283,8 @@ export function getStuckResultSessionRows(
       JOIN session_events e ON e.session_id = s.session_id
       WHERE s.status = 'running'
         AND e.id = (SELECT MAX(id) FROM session_events WHERE session_id = s.session_id)
-        AND e.event_type = 'result'
+        AND e.event_type = 'system'
+        AND json_extract(e.payload, '$.type') = 'result'
         AND s.started_at < (unixepoch('now') - @min_age_seconds) * 1000
     `,
       )
@@ -195,7 +302,42 @@ export function getStuckResultSessionRows(
     JOIN session_events e ON e.session_id = s.session_id
     WHERE s.status = 'running'
       AND e.id = (SELECT MAX(id) FROM session_events WHERE session_id = s.session_id)
-      AND e.event_type = 'result'
+      AND e.event_type = 'system'
+      AND json_extract(e.payload, '$.type') = 'result'
+  `,
+    )
+    .all() as StuckResultSessionRow[];
+}
+
+/**
+ * Query running sessions whose PR is already merged or closed — these should be
+ * reaped on boot rather than resumed as orphans.
+ * Covers both GitHub PRs (pull_requests table, state='merged'|'closed') and
+ * local-only branches (local_branches table, status='merged').
+ */
+export function getRunningSessionsWithMergedOrClosedPR(): StuckResultSessionRow[] {
+  return db
+    .prepare(
+      `
+    SELECT s.session_id, s.task_id, s.task_url, s.project_context_url,
+           s.project_id, s.pr_url, s.worktree_path, s.session_type,
+           COALESCE(e.timestamp, s.started_at) AS last_ts
+    FROM sessions s
+    LEFT JOIN session_events e ON e.session_id = s.session_id
+      AND e.id = (SELECT MAX(id) FROM session_events WHERE session_id = s.session_id)
+    WHERE s.status = 'running'
+      AND (
+        EXISTS (
+          SELECT 1 FROM pull_requests pr
+          WHERE pr.session_id = s.session_id
+            AND pr.state IN ('merged', 'closed')
+        )
+        OR EXISTS (
+          SELECT 1 FROM local_branches lb
+          WHERE lb.session_id = s.session_id
+            AND lb.status = 'merged'
+        )
+      )
   `,
     )
     .all() as StuckResultSessionRow[];
@@ -228,7 +370,6 @@ export function insertSessionOrIgnore(s: NewSession): void {
 }
 
 export function deleteSession(sessionId: string): boolean {
-  stmtDeleteSessionEvents.run({ session_id: sessionId });
   const result = stmtDeleteSession.run({ session_id: sessionId });
   return result.changes > 0;
 }
@@ -268,6 +409,23 @@ export function getSessionsByStatus(statuses: string[]): Session[] {
  * propagated back from the task backend.
  * Strips hyphens from both sides to normalize UUID format differences.
  */
+/**
+ * Returns terminal (done/error/killed/superseded) standard sessions for a task,
+ * most recent first. Used to identify stale predecessor sessions on fresh launch.
+ */
+export function getTerminalSessionsForTask(taskId: string): Session[] {
+  const norm = taskId.replace(/-/g, '');
+  return db
+    .prepare<{ task_id: string }>(
+      `SELECT * FROM sessions
+       WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
+         AND status IN ('done', 'error', 'killed', 'superseded')
+         AND (session_type = 'standard' OR session_type IS NULL)
+       ORDER BY started_at DESC`,
+    )
+    .all({ task_id: norm }) as Session[];
+}
+
 export function hasActiveSessionForTask(taskId: string): boolean {
   const norm = taskId.replace(/-/g, '');
   const row = db
@@ -275,7 +433,7 @@ export function hasActiveSessionForTask(taskId: string): boolean {
       `
     SELECT 1 FROM sessions
     WHERE REPLACE(COALESCE(task_id, ''), '-', '') = @task_id
-      AND status NOT IN ('done', 'error', 'killed')
+      AND status NOT IN ('idle', 'done', 'error', 'killed', 'superseded')
       AND (session_type = 'standard' OR session_type IS NULL)
     LIMIT 1
   `,
@@ -345,7 +503,7 @@ export function unfavoriteSession(sessionId: string): boolean {
 export function archiveFinishedSessions(): number {
   const result = db
     .prepare(
-      `UPDATE sessions SET archived = 1 WHERE status IN ('done', 'error', 'killed')`,
+      `UPDATE sessions SET archived = 1 WHERE status IN ('done', 'error', 'killed', 'idle')`,
     )
     .run();
   return result.changes;
@@ -354,6 +512,7 @@ export function archiveFinishedSessions(): number {
 /**
  * Archive concluded sessions (status IN ('done','error','killed'), archived=0)
  * whose ended_at is older than the given cutoff timestamp (ms).
+ * Idle sessions are excluded — the CLI subprocess is still alive and resumable.
  * Returns the session_ids of archived sessions.
  */
 export function archiveConcludedSessionsOlderThan(cutoffMs: number): string[] {
@@ -446,6 +605,29 @@ export function setSessionMetadata(
 
 // ─── session_events ────────────────────────────────────────────────────────
 
+export const MAX_EVENT_PAYLOAD_BYTES = 262144;
+const HEAD_BYTES = 8192;
+
+function capEventPayload(payload: string): string {
+  if (Buffer.byteLength(payload, 'utf8') <= MAX_EVENT_PAYLOAD_BYTES)
+    return payload;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    parsed = null;
+  }
+  const rec =
+    parsed != null && typeof parsed === 'object'
+      ? (parsed as Record<string, unknown>)
+      : {};
+  const truncated: Record<string, unknown> = { truncated: true };
+  if ('type' in rec) truncated.type = rec.type;
+  if ('usage' in rec) truncated.usage = rec.usage;
+  truncated.head = payload.slice(0, HEAD_BYTES);
+  return JSON.stringify(truncated);
+}
+
 const stmtInsertEvent = db.prepare<
   NewSessionEvent & { message_id: string | null }
 >(`
@@ -472,12 +654,33 @@ const stmtGetEventsBySession = db.prepare<{ session_id: string }>(`
   SELECT * FROM session_events WHERE session_id = @session_id ORDER BY id ASC
 `);
 
+/** Returns the timestamp of the most recent session_events row for the session, or null. */
+export function getLatestSessionEventTimestamp(
+  sessionId: string,
+): number | null {
+  const row = db
+    .prepare<
+      [string],
+      { ts: number | null }
+    >(`SELECT MAX(timestamp) AS ts FROM session_events WHERE session_id = ?`)
+    .get(sessionId);
+  return row?.ts ?? null;
+}
+
 export function insertEvent(e: NewSessionEvent): void {
-  stmtInsertEvent.run({ message_id: null, ...e });
+  stmtInsertEvent.run({
+    message_id: null,
+    ...e,
+    payload: capEventPayload(e.payload),
+  });
 }
 
 export function insertEventOrIgnore(e: NewSessionEvent): void {
-  stmtInsertEventOrIgnore.run({ message_id: null, ...e });
+  stmtInsertEventOrIgnore.run({
+    message_id: null,
+    ...e,
+    payload: capEventPayload(e.payload),
+  });
 }
 
 /**
@@ -493,10 +696,11 @@ export function upsertSessionEvent(
   e: NewSessionEvent & { message_id?: string | null },
   existingId?: number,
 ): number {
+  const cappedPayload = capEventPayload(e.payload);
   if (existingId != null) {
     stmtUpdateEventPayload.run({
       id: existingId,
-      payload: e.payload,
+      payload: cappedPayload,
       timestamp: e.timestamp,
     });
     return existingId;
@@ -508,7 +712,11 @@ export function upsertSessionEvent(
     );
     return -1;
   }
-  const result = stmtInsertEvent.run({ message_id: null, ...e });
+  const result = stmtInsertEvent.run({
+    message_id: null,
+    ...e,
+    payload: cappedPayload,
+  });
   return result.lastInsertRowid as number;
 }
 
@@ -831,6 +1039,7 @@ export function upsertPullRequest(
     | 'pause_reason'
     | 'pause_reason_set_at'
     | 'ci_remediation_attempted_sha'
+    | 'pre_review_stage'
   > & {
     review_session_id?: string | null;
     review_iteration?: number;
@@ -1045,6 +1254,12 @@ export function getPRByNumber(
     .get({ pr_number: prNumber, repo }) as PullRequestRow | null;
 }
 
+/**
+ * Persist a JSON-encoded review result for a PR. Valid verdict values are:
+ * 'approved' | 'needs_changes' | 'incomplete' | 'error' | 'verify_failed' | 'autofix_failed'
+ * Gate failure verdicts (verify_failed, autofix_failed) are set by ReviewOrchestrator
+ * before any review session is spawned and do not consume a review iteration.
+ */
 export function setPRReviewResult(
   prNumber: number,
   repo: string,
@@ -1091,6 +1306,16 @@ export function updatePRState(
     UPDATE pull_requests SET state = @state WHERE pr_number = @pr_number AND repo = @repo
   `,
   ).run({ pr_number: prNumber, repo, state });
+}
+
+export function setPreReviewStage(
+  prNumber: number,
+  repo: string,
+  stage: string | null,
+): void {
+  db.prepare<{ pr_number: number; repo: string; stage: string | null }>(
+    `UPDATE pull_requests SET pre_review_stage = @stage WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({ pr_number: prNumber, repo, stage });
 }
 
 export function deletePR(prNumber: number, repo: string): boolean {
@@ -1268,6 +1493,16 @@ export function setCiRemediationAttemptedSha(
   ).run(sha, prNumber, repo);
 }
 
+export function setConflictNudgeSha(
+  prNumber: number,
+  repo: string,
+  sha: string,
+): void {
+  db.prepare(
+    `UPDATE pull_requests SET conflict_nudge_sha = ? WHERE pr_number = ? AND repo = ?`,
+  ).run(sha, prNumber, repo);
+}
+
 export function setPauseReason(
   prNumber: number,
   repo: string,
@@ -1341,6 +1576,36 @@ export function getStaleAutoMergeFailedPRs(thresholdMs: number): Array<{
 }
 
 /**
+ * Open PRs that may need a catch-up conflict/rebase nudge:
+ * - pause_reason='auto_merge_failed': stalled by a blocked/behind merge that
+ *   may not have been notified (e.g. pre-fix pauses or failed deliveries).
+ * - pause_reason IS NULL, merge_state IN ('dirty','blocked'): PRMergeWatcher
+ *   recorded the conflict but the transition-gated nudge was never sent.
+ * Both cases require session_id, head_sha, and that the current head_sha has
+ * not already been nudged (dedup via conflict_nudge_sha).
+ */
+export function getConflictNudgeCandidates(): Array<{
+  pr_number: number;
+  repo: string;
+}> {
+  return db
+    .prepare(
+      `
+    SELECT pr_number, repo FROM pull_requests
+    WHERE state = 'open'
+      AND session_id IS NOT NULL
+      AND head_sha IS NOT NULL
+      AND (conflict_nudge_sha IS NULL OR head_sha != conflict_nudge_sha)
+      AND (
+        pause_reason = 'auto_merge_failed'
+        OR (pause_reason IS NULL AND merge_state IN ('dirty', 'blocked'))
+      )
+  `,
+    )
+    .all() as Array<{ pr_number: number; repo: string }>;
+}
+
+/**
  * Returns the pause_reason of the most recent PR for the given task id,
  * or null if no PR exists or the PR is not paused. Used by auto-runner
  * components to skip tasks paused by stuck_timeout (or any other reason).
@@ -1358,6 +1623,45 @@ export function getPausedPrReasonForTask(taskId: string): PauseReason | null {
     )
     .get({ task_id: taskId }) as { pause_reason: string | null } | undefined;
   return (row?.pause_reason as PauseReason | null) ?? null;
+}
+
+// ─── task_pause_reasons ────────────────────────────────────────────────────────
+
+/**
+ * Persist a task-level pause reason for tasks that have no PR yet (e.g. launch_failed).
+ * Replaces any existing entry for the same task_id.
+ */
+export function setTaskPauseReason(
+  taskId: string,
+  reason: PauseReason,
+  detail: string,
+): void {
+  db.prepare<{
+    task_id: string;
+    pause_reason: string;
+    detail: string;
+    set_at: number;
+  }>(
+    `INSERT OR REPLACE INTO task_pause_reasons (task_id, pause_reason, detail, set_at)
+     VALUES (@task_id, @pause_reason, @detail, @set_at)`,
+  ).run({ task_id: taskId, pause_reason: reason, detail, set_at: Date.now() });
+}
+
+/** Returns the task-level pause reason, or null if none is set. */
+export function getTaskPauseReason(taskId: string): PauseReason | null {
+  const row = db
+    .prepare<{
+      task_id: string;
+    }>(`SELECT pause_reason FROM task_pause_reasons WHERE task_id = @task_id`)
+    .get({ task_id: taskId }) as { pause_reason: string } | undefined;
+  return (row?.pause_reason as PauseReason) ?? null;
+}
+
+/** Clear a task-level pause reason (e.g. on successful launch). */
+export function clearTaskPauseReason(taskId: string): void {
+  db.prepare<{ task_id: string }>(
+    `DELETE FROM task_pause_reasons WHERE task_id = @task_id`,
+  ).run({ task_id: taskId });
 }
 
 /**
@@ -1386,6 +1690,36 @@ export function getAllOpenPRs(): PullRequestRow[] {
   `,
     )
     .all() as PullRequestRow[];
+}
+
+export interface IdleSessionWithResolvedPR {
+  session_id: string;
+  task_id: string | null;
+  project_id: string | null;
+  pr_state: string;
+  pr_number: number;
+  repo: string;
+  pr_url: string | null;
+}
+
+/**
+ * Returns idle sessions that have a linked PR already in a terminal state
+ * (merged or closed). Used by the boot-time reconciliation pass to apply
+ * session terminal transitions for PRs that resolved while the server was down.
+ */
+export function getIdleSessionsWithResolvedPRs(): IdleSessionWithResolvedPR[] {
+  return db
+    .prepare(
+      `
+    SELECT s.session_id, s.task_id, s.project_id,
+           pr.state AS pr_state, pr.pr_number, pr.repo, pr.pr_url
+    FROM sessions s
+    JOIN pull_requests pr ON pr.session_id = s.session_id
+    WHERE s.status = 'idle'
+      AND pr.state IN ('merged', 'closed')
+  `,
+    )
+    .all() as IdleSessionWithResolvedPR[];
 }
 
 /**
@@ -1461,6 +1795,7 @@ export interface TaskAggregateRow {
   code_session_last_event_payload: string | null;
   code_session_context_occupancy_tokens: number | null;
   code_session_compaction_count: number | null;
+  code_session_model: string | null;
   // review session (session_type = 'review')
   review_session_id: string | null;
   review_session_status: string | null;
@@ -1479,6 +1814,8 @@ export interface TaskAggregateRow {
   pr_review_iteration: number | null;
   pr_merge_state: string | null;
   pr_pause_reason: string | null;
+  pr_pre_review_stage: string | null;
+  session_pr_creation_failed_pause_reason: string | null;
 }
 
 export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
@@ -1532,11 +1869,12 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       (
         SELECT payload FROM session_events
         WHERE session_id = cs.session_id
-          AND event_type NOT IN ('system', 'user_message')
+          AND event_type IN ('text', 'tool_use', 'tool_result', 'error')
         ORDER BY id DESC LIMIT 1
       )                            AS code_session_last_event_payload,
       cs.context_occupancy_tokens  AS code_session_context_occupancy_tokens,
       cs.compaction_count          AS code_session_compaction_count,
+      cs.model                     AS code_session_model,
       rs.session_id          AS review_session_id,
       rs.status              AS review_session_status,
       rs.total_input_tokens  AS review_session_input_tokens,
@@ -1552,7 +1890,14 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
       pr.review_result       AS pr_review_result,
       pr.review_iteration    AS pr_review_iteration,
       pr.merge_state         AS pr_merge_state,
-      pr.pause_reason        AS pr_pause_reason
+      pr.pause_reason        AS pr_pause_reason,
+      pr.pre_review_stage    AS pr_pre_review_stage,
+      CASE
+        WHEN pr.pr_number IS NULL
+          AND cs.pause_reason IN ('pr_creation_failed', 'stalled_idle')
+        THEN cs.pause_reason
+        ELSE NULL
+      END                    AS session_pr_creation_failed_pause_reason
     FROM task_cache tc
     LEFT JOIN ranked_code cs ON cs.task_id = tc.task_id AND cs.rn = 1
     LEFT JOIN ranked_review rs ON rs.task_id = tc.task_id AND rs.rn = 1
@@ -1572,7 +1917,7 @@ export function getLatestNonSystemEventPayload(
       `
     SELECT payload FROM session_events
     WHERE session_id = ?
-      AND event_type NOT IN ('system', 'user_message')
+      AND event_type IN ('text', 'tool_use', 'tool_result', 'error')
     ORDER BY id DESC
     LIMIT 1
   `,
@@ -2171,6 +2516,36 @@ export function bumpTaskNoOpAttempts(taskId: string): void {
   ).run(taskId, now);
 }
 
+// ─── task_crash_counts ────────────────────────────────────────────────────────
+
+export function getTaskCrashCount(taskId: string): number {
+  const row = db
+    .prepare<{
+      task_id: string;
+    }>(
+      `SELECT consecutive_crashes FROM task_crash_counts WHERE task_id = @task_id`,
+    )
+    .get({ task_id: taskId }) as { consecutive_crashes: number } | undefined;
+  return row?.consecutive_crashes ?? 0;
+}
+
+/** Increment consecutive_crashes and return the new count. */
+export function incrementTaskCrashCount(taskId: string): number {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO task_crash_counts (task_id, consecutive_crashes, last_crash_at)
+     VALUES (?, 1, ?)
+     ON CONFLICT(task_id) DO UPDATE SET
+       consecutive_crashes = consecutive_crashes + 1,
+       last_crash_at = excluded.last_crash_at`,
+  ).run(taskId, now);
+  return getTaskCrashCount(taskId);
+}
+
+export function resetTaskCrashCount(taskId: string): void {
+  db.prepare(`DELETE FROM task_crash_counts WHERE task_id = ?`).run(taskId);
+}
+
 // ─── session_pause_intervals ────────────────────────────────────────────────
 
 export function insertPauseInterval(
@@ -2297,4 +2672,192 @@ export function getAllStuckSessionTimers(): StuckSessionTimerRow[] {
   return db
     .prepare(`SELECT * FROM stuck_session_timers`)
     .all() as StuckSessionTimerRow[];
+}
+
+// ─── active_merges ────────────────────────────────────────────────────────────
+
+export interface ActiveMergeRow {
+  key: string;
+  repo: string;
+  pr_number: number;
+  started_at: number;
+}
+
+export function upsertActiveMerge(
+  key: string,
+  repo: string,
+  prNumber: number,
+): void {
+  db.prepare<{
+    key: string;
+    repo: string;
+    pr_number: number;
+    started_at: number;
+  }>(
+    `INSERT OR REPLACE INTO active_merges (key, repo, pr_number, started_at)
+     VALUES (@key, @repo, @pr_number, @started_at)`,
+  ).run({ key, repo, pr_number: prNumber, started_at: Date.now() });
+}
+
+export function deleteActiveMerge(key: string): void {
+  db.prepare<{ key: string }>(`DELETE FROM active_merges WHERE key = @key`).run(
+    { key },
+  );
+}
+
+export function getAllActiveMerges(): ActiveMergeRow[] {
+  return db.prepare(`SELECT * FROM active_merges`).all() as ActiveMergeRow[];
+}
+
+// ─── orchestrator_test_results ────────────────────────────────────────────────
+
+export interface TestResultRow {
+  pr_number: number;
+  repo: string;
+  sha: string;
+  passed: number;
+  output: string;
+  ran_at: string;
+}
+
+export function hasTestResultForSha(
+  prNumber: number,
+  repo: string,
+  sha: string,
+): boolean {
+  const row = db
+    .prepare<{
+      pr_number: number;
+      repo: string;
+      sha: string;
+    }>(
+      `SELECT 1 FROM orchestrator_test_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
+    )
+    .get({ pr_number: prNumber, repo, sha });
+  return row != null;
+}
+
+export function upsertTestResult(
+  prNumber: number,
+  repo: string,
+  sha: string,
+  passed: boolean,
+  output: string,
+): void {
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    sha: string;
+    passed: number;
+    output: string;
+    ran_at: string;
+  }>(
+    `INSERT OR REPLACE INTO orchestrator_test_results (pr_number, repo, sha, passed, output, ran_at)
+     VALUES (@pr_number, @repo, @sha, @passed, @output, @ran_at)`,
+  ).run({
+    pr_number: prNumber,
+    repo,
+    sha,
+    passed: passed ? 1 : 0,
+    output,
+    ran_at: new Date().toISOString(),
+  });
+}
+
+export function getTestResult(
+  prNumber: number,
+  repo: string,
+  sha: string,
+): TestResultRow | undefined {
+  return db
+    .prepare<{
+      pr_number: number;
+      repo: string;
+      sha: string;
+    }>(
+      `SELECT * FROM orchestrator_test_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
+    )
+    .get({ pr_number: prNumber, repo, sha }) as TestResultRow | undefined;
+}
+
+// ─── session_events pruner ──────────────────────────────────────────────────
+
+export interface PruneEligibleSession {
+  session_id: string;
+  total_input_tokens: number;
+  total_output_tokens: number;
+}
+
+/**
+ * Returns sessions eligible for payload pruning: archived, ended before the
+ * retention cutoff, and not yet pruned.
+ */
+export function getPruneEligibleSessions(
+  endedAtCutoff: number,
+  limit: number,
+): PruneEligibleSession[] {
+  return db
+    .prepare<{ cutoff: number; limit: number }>(
+      `SELECT session_id, total_input_tokens, total_output_tokens
+       FROM sessions
+       WHERE archived = 1
+         AND ended_at IS NOT NULL
+         AND ended_at < @cutoff
+         AND events_pruned_at IS NULL
+       ORDER BY ended_at ASC
+       LIMIT @limit`,
+    )
+    .all({ cutoff: endedAtCutoff, limit }) as PruneEligibleSession[];
+}
+
+/**
+ * Returns system event IDs and payloads for a session in a paginated batch,
+ * for use in the pruner's batched update loop.
+ */
+export function getSystemEventBatch(
+  sessionId: string,
+  afterId: number,
+  limit: number,
+): { id: number; payload: string }[] {
+  return db
+    .prepare<{ session_id: string; after_id: number; limit: number }>(
+      `SELECT id, payload FROM session_events
+       WHERE session_id = @session_id
+         AND event_type = 'system'
+         AND id > @after_id
+       ORDER BY id ASC
+       LIMIT @limit`,
+    )
+    .all({ session_id: sessionId, after_id: afterId, limit }) as {
+    id: number;
+    payload: string;
+  }[];
+}
+
+/**
+ * Bulk-updates a batch of system event rows to their pruned stub payloads.
+ * Runs in a single transaction to keep write locks short.
+ */
+export function pruneSystemEventBatch(
+  updates: { id: number; payload: string }[],
+): void {
+  const stmt = db.prepare<{ id: number; payload: string }>(
+    `UPDATE session_events SET payload = @payload WHERE id = @id`,
+  );
+  const tx = db.transaction((rows: { id: number; payload: string }[]) => {
+    for (const row of rows) {
+      stmt.run(row);
+    }
+  });
+  tx(updates);
+}
+
+/** Marks a session's events as pruned. */
+export function markSessionEventsPruned(
+  sessionId: string,
+  prunedAt: number,
+): void {
+  db.prepare<{ session_id: string; pruned_at: number }>(
+    `UPDATE sessions SET events_pruned_at = @pruned_at WHERE session_id = @session_id`,
+  ).run({ session_id: sessionId, pruned_at: prunedAt });
 }

@@ -1,188 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { makeEventRow } from '../../test/helpers/eventFixtures';
 
 // ── In-memory SQLite — schema must be applied inside the factory ───────────────
 // queries.ts creates prepared statements at module load, so the tables must
 // exist before the module is imported.
 
 vi.mock('../db/db.js', async () => {
-  const { default: Database } = await import('better-sqlite3');
-  const db = new Database(':memory:');
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      session_id          TEXT    PRIMARY KEY,
-      task_id             TEXT,
-      task_url            TEXT,
-      project_context_url TEXT,
-      status              TEXT    NOT NULL DEFAULT 'running',
-      started_at          INTEGER NOT NULL DEFAULT 0,
-      ended_at            INTEGER,
-      pr_url              TEXT,
-      worktree_path       TEXT,
-      archived            INTEGER NOT NULL DEFAULT 0,
-      project_id          TEXT,
-      session_type        TEXT    NOT NULL DEFAULT 'standard',
-      favorited           INTEGER NOT NULL DEFAULT 0,
-      note                TEXT,
-      tags                TEXT,
-      task_name           TEXT,
-      model               TEXT,
-      total_input_tokens  INTEGER NOT NULL DEFAULT 0,
-      total_output_tokens INTEGER NOT NULL DEFAULT 0,
-      review_result       TEXT,
-      metadata            TEXT
-    );
-    CREATE TABLE IF NOT EXISTS session_events (
-      id           INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id   TEXT    NOT NULL,
-      event_type   TEXT    NOT NULL,
-      payload      TEXT    NOT NULL,
-      timestamp    INTEGER NOT NULL,
-      message_id   TEXT
-    );
-    CREATE TABLE IF NOT EXISTS permission_events (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id      TEXT    NOT NULL,
-      tool_name       TEXT    NOT NULL,
-      proposed_action TEXT,
-      decision        TEXT    NOT NULL,
-      rule_matched    TEXT,
-      decided_at      INTEGER NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS permission_rules (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      order_index INTEGER NOT NULL,
-      pattern     TEXT    NOT NULL,
-      match_type  TEXT    NOT NULL,
-      decision    TEXT    NOT NULL,
-      label       TEXT,
-      enabled     INTEGER NOT NULL DEFAULT 1
-    );
-    CREATE TABLE IF NOT EXISTS permission_denials (
-      id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id  TEXT    NOT NULL,
-      tool_name   TEXT    NOT NULL,
-      tool_use_id TEXT    NOT NULL,
-      tool_input  TEXT    NOT NULL,
-      timestamp   INTEGER NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS task_cache (
-      task_id    TEXT    PRIMARY KEY,
-      fetched_at INTEGER NOT NULL,
-      raw_json   TEXT    NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS settings (
-      key   TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS session_audits (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id    TEXT NOT NULL,
-      pr_opened     INTEGER NOT NULL DEFAULT 0,
-      pr_targets    TEXT,
-      task_status   TEXT,
-      violations    TEXT NOT NULL DEFAULT '[]',
-      spec_mismatch TEXT,
-      audited_at    TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS pull_requests (
-      id                     INTEGER PRIMARY KEY AUTOINCREMENT,
-      pr_number              INTEGER NOT NULL,
-      pr_url                 TEXT    NOT NULL UNIQUE,
-      task_id                TEXT,
-      session_id             TEXT,
-      repo                   TEXT    NOT NULL,
-      title                  TEXT,
-      body                   TEXT,
-      head_branch            TEXT,
-      base_branch            TEXT,
-      state                  TEXT    NOT NULL DEFAULT 'open',
-      draft                  INTEGER NOT NULL DEFAULT 0,
-      review_result          TEXT,
-      review_at              TEXT,
-      created_at             TEXT    NOT NULL,
-      updated_at             TEXT    NOT NULL,
-      synced_at              TEXT    NOT NULL,
-      review_session_id      TEXT,
-      review_iteration       INTEGER NOT NULL DEFAULT 0,
-      head_sha               TEXT,
-      last_reviewed_sha      TEXT,
-      node_id                TEXT,
-      mergeable              INTEGER,
-      merge_state            TEXT,
-      merge_state_checked_at TEXT,
-      pending_push           INTEGER NOT NULL DEFAULT 0,
-      pause_reason           TEXT,
-      failing_checks         TEXT
-    );
-    CREATE TABLE IF NOT EXISTS projects (
-      id                       TEXT    PRIMARY KEY,
-      name                     TEXT    NOT NULL,
-      project_dir              TEXT    NOT NULL,
-      context_url              TEXT,
-      github_repo              TEXT,
-      task_source              TEXT    NOT NULL DEFAULT 'notion',
-      auto_launch_enabled      INTEGER NOT NULL DEFAULT 0,
-      auto_launch_milestone_id TEXT,
-      auto_merge_enabled       INTEGER NOT NULL DEFAULT 0,
-      git_mode                 TEXT    NOT NULL DEFAULT 'github',
-      created_at               INTEGER NOT NULL,
-      updated_at               INTEGER NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS milestones (
-      id            TEXT    PRIMARY KEY,
-      project_id    TEXT    NOT NULL,
-      name          TEXT    NOT NULL,
-      source_id     TEXT,
-      display_order INTEGER NOT NULL DEFAULT 0,
-      created_at    INTEGER NOT NULL,
-      updated_at    INTEGER NOT NULL,
-      FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
-    );
-    CREATE TABLE IF NOT EXISTS local_branches (
-      id               INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id       TEXT NOT NULL,
-      session_id       TEXT NOT NULL,
-      branch_name      TEXT NOT NULL,
-      base_branch      TEXT NOT NULL DEFAULT 'dev',
-      status           TEXT NOT NULL DEFAULT 'open',
-      review_result    TEXT,
-      created_at       TEXT NOT NULL,
-      updated_at       TEXT NOT NULL,
-      pause_reason     TEXT,
-      merge_commit_sha TEXT
-    );
-    CREATE INDEX IF NOT EXISTS idx_local_branches_project_status ON local_branches(project_id, status);
-    CREATE TABLE IF NOT EXISTS audit_log (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      ts         INTEGER NOT NULL,
-      event_type TEXT    NOT NULL,
-      actor_type TEXT    NOT NULL,
-      actor_id   TEXT,
-      project_id TEXT,
-      task_id    TEXT,
-      payload    TEXT    NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS devices (
-      id          TEXT    PRIMARY KEY,
-      name        TEXT    NOT NULL,
-      user_agent  TEXT,
-      last_ip     TEXT,
-      last_seen   INTEGER,
-      enrolled_at INTEGER NOT NULL,
-      token       TEXT    NOT NULL UNIQUE,
-      revoked     INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE TABLE IF NOT EXISTS pr_review_comments_routed (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      pr_number  INTEGER NOT NULL,
-      repo       TEXT    NOT NULL,
-      comment_id TEXT    NOT NULL,
-      routed_at  INTEGER NOT NULL,
-      UNIQUE(pr_number, repo, comment_id)
-    );
-    INSERT INTO projects (id, name, project_dir, github_repo, task_source, created_at, updated_at)
-    VALUES ('proj-1', 'Test Project', '/test', 'o/r', 'notion', 1000, 1000);
-  `);
+  const { setupTestDb } = await import('../../test/helpers/setupTestDb.js');
+  const db = setupTestDb();
+  db.prepare(
+    `INSERT INTO projects (id, name, project_dir, github_repo, task_source, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run('proj-1', 'Test Project', '/test', 'o/r', 'notion', 1000, 1000);
   return { db };
 });
 
@@ -264,7 +92,7 @@ const SESSION_DEFAULTS = {
 
 describe('runMigrations — index idempotency', () => {
   it('creates all six covering indexes on a fresh DB', () => {
-    runMigrations();
+    runMigrations(typedDb);
     const names = indexNames();
     for (const idx of EXPECTED_INDEXES) {
       expect(names, `missing index ${idx}`).toContain(idx);
@@ -272,8 +100,8 @@ describe('runMigrations — index idempotency', () => {
   });
 
   it('is safe to run twice on the same DB (idempotent)', () => {
-    runMigrations();
-    expect(() => runMigrations()).not.toThrow();
+    runMigrations(typedDb);
+    expect(() => runMigrations(typedDb)).not.toThrow();
     const names = indexNames();
     for (const idx of EXPECTED_INDEXES) {
       expect(names).toContain(idx);
@@ -399,20 +227,20 @@ describe('getActiveTaskAggregates — output shape regression guard', () => {
     });
     insertEvent({
       session_id: 'sess-payload',
-      event_type: 'system',
-      payload: '{"sys":true}',
+      ...makeEventRow('other').live,
       timestamp: 1,
     });
     insertEvent({
       session_id: 'sess-payload',
-      event_type: 'assistant',
-      payload: '{"text":"hello"}',
+      ...makeEventRow('text').live,
       timestamp: 2,
     });
 
     const rows = getActiveTaskAggregates([tid]);
     expect(rows).toHaveLength(1);
-    expect(rows[0].code_session_last_event_payload).toBe('{"text":"hello"}');
+    expect(rows[0].code_session_last_event_payload).toBe(
+      makeEventRow('text').live.payload,
+    );
   });
 
   it('returns null code_session_last_event_payload when session has only system/user events', () => {
@@ -429,14 +257,12 @@ describe('getActiveTaskAggregates — output shape regression guard', () => {
     });
     insertEvent({
       session_id: 'sess-sys',
-      event_type: 'system',
-      payload: '{}',
+      ...makeEventRow('other').live,
       timestamp: 1,
     });
     insertEvent({
       session_id: 'sess-sys',
-      event_type: 'user_message',
-      payload: '{}',
+      ...makeEventRow('user_message').live,
       timestamp: 2,
     });
 
@@ -450,7 +276,7 @@ describe('getActiveTaskAggregates — output shape regression guard', () => {
 describe('bench: getActiveTaskAggregates', () => {
   it('completes in <100 ms on 100k events + 50 sessions + 30 tasks', () => {
     clearTables();
-    runMigrations(); // ensure indexes are present for the bench
+    runMigrations(typedDb); // ensure indexes are present for the bench
 
     const TASK_COUNT = 30;
     const SESSION_COUNT = 50;
@@ -493,7 +319,7 @@ describe('bench: getActiveTaskAggregates', () => {
     const bulkInsert = typedDb.transaction(() => {
       for (let i = 0; i < EVENT_COUNT; i++) {
         const sid = sessionIds[i % SESSION_COUNT];
-        const evType = i % 20 === 0 ? 'system' : 'assistant';
+        const evType = i % 20 === 0 ? 'system' : 'text';
         insertStmt.run(sid, evType, `{"i":${i}}`, i);
       }
     });
@@ -515,7 +341,7 @@ describe('bench: getActiveTaskAggregates', () => {
 
 describe('query-plan regression: getActiveTaskAggregates', () => {
   it('planner uses idx_sessions_notion_task_id_session_type and idx_pull_requests_task_id_pr_number', () => {
-    runMigrations();
+    runMigrations(typedDb);
     // Direct SQL matching the body of getActiveTaskAggregates with one placeholder.
     // If SUBSTR/INSTR wrappers are re-introduced, these indexes become unusable and
     // the planner falls back to full-table scans — causing this assertion to fail.
@@ -546,7 +372,7 @@ describe('query-plan regression: getActiveTaskAggregates', () => {
         cs.total_output_tokens AS code_session_output_tokens,
         (SELECT payload FROM session_events
          WHERE session_id = cs.session_id
-           AND event_type NOT IN ('system', 'user_message')
+           AND event_type IN ('text', 'tool_use', 'tool_result', 'error')
          ORDER BY id DESC LIMIT 1) AS code_session_last_event_payload,
         rs.session_id AS review_session_id, rs.status AS review_session_status,
         rs.total_input_tokens AS review_session_input_tokens,

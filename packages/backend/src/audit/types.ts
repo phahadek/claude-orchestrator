@@ -6,6 +6,7 @@ export type EventType =
   | 'status_updated'
   | 'pr_body_invalid'
   | 'pr_body_invalid_warning'
+  | 'pr_body_updated_via_marker'
   | 'attribution_missing'
   | 'session_launch_refused_zdr'
   | 'data_residency_flag_toggled'
@@ -17,12 +18,25 @@ export type EventType =
   | 'file_pollution_check_failed'
   | 'handle_clean_exit_entered'
   | 'handle_clean_exit_session_marked_done'
+  | 'handle_clean_exit_session_marked_idle'
   | 'task_orphan_reverted'
+  | 'task_orphan_nudged'
+  | 'task_orphan_surfaced'
   | 'session_errored'
   | 'session_backfilled'
   | 'verdict_routing_failed'
   | 'manual_pr_clear'
-  | 'sessions_auto_archived';
+  | 'sessions_auto_archived'
+  | 'pr_attribution_mismatch'
+  | 'pr_creation_failed'
+  | 'session_aborted'
+  | 'auto_launch_done_update_stuck'
+  | 'auto_launch_paused'
+  | 'session_marked_done_while_running'
+  | 'conflict_nudge_delivery_failed'
+  | 'worktree_remove_failed'
+  | 'stale_branch_abandoned'
+  | 'review_side_effect_failed';
 
 export type ActorType = 'ai' | 'human' | 'system';
 

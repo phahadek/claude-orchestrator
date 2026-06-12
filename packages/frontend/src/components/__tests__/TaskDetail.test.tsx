@@ -96,19 +96,17 @@ function makeReview(
 }
 
 // ── useIsMobile mock ────────────────────────────────────────────────
-// Controls the mobile/desktop mode for each test without touching browser globals.
 let isMobileValue = false;
 vi.mock('../../hooks/useIsMobile', () => ({
   useIsMobile: () => isMobileValue,
 }));
 
-// jsdom does not implement matchMedia — provide a default desktop stub.
 beforeEach(() => {
   isMobileValue = false;
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
     value: vi.fn((query: string) => ({
-      matches: false, // desktop by default
+      matches: false,
       media: query,
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
@@ -185,9 +183,9 @@ describe('TaskDetail', () => {
     backSpy.mockRestore();
   });
 
-  // ── Code session section ──
+  // ── Code session — embedded SessionPanel ──
 
-  it('does not render code session section when codeSession is null', () => {
+  it('does not render code session when codeSession is null', () => {
     render(
       <TaskDetail
         task={makeTask({ codeSession: null })}
@@ -195,47 +193,152 @@ describe('TaskDetail', () => {
         onClose={vi.fn()}
       />,
     );
-    expect(screen.queryByText('Code Session')).toBeNull();
+    // No session transcript placeholder when there is no code session
+    expect(screen.queryByText(/Transcript not available/)).toBeNull();
   });
 
-  it('renders code session section header with status', () => {
+  it('shows placeholder when codeSession is set but not in sessions store', () => {
     const codeSession = makeCodeSession();
     render(
       <TaskDetail
         task={makeTask({ codeSession })}
         send={vi.fn()}
         onClose={vi.fn()}
+        sessions={[]}
       />,
     );
-    expect(screen.getByText('Code Session')).toBeTruthy();
-    // The full transcript replaces the lastMessage preview when the session is
-    // available in the sessions prop (otherwise a "not loaded" placeholder).
     expect(screen.getByText(/Transcript not available/)).toBeTruthy();
   });
 
-  it('renders elapsed time in code session section', () => {
-    const codeSession = makeCodeSession({
-      startedAt: Date.now() - 65000,
-      endedAt: null,
-    });
+  it('renders SessionPanel for code session when sessions prop includes matching session', () => {
+    const codeSession = makeCodeSession({ sessionId: 'sess-1' });
+    const sessions: SessionState[] = [
+      makeSessionState({ sessionId: 'sess-1', events: [] }),
+    ];
     render(
       <TaskDetail
         task={makeTask({ codeSession })}
         send={vi.fn()}
         onClose={vi.fn()}
+        sessions={sessions}
       />,
     );
-    // Some elapsed time should be shown (1m 5s or similar)
-    expect(screen.getByText('Code Session')).toBeTruthy();
+    // SessionPanel renders empty transcript state
+    expect(screen.getByText('No events yet.')).toBeTruthy();
   });
 
-  it('shows message composer for active code session', () => {
-    const codeSession = makeCodeSession({ status: 'running' });
+  it('code session SessionPanel exposes Kill button for running session', () => {
+    const codeSession = makeCodeSession({
+      sessionId: 'sess-1',
+      status: 'running',
+    });
+    const sessions: SessionState[] = [
+      makeSessionState({ sessionId: 'sess-1', status: 'running' }),
+    ];
     render(
       <TaskDetail
         task={makeTask({ codeSession })}
         send={vi.fn()}
         onClose={vi.fn()}
+        sessions={sessions}
+      />,
+    );
+    expect(screen.getByText('Kill')).toBeTruthy();
+  });
+
+  it('code session SessionPanel exposes Favorite button', () => {
+    const codeSession = makeCodeSession({
+      sessionId: 'sess-1',
+      status: 'running',
+    });
+    const sessions: SessionState[] = [
+      makeSessionState({ sessionId: 'sess-1', status: 'running' }),
+    ];
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={sessions}
+        setSessionFavorited={vi.fn()}
+      />,
+    );
+    // SessionControls renders a favorite button (☆ for unfavorited)
+    expect(screen.getByLabelText('Favorite session')).toBeTruthy();
+  });
+
+  it('code session SessionPanel exposes Archive button for finished session', () => {
+    const codeSession = makeCodeSession({
+      sessionId: 'sess-1',
+      status: 'done',
+    });
+    const sessions: SessionState[] = [
+      makeSessionState({ sessionId: 'sess-1', status: 'done' }),
+    ];
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={sessions}
+        setSessionArchived={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Archive')).toBeTruthy();
+  });
+
+  it('code session SessionPanel exposes Delete button for finished session', () => {
+    const codeSession = makeCodeSession({
+      sessionId: 'sess-1',
+      status: 'done',
+    });
+    const sessions: SessionState[] = [
+      makeSessionState({ sessionId: 'sess-1', status: 'done' }),
+    ];
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={sessions}
+      />,
+    );
+    expect(screen.getByText('Delete')).toBeTruthy();
+  });
+
+  it('does not show Kill for finished code session', () => {
+    const codeSession = makeCodeSession({
+      sessionId: 'sess-1',
+      status: 'done',
+    });
+    const sessions: SessionState[] = [
+      makeSessionState({ sessionId: 'sess-1', status: 'done' }),
+    ];
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={sessions}
+      />,
+    );
+    expect(screen.queryByText('Kill')).toBeNull();
+  });
+
+  it('shows message composer for active code session via SessionPanel', () => {
+    const codeSession = makeCodeSession({
+      sessionId: 'sess-1',
+      status: 'running',
+    });
+    const sessions: SessionState[] = [
+      makeSessionState({ sessionId: 'sess-1', status: 'running' }),
+    ];
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={sessions}
       />,
     );
     expect(
@@ -244,12 +347,19 @@ describe('TaskDetail', () => {
   });
 
   it('does not show composer for finished code session', () => {
-    const codeSession = makeCodeSession({ status: 'done' });
+    const codeSession = makeCodeSession({
+      sessionId: 'sess-1',
+      status: 'done',
+    });
+    const sessions: SessionState[] = [
+      makeSessionState({ sessionId: 'sess-1', status: 'done' }),
+    ];
     render(
       <TaskDetail
         task={makeTask({ codeSession })}
         send={vi.fn()}
         onClose={vi.fn()}
+        sessions={sessions}
       />,
     );
     expect(
@@ -257,17 +367,21 @@ describe('TaskDetail', () => {
     ).toBeNull();
   });
 
-  it('sends send_message when composer is submitted', () => {
+  it('sends send_message when composer is submitted via SessionPanel', () => {
     const send = vi.fn();
     const codeSession = makeCodeSession({
       status: 'running',
       sessionId: 'sess-abc',
     });
+    const sessions: SessionState[] = [
+      makeSessionState({ sessionId: 'sess-abc', status: 'running' }),
+    ];
     render(
       <TaskDetail
         task={makeTask({ codeSession })}
         send={send}
         onClose={vi.fn()}
+        sessions={sessions}
       />,
     );
     const textarea = screen.getByPlaceholderText(
@@ -282,7 +396,60 @@ describe('TaskDetail', () => {
     } as ClientMessage);
   });
 
-  // The full transcript is now always shown inline (no toggle button).
+  it('Kill button in code SessionPanel sends kill WS message', () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const send = vi.fn();
+    const codeSession = makeCodeSession({
+      status: 'running',
+      sessionId: 'sess-kill',
+    });
+    const sessions: SessionState[] = [
+      makeSessionState({ sessionId: 'sess-kill', status: 'running' }),
+    ];
+    render(
+      <TaskDetail
+        task={makeTask({ codeSession })}
+        send={send}
+        onClose={vi.fn()}
+        sessions={sessions}
+      />,
+    );
+    fireEvent.click(screen.getByText('Kill'));
+    expect(send).toHaveBeenCalledWith({
+      type: 'kill',
+      sessionId: 'sess-kill',
+    } as ClientMessage);
+    vi.restoreAllMocks();
+  });
+
+  // ── No task-level Overview/Diff tabs ──
+
+  it('has no Overview tab at task level', () => {
+    const pr = makePr();
+    render(
+      <TaskDetail task={makeTask({ pr })} send={vi.fn()} onClose={vi.fn()} />,
+    );
+    expect(screen.queryByRole('button', { name: 'Overview' })).toBeNull();
+  });
+
+  it('has no Diff tab at task level', () => {
+    const pr = makePr();
+    render(
+      <TaskDetail task={makeTask({ pr })} send={vi.fn()} onClose={vi.fn()} />,
+    );
+    // The PR section is rendered but there is no Diff tab at the task level
+    expect(screen.getByText('Pull Request')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Diff' })).toBeNull();
+  });
+
+  it('PR section is always visible without tabs', () => {
+    const pr = makePr();
+    render(
+      <TaskDetail task={makeTask({ pr })} send={vi.fn()} onClose={vi.fn()} />,
+    );
+    expect(screen.getByText('Pull Request')).toBeTruthy();
+    expect(screen.getByText('#42')).toBeTruthy();
+  });
 
   // ── PR section ──
 
@@ -349,6 +516,34 @@ describe('TaskDetail', () => {
     expect(screen.getByText('Draft')).toBeTruthy();
   });
 
+  it('Run Review button fires the review endpoint', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const pr = makePr({ state: 'open', prNumber: 42 });
+    render(
+      <TaskDetail
+        task={makeTask({ pr })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        projectId="proj-1"
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Run Review'));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/prs/42/review?projectId=proj-1',
+        { method: 'POST' },
+      );
+    });
+
+    vi.unstubAllGlobals();
+  });
+
   // ── Review section ──
 
   it('does not render review section when review is null', () => {
@@ -389,9 +584,6 @@ describe('TaskDetail', () => {
     expect(screen.getByText('⚠️ Needs Changes')).toBeTruthy();
   });
 
-  // Review summary string is no longer rendered — only the verdict pill +
-  // dimensions are surfaced (verdict pill is covered by sibling tests).
-
   it('renders "In progress…" pill when review session is running with no verdict', () => {
     const review = makeReview({ verdict: null, status: 'running' });
     render(
@@ -404,15 +596,40 @@ describe('TaskDetail', () => {
     expect(screen.getByText('In progress…')).toBeTruthy();
   });
 
-  it('is hidden when review is null', () => {
+  it('shows review transcript not available placeholder when review session not loaded', () => {
+    const review = makeReview({ sessionId: 'review-sess-1' });
     render(
       <TaskDetail
-        task={makeTask({ review: null })}
+        task={makeTask({ review })}
         send={vi.fn()}
         onClose={vi.fn()}
+        sessions={[]}
       />,
     );
-    expect(screen.queryByText('Review')).toBeNull();
+    // Expanded by default, shows placeholder
+    expect(screen.getByText('Review transcript not available.')).toBeTruthy();
+  });
+
+  it('renders review SessionPanel when review session is in store', () => {
+    const review = makeReview({ sessionId: 'review-sess-1' });
+    const sessions: SessionState[] = [
+      makeSessionState({
+        sessionId: 'review-sess-1',
+        status: 'done',
+        sessionType: 'review',
+        events: [],
+      }),
+    ];
+    render(
+      <TaskDetail
+        task={makeTask({ review })}
+        send={vi.fn()}
+        onClose={vi.fn()}
+        sessions={sessions}
+      />,
+    );
+    // ReviewDetailView renders "No result" when there are no events
+    expect(screen.getByText('No result')).toBeTruthy();
   });
 
   // ── Merge button ──
@@ -488,193 +705,6 @@ describe('TaskDetail', () => {
     vi.unstubAllGlobals();
   });
 
-  // ── Kill button ──
-
-  it('renders Kill button when codeSession is running', () => {
-    const codeSession = makeCodeSession({ status: 'running' });
-    render(
-      <TaskDetail
-        task={makeTask({ codeSession })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-    expect(screen.getByText('Kill')).toBeTruthy();
-  });
-
-  it('renders Kill button when codeSession is needs_permission', () => {
-    const codeSession = makeCodeSession({ status: 'needs_permission' });
-    render(
-      <TaskDetail
-        task={makeTask({ codeSession })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-    expect(screen.getByText('Kill')).toBeTruthy();
-  });
-
-  it('does not render Kill button when codeSession is done', () => {
-    const codeSession = makeCodeSession({ status: 'done' });
-    render(
-      <TaskDetail
-        task={makeTask({ codeSession })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-    expect(screen.queryByText('Kill')).toBeNull();
-  });
-
-  it('does not render Kill button when codeSession is error', () => {
-    const codeSession = makeCodeSession({ status: 'error' });
-    render(
-      <TaskDetail
-        task={makeTask({ codeSession })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-    expect(screen.queryByText('Kill')).toBeNull();
-  });
-
-  it('does not render Kill button when codeSession is killed', () => {
-    const codeSession = makeCodeSession({ status: 'killed' });
-    render(
-      <TaskDetail
-        task={makeTask({ codeSession })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-    expect(screen.queryByText('Kill')).toBeNull();
-  });
-
-  it('does not render Kill button when there is no codeSession', () => {
-    render(
-      <TaskDetail
-        task={makeTask({ codeSession: null })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-    expect(screen.queryByText('Kill')).toBeNull();
-  });
-
-  it('shows confirm dialog with exact copy when Kill is clicked', () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    const codeSession = makeCodeSession({ status: 'running' });
-    render(
-      <TaskDetail
-        task={makeTask({ codeSession })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-    fireEvent.click(screen.getByText('Kill'));
-    expect(confirmSpy).toHaveBeenCalledWith(
-      'Kill this session? It will have 15 seconds to wrap up.',
-    );
-    confirmSpy.mockRestore();
-  });
-
-  it('sends kill WS message with correct sessionId when confirmed', () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-    const send = vi.fn();
-    const codeSession = makeCodeSession({
-      status: 'running',
-      sessionId: 'sess-kill',
-    });
-    render(
-      <TaskDetail
-        task={makeTask({ codeSession })}
-        send={send}
-        onClose={vi.fn()}
-      />,
-    );
-    fireEvent.click(screen.getByText('Kill'));
-    expect(send).toHaveBeenCalledWith({
-      type: 'kill',
-      sessionId: 'sess-kill',
-    } as ClientMessage);
-    vi.restoreAllMocks();
-  });
-
-  it('does not send kill WS message when confirm is cancelled', () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
-    const send = vi.fn();
-    const codeSession = makeCodeSession({
-      status: 'running',
-      sessionId: 'sess-kill',
-    });
-    render(
-      <TaskDetail
-        task={makeTask({ codeSession })}
-        send={send}
-        onClose={vi.fn()}
-      />,
-    );
-    fireEvent.click(screen.getByText('Kill'));
-    expect(send).not.toHaveBeenCalled();
-    vi.restoreAllMocks();
-  });
-
-  // ── Kill button: live session status ──
-
-  it('shows Kill button when task.codeSession.status is starting but live session is running', () => {
-    const codeSession = makeCodeSession({
-      sessionId: 'sess-1',
-      status: 'starting',
-    });
-    const sessions: SessionState[] = [
-      makeSessionState({ sessionId: 'sess-1', status: 'running' }),
-    ];
-    render(
-      <TaskDetail
-        task={makeTask({ codeSession })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        sessions={sessions}
-      />,
-    );
-    expect(screen.getByText('Kill')).toBeTruthy();
-  });
-
-  it('does not show Kill button when live session status is done (regression check)', () => {
-    const codeSession = makeCodeSession({
-      sessionId: 'sess-1',
-      status: 'running',
-    });
-    const sessions: SessionState[] = [
-      makeSessionState({ sessionId: 'sess-1', status: 'done' }),
-    ];
-    render(
-      <TaskDetail
-        task={makeTask({ codeSession })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        sessions={sessions}
-      />,
-    );
-    expect(screen.queryByText('Kill')).toBeNull();
-  });
-
-  it('shows Kill button via static task status when no live session entry exists', () => {
-    const codeSession = makeCodeSession({
-      sessionId: 'sess-1',
-      status: 'running',
-    });
-    render(
-      <TaskDetail
-        task={makeTask({ codeSession })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        sessions={[]}
-      />,
-    );
-    expect(screen.getByText('Kill')).toBeTruthy();
-  });
-
   // ── Token aggregation display ──
 
   it('displays aggregated token count badge when totalTokens > 0', () => {
@@ -717,7 +747,7 @@ describe('TaskDetail', () => {
 
   // ── EventTranscript integration ──
 
-  it('renders EventTranscript inline for code session when sessions prop includes matching session', () => {
+  it('renders EventTranscript via SessionPanel for code session when sessions has matching session', () => {
     const codeSession = makeCodeSession({ sessionId: 'sess-1' });
     const sessions: SessionState[] = [
       makeSessionState({ sessionId: 'sess-1', events: [] }),
@@ -730,31 +760,6 @@ describe('TaskDetail', () => {
         sessions={sessions}
       />,
     );
-    // Empty events render the EventTranscript empty-state text.
-    expect(screen.getByText('No events yet.')).toBeTruthy();
-  });
-
-  it('renders EventTranscript for review session inside the review section', () => {
-    const review = makeReview({ sessionId: 'review-sess-1' });
-    const sessions: SessionState[] = [
-      makeSessionState({
-        sessionId: 'review-sess-1',
-        status: 'done',
-        events: [],
-      }),
-    ];
-    render(
-      <TaskDetail
-        task={makeTask({ review })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        sessions={sessions}
-      />,
-    );
-    // Review section is expanded by default; the empty transcript renders the
-    // EventTranscript empty-state. There are two transcripts (code + review)
-    // rendering the same empty-state when both have no events; the codeSession
-    // is null in this test, so only one is rendered.
     expect(screen.getByText('No events yet.')).toBeTruthy();
   });
 
@@ -783,60 +788,22 @@ describe('TaskDetail', () => {
     expect(screen.getByText('Working on the fix…')).toBeTruthy();
   });
 
-  // ── Diff tab ──
+  // ── InlineComposer / ReviewDimensions are gone ──
 
-  it('shows Diff tab when task.pr exists', () => {
-    const pr = makePr();
-    render(
-      <TaskDetail task={makeTask({ pr })} send={vi.fn()} onClose={vi.fn()} />,
+  it('TaskDetail.tsx does not reference InlineComposer', () => {
+    const src = fs.readFileSync(
+      path.join(__dirname, '../TaskDetail.tsx'),
+      'utf-8',
     );
-    expect(screen.getByRole('button', { name: 'Diff' })).toBeTruthy();
+    expect(src).not.toContain('InlineComposer');
   });
 
-  it('does not show Diff tab when task.pr is null', () => {
-    render(
-      <TaskDetail
-        task={makeTask({ pr: null })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-      />,
+  it('TaskDetail.tsx does not reference ReviewDimensions', () => {
+    const src = fs.readFileSync(
+      path.join(__dirname, '../TaskDetail.tsx'),
+      'utf-8',
     );
-    expect(screen.queryByRole('button', { name: 'Diff' })).toBeNull();
-  });
-
-  it('default active tab is Overview', () => {
-    const pr = makePr();
-    render(
-      <TaskDetail task={makeTask({ pr })} send={vi.fn()} onClose={vi.fn()} />,
-    );
-    // PR section content visible means Overview tab is active
-    expect(screen.getByText('Pull Request')).toBeTruthy();
-  });
-
-  it('clicking Diff tab renders DiffViewer with correct prNumber', async () => {
-    const pr = makePr({ prNumber: 42 });
-    render(
-      <TaskDetail
-        task={makeTask({ pr })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        projectId={undefined}
-      />,
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Diff' }));
-    // DiffViewer renders an error when projectId is absent
-    await waitFor(() => {
-      expect(screen.getByText(/No project ID available/)).toBeTruthy();
-    });
-  });
-
-  it('switching to Diff tab hides Overview content', () => {
-    const pr = makePr();
-    render(
-      <TaskDetail task={makeTask({ pr })} send={vi.fn()} onClose={vi.fn()} />,
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Diff' }));
-    expect(screen.queryByText('Pull Request')).toBeNull();
+    expect(src).not.toContain('ReviewDimensions');
   });
 
   // ── Mobile header chrome compaction ──
@@ -844,22 +811,17 @@ describe('TaskDetail', () => {
   it('TaskDetail.module.css contains mobile media query for header chrome compaction', () => {
     const cssPath = path.join(__dirname, '../TaskDetail.module.css');
     const css = fs.readFileSync(cssPath, 'utf-8');
-    // The mobile media query block must target the key header chrome selectors.
-    // Desktop styles must remain in their original (non-media-query) blocks —
-    // this verifies we are overriding, not replacing, the desktop values.
     const mobileBlockStart = css.lastIndexOf('@media (max-width: 768px)');
     expect(mobileBlockStart).toBeGreaterThan(-1);
     const mobileBlock = css.slice(mobileBlockStart);
     expect(mobileBlock).toContain('.header');
     expect(mobileBlock).toContain('.taskName');
-    expect(mobileBlock).toContain('.tabButton');
     expect(mobileBlock).toContain('.sectionHeader');
   });
 
   it('desktop header padding is not overridden outside mobile media query', () => {
     const cssPath = path.join(__dirname, '../TaskDetail.module.css');
     const css = fs.readFileSync(cssPath, 'utf-8');
-    // Desktop .header rule must retain its original padding (regression guard).
     const mobileBlockStart = css.lastIndexOf('@media (max-width: 768px)');
     const desktopCss = css.slice(0, mobileBlockStart);
     expect(desktopCss).toContain('padding: 14px 16px');
@@ -878,7 +840,7 @@ describe('TaskDetail', () => {
   }
 
   it('desktop: both REVIEW and PULL REQUEST sections can be expanded simultaneously', () => {
-    setMobileViewport(false); // desktop viewport
+    setMobileViewport(false);
     const pr = makePr();
     const review = makeReview({ verdict: 'approved' });
     render(
@@ -888,17 +850,14 @@ describe('TaskDetail', () => {
         onClose={vi.fn()}
       />,
     );
-    // Both sections visible by default on desktop
     expect(screen.getByText('Review')).toBeTruthy();
     expect(screen.getByText('Pull Request')).toBeTruthy();
-    // REVIEW content (verdict pill) visible
     expect(screen.getByText('✅ Approved')).toBeTruthy();
-    // PR content visible
     expect(screen.getByText('#42')).toBeTruthy();
   });
 
   it('mobile: expanding REVIEW collapses PULL REQUEST', () => {
-    setMobileViewport(true); // mobile viewport
+    isMobileValue = true;
     const pr = makePr();
     const review = makeReview({ verdict: 'approved' });
     render(
@@ -906,6 +865,7 @@ describe('TaskDetail', () => {
         task={makeTask({ pr, review })}
         send={vi.fn()}
         onClose={vi.fn()}
+        sessions={[]}
       />,
     );
     // Initially REVIEW is open (body visible), PR body is collapsed
@@ -921,7 +881,7 @@ describe('TaskDetail', () => {
   });
 
   it('mobile: expanding PULL REQUEST collapses REVIEW', () => {
-    setMobileViewport(true); // mobile viewport
+    isMobileValue = true;
     const pr = makePr();
     const review = makeReview({ verdict: 'needs_changes' });
     render(
@@ -929,21 +889,20 @@ describe('TaskDetail', () => {
         task={makeTask({ pr, review })}
         send={vi.fn()}
         onClose={vi.fn()}
+        sessions={[]}
       />,
     );
-    // REVIEW is open initially, click PR to expand it
     fireEvent.click(
       screen.getByRole('button', { name: /pull request/i, hidden: true }),
     );
     expect(screen.getByText('#42')).toBeTruthy();
-    // Click REVIEW section header (name starts with "Review", not "Run Review")
     fireEvent.click(screen.getByRole('button', { name: /^review/i }));
     expect(screen.queryByText('#42')).toBeNull();
     expect(screen.getByText('⚠️ Needs Changes')).toBeTruthy();
   });
 
   it('mobile: section-toggle handlers track which section is open', () => {
-    setMobileViewport(true); // mobile viewport
+    isMobileValue = true;
     const pr = makePr();
     const review = makeReview({ verdict: 'approved' });
     render(
@@ -951,13 +910,12 @@ describe('TaskDetail', () => {
         task={makeTask({ pr, review })}
         send={vi.fn()}
         onClose={vi.fn()}
+        sessions={[]}
       />,
     );
-    // Start: REVIEW open (name starts with "Review", distinguishes from "Run Review")
     const reviewHeader = screen.getByRole('button', { name: /^review/i });
     expect(reviewHeader.getAttribute('aria-expanded')).toBe('true');
 
-    // Click PR header → PR opens
     const prHeader = screen.getByRole('button', {
       name: /pull request/i,
       hidden: true,
@@ -967,117 +925,67 @@ describe('TaskDetail', () => {
     expect(reviewHeader.getAttribute('aria-expanded')).toBe('false');
   });
 
-  // ── Mobile: compact session summary ──────────────────────────────
+  // ── Mobile accordion — PR reachability ──
 
-  it('desktop: renders full embedded session transcript (regression)', () => {
-    // isMobileValue is false by default (set in beforeEach)
-    const codeSession = makeCodeSession({ sessionId: 'sess-1' });
-    const sessions: SessionState[] = [
-      makeSessionState({ sessionId: 'sess-1', events: [] }),
-    ];
+  it('mobile: PULL REQUEST header accessible without hidden flag when review is expanded', () => {
+    isMobileValue = true;
+    const pr = makePr();
+    const review = makeReview({ verdict: 'approved' });
     render(
       <TaskDetail
-        task={makeTask({ codeSession })}
+        task={makeTask({ pr, review })}
         send={vi.fn()}
         onClose={vi.fn()}
-        sessions={sessions}
       />,
     );
-    // Full transcript renders (EventTranscript empty-state)
-    expect(screen.getByText('No events yet.')).toBeTruthy();
-    // No "View full session" button on desktop
-    expect(screen.queryByText('View full session')).toBeNull();
+    // Review is expanded by default; PR header should be findable without hidden:true
+    const prHeader = screen.getByRole('button', { name: /pull request/i });
+    expect(prHeader).toBeTruthy();
+    expect(prHeader.getAttribute('aria-expanded')).toBe('false');
   });
 
-  it('mobile: renders compact session summary and "View full session" button', () => {
+  it('mobile: tapping PR header from review-open state expands PR and collapses review', () => {
     isMobileValue = true;
-    const codeSession = makeCodeSession({
-      sessionId: 'sess-1',
-      lastMessage: 'Working on implementation…',
-      inputTokens: 1000,
-      outputTokens: 500,
-    });
+    const pr = makePr();
+    const review = makeReview({ verdict: 'approved' });
     render(
       <TaskDetail
-        task={makeTask({ codeSession })}
+        task={makeTask({ pr, review })}
         send={vi.fn()}
         onClose={vi.fn()}
+        sessions={[]}
       />,
     );
-    // Compact summary shows last message
-    expect(screen.getByText('Working on implementation…')).toBeTruthy();
-    // Shows "View full session" button
-    expect(screen.getByText('View full session')).toBeTruthy();
-    // Full transcript NOT rendered on mobile
-    expect(screen.queryByText('No events yet.')).toBeNull();
+    // Review is expanded by default
+    expect(screen.getByText('Review transcript not available.')).toBeTruthy();
+    const prHeader = screen.getByRole('button', { name: /pull request/i });
+    fireEvent.click(prHeader);
+    // PR is now expanded, review is collapsed
+    expect(screen.getByText('#42')).toBeTruthy();
+    expect(screen.queryByText('Review transcript not available.')).toBeNull();
   });
 
-  it('mobile: tapping "View full session" calls onOpenSessionOverlay', () => {
-    isMobileValue = true;
-    const codeSession = makeCodeSession({ sessionId: 'sess-1' });
-    const onOpenSessionOverlay = vi.fn();
-    render(
-      <TaskDetail
-        task={makeTask({ codeSession })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        onOpenSessionOverlay={onOpenSessionOverlay}
-      />,
-    );
-    fireEvent.click(screen.getByText('View full session'));
-    expect(onOpenSessionOverlay).toHaveBeenCalledOnce();
-  });
+  // ── Review dead-space: CSS cap applied ──
 
-  it('mobile: renders SessionDetail overlay when sessionOverlayOpen=true', () => {
-    isMobileValue = true;
-    const codeSession = makeCodeSession({ sessionId: 'sess-1' });
-    const sessions: SessionState[] = [
-      makeSessionState({ sessionId: 'sess-1', events: [] }),
-    ];
-    render(
-      <TaskDetail
-        task={makeTask({ codeSession })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        sessions={sessions}
-        sessionOverlayOpen={true}
-      />,
-    );
-    expect(screen.getByTestId('session-overlay')).toBeTruthy();
-  });
-
-  it('mobile: session overlay backdrop calls history.back()', () => {
-    isMobileValue = true;
-    const codeSession = makeCodeSession({ sessionId: 'sess-1' });
-    const sessions: SessionState[] = [
-      makeSessionState({ sessionId: 'sess-1', events: [] }),
-    ];
-    const backSpy = vi
-      .spyOn(window.history, 'back')
-      .mockImplementation(() => {});
-    render(
-      <TaskDetail
-        task={makeTask({ codeSession })}
-        send={vi.fn()}
-        onClose={vi.fn()}
-        sessions={sessions}
-        sessionOverlayOpen={true}
-      />,
-    );
-    fireEvent.click(screen.getByTestId('session-overlay-backdrop'));
-    expect(backSpy).toHaveBeenCalledOnce();
-    backSpy.mockRestore();
+  it('TaskDetail.module.css reviewBody uses max-height cap (no flex:1 dead space)', () => {
+    const cssPath = path.join(__dirname, '../TaskDetail.module.css');
+    const css = fs.readFileSync(cssPath, 'utf-8');
+    const reviewBodyMatch = css.match(/\.reviewBody\s*\{([^}]+)\}/);
+    expect(reviewBodyMatch).toBeTruthy();
+    const reviewBodyBlock = reviewBodyMatch![1];
+    expect(reviewBodyBlock).not.toContain('flex: 1');
+    expect(reviewBodyBlock).toContain('max-height');
   });
 
   // ── Shared task-views source — detail pane AC tests ──
 
-  it('renders task data when the task prop is provided (shared source has the task)', () => {
+  it('renders task data when the task prop is provided', () => {
     const task = makeTask({ taskId: 'task-001', taskName: 'Feature Work' });
     render(<TaskDetail task={task} send={vi.fn()} onClose={vi.fn()} />);
     expect(screen.getByText('Feature Work')).toBeTruthy();
   });
 
-  it('renders the correct task after the task prop is swapped to a different task', () => {
+  it('renders the correct task after the task prop is swapped', () => {
     const taskA = makeTask({ taskId: 'task-a', taskName: 'Task A' });
     const taskB = makeTask({ taskId: 'task-b', taskName: 'Task B' });
     const { rerender } = render(

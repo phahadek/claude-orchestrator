@@ -46,6 +46,18 @@ vi.mock('child_process', () => ({
   spawn: vi.fn(() => mockProc.proc),
   execSync: vi.fn(() => ''),
   execFile: vi.fn(),
+  exec: vi
+    .fn()
+    .mockImplementation(
+      (
+        _cmd: string,
+        _opts: unknown,
+        cb: (err: null, result: { stdout: string; stderr: string }) => void,
+      ) => {
+        const callback = typeof _opts === 'function' ? _opts : cb;
+        process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+      },
+    ),
 }));
 
 // fs is mocked so existsSync can be controlled per-test; readFileSync /
@@ -82,7 +94,6 @@ const projectFixture = {
 
 vi.mock('../config', () => ({
   AUTO_REVIEW_ENABLED: false,
-  AUTO_REVIEW_CONCURRENCY: 1,
   ALLOWED_TOOLS: [],
   config: {
     claudePath: '/fake/claude',
@@ -99,6 +110,7 @@ vi.mock('../config', () => ({
     code_session_model: '',
     review_session_model: '',
     max_concurrent_code_sessions: 20,
+    auto_review_concurrency: 20,
   },
 }));
 
@@ -152,7 +164,9 @@ vi.mock('../db/queries', () => ({
   getPRByNumber: vi.fn(() => null),
   updateSessionStatus: vi.fn(),
   markSessionDone: vi.fn(),
+  markSessionIdle: vi.fn(),
   getStuckResultSessionRows: vi.fn(() => []),
+  getRunningSessionsWithMergedOrClosedPR: vi.fn(() => []),
   insertSession: vi.fn(),
   insertEvent: vi.fn(),
   upsertSessionEvent: vi.fn(() => 1),
@@ -516,15 +530,14 @@ describe('resumeOrphanSessions() — spawn arg contract: --resume <session_id>',
     vi.mocked(execSync).mockReturnValue('');
 
     const sm = new SessionManager();
-    sm.start('https://notion.so/task', 'https://notion.so/ctx', {
+    await sm.start('https://notion.so/task', 'https://notion.so/ctx', {
       projectId: 'test-project',
       sessionId: SESSION_UUID,
       taskKind: 'milestone',
     });
 
-    // launchSession() is async — it awaits fetchTaskPage() before calling
-    // wireSession(). A single setImmediate drains all pending microtasks so
-    // the spawn happens before we assert.
+    // launchSession() is fire-and-forget — setImmediate drains its microtasks
+    // so the spawn happens before we assert.
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(spawn).toHaveBeenCalledTimes(1);
@@ -535,5 +548,41 @@ describe('resumeOrphanSessions() — spawn arg contract: --resume <session_id>',
     expect(sessionIdIdx).toBeGreaterThan(-1);
     expect(spawnArgs[sessionIdIdx + 1]).toBe(SESSION_UUID);
     expect(spawnArgs).not.toContain('--resume');
+  });
+});
+
+// ── Test 6: merged/closed PR sessions are reaped, not resumed ────────────────
+describe('resumeOrphanSessions() — merged/closed PR reaping', () => {
+  it('marks merged-PR sessions as done on boot instead of resuming them', async () => {
+    const mergedRow = {
+      session_id: 'merged-sess',
+      task_id: 'task-merged',
+      task_url: 'https://notion.so/task',
+      project_context_url: 'https://notion.so/ctx',
+      project_id: 'test-project',
+      pr_url: 'https://github.com/owner/repo/pull/504',
+      worktree_path: '/fake/project/.claude/worktrees/merged-sess',
+      session_type: 'standard',
+      last_ts: 1_000_000,
+    };
+
+    vi.mocked(queries.getSessionsByStatus).mockReturnValue([]);
+    vi.mocked(queries.getStuckResultSessionRows).mockReturnValue([]);
+    vi.mocked(
+      queries.getRunningSessionsWithMergedOrClosedPR as ReturnType<
+        typeof vi.fn
+      >,
+    ).mockReturnValue([mergedRow]);
+
+    const sm = new SessionManager();
+    await sm.resumeOrphanSessions();
+
+    // Merged-PR session must be marked done, not spawned.
+    expect(queries.markSessionDone).toHaveBeenCalledWith(
+      'merged-sess',
+      mergedRow.last_ts,
+      mergedRow.pr_url,
+    );
+    expect(spawn).not.toHaveBeenCalled();
   });
 });

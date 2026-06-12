@@ -40,6 +40,18 @@ vi.mock('child_process', () => ({
   spawn: vi.fn(() => mockProc.proc),
   execSync: vi.fn(() => 'dev'),
   execFile: vi.fn(),
+  exec: vi
+    .fn()
+    .mockImplementation(
+      (
+        _cmd: string,
+        _opts: unknown,
+        cb: (err: null, result: { stdout: string; stderr: string }) => void,
+      ) => {
+        const callback = typeof _opts === 'function' ? _opts : cb;
+        process.nextTick(() => callback(null, { stdout: '', stderr: '' }));
+      },
+    ),
 }));
 
 // ── Mock fs ────────────────────────────────────────────────────────────────
@@ -74,7 +86,6 @@ const projectFixture = {
 
 vi.mock('../config', () => ({
   AUTO_REVIEW_ENABLED: false,
-  AUTO_REVIEW_CONCURRENCY: 1,
   ALLOWED_TOOLS: [],
   config: {
     claudePath: '/fake/claude',
@@ -91,6 +102,7 @@ vi.mock('../config', () => ({
     code_session_model: '',
     review_session_model: '',
     max_concurrent_code_sessions: 20,
+    auto_review_concurrency: 20,
   },
 }));
 
@@ -166,7 +178,7 @@ beforeEach(() => {
 // ── Test 1: insertSession called before CLI is spawned for review sessions ────
 
 describe('SessionManager.start() — review session FK safety', () => {
-  it('calls insertSession before spawning the CLI subprocess', () => {
+  it('calls insertSession before spawning the CLI subprocess', async () => {
     const callOrder: string[] = [];
 
     vi.mocked(queries.insertSession).mockImplementation(() => {
@@ -178,23 +190,28 @@ describe('SessionManager.start() — review session FK safety', () => {
     });
 
     const sm = new SessionManager();
-    sm.start('https://notion.so/task-abc', 'https://notion.so/ctx', {
+    await sm.start('https://notion.so/task-abc', 'https://notion.so/ctx', {
       sessionType: 'review',
       projectId: 'test-project',
       taskName: 'review task',
       sessionId: 'review-session-id-001',
     });
 
+    // insertSession is called synchronously within start() body, after exec awaits
     const insertIdx = callOrder.indexOf('insertSession');
-    const spawnIdx = callOrder.indexOf('spawn');
     expect(insertIdx).toBeGreaterThanOrEqual(0);
+
+    // spawn happens in launchSession() which is fire-and-forget; flush microtasks
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const spawnIdx = callOrder.indexOf('spawn');
     expect(spawnIdx).toBeGreaterThanOrEqual(0);
     expect(insertIdx).toBeLessThan(spawnIdx);
   });
 
-  it('calls insertSession with session_type=review', () => {
+  it('calls insertSession with session_type=review', async () => {
     const sm = new SessionManager();
-    sm.start('https://notion.so/task-abc', 'https://notion.so/ctx', {
+    await sm.start('https://notion.so/task-abc', 'https://notion.so/ctx', {
       sessionType: 'review',
       projectId: 'test-project',
       sessionId: 'review-session-id-002',
@@ -208,9 +225,9 @@ describe('SessionManager.start() — review session FK safety', () => {
     );
   });
 
-  it('returns the session id before any events flow', () => {
+  it('returns the session id', async () => {
     const sm = new SessionManager();
-    const sessionId = sm.start(
+    const sessionId = await sm.start(
       'https://notion.so/task-abc',
       'https://notion.so/ctx',
       {

@@ -32,8 +32,7 @@ vi.mock('../db/queries.js', () => ({
 
 vi.mock('../config.js', () => ({
   AUTO_REVIEW_ENABLED: true,
-  AUTO_REVIEW_CONCURRENCY: 1,
-  runtimeSettings: {},
+  runtimeSettings: { auto_review_concurrency: 20 },
   getProjectByGithubRepo: vi.fn().mockReturnValue(null),
   getProjectById: vi.fn(),
   getAllProjects: vi.fn(() => []),

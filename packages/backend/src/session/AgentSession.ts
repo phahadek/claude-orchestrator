@@ -1,11 +1,17 @@
 import { EventEmitter } from 'events';
+import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import { ALLOWED_TOOLS, runtimeSettings } from '../config';
+import {
+  ALLOWED_TOOLS,
+  GITHUB_REPO,
+  runtimeSettings,
+  getProjectById,
+} from '../config';
 import {
   upsertSessionEvent,
   updateSessionStatus,
-  markSessionDone,
+  markSessionIdle,
   getEventsBySession,
   insertPermissionDenial,
   upsertPullRequest,
@@ -17,7 +23,11 @@ import {
   getPRBySessionId,
   setHeadSha,
   setPauseReason,
+  setSessionPauseReason,
   insertPauseInterval,
+  getSessionTags,
+  setSessionTags,
+  resetTaskCrashCount,
 } from '../db/queries';
 import type { ServerMessage, PermissionDenial } from '../ws/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -29,9 +39,10 @@ import {
 } from '../github/PRBodyValidator';
 import { runFilePollutionCheck as filePollutionCheckFn } from './filePollutionCheck';
 import { checkCommitAttribution } from '../github/CommitAttributionWatcher';
-import { recordEvent } from '../audit/AuditLog';
+import { recordEvent, countPushFailureEvents } from '../audit/AuditLog';
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import type { ISessionManager } from './SessionAuditor';
+import { detectInFlightEscape } from './SessionAuditor';
 import type { ISessionRunner } from './SessionRunner';
 import { CliSessionRunner } from './CliSessionRunner';
 import { recoverSession } from './sessionRecovery';
@@ -40,8 +51,11 @@ import {
   SILENT_SKIP_TYPES,
   toEventType,
 } from './eventTypes';
+import { eventKind } from './eventKind';
+import { isContextOverflow } from './contextOverflow';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
+const PR_BODY_MARKER_REGEX = /<pr-body>([\s\S]*?)<\/pr-body>/;
 
 /**
  * Returns true if the tool call represents a git push operation.
@@ -125,6 +139,15 @@ export function parseNotionPageIdDashed(url: string): string {
 }
 
 /**
+ * Attempt to extract an existing PR number from a GitHub 422 "already exists" error
+ * body or message. Returns null when the number cannot be parsed.
+ */
+function extractPRNumberFromError(msg: string): number | null {
+  const m = msg.match(/pull\/(\d+)/i);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+/**
  * Merge assistant message content blocks so that text blocks emitted in earlier
  * streaming events are not lost when later streaming events contain only tool_use
  * blocks. The Claude CLI can stream multiple `assistant` events for the same message
@@ -181,13 +204,21 @@ export class AgentSession extends EventEmitter {
   private totalOutputTokens = 0;
   /** Count of compact_boundary events seen this session (in-memory, synced to SQLite). */
   private compactionCount = 0;
-  private static readonly CONTEXT_WINDOW_LIMIT = 200_000;
+  static contextWindowForModel(model: string | null): number {
+    return model?.includes('[1m]') ? 1_000_000 : 200_000;
+  }
   /** Model name extracted from the first assistant event (e.g. 'claude-sonnet-4-6'). */
   public model: string | null = null;
   /** Count of consecutive transient-error retries for this session instance. Resets on clean exit. */
   private retryCount = 0;
   /** Guard: fires at most once per session to avoid duplicate pause broadcasts. */
   private inSessionApiErrorFired = false;
+  /** Set when a context-overflow result event is detected; suppresses generic retry. */
+  private contextOverflowDetected = false;
+  /** Set by tryEscalateForOverflow() — target model for the escalated spawn. */
+  private _escalationModel: string | undefined = undefined;
+  /** Set by tryEscalateForOverflow() — disableAutoCompact override for the escalated spawn. */
+  private _escalationDisableAutoCompact: boolean | null = null;
   /** One-cycle injection skip lock set by PRFileReverter.
    *  Each entry is consumed (deleted) the first time injectContextFile checks it,
    *  blocking exactly one injection attempt per reverted file before resetting. */
@@ -196,6 +227,16 @@ export class AgentSession extends EventEmitter {
    *  Used as a loop guard: if the PR's HEAD equals this SHA, the check is skipped
    *  so we don't re-revert our own revert commit. */
   private lastFilePollutionRevertSha: string | null = null;
+  /** Tracks message IDs whose <pr-body> marker has already been processed (deduplicate streaming chunks). */
+  private readonly processedPRBodyMessageIds = new Set<string>();
+  /** tool_use_ids already warned for worktree escape (deduplicate across streaming chunks). */
+  private readonly warnedEscapeToolUseIds = new Set<string>();
+  /** In-flight promise from handlePRBodyMarker; awaited by handleCleanExit before markSessionIdle. */
+  private prBodyMarkerPromise: Promise<void> | null = null;
+  /** Continuation nudge to deliver via stdin on the first event of the escalated session. */
+  private _pendingEscalationNudge: string | null = null;
+  /** Text that triggered an overflow on this resume; re-delivered to the escalated session. */
+  private _pendingOverflowText: string | null = null;
 
   /** The underlying I/O adapter (CLI subprocess or Agent SDK). */
   private runner: ISessionRunner;
@@ -300,6 +341,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         ? runtimeSettings.review_session_model
         : runtimeSettings.code_session_model;
 
+    // Per-iteration overrides set by tryEscalateForOverflow() (T3b).
+    // Instance fields _escalationModel and _escalationDisableAutoCompact hold these
+    // so they're accessible from the helper without parameter threading.
+
     // Loop is exited by an explicit return on every terminal path: clean exit,
     // kill/spawn error, or non-transient failure. Only a transient API error
     // continues to the next iteration to retry with backoff.
@@ -323,10 +368,14 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         resumeIdForSpawn,
         {
           worktreePath: this.worktreePath,
-          model: modelSetting || undefined,
+          model: this._escalationModel ?? (modelSetting || undefined),
           allowedTools: [...ALLOWED_TOOLS, ...this.extraAllowedTools],
           systemPrompt: this.systemPromptContent,
           mcpConfigPath: this.mcpConfigPath,
+          disableAutoCompact:
+            this._escalationDisableAutoCompact !== null
+              ? this._escalationDisableAutoCompact
+              : !!runtimeSettings.large_task_model,
         },
         (event) => this.handleRawEvent(event),
       );
@@ -337,6 +386,34 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         this.isPausingForShutdown
       )
         return;
+
+      // Check overflow FIRST — clean exit must not bypass escalation.
+      if (await this.tryEscalateForOverflow()) {
+        resumeIdForSpawn = this.sessionId;
+        continue;
+      }
+
+      // Overflow detected but escalation not possible (no model or already on it)
+      // — error the session regardless of exit code.
+      if (this.contextOverflowDetected) {
+        if (!this.hasEnded) {
+          this.sessionManager?.markSessionErrored?.(
+            this.sessionId,
+            'error',
+            'context_overflow',
+          );
+          if (!this.hasEnded) {
+            updateSessionStatus(this.sessionId, 'error', Date.now());
+            this.broadcast({
+              type: 'session_ended',
+              sessionId: this.sessionId,
+              status: 'error',
+              ...(this.taskId && { taskId: this.taskId }),
+            });
+          }
+        }
+        return;
+      }
 
       if (exitCode === 0) {
         this.retryCount = 0;
@@ -408,7 +485,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     const events = getEventsBySession(this.sessionId);
     if (events.length === 0) return false;
     const lastEvent = events[events.length - 1];
-    if (lastEvent.event_type !== 'error') return false;
+    if (eventKind(lastEvent) !== 'error') return false;
     const payload = lastEvent.payload.toLowerCase();
     return (
       payload.includes('api_error') || payload.includes('overloaded_error')
@@ -457,6 +534,13 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
    * This is called for each event by both CliSessionRunner and ApiSessionRunner.
    */
   private handleRawEvent(event: Record<string, unknown>): void {
+    // Deliver escalation nudge on the first event from the restarted session
+    if (this._pendingEscalationNudge !== null) {
+      const nudge = this._pendingEscalationNudge;
+      this._pendingEscalationNudge = null;
+      this.runner.sendMessage(nudge);
+    }
+
     const rawType = (event.type as string) ?? 'unknown';
 
     // Debug logging
@@ -545,6 +629,33 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               typeof block.id === 'string'
             ) {
               this.pendingPushFileToolUseIds.add(block.id);
+            }
+
+            // In-flight worktree-escape detection: warn and continue.
+            if (this.worktreePath && typeof block.name === 'string') {
+              const toolUseId =
+                typeof block.id === 'string' ? block.id : undefined;
+              const alreadyWarned =
+                toolUseId != null && this.warnedEscapeToolUseIds.has(toolUseId);
+              if (!alreadyWarned) {
+                const input = (block.input ?? {}) as Record<string, unknown>;
+                const escape = detectInFlightEscape(
+                  block.name,
+                  input,
+                  this.worktreePath,
+                );
+                if (escape) {
+                  if (toolUseId != null)
+                    this.warnedEscapeToolUseIds.add(toolUseId);
+                  sessionLog(
+                    this.sessionId,
+                    `worktree_escape detected in-flight: ${escape.tool} → ${escape.path}`,
+                  );
+                  this.sendMessage(
+                    `⚠️ Worktree escape detected: \`${escape.tool}\` is writing to \`${escape.path}\` which is outside your assigned worktree (\`${this.worktreePath}\`). Please only write files inside the worktree.`,
+                  );
+                }
+              }
             }
           }
         }
@@ -645,6 +756,23 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           denials,
         });
       }
+
+      // Detect context overflow before the session exits (or mid-session).
+      if (!this.contextOverflowDetected && isContextOverflow(event)) {
+        this.contextOverflowDetected = true;
+        sessionLog(this.sessionId, 'context overflow detected');
+        this.broadcast({
+          type: 'context_overflow_detected',
+          sessionId: this.sessionId,
+        });
+        // The 'prompt is too long' variant (is_error=true) causes the CLI to emit
+        // the error result then hang waiting for more stdin input.  Close stdin now
+        // so the subprocess exits and runner.run() returns, allowing the escalation
+        // path to fire.
+        if (event.is_error === true) {
+          this.runner.endSession();
+        }
+      }
     }
 
     // Persist event to SQLite then broadcast
@@ -681,6 +809,22 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           ...event,
           message: { ...msg, content: mergedContent },
         });
+
+        // Detect <pr-body>…</pr-body> marker emitted by the session.
+        // Guard by message ID so streaming chunks don't trigger multiple times.
+        if (!this.processedPRBodyMessageIds.has(messageId)) {
+          const accumulatedText = mergedContent
+            .filter((b) => b.type === 'text' && typeof b.text === 'string')
+            .map((b) => b.text as string)
+            .join('');
+          const markerMatch = accumulatedText.match(PR_BODY_MARKER_REGEX);
+          if (markerMatch) {
+            this.processedPRBodyMessageIds.add(messageId);
+            this.prBodyMarkerPromise = this.handlePRBodyMarker(
+              markerMatch[1].trim(),
+            );
+          }
+        }
       }
     }
 
@@ -728,7 +872,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             totalOutputTokens: this.totalOutputTokens,
             contextOccupancyTokens: occupancy,
             contextOccupancyFraction:
-              occupancy / AgentSession.CONTEXT_WINDOW_LIMIT,
+              occupancy / AgentSession.contextWindowForModel(this.model),
           });
         }
       }
@@ -769,7 +913,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     this.broadcast({
       type: 'session_event',
       sessionId: this.sessionId,
-      eventType: eventType as 'text' | 'tool_use' | 'tool_result' | 'system',
+      eventType: eventKind({ event_type: eventType, payload }),
       content: payload,
       ...(messageId != null && { messageId }),
     });
@@ -840,6 +984,373 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
   }
 
   /**
+   * Handle a <pr-body>…</pr-body> marker emitted by the session.
+   * Validates the body, then either creates a new PR or updates an existing one.
+   * Invalid body → re-prompts the session over stdin; no PR opened.
+   */
+  private async handlePRBodyMarker(body: string): Promise<void> {
+    if (!this.githubClient) {
+      sessionLog(
+        this.sessionId,
+        '<pr-body> marker found but githubClient not configured — skipping',
+      );
+      return;
+    }
+
+    // Validate before creating — invalid body re-prompts; no PR opened.
+    const validation = validatePRBody(body);
+    if (!validation.valid) {
+      sessionLog(
+        this.sessionId,
+        `PR creation failed: validation — missing required sections: ${validation.missingSections.join(', ')}`,
+      );
+      const missing = validation.missingSections
+        .map((s) => `\`${s}\``)
+        .join(', ');
+      this.sendMessage(
+        `The PR body is missing required sections: ${missing}.\n\n` +
+          `Please fix the body and re-emit it inside a <pr-body>…</pr-body> marker ` +
+          `in your next message. All four sections must be present: ` +
+          `\`## Summary\`, task-source section, \`## Automated Tests\`, \`## Files Changed\`.`,
+      );
+      return;
+    }
+
+    // Check for an existing PR for this session (idempotent update path).
+    const existingPR = getPRBySessionId(this.sessionId);
+    if (existingPR) {
+      sessionLog(
+        this.sessionId,
+        `<pr-body> marker — updating body of existing PR #${existingPR.pr_number}`,
+      );
+      try {
+        await this.githubClient.updatePR(
+          existingPR.repo,
+          existingPR.pr_number,
+          {
+            body,
+          },
+        );
+        recordEvent({
+          event_type: 'pr_body_updated_via_marker',
+          actor_type: 'ai',
+          actor_id: this.sessionId,
+          project_id: this.projectId || null,
+          task_id: this.taskId || null,
+          payload: { pr_number: existingPR.pr_number, repo: existingPR.repo },
+        });
+      } catch (e) {
+        console.warn(
+          `[AgentSession] updatePR #${existingPR.pr_number} failed: ${(e as Error).message}`,
+        );
+      }
+      return;
+    }
+
+    // No existing PR — create one.
+    sessionLog(this.sessionId, '<pr-body> marker — creating PR via REST');
+
+    let baseBranch = 'dev';
+    try {
+      baseBranch = getProjectById(this.projectId)?.baseBranch ?? 'dev';
+    } catch {
+      // project lookup failed — keep 'dev' default
+    }
+
+    let branch: string;
+    let repo: string;
+    try {
+      branch = execSync('git branch --show-current', {
+        cwd: this.worktreePath,
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      }).trim();
+
+      const remoteUrl = execSync('git remote get-url origin', {
+        cwd: this.worktreePath,
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      }).trim();
+      const repoMatch = remoteUrl.match(
+        /github\.com[:/]([^/]+\/[^.]+?)(?:\.git)?$/,
+      );
+      repo = repoMatch ? repoMatch[1] : GITHUB_REPO;
+    } catch (e) {
+      sessionLog(
+        this.sessionId,
+        `PR creation failed: could not read git info — ${(e as Error).message}`,
+      );
+      return;
+    }
+
+    if (!branch) {
+      sessionLog(
+        this.sessionId,
+        `PR creation failed: detached HEAD — no current branch. Run git checkout -b feature/<task-name> first.`,
+      );
+      recordEvent({
+        event_type: 'pr_creation_failed',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: this.projectId || null,
+        task_id: this.taskId || null,
+        payload: {
+          stage: 'branch',
+          error: 'detached HEAD — no current branch',
+        },
+      });
+      this.sendMessage(
+        `The worktree is in detached HEAD state — there is no current branch, so I cannot open a PR.\n\n` +
+          `Please run \`git checkout -b feature/<task-name>\` to create a branch, then re-emit the ` +
+          `\`<pr-body>\` marker so I can push and open the PR.`,
+      );
+      return;
+    }
+
+    // Push the branch to origin so GitHub can find it when createPR is called.
+    // Re-pushing an already-current branch is a harmless fast-forward no-op.
+    try {
+      execSync(`git push -u origin ${branch}`, {
+        cwd: this.worktreePath,
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      });
+    } catch (e) {
+      const msg = (e as Error).message;
+      sessionLog(
+        this.sessionId,
+        `PR creation failed: git push of branch "${branch}" to origin rejected — ${msg.slice(0, 200)}`,
+      );
+      console.error(
+        `[AgentSession] git push for <pr-body> marker failed: ${msg}`,
+      );
+      recordEvent({
+        event_type: 'pr_creation_failed',
+        actor_type: 'system',
+        actor_id: this.sessionId,
+        project_id: this.projectId || null,
+        task_id: this.taskId || null,
+        payload: { stage: 'push', error: msg },
+      });
+      // Bounded retry: derive count from persisted events so it survives re-prompts.
+      // The event recorded above is already included, so priorCount >= 1 here.
+      const priorCount = countPushFailureEvents(this.sessionId);
+      const PUSH_RETRY_LIMIT = 2;
+      if (priorCount <= PUSH_RETRY_LIMIT) {
+        this.sendMessage(
+          `I couldn't push your branch \`${branch}\` to origin (${msg}). ` +
+            `Please run \`git push -u origin ${branch}\` yourself, then re-emit the ` +
+            `\`<pr-body>\` marker so I can open the PR.`,
+        );
+      } else {
+        setSessionPauseReason(this.sessionId, 'pr_creation_failed');
+      }
+      return;
+    }
+
+    const taskName = branch.replace(/^feature\//, '');
+    const title = `feat: ${taskName}`;
+
+    await this.createPRWithRetry(
+      repo,
+      { title, body, head: branch, base: baseBranch },
+      branch,
+    );
+  }
+
+  private async createPRWithRetry(
+    repo: string,
+    params: { title: string; body: string; head: string; base: string },
+    branch: string,
+  ): Promise<void> {
+    const MAX_ATTEMPTS = 3;
+    const BACKOFF_MS = [2000, 4000, 8000];
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      try {
+        const created = await this.githubClient!.createPR(repo, {
+          ...params,
+          draft: true,
+        });
+
+        const prShape: GitHubPRShape = {
+          number: created.number,
+          html_url: created.html_url,
+          title: created.title,
+          body: created.body,
+          head: { ref: created.head.ref, sha: created.head.sha },
+          base: { ref: created.base.ref },
+          state: created.state,
+          created_at: created.created_at,
+          updated_at: created.updated_at,
+          draft: created.draft,
+        };
+
+        await this.handlePRDetected(created.html_url, prShape);
+        sessionLog(
+          this.sessionId,
+          `PR creation succeeded: PR #${created.number} at ${created.html_url}`,
+        );
+        return;
+      } catch (e) {
+        const msg = (e as Error).message;
+
+        // 422 "A pull request already exists" → divert to update path.
+        if (/422/.test(msg) && /pull request already exists/i.test(msg)) {
+          const existingPR = getPRBySessionId(this.sessionId);
+          const parsedNum = extractPRNumberFromError(msg);
+          const existingNum = existingPR?.pr_number ?? parsedNum;
+          sessionLog(
+            this.sessionId,
+            `PR creation failed: duplicate PR on branch "${branch}" (existing PR #${existingNum ?? '?'}). ` +
+              `If the existing PR is stale, the operator must close it before this session can create a new one.`,
+          );
+          if (existingPR) {
+            try {
+              await this.githubClient!.updatePR(
+                existingPR.repo,
+                existingPR.pr_number,
+                {
+                  body: params.body,
+                },
+              );
+            } catch (ue) {
+              console.warn(
+                `[AgentSession] updatePR fallback #${existingPR.pr_number} failed: ${(ue as Error).message}`,
+              );
+            }
+          }
+          return;
+        }
+
+        // 422 "head branch not found" → divert to push-failure path.
+        if (/422/.test(msg) && /head.*not found|head branch/i.test(msg)) {
+          sessionLog(
+            this.sessionId,
+            `PR creation failed: branch "${branch}" not found on origin — GitHub rejected the head ref. Did the prior push step succeed?`,
+          );
+          console.error(
+            `[AgentSession] createPR 422 head-not-found — diverting to push-failure path: ${msg}`,
+          );
+          recordEvent({
+            event_type: 'pr_creation_failed',
+            actor_type: 'system',
+            actor_id: this.sessionId,
+            project_id: this.projectId || null,
+            task_id: this.taskId || null,
+            payload: { stage: 'push', error: msg },
+          });
+          const priorCount = countPushFailureEvents(this.sessionId);
+          const PUSH_RETRY_LIMIT = 2;
+          if (priorCount <= PUSH_RETRY_LIMIT) {
+            this.sendMessage(
+              `I couldn't push your branch \`${branch}\` to origin (${msg}). ` +
+                `Please run \`git push -u origin ${branch}\` yourself, then re-emit the ` +
+                `\`<pr-body>\` marker so I can open the PR.`,
+            );
+          } else {
+            setSessionPauseReason(this.sessionId, 'pr_creation_failed');
+          }
+          return;
+        }
+
+        // Any other 422 is a terminal client error — don't retry.
+        if (/422/.test(msg)) {
+          sessionLog(
+            this.sessionId,
+            `PR creation failed: GitHub 422 client error — ${msg.slice(0, 300)}`,
+          );
+          console.error(`[AgentSession] createPR terminal 422: ${msg}`);
+          recordEvent({
+            event_type: 'pr_creation_failed',
+            actor_type: 'system',
+            actor_id: this.sessionId,
+            project_id: this.projectId || null,
+            task_id: this.taskId || null,
+            payload: { stage: 'create', error: msg },
+          });
+          setSessionPauseReason(this.sessionId, 'pr_creation_failed');
+          return;
+        }
+
+        // 404 — branch or repo not found on GitHub.
+        if (/\b404\b/.test(msg)) {
+          sessionLog(
+            this.sessionId,
+            `PR creation failed: branch "${branch}" not found on origin (GitHub 404). Did the prior push step succeed?`,
+          );
+          console.error(`[AgentSession] createPR 404 not-found: ${msg}`);
+          recordEvent({
+            event_type: 'pr_creation_failed',
+            actor_type: 'system',
+            actor_id: this.sessionId,
+            project_id: this.projectId || null,
+            task_id: this.taskId || null,
+            payload: { stage: 'create', error: msg },
+          });
+          setSessionPauseReason(this.sessionId, 'pr_creation_failed');
+          return;
+        }
+
+        // 401/403 auth errors — terminal, never retry.
+        if (/\b40[13]\b/.test(msg)) {
+          sessionLog(
+            this.sessionId,
+            `PR creation failed: GitHub auth/permission denied (${msg.slice(0, 200)}). Check GITHUB_TOKEN scope.`,
+          );
+          console.error(`[AgentSession] createPR auth error: ${msg}`);
+          recordEvent({
+            event_type: 'pr_creation_failed',
+            actor_type: 'system',
+            actor_id: this.sessionId,
+            project_id: this.projectId || null,
+            task_id: this.taskId || null,
+            payload: { stage: 'create', error: msg },
+          });
+          setSessionPauseReason(this.sessionId, 'pr_creation_failed');
+          return;
+        }
+
+        // Transient error (5xx / network / timeout / fetch) — retry with backoff.
+        const isTransient =
+          /5\d\d/.test(msg) ||
+          /ECONNRESET|ETIMEDOUT|ENOTFOUND|network|socket|timeout|fetch failed/i.test(
+            msg,
+          );
+
+        if (!isTransient || attempt === MAX_ATTEMPTS - 1) {
+          sessionLog(
+            this.sessionId,
+            `PR creation failed with unexpected error: ${msg.slice(0, 300)}`,
+          );
+          console.error(
+            `[AgentSession] createPR via <pr-body> marker failed (attempt ${attempt + 1}/${MAX_ATTEMPTS}): ${msg}`,
+          );
+          recordEvent({
+            event_type: 'pr_creation_failed',
+            actor_type: 'system',
+            actor_id: this.sessionId,
+            project_id: this.projectId || null,
+            task_id: this.taskId || null,
+            payload: { stage: 'create', error: msg },
+          });
+          setSessionPauseReason(this.sessionId, 'pr_creation_failed');
+          return;
+        }
+
+        sessionLog(
+          this.sessionId,
+          `PR creation failed: GitHub server error (transient, attempt ${attempt + 1}/${MAX_ATTEMPTS}). Retrying in ${BACKOFF_MS[attempt]}ms.`,
+        );
+        console.warn(
+          `[AgentSession] createPR transient error (attempt ${attempt + 1}/${MAX_ATTEMPTS}), retrying in ${BACKOFF_MS[attempt]}ms: ${msg}`,
+        );
+        await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt]));
+      }
+    }
+  }
+
+  /**
    * Core PR detection: upsert the pull_requests row, broadcast pr_created,
    * and emit the pr_opened event. Shared by MCP and Bash detection paths.
    */
@@ -859,12 +1370,15 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     this.prUrl = prUrl;
     this.prDetectedLive = true;
 
+    if (this.taskId) resetTaskCrashCount(this.taskId);
+
+    let upsertSucceeded = true;
     if (this.sessionType === 'standard') {
       this.taskBackend()
         .attachPR(this.taskId, prUrl)
         .catch((e) => console.error(`[AgentSession] attachPR failed: ${e}`));
 
-      upsertPullRequest({
+      const upsertResult = upsertPullRequest({
         pr_number: prNumber,
         pr_url: prUrl,
         task_id: this.taskId,
@@ -883,57 +1397,112 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         synced_at: now,
         node_id: null,
         head_sha: prShape.head?.sha ?? null,
+        conflict_nudge_sha: null,
       });
+      if (upsertResult === null) {
+        // Repo not configured — no PR row written. Skip pr_created broadcast
+        // and pr_opened emit so StuckSessionMonitor sees no PR row and routes
+        // correctly (idle, not done) when the subprocess is still alive.
+        console.warn(
+          `[AgentSession] handlePRDetected: upsertPullRequest rejected for repo "${repo}" — skipping pr_created broadcast`,
+        );
+        upsertSucceeded = false;
+      }
 
-      // If head_sha was missing from the tool response, fetch it from GitHub
-      // so shouldAutoReview() can compare SHAs on the first re-review attempt.
-      if (!prShape.head?.sha && this.githubClient) {
+      // If head_sha or body was missing from the tool response (live-detection path
+      // where gh pr create does not include body in its stream output), fetch the
+      // full PR from GitHub for accurate head_sha backfill and/or body validation.
+      const needsHeadSha = !prShape.head?.sha;
+      const needsBodyValidation = !prShape.body;
+      if ((needsHeadSha || needsBodyValidation) && this.githubClient) {
         const ghClient = this.githubClient;
         void (async () => {
           try {
             const freshPR = await ghClient.fetchPR(repo, prNumber);
-            if (freshPR.headSha) {
+            if (needsHeadSha && freshPR.headSha) {
               setHeadSha(prNumber, repo, freshPR.headSha);
+            }
+            if (needsBodyValidation) {
+              const bodyValidation = validatePRBody(freshPR.body);
+              if (!bodyValidation.valid) {
+                const isCorporate = runtimeSettings.corporate_mode_enabled;
+                recordEvent({
+                  event_type: isCorporate
+                    ? 'pr_body_invalid'
+                    : 'pr_body_invalid_warning',
+                  actor_type: 'ai',
+                  actor_id: this.sessionId,
+                  project_id: this.projectId || null,
+                  task_id: this.taskId || null,
+                  payload: {
+                    pr_number: prNumber,
+                    repo,
+                    missing_sections: bodyValidation.missingSections,
+                  },
+                });
+                if (isCorporate) {
+                  setPauseReason(prNumber, repo, 'pr_body_invalid');
+                  const comment = buildValidationComment(
+                    bodyValidation.missingSections,
+                  );
+                  void ghClient
+                    .createIssueComment(repo, prNumber, comment)
+                    .catch((e) =>
+                      console.warn(
+                        `[AgentSession] createIssueComment failed: ${e}`,
+                      ),
+                    );
+                }
+              }
             }
           } catch (e) {
             console.warn(
-              `[AgentSession] handlePRDetected: failed to fetch head_sha for PR #${prNumber}:`,
+              `[AgentSession] handlePRDetected: failed to fetch PR #${prNumber}:`,
               e,
             );
+            if (needsBodyValidation) {
+              console.warn(
+                `[AgentSession] handlePRDetected: skipping PR body validation for PR #${prNumber} — GitHub fetch failed (fail-open)`,
+              );
+            }
           }
         })();
       }
 
-      // Validate PR body against required template.
-      const bodyValidation = validatePRBody(prShape.body);
-      if (!bodyValidation.valid) {
-        const isCorporate = runtimeSettings.corporate_mode_enabled;
-        recordEvent({
-          event_type: isCorporate
-            ? 'pr_body_invalid'
-            : 'pr_body_invalid_warning',
-          actor_type: 'ai',
-          actor_id: this.sessionId,
-          project_id: this.projectId || null,
-          task_id: this.taskId || null,
-          payload: {
-            pr_number: prNumber,
-            repo,
-            missing_sections: bodyValidation.missingSections,
-          },
-        });
-        if (isCorporate) {
-          setPauseReason(prNumber, repo, 'pr_body_invalid');
-          if (this.githubClient) {
-            const ghClient = this.githubClient;
-            const comment = buildValidationComment(
-              bodyValidation.missingSections,
-            );
-            void ghClient
-              .createIssueComment(repo, prNumber, comment)
-              .catch((e) =>
-                console.warn(`[AgentSession] createIssueComment failed: ${e}`),
+      // Validate PR body against required template (marker path: body present at detection time).
+      if (prShape.body) {
+        const bodyValidation = validatePRBody(prShape.body);
+        if (!bodyValidation.valid) {
+          const isCorporate = runtimeSettings.corporate_mode_enabled;
+          recordEvent({
+            event_type: isCorporate
+              ? 'pr_body_invalid'
+              : 'pr_body_invalid_warning',
+            actor_type: 'ai',
+            actor_id: this.sessionId,
+            project_id: this.projectId || null,
+            task_id: this.taskId || null,
+            payload: {
+              pr_number: prNumber,
+              repo,
+              missing_sections: bodyValidation.missingSections,
+            },
+          });
+          if (isCorporate) {
+            setPauseReason(prNumber, repo, 'pr_body_invalid');
+            if (this.githubClient) {
+              const ghClient = this.githubClient;
+              const comment = buildValidationComment(
+                bodyValidation.missingSections,
               );
+              void ghClient
+                .createIssueComment(repo, prNumber, comment)
+                .catch((e) =>
+                  console.warn(
+                    `[AgentSession] createIssueComment failed: ${e}`,
+                  ),
+                );
+            }
           }
         }
       }
@@ -967,12 +1536,17 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       }
     }
 
+    if (!upsertSucceeded) return;
+
     this.broadcast({
       type: 'pr_created',
       sessionId: this.sessionId,
       prUrl,
       ...(this.taskId && { taskId: this.taskId }),
     });
+    console.log(
+      `[AgentSession] emitting pr_opened for PR #${prNumber} (${repo}) session=${this.sessionId}`,
+    );
     this.emit('pr_opened', {
       prNumber,
       repo,
@@ -997,6 +1571,70 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
    * with prNumber and repo included.
    */
   private async handlePushDetected(): Promise<void> {
+    // Auto-push any local commits ahead of origin before signalling.
+    if (this.worktreePath) {
+      try {
+        const branch = execSync('git rev-parse --abbrev-ref HEAD', {
+          cwd: this.worktreePath,
+        })
+          .toString()
+          .trim();
+        const localHead = execSync('git rev-parse HEAD', {
+          cwd: this.worktreePath,
+        })
+          .toString()
+          .trim();
+        const remoteHead =
+          execSync(`git ls-remote origin ${branch}`, { cwd: this.worktreePath })
+            .toString()
+            .split(/\s+/)[0]
+            ?.trim() || '';
+
+        if (localHead && localHead !== remoteHead) {
+          const aheadBehind = execSync(
+            `git rev-list --left-right --count origin/${branch}...HEAD`,
+            { cwd: this.worktreePath },
+          )
+            .toString()
+            .trim();
+          const [behind, ahead] = aheadBehind.split(/\s+/).map(Number);
+          if (ahead > 0 && behind === 0) {
+            sessionLog(
+              this.sessionId,
+              `auto-pushing ${ahead} local commit(s) on ${branch} (origin was at ${remoteHead.slice(0, 7)}, local at ${localHead.slice(0, 7)})`,
+            );
+            execSync(`git push origin ${branch}`, { cwd: this.worktreePath });
+            this.broadcast({
+              type: 'session_auto_pushed',
+              sessionId: this.sessionId,
+              branch,
+              commits: ahead,
+            });
+          } else if (behind > 0) {
+            sessionLog(
+              this.sessionId,
+              `auto-push skipped: branch ${branch} has diverged (ahead=${ahead}, behind=${behind}) — manual reconciliation needed`,
+            );
+            const pr = getPRBySessionId(this.sessionId);
+            if (pr) {
+              setPauseReason(pr.pr_number, pr.repo, 'diverged_branch');
+            }
+            this.broadcast({
+              type: 'session_auto_pushed',
+              sessionId: this.sessionId,
+              branch,
+              commits: 0,
+            });
+          }
+        }
+      } catch (err) {
+        sessionLog(
+          this.sessionId,
+          `auto-push check failed (non-fatal): ${(err as Error).message}`,
+        );
+      }
+    }
+
     this.emit('push_detected', { sessionId: this.sessionId });
     const pr = getPRBySessionId(this.sessionId);
     if (pr) {
@@ -1062,6 +1700,72 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     }
   }
 
+  /**
+   * Register the feedback text that is being delivered via sendOrResume.
+   * If the session overflows and escalates, this text is re-delivered to the
+   * escalated session so it is never lost.
+   */
+  setPendingOverflowText(text: string): void {
+    this._pendingOverflowText = text;
+  }
+
+  /**
+   * If a context overflow was detected this run, attempt to escalate to the large model.
+   * Returns true (caller should `continue` the run loop) when escalation is initiated.
+   * Returns false when no overflow was detected OR when overflow was detected but escalation
+   * is not possible (no large_task_model configured, or already on the large model).
+   * In the false+overflow case, `this.contextOverflowDetected` remains true so the caller
+   * can error the session regardless of exit code.
+   */
+  private async tryEscalateForOverflow(): Promise<boolean> {
+    if (!this.contextOverflowDetected) return false;
+    const largeModel = runtimeSettings.large_task_model;
+    if (!largeModel || this.model === largeModel) {
+      sessionLog(
+        this.sessionId,
+        largeModel
+          ? `context overflow — already on large model ${largeModel}, no re-escalation`
+          : 'context overflow — large_task_model not configured, exiting without retry',
+      );
+      return false;
+    }
+    sessionLog(
+      this.sessionId,
+      `context overflow — escalating to large model ${largeModel} (was: ${this.model ?? 'unknown'})`,
+    );
+    const currentTags = getSessionTags(this.sessionId);
+    const updatedTags = currentTags.includes('large-model')
+      ? currentTags
+      : [...currentTags, 'large-model'];
+    setSessionTags(this.sessionId, updatedTags);
+    this.broadcast({
+      type: 'session_updated',
+      sessionId: this.sessionId,
+      tags: updatedTags,
+    });
+    // Signal escalation so listeners (e.g. PRMergeWatcher) can reset timeouts.
+    this.broadcast({
+      type: 'large_model_escalation_started',
+      sessionId: this.sessionId,
+    });
+    // Reset overflow flag and model; set escalation overrides for the next spawn.
+    this.contextOverflowDetected = false;
+    this.model = null;
+    this._escalationModel = largeModel;
+    this._escalationDisableAutoCompact = false;
+    const pendingText = this._pendingOverflowText;
+    this._pendingOverflowText = null; // consume — prevent double-delivery on re-escalation
+    this._pendingEscalationNudge = pendingText
+      ? `You exceeded the previous model's context window and have been resumed on a 1M-context model. The following message was pending delivery when the overflow occurred — please process it now:\n\n${pendingText}`
+      : "You exceeded the previous model's context window and have been resumed on a 1M-context model. Continue the task from where you left off.";
+    this.broadcast({
+      type: 'session_status',
+      sessionId: this.sessionId,
+      status: 'running',
+    });
+    return true;
+  }
+
   private async handleCleanExit(): Promise<void> {
     recordEvent({
       event_type: 'handle_clean_exit_entered',
@@ -1074,13 +1778,29 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     const endedAt = Date.now();
     let prUrl: string | undefined;
 
+    // Await any in-flight PR creation from the <pr-body> marker so that the PR
+    // is registered before we scan for the URL and call markSessionIdle.
+    if (this.prBodyMarkerPromise) {
+      const MARKER_PR_TIMEOUT_MS = 30_000;
+      await Promise.race([
+        this.prBodyMarkerPromise,
+        new Promise<void>((resolve) =>
+          setTimeout(resolve, MARKER_PR_TIMEOUT_MS),
+        ),
+      ]);
+    }
+
     try {
       const events = getEventsBySession(this.sessionId);
-      // Only scan text and system events — tool_use events carry tool-call
-      // inputs (Write, Edit, etc.) which may contain placeholder URLs in test
-      // fixtures or code comments, producing phantom pull_requests rows.
+      // Exclude tool-call and user-message events — tool_use inputs (Write, Edit,
+      // etc.) may contain placeholder URLs producing phantom pull_requests rows.
       const last20 = events
-        .filter((ev) => ev.event_type === 'text' || ev.event_type === 'system')
+        .filter((ev) => {
+          const k = eventKind(ev);
+          return (
+            k !== 'tool_use' && k !== 'tool_result' && k !== 'user_message'
+          );
+        })
         .slice(-20);
 
       for (const ev of last20) {
@@ -1098,14 +1818,19 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       // Fall through with prUrl=undefined — periodic recovery will retry PR extraction.
     }
 
+    // Preserve URL detected live (e.g. via marker flow where the URL is never
+    // emitted into session events — handlePRDetected sets this.prUrl directly).
+    if (!prUrl) prUrl = this.prUrl;
     this.prUrl = prUrl;
 
-    // Atomically persist done + pr_url before any network or review-pipeline
-    // calls. This ensures the session is terminal in the DB even if the
-    // downstream review pipeline throws or the process dies mid-handleCleanExit.
-    markSessionDone(this.sessionId, endedAt, prUrl ?? null);
+    // Atomically persist idle + pr_url before any network or review-pipeline
+    // calls. Session becomes done only when the PR merges (PRMergeWatcher).
+    // Using idle (not done) prevents the post-hoc auditor from triggering review
+    // on a stale SHA before the PR has been properly reviewed/merged.
+    markSessionIdle(this.sessionId, endedAt, prUrl ?? null);
+    if (this.taskId) resetTaskCrashCount(this.taskId);
     recordEvent({
-      event_type: 'handle_clean_exit_session_marked_done',
+      event_type: 'handle_clean_exit_session_marked_idle',
       actor_type: 'system',
       actor_id: this.sessionId,
       project_id: this.projectId ?? null,

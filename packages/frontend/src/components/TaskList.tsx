@@ -23,6 +23,8 @@ interface Props {
   onForceRefetch?: () => Promise<void>;
   /** Incremented when tasks_ready / pr_review_complete arrive — used to clear syncing indicator. */
   reviewRefreshTrigger?: number;
+  /** refreshedAt timestamp from the latest task_cache_updated event for this board — clears the Sync spinner. */
+  cacheUpdatedAt?: number;
   send: (msg: ClientMessage) => boolean;
   project: ProjectConfig | null;
 }
@@ -279,6 +281,7 @@ export function TaskList({
   onOptimisticDispatch,
   onForceRefetch,
   reviewRefreshTrigger,
+  cacheUpdatedAt,
   send,
   project,
 }: Props) {
@@ -313,6 +316,19 @@ export function TaskList({
     }
     setSyncing(false);
   }, [reviewRefreshTrigger]);
+
+  // Clear syncing when task_cache_updated fires for this board (Sync button flow).
+  useEffect(() => {
+    if (!cacheUpdatedAt) return;
+    if (!syncPendingRef.current) return;
+    syncPendingRef.current = false;
+    if (syncTimeoutRef.current) {
+      clearTimeout(syncTimeoutRef.current);
+      // eslint-disable-next-line react-hooks/immutability
+      syncTimeoutRef.current = null;
+    }
+    setSyncing(false);
+  }, [cacheUpdatedAt]);
 
   const handleOptimisticDispatch = useCallback(
     (taskIds: string[]) => {

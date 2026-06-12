@@ -317,7 +317,10 @@ export function summarizeEvent(
       return truncateStr(result, maxLen);
     }
 
-    case 'system': {
+    case 'result':
+      return '';
+
+    case 'other': {
       if (isHiddenSystemEvent(payload)) return '';
       const { display } = extractSystem(payload, event.content);
       return display;

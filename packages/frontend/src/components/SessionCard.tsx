@@ -43,7 +43,7 @@ export function SessionCard({
     .filter(
       (e) =>
         !(
-          e.eventType === 'system' &&
+          e.eventType === 'other' &&
           isHiddenSystemEvent(tryParseJson(e.content))
         ),
     )

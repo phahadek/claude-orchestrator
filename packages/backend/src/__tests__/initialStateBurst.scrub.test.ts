@@ -3,6 +3,7 @@
  * payloads before sending them to a newly connected WebSocket client.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { makeEventRow } from '../../test/helpers/eventFixtures';
 import type { Session } from '../db/types';
 import type { ServerMessage } from '../ws/types';
 
@@ -55,7 +56,7 @@ describe('sendInitialStateBurst — secret scrubbing', () => {
       {
         id: 1,
         session_id: 's1',
-        event_type: 'tool_use',
+        ...makeEventRow('tool_use').live,
         payload: JSON.stringify({
           name: 'Bash',
           input: { command: 'echo sk-ant-api03-supersecret12345' },
@@ -81,7 +82,7 @@ describe('sendInitialStateBurst — secret scrubbing', () => {
       {
         id: 2,
         session_id: 's2',
-        event_type: 'text',
+        ...makeEventRow('text').live,
         payload: 'hello world',
         timestamp: 1_000_000,
         message_id: null,

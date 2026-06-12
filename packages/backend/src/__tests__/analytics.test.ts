@@ -4,31 +4,8 @@ import supertest from 'supertest';
 
 // ── mock the db module with an in-memory SQLite instance ────────────────────
 vi.mock('../db/db.js', async () => {
-  const { default: Database } = await import('better-sqlite3');
-  const db = new Database(':memory:');
-  db.exec(`
-    CREATE TABLE sessions (
-      session_id          TEXT    PRIMARY KEY,
-      task_id             TEXT,
-      task_url            TEXT,
-      project_context_url TEXT,
-      project_id          TEXT,
-      status              TEXT    NOT NULL,
-      started_at          INTEGER NOT NULL,
-      ended_at            INTEGER,
-      pr_url              TEXT,
-      worktree_path       TEXT,
-      archived            INTEGER NOT NULL DEFAULT 0,
-      favorited           INTEGER NOT NULL DEFAULT 0,
-      session_type        TEXT    NOT NULL DEFAULT 'standard',
-      note                TEXT,
-      tags                TEXT,
-      total_input_tokens  INTEGER NOT NULL DEFAULT 0,
-      total_output_tokens INTEGER NOT NULL DEFAULT 0,
-      model               TEXT,
-      task_name           TEXT
-    );
-  `);
+  const { setupTestDb } = await import('../../test/helpers/setupTestDb.js');
+  const db = setupTestDb();
 
   // Fixture data
   db.prepare(

@@ -7,7 +7,7 @@ import os from 'os';
 import { runMigrations } from './db/schema';
 import { db } from './db/db';
 import { SessionManager } from './session/SessionManager';
-import { handleMessage } from './ws/router';
+import { handleMessage, setWsRouterRefreshFn } from './ws/router';
 import { sendInitialStateBurst } from './ws/initialStateBurst';
 import { JsonlReader, DEFAULT_SESSIONS_DIR } from './session/JsonlReader';
 import type { ServerMessage } from './ws/types';
@@ -16,10 +16,22 @@ import {
   permissionDenialsRouter,
 } from './routes/rules';
 import configRouter from './routes/config';
-import settingsRouter, { loadRuntimeSettingsFromDb } from './routes/settings';
-import { sessionsRouter, setBroadcast } from './routes/sessions';
+import settingsRouter, {
+  loadRuntimeSettingsFromDb,
+  setReviewOrchestrator as setSettingsReviewOrchestrator,
+} from './routes/settings';
+import {
+  sessionsRouter,
+  setBroadcast,
+  setSessionManager,
+} from './routes/sessions';
 import { createPrsRouter, setPRBroadcast } from './routes/prs';
-import { createTasksRouter, setTaskBroadcast } from './routes/tasks';
+import {
+  createTasksRouter,
+  setTaskBroadcast,
+  setTaskCacheRefresher,
+} from './routes/tasks';
+import { TaskCacheRefresher } from './orchestration/TaskCacheRefresher';
 import { analyticsRouter } from './routes/analytics';
 import { projectsRouter, setAutoMerger } from './routes/projects';
 import { requireDeviceAuth, validateWsToken } from './auth/DeviceAuth';
@@ -35,19 +47,21 @@ import { ReviewOrchestrator } from './github/ReviewOrchestrator';
 import { PRMergeWatcher } from './github/PRMergeWatcher';
 import { AutoMerger } from './github/AutoMerger';
 import { ReviewerCommentsWatcher } from './github/ReviewerCommentsWatcher';
-import { AUTO_REVIEW_ENABLED, AUTO_REVIEW_CONCURRENCY } from './config';
+import { AUTO_REVIEW_ENABLED } from './config';
 import { getCorporateMode } from './config/corporateMode';
 import { getOrchestratorConfig } from './config/appConfig';
 import { AutoLauncher } from './orchestration/AutoLauncher';
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
 import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
 import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiver';
+import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
 import { deleteGhostSessions, getPRBySessionId } from './db/queries';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
-import { runPRBootSweep } from './github/PRBootSweep';
+import setupRouter, { createSetupModeGuard } from './routes/setup';
+import { runBootSequence } from './bootSequence';
 
-runMigrations();
+runMigrations(db);
 loadRuntimeSettingsFromDb();
 importProjectsFromEnv(process.env.PROJECTS);
 
@@ -88,10 +102,10 @@ const prReviewService = new PRReviewService(
 const reviewOrchestrator = new ReviewOrchestrator(
   prReviewService,
   sessionManager,
-  AUTO_REVIEW_CONCURRENCY,
   AUTO_REVIEW_ENABLED,
   githubClient,
 );
+setSettingsReviewOrchestrator(reviewOrchestrator);
 
 const PORT = getOrchestratorConfig().server.port;
 
@@ -99,6 +113,10 @@ const app = express();
 app.use(express.json());
 // Enrollment endpoints are public — mount before the device auth middleware
 app.use('/api/enrollment', createEnrollmentRouter());
+// Setup endpoints are public — wizard UI uses them before credentials exist
+app.use('/api', setupRouter);
+// Gate all other /api routes when setup has not been completed
+app.use('/api', createSetupModeGuard());
 app.use(requireDeviceAuth);
 app.use('/api/permission-events', permissionEventsRouter);
 app.use('/api/permission-denials', permissionDenialsRouter);
@@ -164,6 +182,8 @@ function broadcast(msg: ServerMessage) {
 
 // Wire broadcast into the sessions router (for PATCH note/tags)
 setBroadcast(broadcast);
+// Wire sessionManager into the sessions router (for abort)
+setSessionManager(sessionManager);
 // Wire broadcast into the prs router (for merge/close events)
 setPRBroadcast(broadcast);
 // Wire broadcast into the tasks route (for task_updated WS messages)
@@ -229,6 +249,16 @@ wss.on('connection', (ws, req) => {
 // reservations (orphan resume reserves slots from this.sessions.size).
 const autoLauncher = new AutoLauncher(sessionManager, broadcast);
 
+// TaskCacheRefresher: background loop that keeps per-project board caches warm.
+// Handlers always serve from cache; the refresher populates it on an interval.
+const taskCacheRefresher = new TaskCacheRefresher(broadcast);
+setTaskCacheRefresher((projectId) =>
+  taskCacheRefresher.refreshProjectById(projectId),
+);
+setWsRouterRefreshFn((projectId) =>
+  taskCacheRefresher.refreshProjectById(projectId),
+);
+
 // Auto-updater: polls GitHub Releases on startup + every 24h
 const updateChecker = new UpdateChecker(broadcast);
 setUpdateChecker(updateChecker, broadcast);
@@ -244,65 +274,44 @@ const stuckSessionMonitor = new StuckSessionMonitor(
 
 // Orphaned-task sweep: runs at the auto-launch poll interval, finds tasks stuck
 // at In Progress with no live session and reverts them to Ready.
-const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast);
+// sendOrResume is wired so idle sessions without a PR are nudged rather than reverted.
+const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast, {
+  sendOrResume: (sessionId, text) =>
+    sessionManager.sendOrResume(sessionId, text),
+});
 
 // Concluded-session archiver: periodically archives sessions that have been
 // in a terminal state longer than the configured grace period.
 const concludedSessionArchiver = new ConcludedSessionArchiver(broadcast);
 
-jsonlReader
-  .importAll()
-  .then(async () => {
-    jsonlReader.backfillTokens();
+const sessionEventsPruner = new SessionEventsPruner();
 
-    await sessionManager
-      .resumeOrphanSessions()
-      .catch((err: unknown) =>
-        console.warn(
-          '[server] orphan session resume failed:',
-          (err as Error).message,
-        ),
-      );
-
-    stuckSessionMonitor.rehydrate();
-    stuckSessionMonitor.startScan();
-
-    runPRBootSweep(githubClient).catch((err: unknown) =>
-      console.warn('[server] PR boot sweep failed:', (err as Error).message),
-    );
-
-    prMergeWatcher.start();
-    reviewerCommentsWatcher.start();
-
-    await autoLauncher
-      .start()
-      .catch((err: unknown) =>
-        console.warn(
-          '[server] auto-launcher start failed:',
-          (err as Error).message,
-        ),
-      );
-
-    orphanedTaskSweeper.start();
-    concludedSessionArchiver.start();
-    updateChecker.start();
-
-    server.listen(PORT, '0.0.0.0', () => {
-      console.log(`[server] listening on port ${PORT}`);
-      console.log('[server] LAN access enabled — device auth required');
-    });
-  })
-  .catch((err: unknown) => {
-    console.error('[server] JSONL import failed:', err);
-    process.exit(1);
-  });
+void runBootSequence({
+  jsonlReader,
+  sessionManager,
+  stuckSessionMonitor,
+  autoMerger,
+  githubClient,
+  prMergeWatcher,
+  reviewerCommentsWatcher,
+  autoLauncher,
+  orphanedTaskSweeper,
+  concludedSessionArchiver,
+  updateChecker,
+  taskCacheRefresher,
+  sessionEventsPruner,
+  server,
+  port: PORT,
+});
 
 async function gracefulShutdown(signal: string) {
   console.log(`[server] ${signal} received — shutting down`);
   autoLauncher.stop();
+  taskCacheRefresher.stop();
   stuckSessionMonitor.stop();
   orphanedTaskSweeper.stop();
   concludedSessionArchiver.stop();
+  sessionEventsPruner.stop();
   updateChecker.stop();
   reviewerCommentsWatcher.stop();
   wss.close();

@@ -14,6 +14,7 @@ vi.mock('../db/queries.js', () => ({
   setHeadSha: vi.fn(),
   setLocalBranchReviewResult: vi.fn(),
   getLocalBranchById: vi.fn(),
+  getSession: vi.fn().mockReturnValue(null),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -30,7 +31,9 @@ import {
   incrementReviewIteration,
   setLocalBranchReviewResult,
   getLocalBranchById,
+  setLastReviewedSha,
 } from '../db/queries';
+import { recordEvent } from '../audit/AuditLog';
 import type { GitHubClient } from './GitHubClient';
 import { GitHubApiError } from './types';
 import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend';
@@ -488,7 +491,11 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
     expect(typeof opts.sessionId).toBe('string');
 
     expect(result.verdict).toBe('approved');
-    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledOnce();
+    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      expect.stringContaining('"approved"'),
+    );
     expect(vi.mocked(setReviewSessionId)).toHaveBeenCalledWith(
       42,
       'owner/repo',
@@ -636,7 +643,11 @@ describe('PRReviewService.reviewPR() — event-driven verdict parsing', () => {
 
     expect(result.verdict).toBe('approved');
     expect(result.summary).toBe('Approved immediately.');
-    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledOnce();
+    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      expect.stringContaining('"approved"'),
+    );
   });
 
   it('throws when PR is not found in database', async () => {
@@ -1695,6 +1706,338 @@ describe('PRReviewService.reReviewPR()', () => {
   });
 });
 
+// ── Verdict persisted before GitHub side effects (all four review paths) ───────
+
+describe('PRReviewService — verdict persisted before side effects', () => {
+  const approvedPayload = {
+    verdict: 'approved',
+    dimensions: [{ name: 'Diff vs Context spec', passed: true, notes: 'ok' }],
+    summary: 'All good.',
+  };
+
+  function makeSessionThatEmits(
+    mockSM: ReturnType<typeof makeMockSessionManager>,
+    payload: object,
+    useStart = true,
+  ) {
+    if (useStart) {
+      (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        (_u: string, _c: string, opts: { sessionId: string }) => {
+          setImmediate(() =>
+            mockSM.emit(
+              'message',
+              makeSessionEventMessage(opts.sessionId, JSON.stringify(payload)),
+            ),
+          );
+          return opts.sessionId;
+        },
+      );
+    }
+  }
+
+  it('Case 3 (fresh): setPRReviewResult called before markPRReady', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...mockPRRow,
+      review_session_id: null,
+      draft: 1,
+    } as any);
+
+    const callOrder: string[] = [];
+    const mockGH = makeMockGitHub();
+    vi.mocked(mockGH.markPRReady).mockImplementation(async () => {
+      callOrder.push('markPRReady');
+    });
+    vi.mocked(setPRReviewResult).mockImplementation(() => {
+      callOrder.push('setPRReviewResult');
+    });
+
+    const mockSM = makeMockSessionManager();
+    makeSessionThatEmits(mockSM, approvedPayload);
+
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(callOrder.indexOf('setPRReviewResult')).toBeLessThan(
+      callOrder.indexOf('markPRReady'),
+    );
+  });
+
+  it('Case 1 (live): setPRReviewResult called before markPRReady', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...mockPRRow,
+      review_session_id: 'existing-review-session-id',
+      draft: 1,
+    } as any);
+
+    const callOrder: string[] = [];
+    const mockGH = makeMockGitHub();
+    vi.mocked(mockGH.markPRReady).mockImplementation(async () => {
+      callOrder.push('markPRReady');
+    });
+    vi.mocked(setPRReviewResult).mockImplementation(() => {
+      callOrder.push('setPRReviewResult');
+    });
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (mockSM.send as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+      setImmediate(() =>
+        mockSM.emit(
+          'message',
+          makeSessionEventMessage(
+            'existing-review-session-id',
+            JSON.stringify(approvedPayload),
+          ),
+        ),
+      );
+    });
+
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(callOrder.indexOf('setPRReviewResult')).toBeLessThan(
+      callOrder.indexOf('markPRReady'),
+    );
+  });
+
+  it('Case 2 (resume): setPRReviewResult called before markPRReady', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...mockPRRow,
+      review_session_id: 'dead-session-id',
+      draft: 1,
+    } as any);
+
+    const callOrder: string[] = [];
+    const mockGH = makeMockGitHub();
+    vi.mocked(mockGH.markPRReady).mockImplementation(async () => {
+      callOrder.push('markPRReady');
+    });
+    vi.mocked(setPRReviewResult).mockImplementation(() => {
+      callOrder.push('setPRReviewResult');
+    });
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (sessionId: string) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(sessionId, JSON.stringify(approvedPayload)),
+          ),
+        );
+        return sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(callOrder.indexOf('setPRReviewResult')).toBeLessThan(
+      callOrder.indexOf('markPRReady'),
+    );
+  });
+
+  it('reReviewPR: setPRReviewResult called before markPRReady', async () => {
+    const prRowWithSession = {
+      ...mockPRRow,
+      review_session_id: 'review-session-rereview',
+      draft: 1,
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithSession as any);
+
+    const callOrder: string[] = [];
+    const mockGH = makeMockGitHub();
+    vi.mocked(mockGH.markPRReady).mockImplementation(async () => {
+      callOrder.push('markPRReady');
+    });
+    vi.mocked(setPRReviewResult).mockImplementation(() => {
+      callOrder.push('setPRReviewResult');
+    });
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.sendOrResume as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      async (sessionId: string) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(sessionId, JSON.stringify(approvedPayload)),
+          ),
+        );
+        return sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    await service.reReviewPR(42, 'owner/repo');
+
+    expect(callOrder.indexOf('setPRReviewResult')).toBeLessThan(
+      callOrder.indexOf('markPRReady'),
+    );
+  });
+});
+
+// ── Verdict persisted on GitHub outage — regression for #627 ──────────────────
+
+describe('PRReviewService — verdict survives GitHub side-effect failure (#627)', () => {
+  it('verdict + last_reviewed_sha persisted even when markPRReady throws (GitHub outage)', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...mockPRRow,
+      review_session_id: null,
+      draft: 1,
+    } as any);
+
+    const mockGH = makeMockGitHub();
+    vi.mocked(mockGH.markPRReady).mockRejectedValue(
+      new Error('GitHub outage: 503 Service Unavailable'),
+    );
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_u: string, _c: string, opts: { sessionId: string }) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify({
+                verdict: 'approved',
+                dimensions: [
+                  { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
+                ],
+                summary: 'Approved.',
+              }),
+            ),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    // Verdict must be persisted despite the GitHub failure
+    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      expect.stringContaining('"approved"'),
+    );
+    // SHA must also be recorded
+    expect(vi.mocked(setLastReviewedSha)).toHaveBeenCalled();
+    // review_side_effect_failed audit event must be emitted
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'review_side_effect_failed',
+        actor_type: 'system',
+        payload: expect.objectContaining({
+          side_effect: 'markPRReady',
+          pr_number: 42,
+        }),
+      }),
+    );
+    // reviewPR must still return the verdict (not throw)
+    expect(result.verdict).toBe('approved');
+  });
+
+  it('pipeline proceeds: autoMerger.attempt called even when markPRReady throws', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue({
+      ...mockPRRow,
+      review_session_id: null,
+    } as any);
+
+    const mockGH = makeMockGitHub();
+    vi.mocked(mockGH.markPRReady).mockRejectedValue(new Error('GitHub outage'));
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.start as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      (_u: string, _c: string, opts: { sessionId: string }) => {
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(
+              opts.sessionId,
+              JSON.stringify({
+                verdict: 'approved',
+                dimensions: [
+                  { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
+                ],
+                summary: 'Approved.',
+              }),
+            ),
+          ),
+        );
+        return opts.sessionId;
+      },
+    );
+
+    const service = new PRReviewService(
+      mockGH,
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+
+    const autoMergerAttempt = vi.fn();
+    service.setAutoMerger({ attempt: autoMergerAttempt } as any);
+
+    await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    expect(autoMergerAttempt).toHaveBeenCalledWith(42, 'owner/repo');
+  });
+});
+
 // ── Size proportionality dimension ────────────────────────────────────────────
 
 describe('PRReviewService — Size proportionality dimension', () => {
@@ -2291,7 +2634,7 @@ describe('PRReviewService.reviewPR() — local branch verdict persistence', () =
     expect(vi.mocked(setPRReviewResult)).not.toHaveBeenCalled();
   });
 
-  it('persists verdict to pull_requests.review_result for pr work items (regression)', async () => {
+  it('persists verdict internally — PRReviewService is the single owner of the write', async () => {
     vi.mocked(getPRByNumber).mockReturnValue(mockPRRow as any);
 
     const approvedPayload = {
@@ -2338,18 +2681,20 @@ describe('PRReviewService.reviewPR() — local branch verdict persistence', () =
       'https://notion.so/ctx',
     );
 
-    await service.reviewPR(
+    const result = await service.reviewPR(
       { type: 'pr', prNumber: 42, repo: 'owner/repo' },
       makeMockDiffSource(),
     );
 
+    // PRReviewService is now the single owner of the verdict write
     expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledWith(
       42,
       'owner/repo',
-      expect.any(String),
+      expect.stringContaining('"approved"'),
     );
-    // Must NOT write to local_branches
+    // local_branch path writes to setLocalBranchReviewResult, not setPRReviewResult
     expect(vi.mocked(setLocalBranchReviewResult)).not.toHaveBeenCalled();
+    expect(result.verdict).toBe('approved');
   });
 });
 
@@ -2568,7 +2913,11 @@ describe('PRReviewService.reviewPR() — transient fetch retry', () => {
     );
 
     expect(result.verdict).toBe('approved');
-    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledOnce();
+    expect(vi.mocked(setPRReviewResult)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      expect.stringContaining('"approved"'),
+    );
     expect(diffSource.fetchDiff).toHaveBeenCalledTimes(2);
   });
 

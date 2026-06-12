@@ -112,14 +112,17 @@ function prBodyTaskSectionHeader(backend: TaskBackend): string {
  *  2. Task assignment (task name, task URL, project context URL)
  *  3. Lifecycle steps
  *  4. Status ownership
- *  5. PR format standards
- *  6. Branch rules
- *  7. Pre-PR gate
- *  8. Forbidden actions
- *  9. Git isolation
- * 10. Filesystem isolation (personal mode)
- * 11. Bash rules (permission system)
- * 12. Separator + "# Project Instructions (from project CLAUDE.md)" (added by caller)
+ *  5. Efficiency rules
+ *  6. Context efficiency
+ *  7. PR format standards
+ *  8. Branch rules
+ *  9. Commit attribution
+ * 10. Pre-PR gate
+ * 11. Forbidden actions
+ * 12. Git isolation
+ * 13. Filesystem isolation (personal mode)
+ * 14. Bash rules (permission system)
+ * 15. Separator + "# Project Instructions (from project CLAUDE.md)" (added by caller)
  */
 export function buildOrchestratorClaudeMd(
   params: OrchestratorClaudeMdParams,
@@ -174,21 +177,23 @@ export function buildOrchestratorClaudeMd(
 
 Follow these steps in order — every session:
 
+> ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work after checking git status, stop and wait for instructions.**
+
 ${
   taskContent
     ? `> **Task spec is pre-loaded below.** Do NOT fetch Notion pages — the task content has
 > already been injected by the orchestrator. Proceed directly to implementation.
 
 1. Read the **Task Spec** section below — it contains the full task specification.
-2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
+2. The orchestrator creates the worktree on a named feature branch. Verify with \`git branch --show-current\` — it should output \`feature/<task-name>\`.`
     : taskBackend === 'local'
       ? `> ⚠️ **YAML task source**: Task context comes from \`tasks.yaml\` in the project root.
 > Skip the remote fetch step and instead read \`tasks.yaml\` for task context.
 
 1. Read \`tasks.yaml\` in the project root for task context (skip remote fetch).
-2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
-      : `1. ${fetchInstruction(taskBackend)}
-2. Create your task branch from the current HEAD: \`git checkout -b feature/<task-name>\`.`
+2. The orchestrator creates the worktree on a named feature branch. Verify with \`git branch --show-current\` — it should output \`feature/<task-name>\`.`
+      : `1. ${fetchInstruction(taskBackend)} Retrieve only the pre-assigned task above — do NOT browse the board to pick up additional work.
+2. The orchestrator creates the worktree on a named feature branch. Verify with \`git branch --show-current\` — it should output \`feature/<task-name>\`.`
 }
 3. Implement the task per the acceptance criteria.
 4. Pass the pre-PR gate (see Pre-PR Gate section below).
@@ -227,19 +232,25 @@ Optimize for speed and token efficiency:
 
 ---
 
+## Context Efficiency
+
+Large Read payloads and broad Grep results are the primary drivers of context exhaustion.
+Prefer surgical access over full-file reads:
+
+- **Grep first, then read the slice** — use Grep to locate the region, then Read with \`offset\`/\`limit\` to fetch only the lines you need. Never read a large file whole when you only need a section.
+- **Scope every Grep** — always supply a \`path\`/\`glob\` and a specific pattern. Avoid repo-wide matches; large result sets consume context and hide the signal.
+- **Don't re-read after editing** — the Edit result already reflects the change. Re-reading wastes tokens.
+- **Reference modules: read the relevant region only** — for large existing files used only as reference, read the relevant lines, not the whole file.
+
+---
+
 ${
   gitMode === 'local-only'
     ? ``
     : `## PR Format Standards
 
 - **Title**: \`feat: <task-name>\` — no scope prefix like \`(backend)\`, no milestone tags.
-- **How to create the PR**: write the body to \`.claude/pr-body.md\` in your worktree
-  (gitignored + lint-excluded; avoids shell-escaping issues with multi-line markdown),
-  then run \`gh pr create --draft --base "${targetBranch}" --body-file .claude/pr-body.md\`.
-  Use the Write tool to create the file — do NOT use shell redirects (\`cat >\`, \`echo >\`).
-  Do NOT use the MCP \`mcp__github__create_pull_request\` tool —
-  its token authentication scope does not always match the repo, and \`gh\` is already authenticated
-  for the orchestrator's session.
+- **How to create the PR**: emit the PR body inside a \`<pr-body>…</pr-body>\` marker block in your final message text. The backend detects this marker, validates the body, and opens (or updates) the draft PR targeting \`${targetBranch}\` via REST — no file written, no shell command run. Do NOT use the MCP \`mcp__github__create_pull_request\` tool — the marker is the only permitted path.
 - **Required body sections** (no omissions, no reordering):
 
 \`\`\`
@@ -346,7 +357,7 @@ All file writes **must stay inside the worktree directory** (\`${worktreePath}\`
   Use paths like \`<worktree>/.dev-state/<file>\` or resolve paths relative to \`cwd\`.
 - **Before running any script that writes files or opens a database, verify the target path is inside the worktree.**
   If a script hardcodes an absolute project-root path, patch it to accept an env var or relative path before executing.
-- **Need a scratch/temp file (PR body, notes, intermediate output)? Write it under \`.claude/\` in your worktree** — it's gitignored and excluded from lint/format.
+- **Need a scratch/temp file (notes, intermediate output)? Write it under \`.claude/\` in your worktree** — it's gitignored and excluded from lint/format.
   NEVER write to \`/tmp/\`, \`$HOME\`, \`$(mktemp)\`, or anywhere outside your worktree:
   those paths are shared across sessions (collision risk) and violate isolation.
 
@@ -364,8 +375,7 @@ Never chain with \`&&\`, \`;\`, or \`||\`. Split into separate Bash calls.
 You are already in the worktree directory. Just run the command directly.
 
 **Rule 3 — No heredoc subshells in git commit.**
-\`git commit -m "$(cat <<'EOF'...)"\` is denied. Use a simple \`-m "message"\` instead.
-For multiline commit messages, write the message to \`.claude/.commit-msg\` with the Write tool, then run \`git commit -F .claude/.commit-msg\`. **Use that exact path** — the \`.claude/\` directory is gitignored, so the scratch file is never accidentally staged. Do not invent other filenames (\`commit-msg.txt\`, \`.git-commit-msg.txt\`, etc.) — they will leak into the PR diff.
+\`git commit -m "$(cat <<'EOF'...)"\` is denied. For multiline commit messages, use repeated \`-m\` flags: \`git commit -m "<subject>" -m "<paragraph 2>" -m "<paragraph 3>"\` — git concatenates each \`-m\` as a separate paragraph. No scratch file needed.
 
 **Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
 Use the Write tool for any file creation. Never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.

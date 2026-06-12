@@ -4,6 +4,18 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
+}
+
+/* Floating overlay pinned to top-right inside the transcript area */
+.transcriptOverlay {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  z-index: 2;
+  display: flex;
+  gap: 4px;
+  align-items: center;
 }
 
 .transcriptHeader {
@@ -17,7 +29,7 @@
 }
 
 .copyButton {
-  background: transparent;
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text-faint);
@@ -40,7 +52,7 @@
 }
 
 .goToEndButton {
-  background: transparent;
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text-faint);

@@ -20,7 +20,13 @@ export type PauseReason =
   | 'awaiting_human_approval'
   | 'human_changes_requested'
   | 'pr_body_invalid'
-  | 'attribution_missing';
+  | 'attribution_missing'
+  | 'audit_findings'
+  | 'pr_creation_failed'
+  | 'stalled_idle'
+  | 'notion_done_update_stuck'
+  | 'launch_failed'
+  | 'diverged_branch';
 
 export interface TaskView {
   taskId: string;
@@ -44,6 +50,7 @@ export interface TaskView {
     outputTokens: number;
     context_occupancy_tokens?: number;
     compaction_count?: number;
+    model?: string | null;
   } | null;
   pr: {
     prNumber: number;
@@ -54,6 +61,7 @@ export interface TaskView {
     state: string;
     draft: boolean;
     mergeState: string | null;
+    preReviewStage?: string | null;
   } | null;
   review: {
     sessionId: string;

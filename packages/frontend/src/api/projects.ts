@@ -279,4 +279,10 @@ export const sessionsApi = {
       { method: 'POST' },
     );
   },
+  abort(sessionId: string): Promise<{ ok: boolean }> {
+    return request<{ ok: boolean }>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/abort`,
+      { method: 'POST' },
+    );
+  },
 };

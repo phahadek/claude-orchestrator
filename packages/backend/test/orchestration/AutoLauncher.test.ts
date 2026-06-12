@@ -2,12 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 
 vi.mock('../../src/db/db.js', async () => {
-  const Database = (await import('better-sqlite3')).default;
-  const memDb = new Database(':memory:');
-  memDb.pragma('foreign_keys = ON');
-  const { applyTestSchema } = await import('../helpers/testDbSchema');
-  applyTestSchema(memDb);
-  return { db: memDb };
+  const { setupTestDb } = await import('../helpers/setupTestDb.js');
+  return { db: setupTestDb() };
 });
 
 import { AutoLauncher } from '../../src/orchestration/AutoLauncher';
@@ -256,13 +252,13 @@ describe('AutoLauncher', () => {
     db.prepare(
       `
       INSERT INTO pull_requests
-        (pr_number, pr_url, notion_task_id, session_id, repo, state,
+        (pr_number, pr_url, task_id, session_id, repo, state,
          created_at, updated_at, synced_at, pause_reason)
       VALUES
-        (1, 'https://github.com/o/r/pull/1', @notion_task_id, NULL, 'o/r', 'open',
+        (1, 'https://github.com/o/r/pull/1', @task_id, NULL, 'o/r', 'open',
          'now', 'now', 'now', 'stuck_timeout')
     `,
-    ).run({ notion_task_id: task.id });
+    ).run({ task_id: task.id });
     const backend = makeMockBackend([makeResolved(task)]);
 
     const launcher = new AutoLauncher(sm, undefined, {
@@ -272,6 +268,65 @@ describe('AutoLauncher', () => {
     });
 
     await launcher.pollOnce();
+    expect(
+      (sm as unknown as { start: ReturnType<typeof vi.fn> }).start,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('does NOT re-update an already-Done task whose PR is merged (idempotency guard)', async () => {
+    const sm = makeMockSessionManager();
+    const task = makeTask({ id: 'done-task', status: '✅ Done' });
+    db.prepare(
+      `
+      INSERT INTO pull_requests
+        (pr_number, pr_url, task_id, session_id, repo, state,
+         created_at, updated_at, synced_at)
+      VALUES
+        (2, 'https://github.com/o/r/pull/2', @task_id, NULL, 'o/r', 'merged',
+         'now', 'now', 'now')
+    `,
+    ).run({ task_id: task.id });
+    const backend = makeMockBackend([makeResolved(task)]);
+
+    const launcher = new AutoLauncher(sm, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+    expect(
+      (backend as unknown as { updateStatus: ReturnType<typeof vi.fn> })
+        .updateStatus,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('marks a still-Ready task Done when its PR is already merged (catch-up still fires)', async () => {
+    const sm = makeMockSessionManager();
+    const task = makeTask({ id: 'ready-merged-task', status: '🗂️ Ready' });
+    db.prepare(
+      `
+      INSERT INTO pull_requests
+        (pr_number, pr_url, task_id, session_id, repo, state,
+         created_at, updated_at, synced_at)
+      VALUES
+        (3, 'https://github.com/o/r/pull/3', @task_id, NULL, 'o/r', 'merged',
+         'now', 'now', 'now')
+    `,
+    ).run({ task_id: task.id });
+    const backend = makeMockBackend([makeResolved(task)]);
+
+    const launcher = new AutoLauncher(sm, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend,
+      pollOnStart: false,
+    });
+
+    await launcher.pollOnce();
+    expect(
+      (backend as unknown as { updateStatus: ReturnType<typeof vi.fn> })
+        .updateStatus,
+    ).toHaveBeenCalledWith('ready-merged-task', '✅ Done');
     expect(
       (sm as unknown as { start: ReturnType<typeof vi.fn> }).start,
     ).not.toHaveBeenCalled();
