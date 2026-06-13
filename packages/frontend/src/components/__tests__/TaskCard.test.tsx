@@ -1,7 +1,7 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { TaskCard } from '../TaskCard';
-import type { TaskView, DisplayStatus } from '../../types/taskView';
+import type { TaskView, DisplayStatus, PauseReason } from '../../types/taskView';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 
 function makeTask(overrides?: Partial<TaskView>): TaskView {
@@ -687,6 +687,36 @@ describe('TaskCard', () => {
     );
     const badge = screen.getByText('⚠️ Needs Attention');
     expect(badge.getAttribute('title')).toBeTruthy();
+    // source tag derived from parsed struct (pr_creation_failed → source='merge')
+    expect(badge.getAttribute('title')).toContain('[merge]');
     expect(badge.getAttribute('title')).toContain('PR creation failed');
+    // severity derived from parsed struct
+    expect(badge.getAttribute('data-pause-severity')).toBe('needs_attention');
+    expect(badge.getAttribute('data-pause-source')).toBe('merge');
+  });
+
+  it('derives source tag and severity from JSON struct pauseReason', () => {
+    const jsonPauseReason = JSON.stringify({
+      reason: 'ci_failing',
+      source: 'ci',
+      severity: 'needs_attention',
+      retry_strategy: 'manual_action',
+    });
+    render(
+      <TaskCard
+        task={makeTask({
+          displayStatus: 'needs_attention',
+          pauseReason: jsonPauseReason as unknown as PauseReason,
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    const badge = screen.getByText('⚠️ Needs Attention');
+    expect(badge.getAttribute('data-pause-source')).toBe('ci');
+    expect(badge.getAttribute('data-pause-severity')).toBe('needs_attention');
+    expect(badge.getAttribute('title')).toContain('[ci]');
   });
 });

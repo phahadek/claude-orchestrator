@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import styles from './WorkItemCard.module.css';
 import { CIBadges } from './CIBadges';
+import { parsePauseReason } from '@claude-orchestrator/backend/src/db/pauseReason';
 
 export interface PRReviewDimension {
   name: string;
@@ -227,6 +228,7 @@ function PRWorkItemCard({
 }: Omit<WorkItemCardProps, 'item'> & { item: PRWorkItem }) {
   const [detailsOpen, setDetailsOpen] = useState(false);
 
+  const prPauseStruct = parsePauseReason(pr.pauseReason ?? null);
   const isFinished = pr.state === 'merged' || pr.state === 'closed';
   const verdict = pr.reviewResult?.verdict ?? null;
   const hasConflicts = !isFinished && pr.mergeState === 'dirty';
@@ -377,7 +379,7 @@ function PRWorkItemCard({
             ⚠ Mergeability unknown
           </span>
         )}
-        {pr.pauseReason === 'review_failed' && (
+        {prPauseStruct?.reason === 'review_failed' && (
           <span
             className={styles.conflictBadge}
             title="Re-review failed unexpectedly — check logs and trigger a manual re-review."
@@ -385,7 +387,7 @@ function PRWorkItemCard({
             ⚠ Review failed
           </span>
         )}
-        {pr.pauseReason === 'api_overloaded' && (
+        {prPauseStruct?.reason === 'api_overloaded' && (
           <span
             className={styles.conflictBadge}
             title="Session paused — Anthropic API returned 529 Overloaded. Resume when the API is available."
