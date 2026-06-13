@@ -3,8 +3,7 @@
 exports[`buildOrchestratorClaudeMd — taskBackend wording > github backend > matches snapshot 1`] = `
 "# Orchestrator Rules (DO NOT OVERRIDE)
 
-> ⚠️ These rules are injected by the dashboard orchestrator and take priority over any
-> project-level instructions below. Do not remove, reorder, or override them.
+> ⚠️ Injected by the orchestrator — takes priority over all project instructions. Do not remove or override.
 
 ---
 
@@ -18,12 +17,10 @@ exports[`buildOrchestratorClaudeMd — taskBackend wording > github backend > ma
 
 ## Lifecycle
 
-Follow these steps in order — every session:
-
 > ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work after checking git status, stop and wait for instructions.**
 
-1. Fetch the GitHub issue via the gh CLI. Fetch only the task listed above — do NOT browse the board for other tasks.
-2. The orchestrator creates the worktree on a named feature branch. Verify with \`git branch --show-current\` — it should output \`feature/<task-name>\`.
+1. Fetch the GitHub issue via the gh CLI. Retrieve only the pre-assigned task above — do NOT browse the board to pick up additional work.
+2. Verify your branch: \`git branch --show-current\` → \`feature/<task-name>\`.
 3. Implement the task per the acceptance criteria.
 4. Pass the pre-PR gate (see Pre-PR Gate section below).
 5. Open a draft PR targeting \`dev\` using the required body template.
@@ -42,36 +39,31 @@ The orchestrator backend handles all status transitions (In Progress → In Revi
 
 ## Efficiency Rules
 
-This session runs in \`--print\` mode with no human watching the output.
-Optimize for speed and token efficiency:
+Running in \`--print\` mode — optimize for speed and token efficiency:
 
 - **Do NOT use TodoWrite.** No one sees the todo list. Track your progress internally.
 - **Do NOT use Agent subagents for exploration.** Use Glob and Grep directly.
-- **Minimize tool calls.** Batch independent reads. Don't re-read files you already read.
-- **Keep commit messages and PR descriptions concise.** One sentence summaries, not essays.
-- **Prefer Edit over Write for files that already exist.** Only use Write to create a new file or when replacing the majority of a file. Never re-emit an unchanged file body.
-- **Never Read a file you just wrote or edited** — you already know its contents and line layout.
-- **Never Read/cat raw \`tasks/*.output\` background-task files** — they bypass the Bash output cap. Use the TaskOutput tool if you must inspect a backgrounded command's output.
+- **Minimize tool calls.** Batch reads; don't re-read files you just wrote or edited.
+- **Prefer Edit over Write** for existing files; never re-emit unchanged file bodies.
+- **Commit messages/PR descriptions:** one sentence summaries.
+- **Never cat \`tasks/*.output\` files** — use the TaskOutput tool instead.
 
 ---
 
 ## Context Efficiency
 
-Large Read payloads and broad Grep results are the primary drivers of context exhaustion.
-Prefer surgical access over full-file reads:
-
-- **Grep first, then read the slice** — use Grep to locate the region, then Read with \`offset\`/\`limit\` to fetch only the lines you need. Never read a large file whole when you only need a section.
-- **Scope every Grep** — always supply a \`path\`/\`glob\` and a specific pattern. Avoid repo-wide matches; large result sets consume context and hide the signal.
-- **Don't re-read after editing** — the Edit result already reflects the change. Re-reading wastes tokens.
-- **Reference modules: read the relevant region only** — for large existing files used only as reference, read the relevant lines, not the whole file.
+- **Grep first, then read the slice** — locate with Grep, then Read with \`offset\`/\`limit\` for only the region you need.
+- **Scope every Grep** — supply \`path\`/\`glob\` and a specific pattern; avoid repo-wide matches.
+- **Don't re-read after editing** — the Edit result already reflects the change.
+- **Reference modules: read the relevant region only**, not the whole file.
 
 ---
 
 ## PR Format Standards
 
-- **Title**: \`feat: <task-name>\` — no scope prefix like \`(backend)\`, no milestone tags.
-- **How to create the PR**: emit the PR body inside a \`<pr-body>…</pr-body>\` marker block in your final message text. The backend detects this marker, validates the body, and opens (or updates) the draft PR targeting \`dev\` via REST — no file written, no shell command run. Do NOT use the MCP \`mcp__github__create_pull_request\` tool — the marker is the only permitted path.
-- **Required body sections** (no omissions, no reordering):
+- **Title**: \`feat: <task-name>\` — no scope prefix, no milestone tags.
+- **How to create the PR**: emit the body inside \`<pr-body>…</pr-body>\` in your final message. Do NOT use the MCP \`mcp__github__create_pull_request\` tool — the marker is the only path.
+- **Required body sections**:
 
 \`\`\`
 ## Summary
@@ -91,7 +83,7 @@ Prefer surgical access over full-file reads:
 
 ## Branch Rules
 
-- Branch name: \`feature/<task-name>\` — created from the worktree's current HEAD
+- Branch name: \`feature/<task-name>\`
 - Never commit directly to \`dev\` or \`main\`
 - Never merge your own PR
 - One task per session — no scope creep
@@ -100,15 +92,11 @@ Prefer surgical access over full-file reads:
 
 ## Commit Attribution
 
-Every commit **must** include the following trailer (replace \`<model>\` and \`<session-id>\` with your actual model ID and session ID):
+Every commit **must** include this trailer:
 
 \`\`\`
 AI-Authored-By: <model> (session: <session-id>)
 \`\`\`
-
-Example: \`AI-Authored-By: claude-sonnet-4-6 (session: f98ff4ec)\`
-
-The backend verifies this trailer server-side. In corporate mode, missing trailers pause the task.
 
 ---
 
@@ -140,51 +128,34 @@ Run in order — all must pass before opening the PR:
 > **Your worktree directory is \`/worktrees/abc123\`.**
 > This is your \`cwd\`. All commands run here. Never navigate to or operate on any parent directory.
 
-- All git commands must run inside the worktree directory (your \`cwd\`)
 - Never use \`git -C <path>\` pointing outside this worktree
 - Never use \`--work-tree\` or \`--git-dir\` flags pointing outside this worktree
 - Never run \`git checkout\` or \`git switch\` targeting a branch in the main repo directory
-- The backend records the main repo branch before each session and will warn if it drifts
 
 ---
 
 ## Filesystem Isolation (Personal Mode)
 
-> ⚠️ **Personal mode has no structural sandbox** — there is no docker, chroot, or
-> namespace to prevent writes outside the worktree. All isolation is prompt-level.
-> Violating these rules can corrupt the developer's live environment.
+> ⚠️ **No sandbox** — isolation is prompt-level only. Writes outside the worktree corrupt the developer's environment.
 
-All file writes **must stay inside the worktree directory** (\`/worktrees/abc123\`).
-
-- **Never write to the project root or any path above the worktree.**
-  Scripts, tools, and generated outputs must target paths under the worktree, not the parent repo.
-- **Dev state (SQLite databases, log files, generated artifacts) must use worktree-relative paths.**
-  Do not reference absolute paths to project-root databases or output files.
-  Use paths like \`<worktree>/.dev-state/<file>\` or resolve paths relative to \`cwd\`.
-- **Before running any script that writes files or opens a database, verify the target path is inside the worktree.**
-  If a script hardcodes an absolute project-root path, patch it to accept an env var or relative path before executing.
-- **Need a scratch/temp file (notes, intermediate output)? Write it under \`.claude/\` in your worktree** — it's gitignored and excluded from lint/format.
-  NEVER write to \`/tmp/\`, \`$HOME\`, \`$(mktemp)\`, or anywhere outside your worktree:
-  those paths are shared across sessions (collision risk) and violate isolation.
+All file writes **must stay inside** \`/worktrees/abc123\`. Never write to the project root, \`/tmp/\`, or \`$HOME\`. For scratch files use \`.claude/\` in your worktree.
 
 ---
 
 ## Bash Rules (Permission System)
 
-Your Bash commands are authorized by prefix matching on the **first token**.
-Violating these rules causes **silent denial** — the command fails with no error message.
+Bash is authorized by **first-token** prefix matching. Violations cause **silent denial**.
 
 **Rule 1 — One command per Bash call.**
 Never chain with \`&&\`, \`;\`, or \`||\`. Split into separate Bash calls.
 
-**Rule 2 — Never prefix with \`cd path &&\`.**
-You are already in the worktree directory. Just run the command directly.
+**Rule 2 — Never prefix with \`cd path &&\`.** You're already in the worktree; run commands directly.
 
 **Rule 3 — No heredoc subshells in git commit.**
-\`git commit -m "$(cat <<'EOF'...)"\` is denied. For multiline commit messages, use repeated \`-m\` flags: \`git commit -m "<subject>" -m "<paragraph 2>" -m "<paragraph 3>"\` — git concatenates each \`-m\` as a separate paragraph. No scratch file needed.
+Use repeated \`-m\` flags instead: \`git commit -m "subject" -m "body"\` — git concatenates them.
 
 **Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
-Use the Write tool for any file creation. Never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
+Use the Write tool; never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
 
 **Rule 5 — Use \`npx\` instead of bare tool names.**
 \`tsc\` → \`npx tsc\`. Bare commands may not be on PATH."
@@ -193,8 +164,7 @@ Use the Write tool for any file creation. Never use \`cat >\`, \`printf >\`, or 
 exports[`buildOrchestratorClaudeMd — taskBackend wording > jira backend > matches snapshot 1`] = `
 "# Orchestrator Rules (DO NOT OVERRIDE)
 
-> ⚠️ These rules are injected by the dashboard orchestrator and take priority over any
-> project-level instructions below. Do not remove, reorder, or override them.
+> ⚠️ Injected by the orchestrator — takes priority over all project instructions. Do not remove or override.
 
 ---
 
@@ -208,12 +178,10 @@ exports[`buildOrchestratorClaudeMd — taskBackend wording > jira backend > matc
 
 ## Lifecycle
 
-Follow these steps in order — every session:
-
 > ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work after checking git status, stop and wait for instructions.**
 
-1. Fetch the Jira issue. Fetch only the task listed above — do NOT browse the board for other tasks.
-2. The orchestrator creates the worktree on a named feature branch. Verify with \`git branch --show-current\` — it should output \`feature/<task-name>\`.
+1. Fetch the Jira issue. Retrieve only the pre-assigned task above — do NOT browse the board to pick up additional work.
+2. Verify your branch: \`git branch --show-current\` → \`feature/<task-name>\`.
 3. Implement the task per the acceptance criteria.
 4. Pass the pre-PR gate (see Pre-PR Gate section below).
 5. Open a draft PR targeting \`dev\` using the required body template.
@@ -232,36 +200,31 @@ The orchestrator backend handles all status transitions (In Progress → In Revi
 
 ## Efficiency Rules
 
-This session runs in \`--print\` mode with no human watching the output.
-Optimize for speed and token efficiency:
+Running in \`--print\` mode — optimize for speed and token efficiency:
 
 - **Do NOT use TodoWrite.** No one sees the todo list. Track your progress internally.
 - **Do NOT use Agent subagents for exploration.** Use Glob and Grep directly.
-- **Minimize tool calls.** Batch independent reads. Don't re-read files you already read.
-- **Keep commit messages and PR descriptions concise.** One sentence summaries, not essays.
-- **Prefer Edit over Write for files that already exist.** Only use Write to create a new file or when replacing the majority of a file. Never re-emit an unchanged file body.
-- **Never Read a file you just wrote or edited** — you already know its contents and line layout.
-- **Never Read/cat raw \`tasks/*.output\` background-task files** — they bypass the Bash output cap. Use the TaskOutput tool if you must inspect a backgrounded command's output.
+- **Minimize tool calls.** Batch reads; don't re-read files you just wrote or edited.
+- **Prefer Edit over Write** for existing files; never re-emit unchanged file bodies.
+- **Commit messages/PR descriptions:** one sentence summaries.
+- **Never cat \`tasks/*.output\` files** — use the TaskOutput tool instead.
 
 ---
 
 ## Context Efficiency
 
-Large Read payloads and broad Grep results are the primary drivers of context exhaustion.
-Prefer surgical access over full-file reads:
-
-- **Grep first, then read the slice** — use Grep to locate the region, then Read with \`offset\`/\`limit\` to fetch only the lines you need. Never read a large file whole when you only need a section.
-- **Scope every Grep** — always supply a \`path\`/\`glob\` and a specific pattern. Avoid repo-wide matches; large result sets consume context and hide the signal.
-- **Don't re-read after editing** — the Edit result already reflects the change. Re-reading wastes tokens.
-- **Reference modules: read the relevant region only** — for large existing files used only as reference, read the relevant lines, not the whole file.
+- **Grep first, then read the slice** — locate with Grep, then Read with \`offset\`/\`limit\` for only the region you need.
+- **Scope every Grep** — supply \`path\`/\`glob\` and a specific pattern; avoid repo-wide matches.
+- **Don't re-read after editing** — the Edit result already reflects the change.
+- **Reference modules: read the relevant region only**, not the whole file.
 
 ---
 
 ## PR Format Standards
 
-- **Title**: \`feat: <task-name>\` — no scope prefix like \`(backend)\`, no milestone tags.
-- **How to create the PR**: emit the PR body inside a \`<pr-body>…</pr-body>\` marker block in your final message text. The backend detects this marker, validates the body, and opens (or updates) the draft PR targeting \`dev\` via REST — no file written, no shell command run. Do NOT use the MCP \`mcp__github__create_pull_request\` tool — the marker is the only permitted path.
-- **Required body sections** (no omissions, no reordering):
+- **Title**: \`feat: <task-name>\` — no scope prefix, no milestone tags.
+- **How to create the PR**: emit the body inside \`<pr-body>…</pr-body>\` in your final message. Do NOT use the MCP \`mcp__github__create_pull_request\` tool — the marker is the only path.
+- **Required body sections**:
 
 \`\`\`
 ## Summary
@@ -281,7 +244,7 @@ Prefer surgical access over full-file reads:
 
 ## Branch Rules
 
-- Branch name: \`feature/<task-name>\` — created from the worktree's current HEAD
+- Branch name: \`feature/<task-name>\`
 - Never commit directly to \`dev\` or \`main\`
 - Never merge your own PR
 - One task per session — no scope creep
@@ -290,15 +253,11 @@ Prefer surgical access over full-file reads:
 
 ## Commit Attribution
 
-Every commit **must** include the following trailer (replace \`<model>\` and \`<session-id>\` with your actual model ID and session ID):
+Every commit **must** include this trailer:
 
 \`\`\`
 AI-Authored-By: <model> (session: <session-id>)
 \`\`\`
-
-Example: \`AI-Authored-By: claude-sonnet-4-6 (session: f98ff4ec)\`
-
-The backend verifies this trailer server-side. In corporate mode, missing trailers pause the task.
 
 ---
 
@@ -330,51 +289,34 @@ Run in order — all must pass before opening the PR:
 > **Your worktree directory is \`/worktrees/abc123\`.**
 > This is your \`cwd\`. All commands run here. Never navigate to or operate on any parent directory.
 
-- All git commands must run inside the worktree directory (your \`cwd\`)
 - Never use \`git -C <path>\` pointing outside this worktree
 - Never use \`--work-tree\` or \`--git-dir\` flags pointing outside this worktree
 - Never run \`git checkout\` or \`git switch\` targeting a branch in the main repo directory
-- The backend records the main repo branch before each session and will warn if it drifts
 
 ---
 
 ## Filesystem Isolation (Personal Mode)
 
-> ⚠️ **Personal mode has no structural sandbox** — there is no docker, chroot, or
-> namespace to prevent writes outside the worktree. All isolation is prompt-level.
-> Violating these rules can corrupt the developer's live environment.
+> ⚠️ **No sandbox** — isolation is prompt-level only. Writes outside the worktree corrupt the developer's environment.
 
-All file writes **must stay inside the worktree directory** (\`/worktrees/abc123\`).
-
-- **Never write to the project root or any path above the worktree.**
-  Scripts, tools, and generated outputs must target paths under the worktree, not the parent repo.
-- **Dev state (SQLite databases, log files, generated artifacts) must use worktree-relative paths.**
-  Do not reference absolute paths to project-root databases or output files.
-  Use paths like \`<worktree>/.dev-state/<file>\` or resolve paths relative to \`cwd\`.
-- **Before running any script that writes files or opens a database, verify the target path is inside the worktree.**
-  If a script hardcodes an absolute project-root path, patch it to accept an env var or relative path before executing.
-- **Need a scratch/temp file (notes, intermediate output)? Write it under \`.claude/\` in your worktree** — it's gitignored and excluded from lint/format.
-  NEVER write to \`/tmp/\`, \`$HOME\`, \`$(mktemp)\`, or anywhere outside your worktree:
-  those paths are shared across sessions (collision risk) and violate isolation.
+All file writes **must stay inside** \`/worktrees/abc123\`. Never write to the project root, \`/tmp/\`, or \`$HOME\`. For scratch files use \`.claude/\` in your worktree.
 
 ---
 
 ## Bash Rules (Permission System)
 
-Your Bash commands are authorized by prefix matching on the **first token**.
-Violating these rules causes **silent denial** — the command fails with no error message.
+Bash is authorized by **first-token** prefix matching. Violations cause **silent denial**.
 
 **Rule 1 — One command per Bash call.**
 Never chain with \`&&\`, \`;\`, or \`||\`. Split into separate Bash calls.
 
-**Rule 2 — Never prefix with \`cd path &&\`.**
-You are already in the worktree directory. Just run the command directly.
+**Rule 2 — Never prefix with \`cd path &&\`.** You're already in the worktree; run commands directly.
 
 **Rule 3 — No heredoc subshells in git commit.**
-\`git commit -m "$(cat <<'EOF'...)"\` is denied. For multiline commit messages, use repeated \`-m\` flags: \`git commit -m "<subject>" -m "<paragraph 2>" -m "<paragraph 3>"\` — git concatenates each \`-m\` as a separate paragraph. No scratch file needed.
+Use repeated \`-m\` flags instead: \`git commit -m "subject" -m "body"\` — git concatenates them.
 
 **Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
-Use the Write tool for any file creation. Never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
+Use the Write tool; never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
 
 **Rule 5 — Use \`npx\` instead of bare tool names.**
 \`tsc\` → \`npx tsc\`. Bare commands may not be on PATH."
@@ -383,8 +325,7 @@ Use the Write tool for any file creation. Never use \`cat >\`, \`printf >\`, or 
 exports[`buildOrchestratorClaudeMd — taskBackend wording > local backend > matches snapshot 1`] = `
 "# Orchestrator Rules (DO NOT OVERRIDE)
 
-> ⚠️ These rules are injected by the dashboard orchestrator and take priority over any
-> project-level instructions below. Do not remove, reorder, or override them.
+> ⚠️ Injected by the orchestrator — takes priority over all project instructions. Do not remove or override.
 
 ---
 
@@ -398,15 +339,12 @@ exports[`buildOrchestratorClaudeMd — taskBackend wording > local backend > mat
 
 ## Lifecycle
 
-Follow these steps in order — every session:
-
 > ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work after checking git status, stop and wait for instructions.**
 
-> ⚠️ **YAML task source**: Task context comes from \`tasks.yaml\` in the project root.
-> Skip the remote fetch step and instead read \`tasks.yaml\` for task context.
+> ⚠️ **YAML task source**: Task context is in \`tasks.yaml\` in the project root. Skip the remote fetch step.
 
-1. Read \`tasks.yaml\` in the project root for task context (skip remote fetch).
-2. The orchestrator creates the worktree on a named feature branch. Verify with \`git branch --show-current\` — it should output \`feature/<task-name>\`.
+1. Read \`tasks.yaml\` for task context (skip remote fetch).
+2. Verify your branch: \`git branch --show-current\` → \`feature/<task-name>\`.
 3. Implement the task per the acceptance criteria.
 4. Pass the pre-PR gate (see Pre-PR Gate section below).
 5. Open a draft PR targeting \`dev\` using the required body template.
@@ -425,36 +363,31 @@ The orchestrator backend handles all status transitions (In Progress → In Revi
 
 ## Efficiency Rules
 
-This session runs in \`--print\` mode with no human watching the output.
-Optimize for speed and token efficiency:
+Running in \`--print\` mode — optimize for speed and token efficiency:
 
 - **Do NOT use TodoWrite.** No one sees the todo list. Track your progress internally.
 - **Do NOT use Agent subagents for exploration.** Use Glob and Grep directly.
-- **Minimize tool calls.** Batch independent reads. Don't re-read files you already read.
-- **Keep commit messages and PR descriptions concise.** One sentence summaries, not essays.
-- **Prefer Edit over Write for files that already exist.** Only use Write to create a new file or when replacing the majority of a file. Never re-emit an unchanged file body.
-- **Never Read a file you just wrote or edited** — you already know its contents and line layout.
-- **Never Read/cat raw \`tasks/*.output\` background-task files** — they bypass the Bash output cap. Use the TaskOutput tool if you must inspect a backgrounded command's output.
+- **Minimize tool calls.** Batch reads; don't re-read files you just wrote or edited.
+- **Prefer Edit over Write** for existing files; never re-emit unchanged file bodies.
+- **Commit messages/PR descriptions:** one sentence summaries.
+- **Never cat \`tasks/*.output\` files** — use the TaskOutput tool instead.
 
 ---
 
 ## Context Efficiency
 
-Large Read payloads and broad Grep results are the primary drivers of context exhaustion.
-Prefer surgical access over full-file reads:
-
-- **Grep first, then read the slice** — use Grep to locate the region, then Read with \`offset\`/\`limit\` to fetch only the lines you need. Never read a large file whole when you only need a section.
-- **Scope every Grep** — always supply a \`path\`/\`glob\` and a specific pattern. Avoid repo-wide matches; large result sets consume context and hide the signal.
-- **Don't re-read after editing** — the Edit result already reflects the change. Re-reading wastes tokens.
-- **Reference modules: read the relevant region only** — for large existing files used only as reference, read the relevant lines, not the whole file.
+- **Grep first, then read the slice** — locate with Grep, then Read with \`offset\`/\`limit\` for only the region you need.
+- **Scope every Grep** — supply \`path\`/\`glob\` and a specific pattern; avoid repo-wide matches.
+- **Don't re-read after editing** — the Edit result already reflects the change.
+- **Reference modules: read the relevant region only**, not the whole file.
 
 ---
 
 ## PR Format Standards
 
-- **Title**: \`feat: <task-name>\` — no scope prefix like \`(backend)\`, no milestone tags.
-- **How to create the PR**: emit the PR body inside a \`<pr-body>…</pr-body>\` marker block in your final message text. The backend detects this marker, validates the body, and opens (or updates) the draft PR targeting \`dev\` via REST — no file written, no shell command run. Do NOT use the MCP \`mcp__github__create_pull_request\` tool — the marker is the only permitted path.
-- **Required body sections** (no omissions, no reordering):
+- **Title**: \`feat: <task-name>\` — no scope prefix, no milestone tags.
+- **How to create the PR**: emit the body inside \`<pr-body>…</pr-body>\` in your final message. Do NOT use the MCP \`mcp__github__create_pull_request\` tool — the marker is the only path.
+- **Required body sections**:
 
 \`\`\`
 ## Summary
@@ -474,7 +407,7 @@ Prefer surgical access over full-file reads:
 
 ## Branch Rules
 
-- Branch name: \`feature/<task-name>\` — created from the worktree's current HEAD
+- Branch name: \`feature/<task-name>\`
 - Never commit directly to \`dev\` or \`main\`
 - Never merge your own PR
 - One task per session — no scope creep
@@ -483,15 +416,11 @@ Prefer surgical access over full-file reads:
 
 ## Commit Attribution
 
-Every commit **must** include the following trailer (replace \`<model>\` and \`<session-id>\` with your actual model ID and session ID):
+Every commit **must** include this trailer:
 
 \`\`\`
 AI-Authored-By: <model> (session: <session-id>)
 \`\`\`
-
-Example: \`AI-Authored-By: claude-sonnet-4-6 (session: f98ff4ec)\`
-
-The backend verifies this trailer server-side. In corporate mode, missing trailers pause the task.
 
 ---
 
@@ -523,51 +452,34 @@ Run in order — all must pass before opening the PR:
 > **Your worktree directory is \`/worktrees/abc123\`.**
 > This is your \`cwd\`. All commands run here. Never navigate to or operate on any parent directory.
 
-- All git commands must run inside the worktree directory (your \`cwd\`)
 - Never use \`git -C <path>\` pointing outside this worktree
 - Never use \`--work-tree\` or \`--git-dir\` flags pointing outside this worktree
 - Never run \`git checkout\` or \`git switch\` targeting a branch in the main repo directory
-- The backend records the main repo branch before each session and will warn if it drifts
 
 ---
 
 ## Filesystem Isolation (Personal Mode)
 
-> ⚠️ **Personal mode has no structural sandbox** — there is no docker, chroot, or
-> namespace to prevent writes outside the worktree. All isolation is prompt-level.
-> Violating these rules can corrupt the developer's live environment.
+> ⚠️ **No sandbox** — isolation is prompt-level only. Writes outside the worktree corrupt the developer's environment.
 
-All file writes **must stay inside the worktree directory** (\`/worktrees/abc123\`).
-
-- **Never write to the project root or any path above the worktree.**
-  Scripts, tools, and generated outputs must target paths under the worktree, not the parent repo.
-- **Dev state (SQLite databases, log files, generated artifacts) must use worktree-relative paths.**
-  Do not reference absolute paths to project-root databases or output files.
-  Use paths like \`<worktree>/.dev-state/<file>\` or resolve paths relative to \`cwd\`.
-- **Before running any script that writes files or opens a database, verify the target path is inside the worktree.**
-  If a script hardcodes an absolute project-root path, patch it to accept an env var or relative path before executing.
-- **Need a scratch/temp file (notes, intermediate output)? Write it under \`.claude/\` in your worktree** — it's gitignored and excluded from lint/format.
-  NEVER write to \`/tmp/\`, \`$HOME\`, \`$(mktemp)\`, or anywhere outside your worktree:
-  those paths are shared across sessions (collision risk) and violate isolation.
+All file writes **must stay inside** \`/worktrees/abc123\`. Never write to the project root, \`/tmp/\`, or \`$HOME\`. For scratch files use \`.claude/\` in your worktree.
 
 ---
 
 ## Bash Rules (Permission System)
 
-Your Bash commands are authorized by prefix matching on the **first token**.
-Violating these rules causes **silent denial** — the command fails with no error message.
+Bash is authorized by **first-token** prefix matching. Violations cause **silent denial**.
 
 **Rule 1 — One command per Bash call.**
 Never chain with \`&&\`, \`;\`, or \`||\`. Split into separate Bash calls.
 
-**Rule 2 — Never prefix with \`cd path &&\`.**
-You are already in the worktree directory. Just run the command directly.
+**Rule 2 — Never prefix with \`cd path &&\`.** You're already in the worktree; run commands directly.
 
 **Rule 3 — No heredoc subshells in git commit.**
-\`git commit -m "$(cat <<'EOF'...)"\` is denied. For multiline commit messages, use repeated \`-m\` flags: \`git commit -m "<subject>" -m "<paragraph 2>" -m "<paragraph 3>"\` — git concatenates each \`-m\` as a separate paragraph. No scratch file needed.
+Use repeated \`-m\` flags instead: \`git commit -m "subject" -m "body"\` — git concatenates them.
 
 **Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
-Use the Write tool for any file creation. Never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
+Use the Write tool; never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
 
 **Rule 5 — Use \`npx\` instead of bare tool names.**
 \`tsc\` → \`npx tsc\`. Bare commands may not be on PATH."
@@ -576,8 +488,7 @@ Use the Write tool for any file creation. Never use \`cat >\`, \`printf >\`, or 
 exports[`buildOrchestratorClaudeMd — taskBackend wording > notion backend (default) > matches snapshot 1`] = `
 "# Orchestrator Rules (DO NOT OVERRIDE)
 
-> ⚠️ These rules are injected by the dashboard orchestrator and take priority over any
-> project-level instructions below. Do not remove, reorder, or override them.
+> ⚠️ Injected by the orchestrator — takes priority over all project instructions. Do not remove or override.
 
 ---
 
@@ -591,12 +502,10 @@ exports[`buildOrchestratorClaudeMd — taskBackend wording > notion backend (def
 
 ## Lifecycle
 
-Follow these steps in order — every session:
-
 > ⚠️ **Your task is pre-assigned (see Task Assignment above). Never browse the task board or self-assign a different task. If you have no remaining work after checking git status, stop and wait for instructions.**
 
-1. Fetch the Notion task page and project context page. Fetch only the task listed above — do NOT browse the board for other tasks.
-2. The orchestrator creates the worktree on a named feature branch. Verify with \`git branch --show-current\` — it should output \`feature/<task-name>\`.
+1. Fetch the Notion task page and project context page. Retrieve only the pre-assigned task above — do NOT browse the board to pick up additional work.
+2. Verify your branch: \`git branch --show-current\` → \`feature/<task-name>\`.
 3. Implement the task per the acceptance criteria.
 4. Pass the pre-PR gate (see Pre-PR Gate section below).
 5. Open a draft PR targeting \`dev\` using the required body template.
@@ -615,36 +524,31 @@ The orchestrator backend handles all status transitions (In Progress → In Revi
 
 ## Efficiency Rules
 
-This session runs in \`--print\` mode with no human watching the output.
-Optimize for speed and token efficiency:
+Running in \`--print\` mode — optimize for speed and token efficiency:
 
 - **Do NOT use TodoWrite.** No one sees the todo list. Track your progress internally.
 - **Do NOT use Agent subagents for exploration.** Use Glob and Grep directly.
-- **Minimize tool calls.** Batch independent reads. Don't re-read files you already read.
-- **Keep commit messages and PR descriptions concise.** One sentence summaries, not essays.
-- **Prefer Edit over Write for files that already exist.** Only use Write to create a new file or when replacing the majority of a file. Never re-emit an unchanged file body.
-- **Never Read a file you just wrote or edited** — you already know its contents and line layout.
-- **Never Read/cat raw \`tasks/*.output\` background-task files** — they bypass the Bash output cap. Use the TaskOutput tool if you must inspect a backgrounded command's output.
+- **Minimize tool calls.** Batch reads; don't re-read files you just wrote or edited.
+- **Prefer Edit over Write** for existing files; never re-emit unchanged file bodies.
+- **Commit messages/PR descriptions:** one sentence summaries.
+- **Never cat \`tasks/*.output\` files** — use the TaskOutput tool instead.
 
 ---
 
 ## Context Efficiency
 
-Large Read payloads and broad Grep results are the primary drivers of context exhaustion.
-Prefer surgical access over full-file reads:
-
-- **Grep first, then read the slice** — use Grep to locate the region, then Read with \`offset\`/\`limit\` to fetch only the lines you need. Never read a large file whole when you only need a section.
-- **Scope every Grep** — always supply a \`path\`/\`glob\` and a specific pattern. Avoid repo-wide matches; large result sets consume context and hide the signal.
-- **Don't re-read after editing** — the Edit result already reflects the change. Re-reading wastes tokens.
-- **Reference modules: read the relevant region only** — for large existing files used only as reference, read the relevant lines, not the whole file.
+- **Grep first, then read the slice** — locate with Grep, then Read with \`offset\`/\`limit\` for only the region you need.
+- **Scope every Grep** — supply \`path\`/\`glob\` and a specific pattern; avoid repo-wide matches.
+- **Don't re-read after editing** — the Edit result already reflects the change.
+- **Reference modules: read the relevant region only**, not the whole file.
 
 ---
 
 ## PR Format Standards
 
-- **Title**: \`feat: <task-name>\` — no scope prefix like \`(backend)\`, no milestone tags.
-- **How to create the PR**: emit the PR body inside a \`<pr-body>…</pr-body>\` marker block in your final message text. The backend detects this marker, validates the body, and opens (or updates) the draft PR targeting \`dev\` via REST — no file written, no shell command run. Do NOT use the MCP \`mcp__github__create_pull_request\` tool — the marker is the only permitted path.
-- **Required body sections** (no omissions, no reordering):
+- **Title**: \`feat: <task-name>\` — no scope prefix, no milestone tags.
+- **How to create the PR**: emit the body inside \`<pr-body>…</pr-body>\` in your final message. Do NOT use the MCP \`mcp__github__create_pull_request\` tool — the marker is the only path.
+- **Required body sections**:
 
 \`\`\`
 ## Summary
@@ -664,7 +568,7 @@ Prefer surgical access over full-file reads:
 
 ## Branch Rules
 
-- Branch name: \`feature/<task-name>\` — created from the worktree's current HEAD
+- Branch name: \`feature/<task-name>\`
 - Never commit directly to \`dev\` or \`main\`
 - Never merge your own PR
 - One task per session — no scope creep
@@ -673,15 +577,11 @@ Prefer surgical access over full-file reads:
 
 ## Commit Attribution
 
-Every commit **must** include the following trailer (replace \`<model>\` and \`<session-id>\` with your actual model ID and session ID):
+Every commit **must** include this trailer:
 
 \`\`\`
 AI-Authored-By: <model> (session: <session-id>)
 \`\`\`
-
-Example: \`AI-Authored-By: claude-sonnet-4-6 (session: f98ff4ec)\`
-
-The backend verifies this trailer server-side. In corporate mode, missing trailers pause the task.
 
 ---
 
@@ -713,51 +613,34 @@ Run in order — all must pass before opening the PR:
 > **Your worktree directory is \`/worktrees/abc123\`.**
 > This is your \`cwd\`. All commands run here. Never navigate to or operate on any parent directory.
 
-- All git commands must run inside the worktree directory (your \`cwd\`)
 - Never use \`git -C <path>\` pointing outside this worktree
 - Never use \`--work-tree\` or \`--git-dir\` flags pointing outside this worktree
 - Never run \`git checkout\` or \`git switch\` targeting a branch in the main repo directory
-- The backend records the main repo branch before each session and will warn if it drifts
 
 ---
 
 ## Filesystem Isolation (Personal Mode)
 
-> ⚠️ **Personal mode has no structural sandbox** — there is no docker, chroot, or
-> namespace to prevent writes outside the worktree. All isolation is prompt-level.
-> Violating these rules can corrupt the developer's live environment.
+> ⚠️ **No sandbox** — isolation is prompt-level only. Writes outside the worktree corrupt the developer's environment.
 
-All file writes **must stay inside the worktree directory** (\`/worktrees/abc123\`).
-
-- **Never write to the project root or any path above the worktree.**
-  Scripts, tools, and generated outputs must target paths under the worktree, not the parent repo.
-- **Dev state (SQLite databases, log files, generated artifacts) must use worktree-relative paths.**
-  Do not reference absolute paths to project-root databases or output files.
-  Use paths like \`<worktree>/.dev-state/<file>\` or resolve paths relative to \`cwd\`.
-- **Before running any script that writes files or opens a database, verify the target path is inside the worktree.**
-  If a script hardcodes an absolute project-root path, patch it to accept an env var or relative path before executing.
-- **Need a scratch/temp file (notes, intermediate output)? Write it under \`.claude/\` in your worktree** — it's gitignored and excluded from lint/format.
-  NEVER write to \`/tmp/\`, \`$HOME\`, \`$(mktemp)\`, or anywhere outside your worktree:
-  those paths are shared across sessions (collision risk) and violate isolation.
+All file writes **must stay inside** \`/worktrees/abc123\`. Never write to the project root, \`/tmp/\`, or \`$HOME\`. For scratch files use \`.claude/\` in your worktree.
 
 ---
 
 ## Bash Rules (Permission System)
 
-Your Bash commands are authorized by prefix matching on the **first token**.
-Violating these rules causes **silent denial** — the command fails with no error message.
+Bash is authorized by **first-token** prefix matching. Violations cause **silent denial**.
 
 **Rule 1 — One command per Bash call.**
 Never chain with \`&&\`, \`;\`, or \`||\`. Split into separate Bash calls.
 
-**Rule 2 — Never prefix with \`cd path &&\`.**
-You are already in the worktree directory. Just run the command directly.
+**Rule 2 — Never prefix with \`cd path &&\`.** You're already in the worktree; run commands directly.
 
 **Rule 3 — No heredoc subshells in git commit.**
-\`git commit -m "$(cat <<'EOF'...)"\` is denied. For multiline commit messages, use repeated \`-m\` flags: \`git commit -m "<subject>" -m "<paragraph 2>" -m "<paragraph 3>"\` — git concatenates each \`-m\` as a separate paragraph. No scratch file needed.
+Use repeated \`-m\` flags instead: \`git commit -m "subject" -m "body"\` — git concatenates them.
 
 **Rule 4 — Do not write to \`/tmp/\` or paths outside the worktree.**
-Use the Write tool for any file creation. Never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
+Use the Write tool; never use \`cat >\`, \`printf >\`, or \`echo >\` redirects.
 
 **Rule 5 — Use \`npx\` instead of bare tool names.**
 \`tsc\` → \`npx tsc\`. Bare commands may not be on PATH."
