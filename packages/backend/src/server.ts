@@ -60,19 +60,20 @@ import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
 import setupRouter, { createSetupModeGuard } from './routes/setup';
 import { runBootSequence } from './bootSequence';
+import { logger } from './logger';
 
 runMigrations(db);
 loadRuntimeSettingsFromDb();
 importProjectsFromEnv(process.env.PROJECTS);
 
 const _cm = getCorporateMode();
-console.log(
+logger.info(
   `[corporateMode] mode=${_cm.enabled ? 'corporate' : 'personal'} envLocked=${_cm.envLocked} gates=${JSON.stringify(_cm.gates)}`,
 );
 
 const ghostsRemoved = deleteGhostSessions();
 if (ghostsRemoved > 0) {
-  console.log(
+  logger.info(
     `[server] cleaned up ${ghostsRemoved} ghost session(s) with no events`,
   );
 }
@@ -83,7 +84,7 @@ const sessionsDir = rawSessionsDir.replace(/^~/, os.homedir());
 const jsonlReader = new JsonlReader(sessionsDir);
 
 if (process.env.TASK_BACKEND) {
-  console.warn(
+  logger.warn(
     '[startup] TASK_BACKEND env var is deprecated and ignored. ' +
       'task_source is now configured per-project in SQLite.',
   );
@@ -201,12 +202,12 @@ sessionManager.on('message', broadcast);
 sessionManager.on(
   'push_detected',
   ({ sessionId: codingSessionId }: { sessionId: string }) => {
-    console.log(
+    logger.info(
       `[server] push_detected from session ${codingSessionId.slice(0, 8)}`,
     );
     const prRow = getPRBySessionId(codingSessionId);
     if (!prRow || prRow.state !== 'open') {
-      console.log(
+      logger.info(
         `[server] push_detected: no open PR for session (found=${!!prRow})`,
       );
       return;
@@ -230,7 +231,7 @@ wss.on('connection', (ws, req) => {
     }
   }
 
-  console.log('[WS] client connected');
+  logger.info('[WS] client connected');
 
   // Send existing active (non-archived) sessions to the new client so the UI populates on load.
   // session_status messages in this burst carry replay: true so the frontend can suppress
@@ -241,7 +242,7 @@ wss.on('connection', (ws, req) => {
   ws.on('message', (data) =>
     handleMessage(ws, data.toString(), sessionManager),
   );
-  ws.on('close', () => console.log('[WS] client disconnected'));
+  ws.on('close', () => logger.info('[WS] client disconnected'));
 });
 
 // AutoLauncher is constructed up-front so it can be referenced during shutdown,
@@ -305,7 +306,7 @@ void runBootSequence({
 });
 
 async function gracefulShutdown(signal: string) {
-  console.log(`[server] ${signal} received — shutting down`);
+  logger.info(`[server] ${signal} received — shutting down`);
   autoLauncher.stop();
   taskCacheRefresher.stop();
   stuckSessionMonitor.stop();
@@ -322,9 +323,9 @@ async function gracefulShutdown(signal: string) {
 }
 
 function shutdownWithTimeout(signal: string) {
-  gracefulShutdown(signal).catch(console.error);
+  gracefulShutdown(signal).catch(logger.error);
   setTimeout(() => {
-    console.error('[server] Graceful shutdown timed out — forcing exit');
+    logger.error('[server] Graceful shutdown timed out — forcing exit');
     process.exit(1);
   }, 15_000).unref();
 }
