@@ -269,6 +269,8 @@ export type ServerMessage =
     }
   | { type: 'verify_pipeline_started'; prNumber: number; repo: string }
   | { type: 'verify_pipeline_complete'; prNumber: number; repo: string }
+  | { type: 'analyze_pipeline_started'; prNumber: number; repo: string }
+  | { type: 'analyze_pipeline_complete'; prNumber: number; repo: string }
   | { type: 'test_pipeline_started'; prNumber: number; repo: string }
   | { type: 'test_pipeline_complete'; prNumber: number; repo: string }
   | { type: 'review_started'; prNumber: number; sessionId: string }
@@ -276,9 +278,30 @@ export type ServerMessage =
       type: 'pr_review_blocked_by_gate';
       prNumber: number;
       repo: string;
-      kind: 'verify' | 'autofix';
+      kind: 'verify' | 'autofix' | 'analyze';
       failedCommand?: string;
       summary: string;
+    }
+  | {
+      type: 'pipeline_stage_entered';
+      prNumber: number;
+      repo: string;
+      stage: string;
+    }
+  | {
+      type: 'pipeline_stage_passed';
+      prNumber: number;
+      repo: string;
+      stage: string;
+      summary?: string;
+    }
+  | {
+      type: 'pipeline_stage_failed';
+      prNumber: number;
+      repo: string;
+      stage: string;
+      summary?: string;
+      failedCommand?: string;
     }
   | {
       type: 'local_branch_submitted';

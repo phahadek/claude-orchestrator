@@ -36,7 +36,10 @@ export type EventType =
   | 'conflict_nudge_delivery_failed'
   | 'worktree_remove_failed'
   | 'stale_branch_abandoned'
-  | 'review_side_effect_failed';
+  | 'review_side_effect_failed'
+  | 'pipeline_stage_entered'
+  | 'pipeline_stage_passed'
+  | 'pipeline_stage_failed';
 
 export type ActorType = 'ai' | 'human' | 'system';
 
