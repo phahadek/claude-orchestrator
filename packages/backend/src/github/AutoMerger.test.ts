@@ -644,9 +644,7 @@ describe('AutoMerger.pauseWithReason() — branches on pause-reason structure', 
       mergeable: false,
       mergeState: null,
     });
-    expect(
-      (msg as { failingChecks?: unknown }).failingChecks,
-    ).toBeUndefined();
+    expect((msg as { failingChecks?: unknown }).failingChecks).toBeUndefined();
   });
 });
 

@@ -2157,7 +2157,10 @@ describe('PRMergeWatcher — branches on pause-reason structure', () => {
       'owner/repo',
       null,
     );
-    expect(vi.mocked(autoMerger.attempt)).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(vi.mocked(autoMerger.attempt)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
     // Pause-clear path returns early — no re-review is enqueued.
     expect(
       vi.mocked(reviewService.reReviewPR as ReturnType<typeof vi.fn>),
