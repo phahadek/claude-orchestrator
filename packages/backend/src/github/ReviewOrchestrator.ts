@@ -19,6 +19,9 @@ import {
   getAllPendingReviewSyncs,
   hasTestResultForSha,
   upsertTestResult,
+  hasAnalyzeResultForSha,
+  upsertAnalyzeResult,
+  getAnalyzeResult,
   setPreReviewStage,
   setLastReviewedSha,
 } from '../db/queries';
@@ -499,6 +502,54 @@ export class ReviewOrchestrator {
     );
   }
 
+  /**
+   * Run the configured analyze: commands for a PR's head SHA.
+   * Deduplicates: if a result already exists for this SHA, returns the cached result.
+   * Persists { passed, output } keyed by (prNumber, repo, sha).
+   * Returns { passed, output } so the caller can act on failure.
+   */
+  async runAnalyzePipeline(
+    prNumber: number,
+    repo: string,
+    headSha: string,
+    worktreePath: string,
+    commands: string[],
+    timeoutSec: number,
+    maxRssMb = 0,
+    failFast = true,
+  ): Promise<{ passed: boolean; output: string }> {
+    if (!commands.length || !headSha) return { passed: true, output: '' };
+
+    if (hasAnalyzeResultForSha(prNumber, repo, headSha)) {
+      console.log(
+        `[ReviewOrchestrator] analyze already ran for PR #${prNumber} SHA ${headSha.slice(0, 7)} — returning cached result`,
+      );
+      const cached = getAnalyzeResult(prNumber, repo, headSha);
+      return { passed: cached?.passed === 1, output: cached?.output ?? '' };
+    }
+
+    console.log(
+      `[ReviewOrchestrator] running analyze for PR #${prNumber} SHA ${headSha.slice(0, 7)} (timeout ${timeoutSec}s)`,
+    );
+
+    const { passed, output } = await runTestCommands(
+      worktreePath,
+      commands,
+      timeoutSec,
+      (msg) =>
+        console.log(`[ReviewOrchestrator] analyze PR #${prNumber}: ${msg}`),
+      { maxRssMb, failFast },
+    );
+
+    upsertAnalyzeResult(prNumber, repo, headSha, passed, output);
+
+    console.log(
+      `[ReviewOrchestrator] analyze ${passed ? 'PASSED' : 'FAILED'} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,
+    );
+
+    return { passed, output };
+  }
+
   private async executeLocalBranchReview(job: LocalBranchJob): Promise<void> {
     const project = getProjectById(job.projectId);
     if (project) {
@@ -832,6 +883,67 @@ export class ReviewOrchestrator {
           prNumber: job.prNumber,
           repo: job.repo,
         });
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Gate 3: Analyze (static analysis, between verify and tests) ──────────
+    {
+      const analyzePrRow = getPRByNumber(job.prNumber, job.repo);
+      const analyzeHeadSha = analyzePrRow?.head_sha ?? '';
+      const analyzeWorktreePath = analyzePrRow?.session_id
+        ? (getSession(analyzePrRow.session_id)?.worktree_path ?? '')
+        : '';
+      if (analyzeHeadSha && analyzeWorktreePath) {
+        const analyzeConfig = loadOrchestratorConfig(project.projectDir);
+        if (analyzeConfig.analyze?.length) {
+          this.sessionManager.emit('message', {
+            type: 'analyze_pipeline_started',
+            prNumber: job.prNumber,
+            repo: job.repo,
+          });
+          setPreReviewStage(job.prNumber, job.repo, 'analyzing');
+          const analyzeResult = await this.runAnalyzePipeline(
+            job.prNumber,
+            job.repo,
+            analyzeHeadSha,
+            analyzeWorktreePath,
+            analyzeConfig.analyze,
+            analyzeConfig.analyze_timeout_sec,
+            analyzeConfig.analyze_max_rss_mb,
+            analyzeConfig.analyze_fail_fast,
+          );
+          if (!analyzeResult.passed) {
+            console.log(
+              `[ReviewOrchestrator] executeReview: analyze gate FAILED for PR #${job.prNumber} — pausing`,
+            );
+            setPauseReason(job.prNumber, job.repo, 'analyze_failing');
+            const analyzeSessionId = getPRByNumber(
+              job.prNumber,
+              job.repo,
+            )?.session_id;
+            if (analyzeSessionId) {
+              const message = `## Analyze Gate Failure\n\nThe static analysis gate failed. Please fix the issues below and re-push.\n\n\`\`\`\n${analyzeResult.output}\n\`\`\``;
+              try {
+                await this.sessionManager.sendOrResume(
+                  analyzeSessionId,
+                  message,
+                );
+              } catch (e) {
+                console.warn(
+                  `[ReviewOrchestrator] analyze failure routing failed for PR #${job.prNumber}: ${e}`,
+                );
+              }
+            }
+            this.consumePendingPushIfSet(job.prNumber, job.repo);
+            return;
+          }
+          this.sessionManager.emit('message', {
+            type: 'analyze_pipeline_complete',
+            prNumber: job.prNumber,
+            repo: job.repo,
+          });
+        }
       }
     }
     // ─────────────────────────────────────────────────────────────────────────

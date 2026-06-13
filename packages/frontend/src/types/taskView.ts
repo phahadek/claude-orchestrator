@@ -26,7 +26,8 @@ export type PauseReason =
   | 'stalled_idle'
   | 'notion_done_update_stuck'
   | 'launch_failed'
-  | 'diverged_branch';
+  | 'diverged_branch'
+  | 'analyze_failing';
 
 export interface TaskView {
   taskId: string;
