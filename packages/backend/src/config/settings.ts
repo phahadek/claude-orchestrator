@@ -1,5 +1,8 @@
 import { z } from 'zod';
-import { getSetting as rawGetSetting, setSetting as rawSetSetting } from '../db/queries';
+import {
+  getSetting as rawGetSetting,
+  setSetting as rawSetSetting,
+} from '../db/queries';
 
 const zodBoolCoerce = z.union([
   z.boolean(),
@@ -72,7 +75,10 @@ export const SETTING_DEFAULTS: Settings = {
   ai_reviewer_usernames: [],
 };
 
-function deserializeField<K extends SettingKey>(key: K, raw: string): Settings[K] | null {
+function deserializeField<K extends SettingKey>(
+  key: K,
+  raw: string,
+): Settings[K] | null {
   let input: unknown = raw;
   if (key === 'ai_reviewer_usernames') {
     try {
@@ -87,7 +93,10 @@ function deserializeField<K extends SettingKey>(key: K, raw: string): Settings[K
   return null;
 }
 
-function serializeSetting<K extends SettingKey>(_key: K, value: Settings[K]): string {
+function serializeSetting<K extends SettingKey>(
+  _key: K,
+  value: Settings[K],
+): string {
   if (Array.isArray(value)) return JSON.stringify(value);
   return String(value);
 }
@@ -103,7 +112,9 @@ export function typedGetSetting<K extends SettingKey>(key: K): Settings[K] {
   }
   const parsed = deserializeField(key, raw);
   if (parsed === null) {
-    console.warn(`[settings] Malformed value for "${key}": ${JSON.stringify(raw)} — using default`);
+    console.warn(
+      `[settings] Malformed value for "${key}": ${JSON.stringify(raw)} — using default`,
+    );
     return SETTING_DEFAULTS[key];
   }
   return parsed;
@@ -114,8 +125,13 @@ export function typedGetSetting<K extends SettingKey>(key: K): Settings[K] {
  * Throws ZodError immediately for non-conforming values (wrong type / out-of-enum).
  * Returns the validated typed value so callers can apply it to runtime state.
  */
-export function typedSetSetting<K extends SettingKey>(key: K, value: Settings[K]): Settings[K] {
-  const parsed = (SettingsSchema.shape[key] as z.ZodTypeAny).parse(value) as Settings[K];
+export function typedSetSetting<K extends SettingKey>(
+  key: K,
+  value: Settings[K],
+): Settings[K] {
+  const parsed = (SettingsSchema.shape[key] as z.ZodTypeAny).parse(
+    value,
+  ) as Settings[K];
   rawSetSetting(key, serializeSetting(key, parsed));
   return parsed;
 }

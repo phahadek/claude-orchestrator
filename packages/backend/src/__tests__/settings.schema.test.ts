@@ -31,9 +31,7 @@ describe('typedGetSetting — missing key', () => {
   });
 
   it('returns typed enum default when key absent', () => {
-    expect(typedGetSetting('session_mode')).toBe(
-      SETTING_DEFAULTS.session_mode,
-    );
+    expect(typedGetSetting('session_mode')).toBe(SETTING_DEFAULTS.session_mode);
     expect(typedGetSetting('release_channel')).toBe(
       SETTING_DEFAULTS.release_channel,
     );

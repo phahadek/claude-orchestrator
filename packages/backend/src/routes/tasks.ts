@@ -4,10 +4,7 @@ import { logger } from '../logger';
 import { getProjectById, runtimeSettings } from '../config';
 import { ProjectService } from '../projects/ProjectService';
 import { getTaskBackend } from '../tasks/TaskBackend';
-import {
-  getTaskCache,
-  getActiveTaskAggregates,
-} from '../db/queries';
+import { getTaskCache, getActiveTaskAggregates } from '../db/queries';
 import { typedGetSetting } from '../config/settings';
 import type { TaskAggregateRow } from '../db/queries';
 import { deriveDisplayStatus } from '../tasks/TaskStatusEngine';

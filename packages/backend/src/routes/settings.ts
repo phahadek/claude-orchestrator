@@ -41,7 +41,10 @@ const SETTING_KEYS = [
 
 type RouteSettingKey = (typeof SETTING_KEYS)[number];
 
-function applyToRuntime(key: RouteSettingKey, value: Settings[RouteSettingKey]): void {
+function applyToRuntime(
+  key: RouteSettingKey,
+  value: Settings[RouteSettingKey],
+): void {
   switch (key) {
     case 'max_concurrent_code_sessions':
       runtimeSettings.max_concurrent_code_sessions = value as number;
@@ -176,7 +179,9 @@ router.patch('/', (req: Request, res: Response) => {
       } catch (err) {
         res
           .status(400)
-          .json({ error: `Invalid value for "${key}": ${(err as Error).message}` });
+          .json({
+            error: `Invalid value for "${key}": ${(err as Error).message}`,
+          });
         return;
       }
     }
