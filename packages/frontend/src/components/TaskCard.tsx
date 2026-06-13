@@ -61,6 +61,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Branch has diverged from origin — manual reconciliation needed before auto-push can resume.',
   analyze_failing:
     'Static analysis gate failed — fix the reported issues and re-push.',
+  rate_limit:
+    'API rate limit reached — session paused. Will resume automatically.',
 };
 
 function verdictLabel(verdict: string): string {

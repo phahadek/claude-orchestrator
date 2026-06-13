@@ -1,3 +1,5 @@
+import type { CanonicalPauseReason } from '@claude-orchestrator/backend/src/db/pauseReason';
+
 export type DisplayStatus =
   | 'ready'
   | 'in_progress'
@@ -7,27 +9,7 @@ export type DisplayStatus =
   | 'done'
   | 'backlog';
 
-export type PauseReason =
-  | 'max_reviews'
-  | 'stuck_timeout'
-  | 'ci_failing'
-  | 'ci_billing_blocked'
-  | 'auto_merge_failed'
-  | 'pr_closed'
-  | 'review_failed'
-  | 'api_overloaded'
-  | 'merge_conflict'
-  | 'awaiting_human_approval'
-  | 'human_changes_requested'
-  | 'pr_body_invalid'
-  | 'attribution_missing'
-  | 'audit_findings'
-  | 'pr_creation_failed'
-  | 'stalled_idle'
-  | 'notion_done_update_stuck'
-  | 'launch_failed'
-  | 'diverged_branch'
-  | 'analyze_failing';
+export type PauseReason = CanonicalPauseReason;
 
 export interface TaskView {
   taskId: string;
