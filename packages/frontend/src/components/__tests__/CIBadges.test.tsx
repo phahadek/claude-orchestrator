@@ -18,6 +18,17 @@ describe('CIBadges', () => {
     expect(screen.getByText('❌ CI failing')).toBeDefined();
   });
 
+  it('renders ❌ CI failing when pauseReason is a JSON struct with source ci', () => {
+    const jsonPauseReason = JSON.stringify({
+      reason: 'ci_failing',
+      source: 'ci',
+      severity: 'needs_attention',
+      retry_strategy: 'manual_action',
+    });
+    render(<CIBadges mergeState={null} pauseReason={jsonPauseReason} />);
+    expect(screen.getByText('❌ CI failing')).toBeDefined();
+  });
+
   it('renders nothing when mergeState is clean and pauseReason is null', () => {
     const { container } = render(
       <CIBadges mergeState="clean" pauseReason={null} />,

@@ -32,7 +32,8 @@ describe('insertPauseInterval', () => {
     const intervals = getPauseIntervalsBySession('sess-1');
     expect(intervals).toHaveLength(1);
     expect(intervals[0].session_id).toBe('sess-1');
-    expect(intervals[0].pause_reason).toBe('rate_limit');
+    expect(intervals[0].pause_reason.reason).toBe('rate_limit');
+    expect(intervals[0].pause_reason.source).toBe('session');
     expect(intervals[0].paused_at).toBeGreaterThan(0);
     expect(intervals[0].resumed_at).toBeNull();
   });
@@ -43,7 +44,7 @@ describe('insertPauseInterval', () => {
     insertPauseInterval('sess-2', 'stuck_timeout');
     const intervals = getPauseIntervalsBySession('sess-2');
     expect(intervals).toHaveLength(2);
-    expect(intervals.map((i) => i.pause_reason)).toEqual([
+    expect(intervals.map((i) => i.pause_reason.reason)).toEqual([
       'rate_limit',
       'stuck_timeout',
     ]);
@@ -123,6 +124,7 @@ describe('getTotalPausedMs', () => {
 
   it('uses endedAt as implicit resume for open intervals (session ending while paused)', async () => {
     const startedAt = Date.now();
+    insertSession('sess-9');
     insertPauseInterval('sess-9', 'api_overloaded');
     await new Promise((r) => setTimeout(r, 30));
     const endedAt = Date.now();
@@ -139,6 +141,29 @@ describe('getTotalPausedMs', () => {
     const total = getTotalPausedMs('sess-10');
     // With implicit now, open intervals contribute their current elapsed time
     expect(total).toBeGreaterThanOrEqual(10);
+  });
+});
+
+describe('legacy bare-string fixture regression', () => {
+  it('reads back legacy bare-string pause_reason rows with fallback', () => {
+    insertSession('sess-legacy');
+    db.prepare(
+      `INSERT INTO session_pause_intervals (session_id, pause_reason, paused_at) VALUES (?, ?, ?)`,
+    ).run('sess-legacy', 'rate_limit', Date.now());
+    db.prepare(
+      `INSERT INTO session_pause_intervals (session_id, pause_reason, paused_at) VALUES (?, ?, ?)`,
+    ).run('sess-legacy', 'stuck_timeout', Date.now());
+    db.prepare(
+      `INSERT INTO session_pause_intervals (session_id, pause_reason, paused_at) VALUES (?, ?, ?)`,
+    ).run('sess-legacy', 'api_overloaded', Date.now());
+    const intervals = getPauseIntervalsBySession('sess-legacy');
+    expect(intervals).toHaveLength(3);
+    expect(intervals[0].pause_reason.reason).toBe('rate_limit');
+    expect(intervals[0].pause_reason.source).toBe('session');
+    expect(intervals[1].pause_reason.reason).toBe('stuck_timeout');
+    expect(intervals[1].pause_reason.source).toBe('session');
+    expect(intervals[2].pause_reason.reason).toBe('api_overloaded');
+    expect(intervals[2].pause_reason.source).toBe('session');
   });
 });
 

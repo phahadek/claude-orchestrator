@@ -1,4 +1,5 @@
 import styles from './CIBadges.module.css';
+import { parsePauseReason } from '@claude-orchestrator/backend/src/db/pauseReason';
 
 export type PreReviewStage =
   | 'autofix'
@@ -133,10 +134,13 @@ export function CIBadges({
 }: CIBadgesProps) {
   if (prState === 'merged' || prState === 'closed') return null;
 
+  const pauseStruct = parsePauseReason(pauseReason ?? null);
+  const isCIPause = pauseStruct?.source === 'ci';
+  const showBillingBlocked =
+    isCIPause && pauseStruct!.reason === 'ci_billing_blocked';
   const showCiFailing =
-    mergeState === 'ci_failed' || pauseReason === 'ci_failing';
-  const showBillingBlocked = pauseReason === 'ci_billing_blocked';
-  const showAnalyzeFailing = pauseReason === 'analyze_failing';
+    mergeState === 'ci_failed' || (isCIPause && !showBillingBlocked);
+  const showAnalyzeFailing = pauseStruct?.source === 'analyze';
   const showUnstable = mergeState === 'unstable';
   const showRunning = mergeState === 'ci_running';
 
