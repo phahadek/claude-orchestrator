@@ -125,18 +125,6 @@ export function _setMaxBytesForTesting(n: number): void {
   _maxBytesOverride = n;
 }
 
-/**
- * Structured logger backed by the rotating-file sink.
- * Uses the patched console methods so calls are forwarded to the log file
- * once initLogger() has been called, and fall back to stdout before that.
- */
-export const logger = {
-  info: (...args: unknown[]) => console.log(...args),
-  warn: (...args: unknown[]) => console.warn(...args),
-  error: (...args: unknown[]) => console.error(...args),
-  debug: (...args: unknown[]) => console.debug(...args),
-};
-
 /** Reset module state and restore console — for unit tests only. */
 export function _resetForTesting(): void {
   closeFd();
