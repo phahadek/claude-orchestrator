@@ -429,7 +429,10 @@ describe('PRCard', () => {
         retry_strategy: 'manual_action',
       });
       render(
-        <PRCard pr={makePR({ pauseReason: jsonPauseReason })} {...defaultProps} />,
+        <PRCard
+          pr={makePR({ pauseReason: jsonPauseReason })}
+          {...defaultProps}
+        />,
       );
       expect(screen.getByText(/⚠ Review failed/)).toBeDefined();
     });
