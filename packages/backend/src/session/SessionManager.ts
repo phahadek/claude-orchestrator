@@ -1819,9 +1819,7 @@ export class SessionManager extends EventEmitter {
         emitTaskUpdated(notionTaskId);
       })
       .catch((e) =>
-        logger.error(
-          `[SessionManager] abortSession updateStatus failed: ${e}`,
-        ),
+        logger.error(`[SessionManager] abortSession updateStatus failed: ${e}`),
       );
   }
 
