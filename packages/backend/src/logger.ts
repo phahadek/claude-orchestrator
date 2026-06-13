@@ -111,6 +111,15 @@ export function initLogger(): void {
   });
 }
 
+/** Structured logger — delegates to the (patched) console methods so output
+ *  reaches both stdout and the rotating log file after initLogger() runs. */
+export const logger = {
+  info: (...args: unknown[]) => console.log(...args),
+  warn: (...args: unknown[]) => console.warn(...args),
+  error: (...args: unknown[]) => console.error(...args),
+  debug: (...args: unknown[]) => console.debug(...args),
+};
+
 /** Override the rotation threshold — for unit tests only. */
 export function _setMaxBytesForTesting(n: number): void {
   _maxBytesOverride = n;

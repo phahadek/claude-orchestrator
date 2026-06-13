@@ -3,6 +3,7 @@ import { GitHubClient } from './github/GitHubClient';
 import { runPRBootSweep } from './github/PRBootSweep';
 import { runBootIdleReconciliation } from './session/bootIdleReconciliation';
 import { runBootWorktreeReconciliation } from './orchestration/WorktreeReconciler';
+import { logger } from './logger';
 
 interface BootDeps {
   jsonlReader: {
@@ -71,7 +72,7 @@ export async function runBootSequence(deps: BootDeps): Promise<void> {
   try {
     await jsonlReader.importAll();
   } catch (err) {
-    console.error('[server] BOOT FAILURE in JSONL import:', err);
+    logger.error('[server] BOOT FAILURE in JSONL import:', err);
     process.exit(1);
   }
 
@@ -80,21 +81,21 @@ export async function runBootSequence(deps: BootDeps): Promise<void> {
   void sessionEventsPruner
     .runAtBoot()
     .catch((err: unknown) =>
-      console.warn('[server] SessionEventsPruner boot run failed:', err),
+      logger.warn('[server] SessionEventsPruner boot run failed:', err),
     );
   sessionEventsPruner.start();
 
   try {
     await sessionManager.resumeOrphanSessions();
   } catch (err) {
-    console.error('[server] BOOT FAILURE in resumeOrphanSessions:', err);
+    logger.error('[server] BOOT FAILURE in resumeOrphanSessions:', err);
     process.exit(1);
   }
 
   try {
     stuckSessionMonitor.rehydrate();
   } catch (err) {
-    console.error(
+    logger.error(
       '[server] BOOT FAILURE in StuckSessionMonitor.rehydrate:',
       err,
     );
@@ -105,13 +106,13 @@ export async function runBootSequence(deps: BootDeps): Promise<void> {
   autoMerger.rehydrate();
 
   await runBootWorktreeReconciliation().catch((err: unknown) =>
-    console.warn('[server] WorktreeReconciler boot sweep failed:', err),
+    logger.warn('[server] WorktreeReconciler boot sweep failed:', err),
   );
 
   void runPRBootSweep(githubClient)
     .then(() => runBootIdleReconciliation())
     .catch((err: unknown) =>
-      console.warn('[server] PR boot sweep failed:', err),
+      logger.warn('[server] PR boot sweep failed:', err),
     );
 
   prMergeWatcher.start();
@@ -120,7 +121,7 @@ export async function runBootSequence(deps: BootDeps): Promise<void> {
   await autoLauncher
     .start()
     .catch((err: unknown) =>
-      console.warn('[server] auto-launcher start failed:', err),
+      logger.warn('[server] auto-launcher start failed:', err),
     );
 
   orphanedTaskSweeper.start();
@@ -129,7 +130,7 @@ export async function runBootSequence(deps: BootDeps): Promise<void> {
   taskCacheRefresher.start();
 
   server.listen(port, '0.0.0.0', () => {
-    console.log(`[server] listening on port ${port}`);
-    console.log('[server] LAN access enabled — device auth required');
+    logger.info(`[server] listening on port ${port}`);
+    logger.info('[server] LAN access enabled — device auth required');
   });
 }
