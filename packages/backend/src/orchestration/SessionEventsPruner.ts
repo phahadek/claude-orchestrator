@@ -1,3 +1,4 @@
+import { logger } from '../logger';
 import { db } from '../db/db';
 import {
   getPruneEligibleSessions,
@@ -75,12 +76,12 @@ export class SessionEventsPruner {
       }
 
       if (totalPruned > 0) {
-        console.log(
+        logger.info(
           `[SessionEventsPruner] pruned ${totalPruned} system events across ${sessions.length} session(s)`,
         );
       }
     } catch (err) {
-      console.error('[SessionEventsPruner] pruneOnce error:', err);
+      logger.error('[SessionEventsPruner] pruneOnce error:', err);
     } finally {
       this.pruneRunning = false;
     }

@@ -1,3 +1,4 @@
+import { logger } from '../logger';
 import { runtimeSettings } from '../config';
 import { archiveConcludedSessionsOlderThan } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
@@ -78,11 +79,11 @@ export class ConcludedSessionArchiver {
         },
       });
 
-      console.log(
+      logger.info(
         `[ConcludedSessionArchiver] archived ${archivedIds.length} concluded session(s)`,
       );
     } catch (err) {
-      console.error(`[ConcludedSessionArchiver] sweep error: ${err}`);
+      logger.error(`[ConcludedSessionArchiver] sweep error: ${err}`);
     } finally {
       this.sweepRunning = false;
     }

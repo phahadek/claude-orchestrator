@@ -1,3 +1,4 @@
+import { logger } from '../logger';
 import type { SessionManager } from '../session/SessionManager';
 import { runtimeSettings } from '../config';
 import {
@@ -176,13 +177,13 @@ export class StuckSessionMonitor {
           broadcast: this.broadcast,
           emitPrOpened: () => {},
         }).catch((e) =>
-          console.error(
+          logger.error(
             `[StuckSessionMonitor] recoverSession failed for ${row.session_id}: ${e}`,
           ),
         );
       }
     } catch (e) {
-      console.error(`[StuckSessionMonitor] scanForStuckSessions error: ${e}`);
+      logger.error(`[StuckSessionMonitor] scanForStuckSessions error: ${e}`);
     } finally {
       this.scanRunning = false;
     }
@@ -526,7 +527,7 @@ export class StuckSessionMonitor {
     try {
       this.sessionManager.send(sessionId, PAUSE_MESSAGE);
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[StuckSessionMonitor] send failed for ${sessionId}: ${(err as Error).message}`,
       );
     }
@@ -561,7 +562,7 @@ export class StuckSessionMonitor {
     if (!state.hardStopArmed) return;
     if (Date.now() > state.hardStopDeadline) return;
 
-    console.warn(
+    logger.warn(
       `[StuckSessionMonitor] hard-stopping session ${sessionId.slice(0, 8)} — tool_use within hard-stop window after pause`,
     );
     // Disarm immediately so a flurry of tool_use events doesn't spawn parallel kills.
@@ -577,7 +578,7 @@ export class StuckSessionMonitor {
     this.sessionManager
       .kill(sessionId)
       .catch((err: unknown) =>
-        console.warn(
+        logger.warn(
           `[StuckSessionMonitor] kill failed for ${sessionId}: ${(err as Error).message}`,
         ),
       );
