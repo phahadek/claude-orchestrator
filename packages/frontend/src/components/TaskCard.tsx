@@ -1,6 +1,7 @@
 import type { TaskView, DisplayStatus, PauseReason } from '../types/taskView';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
+import { parsePauseReason } from '@claude-orchestrator/backend/src/db/pauseReason';
 import { useDispatch } from '../hooks/useDispatch';
 import { formatTokenCount } from '@claude-orchestrator/backend/src/utils/usage';
 import { CIBadges, PipelineStageBadge } from './CIBadges';
@@ -84,6 +85,7 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
   const statusKey = task.displayStatus.replace(/_/g, '-') as string;
   const dispatchTask = useDispatch(send, project);
   const isNonCode = !task.taskType.includes('💻');
+  const pauseStruct = parsePauseReason(task.pauseReason);
 
   // Only Ready code tasks that aren't blocked can be launched.
   // In Progress and In Review tasks already have an active session — launching
@@ -116,8 +118,12 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
         <span
           className={`${styles.statusBadge} ${styles[`status-${statusKey}`] ?? ''}`}
           title={
-            task.pauseReason ? PAUSE_REASON_LABELS[task.pauseReason] : undefined
+            pauseStruct
+              ? `[${pauseStruct.source}] ${PAUSE_REASON_LABELS[pauseStruct.reason] ?? pauseStruct.reason}`
+              : undefined
           }
+          data-pause-severity={pauseStruct?.severity}
+          data-pause-source={pauseStruct?.source}
         >
           {STATUS_LABELS[task.displayStatus]}
         </span>

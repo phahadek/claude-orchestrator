@@ -420,6 +420,22 @@ describe('PRCard', () => {
       );
       expect(screen.queryByText(/⚠ Review failed/)).toBeNull();
     });
+
+    it('shows "Review failed" badge when pauseReason is a JSON struct with reason review_failed', () => {
+      const jsonPauseReason = JSON.stringify({
+        reason: 'review_failed',
+        source: 'review',
+        severity: 'needs_attention',
+        retry_strategy: 'manual_action',
+      });
+      render(
+        <PRCard
+          pr={makePR({ pauseReason: jsonPauseReason })}
+          {...defaultProps}
+        />,
+      );
+      expect(screen.getByText(/⚠ Review failed/)).toBeDefined();
+    });
   });
 
   // ── CI badge ─────────────────────────────────────────────────────────────────

@@ -2558,7 +2558,9 @@ export function insertPauseInterval(
   sessionId: string,
   pauseReason: CanonicalPauseReason,
 ): void {
-  const serialized = serializePauseReason(pauseReasonFromCanonical(pauseReason));
+  const serialized = serializePauseReason(
+    pauseReasonFromCanonical(pauseReason),
+  );
   db.prepare(
     `INSERT INTO session_pause_intervals (session_id, pause_reason, paused_at)
      VALUES (?, ?, ?)`,
