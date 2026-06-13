@@ -42,6 +42,7 @@ import {
   setPreReviewStage,
 } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
+import { logger } from '../logger';
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const PUSH_REVIEW_TIMEOUT_MS = 240_000;
@@ -115,7 +116,7 @@ export class PRMergeWatcher {
     if (this.taskBackendOverride) return this.taskBackendOverride;
     const project = getProjectByGithubRepo(repo);
     if (!project) {
-      console.warn(
+      logger.warn(
         `[PRMergeWatcher] no project found for repo ${repo} — skipping task backend update`,
       );
       return undefined;
@@ -127,13 +128,13 @@ export class PRMergeWatcher {
     if (this.timer) return;
     this.timer = setInterval(() => {
       this.poll().catch((err: unknown) =>
-        console.warn('[PRMergeWatcher] poll error:', (err as Error).message),
+        logger.warn('[PRMergeWatcher] poll error:', (err as Error).message),
       );
     }, intervalMs);
     this.poll().catch((err: unknown) =>
-      console.warn('[PRMergeWatcher] poll error:', (err as Error).message),
+      logger.warn('[PRMergeWatcher] poll error:', (err as Error).message),
     );
-    console.log(`[PRMergeWatcher] started (interval=${intervalMs}ms)`);
+    logger.info(`[PRMergeWatcher] started (interval=${intervalMs}ms)`);
   }
 
   stop(): void {
@@ -147,7 +148,7 @@ export class PRMergeWatcher {
     this.pausedUntil = err.resetAt;
     if (!this.rateLimitBroadcasted) {
       this.rateLimitBroadcasted = true;
-      console.warn(
+      logger.warn(
         `[PRMergeWatcher] GitHub rate-limited; backing off until ${err.resetAt.toISOString()}`,
       );
       this.broadcast({
@@ -177,13 +178,13 @@ export class PRMergeWatcher {
     const byRepo = new Map<string, PullRequestRow[]>();
     for (const pr of openPRs) {
       if (!getProjectByGithubRepo(pr.repo)) {
-        console.warn(
+        logger.warn(
           `[PRMergeWatcher] PR #${pr.pr_number}: no project for repo ${pr.repo} — skipping poll`,
         );
         continue;
       }
       if (isTerminalStalePR(pr)) {
-        console.log(
+        logger.info(
           `[PRMergeWatcher] PR #${pr.pr_number}: verdict=incomplete with no new push — skipping poll`,
         );
         continue;
@@ -206,7 +207,7 @@ export class PRMergeWatcher {
       try {
         batchStates = await this.github.listOpenPRStates(repo);
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[PRMergeWatcher] listOpenPRStates failed for ${repo}, falling back to individual:`,
           (err as Error).message,
         );
@@ -243,7 +244,7 @@ export class PRMergeWatcher {
         this.handleRateLimit(err);
         return;
       }
-      console.warn(
+      logger.warn(
         `[PRMergeWatcher] getPRState failed for PR #${pr.pr_number}:`,
         (err as Error).message,
       );
@@ -282,7 +283,7 @@ export class PRMergeWatcher {
   ): Promise<void> {
     // Detect out-of-band pushes for any open PR
     if (githubHeadSha && githubHeadSha !== pr.head_sha) {
-      console.log(
+      logger.info(
         `[PRMergeWatcher] PR #${pr.pr_number} head_sha changed: ${pr.head_sha?.slice(0, 7) ?? 'null'} → ${githubHeadSha.slice(0, 7)} — triggering push pipeline`,
       );
       setHeadSha(pr.pr_number, pr.repo, githubHeadSha);
@@ -365,7 +366,7 @@ export class PRMergeWatcher {
         this.handleRateLimit(err);
         return;
       }
-      console.warn(
+      logger.warn(
         `[PRMergeWatcher] categorizeMergeability failed for PR #${pr.pr_number}:`,
         (err as Error).message,
       );
@@ -404,7 +405,7 @@ export class PRMergeWatcher {
           const billingBlock = await this.github
             .detectBillingBlock(pr.head_sha, pr.repo)
             .catch((err: unknown) => {
-              console.warn(
+              logger.warn(
                 `[PRMergeWatcher] detectBillingBlock failed for PR #${pr.pr_number}:`,
                 (err as Error).message,
               );
@@ -421,7 +422,7 @@ export class PRMergeWatcher {
             if (pr.task_id) {
               emitTaskUpdated(pr.task_id);
             }
-            console.log(
+            logger.info(
               `[PRMergeWatcher] PR #${pr.pr_number}: billing/spending limit blocked — paused as ci_billing_blocked`,
             );
             return;
@@ -436,7 +437,7 @@ export class PRMergeWatcher {
     // PRs already conflicted at first poll (or whose transition happened during
     // a backend restart) are correctly nudged because dedup is state-based.
     if (category.category === 'conflict') {
-      console.log(
+      logger.info(
         `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has merge conflicts`,
       );
       await sendConflictNudge(this.sessions, pr, 'conflict');
@@ -472,7 +473,7 @@ export class PRMergeWatcher {
     this.tryCIFailingRecovery(pr, category);
 
     if (stateChanged && category.category === 'blocked') {
-      console.log(
+      logger.info(
         `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} is blocked by branch protection`,
       );
     }
@@ -489,7 +490,7 @@ export class PRMergeWatcher {
     failingNames: string[],
     logExcerpt?: string | null,
   ): Promise<void> {
-    console.log(
+    logger.info(
       `[PRMergeWatcher] PR #${pr.pr_number} in ${pr.repo} has failing CI checks: ${failingNames.join(', ') || '(unknown)'}`,
     );
 
@@ -512,7 +513,7 @@ export class PRMergeWatcher {
             project!.projectDir,
             autofixCommands,
             (msg) =>
-              console.log(
+              logger.info(
                 `[PRMergeWatcher] autofix PR #${pr.pr_number}: ${msg}`,
               ),
           );
@@ -532,7 +533,7 @@ export class PRMergeWatcher {
             return; // CI will re-run on the new SHA
           }
         } catch (err) {
-          console.warn(
+          logger.warn(
             `[PRMergeWatcher] autofix error for PR #${pr.pr_number}:`,
             (err as Error).message,
           );
@@ -550,7 +551,7 @@ export class PRMergeWatcher {
     this.sessions
       .sendOrResume(pr.session_id!, msg)
       .catch((err: unknown) =>
-        console.warn(
+        logger.warn(
           `[PRMergeWatcher] sendOrResume failed for session ${pr.session_id}:`,
           (err as Error).message,
         ),
@@ -571,7 +572,7 @@ export class PRMergeWatcher {
     if (category.category === 'ci_failed' || category.category === 'conflict')
       return;
     setPauseReason(pr.pr_number, pr.repo, null);
-    console.log(
+    logger.info(
       `[PRMergeWatcher] PR #${pr.pr_number} CI recovered (mergeState=${category.mergeState}) — clearing ${pr.pause_reason} pause and retrying AutoMerger`,
     );
     this.broadcast({
@@ -592,7 +593,7 @@ export class PRMergeWatcher {
    */
   async handlePushDetected(prRow: PullRequestRow): Promise<void> {
     if (!AUTO_REVIEW_ENABLED) {
-      console.log('[PRMergeWatcher] handlePushDetected: auto-review disabled');
+      logger.info('[PRMergeWatcher] handlePushDetected: auto-review disabled');
       return;
     }
 
@@ -600,7 +601,7 @@ export class PRMergeWatcher {
     if (!sessionId) return;
 
     if (this.pendingReReviews.has(sessionId)) {
-      console.log(
+      logger.info(
         `[PRMergeWatcher] handlePushDetected: already pending for session ${sessionId.slice(0, 8)}`,
       );
       return;
@@ -611,7 +612,7 @@ export class PRMergeWatcher {
       // AutoMerger can re-check the review state (re-approve or request more changes).
       setPauseReason(prRow.pr_number, prRow.repo, null);
       this.autoMerger?.attempt(prRow.pr_number, prRow.repo);
-      console.log(
+      logger.info(
         `[PRMergeWatcher] handlePushDetected: human_changes_requested cleared for PR #${prRow.pr_number} — AutoMerger restarted`,
       );
       return;
@@ -635,7 +636,7 @@ export class PRMergeWatcher {
         const maxIter = this.getMaxReviewIterations();
         if (prRow.review_iteration >= maxIter) {
           const message = `Review loop for PR #${prRow.pr_number} reached ${maxIter} iterations without approval. Manual intervention needed.`;
-          console.warn(`[PRMergeWatcher] ${message}`);
+          logger.warn(`[PRMergeWatcher] ${message}`);
           setPauseReason(prRow.pr_number, prRow.repo, 'max_reviews');
           this.broadcast({
             type: 'review_escalated',
@@ -656,7 +657,7 @@ export class PRMergeWatcher {
           taskUrl: session?.task_url ?? '',
           contextUrl: project?.contextUrl ?? '',
         });
-        console.log(
+        logger.info(
           `[PRMergeWatcher] handlePushDetected for PR #${prRow.pr_number}: post-gate-failure push — enqueued review directly`,
         );
         return;
@@ -665,14 +666,14 @@ export class PRMergeWatcher {
       // Initial review hasn't started yet (or orchestrator unavailable) — queue
       // the push so it triggers re-review after the initial review is established.
       setPendingPush(prRow.pr_number, prRow.repo, 1);
-      console.log(
+      logger.info(
         `[PRMergeWatcher] handlePushDetected for PR #${prRow.pr_number} before review session established — queued as pending_push`,
       );
       return;
     }
 
     if (!this.prReviewService || !this.reviewOrchestrator) {
-      console.warn(
+      logger.warn(
         `[PRMergeWatcher] handlePushDetected: prReviewService or reviewOrchestrator not set — skipping re-review for PR #${prRow.pr_number}`,
       );
       return;
@@ -701,7 +702,7 @@ export class PRMergeWatcher {
           } catch (e) {
             fetchError = e;
             if (attempt === 0) {
-              console.warn(
+              logger.warn(
                 `[PRMergeWatcher] fetch PR #${prRow.pr_number} failed (attempt 1), retrying...`,
               );
               await new Promise<void>((resolve) => setTimeout(resolve, 2000));
@@ -709,7 +710,7 @@ export class PRMergeWatcher {
           }
         }
         if (fetchError) {
-          console.warn(
+          logger.warn(
             `[PRMergeWatcher] failed to fetch latest PR state for #${prRow.pr_number} after retry:`,
             fetchError,
           );
@@ -725,7 +726,7 @@ export class PRMergeWatcher {
             headSha,
           )
         ) {
-          console.log(
+          logger.info(
             `[PRMergeWatcher] handlePushDetected: autofix-only push for PR #${prRow.pr_number} — skipping re-review`,
           );
           return;
@@ -736,7 +737,7 @@ export class PRMergeWatcher {
         // Escalation cap reached — emit review_escalated before bailing out.
         if (prRow.review_iteration >= maxIter) {
           const message = `Review loop for PR #${prRow.pr_number} reached ${maxIter} iterations without approval. Manual intervention needed.`;
-          console.warn(`[PRMergeWatcher] ${message}`);
+          logger.warn(`[PRMergeWatcher] ${message}`);
           setPauseReason(prRow.pr_number, prRow.repo, 'max_reviews');
           this.broadcast({
             type: 'review_escalated',
@@ -755,7 +756,7 @@ export class PRMergeWatcher {
           },
           maxIter,
         );
-        console.log(
+        logger.info(
           `[PRMergeWatcher] shouldAutoReview: iter=${prRow.review_iteration}/${maxIter} head=${headSha?.slice(0, 7)} lastReviewed=${prRow.last_reviewed_sha?.slice(0, 7)} → ${autoReviewOk}`,
         );
         if (!autoReviewOk) {
@@ -820,7 +821,7 @@ export class PRMergeWatcher {
                     msg.type === 'large_model_escalation_started' &&
                     msg.sessionId === reviewSessionId
                   ) {
-                    console.log(
+                    logger.info(
                       `[PRMergeWatcher] review session ${reviewSessionId.slice(0, 8)} escalated to 1M model — resetting re-review timeout`,
                     );
                     arm();
@@ -843,7 +844,7 @@ export class PRMergeWatcher {
             }
           } catch (e) {
             const summary = e instanceof Error ? e.message : String(e);
-            console.error(
+            logger.error(
               `[PRMergeWatcher] re-review failed for PR #${prRow.pr_number}:`,
               e,
             );
@@ -891,14 +892,14 @@ export class PRMergeWatcher {
                 formatReviewFeedback(result, iteration),
               );
             } catch (e) {
-              console.warn(
+              logger.warn(
                 `[PRMergeWatcher] Failed to deliver review feedback to session ${sessionId}:`,
                 e,
               );
             }
           } else if (result.verdict === 'incomplete') {
             const message = `Review for PR #${prRow.pr_number} returned an incomplete verdict — the reviewer could not assess the PR. Manual intervention needed.`;
-            console.warn(`[PRMergeWatcher] ${message}`);
+            logger.warn(`[PRMergeWatcher] ${message}`);
             this.broadcast({
               type: 'review_incomplete',
               prNumber: prRow.pr_number,
@@ -912,7 +913,7 @@ export class PRMergeWatcher {
                 formatReviewFeedback(result, iteration),
               );
             } catch (e) {
-              console.warn(
+              logger.warn(
                 `[PRMergeWatcher] Failed to deliver incomplete review feedback to session ${sessionId}:`,
                 e,
               );
@@ -922,7 +923,7 @@ export class PRMergeWatcher {
           this.pendingReReviews.delete(sessionId);
         }
       } catch (e) {
-        console.error(
+        logger.error(
           `[PRMergeWatcher] handlePushDetected unexpected error for session ${sessionId.slice(0, 8)}:`,
           e,
         );
@@ -936,7 +937,7 @@ export class PRMergeWatcher {
     const now = Date.now();
     for (const [sid, addedAt] of this.pendingReReviews) {
       if (now - addedAt > PENDING_REREVIEW_TTL_MS) {
-        console.warn(
+        logger.warn(
           `[PRMergeWatcher] sweeping stale pendingReReview for session ${sid.slice(0, 8)} (age ${Math.round((now - addedAt) / 1000)}s)`,
         );
         this.pendingReReviews.delete(sid);
@@ -980,7 +981,7 @@ export class PRMergeWatcher {
         taskUrl: session?.task_url ?? '',
         contextUrl: project?.contextUrl ?? '',
       });
-      console.log(
+      logger.info(
         `[PRMergeWatcher] sweepPendingPushDeadLetters: consumed pending_push for PR #${pr.pr_number} — review enqueued`,
       );
     }
@@ -1006,7 +1007,7 @@ export class PRMergeWatcher {
       await this.github
         .deleteBranch(pr.repo, pr.head_branch)
         .catch((err: unknown) =>
-          console.warn(
+          logger.warn(
             `[PRMergeWatcher] deleteBranch origin ${pr.head_branch} failed:`,
             (err as Error).message,
           ),
@@ -1054,7 +1055,7 @@ export class PRMergeWatcher {
             emitTaskUpdated(pr.task_id!);
           })
           .catch((err: unknown) =>
-            console.warn(
+            logger.warn(
               `[PRMergeWatcher] task backend updateStatus failed:`,
               (err as Error).message,
             ),

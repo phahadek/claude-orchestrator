@@ -35,6 +35,7 @@ import { squashMergeLocal } from '../orchestration/localMergeRunner';
 import { detectMergeConflict } from '../orchestration/localBranchHelpers';
 import { formatMergeConflictFeedback } from './reviewUtils';
 import { sendConflictNudge, type ConflictNudgeCause } from './conflictNudge';
+import { logger } from '../logger';
 
 const MIN_POLL_INTERVAL_MS = 5_000;
 
@@ -70,7 +71,7 @@ export class AutoMerger {
     this.pausedUntil = err.resetAt;
     if (!this.rateLimitBroadcasted) {
       this.rateLimitBroadcasted = true;
-      console.warn(
+      logger.warn(
         `[AutoMerger] GitHub rate-limited; backing off until ${err.resetAt.toISOString()}`,
       );
       this.broadcast({
@@ -94,18 +95,18 @@ export class AutoMerger {
   bootSweep(): void {
     const orphans = getOrphanMergeablePRs();
     for (const row of orphans) {
-      console.log(
+      logger.info(
         `[AutoMerger] boot sweep: triggering merge for orphan PR #${row.pr_number} in ${row.repo}`,
       );
       this.attempt(row.pr_number, row.repo);
     }
     if (orphans.length > 0) {
-      console.log(
+      logger.info(
         `[AutoMerger] boot sweep complete — triggered ${orphans.length} orphan PR(s)`,
       );
     }
     void this.conflictNudgeSweep().catch((err: unknown) =>
-      console.warn(
+      logger.warn(
         `[AutoMerger] conflictNudgeSweep error on boot: ${(err as Error).message}`,
       ),
     );
@@ -122,7 +123,7 @@ export class AutoMerger {
       Math.max(1, runtimeSettings.auto_merge_failed_clear_minutes) * 60_000;
     const stale = getStaleAutoMergeFailedPRs(thresholdMs);
     for (const row of stale) {
-      console.log(
+      logger.info(
         `[AutoMerger] clearing stale auto_merge_failed pause for PR #${row.pr_number} in ${row.repo} (>${runtimeSettings.auto_merge_failed_clear_minutes}m old) — retrying`,
       );
       setPauseReason(row.pr_number, row.repo, null);
@@ -146,7 +147,7 @@ export class AutoMerger {
     const candidates = getConflictNudgeCandidates();
     if (candidates.length === 0) return;
 
-    console.log(
+    logger.info(
       `[AutoMerger] conflictNudgeSweep: checking ${candidates.length} candidate(s)`,
     );
     let nudged = 0;
@@ -162,7 +163,7 @@ export class AutoMerger {
       try {
         category = await this.github.categorizeMergeability(pr_number, repo);
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[AutoMerger] conflictNudgeSweep: categorizeMergeability failed for PR #${pr_number}: ${(err as Error).message}`,
         );
         continue;
@@ -184,7 +185,7 @@ export class AutoMerger {
     }
 
     if (nudged > 0) {
-      console.log(
+      logger.info(
         `[AutoMerger] conflictNudgeSweep complete — nudged ${nudged} session(s)`,
       );
     }
@@ -223,7 +224,7 @@ export class AutoMerger {
   ): Promise<void> {
     const session = row.session_id ? getSession(row.session_id) : undefined;
     if (!session) {
-      console.warn(
+      logger.warn(
         `[AutoMerger] local branch #${row.id} (${row.branch_name}): session ${row.session_id} not found — skipping`,
       );
       return;
@@ -231,7 +232,7 @@ export class AutoMerger {
 
     const worktreePath = session.worktree_path;
     if (!worktreePath) {
-      console.warn(
+      logger.warn(
         `[AutoMerger] local branch #${row.id} (${row.branch_name}): no worktree_path on session — skipping`,
       );
       return;
@@ -242,7 +243,7 @@ export class AutoMerger {
       row.base_branch,
       row.branch_name,
     ).catch((err: unknown) => {
-      console.warn(
+      logger.warn(
         `[AutoMerger] local branch #${row.id}: detectMergeConflict failed: ${(err as Error).message}`,
       );
       return false;
@@ -260,7 +261,7 @@ export class AutoMerger {
             }),
           )
           .catch((err: unknown) =>
-            console.warn(
+            logger.warn(
               `[AutoMerger] local branch #${row.id}: sendOrResume failed: ${(err as Error).message}`,
             ),
           );
@@ -276,7 +277,7 @@ export class AutoMerger {
       featureBranch: row.branch_name,
       taskName,
     }).catch((err: unknown) => {
-      console.warn(
+      logger.warn(
         `[AutoMerger] local branch #${row.id}: squashMergeLocal threw: ${(err as Error).message}`,
       );
       return { merged: false as const, conflict: false };
@@ -295,7 +296,7 @@ export class AutoMerger {
               }),
             )
             .catch((err: unknown) =>
-              console.warn(
+              logger.warn(
                 `[AutoMerger] local branch #${row.id}: sendOrResume failed: ${(err as Error).message}`,
               ),
             );
@@ -333,7 +334,7 @@ export class AutoMerger {
         backend
           .updateStatus(session.task_id, '✅ Done')
           .catch((err: unknown) =>
-            console.warn(
+            logger.warn(
               `[AutoMerger] local branch #${row.id}: updateStatus failed: ${(err as Error).message}`,
             ),
           );
@@ -348,7 +349,7 @@ export class AutoMerger {
       commitSha,
     });
 
-    console.log(
+    logger.info(
       `[AutoMerger] local branch ${row.branch_name} squash-merged into ${row.base_branch} (${commitSha ?? 'no sha'})`,
     );
   }
@@ -395,13 +396,13 @@ export class AutoMerger {
   rehydrate(): void {
     const rows = getAllActiveMerges();
     for (const row of rows) {
-      console.log(
+      logger.info(
         `[AutoMerger] rehydrate: resuming in-flight merge for PR #${row.pr_number} in ${row.repo}`,
       );
       this.attempt(row.pr_number, row.repo);
     }
     if (rows.length > 0) {
-      console.log(
+      logger.info(
         `[AutoMerger] rehydrate complete — resumed ${rows.length} in-flight merge(s)`,
       );
     }
@@ -414,7 +415,7 @@ export class AutoMerger {
   ): Promise<void> {
     const project = getProjectByGithubRepo(repo);
     if (!project) {
-      console.log(
+      logger.info(
         `[AutoMerger] PR #${prNumber}: no project for repo ${repo} — skipping`,
       );
       return;
@@ -424,7 +425,7 @@ export class AutoMerger {
     const initialRow = getPRByNumber(prNumber, repo);
     if (!initialRow) return;
     if (initialRow.pause_reason !== null) {
-      console.log(
+      logger.info(
         `[AutoMerger] PR #${prNumber}: paused (${initialRow.pause_reason}) — skipping`,
       );
       return;
@@ -442,7 +443,7 @@ export class AutoMerger {
 
     let etag: string | null = null;
 
-    console.log(
+    logger.info(
       `[AutoMerger] starting for PR #${prNumber} in ${repo} (interval=${intervalSec}s, max=${runtimeSettings.ci_poll_max_minutes}m)`,
     );
 
@@ -451,7 +452,7 @@ export class AutoMerger {
       const row = getPRByNumber(prNumber, repo);
       if (!row) return;
       if (row.pause_reason !== null) {
-        console.log(
+        logger.info(
           `[AutoMerger] PR #${prNumber}: pause_reason set to '${row.pause_reason}' externally — aborting`,
         );
         return;
@@ -470,7 +471,7 @@ export class AutoMerger {
           this.handleRateLimit(err);
           return;
         }
-        console.warn(
+        logger.warn(
           `[AutoMerger] PR #${prNumber}: status fetch failed: ${(err as Error).message}`,
         );
         await sleep(intervalMs);
@@ -506,7 +507,7 @@ export class AutoMerger {
                 this.handleRateLimit(err);
                 return;
               }
-              console.warn(
+              logger.warn(
                 `[AutoMerger] PR #${prNumber}: getReviewState failed: ${(err as Error).message}`,
               );
               await sleep(intervalMs);
@@ -546,7 +547,7 @@ export class AutoMerger {
         case 'conflict':
           // Existing merge-conflict handling owns this case (see PRMergeWatcher
           // and the /merge route) — agent gets a rebase message; we don't pause.
-          console.log(
+          logger.info(
             `[AutoMerger] PR #${prNumber}: conflict — leaving to existing handling`,
           );
           return;
@@ -566,7 +567,7 @@ export class AutoMerger {
     // Timed out waiting for CI — pause as ci_failing (semantically: CI did not pass).
     const finalRow = getPRByNumber(prNumber, repo);
     if (finalRow && finalRow.pause_reason === null) {
-      console.log(
+      logger.info(
         `[AutoMerger] PR #${prNumber}: timed out after ${runtimeSettings.ci_poll_max_minutes}m — pausing`,
       );
       await this.pauseWithReason(finalRow, 'ci_failing');
@@ -597,7 +598,7 @@ export class AutoMerger {
           merge_sha: result.sha ?? null,
         },
       });
-      console.log(
+      logger.info(
         `[AutoMerger] PR #${pr.pr_number}: squash-merged to ${pr.base_branch ?? 'dev'}`,
       );
     } catch (err) {
@@ -607,7 +608,7 @@ export class AutoMerger {
         err.status === 405 &&
         /still a draft/i.test(err.body)
       ) {
-        console.warn(
+        logger.warn(
           `[AutoMerger] PR #${pr.pr_number}: 405 still-draft — retrying markPRReady then merge`,
         );
         try {
@@ -631,12 +632,12 @@ export class AutoMerger {
               merge_sha: retryResult.sha ?? null,
             },
           });
-          console.log(
+          logger.info(
             `[AutoMerger] PR #${pr.pr_number}: squash-merged to ${pr.base_branch ?? 'dev'}`,
           );
           return;
         } catch (retryErr) {
-          console.error(
+          logger.error(
             `[AutoMerger] PR #${pr.pr_number}: retry after markPRReady failed:`,
             retryErr,
           );
@@ -676,7 +677,7 @@ export class AutoMerger {
             await this.pauseWithReason(pr, 'auto_merge_failed');
             return;
           }
-          console.log(
+          logger.info(
             `[AutoMerger] PR #${pr.pr_number}: merge failed — conflict, leaving to existing handling`,
           );
           return;
@@ -701,7 +702,7 @@ export class AutoMerger {
           return;
         }
       }
-      console.warn(
+      logger.warn(
         `[AutoMerger] PR #${pr.pr_number}: merge failed: ${(err as Error).message}`,
       );
       await this.pauseWithReason(pr, 'auto_merge_failed');
@@ -722,7 +723,7 @@ export class AutoMerger {
     if (pr.task_id) {
       emitTaskUpdated(pr.task_id);
     }
-    console.log(
+    logger.info(
       `[AutoMerger] PR #${pr.pr_number}: billing/spending limit blocked — paused as ci_billing_blocked`,
     );
   }
@@ -768,7 +769,7 @@ export class AutoMerger {
     if (pr.task_id) {
       emitTaskUpdated(pr.task_id);
     }
-    console.log(
+    logger.info(
       `[AutoMerger] PR #${pr.pr_number}: paused with reason '${reason}'`,
     );
   }
