@@ -177,11 +177,9 @@ router.patch('/', (req: Request, res: Response) => {
         applyToRuntime(key, typed);
         updated[key] = typed;
       } catch (err) {
-        res
-          .status(400)
-          .json({
-            error: `Invalid value for "${key}": ${(err as Error).message}`,
-          });
+        res.status(400).json({
+          error: `Invalid value for "${key}": ${(err as Error).message}`,
+        });
         return;
       }
     }
