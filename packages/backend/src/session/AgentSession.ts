@@ -334,6 +334,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
 
     // Backoff schedule for transient API errors: 5s, 10s, 20s, 40s, 80s (5 attempts).
     const BACKOFF_DELAYS_MS = [5_000, 10_000, 20_000, 40_000, 80_000];
+    // Escalation re-spawn: proactive nudge delay and first-event watchdog.
+    const ESCALATION_NUDGE_DELAY_MS = 2_000;
+    const ESCALATION_WATCHDOG_MS = 30_000;
+    const MAX_ESCALATION_RETRIES = 2; // 3 total attempts
     // resumeIdForSpawn: undefined on first run, set to this.sessionId on each retry.
     let resumeIdForSpawn: string | undefined = this.resumeSessionId;
 
@@ -345,6 +349,11 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     // Per-iteration overrides set by tryEscalateForOverflow() (T3b).
     // Instance fields _escalationModel and _escalationDisableAutoCompact hold these
     // so they're accessible from the helper without parameter threading.
+
+    // Escalation state — persisted across loop iterations.
+    let isEscalationSpawn = false;
+    let escalationRetryCount = 0;
+    let escalationNudgeText: string | null = null;
 
     // Loop is exited by an explicit return on every terminal path: clean exit,
     // kill/spawn error, or non-transient failure. Only a transient API error
@@ -364,6 +373,38 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         `starting session: runner=${this.runner.constructor.name} worktree=${this.worktreePath}`,
       );
 
+      // Per-attempt escalation watchdog + proactive nudge state.
+      let watchdogFiredThisAttempt = false;
+      let nudgeSentThisAttempt = false;
+      let escalationWatchdog: ReturnType<typeof setTimeout> | null = null;
+      let escalationNudgeTimer: ReturnType<typeof setTimeout> | null = null;
+
+      if (isEscalationSpawn && escalationNudgeText !== null) {
+        const capturedNudge = escalationNudgeText;
+
+        // Proactive nudge: send ~2s after spawn without waiting for a first event.
+        // Mirrors the resumeSession fix in SessionManager — a --resumed CLI in
+        // stream-json mode deadlocks waiting for stdin, so we must not gate on events.
+        escalationNudgeTimer = setTimeout(() => {
+          if (!nudgeSentThisAttempt) {
+            nudgeSentThisAttempt = true;
+            this.runner.sendMessage(capturedNudge);
+          }
+        }, ESCALATION_NUDGE_DELAY_MS);
+        escalationNudgeTimer.unref?.();
+
+        // First-event watchdog: if no event arrives within 30s, kill and retry.
+        escalationWatchdog = setTimeout(async () => {
+          watchdogFiredThisAttempt = true;
+          sessionLog(
+            this.sessionId,
+            `escalation watchdog fired (attempt ${escalationRetryCount + 1}/${MAX_ESCALATION_RETRIES + 1}) — killing hung subprocess`,
+          );
+          await this.runner.kill();
+        }, ESCALATION_WATCHDOG_MS);
+        escalationWatchdog.unref?.();
+      }
+
       const exitCode = await this.runner.run(
         resumeIdForSpawn ? undefined : initialPrompt,
         resumeIdForSpawn,
@@ -378,8 +419,28 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               ? this._escalationDisableAutoCompact
               : !!runtimeSettings.large_task_model,
         },
-        (event) => this.handleRawEvent(event),
+        (event) => {
+          // On the first event of an escalated spawn: cancel pending timers and
+          // deliver the nudge immediately if the 2s timer hasn't fired yet.
+          if (isEscalationSpawn && escalationWatchdog !== null) {
+            clearTimeout(escalationWatchdog);
+            escalationWatchdog = null;
+            if (!nudgeSentThisAttempt && escalationNudgeText !== null) {
+              nudgeSentThisAttempt = true;
+              if (escalationNudgeTimer !== null) {
+                clearTimeout(escalationNudgeTimer);
+                escalationNudgeTimer = null;
+              }
+              this.runner.sendMessage(escalationNudgeText);
+            }
+          }
+          this.handleRawEvent(event);
+        },
       );
+
+      // Clear any timers that outlived the run (normal exits, non-watchdog kills).
+      if (escalationNudgeTimer !== null) clearTimeout(escalationNudgeTimer);
+      if (escalationWatchdog !== null) clearTimeout(escalationWatchdog);
 
       if (
         this.runner.hasSpawnError ||
@@ -388,9 +449,51 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       )
         return;
 
+      // Watchdog fired: the escalated subprocess never emitted a first event.
+      // Retry up to MAX_ESCALATION_RETRIES times; on exhaustion mark as error
+      // so the session surfaces in Needs Attention rather than staying idle.
+      if (watchdogFiredThisAttempt) {
+        if (escalationRetryCount < MAX_ESCALATION_RETRIES) {
+          escalationRetryCount++;
+          sessionLog(
+            this.sessionId,
+            `escalation watchdog: retrying large-model spawn (attempt ${escalationRetryCount + 1}/${MAX_ESCALATION_RETRIES + 1})`,
+          );
+          resumeIdForSpawn = this.sessionId;
+          continue;
+        }
+        sessionLog(
+          this.sessionId,
+          `escalation deadlock: all ${MAX_ESCALATION_RETRIES + 1} attempts exhausted — marking session as error`,
+        );
+        if (!this.hasEnded) {
+          this.sessionManager?.markSessionErrored?.(
+            this.sessionId,
+            'error',
+            'escalation_deadlock',
+          );
+          if (!this.hasEnded) {
+            updateSessionStatus(this.sessionId, 'error', Date.now());
+            this.broadcast({
+              type: 'session_ended',
+              sessionId: this.sessionId,
+              status: 'error',
+              ...(this.taskId && { taskId: this.taskId }),
+            });
+          }
+        }
+        return;
+      }
+
       // Check overflow FIRST — clean exit must not bypass escalation.
       if (await this.tryEscalateForOverflow()) {
         resumeIdForSpawn = this.sessionId;
+        isEscalationSpawn = true;
+        escalationRetryCount = 0;
+        // Capture the nudge text and clear the instance field — proactive delivery
+        // (timer + first-event handler above) replaces the old first-event gating.
+        escalationNudgeText = this._pendingEscalationNudge;
+        this._pendingEscalationNudge = null;
         continue;
       }
 
@@ -535,13 +638,6 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
    * This is called for each event by both CliSessionRunner and ApiSessionRunner.
    */
   private handleRawEvent(event: Record<string, unknown>): void {
-    // Deliver escalation nudge on the first event from the restarted session
-    if (this._pendingEscalationNudge !== null) {
-      const nudge = this._pendingEscalationNudge;
-      this._pendingEscalationNudge = null;
-      this.runner.sendMessage(nudge);
-    }
-
     const rawType = (event.type as string) ?? 'unknown';
 
     // Debug logging
