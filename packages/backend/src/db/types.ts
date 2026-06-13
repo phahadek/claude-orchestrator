@@ -6,7 +6,10 @@ export type {
   PauseReasonStruct,
 } from './pauseReason';
 
-import type { CanonicalPauseReason as _CanonicalPauseReason } from './pauseReason';
+import type {
+  CanonicalPauseReason as _CanonicalPauseReason,
+  PauseReasonStruct,
+} from './pauseReason';
 /** Back-compat alias — canonical source of truth is CanonicalPauseReason in pauseReason.ts. */
 type PauseReason = _CanonicalPauseReason;
 export type { PauseReason };
@@ -296,15 +299,10 @@ export type NewDeviceRow = Omit<DeviceRow, 'last_seen' | 'revoked'> & {
 
 // ─── session_pause_intervals ────────────────────────────────────────────────
 
-export type SessionPauseReason =
-  | 'rate_limit'
-  | 'stuck_timeout'
-  | 'api_overloaded';
-
 export interface SessionPauseInterval {
   id: number;
   session_id: string;
-  pause_reason: SessionPauseReason;
+  pause_reason: PauseReasonStruct;
   paused_at: number;
   resumed_at: number | null;
 }

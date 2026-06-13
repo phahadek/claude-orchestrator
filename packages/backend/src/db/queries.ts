@@ -1,6 +1,11 @@
 import { db } from './db';
 import { logger } from '../logger';
 import { recordEvent } from '../audit/AuditLog';
+import {
+  pauseReasonFromCanonical,
+  serializePauseReason,
+  parsePauseReason,
+} from './pauseReason';
 import type {
   Session,
   NewSession,
@@ -15,6 +20,7 @@ import type {
   TaskCache,
   PullRequestRow,
   PauseReason,
+  CanonicalPauseReason,
   ProjectRow,
   NewProjectRow,
   MilestoneRow,
@@ -24,7 +30,6 @@ import type {
   DeviceRow,
   NewDeviceRow,
   SessionPauseInterval,
-  SessionPauseReason,
 } from './types';
 
 // ─── sessions ──────────────────────────────────────────────────────────────
@@ -2551,12 +2556,13 @@ export function resetTaskCrashCount(taskId: string): void {
 
 export function insertPauseInterval(
   sessionId: string,
-  pauseReason: SessionPauseReason,
+  pauseReason: CanonicalPauseReason,
 ): void {
+  const serialized = serializePauseReason(pauseReasonFromCanonical(pauseReason));
   db.prepare(
     `INSERT INTO session_pause_intervals (session_id, pause_reason, paused_at)
      VALUES (?, ?, ?)`,
-  ).run(sessionId, pauseReason, Date.now());
+  ).run(sessionId, serialized, Date.now());
 }
 
 export function closePauseInterval(sessionId: string): void {
@@ -2575,11 +2581,17 @@ export function closePauseInterval(sessionId: string): void {
 export function getPauseIntervalsBySession(
   sessionId: string,
 ): SessionPauseInterval[] {
-  return db
+  const rows = db
     .prepare(
       `SELECT * FROM session_pause_intervals WHERE session_id = ? ORDER BY paused_at ASC`,
     )
-    .all(sessionId) as SessionPauseInterval[];
+    .all(sessionId) as Array<
+    Omit<SessionPauseInterval, 'pause_reason'> & { pause_reason: string }
+  >;
+  return rows.map((row) => ({
+    ...row,
+    pause_reason: parsePauseReason(row.pause_reason)!,
+  }));
 }
 
 export function getTotalPausedMs(
