@@ -3,6 +3,7 @@ import {
   markSessionDone,
   updateSessionStatus,
 } from '../db/queries';
+import { logger } from '../logger';
 
 /**
  * Boot-time reconciliation: scan for idle sessions whose linked PR is already
@@ -20,7 +21,7 @@ export function runBootIdleReconciliation(): void {
   const rows = getIdleSessionsWithResolvedPRs();
   if (rows.length === 0) return;
 
-  console.log(
+  logger.info(
     `[BootIdleReconciliation] ${rows.length} idle session(s) with resolved PRs — applying terminal transitions`,
   );
 
@@ -28,12 +29,12 @@ export function runBootIdleReconciliation(): void {
   for (const row of rows) {
     if (row.pr_state === 'merged') {
       markSessionDone(row.session_id, now, row.pr_url, 'boot_idle_merged_pr');
-      console.log(
+      logger.info(
         `[BootIdleReconciliation] ${row.session_id.slice(0, 8)} idle→done (PR #${row.pr_number} ${row.repo} merged)`,
       );
     } else {
       updateSessionStatus(row.session_id, 'error', now);
-      console.log(
+      logger.info(
         `[BootIdleReconciliation] ${row.session_id.slice(0, 8)} idle→error (PR #${row.pr_number} ${row.repo} closed)`,
       );
     }

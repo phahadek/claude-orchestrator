@@ -1,6 +1,7 @@
 import path from 'path';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
+import { logger } from '../logger';
 import { parseSection } from '../notion/NotionClient';
 import type { GitHubClient } from '../github/GitHubClient';
 import {
@@ -153,7 +154,7 @@ export class SessionAuditor {
         try {
           pr = await this.githubClient.fetchPR(repo, prNumber);
         } catch (err) {
-          console.warn(
+          logger.warn(
             `[SessionAuditor] GitHub fetchPR failed — skipping PR checks: ${err}`,
           );
         }
@@ -208,7 +209,7 @@ export class SessionAuditor {
         );
         violations.push(...escapes);
       } catch (err) {
-        console.warn(`[SessionAuditor] auditWorktreeEscape failed: ${err}`);
+        logger.warn(`[SessionAuditor] auditWorktreeEscape failed: ${err}`);
       }
     }
 
@@ -287,7 +288,7 @@ export class SessionAuditor {
       const prDiff = await this.githubClient.fetchDiff(prNumber, repo);
       diffFiles = prDiff.filesChanged;
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[SessionAuditor] fetchDiff failed — skipping spec comparison: ${err}`,
       );
       return null;
@@ -297,7 +298,7 @@ export class SessionAuditor {
     try {
       taskMarkdown = await this.resolveBackend().fetchTaskPage(taskId);
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[SessionAuditor] fetchTaskPage failed — skipping spec comparison: ${err}`,
       );
       return null;

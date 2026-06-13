@@ -4,6 +4,7 @@ import { spawn } from 'child_process';
 import yaml from 'js-yaml';
 import { isHardBanned } from '../github/PRFileValidator';
 import { recordEvent } from '../audit/AuditLog';
+import { logger } from '../logger';
 
 interface OrchestratorYml {
   autofix?: string[];
@@ -39,7 +40,7 @@ export function loadAutofixCommands(projectDir: string): string[] {
       (cmd): cmd is string => typeof cmd === 'string',
     );
   } catch (err) {
-    console.warn(`[autofix-runner] failed to parse ${ymlPath}: ${err}`);
+    logger.warn(`[autofix-runner] failed to parse ${ymlPath}: ${err}`);
     return [];
   }
 }

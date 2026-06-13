@@ -4,6 +4,7 @@ import type {
   SessionRunnerOptions,
 } from './SessionRunner';
 import { getSecret } from '../security/secrets';
+import { logger } from '../logger';
 
 /**
  * A push-based async iterable used to stream follow-up messages into the Agent SDK's
@@ -119,7 +120,7 @@ export class ApiSessionRunner implements ISessionRunner {
       > => {
         // All tools in the allowedTools list are pre-approved by the SDK's allowedTools option.
         // canUseTool only fires for tools NOT in that list — deny them.
-        console.log(
+        logger.info(
           `[ApiSessionRunner ${this.sessionId.slice(0, 8)}] canUseTool: ${toolName} — not in allowedTools, denying`,
         );
         void input;
@@ -162,7 +163,7 @@ export class ApiSessionRunner implements ISessionRunner {
         // Abort was intentional — treat as clean kill
         return null;
       }
-      console.error(
+      logger.error(
         `[ApiSessionRunner ${this.sessionId.slice(0, 8)}] error:`,
         err,
       );

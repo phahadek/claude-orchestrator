@@ -10,9 +10,10 @@ import type {
   RawSessionEvent,
   SessionRunnerOptions,
 } from './SessionRunner';
+import { logger } from '../logger';
 
 function log(sessionId: string, ...args: unknown[]) {
-  console.log(`[CliSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
+  logger.info(`[CliSessionRunner ${sessionId.slice(0, 8)}]`, ...args);
 }
 
 /**
@@ -115,7 +116,7 @@ export class CliSessionRunner implements ISessionRunner {
 
     this.proc.on('error', (err) => {
       this._hasSpawnError = true;
-      console.error(`[CliSessionRunner] spawn error: ${err.message}`);
+      logger.error(`[CliSessionRunner] spawn error: ${err.message}`);
     });
 
     // Pipe stderr to console for diagnostics
@@ -139,7 +140,7 @@ export class CliSessionRunner implements ISessionRunner {
       try {
         onEvent(event);
       } catch (err) {
-        console.error(
+        logger.error(
           `[CliSessionRunner] event handler threw for session ${this.sessionId}: ${(err as Error).message}`,
           err,
         );

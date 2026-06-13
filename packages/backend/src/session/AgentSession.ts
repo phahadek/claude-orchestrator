@@ -53,6 +53,7 @@ import {
 } from './eventTypes';
 import { eventKind } from './eventKind';
 import { isContextOverflow } from './contextOverflow';
+import { logger } from '../logger';
 
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
 const PR_BODY_MARKER_REGEX = /<pr-body>([\s\S]*?)<\/pr-body>/;
@@ -114,7 +115,7 @@ export function extractTextFromToolResultEvent(
 }
 
 function sessionLog(sessionId: string, ...args: unknown[]) {
-  console.log(`[Session ${sessionId.slice(0, 8)}]`, ...args);
+  logger.info(`[Session ${sessionId.slice(0, 8)}]`, ...args);
 }
 
 /** Parse the Notion page ID out of a notion.so URL or return the raw value. */
@@ -516,7 +517,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       try {
         this.sessionManager.send(this.sessionId, pauseMessage);
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[AgentSession] send failed for ${this.sessionId}: ${(err as Error).message}`,
         );
       }
@@ -1040,7 +1041,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           payload: { pr_number: existingPR.pr_number, repo: existingPR.repo },
         });
       } catch (e) {
-        console.warn(
+        logger.warn(
           `[AgentSession] updatePR #${existingPR.pr_number} failed: ${(e as Error).message}`,
         );
       }
@@ -1121,7 +1122,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         this.sessionId,
         `PR creation failed: git push of branch "${branch}" to origin rejected — ${msg.slice(0, 200)}`,
       );
-      console.error(
+      logger.error(
         `[AgentSession] git push for <pr-body> marker failed: ${msg}`,
       );
       recordEvent({
@@ -1215,7 +1216,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
                 },
               );
             } catch (ue) {
-              console.warn(
+              logger.warn(
                 `[AgentSession] updatePR fallback #${existingPR.pr_number} failed: ${(ue as Error).message}`,
               );
             }
@@ -1229,7 +1230,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             this.sessionId,
             `PR creation failed: branch "${branch}" not found on origin — GitHub rejected the head ref. Did the prior push step succeed?`,
           );
-          console.error(
+          logger.error(
             `[AgentSession] createPR 422 head-not-found — diverting to push-failure path: ${msg}`,
           );
           recordEvent({
@@ -1260,7 +1261,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             this.sessionId,
             `PR creation failed: GitHub 422 client error — ${msg.slice(0, 300)}`,
           );
-          console.error(`[AgentSession] createPR terminal 422: ${msg}`);
+          logger.error(`[AgentSession] createPR terminal 422: ${msg}`);
           recordEvent({
             event_type: 'pr_creation_failed',
             actor_type: 'system',
@@ -1279,7 +1280,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             this.sessionId,
             `PR creation failed: branch "${branch}" not found on origin (GitHub 404). Did the prior push step succeed?`,
           );
-          console.error(`[AgentSession] createPR 404 not-found: ${msg}`);
+          logger.error(`[AgentSession] createPR 404 not-found: ${msg}`);
           recordEvent({
             event_type: 'pr_creation_failed',
             actor_type: 'system',
@@ -1298,7 +1299,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             this.sessionId,
             `PR creation failed: GitHub auth/permission denied (${msg.slice(0, 200)}). Check GITHUB_TOKEN scope.`,
           );
-          console.error(`[AgentSession] createPR auth error: ${msg}`);
+          logger.error(`[AgentSession] createPR auth error: ${msg}`);
           recordEvent({
             event_type: 'pr_creation_failed',
             actor_type: 'system',
@@ -1323,7 +1324,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             this.sessionId,
             `PR creation failed with unexpected error: ${msg.slice(0, 300)}`,
           );
-          console.error(
+          logger.error(
             `[AgentSession] createPR via <pr-body> marker failed (attempt ${attempt + 1}/${MAX_ATTEMPTS}): ${msg}`,
           );
           recordEvent({
@@ -1342,7 +1343,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           this.sessionId,
           `PR creation failed: GitHub server error (transient, attempt ${attempt + 1}/${MAX_ATTEMPTS}). Retrying in ${BACKOFF_MS[attempt]}ms.`,
         );
-        console.warn(
+        logger.warn(
           `[AgentSession] createPR transient error (attempt ${attempt + 1}/${MAX_ATTEMPTS}), retrying in ${BACKOFF_MS[attempt]}ms: ${msg}`,
         );
         await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt]));
@@ -1376,7 +1377,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
     if (this.sessionType === 'standard') {
       this.taskBackend()
         .attachPR(this.taskId, prUrl)
-        .catch((e) => console.error(`[AgentSession] attachPR failed: ${e}`));
+        .catch((e) => logger.error(`[AgentSession] attachPR failed: ${e}`));
 
       const upsertResult = upsertPullRequest({
         pr_number: prNumber,
@@ -1403,7 +1404,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         // Repo not configured — no PR row written. Skip pr_created broadcast
         // and pr_opened emit so StuckSessionMonitor sees no PR row and routes
         // correctly (idle, not done) when the subprocess is still alive.
-        console.warn(
+        logger.warn(
           `[AgentSession] handlePRDetected: upsertPullRequest rejected for repo "${repo}" — skipping pr_created broadcast`,
         );
         upsertSucceeded = false;
@@ -1448,7 +1449,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
                   void ghClient
                     .createIssueComment(repo, prNumber, comment)
                     .catch((e) =>
-                      console.warn(
+                      logger.warn(
                         `[AgentSession] createIssueComment failed: ${e}`,
                       ),
                     );
@@ -1456,12 +1457,12 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               }
             }
           } catch (e) {
-            console.warn(
+            logger.warn(
               `[AgentSession] handlePRDetected: failed to fetch PR #${prNumber}:`,
               e,
             );
             if (needsBodyValidation) {
-              console.warn(
+              logger.warn(
                 `[AgentSession] handlePRDetected: skipping PR body validation for PR #${prNumber} — GitHub fetch failed (fail-open)`,
               );
             }
@@ -1498,7 +1499,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               void ghClient
                 .createIssueComment(repo, prNumber, comment)
                 .catch((e) =>
-                  console.warn(
+                  logger.warn(
                     `[AgentSession] createIssueComment failed: ${e}`,
                   ),
                 );
@@ -1530,7 +1531,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
             );
             await ghClient.addLabelToPR(repo, prNumber, 'ai-authored');
           } catch (e) {
-            console.warn(`[AgentSession] ai-authored label failed: ${e}`);
+            logger.warn(`[AgentSession] ai-authored label failed: ${e}`);
           }
         })();
       }
@@ -1544,7 +1545,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
       prUrl,
       ...(this.taskId && { taskId: this.taskId }),
     });
-    console.log(
+    logger.info(
       `[AgentSession] emitting pr_opened for PR #${prNumber} (${repo}) session=${this.sessionId}`,
     );
     this.emit('pr_opened', {
@@ -1666,7 +1667,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
           this.taskId || null,
           runtimeSettings.corporate_mode_enabled,
         ).catch((e) =>
-          console.warn(`[AgentSession] checkCommitAttribution failed: ${e}`),
+          logger.warn(`[AgentSession] checkCommitAttribution failed: ${e}`),
         );
       }
     }
@@ -1811,7 +1812,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         }
       }
     } catch (e) {
-      console.error(
+      logger.error(
         `[AgentSession] handleCleanExit pre-done failed for ${this.sessionId}:`,
         e,
       );
@@ -1891,7 +1892,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
         'utf-8',
       );
     } catch (err) {
-      console.error(
+      logger.error(
         `[AgentSession] injectContextFile: failed to write ${filename}: ${err}`,
       );
     }

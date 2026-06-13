@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import yaml from 'js-yaml';
+import { logger } from '../logger';
 
 export interface OrchestratorConfig {
   /** Commands run in the worktree before opening the PR (mechanical fixes only). */
@@ -135,7 +136,7 @@ export function loadOrchestratorConfig(projectDir: string): OrchestratorConfig {
           : undefined,
     };
   } catch (err) {
-    console.warn(
+    logger.warn(
       `[orchestrator-config] failed to parse ${configPath}: ${err} — using defaults`,
     );
     return { ...DEFAULTS };
