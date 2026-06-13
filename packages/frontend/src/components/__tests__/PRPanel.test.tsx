@@ -808,6 +808,44 @@ describe('PRPanel — PipelineStageBadge', () => {
     );
   });
 
+  it('renders analyzing badge when prPipelineStages contains analyzing', async () => {
+    const pr = makePR({ prNumber: 10, title: 'Analyze PR' });
+    setupFetchWithPRs([pr]);
+    const { rerender } = render(
+      <PRPanel activeProjectId="proj-1" prPipelineStages={new Map()} />,
+    );
+    await waitFor(() => expect(screen.getByText('Analyze PR')).toBeDefined());
+    rerender(
+      <PRPanel
+        activeProjectId="proj-1"
+        prPipelineStages={new Map([[10, 'analyzing']])}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByText(/Running analyze/)).toBeDefined(),
+    );
+  });
+
+  it('renders failedCommand in badge title when prPipelineFailedCommands is set', async () => {
+    const pr = makePR({ prNumber: 11, title: 'Failed PR' });
+    setupFetchWithPRs([pr]);
+    const { rerender } = render(
+      <PRPanel activeProjectId="proj-1" prPipelineStages={new Map()} />,
+    );
+    await waitFor(() => expect(screen.getByText('Failed PR')).toBeDefined());
+    rerender(
+      <PRPanel
+        activeProjectId="proj-1"
+        prPipelineStages={new Map([[11, 'blocked_verify']])}
+        prPipelineFailedCommands={new Map([[11, 'npx tsc --noEmit']])}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText(/Verify failed/)).toBeDefined();
+      expect(screen.getByTitle(/npx tsc --noEmit/)).toBeDefined();
+    });
+  });
+
   it('badge clears when review_started drives stage to null', async () => {
     const pr = makePR({ prNumber: 9, title: 'Clear Stage PR' });
     setupFetchWithPRs([pr]);

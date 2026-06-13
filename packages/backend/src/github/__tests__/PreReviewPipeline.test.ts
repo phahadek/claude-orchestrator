@@ -252,7 +252,7 @@ describe('PreReviewPipeline — autofix gate', () => {
     );
   });
 
-  it('emits pr_review_blocked_by_gate with kind=autofix on failure', async () => {
+  it('emits pipeline_stage_failed with stage=autofix on failure', async () => {
     mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
     mockRunAutofix.mockResolvedValue({
       success: false,
@@ -267,8 +267,8 @@ describe('PreReviewPipeline — autofix gate', () => {
     expect(sm.emit).toHaveBeenCalledWith(
       'message',
       expect.objectContaining({
-        type: 'pr_review_blocked_by_gate',
-        kind: 'autofix',
+        type: 'pipeline_stage_failed',
+        stage: 'autofix',
       }),
     );
   });
@@ -313,8 +313,8 @@ describe('PreReviewPipeline — verify gate', () => {
     expect(sm.emit).toHaveBeenCalledWith(
       'message',
       expect.objectContaining({
-        type: 'pr_review_blocked_by_gate',
-        kind: 'verify',
+        type: 'pipeline_stage_failed',
+        stage: 'verify',
       }),
     );
     expect(mockSetPreReviewStage).toHaveBeenCalledWith(
@@ -338,11 +338,11 @@ describe('PreReviewPipeline — verify gate', () => {
     expect(result.passed).toBe(true);
     expect(sm.emit).toHaveBeenCalledWith(
       'message',
-      expect.objectContaining({ type: 'verify_pipeline_started' }),
+      expect.objectContaining({ type: 'pipeline_stage_entered', stage: 'verify' }),
     );
     expect(sm.emit).toHaveBeenCalledWith(
       'message',
-      expect.objectContaining({ type: 'verify_pipeline_complete' }),
+      expect.objectContaining({ type: 'pipeline_stage_passed', stage: 'verify' }),
     );
   });
 });
@@ -426,12 +426,12 @@ describe('PreReviewPipeline — analyze gate (parity with autofix/verify)', () =
       REPO,
       'analyze_failing',
     );
-    // pr_review_blocked_by_gate with kind=analyze
+    // pipeline_stage_failed with stage=analyze
     expect(sm.emit).toHaveBeenCalledWith(
       'message',
       expect.objectContaining({
-        type: 'pr_review_blocked_by_gate',
-        kind: 'analyze',
+        type: 'pipeline_stage_failed',
+        stage: 'analyze',
       }),
     );
     // sendOrResume with the failure message
@@ -441,7 +441,7 @@ describe('PreReviewPipeline — analyze gate (parity with autofix/verify)', () =
     );
   });
 
-  it('passes analyze and emits analyze_pipeline_started/complete events', async () => {
+  it('passes analyze and emits pipeline_stage_entered/passed events for analyze', async () => {
     mockRunTestCommands.mockResolvedValue({ passed: true, output: 'ok' });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
@@ -451,11 +451,11 @@ describe('PreReviewPipeline — analyze gate (parity with autofix/verify)', () =
     expect(result.passed).toBe(true);
     expect(sm.emit).toHaveBeenCalledWith(
       'message',
-      expect.objectContaining({ type: 'analyze_pipeline_started' }),
+      expect.objectContaining({ type: 'pipeline_stage_entered', stage: 'analyze' }),
     );
     expect(sm.emit).toHaveBeenCalledWith(
       'message',
-      expect.objectContaining({ type: 'analyze_pipeline_complete' }),
+      expect.objectContaining({ type: 'pipeline_stage_passed', stage: 'analyze' }),
     );
   });
 

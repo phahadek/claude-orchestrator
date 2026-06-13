@@ -116,6 +116,11 @@ describe('PipelineStageBadge', () => {
     expect(screen.getByText(/Running verify/)).toBeDefined();
   });
 
+  it('renders running analyze badge', () => {
+    render(<PipelineStageBadge stage="analyzing" />);
+    expect(screen.getByText(/Running analyze/)).toBeDefined();
+  });
+
   it('renders running tests badge', () => {
     render(<PipelineStageBadge stage="tests" />);
     expect(screen.getByText(/Running tests/)).toBeDefined();
@@ -134,6 +139,11 @@ describe('PipelineStageBadge', () => {
   it('renders verify failed badge', () => {
     render(<PipelineStageBadge stage="blocked_verify" />);
     expect(screen.getByText(/Verify failed/)).toBeDefined();
+  });
+
+  it('renders analyze failed badge', () => {
+    render(<PipelineStageBadge stage="blocked_analyze" />);
+    expect(screen.getByText(/Analyze failed/)).toBeDefined();
   });
 
   it('does not render "Blocked" compact label for blocked_autofix', () => {
