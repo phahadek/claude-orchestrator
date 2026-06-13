@@ -2,7 +2,7 @@ import https from 'https';
 import type { IncomingMessage } from 'http';
 import type { GitHubRelease, UpdateInfo } from './types';
 import type { ServerMessage } from '../ws/types';
-import { getSetting } from '../db/queries';
+import { typedGetSetting } from '../config/settings';
 import { logger } from '../logger';
 
 const REPO = 'phahadek/claude-orchestrator';
@@ -69,8 +69,7 @@ function fetchJson<T>(url: string): Promise<T | null> {
 }
 
 export function getChannel(): ReleaseChannel {
-  const stored = getSetting('release_channel');
-  return stored === 'beta' ? 'beta' : 'stable';
+  return typedGetSetting('release_channel');
 }
 
 /** Pick the newest release from a list, optionally including prereleases. */
@@ -83,7 +82,7 @@ export function selectNewest(
     : releases.filter((r) => !r.prerelease);
   return candidates.reduce<GitHubRelease | null>((best, r) => {
     if (!best) return r;
-    return isNewer(best.tag_name, r.tag_name) ? best : r;
+    return isNewer(best.tag_name, r.tag_name) ? r : best;
   }, null);
 }
 

@@ -9,7 +9,7 @@ import {
 } from '../updater/index';
 import { launchInstallerAndExit } from '../updater/UpdateInstaller';
 import type { ServerMessage } from '../ws/types';
-import { getSetting, setSetting } from '../db/queries';
+import { typedGetSetting, typedSetSetting } from '../config/settings';
 import type { ReleaseChannel } from '../updater/UpdateChecker';
 
 let _checker: UpdateChecker | null = null;
@@ -107,8 +107,7 @@ router.post('/update/install', async (req: Request, res: Response) => {
 
 /** GET /api/update/channel — get the current release channel */
 router.get('/update/channel', (_req: Request, res: Response) => {
-  const channel: ReleaseChannel =
-    getSetting('release_channel') === 'beta' ? 'beta' : 'stable';
+  const channel: ReleaseChannel = typedGetSetting('release_channel');
   res.json({ channel });
 });
 
@@ -119,7 +118,7 @@ router.put('/update/channel', (req: Request, res: Response) => {
     res.status(400).json({ error: 'channel must be "stable" or "beta"' });
     return;
   }
-  setSetting('release_channel', channel);
+  typedSetSetting('release_channel', channel);
   res.json({ ok: true, channel });
 });
 
