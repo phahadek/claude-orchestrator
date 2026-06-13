@@ -4,9 +4,9 @@ export type {
   PauseSeverity,
   PauseRetryStrategy,
   PauseReasonStruct,
-} from './pauseReason.js';
+} from './pauseReason';
 
-import type { CanonicalPauseReason as _CanonicalPauseReason } from './pauseReason.js';
+import type { CanonicalPauseReason as _CanonicalPauseReason } from './pauseReason';
 /** Back-compat alias — canonical source of truth is CanonicalPauseReason in pauseReason.ts. */
 type PauseReason = _CanonicalPauseReason;
 export type { PauseReason };

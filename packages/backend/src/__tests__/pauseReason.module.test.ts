@@ -5,10 +5,7 @@ import {
   serializePauseReason,
   pauseReasonFromCanonical,
 } from '../db/pauseReason.js';
-import type {
-  CanonicalPauseReason,
-  PauseReasonStruct,
-} from '../db/pauseReason.js';
+import type { CanonicalPauseReason } from '../db/pauseReason.js';
 
 const ALL_REASONS = Object.keys(
   PAUSE_REASON_REGISTRY,
