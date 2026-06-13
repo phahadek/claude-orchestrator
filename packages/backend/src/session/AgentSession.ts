@@ -1499,9 +1499,7 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               void ghClient
                 .createIssueComment(repo, prNumber, comment)
                 .catch((e) =>
-                  logger.warn(
-                    `[AgentSession] createIssueComment failed: ${e}`,
-                  ),
+                  logger.warn(`[AgentSession] createIssueComment failed: ${e}`),
                 );
             }
           }

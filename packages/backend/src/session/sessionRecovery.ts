@@ -134,9 +134,7 @@ export async function recoverSession(
       if (prUrl && !prDetectedLive) {
         taskBackend
           .attachPR(taskId, prUrl)
-          .catch((e) =>
-            logger.error(`[recoverSession] attachPR failed: ${e}`),
-          );
+          .catch((e) => logger.error(`[recoverSession] attachPR failed: ${e}`));
       }
 
       let existingPrState: string | undefined;
