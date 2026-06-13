@@ -338,11 +338,17 @@ describe('PreReviewPipeline — verify gate', () => {
     expect(result.passed).toBe(true);
     expect(sm.emit).toHaveBeenCalledWith(
       'message',
-      expect.objectContaining({ type: 'pipeline_stage_entered', stage: 'verify' }),
+      expect.objectContaining({
+        type: 'pipeline_stage_entered',
+        stage: 'verify',
+      }),
     );
     expect(sm.emit).toHaveBeenCalledWith(
       'message',
-      expect.objectContaining({ type: 'pipeline_stage_passed', stage: 'verify' }),
+      expect.objectContaining({
+        type: 'pipeline_stage_passed',
+        stage: 'verify',
+      }),
     );
   });
 });
@@ -451,11 +457,17 @@ describe('PreReviewPipeline — analyze gate (parity with autofix/verify)', () =
     expect(result.passed).toBe(true);
     expect(sm.emit).toHaveBeenCalledWith(
       'message',
-      expect.objectContaining({ type: 'pipeline_stage_entered', stage: 'analyze' }),
+      expect.objectContaining({
+        type: 'pipeline_stage_entered',
+        stage: 'analyze',
+      }),
     );
     expect(sm.emit).toHaveBeenCalledWith(
       'message',
-      expect.objectContaining({ type: 'pipeline_stage_passed', stage: 'analyze' }),
+      expect.objectContaining({
+        type: 'pipeline_stage_passed',
+        stage: 'analyze',
+      }),
     );
   });
 

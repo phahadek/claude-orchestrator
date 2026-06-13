@@ -193,7 +193,8 @@ export function PRPanel({
 
   // Merge WS-driven failed commands from store into local map
   useEffect(() => {
-    if (!prPipelineFailedCommands || prPipelineFailedCommands.size === 0) return;
+    if (!prPipelineFailedCommands || prPipelineFailedCommands.size === 0)
+      return;
     setLocalFailedCommands((prev) => {
       let changed = false;
       const next = new Map(prev);
