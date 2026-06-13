@@ -25,7 +25,8 @@ vi.mock('../../db/queries', () => ({
   setPauseReason: (...args: unknown[]) => mockSetPauseReason(...args),
   hasTestResultForSha: (...args: unknown[]) => mockHasTestResultForSha(...args),
   upsertTestResult: (...args: unknown[]) => mockUpsertTestResult(...args),
-  hasAnalyzeResultForSha: (...args: unknown[]) => mockHasAnalyzeResultForSha(...args),
+  hasAnalyzeResultForSha: (...args: unknown[]) =>
+    mockHasAnalyzeResultForSha(...args),
   upsertAnalyzeResult: (...args: unknown[]) => mockUpsertAnalyzeResult(...args),
   getAnalyzeResult: (...args: unknown[]) => mockGetAnalyzeResult(...args),
   addAutofixSha: (...args: unknown[]) => mockAddAutofixSha(...args),
@@ -37,20 +38,27 @@ vi.mock('../../orchestration/verifyRunner', () => ({
 }));
 
 const mockLoadAutofixCommands = vi.fn().mockReturnValue([]);
-const mockRunAutofix = vi.fn().mockResolvedValue({ success: true, summary: 'ok', commitSha: null });
+const mockRunAutofix = vi
+  .fn()
+  .mockResolvedValue({ success: true, summary: 'ok', commitSha: null });
 vi.mock('../../session/autofix-runner', () => ({
   loadAutofixCommands: (...args: unknown[]) => mockLoadAutofixCommands(...args),
   runAutofix: (...args: unknown[]) => mockRunAutofix(...args),
 }));
 
-const mockRunTestCommands = vi.fn().mockResolvedValue({ passed: true, output: '' });
+const mockRunTestCommands = vi
+  .fn()
+  .mockResolvedValue({ passed: true, output: '' });
 vi.mock('../../session/test-runner', () => ({
   runTestCommands: (...args: unknown[]) => mockRunTestCommands(...args),
 }));
 
-const mockRunFilePollutionCheck = vi.fn().mockResolvedValue({ revertCommitSha: null });
+const mockRunFilePollutionCheck = vi
+  .fn()
+  .mockResolvedValue({ revertCommitSha: null });
 vi.mock('../../session/filePollutionCheck', () => ({
-  runFilePollutionCheck: (...args: unknown[]) => mockRunFilePollutionCheck(...args),
+  runFilePollutionCheck: (...args: unknown[]) =>
+    mockRunFilePollutionCheck(...args),
 }));
 
 const mockLoadOrchestratorConfig = vi.fn().mockReturnValue({
@@ -70,7 +78,8 @@ const mockLoadOrchestratorConfig = vi.fn().mockReturnValue({
   bootstrap_script: '',
 });
 vi.mock('../../session/orchestrator-config', () => ({
-  loadOrchestratorConfig: (...args: unknown[]) => mockLoadOrchestratorConfig(...args),
+  loadOrchestratorConfig: (...args: unknown[]) =>
+    mockLoadOrchestratorConfig(...args),
 }));
 
 const mockRecordEvent = vi.fn();
@@ -139,7 +148,11 @@ beforeEach(() => {
   mockGetPRByNumber.mockReturnValue(makePRRow());
   mockGetSession.mockReturnValue(makeSessionRow());
   mockRunVerifyAsGate.mockResolvedValue({ passed: true });
-  mockRunAutofix.mockResolvedValue({ success: true, summary: 'ok', commitSha: null });
+  mockRunAutofix.mockResolvedValue({
+    success: true,
+    summary: 'ok',
+    commitSha: null,
+  });
   mockRunTestCommands.mockResolvedValue({ passed: true, output: '' });
   mockHasTestResultForSha.mockReturnValue(false);
   mockHasAnalyzeResultForSha.mockReturnValue(false);
@@ -170,7 +183,11 @@ describe('PreReviewPipeline.run — all stages skipped when no config', () => {
     const result = await pipeline.run(makeJob(), makeProject());
 
     expect(result.passed).toBe(true);
-    expect(mockSetPreReviewStage).toHaveBeenCalledWith(PR_NUMBER, REPO, 'awaiting_review');
+    expect(mockSetPreReviewStage).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'awaiting_review',
+    );
   });
 });
 
@@ -187,7 +204,11 @@ describe('PreReviewPipeline — autofix gate', () => {
 
   it('runs autofix when commands configured and returns passed:true on success', async () => {
     mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
-    mockRunAutofix.mockResolvedValue({ success: true, summary: 'fixed', commitSha: null });
+    mockRunAutofix.mockResolvedValue({
+      success: true,
+      summary: 'fixed',
+      commitSha: null,
+    });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -199,7 +220,11 @@ describe('PreReviewPipeline — autofix gate', () => {
 
   it('gates on autofix failure: sets setPRReviewResult + setLastReviewedSha + blocked stage + sendOrResume', async () => {
     mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
-    mockRunAutofix.mockResolvedValue({ success: false, summary: 'fix broke', commitSha: null });
+    mockRunAutofix.mockResolvedValue({
+      success: false,
+      summary: 'fix broke',
+      commitSha: null,
+    });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -211,14 +236,29 @@ describe('PreReviewPipeline — autofix gate', () => {
       REPO,
       expect.stringContaining('autofix_failed'),
     );
-    expect(mockSetLastReviewedSha).toHaveBeenCalledWith(PR_NUMBER, REPO, HEAD_SHA);
-    expect(mockSetPreReviewStage).toHaveBeenCalledWith(PR_NUMBER, REPO, 'blocked_autofix');
-    expect(sm.sendOrResume).toHaveBeenCalledWith(SESSION_ID, expect.stringContaining('Autofix Gate Failure'));
+    expect(mockSetLastReviewedSha).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+    );
+    expect(mockSetPreReviewStage).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'blocked_autofix',
+    );
+    expect(sm.sendOrResume).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.stringContaining('Autofix Gate Failure'),
+    );
   });
 
   it('emits pr_review_blocked_by_gate with kind=autofix on failure', async () => {
     mockLoadAutofixCommands.mockReturnValue(['npm run fix']);
-    mockRunAutofix.mockResolvedValue({ success: false, summary: 'broke', commitSha: null });
+    mockRunAutofix.mockResolvedValue({
+      success: false,
+      summary: 'broke',
+      commitSha: null,
+    });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -226,14 +266,20 @@ describe('PreReviewPipeline — autofix gate', () => {
 
     expect(sm.emit).toHaveBeenCalledWith(
       'message',
-      expect.objectContaining({ type: 'pr_review_blocked_by_gate', kind: 'autofix' }),
+      expect.objectContaining({
+        type: 'pr_review_blocked_by_gate',
+        kind: 'autofix',
+      }),
     );
   });
 });
 
 describe('PreReviewPipeline — verify gate', () => {
   it('skips verify when no worktreePath', async () => {
-    mockGetSession.mockReturnValue({ session_id: SESSION_ID, worktree_path: '' });
+    mockGetSession.mockReturnValue({
+      session_id: SESSION_ID,
+      worktree_path: '',
+    });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -259,13 +305,27 @@ describe('PreReviewPipeline — verify gate', () => {
       REPO,
       expect.stringContaining('verify_failed'),
     );
-    expect(mockSetLastReviewedSha).toHaveBeenCalledWith(PR_NUMBER, REPO, HEAD_SHA);
+    expect(mockSetLastReviewedSha).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+    );
     expect(sm.emit).toHaveBeenCalledWith(
       'message',
-      expect.objectContaining({ type: 'pr_review_blocked_by_gate', kind: 'verify' }),
+      expect.objectContaining({
+        type: 'pr_review_blocked_by_gate',
+        kind: 'verify',
+      }),
     );
-    expect(mockSetPreReviewStage).toHaveBeenCalledWith(PR_NUMBER, REPO, 'blocked_verify');
-    expect(sm.sendOrResume).toHaveBeenCalledWith(SESSION_ID, expect.stringContaining('CI Failure'));
+    expect(mockSetPreReviewStage).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'blocked_verify',
+    );
+    expect(sm.sendOrResume).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.stringContaining('CI Failure'),
+    );
   });
 
   it('passes when verify succeeds', async () => {
@@ -333,7 +393,10 @@ describe('PreReviewPipeline — analyze gate (parity with autofix/verify)', () =
   });
 
   it('gates on analyze failure: canonical 5-step including setPRReviewResult + setLastReviewedSha (parity fix)', async () => {
-    mockRunTestCommands.mockResolvedValue({ passed: false, output: 'lint errors' });
+    mockRunTestCommands.mockResolvedValue({
+      passed: false,
+      output: 'lint errors',
+    });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -346,18 +409,36 @@ describe('PreReviewPipeline — analyze gate (parity with autofix/verify)', () =
       REPO,
       expect.stringContaining('analyze_failed'),
     );
-    expect(mockSetLastReviewedSha).toHaveBeenCalledWith(PR_NUMBER, REPO, HEAD_SHA);
+    expect(mockSetLastReviewedSha).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      HEAD_SHA,
+    );
     // blocked_analyze stage (new stage value)
-    expect(mockSetPreReviewStage).toHaveBeenCalledWith(PR_NUMBER, REPO, 'blocked_analyze');
+    expect(mockSetPreReviewStage).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'blocked_analyze',
+    );
     // pause_reason=analyze_failing (preserved from original)
-    expect(mockSetPauseReason).toHaveBeenCalledWith(PR_NUMBER, REPO, 'analyze_failing');
+    expect(mockSetPauseReason).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'analyze_failing',
+    );
     // pr_review_blocked_by_gate with kind=analyze
     expect(sm.emit).toHaveBeenCalledWith(
       'message',
-      expect.objectContaining({ type: 'pr_review_blocked_by_gate', kind: 'analyze' }),
+      expect.objectContaining({
+        type: 'pr_review_blocked_by_gate',
+        kind: 'analyze',
+      }),
     );
     // sendOrResume with the failure message
-    expect(sm.sendOrResume).toHaveBeenCalledWith(SESSION_ID, expect.stringContaining('Analyze Gate Failure'));
+    expect(sm.sendOrResume).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.stringContaining('Analyze Gate Failure'),
+    );
   });
 
   it('passes analyze and emits analyze_pipeline_started/complete events', async () => {
@@ -412,7 +493,10 @@ describe('PreReviewPipeline — tests record stage (non-blocking)', () => {
   });
 
   it('records test result and continues to awaiting_review even when tests fail', async () => {
-    mockRunTestCommands.mockResolvedValue({ passed: false, output: 'test failures' });
+    mockRunTestCommands.mockResolvedValue({
+      passed: false,
+      output: 'test failures',
+    });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
@@ -426,7 +510,11 @@ describe('PreReviewPipeline — tests record stage (non-blocking)', () => {
       false,
       'test failures',
     );
-    expect(mockSetPreReviewStage).toHaveBeenCalledWith(PR_NUMBER, REPO, 'awaiting_review');
+    expect(mockSetPreReviewStage).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'awaiting_review',
+    );
   });
 
   it('does not call setPreReviewStage(blocked_tests) — tests is non-blocking', async () => {
@@ -436,8 +524,11 @@ describe('PreReviewPipeline — tests record stage (non-blocking)', () => {
 
     await pipeline.run(makeJob(), makeProject());
 
-    const calls = (mockSetPreReviewStage as ReturnType<typeof vi.fn>).mock.calls;
-    const blockedCalls = calls.filter(([, , stage]) => stage === 'blocked_tests');
+    const calls = (mockSetPreReviewStage as ReturnType<typeof vi.fn>).mock
+      .calls;
+    const blockedCalls = calls.filter(
+      ([, , stage]) => stage === 'blocked_tests',
+    );
     expect(blockedCalls).toHaveLength(0);
   });
 
@@ -466,7 +557,11 @@ describe('PreReviewPipeline — stage transition sequence', () => {
 
     // verify runs (skipIf only checks worktreePath, which is present)
     expect(emittedTypes).toContain('pipeline_stage_entered');
-    expect(mockSetPreReviewStage).toHaveBeenCalledWith(PR_NUMBER, REPO, 'awaiting_review');
+    expect(mockSetPreReviewStage).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'awaiting_review',
+    );
   });
 
   it('emits pipeline_stage_entered when verify stage runs', async () => {
@@ -478,11 +573,17 @@ describe('PreReviewPipeline — stage transition sequence', () => {
 
     expect(sm.emit).toHaveBeenCalledWith(
       'message',
-      expect.objectContaining({ type: 'pipeline_stage_entered', stage: 'verify' }),
+      expect.objectContaining({
+        type: 'pipeline_stage_entered',
+        stage: 'verify',
+      }),
     );
     expect(sm.emit).toHaveBeenCalledWith(
       'message',
-      expect.objectContaining({ type: 'pipeline_stage_passed', stage: 'verify' }),
+      expect.objectContaining({
+        type: 'pipeline_stage_passed',
+        stage: 'verify',
+      }),
     );
   });
 
@@ -499,7 +600,10 @@ describe('PreReviewPipeline — stage transition sequence', () => {
 
     expect(sm.emit).toHaveBeenCalledWith(
       'message',
-      expect.objectContaining({ type: 'pipeline_stage_failed', stage: 'verify' }),
+      expect.objectContaining({
+        type: 'pipeline_stage_failed',
+        stage: 'verify',
+      }),
     );
     expect(mockRecordEvent).toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'pipeline_stage_failed' }),
@@ -515,20 +619,31 @@ describe('PreReviewPipeline — setPreReviewStage transitions', () => {
 
     await pipeline.run(makeJob(), makeProject());
 
-    expect(mockSetPreReviewStage).toHaveBeenCalledWith(PR_NUMBER, REPO, 'verify');
-    expect(mockSetPreReviewStage).toHaveBeenCalledWith(PR_NUMBER, REPO, 'awaiting_review');
+    expect(mockSetPreReviewStage).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'verify',
+    );
+    expect(mockSetPreReviewStage).toHaveBeenCalledWith(
+      PR_NUMBER,
+      REPO,
+      'awaiting_review',
+    );
   });
 
   it('sets blocked_verify on verify failure, not awaiting_review', async () => {
-    mockRunVerifyAsGate.mockResolvedValue({ passed: false, failedCommand: 'tsc' });
+    mockRunVerifyAsGate.mockResolvedValue({
+      passed: false,
+      failedCommand: 'tsc',
+    });
     const sm = makeSessionManager();
     const pipeline = new PreReviewPipeline(sm);
 
     await pipeline.run(makeJob(), makeProject());
 
-    const stages = (mockSetPreReviewStage as ReturnType<typeof vi.fn>).mock.calls.map(
-      ([, , s]) => s,
-    );
+    const stages = (
+      mockSetPreReviewStage as ReturnType<typeof vi.fn>
+    ).mock.calls.map(([, , s]) => s);
     expect(stages).toContain('blocked_verify');
     expect(stages).not.toContain('awaiting_review');
   });

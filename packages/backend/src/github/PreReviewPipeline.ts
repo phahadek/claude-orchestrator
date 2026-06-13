@@ -134,14 +134,19 @@ export class PreReviewPipeline {
                   worktreePath: ctx.worktreePath,
                   repo: ctx.repo,
                   prNumber: ctx.prNumber,
-                  baseBranch: getPRByNumber(ctx.prNumber, ctx.repo)?.base_branch ?? 'dev',
-                  sessionId: getPRByNumber(ctx.prNumber, ctx.repo)?.session_id ?? null,
+                  baseBranch:
+                    getPRByNumber(ctx.prNumber, ctx.repo)?.base_branch ?? 'dev',
+                  sessionId:
+                    getPRByNumber(ctx.prNumber, ctx.repo)?.session_id ?? null,
                   projectId: ctx.project.id,
                   taskId: ctx.job.taskId,
                   onReverted: (files) => {
                     const row = getPRByNumber(ctx.prNumber, ctx.repo);
                     if (row?.session_id) {
-                      this.sessionManager.addToRevertLock(row.session_id, files);
+                      this.sessionManager.addToRevertLock(
+                        row.session_id,
+                        files,
+                      );
                     }
                   },
                 });
@@ -264,11 +269,20 @@ export class PreReviewPipeline {
               logger.info(
                 `[PreReviewPipeline] analyze PR #${ctx.prNumber}: ${msg}`,
               ),
-            { maxRssMb: config.analyze_max_rss_mb, failFast: config.analyze_fail_fast },
+            {
+              maxRssMb: config.analyze_max_rss_mb,
+              failFast: config.analyze_fail_fast,
+            },
           );
           passed = result.passed;
           output = result.output;
-          upsertAnalyzeResult(ctx.prNumber, ctx.repo, ctx.headSha, passed, output);
+          upsertAnalyzeResult(
+            ctx.prNumber,
+            ctx.repo,
+            ctx.headSha,
+            passed,
+            output,
+          );
         }
 
         logger.info(
@@ -329,9 +343,7 @@ export class PreReviewPipeline {
           config.test,
           config.test_timeout_sec,
           (msg) =>
-            logger.info(
-              `[PreReviewPipeline] test PR #${ctx.prNumber}: ${msg}`,
-            ),
+            logger.info(`[PreReviewPipeline] test PR #${ctx.prNumber}: ${msg}`),
           { maxRssMb: config.test_max_rss_mb, failFast: config.test_fail_fast },
         );
 
@@ -406,7 +418,10 @@ export class PreReviewPipeline {
   }
 
   private emitAuditStageEvent(
-    eventType: 'pipeline_stage_entered' | 'pipeline_stage_passed' | 'pipeline_stage_failed',
+    eventType:
+      | 'pipeline_stage_entered'
+      | 'pipeline_stage_passed'
+      | 'pipeline_stage_failed',
     job: ReviewJob,
     stage: string,
     extra?: { summary?: string; failedCommand?: string },
@@ -424,7 +439,10 @@ export class PreReviewPipeline {
     });
   }
 
-  async run(job: ReviewJob, project: ProjectConfig): Promise<{ passed: boolean }> {
+  async run(
+    job: ReviewJob,
+    project: ProjectConfig,
+  ): Promise<{ passed: boolean }> {
     const prRow = getPRByNumber(job.prNumber, job.repo);
     const headSha = prRow?.head_sha ?? '';
     const worktreePath = prRow?.session_id
