@@ -1,3 +1,4 @@
+import { logger } from '../logger';
 import { recordEvent } from '../audit/AuditLog';
 import { setPauseReason } from '../db/queries';
 import { ORCHESTRATOR_BOT_EMAIL } from '../session/autofix-runner';
@@ -38,7 +39,7 @@ export async function checkCommitAttribution(
   try {
     commits = await client.getCommitsForPR(repo, prNumber);
   } catch (err) {
-    console.warn(
+    logger.warn(
       `[CommitAttributionWatcher] failed to fetch commits for PR #${prNumber} in ${repo}: ${(err as Error).message}`,
     );
     return { checked: 0, missing: 0, paused: false };

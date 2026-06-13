@@ -69,6 +69,20 @@ function write(level: string, args: unknown[]): void {
 }
 
 /**
+ * Thin wrapper so call sites can import { logger } instead of calling console.*
+ * directly. Delegates at call time so it picks up the patched console methods
+ * installed by initLogger(). logger.info routes through console.log (the only
+ * patched INFO-level method) so both console.log and console.info callers get
+ * file output after initLogger() runs.
+ */
+export const logger = {
+  info: (...args: unknown[]) => console.log(...args),
+  warn: (...args: unknown[]) => console.warn(...args),
+  error: (...args: unknown[]) => console.error(...args),
+  debug: (...args: unknown[]) => console.debug(...args),
+};
+
+/**
  * Wire up rotating-file output for all console methods.
  * Log files land in <dataDir>/logs/orchestrator.log and rotate at 10 MB,
  * keeping up to 5 backups (.1 … .5).  Must be called once at startup.

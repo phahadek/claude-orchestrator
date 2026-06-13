@@ -1,3 +1,4 @@
+import { logger } from '../logger';
 import type { GitHubClient } from './GitHubClient';
 import { getAllProjects, runtimeSettings } from '../config';
 import {
@@ -16,7 +17,7 @@ export async function runPRBootSweep(github: GitHubClient): Promise<void> {
   const projects = getAllProjects().filter((p) => p.githubRepo);
   if (projects.length === 0) return;
 
-  console.log(
+  logger.info(
     `[PRBootSweep] scanning ${projects.length} project(s) for missing PR rows`,
   );
 
@@ -27,7 +28,7 @@ export async function runPRBootSweep(github: GitHubClient): Promise<void> {
     try {
       openPRs = await github.listOpenPRs(repo);
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[PRBootSweep] failed to list open PRs for ${repo}:`,
         (err as Error).message,
       );
@@ -45,7 +46,7 @@ export async function runPRBootSweep(github: GitHubClient): Promise<void> {
     try {
       closedPRs = await github.listClosedPullRequests(repo, sinceDays);
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[PRBootSweep] failed to list closed PRs for ${repo}:`,
         (err as Error).message,
       );
@@ -56,7 +57,7 @@ export async function runPRBootSweep(github: GitHubClient): Promise<void> {
     }
   }
 
-  console.log(`[PRBootSweep] done — inserted ${inserted} missing PR row(s)`);
+  logger.info(`[PRBootSweep] done — inserted ${inserted} missing PR row(s)`);
 }
 
 function insertIfMissing(pr: PullRequest, repo: string, now: string): boolean {
@@ -92,11 +93,11 @@ function insertIfMissing(pr: PullRequest, repo: string, now: string): boolean {
   });
 
   if (sessionMatch) {
-    console.log(
+    logger.info(
       `[PRBootSweep] inserted PR #${pr.id} (${repo}) and linked session ${sessionMatch.session_id.slice(0, 8)} via head_branch "${pr.headBranch}"`,
     );
   } else {
-    console.log(
+    logger.info(
       `[PRBootSweep] inserted missing PR #${pr.id} (${repo}) — no session match for head_branch "${pr.headBranch}"`,
     );
   }

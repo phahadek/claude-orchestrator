@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { EventEmitter } from 'events';
+import { logger } from '../logger';
 import {
   getEventsBySession,
   getTaskNoOpAttempts,
@@ -181,7 +182,7 @@ export class NoOpInvestigator {
       const firstHeading = taskMarkdown.match(/^#\s+(.+)$/m);
       if (firstHeading) taskTitle = firstHeading[1];
     } catch (e) {
-      console.error(
+      logger.error(
         `[NoOpInvestigator] fetchTaskPage failed for ${taskId}:`,
         e,
       );
@@ -210,7 +211,7 @@ export class NoOpInvestigator {
           taskCreatedAt,
         );
       } catch (e) {
-        console.error(`[NoOpInvestigator] listMergedPRsSince failed:`, e);
+        logger.error(`[NoOpInvestigator] listMergedPRsSince failed:`, e);
       }
       try {
         recentCommits = await this.githubClient.listCommitsSince(
@@ -219,7 +220,7 @@ export class NoOpInvestigator {
           taskCreatedAt,
         );
       } catch (e) {
-        console.error(`[NoOpInvestigator] listCommitsSince failed:`, e);
+        logger.error(`[NoOpInvestigator] listCommitsSince failed:`, e);
       }
     }
 
@@ -249,7 +250,7 @@ export class NoOpInvestigator {
         taskId: taskId ?? undefined,
       });
     } catch (e) {
-      console.error(
+      logger.error(
         `[NoOpInvestigator] sessionManager.start failed — sessionId=${investigatorSessionId} taskId=${taskId} reason=${String(e)}`,
       );
       return;
@@ -264,14 +265,14 @@ export class NoOpInvestigator {
         ),
       ]);
     } catch (e) {
-      console.error(
+      logger.error(
         `[NoOpInvestigator] verdict wait failed — sessionId=${investigatorSessionId} taskId=${taskId} reason=${String(e)}`,
       );
       return;
     }
 
     if (!verdict) {
-      console.error(
+      logger.error(
         `[NoOpInvestigator] session ended with no parseable verdict — sessionId=${investigatorSessionId} taskId=${taskId} — leaving task status unchanged`,
       );
       return;
@@ -291,7 +292,7 @@ export class NoOpInvestigator {
       try {
         await this.taskBackend.updateStatus(taskId, '✅ Done');
       } catch (e) {
-        console.error(
+        logger.error(
           `[NoOpInvestigator] updateStatus(Done) failed for ${taskId}:`,
           e,
         );
@@ -302,7 +303,7 @@ export class NoOpInvestigator {
           `Auto-resolved by investigator: ${verdict.resolvedByPrUrl} — ${verdict.reason}`,
         );
       } catch (e) {
-        console.error(
+        logger.error(
           `[NoOpInvestigator] appendImplementationNote failed for ${taskId}:`,
           e,
         );
@@ -311,7 +312,7 @@ export class NoOpInvestigator {
         try {
           await this.githubClient.deleteBranch(repo, featureBranchName);
         } catch (e) {
-          console.error(
+          logger.error(
             `[NoOpInvestigator] deleteBranch(${featureBranchName}) failed:`,
             e,
           );
@@ -328,7 +329,7 @@ export class NoOpInvestigator {
         try {
           await this.taskBackend.updateStatus(taskId, '🗂️ Ready');
         } catch (e) {
-          console.error(
+          logger.error(
             `[NoOpInvestigator] updateStatus(Ready) failed for ${taskId}:`,
             e,
           );
@@ -342,7 +343,7 @@ export class NoOpInvestigator {
     try {
       await this.taskBackend.updateStatus(taskId, '🚫 Blocked');
     } catch (e) {
-      console.error(
+      logger.error(
         `[NoOpInvestigator] updateStatus(Blocked) failed for ${taskId}:`,
         e,
       );
@@ -354,7 +355,7 @@ export class NoOpInvestigator {
           : verdict.reason;
       await this.taskBackend.updateNotes(taskId, reason);
     } catch (e) {
-      console.error(`[NoOpInvestigator] updateNotes failed for ${taskId}:`, e);
+      logger.error(`[NoOpInvestigator] updateNotes failed for ${taskId}:`, e);
     }
   }
 }

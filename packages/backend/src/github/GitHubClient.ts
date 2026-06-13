@@ -1,3 +1,4 @@
+import { logger } from '../logger';
 import { GITHUB_TOKEN, GITHUB_REPO } from '../config';
 import {
   GitHubApiError,
@@ -142,7 +143,7 @@ export class GitHubClient {
       result = await this.getMergeability(prNumber, repo);
     }
     if (result.mergeable === null) {
-      console.warn(
+      logger.warn(
         `[GitHubClient] getMergeability still null after retries for PR #${prNumber} in ${repo ?? GITHUB_REPO} — skipping`,
       );
     }
@@ -296,7 +297,7 @@ export class GitHubClient {
       }>(`/repos/${r}/commits/${sha}/check-runs?per_page=100`);
       checkRuns = data.check_runs;
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[GitHubClient] detectBillingBlock: check-runs fetch failed for ${sha}: ${(err as Error).message}`,
       );
       return { blocked: false, message: null };
@@ -571,7 +572,7 @@ export class GitHubClient {
       }>(`/repos/${repo}/commits/${sha}/check-runs?per_page=100`);
       allCheckRuns = data.check_runs;
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[GitHubClient] getFailingChecks failed for ${sha} in ${repo}:`,
         (err as Error).message,
       );
