@@ -68,21 +68,8 @@ function write(level: string, args: unknown[]): void {
   if (currentBytes >= (_maxBytesOverride ?? MAX_BYTES)) rotate();
 }
 
-/** Structured logger — wraps patched console methods for explicit log-level semantics. */
-export const logger = {
-  info: (...args: unknown[]) => console.log(...args),
-  warn: (...args: unknown[]) => console.warn(...args),
-  error: (...args: unknown[]) => console.error(...args),
-  debug: (...args: unknown[]) => console.debug(...args),
-};
-
-/**
- * Thin wrapper so call sites can import { logger } instead of calling console.*
- * directly. Delegates at call time so it picks up the patched console methods
- * installed by initLogger(). logger.info routes through console.log (the only
- * patched INFO-level method) so both console.log and console.info callers get
- * file output after initLogger() runs.
- */
+/** Structured logger — delegates to the (patched) console methods so output
+ *  reaches both stdout and the rotating log file after initLogger() runs. */
 export const logger = {
   info: (...args: unknown[]) => console.log(...args),
   warn: (...args: unknown[]) => console.warn(...args),
@@ -132,15 +119,6 @@ export function initLogger(): void {
     process.exit(0);
   });
 }
-
-/** Structured logger — delegates to the (patched) console methods so output
- *  reaches both stdout and the rotating log file after initLogger() runs. */
-export const logger = {
-  info: (...args: unknown[]) => console.log(...args),
-  warn: (...args: unknown[]) => console.warn(...args),
-  error: (...args: unknown[]) => console.error(...args),
-  debug: (...args: unknown[]) => console.debug(...args),
-};
 
 /** Override the rotation threshold — for unit tests only. */
 export function _setMaxBytesForTesting(n: number): void {
