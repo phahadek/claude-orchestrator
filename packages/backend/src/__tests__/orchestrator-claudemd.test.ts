@@ -44,7 +44,9 @@ describe('buildOrchestratorClaudeMd — behaviour preservation', () => {
   it('status ownership: do not update task status', () => {
     const output = buildOrchestratorClaudeMd(baseParams);
     expect(output).toContain('Do NOT update Notion task status.');
-    expect(output).toContain('Do NOT call any Notion API to change task status.');
+    expect(output).toContain(
+      'Do NOT call any Notion API to change task status.',
+    );
   });
 
   it('pre-PR gate: stash, rebase, restore steps present', () => {
