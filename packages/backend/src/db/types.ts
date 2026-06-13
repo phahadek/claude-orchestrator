@@ -253,7 +253,7 @@ export interface LocalBranchRow {
   base_branch: string;
   status: LocalBranchStatus;
   review_result: string | null; // JSON verdict
-  pause_reason: PauseReason | null;
+  pause_reason: string | null; // JSON-serialized PauseReasonStruct or legacy bare string
   merge_commit_sha: string | null;
   created_at: string;
   updated_at: string;
@@ -263,7 +263,7 @@ export type NewLocalBranchRow = Omit<
   LocalBranchRow,
   'id' | 'pause_reason' | 'merge_commit_sha'
 > & {
-  pause_reason?: PauseReason | null;
+  pause_reason?: string | null;
   merge_commit_sha?: string | null;
 };
 
@@ -346,7 +346,7 @@ export interface PullRequestRow {
   /** JSON-encoded string[] of failing check-run names. Non-null only when merge_state = 'ci_failed'. */
   failing_checks: string | null;
   pending_push: number; // 0 | 1 — push arrived before initial review completed
-  pause_reason: PauseReason | null; // non-null marks the task as needs_attention
+  pause_reason: string | null; // JSON-serialized PauseReasonStruct or legacy bare string
   pause_reason_set_at: number | null; // Unix ms timestamp of when pause_reason was last set
   ci_remediation_attempted_sha: string | null; // last head_sha for which CI remediation was attempted
   pre_review_stage: string | null;

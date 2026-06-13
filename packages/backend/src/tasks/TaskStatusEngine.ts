@@ -4,8 +4,9 @@ import {
   getTaskCache,
   getTaskPauseReason,
 } from '../db/queries';
+import { parsePauseReason } from '../db/pauseReason';
 import { typedGetSetting } from '../config/settings';
-import type { PauseReason } from '../db/types';
+import type { PauseReasonStruct } from '../db/types';
 
 export type DisplayStatus =
   | 'ready'
@@ -24,7 +25,7 @@ export interface TaskStatusInput {
   reviewVerdict: string | null; // 'approved' | 'needs_changes' | 'incomplete' | null
   reviewIterationCount: number; // how many review cycles
   reviewIterationCap: number; // configurable cap from settings
-  pauseReason?: PauseReason | null; // non-null forces needs_attention (unless terminal/approved)
+  pauseReason?: PauseReasonStruct | null; // non-null forces needs_attention (unless terminal/approved)
 }
 
 /**
@@ -110,6 +111,8 @@ export function deriveDisplayStatusFromDb(notionTaskId: string): DisplayStatus {
     reviewIterationCount: prRow?.review_iteration ?? 0,
     reviewIterationCap: getReviewIterationCap(),
     pauseReason:
-      prRow?.pause_reason ?? getTaskPauseReason(notionTaskId) ?? null,
+      parsePauseReason(prRow?.pause_reason ?? null) ??
+      getTaskPauseReason(notionTaskId) ??
+      null,
   });
 }

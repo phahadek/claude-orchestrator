@@ -11,6 +11,7 @@ import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { recordEvent } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
 import type { PullRequestRow } from '../db/types';
+import { parsePauseReason } from '../db/pauseReason';
 import type { AutoMerger } from './AutoMerger';
 import type { PRReviewService, PRReviewResult } from './PRReviewService';
 import type { ReviewOrchestrator } from './ReviewOrchestrator';
@@ -60,6 +61,12 @@ const TERMINAL_MERGE_PAUSE_REASONS: ReadonlySet<string> = new Set([
   'attribution_missing',
   'merge_conflict',
 ]);
+
+function isTerminalMergePause(pauseReasonRaw: string | null): boolean {
+  if (pauseReasonRaw === null) return false;
+  const parsed = parsePauseReason(pauseReasonRaw);
+  return parsed !== null && TERMINAL_MERGE_PAUSE_REASONS.has(parsed.reason);
+}
 
 export class PRMergeWatcher {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -318,10 +325,7 @@ export class PRMergeWatcher {
     if (pr.state === 'merged' || pr.state === 'closed') return;
     // Skip PRs paused for terminal reasons — AutoMerger has given up or human
     // intervention is needed. Polling GitHub's merge state can't change the outcome.
-    if (
-      pr.pause_reason !== null &&
-      TERMINAL_MERGE_PAUSE_REASONS.has(pr.pause_reason)
-    )
+    if (isTerminalMergePause(pr.pause_reason))
       return;
 
     const project = getProjectByGithubRepo(pr.repo);
@@ -555,10 +559,7 @@ export class PRMergeWatcher {
     pr: PullRequestRow,
     category: MergeabilityCategory,
   ): void {
-    if (
-      pr.pause_reason !== 'ci_failing' &&
-      pr.pause_reason !== 'ci_billing_blocked'
-    )
+    if (parsePauseReason(pr.pause_reason)?.source !== 'ci')
       return;
     // Trigger recovery for any non-CI-failing, non-conflict category.
     // AutoMerger will re-categorize and bounce back if not actually mergeable.
@@ -600,7 +601,7 @@ export class PRMergeWatcher {
       return;
     }
 
-    if (prRow.pause_reason === 'human_changes_requested') {
+    if (parsePauseReason(prRow.pause_reason)?.reason === 'human_changes_requested') {
       // Session addressed human review feedback and pushed — clear the pause so
       // AutoMerger can re-check the review state (re-approve or request more changes).
       setPauseReason(prRow.pr_number, prRow.repo, null);
