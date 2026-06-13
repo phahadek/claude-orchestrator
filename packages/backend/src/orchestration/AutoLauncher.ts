@@ -1,3 +1,4 @@
+import { logger } from '../logger';
 import type { SessionManager } from '../session/SessionManager';
 import { WorktreeSetupError } from '../session/WorktreeSetupError';
 import type { TaskBackend } from '../tasks/TaskBackend';
@@ -120,7 +121,7 @@ export class AutoLauncher {
       Date.now() - this.pollLastStartedAt >
         2 * runtimeSettings.auto_launch_poll_interval_ms
     ) {
-      console.warn(
+      logger.warn(
         `[AutoLauncher] poll STALL DETECTED — force-resetting (age=${Date.now() - this.pollLastStartedAt}ms)`,
       );
       this.polling = false;
@@ -144,7 +145,7 @@ export class AutoLauncher {
     this.polling = true;
     const cycleId = ++this.cycleCounter;
     this.pollLastStartedAt = Date.now();
-    console.log(`[AutoLauncher] poll start cycle=${cycleId}`);
+    logger.info(`[AutoLauncher] poll start cycle=${cycleId}`);
     let eligibleCount = 0;
     let launchedCount = 0;
     let skippedCount = 0;
@@ -156,7 +157,7 @@ export class AutoLauncher {
         PROJECT_CONCURRENCY,
         (project) =>
           this.processProject(project).catch((err) => {
-            console.error(`[AutoLauncher] project ${project.id} failed:`, err);
+            logger.error(`[AutoLauncher] project ${project.id} failed:`, err);
             return { eligible: 0, launched: 0, skipped: 0 };
           }),
       );
@@ -168,7 +169,7 @@ export class AutoLauncher {
     } finally {
       this.polling = false;
       const elapsedMs = Date.now() - (this.pollLastStartedAt ?? Date.now());
-      console.log(
+      logger.info(
         `[AutoLauncher] poll complete cycle=${cycleId} (eligible=${eligibleCount}, launched=${launchedCount}, skipped=${skippedCount}) durationMs=${elapsedMs}`,
       );
     }
@@ -188,7 +189,7 @@ export class AutoLauncher {
     if (backend.type === 'notion' || backend.type === 'github') {
       milestoneId = this.resolveMilestoneId(project);
       if (!milestoneId) {
-        console.warn(
+        logger.warn(
           `[AutoLauncher] project ${project.id}: no milestone configured — skipping`,
         );
         return { eligible: 0, launched: 0, skipped: 0 };
@@ -214,7 +215,7 @@ export class AutoLauncher {
           project.id,
         );
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[AutoLauncher] project ${project.id}: fetchNonMilestoneReadyTasks failed: ${err}`,
         );
       }
@@ -238,7 +239,7 @@ export class AutoLauncher {
       async (resolved) => {
         const mergedPR = getMergedPRForTask(resolved.task.id)!;
         const attempt = this.notionUpdateAttempts.get(resolved.task.id);
-        console.warn(
+        logger.warn(
           `[AutoLauncher] task "${resolved.task.title}" (${resolved.task.id}) skipped — PR #${mergedPR.pr_number} (${mergedPR.pr_url}) is already merged; updating task status to Done`,
         );
         try {
@@ -259,7 +260,7 @@ export class AutoLauncher {
             nextRetryAt: Date.now() + backoffMs,
             lastError: String(err),
           });
-          console.warn(
+          logger.warn(
             `[AutoLauncher] failed to update task ${resolved.task.id} to Done (attempt ${next}, next retry in ${backoffMs / 1000}s): ${err}`,
           );
           if (next === AutoLauncher.MAX_ATTEMPTS_BEFORE_AUDIT) {
@@ -402,7 +403,7 @@ export class AutoLauncher {
         },
       );
       clearTaskPauseReason(task.id);
-      console.log(
+      logger.info(
         `[AutoLauncher] launched session ${sessionId.slice(0, 8)} for task ${task.title || task.id} in project ${project.id}`,
       );
       this.broadcast?.({
@@ -418,7 +419,7 @@ export class AutoLauncher {
         err instanceof WorktreeSetupError
           ? err.message
           : (err as Error).message;
-      console.warn(
+      logger.warn(
         `[AutoLauncher] failed to launch task ${task.id}: ${fullMsg}`,
       );
 

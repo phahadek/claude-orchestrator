@@ -1,5 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
+import { logger } from '../logger';
 import { execSync } from 'child_process';
 import { getAllProjects } from '../config';
 import type { ProjectConfig } from '../config';
@@ -97,19 +98,19 @@ export async function runBootWorktreeReconciliation(options?: {
               cwd: project.projectDir,
             });
           } catch (branchErr) {
-            console.warn(
+            logger.warn(
               `[WorktreeReconciler] failed to delete branch ${branchName} for session ${sessionId.slice(0, 8)}: ${branchErr}`,
             );
           }
         }
 
         removed++;
-        console.log(
+        logger.info(
           `[WorktreeReconciler] removed worktree for session ${sessionId.slice(0, 8)} (project ${project.id})`,
         );
       } catch (err) {
         failed++;
-        console.error(
+        logger.error(
           `[WorktreeReconciler] failed to remove worktree ${wtPath} for session ${sessionId.slice(0, 8)}: ${err}`,
         );
         recordEvent({
@@ -154,11 +155,11 @@ export async function runBootWorktreeReconciliation(options?: {
       try {
         fs.rmSync(worktreePath, { recursive: true, force: true });
         fsDeleted++;
-        console.log(
+        logger.info(
           `[WorktreeReconciler] fs-deleted orphaned dir for session ${entry.slice(0, 8)} (project ${project.id})`,
         );
       } catch (err) {
-        console.error(
+        logger.error(
           `[WorktreeReconciler] failed to fs-delete orphaned dir ${worktreePath}: ${err}`,
         );
       }
@@ -168,14 +169,14 @@ export async function runBootWorktreeReconciliation(options?: {
     try {
       execSync('git worktree prune', { cwd: project.projectDir });
     } catch (pruneErr) {
-      console.warn(
+      logger.warn(
         `[WorktreeReconciler] git worktree prune failed for project ${project.id}: ${pruneErr}`,
       );
     }
   }
 
   if (removed > 0 || fsDeleted > 0 || failed > 0) {
-    console.log(
+    logger.info(
       `[WorktreeReconciler] boot sweep complete — removed: ${removed}, fs-deleted: ${fsDeleted}, failed: ${failed}, skipped: ${skipped}`,
     );
   }

@@ -1,3 +1,4 @@
+import { logger } from '../logger';
 import { getAllProjects, runtimeSettings } from '../config';
 import type { ProjectConfig } from '../config';
 import type { ServerMessage } from '../ws/types';
@@ -59,7 +60,7 @@ export class TaskCacheRefresher {
     const start = Date.now();
     const listProjects = this.options.listProjects ?? getAllProjects;
     const projects = listProjects().filter((p) => p.taskSource === 'notion');
-    console.log(
+    logger.info(
       `[TaskCacheRefresher] refresh start projects=${projects.length}`,
     );
     try {
@@ -68,7 +69,7 @@ export class TaskCacheRefresher {
       );
     } finally {
       this.refreshing = false;
-      console.log(
+      logger.info(
         `[TaskCacheRefresher] refresh complete projects=${projects.length} durationMs=${Date.now() - start}`,
       );
     }
@@ -105,7 +106,7 @@ export class TaskCacheRefresher {
           refreshedAt: Date.now(),
         });
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[TaskCacheRefresher] failed to refresh project=${project.id} milestone=${milestone.id}: ${String(err)}`,
         );
       }
@@ -125,7 +126,7 @@ export class TaskCacheRefresher {
           refreshedAt: Date.now(),
         });
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[TaskCacheRefresher] failed to refresh non-milestone project=${project.id}: ${String(err)}`,
         );
       }

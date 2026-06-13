@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { logger } from '../logger';
 import { runtimeSettings, getAllProjects } from '../config';
 import type { ProjectConfig } from '../config';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -104,7 +105,7 @@ export class OrphanedTaskSweeper {
         try {
           backend = resolveBackend(project.id);
         } catch (err) {
-          console.warn(
+          logger.warn(
             `[OrphanedTaskSweeper] skipping project ${project.id}: ${(err as Error).message}`,
           );
           continue;
@@ -114,7 +115,7 @@ export class OrphanedTaskSweeper {
         try {
           tasks = await backend.listTasksByStatus(IN_PROGRESS_STATUS);
         } catch (err) {
-          console.warn(
+          logger.warn(
             `[OrphanedTaskSweeper] listTasksByStatus failed for project ${project.id}: ${(err as Error).message}`,
           );
           continue;
@@ -128,7 +129,7 @@ export class OrphanedTaskSweeper {
           try {
             await this.maybeRevertTask(taskId, project.id, backend);
           } catch (err) {
-            console.warn(
+            logger.warn(
               `[OrphanedTaskSweeper] revert check failed for ${taskId}: ${(err as Error).message}`,
             );
           }
@@ -298,7 +299,7 @@ export class OrphanedTaskSweeper {
     const sendOrResume = this.options.sendOrResume;
     if (!sendOrResume) {
       // No sendOrResume injected — log and skip (shouldn't happen in production).
-      console.warn(
+      logger.warn(
         `[OrphanedTaskSweeper] sendOrResume not injected — cannot nudge session ${session_id} for task ${taskId}`,
       );
       return;
@@ -307,7 +308,7 @@ export class OrphanedTaskSweeper {
     try {
       await sendOrResume(session_id, IDLE_NUDGE_MESSAGE);
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[OrphanedTaskSweeper] sendOrResume failed for session ${session_id}: ${(err as Error).message}`,
       );
       return;
@@ -322,7 +323,7 @@ export class OrphanedTaskSweeper {
       payload: { taskId, sessionId: session_id, nudgeCount: nudgesAlready + 1 },
     });
 
-    console.log(
+    logger.info(
       `[OrphanedTaskSweeper] nudged idle session ${session_id} for task ${taskId} (nudge ${nudgesAlready + 1}/${NUDGE_LIMIT})`,
     );
   }
@@ -351,7 +352,7 @@ export class OrphanedTaskSweeper {
       newStatus: IN_PROGRESS_STATUS,
     });
 
-    console.log(
+    logger.info(
       `[OrphanedTaskSweeper] surfaced stalled session ${sessionId} for task ${taskId} to operator (reason: ${reason})`,
     );
   }
@@ -381,7 +382,7 @@ export class OrphanedTaskSweeper {
       newStatus,
     });
 
-    console.log(
+    logger.info(
       `[OrphanedTaskSweeper] reverted orphan task ${taskId} in project ${projectId} → ${newStatus}`,
     );
   }
