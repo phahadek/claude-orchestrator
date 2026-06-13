@@ -1,10 +1,10 @@
 import {
   getPRByNotionTaskId,
   getLatestCodeSessionByNotionTaskId,
-  getSetting,
   getTaskCache,
   getTaskPauseReason,
 } from '../db/queries';
+import { typedGetSetting } from '../config/settings';
 import type { PauseReason } from '../db/types';
 
 export type DisplayStatus =
@@ -68,15 +68,8 @@ export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
   return 'ready';
 }
 
-const DEFAULT_MAX_REVIEW_ITERATIONS = 3;
-
 function getReviewIterationCap(): number {
-  const raw = getSetting('max_review_iterations');
-  if (!raw) return DEFAULT_MAX_REVIEW_ITERATIONS;
-  const parsed = parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0
-    ? parsed
-    : DEFAULT_MAX_REVIEW_ITERATIONS;
+  return typedGetSetting('max_review_iterations');
 }
 
 /**

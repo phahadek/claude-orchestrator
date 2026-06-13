@@ -8,8 +8,8 @@ import {
   markCommentsRouted,
   setPauseReason,
   getSession,
-  getSetting,
 } from '../db/queries';
+import { typedGetSetting } from '../config/settings';
 import { getProjectByGithubRepo } from '../config';
 import { isTerminalStalePR } from './pollUtils';
 import { formatHumanReviewFeedback, type HumanComment } from './reviewUtils';
@@ -23,15 +23,7 @@ const WATCHABLE_PAUSE_REASONS: ReadonlySet<string | null> = new Set([
 ]);
 
 function getAIReviewerUsernames(): Set<string> {
-  const raw = getSetting('ai_reviewer_usernames');
-  if (!raw) return new Set();
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (Array.isArray(parsed)) return new Set(parsed.map(String));
-  } catch {
-    /* ignore malformed */
-  }
-  return new Set();
+  return new Set(typedGetSetting('ai_reviewer_usernames'));
 }
 
 /**

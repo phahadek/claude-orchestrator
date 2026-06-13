@@ -4,11 +4,8 @@ import { logger } from '../logger';
 import { getProjectById, runtimeSettings } from '../config';
 import { ProjectService } from '../projects/ProjectService';
 import { getTaskBackend } from '../tasks/TaskBackend';
-import {
-  getTaskCache,
-  getActiveTaskAggregates,
-  getSetting,
-} from '../db/queries';
+import { getTaskCache, getActiveTaskAggregates } from '../db/queries';
+import { typedGetSetting } from '../config/settings';
 import type { TaskAggregateRow } from '../db/queries';
 import { deriveDisplayStatus } from '../tasks/TaskStatusEngine';
 import type { NotionTask } from '../notion/types';
@@ -38,15 +35,8 @@ function resolveBoardCacheKey(boardId: string): string {
   return boardId;
 }
 
-const DEFAULT_MAX_REVIEW_ITERATIONS = 3;
-
 function getReviewIterationCap(): number {
-  const raw = getSetting('max_review_iterations');
-  if (!raw) return DEFAULT_MAX_REVIEW_ITERATIONS;
-  const parsed = parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0
-    ? parsed
-    : DEFAULT_MAX_REVIEW_ITERATIONS;
+  return typedGetSetting('max_review_iterations');
 }
 
 // ── Broadcast infrastructure ─────────────────────────────────────────────────

@@ -5,8 +5,10 @@ vi.mock('https', () => ({
   default: { get: vi.fn() },
 }));
 
-const mockGetSetting = vi.fn<[], string | undefined>(() => undefined);
-const mockSetSetting = vi.fn<[string, string], void>();
+const { mockGetSetting, mockSetSetting } = vi.hoisted(() => ({
+  mockGetSetting: vi.fn<[], string | undefined>(() => undefined),
+  mockSetSetting: vi.fn<[string, string], void>(),
+}));
 vi.mock('../../db/queries', () => ({
   getSetting: mockGetSetting,
   setSetting: mockSetSetting,

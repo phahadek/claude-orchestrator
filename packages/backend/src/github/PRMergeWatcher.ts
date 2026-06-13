@@ -4,8 +4,8 @@ import { GitHubRateLimitError } from './types';
 import type { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
-import { getProjectByGithubRepo } from '../config';
-import { AUTO_REVIEW_ENABLED } from '../config';
+import { getProjectByGithubRepo, AUTO_REVIEW_ENABLED } from '../config';
+import { typedGetSetting } from '../config/settings';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
 import { recordEvent } from '../audit/AuditLog';
@@ -36,7 +36,6 @@ import {
   setLastReviewedSha,
   setPRReviewResult,
   setPendingPush,
-  getSetting,
   getTestResult,
   markSessionDone,
   setPreReviewStage,
@@ -47,7 +46,6 @@ import { logger } from '../logger';
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const PUSH_REVIEW_TIMEOUT_MS = 240_000;
 const PENDING_REREVIEW_TTL_MS = 5 * 60 * 1000;
-const DEFAULT_MAX_REVIEW_ITERATIONS = 3;
 
 /**
  * Pause reasons where mergeability polling is pointless — AutoMerger has given
@@ -104,12 +102,7 @@ export class PRMergeWatcher {
   }
 
   private getMaxReviewIterations(): number {
-    const raw = getSetting('max_review_iterations');
-    if (!raw) return DEFAULT_MAX_REVIEW_ITERATIONS;
-    const parsed = parseInt(raw, 10);
-    return Number.isFinite(parsed) && parsed > 0
-      ? parsed
-      : DEFAULT_MAX_REVIEW_ITERATIONS;
+    return typedGetSetting('max_review_iterations');
   }
 
   private resolveBackendForRepo(repo: string): TaskBackend | undefined {

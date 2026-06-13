@@ -1,4 +1,4 @@
-import { getSetting } from '../db/queries';
+import { typedGetSetting } from './settings';
 
 export interface CorporateModeGates {
   dockerMandatory: boolean;
@@ -36,14 +36,9 @@ export function getCorporateMode(): CorporateModeConfig {
     return cachedConfig;
   }
 
-  const dbVal = getSetting('corporate_mode');
-  if (dbVal === 'corporate' || dbVal === 'personal') {
-    const enabled = dbVal === 'corporate';
-    cachedConfig = { enabled, envLocked: false, gates: buildGates(enabled) };
-    return cachedConfig;
-  }
-
-  cachedConfig = { enabled: false, envLocked: false, gates: buildGates(false) };
+  const dbVal = typedGetSetting('corporate_mode'); // 'corporate' | 'personal', default 'personal'
+  const enabled = dbVal === 'corporate';
+  cachedConfig = { enabled, envLocked: false, gates: buildGates(enabled) };
   return cachedConfig;
 }
 

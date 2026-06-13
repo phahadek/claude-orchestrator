@@ -4,9 +4,9 @@ import {
   getProjectById,
   runtimeSettings,
 } from '../config';
+import { typedGetSetting } from '../config/settings';
 import {
   setPRReviewResult,
-  getSetting,
   getPRByNumber,
   setPendingPush,
   setPauseReason,
@@ -46,15 +46,8 @@ import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { recordEvent } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
 
-const DEFAULT_MAX_ITERATIONS = 3;
-
 function getMaxReviewIterations(): number {
-  const raw = getSetting('max_review_iterations');
-  if (!raw) return DEFAULT_MAX_ITERATIONS;
-  const parsed = parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0
-    ? parsed
-    : DEFAULT_MAX_ITERATIONS;
+  return typedGetSetting('max_review_iterations');
 }
 
 interface LocalBranchJob {
