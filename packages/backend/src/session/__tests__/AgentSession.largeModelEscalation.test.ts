@@ -774,7 +774,9 @@ describe('AgentSession — escalation deadlock watchdog + bounded retry', () => 
     // Session never ended as done.
     expect(
       messages.find(
-        (m) => m.type === 'session_ended' && (m as { status?: string }).status === 'done',
+        (m) =>
+          m.type === 'session_ended' &&
+          (m as { status?: string }).status === 'done',
       ),
     ).toBeUndefined();
   });
