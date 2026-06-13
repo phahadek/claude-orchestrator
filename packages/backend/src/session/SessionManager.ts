@@ -70,6 +70,7 @@ import {
   formatApprovedVerdictMessage,
 } from '../github/reviewUtils';
 import type { PRReviewResult } from '../github/PRReviewService';
+import { logger } from '../logger';
 
 /**
  * Derive a prefixed task ID from a task URL, using the project's task source
@@ -249,11 +250,11 @@ export function pruneSessionBranch(
 
   try {
     execSync(`git branch -D "${branchName}"`, { cwd: projectDir });
-    console.log(
+    logger.info(
       `[SessionManager] pruned ${branchName} (session ${sessionId.slice(0, 8)})`,
     );
   } catch (err) {
-    console.error(`[SessionManager] failed to prune ${branchName}: ${err}`);
+    logger.error(`[SessionManager] failed to prune ${branchName}: ${err}`);
   }
 }
 
@@ -308,7 +309,7 @@ export class SessionManager extends EventEmitter {
       try {
         this._handleTaskUpdated(emitArgs[0] as ServerMessage);
       } catch (err) {
-        console.error('[SessionManager] task_updated handler error:', err);
+        logger.error('[SessionManager] task_updated handler error:', err);
       } finally {
         this._inTaskUpdate = false;
       }
@@ -486,7 +487,7 @@ export class SessionManager extends EventEmitter {
         emitTaskUpdated(notionTaskId);
       })
       .catch((e) =>
-        console.error(
+        logger.error(
           `[SessionManager] markSessionErrored updateStatus failed: ${e}`,
         ),
       );
@@ -580,7 +581,7 @@ export class SessionManager extends EventEmitter {
       precomputedTaskId ??
       deriveTaskId(project.taskSource ?? 'notion', taskUrl);
 
-    console.log(
+    logger.info(
       `[SessionManager] start ${sessionId} project=${projectId} sessionType=${sessionType}`,
     );
 
@@ -654,7 +655,7 @@ export class SessionManager extends EventEmitter {
       startedAt,
     ).catch(async (err) => {
       this.pendingStarts.delete(sessionId);
-      console.error(
+      logger.error(
         `[SessionManager] completeStart failed for ${sessionId}:`,
         err,
       );
@@ -722,7 +723,7 @@ export class SessionManager extends EventEmitter {
         try {
           ensureMilestoneBranch(milestoneSlug, projectDir, project.baseBranch);
         } catch (err) {
-          console.warn(
+          logger.warn(
             `[SessionManager] ensureMilestoneBranch failed (continuing): ${err}`,
           );
         }
@@ -733,7 +734,7 @@ export class SessionManager extends EventEmitter {
             timeout: 30_000,
           });
         } catch (err) {
-          console.warn(
+          logger.warn(
             `[SessionManager] git fetch origin ${project.baseBranch} failed (continuing with local ref): ${err}`,
           );
         }
@@ -768,7 +769,7 @@ export class SessionManager extends EventEmitter {
 
           if (predecessor) {
             // Owned by a terminal predecessor of the same task — abandon and retry fresh.
-            console.log(
+            logger.info(
               `[SessionManager] completeStart: stale branch ${featureBranch} from terminal session ${predecessor.session_id.slice(0, 8)} — abandoning`,
             );
 
@@ -785,11 +786,11 @@ export class SessionManager extends EventEmitter {
                   prRow.pr_number,
                   "Superseded — task relaunched; this PR's branch was abandoned per fresh-start policy.",
                 );
-                console.log(
+                logger.info(
                   `[SessionManager] completeStart: closed predecessor PR #${prRow.pr_number} (${prRow.repo})`,
                 );
               } catch (closeErr) {
-                console.warn(
+                logger.warn(
                   `[SessionManager] completeStart: failed to close predecessor PR #${prRow.pr_number}: ${closeErr}`,
                 );
               }
@@ -805,11 +806,11 @@ export class SessionManager extends EventEmitter {
             // Delete the branch locally (best-effort).
             try {
               execSync(`git branch -D "${featureBranch}"`, { cwd: projectDir });
-              console.log(
+              logger.info(
                 `[SessionManager] completeStart: deleted local branch ${featureBranch}`,
               );
             } catch (delLocalErr) {
-              console.warn(
+              logger.warn(
                 `[SessionManager] completeStart: failed to delete local branch ${featureBranch}: ${delLocalErr}`,
               );
             }
@@ -821,11 +822,11 @@ export class SessionManager extends EventEmitter {
                   project.githubRepo,
                   featureBranch,
                 );
-                console.log(
+                logger.info(
                   `[SessionManager] completeStart: deleted origin branch ${featureBranch}`,
                 );
               } catch (delRemoteErr) {
-                console.warn(
+                logger.warn(
                   `[SessionManager] completeStart: failed to delete origin branch ${featureBranch}: ${delRemoteErr}`,
                 );
               }
@@ -860,7 +861,7 @@ export class SessionManager extends EventEmitter {
               const retryStderr = re.stderr ? re.stderr.toString() : '';
               const retryMsg =
                 `${re.message}${retryStderr ? `\nstderr: ${retryStderr}` : ''}`.trim();
-              console.error(
+              logger.error(
                 `[SessionManager] completeStart: retry after stale-branch abandonment also failed for ${sessionId}: ${retryMsg}`,
               );
               throw new WorktreeSetupError(retryMsg, {
@@ -870,13 +871,13 @@ export class SessionManager extends EventEmitter {
           } else {
             // Branch exists but not attributable to a terminal predecessor of this task.
             // Keep deterministic failure — crash budget backstop handles it.
-            console.error(
+            logger.error(
               `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
             );
             throw new WorktreeSetupError(fullMsg, { isBranchAlreadyExists });
           }
         } else {
-          console.error(
+          logger.error(
             `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
           );
           throw new WorktreeSetupError(fullMsg, { isBranchAlreadyExists });
@@ -893,7 +894,7 @@ export class SessionManager extends EventEmitter {
         const stderr = e.stderr ? e.stderr.toString() : '';
         const fullMsg =
           `${e.message}${stderr ? `\nstderr: ${stderr}` : ''}`.trim();
-        console.error(
+        logger.error(
           `[SessionManager] failed to create worktree for ${sessionId}: ${fullMsg}`,
         );
         throw new WorktreeSetupError(fullMsg, { isBranchAlreadyExists: false });
@@ -902,7 +903,7 @@ export class SessionManager extends EventEmitter {
 
     const isUnixStylePath =
       worktreePath.startsWith('/c/') || worktreePath.startsWith('/C/');
-    console.log(
+    logger.info(
       `[SessionManager] worktree created: path=${worktreePath} startingPoint=${startingPoint}` +
         (isUnixStylePath
           ? ' [WARNING: Unix-style path detected — may not resolve correctly on Windows]'
@@ -917,11 +918,11 @@ export class SessionManager extends EventEmitter {
           cwd: projectDir,
           timeout: 120_000,
         });
-        console.log(
+        logger.info(
           `[SessionManager] bootstrap script completed for ${sessionId.slice(0, 8)}`,
         );
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[SessionManager] bootstrap script failed for ${sessionId.slice(0, 8)} (continuing): ${err}`,
         );
       }
@@ -940,11 +941,11 @@ export class SessionManager extends EventEmitter {
       try {
         taskContent =
           await getTaskBackend(projectId).fetchTaskPage(sessionTaskId);
-        console.log(
+        logger.info(
           `[SessionManager] pre-fetched task content for ${sessionId.slice(0, 8)} (${taskContent.length} chars)`,
         );
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[SessionManager] failed to pre-fetch task content for ${sessionId.slice(0, 8)} — session will fetch from task backend: ${err}`,
         );
       }
@@ -955,12 +956,12 @@ export class SessionManager extends EventEmitter {
         const fileSnippets = readTaskFiles(taskContent, projectDir);
         if (fileSnippets) {
           taskContent += '\n\n' + fileSnippets;
-          console.log(
+          logger.info(
             `[SessionManager] appended file snippets for ${sessionId.slice(0, 8)}`,
           );
         }
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[SessionManager] failed to read task files for ${sessionId.slice(0, 8)}: ${err}`,
         );
       }
@@ -993,7 +994,7 @@ export class SessionManager extends EventEmitter {
           gitMode: project.gitMode,
         });
       } catch (err) {
-        console.error(
+        logger.error(
           `[SessionManager] failed to build session context for ${sessionId}: ${err}`,
         );
       }
@@ -1001,7 +1002,7 @@ export class SessionManager extends EventEmitter {
 
     const mcpConfigPath = writeMcpConfig(worktreePath, orchConfig.mcp_servers);
     if (mcpConfigPath) {
-      console.log(
+      logger.info(
         `[SessionManager] wrote MCP config to ${mcpConfigPath} for ${sessionId.slice(0, 8)}`,
       );
     }
@@ -1027,7 +1028,7 @@ export class SessionManager extends EventEmitter {
 
     if (sessionMode === 'cli' && sessionContextContent) {
       session.injectContextFile('CLAUDE.md', sessionContextContent);
-      console.log(
+      logger.info(
         `[SessionManager] orchestrator CLAUDE.md written to worktree for ${sessionId.slice(0, 8)}`,
       );
     }
@@ -1052,7 +1053,7 @@ export class SessionManager extends EventEmitter {
           emitTaskUpdated(sessionTaskId);
         })
         .catch((e) => {
-          console.error(`[SessionManager] failed to set In Progress: ${e}`);
+          logger.error(`[SessionManager] failed to set In Progress: ${e}`);
           this.emit('message', {
             type: 'error',
             message: `Failed to update task status to In Progress: ${e}`,
@@ -1108,11 +1109,11 @@ export class SessionManager extends EventEmitter {
         await exec(`git worktree remove --force "${worktreePath}"`, {
           cwd: projectDir,
         });
-        console.log(
+        logger.info(
           `[SessionManager] cleanupPartialWorktree: removed worktree for ${sessionId.slice(0, 8)}`,
         );
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[SessionManager] cleanupPartialWorktree: worktree remove failed for ${sessionId.slice(0, 8)}: ${err}`,
         );
       }
@@ -1124,7 +1125,7 @@ export class SessionManager extends EventEmitter {
     if (featureBranch) {
       try {
         await exec(`git branch -D "${featureBranch}"`, { cwd: projectDir });
-        console.log(
+        logger.info(
           `[SessionManager] cleanupPartialWorktree: deleted branch ${featureBranch} for ${sessionId.slice(0, 8)}`,
         );
       } catch {
@@ -1153,7 +1154,7 @@ export class SessionManager extends EventEmitter {
         prNumber?: number;
         repo?: string;
       };
-      console.log(
+      logger.info(
         `[SessionManager] forwarding pr_opened for PR #${prJob.prNumber ?? '?'} (${prJob.repo ?? '?'}) from session ${sessionId.slice(0, 8)}`,
       );
       const dispatched = session.taskId;
@@ -1162,7 +1163,7 @@ export class SessionManager extends EventEmitter {
         prJob.taskId &&
         prJob.taskId.replace(/-/g, '') !== dispatched.replace(/-/g, '')
       ) {
-        console.error(
+        logger.error(
           `[SessionManager] PR attribution mismatch: session ${sessionId.slice(0, 8)} dispatched for ${dispatched} but PR is attributed to ${prJob.taskId}`,
         );
         recordEvent({
@@ -1174,7 +1175,7 @@ export class SessionManager extends EventEmitter {
           payload: { dispatchedTaskId: dispatched, prTaskId: prJob.taskId },
         });
       }
-      console.log(
+      logger.info(
         `[SessionManager] emitting pr_opened to ReviewOrchestrator for PR #${prJob.prNumber ?? '?'}`,
       );
       this.emit('pr_opened', job);
@@ -1196,7 +1197,7 @@ export class SessionManager extends EventEmitter {
         ),
       )
       .catch((err) => {
-        console.error(`[SessionManager] session ${sessionId} error: ${err}`);
+        logger.error(`[SessionManager] session ${sessionId} error: ${err}`);
         // If run() threw before broadcasting session_ended, update SQLite and
         // notify the frontend so the session doesn't stay stuck at 'running'.
         if (!session.hasEnded) {
@@ -1266,7 +1267,7 @@ export class SessionManager extends EventEmitter {
   private async resumeSession(row: Session): Promise<void> {
     const project = getProjectById(row.project_id ?? '');
     if (!project) {
-      console.warn(
+      logger.warn(
         `[SessionManager] orphan ${row.session_id}: project not found, marking error`,
       );
       this.markSessionErrored(
@@ -1286,14 +1287,14 @@ export class SessionManager extends EventEmitter {
     // fallback would fire. Detect this upfront and mark the session as error
     // without spawning anything.
     if (!worktreePath || !fs.existsSync(worktreePath)) {
-      console.warn(
+      logger.warn(
         `[SessionManager] resumability pre-check failed for ${row.session_id}: worktree missing (${worktreePath}) — marking error`,
       );
       this.markSessionErrored(row.session_id, 'error', 'worktree_missing');
       return;
     }
 
-    console.log(
+    logger.info(
       `[SessionManager] resumeSession ${row.session_id}: re-using worktree ${worktreePath}`,
     );
 
@@ -1334,7 +1335,7 @@ export class SessionManager extends EventEmitter {
               row.task_id,
             );
           } catch (fetchErr) {
-            console.warn(
+            logger.warn(
               `[SessionManager] resumeSession: task fetch failed for ${row.session_id.slice(0, 8)} (injecting without pre-loaded content): ${fetchErr}`,
             );
           }
@@ -1361,11 +1362,11 @@ export class SessionManager extends EventEmitter {
           gitMode: project.gitMode,
         });
         session.injectContextFile('CLAUDE.md', repinnedContext);
-        console.log(
+        logger.info(
           `[SessionManager] resumeSession: re-pinned CLAUDE.md for ${row.session_id.slice(0, 8)}`,
         );
       } catch (err) {
-        console.warn(
+        logger.warn(
           `[SessionManager] resumeSession: CLAUDE.md re-pin failed for ${row.session_id.slice(0, 8)}: ${err}`,
         );
       }
@@ -1380,7 +1381,7 @@ export class SessionManager extends EventEmitter {
       (eventKind(lastEvent) === 'tool_result' ||
         eventKind(lastEvent) === 'tool_use')
     ) {
-      console.warn(
+      logger.warn(
         `[SessionManager] resumeSession ${row.session_id}: Resuming mid-turn session — sending continuation nudge`,
       );
     }
@@ -1398,7 +1399,7 @@ export class SessionManager extends EventEmitter {
     // Error timer: if the CLI doesn't emit any events within 30s, mark as error.
     const errorTimer = setTimeout(() => {
       if (!session.hasEnded) {
-        console.warn(
+        logger.warn(
           `[SessionManager] resumeSession ${row.session_id}: no events within 30s after resume — marking as error`,
         );
         this.markSessionErrored(row.session_id, 'error', 'resume_timeout');
@@ -1462,7 +1463,7 @@ export class SessionManager extends EventEmitter {
     // 'running' because the review pipeline threw mid-handleCleanExit.
     const stuckRows = getStuckResultSessionRows();
     if (stuckRows.length > 0) {
-      console.log(
+      logger.info(
         `[SessionManager] recovering ${stuckRows.length} stuck session(s) from running→done`,
       );
       for (const row of stuckRows) {
@@ -1494,7 +1495,7 @@ export class SessionManager extends EventEmitter {
             broadcast: (msg) => this.emit('message', msg),
             emitPrOpened: (data) => this.emit('pr_opened', data),
           }).catch((e) =>
-            console.error(
+            logger.error(
               `[SessionManager] recoverSession failed for ${row.session_id}: ${e}`,
             ),
           );
@@ -1506,7 +1507,7 @@ export class SessionManager extends EventEmitter {
     // rather than resume so they don't re-dispatch already-merged work.
     const mergedPrRows = getRunningSessionsWithMergedOrClosedPR();
     if (mergedPrRows.length > 0) {
-      console.log(
+      logger.info(
         `[SessionManager] reaping ${mergedPrRows.length} session(s) with merged/closed PR`,
       );
       for (const row of mergedPrRows) {
@@ -1538,7 +1539,7 @@ export class SessionManager extends EventEmitter {
             broadcast: (msg) => this.emit('message', msg),
             emitPrOpened: (data) => this.emit('pr_opened', data),
           }).catch((e) =>
-            console.error(
+            logger.error(
               `[SessionManager] recoverSession failed for ${row.session_id}: ${e}`,
             ),
           );
@@ -1554,7 +1555,7 @@ export class SessionManager extends EventEmitter {
 
     const orphans = getSessionsByStatus(['running']);
     if (orphans.length === 0) return;
-    console.log(
+    logger.info(
       `[SessionManager] found ${orphans.length} orphan session(s) — resuming`,
     );
 
@@ -1573,7 +1574,7 @@ export class SessionManager extends EventEmitter {
       try {
         await this.resumeSession(row);
       } catch (err) {
-        console.error(
+        logger.error(
           `[SessionManager] failed to resume ${row.session_id}: ${err}`,
         );
         // Mark as error so it doesn't retry forever on subsequent restarts.
@@ -1582,7 +1583,7 @@ export class SessionManager extends EventEmitter {
     }
 
     for (const row of toError) {
-      console.warn(
+      logger.warn(
         `[SessionManager] max concurrent code sessions reached — marking orphan ${row.session_id} as error`,
       );
       this.markSessionErrored(row.session_id, 'error', 'max_concurrent');
@@ -1628,12 +1629,12 @@ export class SessionManager extends EventEmitter {
         encoding: 'utf8',
       }).trim();
       if (dirty) {
-        console.warn(
+        logger.warn(
           `[SessionManager] [WARNING] Main repo has uncommitted changes after session ${sessionId.slice(0, 8)} ended — possible worktree escape:\n${dirty}`,
         );
       }
     } catch (err) {
-      console.error(
+      logger.error(
         `[SessionManager] failed to check main repo status after session ${sessionId.slice(0, 8)}: ${err}`,
       );
     }
@@ -1649,7 +1650,7 @@ export class SessionManager extends EventEmitter {
         fs.unlinkSync(mcpConfigFile);
       }
     } catch (err) {
-      console.warn(
+      logger.warn(
         `[SessionManager] failed to remove orchestrator-mcp.json for ${sessionId.slice(0, 8)}: ${err}`,
       );
     }
@@ -1662,7 +1663,7 @@ export class SessionManager extends EventEmitter {
       const stderr =
         (err as { stderr?: string | Buffer })?.stderr?.toString() ??
         String(err);
-      console.error(
+      logger.error(
         `[SessionManager] failed to remove worktree for ${sessionId}: ${err}`,
       );
       recordEvent({
@@ -1684,7 +1685,7 @@ export class SessionManager extends EventEmitter {
           cwd: projectDir,
         });
       } catch (err) {
-        console.error(
+        logger.error(
           `[SessionManager] failed to delete branch ${branchName}: ${err}`,
         );
       }
@@ -1793,7 +1794,7 @@ export class SessionManager extends EventEmitter {
     // Kill the process (fire-and-forget — cleanup via run().then() still fires).
     if (liveSession) {
       liveSession.kill().catch((err) => {
-        console.error(
+        logger.error(
           `[SessionManager] abortSession kill error for ${sessionId.slice(0, 8)}: ${err}`,
         );
       });
@@ -1818,9 +1819,7 @@ export class SessionManager extends EventEmitter {
         emitTaskUpdated(notionTaskId);
       })
       .catch((e) =>
-        console.error(
-          `[SessionManager] abortSession updateStatus failed: ${e}`,
-        ),
+        logger.error(`[SessionManager] abortSession updateStatus failed: ${e}`),
       );
   }
 
@@ -1935,7 +1934,7 @@ export class SessionManager extends EventEmitter {
     // Session not live — look up details from DB and re-launch with --resume
     const row = getSession(sessionId);
     if (!row) {
-      console.error(
+      logger.error(
         `[SessionManager] sendOrResume: session ${sessionId} not found in DB`,
       );
       return sessionId;
@@ -1948,7 +1947,7 @@ export class SessionManager extends EventEmitter {
       row.status === 'error' ||
       row.status === 'killed'
     ) {
-      console.warn(
+      logger.warn(
         `[SessionManager] sendOrResume: refusing to respawn terminal session ${sessionId} (status=${row.status})`,
       );
       this.emit('message', {
@@ -1963,7 +1962,7 @@ export class SessionManager extends EventEmitter {
 
     const project = getProjectById(row.project_id ?? '');
     if (!project) {
-      console.error(
+      logger.error(
         `[SessionManager] sendOrResume: project not found for session ${sessionId}`,
       );
       return sessionId;
@@ -1990,7 +1989,7 @@ export class SessionManager extends EventEmitter {
       fs.existsSync(recordedPath) &&
       fs.existsSync(path.join(recordedPath, '.git'))
     ) {
-      console.log(
+      logger.info(
         `[SessionManager] sendOrResume reusing surviving worktree: path=${recordedPath}`,
       );
       const orchConfig = loadOrchestratorConfig(projectDir);
@@ -2011,7 +2010,7 @@ export class SessionManager extends EventEmitter {
           row.session_id,
         );
         for (const s of stale) {
-          console.log(
+          logger.info(
             `[SessionManager] sendOrResume: superseding stale session ${s.session_id.slice(0, 8)} for task ${row.task_id}`,
           );
           markSessionSuperseded(s.session_id, Date.now());
@@ -2047,7 +2046,7 @@ export class SessionManager extends EventEmitter {
         try {
           ensureMilestoneBranch(milestoneSlug, projectDir, project.baseBranch);
         } catch (err) {
-          console.warn(
+          logger.warn(
             `[SessionManager] sendOrResume: ensureMilestoneBranch failed (continuing): ${err}`,
           );
         }
@@ -2058,7 +2057,7 @@ export class SessionManager extends EventEmitter {
             timeout: 30_000,
           });
         } catch (err) {
-          console.warn(
+          logger.warn(
             `[SessionManager] sendOrResume: git fetch origin ${project.baseBranch} failed (continuing with local ref): ${err}`,
           );
         }
@@ -2080,7 +2079,7 @@ export class SessionManager extends EventEmitter {
     try {
       execSync(`git worktree prune`, { cwd: projectDir });
     } catch (pruneErr) {
-      console.warn(
+      logger.warn(
         `[SessionManager] sendOrResume: git worktree prune failed (continuing): ${pruneErr}`,
       );
     }
@@ -2152,7 +2151,7 @@ export class SessionManager extends EventEmitter {
       const stderr =
         (err as { stderr?: string | Buffer })?.stderr?.toString() ?? '';
       const msg = `sendOrResume: worktree recreation failed for session ${sessionId.slice(0, 8)}: ${(err as Error).message}\nstderr: ${stderr}`;
-      console.error(`[SessionManager] ${msg}`);
+      logger.error(`[SessionManager] ${msg}`);
 
       this.markSessionErrored(sessionId, 'error', 'worktree_recreate_failed');
 
@@ -2169,7 +2168,7 @@ export class SessionManager extends EventEmitter {
 
     const isUnixStylePath =
       worktreePath.startsWith('/c/') || worktreePath.startsWith('/C/');
-    console.log(
+    logger.info(
       `[SessionManager] sendOrResume worktree created: path=${worktreePath} startingPoint=${startingPoint}` +
         (isUnixStylePath
           ? ' [WARNING: Unix-style path detected — may not resolve correctly on Windows]'
@@ -2195,7 +2194,7 @@ export class SessionManager extends EventEmitter {
     if (row.task_id) {
       const stale = getOtherRunningSessionsForTask(row.task_id, row.session_id);
       for (const s of stale) {
-        console.log(
+        logger.info(
           `[SessionManager] sendOrResume: superseding stale session ${s.session_id.slice(0, 8)} for task ${row.task_id}`,
         );
         markSessionSuperseded(s.session_id, Date.now());
