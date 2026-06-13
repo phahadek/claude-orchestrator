@@ -128,7 +128,9 @@ describe('resetReviewIteration() — resume-mechanism contract', () => {
 
     // Pre-reset: blocked
     expect(getApprovedOpenPRs()).toHaveLength(0);
-    expect(getPausedPrReasonForTask('notion:task-abc')?.reason).toBe('stuck_timeout');
+    expect(getPausedPrReasonForTask('notion:task-abc')?.reason).toBe(
+      'stuck_timeout',
+    );
 
     // Reset (mirrors the re-review endpoint)
     resetReviewIteration(21, 'owner/repo');

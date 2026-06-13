@@ -1662,7 +1662,12 @@ export function setTaskPauseReason(
   }>(
     `INSERT OR REPLACE INTO task_pause_reasons (task_id, pause_reason, detail, set_at)
      VALUES (@task_id, @pause_reason, @detail, @set_at)`,
-  ).run({ task_id: taskId, pause_reason: serialized, detail, set_at: Date.now() });
+  ).run({
+    task_id: taskId,
+    pause_reason: serialized,
+    detail,
+    set_at: Date.now(),
+  });
 }
 
 /** Returns the task-level pause reason struct, or null if none is set. */

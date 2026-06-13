@@ -325,8 +325,7 @@ export class PRMergeWatcher {
     if (pr.state === 'merged' || pr.state === 'closed') return;
     // Skip PRs paused for terminal reasons — AutoMerger has given up or human
     // intervention is needed. Polling GitHub's merge state can't change the outcome.
-    if (isTerminalMergePause(pr.pause_reason))
-      return;
+    if (isTerminalMergePause(pr.pause_reason)) return;
 
     const project = getProjectByGithubRepo(pr.repo);
     const config = project ? loadOrchestratorConfig(project.projectDir) : null;
@@ -564,8 +563,7 @@ export class PRMergeWatcher {
     pr: PullRequestRow,
     category: MergeabilityCategory,
   ): void {
-    if (parsePauseReason(pr.pause_reason)?.source !== 'ci')
-      return;
+    if (parsePauseReason(pr.pause_reason)?.source !== 'ci') return;
     // Trigger recovery for any non-CI-failing, non-conflict category.
     // AutoMerger will re-categorize and bounce back if not actually mergeable.
     if (category.category === 'ci_failed' || category.category === 'conflict')
@@ -606,7 +604,9 @@ export class PRMergeWatcher {
       return;
     }
 
-    if (parsePauseReason(prRow.pause_reason)?.reason === 'human_changes_requested') {
+    if (
+      parsePauseReason(prRow.pause_reason)?.reason === 'human_changes_requested'
+    ) {
       // Session addressed human review feedback and pushed — clear the pause so
       // AutoMerger can re-check the review state (re-approve or request more changes).
       setPauseReason(prRow.pr_number, prRow.repo, null);
