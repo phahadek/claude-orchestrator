@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
+import { logger } from '../logger';
 import {
   UpdateChecker,
   downloadAsset,
@@ -90,7 +91,7 @@ router.post('/update/install', async (req: Request, res: Response) => {
         const installerPath = await downloadAsset(asset);
         launchInstallerAndExit(installerPath);
       } catch (err) {
-        console.error('[updater] install failed:', (err as Error).message);
+        logger.error('[updater] install failed:', (err as Error).message);
         // Clean up partial download
         cleanUpdatesDir();
         _broadcast?.({

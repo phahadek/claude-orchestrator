@@ -68,6 +68,14 @@ function write(level: string, args: unknown[]): void {
   if (currentBytes >= (_maxBytesOverride ?? MAX_BYTES)) rotate();
 }
 
+/** Structured logger — wraps patched console methods for explicit log-level semantics. */
+export const logger = {
+  info: (...args: unknown[]) => console.log(...args),
+  warn: (...args: unknown[]) => console.warn(...args),
+  error: (...args: unknown[]) => console.error(...args),
+  debug: (...args: unknown[]) => console.debug(...args),
+};
+
 /**
  * Thin wrapper so call sites can import { logger } instead of calling console.*
  * directly. Delegates at call time so it picks up the patched console methods

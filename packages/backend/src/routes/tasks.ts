@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
+import { logger } from '../logger';
 import { getProjectById, runtimeSettings } from '../config';
 import { ProjectService } from '../projects/ProjectService';
 import { getTaskBackend } from '../tasks/TaskBackend';
@@ -513,7 +514,7 @@ export function createTasksRouter(): Router {
     // Trigger background refresh — returns 202 immediately; broadcasts task_cache_updated when done.
     if (cacheRefresherFn) {
       void cacheRefresherFn(projectId).catch((err: unknown) => {
-        console.warn(
+        logger.warn(
           `[tasks] /refresh background error for ${projectId}: ${String(err)}`,
         );
       });
