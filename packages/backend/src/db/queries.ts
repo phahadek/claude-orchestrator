@@ -1,4 +1,5 @@
 import { db } from './db';
+import { logger } from '../logger';
 import { recordEvent } from '../audit/AuditLog';
 import type {
   Session,
@@ -215,7 +216,7 @@ export function markSessionDone(
     | { status: string; task_id: string | null }
     | undefined;
   if (current?.status === 'running') {
-    console.warn(
+    logger.warn(
       `[markSessionDone] running→done for ${sessionId.slice(0, 8)} call_site=${callSite ?? 'unknown'} — emitting audit event`,
     );
     recordEvent({
@@ -707,7 +708,7 @@ export function upsertSessionEvent(
   }
   const sessionRow = stmtGetSession.get({ session_id: e.session_id });
   if (!sessionRow) {
-    console.error(
+    logger.error(
       `[upsertSessionEvent] no sessions row for ${e.session_id} — dropping event (type=${e.event_type})`,
     );
     return -1;
@@ -1053,7 +1054,7 @@ export function upsertPullRequest(
   },
 ): PullRequestRow | null {
   if (!getProjectByGithubRepo(pr.repo)) {
-    console.warn(
+    logger.warn(
       `[upsertPullRequest] rejected: repo "${pr.repo}" not configured in any project — skipping upsert to prevent phantom row (pr_url=${pr.pr_url})`,
     );
     return null;
@@ -1356,12 +1357,12 @@ export function lookupSessionByBranch(
     return rows[0];
   }
   if (rows.length === 0) {
-    console.warn(
+    logger.warn(
       `[lookupSessionByBranch] no session found for branch "${headBranch}"`,
     );
   } else {
     const ids = rows.map((r) => r.session_id.slice(0, 8)).join(', ');
-    console.warn(
+    logger.warn(
       `[lookupSessionByBranch] ambiguous: ${rows.length} sessions match branch "${headBranch}" (${ids}) — leaving session_id null`,
     );
   }

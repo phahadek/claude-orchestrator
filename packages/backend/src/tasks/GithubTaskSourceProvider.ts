@@ -6,6 +6,7 @@ import { DependencyResolver } from '../notion/DependencyResolver';
 import type { GitHubClient } from '../github/GitHubClient';
 import type { Issue } from '../github/types';
 import { ProjectService } from '../projects/ProjectService';
+import { logger } from '../logger';
 
 export interface GithubProjectConfig {
   owner: string;
@@ -83,7 +84,7 @@ function resolveStatus(labels: string[], issueNum: number): string {
   for (const label of labels) {
     if (LABEL_TO_STATUS[label]) return LABEL_TO_STATUS[label];
   }
-  console.warn(
+  logger.warn(
     `[GithubTaskSourceProvider] issue #${issueNum} has no status:* label; defaulting to 🔲 Backlog`,
   );
   return '🔲 Backlog';
@@ -206,7 +207,7 @@ export class GithubTaskSourceProvider implements TaskBackend {
     const issue = await this.client.getIssue(this.repo, issueNumber);
     const hadStatusLabel = issue.labels.some((l) => l.startsWith('status:'));
     if (!hadStatusLabel) {
-      console.warn(
+      logger.warn(
         `[GithubTaskSourceProvider] issue #${issueNumber} had no status:* label before updateStatus`,
       );
     }
