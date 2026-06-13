@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { scrubSecrets } from '../security/scrubSecrets';
+import { logger } from '../logger';
 import {
   getAllSessionIds,
   insertSessionOrIgnore,
@@ -38,7 +39,7 @@ export class JsonlReader {
   /** Scan sessionsDir, parse all .jsonl files, upsert into SQLite. */
   async importAll(): Promise<void> {
     if (!fs.existsSync(this.sessionsDir)) {
-      console.log(`[JsonlReader] sessions dir not found: ${this.sessionsDir}`);
+      logger.info(`[JsonlReader] sessions dir not found: ${this.sessionsDir}`);
       return;
     }
 
@@ -90,7 +91,7 @@ export class JsonlReader {
       newSessions++;
     }
 
-    console.log(
+    logger.info(
       `[JsonlReader] imported ${newSessions} new sessions, ${newEvents} new events`,
     );
   }
@@ -112,7 +113,7 @@ export class JsonlReader {
       try {
         obj = JSON.parse(trimmed) as Record<string, unknown>;
       } catch {
-        console.warn(
+        logger.warn(
           `[JsonlReader] malformed line in ${filePath} — skipping: ${trimmed.slice(0, 80)}`,
         );
         continue;
@@ -120,7 +121,7 @@ export class JsonlReader {
 
       if (typeof obj.type !== 'string' || !VALID_EVENT_TYPES.has(obj.type)) {
         const truncated = trimmed.slice(0, 500);
-        console.warn(
+        logger.warn(
           `[JsonlReader] unknown event type "${String(obj.type)}" in ${filePath} — skipping: ${truncated}`,
         );
         continue;
@@ -218,7 +219,7 @@ export class JsonlReader {
     }
 
     if (backfilled > 0) {
-      console.log(
+      logger.info(
         `[JsonlReader] backfilled tokens for ${backfilled} session(s)`,
       );
     }

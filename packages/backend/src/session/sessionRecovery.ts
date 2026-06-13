@@ -6,6 +6,7 @@ import {
   insertLocalBranch,
   insertSessionAudit,
 } from '../db/queries';
+import { logger } from '../logger';
 import {
   getCurrentBranch,
   hasNonEmptyDiff,
@@ -88,7 +89,7 @@ export async function recoverSession(
           hasDiff = await hasNonEmptyDiff(worktreePath, baseBranch, branchName);
         }
       } catch (e) {
-        console.error(`[recoverSession] hasDiff computation failed: ${e}`);
+        logger.error(`[recoverSession] hasDiff computation failed: ${e}`);
       }
 
       // No-op detection: skipped for periodic scope (StuckSessionMonitor handles retries differently).
@@ -124,7 +125,7 @@ export async function recoverSession(
             taskCreatedAt,
           })
           .catch((e) => {
-            console.error(
+            logger.error(
               `[recoverSession] NoOpInvestigator.investigate failed for ${sessionId}: ${e}`,
             );
           });
@@ -133,9 +134,7 @@ export async function recoverSession(
       if (prUrl && !prDetectedLive) {
         taskBackend
           .attachPR(taskId, prUrl)
-          .catch((e) =>
-            console.error(`[recoverSession] attachPR failed: ${e}`),
-          );
+          .catch((e) => logger.error(`[recoverSession] attachPR failed: ${e}`));
       }
 
       let existingPrState: string | undefined;
@@ -152,7 +151,7 @@ export async function recoverSession(
               const freshPR = await githubClient.fetchPR(repo, prNumber);
               headSha = freshPR.headSha ?? null;
             } catch (e) {
-              console.warn(
+              logger.warn(
                 `[recoverSession] failed to fetch PR #${prNumber} from GitHub for head_sha:`,
                 e,
               );
@@ -210,7 +209,7 @@ export async function recoverSession(
             emitTaskUpdated(taskId);
           })
           .catch((e) =>
-            console.error(`[recoverSession] updateStatus failed: ${e}`),
+            logger.error(`[recoverSession] updateStatus failed: ${e}`),
           );
       }
 
@@ -253,18 +252,18 @@ export async function recoverSession(
                   emitTaskUpdated(taskId);
                 })
                 .catch((e) =>
-                  console.error(`[recoverSession] updateStatus failed: ${e}`),
+                  logger.error(`[recoverSession] updateStatus failed: ${e}`),
                 );
             }
           } catch (e) {
-            console.error(
+            logger.error(
               `[recoverSession] local-only submission check failed: ${e}`,
             );
           }
         }
       }
     } catch (e) {
-      console.error(`[recoverSession] post-done error for ${sessionId}:`, e);
+      logger.error(`[recoverSession] post-done error for ${sessionId}:`, e);
     }
   }
 
@@ -311,7 +310,7 @@ export async function recoverSession(
         }
       })
       .catch((err) => {
-        console.error(`[recoverSession] audit failed for ${sessionId}: ${err}`);
+        logger.error(`[recoverSession] audit failed for ${sessionId}: ${err}`);
       });
   }
 
@@ -325,7 +324,7 @@ export async function recoverSession(
       payload: { scope },
     });
   } catch (e) {
-    console.error(
+    logger.error(
       `[recoverSession] session_backfilled audit write failed: ${e}`,
     );
   }
