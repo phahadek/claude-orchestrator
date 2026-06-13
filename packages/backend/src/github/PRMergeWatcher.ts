@@ -340,7 +340,12 @@ export class PRMergeWatcher {
       if (testResult && !testResult.passed) {
         if (pr.ci_remediation_attempted_sha !== pr.head_sha) {
           setCiRemediationAttemptedSha(pr.pr_number, pr.repo, pr.head_sha);
-          setPauseReason(pr.pr_number, pr.repo, 'ci_failing');
+          setPauseReason(
+            pr.pr_number,
+            pr.repo,
+            'ci_failing',
+            testResult.output ? testResult.output.slice(0, 1000) : undefined,
+          );
           await this.runCIFailureRemediation(pr, [], testResult.output);
         }
         return; // Gated on failing tests — skip GitHub mergeability evaluation

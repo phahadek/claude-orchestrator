@@ -2803,6 +2803,7 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       42,
       'owner/repo',
       'ci_failing',
+      'FAIL src/foo.test.ts\n  ● test name\n    expected 1 to equal 2',
     );
     const sent = vi.mocked(sessions.sendOrResume).mock.calls[0]?.[1] as string;
     expect(sent).toMatch(/## CI Failure — PR #42/);
