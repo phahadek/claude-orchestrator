@@ -9,6 +9,98 @@ const baseParams = {
   worktreePath: '/worktrees/abc123',
 };
 
+// Standard fixture matches grooming baseline: taskName='example-task', verify set, no optional content
+const standardParams = {
+  ...baseParams,
+  taskName: 'example-task',
+  verify: ['npx tsc --noEmit', 'npx vite build'],
+};
+
+describe('buildOrchestratorClaudeMd — size ceilings', () => {
+  it('rendered standard fixture is ≤ 6,250 characters', () => {
+    const output = buildOrchestratorClaudeMd(standardParams);
+    expect(output.length).toBeLessThanOrEqual(6250);
+  });
+
+  it('rendered standard fixture is ≤ 990 words', () => {
+    const output = buildOrchestratorClaudeMd(standardParams);
+    const wordCount = output.trim().split(/\s+/).length;
+    expect(wordCount).toBeLessThanOrEqual(990);
+  });
+
+  it('hard ceiling: rendered standard fixture is ≤ 6,500 characters', () => {
+    const output = buildOrchestratorClaudeMd(standardParams);
+    expect(output.length).toBeLessThanOrEqual(6500);
+  });
+});
+
+describe('buildOrchestratorClaudeMd — behaviour preservation', () => {
+  it('branch lifecycle: includes feature/<task-name> and git branch --show-current', () => {
+    const output = buildOrchestratorClaudeMd(baseParams);
+    expect(output).toContain('feature/<task-name>');
+    expect(output).toContain('git branch --show-current');
+  });
+
+  it('status ownership: do not update task status', () => {
+    const output = buildOrchestratorClaudeMd(baseParams);
+    expect(output).toContain('Do NOT update Notion task status.');
+    expect(output).toContain('Do NOT call any Notion API to change task status.');
+  });
+
+  it('pre-PR gate: stash, rebase, restore steps present', () => {
+    const output = buildOrchestratorClaudeMd(baseParams);
+    expect(output).toContain('git stash push CLAUDE.md');
+    expect(output).toContain('Rebase onto');
+    expect(output).toContain('git stash pop');
+    expect(output).toContain('Stage only your implementation files');
+  });
+
+  it('git isolation: worktree path and key prohibitions', () => {
+    const output = buildOrchestratorClaudeMd(baseParams);
+    expect(output).toContain('## Git Isolation');
+    expect(output).toContain(baseParams.worktreePath);
+    expect(output).toContain('git -C');
+    expect(output).toContain('--work-tree');
+  });
+
+  it('filesystem isolation: worktree path and /tmp/ prohibition', () => {
+    const output = buildOrchestratorClaudeMd(baseParams);
+    expect(output).toContain('## Filesystem Isolation');
+    expect(output).toContain(baseParams.worktreePath);
+    expect(output).toContain('/tmp/');
+  });
+
+  it('bash rule 1: one command per Bash call', () => {
+    const output = buildOrchestratorClaudeMd(baseParams);
+    expect(output).toContain('Rule 1');
+    expect(output).toContain('One command per Bash call');
+  });
+
+  it('bash rule 2: no cd prefix', () => {
+    const output = buildOrchestratorClaudeMd(baseParams);
+    expect(output).toContain('Rule 2');
+    expect(output).toContain('cd path');
+  });
+
+  it('bash rule 3: no heredoc subshells', () => {
+    const output = buildOrchestratorClaudeMd(baseParams);
+    expect(output).toContain('Rule 3');
+    expect(output).toContain('heredoc');
+  });
+
+  it('bash rule 4: no writes to /tmp/', () => {
+    const output = buildOrchestratorClaudeMd(baseParams);
+    expect(output).toContain('Rule 4');
+    expect(output).toContain('/tmp/');
+  });
+
+  it('commit attribution: AI-Authored-By trailer format', () => {
+    const output = buildOrchestratorClaudeMd(baseParams);
+    expect(output).toContain('## Commit Attribution');
+    expect(output).toContain('AI-Authored-By');
+  });
+});
+
 describe('buildOrchestratorClaudeMd — Pre-PR Gate', () => {
   it('does not include lint or format:check commands by default', () => {
     const output = buildOrchestratorClaudeMd(baseParams);
