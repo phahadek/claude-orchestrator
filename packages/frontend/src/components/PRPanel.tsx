@@ -44,6 +44,8 @@ interface Props {
   } | null;
   /** Live pipeline stage per PR number, driven by WS events from useSessionStore */
   prPipelineStages?: Map<number, string | null>;
+  /** Failed command per PR number for blocked stage hover tooltip */
+  prPipelineFailedCommands?: Map<number, string | undefined>;
 }
 
 export function PRPanel({
@@ -59,6 +61,7 @@ export function PRPanel({
   autofixEvent,
   reviewStartedEvent,
   prPipelineStages,
+  prPipelineFailedCommands,
 }: Props) {
   const [prs, setPRs] = useState<WorkItemListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -67,6 +70,9 @@ export function PRPanel({
   /** Local pipeline stage overrides: seeded from REST data, then updated by WS events */
   const [localPipelineStages, setLocalPipelineStages] = useState<
     Map<number, string | null>
+  >(new Map());
+  const [localFailedCommands, setLocalFailedCommands] = useState<
+    Map<number, string | undefined>
   >(new Map());
 
   const [reviewInFlight, setReviewInFlight] = useState<Set<number>>(new Set());
@@ -184,6 +190,23 @@ export function PRPanel({
       return changed ? next : prev;
     });
   }, [prPipelineStages]);
+
+  // Merge WS-driven failed commands from store into local map
+  useEffect(() => {
+    if (!prPipelineFailedCommands || prPipelineFailedCommands.size === 0)
+      return;
+    setLocalFailedCommands((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const [prNumber, cmd] of prPipelineFailedCommands) {
+        if (next.get(prNumber) !== cmd) {
+          next.set(prNumber, cmd);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [prPipelineFailedCommands]);
 
   useEffect(() => {
     fetchPRs();
@@ -624,6 +647,7 @@ export function PRPanel({
                       <PipelineStageBadge
                         stage={localPipelineStages.get(prNumber) ?? null}
                         prState={item.type === 'pr' ? item.state : undefined}
+                        failedCommand={localFailedCommands.get(prNumber)}
                       />
                     </div>
                   )}

@@ -135,6 +135,7 @@ export default function App() {
     lastSessionEndedEvent,
     lastCacheUpdatedEvent,
     prPipelineStages,
+    prPipelineFailedCommands,
   } = useSessionStore();
   const [projects, setProjects] = useState<ProjectConfig[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -1420,6 +1421,7 @@ export default function App() {
                 autofixEvent={lastAutofixEvent}
                 reviewStartedEvent={lastReviewStartedEvent}
                 prPipelineStages={prPipelineStages}
+                prPipelineFailedCommands={prPipelineFailedCommands}
               />
             </div>
           </ErrorBoundary>

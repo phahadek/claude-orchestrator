@@ -197,6 +197,9 @@ export function useSessionStore() {
   const [prPipelineStages, setPrPipelineStages] = useState<
     Map<number, string | null>
   >(new Map());
+  const [prPipelineFailedCommands, setPrPipelineFailedCommands] = useState<
+    Map<number, string | undefined>
+  >(new Map());
 
   const dispatch = useCallback((msg: ServerMessage) => {
     setSynced(true);
@@ -504,7 +507,6 @@ export function useSessionStore() {
         repo: msg.repo,
         receivedAt: Date.now(),
       });
-      setPrPipelineStages((prev) => new Map(prev).set(msg.prNumber, 'autofix'));
     }
     if (msg.type === 'autofix_complete') {
       setLastAutofixEvent({
@@ -516,26 +518,29 @@ export function useSessionStore() {
         receivedAt: Date.now(),
       });
     }
-    if (msg.type === 'verify_pipeline_started') {
-      setPrPipelineStages((prev) => new Map(prev).set(msg.prNumber, 'verify'));
+    if (msg.type === 'pipeline_stage_entered') {
+      const runningStageMap: Record<string, string> = {
+        autofix: 'autofix',
+        verify: 'verify',
+        analyze: 'analyzing',
+        tests: 'tests',
+      };
+      const runningStage = runningStageMap[msg.stage] ?? msg.stage;
+      setPrPipelineStages((prev) =>
+        new Map(prev).set(msg.prNumber, runningStage),
+      );
     }
-    if (msg.type === 'verify_pipeline_complete') {
-      // stage will be updated again by test_pipeline_started; no explicit clear
-    }
-    if (msg.type === 'test_pipeline_started') {
-      setPrPipelineStages((prev) => new Map(prev).set(msg.prNumber, 'tests'));
-    }
-    if (msg.type === 'test_pipeline_complete') {
+    if (msg.type === 'pipeline_stage_passed' && msg.stage === 'tests') {
       setPrPipelineStages((prev) =>
         new Map(prev).set(msg.prNumber, 'awaiting_review'),
       );
     }
-    if (msg.type === 'pr_review_blocked_by_gate') {
+    if (msg.type === 'pipeline_stage_failed') {
       setPrPipelineStages((prev) =>
-        new Map(prev).set(
-          msg.prNumber,
-          msg.kind === 'autofix' ? 'blocked_autofix' : 'blocked_verify',
-        ),
+        new Map(prev).set(msg.prNumber, `blocked_${msg.stage}`),
+      );
+      setPrPipelineFailedCommands((prev) =>
+        new Map(prev).set(msg.prNumber, msg.failedCommand),
       );
     }
     if (msg.type === 'review_started') {
@@ -716,5 +721,6 @@ export function useSessionStore() {
     lastSessionEndedEvent,
     lastCacheUpdatedEvent,
     prPipelineStages,
+    prPipelineFailedCommands,
   };
 }

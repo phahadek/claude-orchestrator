@@ -267,21 +267,7 @@ export type ServerMessage =
       success: boolean;
       summary?: string;
     }
-  | { type: 'verify_pipeline_started'; prNumber: number; repo: string }
-  | { type: 'verify_pipeline_complete'; prNumber: number; repo: string }
-  | { type: 'analyze_pipeline_started'; prNumber: number; repo: string }
-  | { type: 'analyze_pipeline_complete'; prNumber: number; repo: string }
-  | { type: 'test_pipeline_started'; prNumber: number; repo: string }
-  | { type: 'test_pipeline_complete'; prNumber: number; repo: string }
   | { type: 'review_started'; prNumber: number; sessionId: string }
-  | {
-      type: 'pr_review_blocked_by_gate';
-      prNumber: number;
-      repo: string;
-      kind: 'verify' | 'autofix' | 'analyze';
-      failedCommand?: string;
-      summary: string;
-    }
   | {
       type: 'pipeline_stage_entered';
       prNumber: number;

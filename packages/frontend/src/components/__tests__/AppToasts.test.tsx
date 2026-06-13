@@ -94,6 +94,7 @@ function baseStoreReturn(sessions: object[] = []) {
     lastSessionEndedEvent: null,
     lastCacheUpdatedEvent: null,
     prPipelineStages: new Map(),
+    prPipelineFailedCommands: new Map(),
   };
 }
 

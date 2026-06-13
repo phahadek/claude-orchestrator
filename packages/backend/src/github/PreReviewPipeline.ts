@@ -196,11 +196,6 @@ export class PreReviewPipeline {
       runningStage: 'verify',
       skipIf: (ctx) => !ctx.worktreePath,
       run: async (ctx) => {
-        this.sessionManager.emit('message', {
-          type: 'verify_pipeline_started',
-          prNumber: ctx.prNumber,
-          repo: ctx.repo,
-        });
         const config = loadOrchestratorConfig(ctx.project.projectDir);
         const result = await runVerifyAsGate(ctx.worktreePath, config.verify);
         if (!result.passed) {
@@ -212,11 +207,6 @@ export class PreReviewPipeline {
               : 'verify failed',
           };
         }
-        this.sessionManager.emit('message', {
-          type: 'verify_pipeline_complete',
-          prNumber: ctx.prNumber,
-          repo: ctx.repo,
-        });
         return null;
       },
       blockedStage: 'blocked_verify',
@@ -243,12 +233,6 @@ export class PreReviewPipeline {
       run: async (ctx) => {
         const config = loadOrchestratorConfig(ctx.project.projectDir);
         if (!config.analyze?.length) return null;
-
-        this.sessionManager.emit('message', {
-          type: 'analyze_pipeline_started',
-          prNumber: ctx.prNumber,
-          repo: ctx.repo,
-        });
 
         let passed: boolean;
         let output: string;
@@ -296,11 +280,6 @@ export class PreReviewPipeline {
           };
         }
 
-        this.sessionManager.emit('message', {
-          type: 'analyze_pipeline_complete',
-          prNumber: ctx.prNumber,
-          repo: ctx.repo,
-        });
         return null;
       },
       blockedStage: 'blocked_analyze',
@@ -332,12 +311,6 @@ export class PreReviewPipeline {
           return;
         }
 
-        this.sessionManager.emit('message', {
-          type: 'test_pipeline_started',
-          prNumber: ctx.prNumber,
-          repo: ctx.repo,
-        });
-
         const { passed, output } = await runTestCommands(
           ctx.worktreePath,
           config.test,
@@ -352,23 +325,16 @@ export class PreReviewPipeline {
         logger.info(
           `[PreReviewPipeline] tests ${passed ? 'PASSED' : 'FAILED'} for PR #${ctx.prNumber} SHA ${ctx.headSha.slice(0, 7)}`,
         );
-
-        this.sessionManager.emit('message', {
-          type: 'test_pipeline_complete',
-          prNumber: ctx.prNumber,
-          repo: ctx.repo,
-        });
       },
     };
   }
 
   /**
-   * Canonical 5-step gate failure handler:
+   * Gate failure handler:
    * 1. setPRReviewResult(verdict)
    * 2. setLastReviewedSha
-   * 3. emit pr_review_blocked_by_gate WS event
-   * 4. setPreReviewStage('blocked_<gate>')
-   * 5. (optional) setPauseReason + sendOrResume(formatFailure)
+   * 3. setPreReviewStage('blocked_<gate>')
+   * 4. (optional) setPauseReason + sendOrResume(formatFailure)
    */
   private async handleGateFailure(
     stage: GateStageDescriptor,
@@ -388,15 +354,6 @@ export class PreReviewPipeline {
     );
 
     setLastReviewedSha(job.prNumber, job.repo, prRow?.head_sha ?? null);
-
-    this.sessionManager.emit('message', {
-      type: 'pr_review_blocked_by_gate',
-      prNumber: job.prNumber,
-      repo: job.repo,
-      kind: stage.id as 'verify' | 'autofix' | 'analyze',
-      failedCommand: detail.failedCommand,
-      summary: detail.summary,
-    });
 
     setPreReviewStage(job.prNumber, job.repo, stage.blockedStage);
 
