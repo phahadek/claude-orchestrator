@@ -21,6 +21,7 @@ import type {
   PullRequestRow,
   PauseReason,
   CanonicalPauseReason,
+  PauseReasonStruct,
   ProjectRow,
   NewProjectRow,
   MilestoneRow,
@@ -1513,7 +1514,12 @@ export function setPauseReason(
   prNumber: number,
   repo: string,
   reason: PauseReason | null,
+  detail?: string,
 ): void {
+  const serialized =
+    reason !== null
+      ? serializePauseReason(pauseReasonFromCanonical(reason, detail))
+      : null;
   db.prepare<{
     pr_number: number;
     repo: string;
@@ -1529,7 +1535,7 @@ export function setPauseReason(
   ).run({
     pr_number: prNumber,
     repo,
-    pause_reason: reason,
+    pause_reason: serialized,
     pause_reason_set_at: reason !== null ? Date.now() : null,
   });
 }
@@ -1573,7 +1579,7 @@ export function getStaleAutoMergeFailedPRs(thresholdMs: number): Array<{
       `
     SELECT pr_number, repo FROM pull_requests
     WHERE state = 'open'
-      AND pause_reason = 'auto_merge_failed'
+      AND (pause_reason = 'auto_merge_failed' OR json_extract(pause_reason, '$.reason') = 'auto_merge_failed')
       AND pause_reason_set_at IS NOT NULL
       AND pause_reason_set_at < @cutoff
   `,
@@ -1604,6 +1610,7 @@ export function getConflictNudgeCandidates(): Array<{
       AND (conflict_nudge_sha IS NULL OR head_sha != conflict_nudge_sha)
       AND (
         pause_reason = 'auto_merge_failed'
+        OR json_extract(pause_reason, '$.reason') = 'auto_merge_failed'
         OR (pause_reason IS NULL AND merge_state IN ('dirty', 'blocked'))
       )
   `,
@@ -1616,7 +1623,9 @@ export function getConflictNudgeCandidates(): Array<{
  * or null if no PR exists or the PR is not paused. Used by auto-runner
  * components to skip tasks paused by stuck_timeout (or any other reason).
  */
-export function getPausedPrReasonForTask(taskId: string): PauseReason | null {
+export function getPausedPrReasonForTask(
+  taskId: string,
+): PauseReasonStruct | null {
   const row = db
     .prepare<{ task_id: string }>(
       `
@@ -1628,7 +1637,7 @@ export function getPausedPrReasonForTask(taskId: string): PauseReason | null {
   `,
     )
     .get({ task_id: taskId }) as { pause_reason: string | null } | undefined;
-  return (row?.pause_reason as PauseReason | null) ?? null;
+  return parsePauseReason(row?.pause_reason ?? null);
 }
 
 // ─── task_pause_reasons ────────────────────────────────────────────────────────
@@ -1642,6 +1651,9 @@ export function setTaskPauseReason(
   reason: PauseReason,
   detail: string,
 ): void {
+  const serialized = serializePauseReason(
+    pauseReasonFromCanonical(reason, detail || undefined),
+  );
   db.prepare<{
     task_id: string;
     pause_reason: string;
@@ -1650,17 +1662,22 @@ export function setTaskPauseReason(
   }>(
     `INSERT OR REPLACE INTO task_pause_reasons (task_id, pause_reason, detail, set_at)
      VALUES (@task_id, @pause_reason, @detail, @set_at)`,
-  ).run({ task_id: taskId, pause_reason: reason, detail, set_at: Date.now() });
+  ).run({
+    task_id: taskId,
+    pause_reason: serialized,
+    detail,
+    set_at: Date.now(),
+  });
 }
 
-/** Returns the task-level pause reason, or null if none is set. */
-export function getTaskPauseReason(taskId: string): PauseReason | null {
+/** Returns the task-level pause reason struct, or null if none is set. */
+export function getTaskPauseReason(taskId: string): PauseReasonStruct | null {
   const row = db
     .prepare<{
       task_id: string;
     }>(`SELECT pause_reason FROM task_pause_reasons WHERE task_id = @task_id`)
     .get({ task_id: taskId }) as { pause_reason: string } | undefined;
-  return (row?.pause_reason as PauseReason) ?? null;
+  return parsePauseReason(row?.pause_reason ?? null);
 }
 
 /** Clear a task-level pause reason (e.g. on successful launch). */
@@ -2279,11 +2296,16 @@ export function setLocalBranchReviewResult(
 export function setLocalBranchPauseReason(
   id: number,
   reason: PauseReason | null,
+  detail?: string,
 ): void {
+  const serialized =
+    reason !== null
+      ? serializePauseReason(pauseReasonFromCanonical(reason, detail))
+      : null;
   const now = new Date().toISOString();
   db.prepare(
     `UPDATE local_branches SET pause_reason = ?, updated_at = ? WHERE id = ?`,
-  ).run(reason, now, id);
+  ).run(serialized, now, id);
 }
 
 /**

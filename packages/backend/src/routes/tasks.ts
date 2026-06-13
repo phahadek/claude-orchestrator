@@ -12,7 +12,7 @@ import type { NotionTask } from '../notion/types';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import type { PRReviewResult } from '../github/PRReviewService';
 import type { ServerMessage, TaskView } from '../ws/types';
-import type { PauseReason } from '../db/types';
+import { parsePauseReason } from '../db/pauseReason';
 import yaml from 'js-yaml';
 export type { TaskView } from '../ws/types';
 
@@ -143,9 +143,9 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     };
   }
 
-  const pauseReason = (row.pr_pause_reason ??
-    row.session_pr_creation_failed_pause_reason ??
-    null) as PauseReason | null;
+  const pauseStruct = parsePauseReason(
+    row.pr_pause_reason ?? row.session_pr_creation_failed_pause_reason ?? null,
+  );
 
   const displayStatus = deriveDisplayStatus({
     notionStatus,
@@ -155,7 +155,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     reviewVerdict,
     reviewIterationCount: row.pr_review_iteration ?? 0,
     reviewIterationCap: cap,
-    pauseReason,
+    pauseReason: pauseStruct,
   });
 
   const totalTokens = {
@@ -172,7 +172,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     taskName: notionTask?.title ?? row.task_id,
     notionStatus,
     displayStatus,
-    pauseReason,
+    pauseReason: pauseStruct?.reason ?? null,
     priority,
     notionUrl: notionTask?.notionUrl ?? '',
     taskType: notionTask?.type ?? '',

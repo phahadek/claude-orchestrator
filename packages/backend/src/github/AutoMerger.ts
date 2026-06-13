@@ -24,6 +24,7 @@ import {
 import type { GitHubClient, PRReviewDecision } from './GitHubClient';
 import { GitHubApiError, GitHubRateLimitError } from './types';
 import { getCorporateMode } from '../config/corporateMode';
+import { pauseReasonFromCanonical } from '../db/pauseReason';
 import type { PRMergeWatcher } from './PRMergeWatcher';
 import type { PullRequestRow } from '../db/types';
 import type { ServerMessage } from '../ws/types';
@@ -738,12 +739,9 @@ export class AutoMerger {
       | 'human_changes_requested',
     failingCheckNames?: string[],
   ): Promise<void> {
+    const struct = pauseReasonFromCanonical(reason);
     setPauseReason(pr.pr_number, pr.repo, reason);
-    if (reason === 'auto_merge_failed') {
-      // No native mergeability category to broadcast — just emit a message so
-      // the dashboard surfaces the failure.
-      updateMergeState(pr.pr_number, pr.repo, 0, 'unknown', null);
-    } else if (reason === 'ci_failing') {
+    if (struct.source === 'ci') {
       const names = failingCheckNames ?? [];
       updateMergeState(
         pr.pr_number,
@@ -752,15 +750,19 @@ export class AutoMerger {
         'ci_failed',
         names.length > 0 ? names : null,
       );
+    } else if (struct.reason === 'auto_merge_failed') {
+      // No native mergeability category to broadcast — just emit a message so
+      // the dashboard surfaces the failure.
+      updateMergeState(pr.pr_number, pr.repo, 0, 'unknown', null);
     }
     this.broadcast({
       type: 'pr_mergeability_changed',
       prNumber: pr.pr_number,
       repo: pr.repo,
       mergeable: false,
-      mergeState: reason === 'ci_failing' ? 'ci_failed' : null,
+      mergeState: struct.source === 'ci' ? 'ci_failed' : null,
       failingChecks:
-        reason === 'ci_failing' &&
+        struct.source === 'ci' &&
         failingCheckNames &&
         failingCheckNames.length > 0
           ? failingCheckNames

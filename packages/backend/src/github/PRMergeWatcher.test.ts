@@ -2086,6 +2086,88 @@ describe('PRMergeWatcher — out-of-band head_sha refresh via poll()', () => {
   });
 });
 
+// ── Branch sites decide from pause-reason structure, not raw strings ──────────
+describe('PRMergeWatcher — branches on pause-reason structure', () => {
+  const serializedTerminal = JSON.stringify({
+    reason: 'auto_merge_failed',
+    source: 'merge',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  });
+
+  it('isTerminalMergePause: a JSON-serialized terminal pause skips mergeability polling', async () => {
+    const pr = makePRRow({ state: 'open', pause_reason: serializedTerminal });
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+    const github = makeMockGitHub();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.checkMergeabilityNow(42, 'owner/repo');
+
+    expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
+  });
+
+  it('isTerminalMergePause: a legacy bare-string terminal pause also skips polling', async () => {
+    const pr = makePRRow({ state: 'open', pause_reason: 'auto_merge_failed' });
+    vi.mocked(getPRByNumber).mockReturnValue(pr);
+    const github = makeMockGitHub();
+
+    const watcher = new PRMergeWatcher(
+      github,
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.checkMergeabilityNow(42, 'owner/repo');
+
+    expect(vi.mocked(github.categorizeMergeability)).not.toHaveBeenCalled();
+  });
+
+  it('handlePushDetected: clears a JSON-serialized human_changes_requested pause and restarts AutoMerger', async () => {
+    const pr = makePRRow({
+      session_id: 'coding-session',
+      pause_reason: JSON.stringify({
+        reason: 'human_changes_requested',
+        source: 'review',
+        severity: 'needs_attention',
+        retry_strategy: 'manual_action',
+      }),
+    });
+    const reviewService = makeMockPRReviewService();
+    const autoMerger = makeMockAutoMerger();
+
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    watcher.setPRReviewService(reviewService);
+    watcher.setReviewOrchestrator(makeMockReviewOrchestrator());
+    watcher.setAutoMerger(autoMerger);
+
+    await watcher.handlePushDetected(pr);
+
+    expect(vi.mocked(setPauseReason)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      null,
+    );
+    expect(vi.mocked(autoMerger.attempt)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
+    // Pause-clear path returns early — no re-review is enqueued.
+    expect(
+      vi.mocked(reviewService.reReviewPR as ReturnType<typeof vi.fn>),
+    ).not.toHaveBeenCalled();
+  });
+});
+
 // ── handlePushDetected watcher-path push pipeline ─────────────────────────────
 
 describe('PRMergeWatcher.handlePushDetected() — push pipeline', () => {
@@ -2803,6 +2885,7 @@ describe('PRMergeWatcher — orchestrator test gate (F2)', () => {
       42,
       'owner/repo',
       'ci_failing',
+      'FAIL src/foo.test.ts\n  ● test name\n    expected 1 to equal 2',
     );
     const sent = vi.mocked(sessions.sendOrResume).mock.calls[0]?.[1] as string;
     expect(sent).toMatch(/## CI Failure — PR #42/);
