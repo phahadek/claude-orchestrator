@@ -2780,6 +2780,77 @@ export function getTestResult(
     .get({ pr_number: prNumber, repo, sha }) as TestResultRow | undefined;
 }
 
+// ─── orchestrator_analyze_results ───────────────────────────────────────────
+
+export interface AnalyzeResultRow {
+  pr_number: number;
+  repo: string;
+  sha: string;
+  passed: number;
+  output: string;
+  ran_at: string;
+}
+
+export function hasAnalyzeResultForSha(
+  prNumber: number,
+  repo: string,
+  sha: string,
+): boolean {
+  const row = db
+    .prepare<{
+      pr_number: number;
+      repo: string;
+      sha: string;
+    }>(
+      `SELECT 1 FROM orchestrator_analyze_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
+    )
+    .get({ pr_number: prNumber, repo, sha });
+  return row != null;
+}
+
+export function upsertAnalyzeResult(
+  prNumber: number,
+  repo: string,
+  sha: string,
+  passed: boolean,
+  output: string,
+): void {
+  db.prepare<{
+    pr_number: number;
+    repo: string;
+    sha: string;
+    passed: number;
+    output: string;
+    ran_at: string;
+  }>(
+    `INSERT OR REPLACE INTO orchestrator_analyze_results (pr_number, repo, sha, passed, output, ran_at)
+     VALUES (@pr_number, @repo, @sha, @passed, @output, @ran_at)`,
+  ).run({
+    pr_number: prNumber,
+    repo,
+    sha,
+    passed: passed ? 1 : 0,
+    output,
+    ran_at: new Date().toISOString(),
+  });
+}
+
+export function getAnalyzeResult(
+  prNumber: number,
+  repo: string,
+  sha: string,
+): AnalyzeResultRow | undefined {
+  return db
+    .prepare<{
+      pr_number: number;
+      repo: string;
+      sha: string;
+    }>(
+      `SELECT * FROM orchestrator_analyze_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
+    )
+    .get({ pr_number: prNumber, repo, sha }) as AnalyzeResultRow | undefined;
+}
+
 // ─── session_events pruner ──────────────────────────────────────────────────
 
 export interface PruneEligibleSession {
