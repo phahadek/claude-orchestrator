@@ -1,3 +1,4 @@
+import { logger } from '../logger';
 import type { GitHubClient } from './GitHubClient';
 import type { SessionManager } from '../session/SessionManager';
 import { GitHubRateLimitError } from './types';
@@ -57,13 +58,13 @@ export class ReviewerCommentsWatcher {
     if (this.timer) return;
     this.timer = setInterval(() => {
       this.pollAll().catch((err: unknown) =>
-        console.warn(
+        logger.warn(
           '[ReviewerCommentsWatcher] pollAll error:',
           (err as Error).message,
         ),
       );
     }, intervalMs);
-    console.log(`[ReviewerCommentsWatcher] started (interval=${intervalMs}ms)`);
+    logger.info(`[ReviewerCommentsWatcher] started (interval=${intervalMs}ms)`);
   }
 
   stop(): void {
@@ -77,7 +78,7 @@ export class ReviewerCommentsWatcher {
     this.pausedUntil = err.resetAt;
     if (!this.rateLimitBroadcasted) {
       this.rateLimitBroadcasted = true;
-      console.warn(
+      logger.warn(
         `[ReviewerCommentsWatcher] GitHub rate-limited; backing off until ${err.resetAt.toISOString()}`,
       );
       this.broadcast({
@@ -112,7 +113,7 @@ export class ReviewerCommentsWatcher {
           this.handleRateLimit(err);
           return;
         }
-        console.warn(
+        logger.warn(
           `[ReviewerCommentsWatcher] poll failed for PR #${pr.pr_number} in ${pr.repo}:`,
           (err as Error).message,
         );
@@ -170,7 +171,7 @@ export class ReviewerCommentsWatcher {
 
     if (hasChangesRequested && pr.pause_reason === 'awaiting_human_approval') {
       setPauseReason(pr.pr_number, pr.repo, 'human_changes_requested');
-      console.log(
+      logger.info(
         `[ReviewerCommentsWatcher] PR #${pr.pr_number}: CHANGES_REQUESTED — transitioning awaiting_human_approval → human_changes_requested`,
       );
     }
@@ -185,7 +186,7 @@ export class ReviewerCommentsWatcher {
       sessionRow.status === 'error' ||
       sessionRow.status === 'killed'
     ) {
-      console.warn(
+      logger.warn(
         `[ReviewerCommentsWatcher] PR #${pr.pr_number}: session ${sessionId.slice(0, 8)} is not alive — skipping comment routing`,
       );
       return;
@@ -206,7 +207,7 @@ export class ReviewerCommentsWatcher {
       newComments.map((c) => c.id),
     );
 
-    console.log(
+    logger.info(
       `[ReviewerCommentsWatcher] routed ${newComments.length} new human comment(s) to session ${sessionId.slice(0, 8)} for PR #${pr.pr_number}`,
     );
   }

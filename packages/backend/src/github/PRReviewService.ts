@@ -1,3 +1,4 @@
+import { logger } from '../logger';
 import {
   getEventsBySession,
   setPRReviewResult,
@@ -171,7 +172,7 @@ export class PRReviewService {
         expectedSize: parseExpectedSize(body),
       };
     } catch (e) {
-      console.warn(
+      logger.warn(
         `[PRReviewService] fetchTaskPage for size signal failed (task ${taskId}):`,
         e,
       );
@@ -438,7 +439,7 @@ export class PRReviewService {
       try {
         taskBody = await this.resolveBackend(projectId).fetchTaskPage(taskId);
       } catch (e) {
-        console.warn(
+        logger.warn(
           `[PRReviewService] fetchTaskPage failed for local branch review (task ${taskId}):`,
           e,
         );
@@ -532,7 +533,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       updatePRDraftStatus(prNumber, repo, 0);
       draftTransitioned = true;
     } catch (e) {
-      console.warn(
+      logger.warn(
         `[PRReviewService] markPRReady skipped for PR #${prNumber}:`,
         e,
       );
@@ -557,7 +558,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
           '👀 In Review',
         );
       } catch (e: unknown) {
-        console.error(`[PRReviewService] task backend updateStatus failed:`, e);
+        logger.error(`[PRReviewService] task backend updateStatus failed:`, e);
         recordEvent({
           event_type: 'review_side_effect_failed',
           actor_type: 'system',
@@ -579,7 +580,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       this.mergeWatcher
         .checkMergeabilityNow(prNumber, repo)
         .catch((err: unknown) =>
-          console.warn(
+          logger.warn(
             `[PRReviewService] checkMergeabilityNow failed for PR #${prNumber}:`,
             (err as Error).message,
           ),
@@ -626,7 +627,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     // before awaiting the verdict, so shouldAutoReview() in server.ts already
     // blocks same-SHA re-reviews via push_detected.
     if (prData.headSha && prData.headSha === pr.last_reviewed_sha) {
-      console.log(
+      logger.info(
         `[PRReviewService] reReviewPR PR #${prNumber}: headSha ${prData.headSha} matches last_reviewed_sha — skipping duplicate re-review`,
       );
       const stored = (() => {
