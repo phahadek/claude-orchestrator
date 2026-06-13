@@ -1,3 +1,16 @@
+export type {
+  CanonicalPauseReason,
+  PauseSource,
+  PauseSeverity,
+  PauseRetryStrategy,
+  PauseReasonStruct,
+} from './pauseReason.js';
+
+import type { CanonicalPauseReason as _CanonicalPauseReason } from './pauseReason.js';
+/** Back-compat alias — canonical source of truth is CanonicalPauseReason in pauseReason.ts. */
+type PauseReason = _CanonicalPauseReason;
+export type { PauseReason };
+
 // ─── sessions ──────────────────────────────────────────────────────────────
 
 export type SessionStatus =
@@ -299,32 +312,6 @@ export interface SessionPauseInterval {
 export type NewSessionPauseInterval = Omit<SessionPauseInterval, 'id'>;
 
 // ─── pull_requests ──────────────────────────────────────────────────────────
-
-/**
- * Closed set of reasons a task is paused awaiting human attention. Stored as
- * plain TEXT in SQLite; the union gives compile-time safety in TS code paths.
- */
-export type PauseReason =
-  | 'max_reviews'
-  | 'stuck_timeout'
-  | 'ci_failing'
-  | 'ci_billing_blocked'
-  | 'auto_merge_failed'
-  | 'pr_closed'
-  | 'review_failed'
-  | 'api_overloaded'
-  | 'merge_conflict'
-  | 'awaiting_human_approval'
-  | 'human_changes_requested'
-  | 'pr_body_invalid'
-  | 'attribution_missing'
-  | 'audit_findings'
-  | 'pr_creation_failed'
-  | 'stalled_idle'
-  | 'notion_done_update_stuck'
-  | 'launch_failed'
-  | 'diverged_branch'
-  | 'analyze_failing';
 
 export interface PullRequestRow {
   id: number;
