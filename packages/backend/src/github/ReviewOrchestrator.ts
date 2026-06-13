@@ -24,7 +24,6 @@ import {
   upsertAnalyzeResult,
   getAnalyzeResult,
   setPreReviewStage,
-  setLastReviewedSha,
 } from '../db/queries';
 import { syncToOrigin } from './PRFileReverter';
 import type {
@@ -45,6 +44,7 @@ import { runTestCommands } from '../session/test-runner';
 import { runFilePollutionCheck } from '../session/filePollutionCheck';
 import { recordEvent } from '../audit/AuditLog';
 import type { ServerMessage } from '../ws/types';
+import { PreReviewPipeline } from './PreReviewPipeline';
 
 function getMaxReviewIterations(): number {
   return typedGetSetting('max_review_iterations');
@@ -79,6 +79,7 @@ export class ReviewOrchestrator {
   /** Resolves once all incomplete pending_review_sync rows from the previous run are retried. */
   readonly bootReady: Promise<void>;
   private stallDetectorInterval: ReturnType<typeof setInterval> | null = null;
+  private preReviewPipeline: PreReviewPipeline;
 
   constructor(
     private reviewService: PRReviewService,
@@ -88,6 +89,7 @@ export class ReviewOrchestrator {
     stallCheckIntervalMs: number = STALL_CHECK_INTERVAL_MS,
     stallTimeoutMs: number = STALL_TIMEOUT_MS,
   ) {
+    this.preReviewPipeline = new PreReviewPipeline(sessionManager, github);
     sessionManager.on('pr_opened', (job: ReviewJob) => this.onPrOpened(job));
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
     sessionManager.on(
@@ -722,65 +724,6 @@ export class ReviewOrchestrator {
     }
   }
 
-  private async routeGateFailureToSession(
-    job: ReviewJob,
-    kind: 'verify' | 'autofix',
-    detail: {
-      failedCommand?: string;
-      truncatedOutput?: string;
-      summary: string;
-    },
-  ): Promise<void> {
-    const prRow = getPRByNumber(job.prNumber, job.repo);
-
-    setPRReviewResult(
-      job.prNumber,
-      job.repo,
-      JSON.stringify({
-        verdict: kind === 'verify' ? 'verify_failed' : 'autofix_failed',
-        summary: detail.summary,
-        dimensions: [],
-      }),
-    );
-    // Set last_reviewed_sha so the next push is identified as new code and
-    // shouldAutoReview returns true instead of seeing null === null.
-    setLastReviewedSha(job.prNumber, job.repo, prRow?.head_sha ?? null);
-
-    this.sessionManager.emit('message', {
-      type: 'pr_review_blocked_by_gate',
-      prNumber: job.prNumber,
-      repo: job.repo,
-      kind,
-      failedCommand: detail.failedCommand,
-      summary: detail.summary,
-    });
-    setPreReviewStage(
-      job.prNumber,
-      job.repo,
-      kind === 'autofix' ? 'blocked_autofix' : 'blocked_verify',
-    );
-
-    const sessionId = prRow?.session_id;
-    if (!sessionId) return;
-
-    const message =
-      kind === 'verify'
-        ? formatCIFailureFeedback({
-            source: 'verify',
-            failedCommand: detail.failedCommand,
-            truncatedOutput: detail.truncatedOutput,
-          })
-        : `## Autofix Gate Failure\n\nThe autofix pipeline failed and could not produce a clean commit.\n\n**Error:** ${detail.summary}\n\nPlease fix the issue and re-push.`;
-
-    try {
-      await this.sessionManager.sendOrResume(sessionId, message);
-    } catch (e) {
-      logger.warn(
-        `[ReviewOrchestrator] gate failure routing failed for PR #${job.prNumber}: ${e}`,
-      );
-    }
-  }
-
   private async executeReview(job: ReviewJob): Promise<void> {
     logger.info(
       `[ReviewOrchestrator] executeReview: entered for PR #${job.prNumber} (${job.repo}) taskId=${job.taskId ?? 'none'}`,
@@ -822,158 +765,11 @@ export class ReviewOrchestrator {
       return;
     }
 
-    // ── Gate 1: Autofix + file-pollution-check step ──────────────────────────
-    const autofixResult = await this.runAutofixPipeline(
-      job.prNumber,
-      job.repo,
-      job.taskId ?? null,
-    );
-    if (!autofixResult.success) {
-      logger.info(
-        `[ReviewOrchestrator] executeReview: gate failure (kind=autofix) for PR #${job.prNumber}`,
-      );
-      await this.routeGateFailureToSession(job, 'autofix', {
-        summary: autofixResult.summary,
-      });
+    // ── Pre-review pipeline (autofix → verify → analyze → tests) ────────────
+    const pipelineResult = await this.preReviewPipeline.run(job, project);
+    if (!pipelineResult.passed) {
       this.consumePendingPushIfSet(job.prNumber, job.repo);
       return;
-    }
-    // ─────────────────────────────────────────────────────────────────────────
-
-    // ── Gate 2: Verify ───────────────────────────────────────────────────────
-    {
-      const gatePrRow = getPRByNumber(job.prNumber, job.repo);
-      const gateWorktreePath = gatePrRow?.session_id
-        ? (getSession(gatePrRow.session_id)?.worktree_path ?? '')
-        : '';
-      if (gateWorktreePath) {
-        this.sessionManager.emit('message', {
-          type: 'verify_pipeline_started',
-          prNumber: job.prNumber,
-          repo: job.repo,
-        });
-        setPreReviewStage(job.prNumber, job.repo, 'verify');
-        const verifyConfig = loadOrchestratorConfig(project.projectDir);
-        const verifyResult = await runVerifyAsGate(
-          gateWorktreePath,
-          verifyConfig.verify,
-        );
-        if (!verifyResult.passed) {
-          logger.info(
-            `[ReviewOrchestrator] executeReview: gate failure (kind=verify) for PR #${job.prNumber}`,
-          );
-          await this.routeGateFailureToSession(job, 'verify', {
-            failedCommand: verifyResult.failedCommand,
-            truncatedOutput: verifyResult.truncatedOutput,
-            summary: verifyResult.failedCommand
-              ? `verify failed: ${verifyResult.failedCommand}`
-              : 'verify failed',
-          });
-          this.consumePendingPushIfSet(job.prNumber, job.repo);
-          return;
-        }
-        this.sessionManager.emit('message', {
-          type: 'verify_pipeline_complete',
-          prNumber: job.prNumber,
-          repo: job.repo,
-        });
-      }
-    }
-    // ─────────────────────────────────────────────────────────────────────────
-
-    // ── Gate 3: Analyze (static analysis, between verify and tests) ──────────
-    {
-      const analyzePrRow = getPRByNumber(job.prNumber, job.repo);
-      const analyzeHeadSha = analyzePrRow?.head_sha ?? '';
-      const analyzeWorktreePath = analyzePrRow?.session_id
-        ? (getSession(analyzePrRow.session_id)?.worktree_path ?? '')
-        : '';
-      if (analyzeHeadSha && analyzeWorktreePath) {
-        const analyzeConfig = loadOrchestratorConfig(project.projectDir);
-        if (analyzeConfig.analyze?.length) {
-          this.sessionManager.emit('message', {
-            type: 'analyze_pipeline_started',
-            prNumber: job.prNumber,
-            repo: job.repo,
-          });
-          setPreReviewStage(job.prNumber, job.repo, 'analyzing');
-          const analyzeResult = await this.runAnalyzePipeline(
-            job.prNumber,
-            job.repo,
-            analyzeHeadSha,
-            analyzeWorktreePath,
-            analyzeConfig.analyze,
-            analyzeConfig.analyze_timeout_sec,
-            analyzeConfig.analyze_max_rss_mb,
-            analyzeConfig.analyze_fail_fast,
-          );
-          if (!analyzeResult.passed) {
-            logger.info(
-              `[ReviewOrchestrator] executeReview: analyze gate FAILED for PR #${job.prNumber} — pausing`,
-            );
-            setPauseReason(job.prNumber, job.repo, 'analyze_failing');
-            const analyzeSessionId = getPRByNumber(
-              job.prNumber,
-              job.repo,
-            )?.session_id;
-            if (analyzeSessionId) {
-              const message = `## Analyze Gate Failure\n\nThe static analysis gate failed. Please fix the issues below and re-push.\n\n\`\`\`\n${analyzeResult.output}\n\`\`\``;
-              try {
-                await this.sessionManager.sendOrResume(
-                  analyzeSessionId,
-                  message,
-                );
-              } catch (e) {
-                logger.warn(
-                  `[ReviewOrchestrator] analyze failure routing failed for PR #${job.prNumber}: ${e}`,
-                );
-              }
-            }
-            this.consumePendingPushIfSet(job.prNumber, job.repo);
-            return;
-          }
-          this.sessionManager.emit('message', {
-            type: 'analyze_pipeline_complete',
-            prNumber: job.prNumber,
-            repo: job.repo,
-          });
-        }
-      }
-    }
-    // ─────────────────────────────────────────────────────────────────────────
-
-    // ── Orchestrator-run tests (per head-SHA, deduped) ────────────────────────
-    {
-      const freshPrRow = getPRByNumber(job.prNumber, job.repo);
-      const headSha = freshPrRow?.head_sha ?? '';
-      const worktreePath = freshPrRow?.session_id
-        ? (getSession(freshPrRow.session_id)?.worktree_path ?? '')
-        : '';
-      if (headSha && worktreePath) {
-        const config = loadOrchestratorConfig(project.projectDir);
-        this.sessionManager.emit('message', {
-          type: 'test_pipeline_started',
-          prNumber: job.prNumber,
-          repo: job.repo,
-        });
-        setPreReviewStage(job.prNumber, job.repo, 'tests');
-        await this.runTestPipeline(
-          job.prNumber,
-          job.repo,
-          headSha,
-          worktreePath,
-          config.test,
-          config.test_timeout_sec,
-          config.test_max_rss_mb,
-          config.test_fail_fast,
-        );
-        this.sessionManager.emit('message', {
-          type: 'test_pipeline_complete',
-          prNumber: job.prNumber,
-          repo: job.repo,
-        });
-        setPreReviewStage(job.prNumber, job.repo, 'awaiting_review');
-      }
     }
     // ─────────────────────────────────────────────────────────────────────────
 

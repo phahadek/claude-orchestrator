@@ -17,9 +17,23 @@ vi.mock('../reviewUtils', () => ({
   formatCIFailureFeedback: vi.fn(),
 }));
 vi.mock('../../session/orchestrator-config', () => ({
-  loadOrchestratorConfig: vi
-    .fn()
-    .mockReturnValue({ mcp_servers: undefined, allowed_tools: [] }),
+  loadOrchestratorConfig: vi.fn().mockReturnValue({
+    mcp_servers: undefined,
+    allowed_tools: [],
+    verify: [],
+    autofix: [],
+    analyze: [],
+    test: [],
+    ci_check_name: [],
+    bash_rules: [],
+    bootstrap_script: '',
+    test_timeout_sec: 300,
+    test_max_rss_mb: 0,
+    test_fail_fast: true,
+    analyze_timeout_sec: 300,
+    analyze_max_rss_mb: 0,
+    analyze_fail_fast: true,
+  }),
 }));
 vi.mock('../../session/autofix-runner', () => ({
   loadAutofixCommands: vi.fn().mockReturnValue([]),
@@ -27,6 +41,9 @@ vi.mock('../../session/autofix-runner', () => ({
 }));
 vi.mock('../../session/filePollutionCheck', () => ({
   runFilePollutionCheck: vi.fn().mockResolvedValue({ revertCommitSha: null }),
+}));
+vi.mock('../../session/test-runner', () => ({
+  runTestCommands: vi.fn().mockResolvedValue({ passed: true, output: '' }),
 }));
 vi.mock('../../orchestration/verifyRunner', () => ({
   runVerifyAsGate: vi.fn().mockResolvedValue(undefined),
@@ -53,6 +70,13 @@ vi.mock('../../db/queries', () => ({
   getAllPendingReviewSyncs: vi.fn().mockReturnValue([]),
   getEventsBySession: vi.fn().mockReturnValue([]),
   setLocalBranchPauseReason: vi.fn(),
+  setPreReviewStage: vi.fn(),
+  setLastReviewedSha: vi.fn(),
+  hasTestResultForSha: vi.fn().mockReturnValue(false),
+  upsertTestResult: vi.fn(),
+  hasAnalyzeResultForSha: vi.fn().mockReturnValue(false),
+  upsertAnalyzeResult: vi.fn(),
+  getAnalyzeResult: vi.fn().mockReturnValue(null),
 }));
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
