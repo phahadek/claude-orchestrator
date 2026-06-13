@@ -5,9 +5,14 @@ import {
   serializePauseReason,
   pauseReasonFromCanonical,
 } from '../db/pauseReason.js';
-import type { CanonicalPauseReason, PauseReasonStruct } from '../db/pauseReason.js';
+import type {
+  CanonicalPauseReason,
+  PauseReasonStruct,
+} from '../db/pauseReason.js';
 
-const ALL_REASONS = Object.keys(PAUSE_REASON_REGISTRY) as CanonicalPauseReason[];
+const ALL_REASONS = Object.keys(
+  PAUSE_REASON_REGISTRY,
+) as CanonicalPauseReason[];
 
 describe('PAUSE_REASON_REGISTRY', () => {
   it('contains exactly 21 canonical reasons', () => {
@@ -48,16 +53,36 @@ describe('PAUSE_REASON_REGISTRY', () => {
 
   it('every entry has valid source, severity, and retry_strategy', () => {
     const validSources = new Set([
-      'autofix', 'verify', 'analyze', 'tests', 'ci',
-      'review', 'merge', 'notion', 'launch', 'session',
+      'autofix',
+      'verify',
+      'analyze',
+      'tests',
+      'ci',
+      'review',
+      'merge',
+      'notion',
+      'launch',
+      'session',
     ]);
-    const validSeverities = new Set(['recoverable', 'needs_attention', 'terminal']);
+    const validSeverities = new Set([
+      'recoverable',
+      'needs_attention',
+      'terminal',
+    ]);
     const validStrategies = new Set(['automatic', 'manual_action', 'none']);
 
     for (const [reason, entry] of Object.entries(PAUSE_REASON_REGISTRY)) {
-      expect(validSources.has(entry.source), `${reason}.source invalid`).toBe(true);
-      expect(validSeverities.has(entry.severity), `${reason}.severity invalid`).toBe(true);
-      expect(validStrategies.has(entry.retry_strategy), `${reason}.retry_strategy invalid`).toBe(true);
+      expect(validSources.has(entry.source), `${reason}.source invalid`).toBe(
+        true,
+      );
+      expect(
+        validSeverities.has(entry.severity),
+        `${reason}.severity invalid`,
+      ).toBe(true);
+      expect(
+        validStrategies.has(entry.retry_strategy),
+        `${reason}.retry_strategy invalid`,
+      ).toBe(true);
     }
   });
 });
@@ -89,14 +114,19 @@ describe('parsePauseReason — null / empty input', () => {
 });
 
 describe('parsePauseReason — legacy bare-string resolution', () => {
-  it.each(ALL_REASONS)('resolves legacy bare string "%s" to the registry triple', (reason) => {
-    const result = parsePauseReason(reason);
-    expect(result).not.toBeNull();
-    expect(result!.reason).toBe(reason);
-    expect(result!.source).toBe(PAUSE_REASON_REGISTRY[reason].source);
-    expect(result!.severity).toBe(PAUSE_REASON_REGISTRY[reason].severity);
-    expect(result!.retry_strategy).toBe(PAUSE_REASON_REGISTRY[reason].retry_strategy);
-  });
+  it.each(ALL_REASONS)(
+    'resolves legacy bare string "%s" to the registry triple',
+    (reason) => {
+      const result = parsePauseReason(reason);
+      expect(result).not.toBeNull();
+      expect(result!.reason).toBe(reason);
+      expect(result!.source).toBe(PAUSE_REASON_REGISTRY[reason].source);
+      expect(result!.severity).toBe(PAUSE_REASON_REGISTRY[reason].severity);
+      expect(result!.retry_strategy).toBe(
+        PAUSE_REASON_REGISTRY[reason].retry_strategy,
+      );
+    },
+  );
 });
 
 describe('parsePauseReason — new JSON format', () => {
@@ -150,12 +180,15 @@ describe('parsePauseReason — unknown string fallback', () => {
 });
 
 describe('round-trip identity', () => {
-  it.each(ALL_REASONS)('parsePauseReason(serializePauseReason(s)) deep-equals s for "%s"', (reason) => {
-    const original = pauseReasonFromCanonical(reason);
-    const serialized = serializePauseReason(original);
-    const restored = parsePauseReason(serialized);
-    expect(restored).toEqual(original);
-  });
+  it.each(ALL_REASONS)(
+    'parsePauseReason(serializePauseReason(s)) deep-equals s for "%s"',
+    (reason) => {
+      const original = pauseReasonFromCanonical(reason);
+      const serialized = serializePauseReason(original);
+      const restored = parsePauseReason(serialized);
+      expect(restored).toEqual(original);
+    },
+  );
 
   it('preserves detail in round-trip', () => {
     const original = pauseReasonFromCanonical('ci_failing', 'tests timed out');

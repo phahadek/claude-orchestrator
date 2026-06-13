@@ -50,28 +50,111 @@ type RegistryEntry = {
   retry_strategy: PauseRetryStrategy;
 };
 
-export const PAUSE_REASON_REGISTRY: Record<CanonicalPauseReason, RegistryEntry> = {
-  max_reviews:              { source: 'review',  severity: 'needs_attention', retry_strategy: 'none' },
-  stuck_timeout:            { source: 'session', severity: 'recoverable',     retry_strategy: 'automatic' },
-  ci_failing:               { source: 'ci',      severity: 'needs_attention', retry_strategy: 'manual_action' },
-  ci_billing_blocked:       { source: 'ci',      severity: 'needs_attention', retry_strategy: 'manual_action' },
-  auto_merge_failed:        { source: 'merge',   severity: 'needs_attention', retry_strategy: 'manual_action' },
-  pr_closed:                { source: 'merge',   severity: 'terminal',        retry_strategy: 'none' },
-  review_failed:            { source: 'review',  severity: 'needs_attention', retry_strategy: 'manual_action' },
-  api_overloaded:           { source: 'session', severity: 'recoverable',     retry_strategy: 'automatic' },
-  merge_conflict:           { source: 'merge',   severity: 'needs_attention', retry_strategy: 'manual_action' },
-  awaiting_human_approval:  { source: 'review',  severity: 'needs_attention', retry_strategy: 'manual_action' },
-  human_changes_requested:  { source: 'review',  severity: 'needs_attention', retry_strategy: 'manual_action' },
-  pr_body_invalid:          { source: 'verify',  severity: 'needs_attention', retry_strategy: 'manual_action' },
-  attribution_missing:      { source: 'verify',  severity: 'needs_attention', retry_strategy: 'manual_action' },
-  audit_findings:           { source: 'verify',  severity: 'needs_attention', retry_strategy: 'manual_action' },
-  pr_creation_failed:       { source: 'merge',   severity: 'needs_attention', retry_strategy: 'manual_action' },
-  stalled_idle:             { source: 'session', severity: 'needs_attention', retry_strategy: 'manual_action' },
-  notion_done_update_stuck: { source: 'notion',  severity: 'needs_attention', retry_strategy: 'manual_action' },
-  launch_failed:            { source: 'launch',  severity: 'needs_attention', retry_strategy: 'manual_action' },
-  diverged_branch:          { source: 'merge',   severity: 'needs_attention', retry_strategy: 'manual_action' },
-  analyze_failing:          { source: 'analyze', severity: 'needs_attention', retry_strategy: 'manual_action' },
-  rate_limit:               { source: 'session', severity: 'recoverable',     retry_strategy: 'automatic' },
+export const PAUSE_REASON_REGISTRY: Record<
+  CanonicalPauseReason,
+  RegistryEntry
+> = {
+  max_reviews: {
+    source: 'review',
+    severity: 'needs_attention',
+    retry_strategy: 'none',
+  },
+  stuck_timeout: {
+    source: 'session',
+    severity: 'recoverable',
+    retry_strategy: 'automatic',
+  },
+  ci_failing: {
+    source: 'ci',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  ci_billing_blocked: {
+    source: 'ci',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  auto_merge_failed: {
+    source: 'merge',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  pr_closed: { source: 'merge', severity: 'terminal', retry_strategy: 'none' },
+  review_failed: {
+    source: 'review',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  api_overloaded: {
+    source: 'session',
+    severity: 'recoverable',
+    retry_strategy: 'automatic',
+  },
+  merge_conflict: {
+    source: 'merge',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  awaiting_human_approval: {
+    source: 'review',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  human_changes_requested: {
+    source: 'review',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  pr_body_invalid: {
+    source: 'verify',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  attribution_missing: {
+    source: 'verify',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  audit_findings: {
+    source: 'verify',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  pr_creation_failed: {
+    source: 'merge',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  stalled_idle: {
+    source: 'session',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  notion_done_update_stuck: {
+    source: 'notion',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  launch_failed: {
+    source: 'launch',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  diverged_branch: {
+    source: 'merge',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  analyze_failing: {
+    source: 'analyze',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  rate_limit: {
+    source: 'session',
+    severity: 'recoverable',
+    retry_strategy: 'automatic',
+  },
 };
 
 const CANONICAL_SET = new Set<string>(Object.keys(PAUSE_REASON_REGISTRY));
@@ -119,6 +202,8 @@ export function parsePauseReason(raw: string | null): PauseReasonStruct | null {
     return pauseReasonFromCanonical(raw as CanonicalPauseReason);
   }
 
-  console.warn(`[pauseReason] Unknown pause reason: "${raw}", using safe default`);
+  console.warn(
+    `[pauseReason] Unknown pause reason: "${raw}", using safe default`,
+  );
   return { reason: raw as CanonicalPauseReason, ...UNKNOWN_FALLBACK };
 }
