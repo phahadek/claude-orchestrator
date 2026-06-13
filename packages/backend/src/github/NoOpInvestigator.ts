@@ -182,10 +182,7 @@ export class NoOpInvestigator {
       const firstHeading = taskMarkdown.match(/^#\s+(.+)$/m);
       if (firstHeading) taskTitle = firstHeading[1];
     } catch (e) {
-      logger.error(
-        `[NoOpInvestigator] fetchTaskPage failed for ${taskId}:`,
-        e,
-      );
+      logger.error(`[NoOpInvestigator] fetchTaskPage failed for ${taskId}:`, e);
     }
 
     const noOpSessionEvents = getEventsBySession(noOpSessionId);
