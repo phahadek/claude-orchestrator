@@ -402,7 +402,15 @@ describe('AutoMerger.attempt() — failure modes', () => {
       'owner/repo',
       'auto_merge_failed',
     );
-    expect(updateMergeState).toHaveBeenCalled();
+    // Branch site: auto_merge_failed (source='merge') → 'unknown' merge state,
+    // distinct from the ci source branch which emits 'ci_failed'.
+    expect(updateMergeState).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+      0,
+      'unknown',
+      null,
+    );
   });
 
   it('leaves conflict category to existing handling (no pause_reason set)', async () => {
@@ -574,6 +582,71 @@ describe('AutoMerger.attempt() — failure modes', () => {
       'ci_failed',
       ['lint', 'unit-tests'],
     );
+  });
+});
+
+// ── pauseWithReason() — struct-driven branch side effects ─────────────────────
+// Asserts that pauseWithReason decides its broadcast/merge-state side effects from
+// the pause-reason struct (.source / .reason) rather than raw-string matches.
+describe('AutoMerger.pauseWithReason() — branches on pause-reason structure', () => {
+  type Msg = import('../../ws/types').ServerMessage;
+  function captureBroadcast() {
+    const messages: Msg[] = [];
+    return { messages, broadcast: (m: Msg) => messages.push(m) };
+  }
+
+  it('ci source: broadcasts mergeState=ci_failed with failing check names', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('ci_failed', [
+          { name: 'lint', conclusion: 'failure' },
+        ]),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const { messages, broadcast } = captureBroadcast();
+    const merger = new AutoMerger(github, makeMockWatcher(), broadcast);
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    const msg = messages.find((m) => m.type === 'pr_mergeability_changed');
+    expect(msg).toMatchObject({
+      type: 'pr_mergeability_changed',
+      mergeable: false,
+      mergeState: 'ci_failed',
+      failingChecks: ['lint'],
+    });
+  });
+
+  it('auto_merge_failed (merge source): broadcasts mergeState=null and no failing checks', async () => {
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    const github = makeMockGitHub([
+      {
+        status: 'ok',
+        etag: 'W/"a"',
+        state: 'open',
+        mergeability: makeMergeability('blocked'),
+        headSha: 'sha-abc',
+      },
+    ]);
+    const { messages, broadcast } = captureBroadcast();
+    const merger = new AutoMerger(github, makeMockWatcher(), broadcast);
+    merger.attempt(42, 'owner/repo');
+    await new Promise((r) => setTimeout(r, 50));
+
+    const msg = messages.find((m) => m.type === 'pr_mergeability_changed');
+    expect(msg).toMatchObject({
+      type: 'pr_mergeability_changed',
+      mergeable: false,
+      mergeState: null,
+    });
+    expect(
+      (msg as { failingChecks?: unknown }).failingChecks,
+    ).toBeUndefined();
   });
 });
 
