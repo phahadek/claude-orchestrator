@@ -6,6 +6,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import type { GitHubAsset, UpdateInfo } from './types';
 import { getDataDir } from '../config/dataDir';
+import { logger } from '../logger';
 
 const execFileAsync = promisify(execFile);
 
@@ -155,7 +156,7 @@ export async function downloadAsset(
     try {
       await verifyGpgSignature(destPath, asset, sigAsset);
     } catch (err) {
-      console.warn(
+      logger.warn(
         '[updater] GPG verification skipped:',
         (err as Error).message,
       );
@@ -185,11 +186,11 @@ async function verifyGpgSignature(
   try {
     await downloadFile(sigUrl, sigPath);
     await execFileAsync('gpg', ['--verify', sigPath, filePath]);
-    console.log('[updater] GPG signature verified');
+    logger.info('[updater] GPG signature verified');
   } catch (err) {
     if (fs.existsSync(sigPath)) fs.unlinkSync(sigPath);
     // Not a hard failure — sig file may not exist for all releases
-    console.warn(
+    logger.warn(
       '[updater] GPG signature not verified:',
       (err as Error).message,
     );

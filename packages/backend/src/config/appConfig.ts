@@ -2,6 +2,7 @@ import path from 'path';
 import { DataDirConfigSource } from './DataDirConfigSource';
 import { EnvFileConfigSource } from './EnvFileConfigSource';
 import { getDataDir } from './dataDir';
+import { logger } from '../logger';
 import {
   ConfigValidationError,
   type ConfigSource,
@@ -22,7 +23,7 @@ function resolve(): OrchestratorConfig {
       return dataDirSource.read();
     } catch (err) {
       if (err instanceof ConfigValidationError) {
-        console.error(err.message);
+        logger.error(err.message);
         process.exit(1);
       }
       throw err;
@@ -31,7 +32,7 @@ function resolve(): OrchestratorConfig {
 
   // Fall back to .env (legacy dev mode)
   const recommendedPath = path.join(getDataDir(), 'config.json');
-  console.warn(
+  logger.warn(
     `[config] No config.json found in the data directory. Reading credentials from .env (legacy mode).\n` +
       `  To migrate, create: ${recommendedPath}\n` +
       `  The first-run wizard will handle this automatically when available.`,

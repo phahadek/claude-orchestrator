@@ -1,5 +1,6 @@
 import { WebSocket } from 'ws';
 import { ClientMessage } from './types';
+import { logger } from '../logger';
 import { SessionManager } from '../session/SessionManager';
 import { getProjectById } from '../config';
 import { approveEnrollment } from '../auth/Enrollment';
@@ -76,12 +77,12 @@ export async function handleMessage(
     case 'approve':
       // The claude CLI --print mode does not support mid-session permission approval.
       // Tools are pre-approved via --allowedTools at spawn time. This is a no-op.
-      console.log(
+      logger.info(
         `[router] approve ignored — CLI does not support mid-session approval`,
       );
       break;
     case 'deny':
-      console.log(
+      logger.info(
         `[router] deny ignored — CLI does not support mid-session denial`,
       );
       break;
@@ -89,7 +90,7 @@ export async function handleMessage(
       void sessions
         .sendOrResume(msg.sessionId, msg.message)
         .catch((err: unknown) => {
-          console.error(
+          logger.error(
             `[router] sendOrResume failed for session ${msg.sessionId}: ${String(err)}`,
           );
         });

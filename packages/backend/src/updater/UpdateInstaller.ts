@@ -1,4 +1,5 @@
 import { spawn } from 'child_process';
+import { logger } from '../logger';
 
 /**
  * Launches the installer in detached mode, then exits the backend process
@@ -8,7 +9,7 @@ import { spawn } from 'child_process';
  * On macOS/Linux: the installer/package manager handles the replacement.
  */
 export function launchInstallerAndExit(installerPath: string): void {
-  console.log(`[updater] launching installer: ${installerPath}`);
+  logger.info(`[updater] launching installer: ${installerPath}`);
 
   const args: string[] = [];
 

@@ -7,6 +7,7 @@ import type { NotionTask } from '../notion/types';
 import { toExternalId, formatTaskId } from './taskId';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import { upsertTaskCache } from '../db/queries';
+import { logger } from '../logger';
 
 // ── tasks.yaml schema ────────────────────────────────────────────────────────
 
@@ -123,7 +124,7 @@ export class LocalTaskBackend implements TaskBackend {
     if (isFlatSchema(parsed)) {
       const migrated = this.migrateFlatToMilestones(parsed);
       this.writeFile(migrated);
-      console.log(
+      logger.info(
         `[LocalTaskBackend] Migrated ${this.filePath} to milestone schema.`,
       );
       return migrated;

@@ -3,6 +3,7 @@ import type { IncomingMessage } from 'http';
 import type { GitHubRelease, UpdateInfo } from './types';
 import type { ServerMessage } from '../ws/types';
 import { getSetting } from '../db/queries';
+import { logger } from '../logger';
 
 const REPO = 'phahadek/claude-orchestrator';
 const RELEASES_LATEST_URL = `https://api.github.com/repos/${REPO}/releases/latest`;
@@ -95,7 +96,7 @@ export class UpdateChecker {
   /** Start polling. Called after server boots. */
   start(): void {
     if (isDevMode()) {
-      console.log('[updater] dev mode — update checks disabled');
+      logger.info('[updater] dev mode — update checks disabled');
       return;
     }
     void this.check();
@@ -133,7 +134,7 @@ export class UpdateChecker {
     if (channel === 'beta') {
       const releases = await fetchJson<GitHubRelease[]>(RELEASES_LIST_URL);
       if (!releases) {
-        console.warn(
+        logger.warn(
           '[updater] failed to fetch releases list — will retry next cycle',
         );
         return null;
@@ -142,7 +143,7 @@ export class UpdateChecker {
     } else {
       release = await fetchJson<GitHubRelease>(RELEASES_LATEST_URL);
       if (!release) {
-        console.warn(
+        logger.warn(
           '[updater] failed to fetch latest release — will retry next cycle',
         );
         return null;
@@ -181,7 +182,7 @@ export class UpdateChecker {
       releaseNotesUrl: release.html_url,
     });
 
-    console.log(
+    logger.info(
       `[updater] update available: ${currentVersion} → ${tagVersion}`,
     );
     return info;
