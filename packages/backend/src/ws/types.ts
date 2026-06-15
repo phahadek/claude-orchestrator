@@ -350,6 +350,24 @@ export type ServerMessage =
       action: string;
       reason: string;
       detail: string;
+    }
+  | {
+      type: 'boot_reconciliation_started';
+      steps: string[];
+      started_at: string;
+    }
+  | {
+      type: 'boot_reconciliation_step';
+      step: string;
+      status: 'started' | 'completed' | 'failed';
+      duration_ms?: number;
+      items_processed?: number;
+      error?: string;
+    }
+  | {
+      type: 'boot_reconciliation_completed';
+      duration_ms: number;
+      completed_at: string;
     };
 
 // ── Client → Server ──────────────────────────────────────────────

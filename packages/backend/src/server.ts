@@ -59,7 +59,7 @@ import { deleteGhostSessions, getPRBySessionId } from './db/queries';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
 import setupRouter, { createSetupModeGuard } from './routes/setup';
-import { runBootSequence } from './bootSequence';
+import { runBootSequence, getActiveBootTracker } from './bootSequence';
 import { logger } from './logger';
 
 runMigrations(db);
@@ -237,7 +237,7 @@ wss.on('connection', (ws, req) => {
   // session_status messages in this burst carry replay: true so the frontend can suppress
   // notification firing — otherwise every backend restart re-fires notifications for every
   // historical non-archived session.
-  sendInitialStateBurst((msg) => ws.send(JSON.stringify(msg)));
+  sendInitialStateBurst((msg) => ws.send(JSON.stringify(msg)), getActiveBootTracker());
 
   ws.on('message', (data) =>
     handleMessage(ws, data.toString(), sessionManager),
@@ -303,6 +303,7 @@ void runBootSequence({
   sessionEventsPruner,
   server,
   port: PORT,
+  broadcast,
 });
 
 async function gracefulShutdown(signal: string) {
