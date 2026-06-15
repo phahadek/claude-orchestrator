@@ -32,6 +32,8 @@ export function SettingsSystemHealth() {
               <th style={thStyle}>Next run</th>
               <th style={thStyle}>Result</th>
               <th style={thStyle}>Duration</th>
+              <th style={thStyle}>24h runs</th>
+              <th style={thStyle}>24h errors</th>
               <th style={thStyle}>Actions</th>
             </tr>
           </thead>

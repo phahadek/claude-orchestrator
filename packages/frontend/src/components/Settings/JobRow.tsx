@@ -56,6 +56,8 @@ export function JobRow({ job, onTrigger }: Props) {
       <td style={tdStyle}>{formatRelative(job.nextRunAt)}</td>
       <td style={tdStyle}>{resultBadge(job.lastStatus)}</td>
       <td style={tdStyle}>{formatDuration(job.lastDurationMs)}</td>
+      <td style={tdStyle}>{job.runCount24h ?? '—'}</td>
+      <td style={tdStyle}>{job.errorCount24h ?? '—'}</td>
       <td style={tdStyle}>
         <button
           type="button"

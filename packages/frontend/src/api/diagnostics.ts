@@ -5,6 +5,8 @@ export interface JobStatus {
   lastStatus: 'ok' | 'failed' | 'skipped' | null;
   nextRunAt: string | null;
   lastDurationMs?: number | null;
+  runCount24h?: number | null;
+  errorCount24h?: number | null;
 }
 
 export async function fetchSchedulerStatus(): Promise<JobStatus[]> {
