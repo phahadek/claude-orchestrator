@@ -113,6 +113,7 @@ Projects and milestones are managed entirely from the dashboard UI — there is 
 2. Fill in the project name, the absolute path to its local repo (`projectDir`), the GitHub `owner/repo`, and choose a **Task source**:
    - **Notion** — the Settings form labels Context URL as optional, but Notion projects in practice need it: paste the URL of the Project Context page. See [`docs/notion-template.md`](docs/notion-template.md) for the workspace structure the dashboard expects.
    - **GitHub** — tasks are GitHub Issues labeled and organized by milestone. See [`docs/github-template.md`](docs/github-template.md) for label vocabulary, issue body structure, and repo bootstrap steps.
+   - **Jira** — tasks are Jira issues organized under an Epic (the milestone). See [`docs/jira-template.md`](docs/jira-template.md) for issue type mapping, workflow status conventions, and project bootstrap steps.
    - **YAML** — tasks live in `<projectDir>/tasks.yaml` (gitignored by default). See [`docs/yaml-template.md`](docs/yaml-template.md) for the schema reference and conventions.
 3. Open **Settings → Milestones → Add milestone** and add as many milestones as you need. For Notion projects, paste the **database ID** of each milestone's task board (a 32-character hex string — pages and databases both have IDs, and they are not interchangeable; copy from the database URL, not a parent page).
 4. The Tasks panel shows the active milestone's tasks. The default active milestone is the first one in display order; if a project has more than one milestone, a milestone selector appears in the header next to the project switcher, and your choice is remembered per browser via `localStorage`. Click **Dispatch** on any `🗂️ Ready` task to spawn a Claude session in a worktree.
@@ -130,6 +131,7 @@ The Analytics tab tracks per-session token usage and per-model cost across the p
 - [Install guide](docs/install.md) — production setup and full env var reference
 - [Notion template](docs/notion-template.md) — set up a Notion workspace compatible with this orchestrator
 - [GitHub template](docs/github-template.md) — label vocabulary, issue body structure, and repo bootstrap for GitHub-backed projects
+- [Jira template](docs/jira-template.md) — issue type mapping, workflow statuses, Epic milestone semantics, and project bootstrap for Jira-backed projects
 - [YAML template](docs/yaml-template.md) — schema reference and conventions for YAML-backed projects
 - [Orchestrator project setup](docs/orchestrator-project-setup.md) — point the orchestrator at an external project (C#, Rust, Godot, …) via `.claude/orchestrator.json` and a bootstrap script
 
