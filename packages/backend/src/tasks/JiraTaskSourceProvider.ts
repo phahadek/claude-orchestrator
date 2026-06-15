@@ -2,7 +2,8 @@ import type { TaskBackend } from './TaskBackend';
 import type { ResolvedTask } from './types';
 import type { NotionTask } from '../notion/types';
 import { formatTaskId, toExternalId } from './taskId';
-import { JiraClient } from './JiraClient';
+import { JiraClient, JiraApiError } from './JiraClient';
+import type { JiraIssue } from './JiraClient';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import { upsertTaskCache } from '../db/queries';
 
@@ -18,6 +19,16 @@ export interface JiraProjectConfig {
    * Defaults to DEFAULT_STATUS_MAPPING.
    */
   status_mapping?: Record<string, string>;
+  /**
+   * Maps Jira issue type names to orchestrator type strings.
+   * Defaults to DEFAULT_TYPE_MAP.
+   */
+  type_mapping?: Record<string, string>;
+  /**
+   * Force a specific JQL field for Epic parent lookups ('parent' or 'Epic Link').
+   * When omitted, the provider auto-detects and caches the working field.
+   */
+  epic_field?: string;
 }
 
 const DEFAULT_READY_STATUSES = ['To Do', 'Ready'];
@@ -30,21 +41,22 @@ const DEFAULT_STATUS_MAPPING: Record<string, string> = {
   '✅ Done': 'Done',
 };
 
-const TYPE_MAP: Record<string, string> = {
-  Bug: '🧪 Testing',
+const DEFAULT_TYPE_MAP: Record<string, string> = {
+  Story: '📋 Planning',
   Task: '💻 Code',
-  Story: '💻 Code',
-  Epic: '📋 Planning',
+  'Sub-task': '💻 Code',
+  Bug: '💻 Code',
 };
 
-function mapIssueType(issuetype: string): string {
-  return TYPE_MAP[issuetype] ?? '💻 Code';
-}
+const LAUNCHABLE_TYPE = '💻 Code';
 
 const resolver = new DependencyResolver();
 
 export class JiraTaskSourceProvider implements TaskBackend {
   readonly type = 'jira' as const;
+
+  /** Cached result of epic-field auto-detection ('parent' or 'Epic Link'). */
+  private epicFieldCache: string | null = null;
 
   constructor(
     private readonly client: JiraClient,
@@ -55,33 +67,148 @@ export class JiraTaskSourceProvider implements TaskBackend {
     milestoneId: string | null,
     _skipCache?: boolean,
   ): Promise<ResolvedTask[]> {
-    const jql = this.buildReadyJql();
-    const issues = await this.client.searchIssues(jql);
+    const typeMap = this.projectConfig.type_mapping ?? DEFAULT_TYPE_MAP;
+    const readyStatuses = new Set(
+      this.projectConfig.ready_statuses ?? DEFAULT_READY_STATUSES,
+    );
 
-    const tasks: NotionTask[] = issues.map((issue) => ({
-      id: issue.key,
-      title: issue.fields.summary,
-      status: issue.fields.status.name,
-      type: mapIssueType(issue.fields.issuetype.name),
-      dependsOn: [],
-      notionUrl: '',
-      priority: issue.fields.priority?.name,
-    }));
+    let initialIssues: JiraIssue[];
+    let dispatchableKeys: Set<string>;
 
+    if (milestoneId !== null) {
+      // Gap 2: 2-level Epic tree scan
+      const level1 = await this.fetchEpicChildren(milestoneId);
+
+      // Level 2: sub-tasks of non-Epic, non-SubTask children
+      const parentCandidateKeys = level1
+        .filter(
+          (i) =>
+            i.fields.issuetype.name !== 'Epic' &&
+            i.fields.issuetype.name !== 'Sub-task',
+        )
+        .map((i) => i.key);
+
+      let level2: JiraIssue[] = [];
+      if (parentCandidateKeys.length > 0) {
+        level2 = await this.client.searchIssues(
+          this.client.buildSubtaskJql(parentCandidateKeys),
+        );
+      }
+
+      initialIssues = [...level1, ...level2];
+
+      dispatchableKeys = new Set(
+        initialIssues
+          .filter(
+            (i) =>
+              i.fields.issuetype.name !== 'Epic' &&
+              readyStatuses.has(i.fields.status.name) &&
+              this.mapIssueType(i.fields.issuetype.name, typeMap) ===
+                LAUNCHABLE_TYPE,
+          )
+          .map((i) => i.key),
+      );
+    } else {
+      const jql = this.buildReadyJql();
+      initialIssues = await this.client.searchIssues(jql);
+      dispatchableKeys = new Set(initialIssues.map((i) => i.key));
+    }
+
+    // Build universe: initial issues + extra (blockers + sub-task parents)
+    const universe = new Map<string, JiraIssue>(
+      initialIssues.map((i) => [i.key, i]),
+    );
+
+    // Round 1 extras: own-blocker keys + parent keys of sub-tasks
+    const round1Keys = new Set<string>();
+    for (const issue of initialIssues) {
+      for (const key of this.parseBlockerKeys(issue)) {
+        if (!universe.has(key)) round1Keys.add(key);
+      }
+      if (
+        issue.fields.issuetype.name === 'Sub-task' &&
+        issue.fields.parent?.key
+      ) {
+        if (!universe.has(issue.fields.parent.key))
+          round1Keys.add(issue.fields.parent.key);
+      }
+    }
+
+    if (round1Keys.size > 0) {
+      const round1 = await this.client.searchIssues(
+        this.client.buildKeyInJql([...round1Keys]),
+      );
+      for (const i of round1) universe.set(i.key, i);
+
+      // Round 2 extras: blockers of newly fetched issues (mainly parents)
+      const round2Keys = new Set<string>();
+      for (const issue of round1) {
+        for (const key of this.parseBlockerKeys(issue)) {
+          if (!universe.has(key)) round2Keys.add(key);
+        }
+      }
+      if (round2Keys.size > 0) {
+        const round2 = await this.client.searchIssues(
+          this.client.buildKeyInJql([...round2Keys]),
+        );
+        for (const i of round2) universe.set(i.key, i);
+      }
+    }
+
+    // Build NotionTask list from the universe
+    const tasks: NotionTask[] = [];
+    for (const issue of universe.values()) {
+      const ownBlockers = this.parseBlockerKeys(issue);
+
+      // Gap 1: sub-tasks inherit their parent's blockers
+      let allBlockers = [...ownBlockers];
+      if (
+        issue.fields.issuetype.name === 'Sub-task' &&
+        issue.fields.parent?.key
+      ) {
+        const parent = universe.get(issue.fields.parent.key);
+        if (parent) {
+          const parentBlockers = this.parseBlockerKeys(parent);
+          allBlockers = [...new Set([...allBlockers, ...parentBlockers])];
+        }
+      }
+
+      tasks.push({
+        id: issue.key,
+        title: issue.fields.summary,
+        status: this.getOrchestratorStatus(issue.fields.status.name),
+        type: this.mapIssueType(issue.fields.issuetype.name, typeMap),
+        dependsOn: allBlockers,
+        notionUrl: '',
+        priority: issue.fields.priority?.name,
+      });
+    }
+
+    // Cache individual dispatchable tasks (unprefixed dependsOn, prefixed id)
     for (const task of tasks) {
-      const prefixedId = formatTaskId('jira', task.id);
-      upsertTaskCache(prefixedId, JSON.stringify({ ...task, id: prefixedId }));
+      if (dispatchableKeys.has(task.id)) {
+        const prefixedId = formatTaskId('jira', task.id);
+        upsertTaskCache(
+          prefixedId,
+          JSON.stringify({ ...task, id: prefixedId }),
+        );
+      }
     }
 
     const resolved = resolver.resolve(tasks, 'jira');
-    const prefixed = resolved.map((r) => ({
-      ...r,
-      task: {
-        ...r.task,
-        id: formatTaskId('jira', r.task.id),
-        dependsOn: r.task.dependsOn.map((dep) => formatTaskId('jira', dep)),
-      },
-    }));
+
+    // Filter to dispatchable only, then prefix all IDs
+    const prefixed = resolved
+      .filter((r) => dispatchableKeys.has(r.task.id))
+      .map((r) => ({
+        ...r,
+        task: {
+          ...r.task,
+          id: formatTaskId('jira', r.task.id),
+          dependsOn: r.task.dependsOn.map((dep) => formatTaskId('jira', dep)),
+        },
+      }));
+
     // Overwrite board cache with prefixed IDs so /api/tasks/active joins correctly.
     if (milestoneId !== null) {
       upsertTaskCache(
@@ -163,5 +290,64 @@ export class JiraTaskSourceProvider implements TaskBackend {
       this.projectConfig.project_key,
       readyStatuses,
     );
+  }
+
+  /** Gap 2: Fetch direct children of an Epic, auto-detecting the JQL field. */
+  private async fetchEpicChildren(epicKey: string): Promise<JiraIssue[]> {
+    const override = this.projectConfig.epic_field ?? this.epicFieldCache;
+    if (override) {
+      const jql =
+        override === 'parent'
+          ? this.client.buildEpicParentJql(epicKey)
+          : this.client.buildEpicLinkJql(epicKey);
+      return this.client.searchIssues(jql);
+    }
+
+    // Auto-detect: try 'parent' first, fall back to 'Epic Link' on 400
+    try {
+      const result = await this.client.searchIssues(
+        this.client.buildEpicParentJql(epicKey),
+      );
+      this.epicFieldCache = 'parent';
+      return result;
+    } catch (e) {
+      if (e instanceof JiraApiError && e.statusCode === 400) {
+        const result = await this.client.searchIssues(
+          this.client.buildEpicLinkJql(epicKey),
+        );
+        this.epicFieldCache = 'Epic Link';
+        return result;
+      }
+      throw e;
+    }
+  }
+
+  /** Extract blocker issue keys from a Jira issue's issuelinks. */
+  private parseBlockerKeys(issue: JiraIssue): string[] {
+    return (issue.fields.issuelinks ?? [])
+      .filter(
+        (link) =>
+          link.type.inward === 'is blocked by' && link.inwardIssue != null,
+      )
+      .map((link) => link.inwardIssue!.key);
+  }
+
+  /** Map a Jira issue type name to an orchestrator type string. */
+  private mapIssueType(
+    issuetype: string,
+    typeMap: Record<string, string>,
+  ): string {
+    return typeMap[issuetype] ?? LAUNCHABLE_TYPE;
+  }
+
+  /** Map a Jira status name to an orchestrator display status. */
+  private getOrchestratorStatus(jiraStatus: string): string {
+    const mapping = this.projectConfig.status_mapping ?? DEFAULT_STATUS_MAPPING;
+    for (const [orchStatus, jiraName] of Object.entries(mapping)) {
+      if (jiraName.toLowerCase() === jiraStatus.toLowerCase()) {
+        return orchStatus;
+      }
+    }
+    return jiraStatus;
   }
 }
