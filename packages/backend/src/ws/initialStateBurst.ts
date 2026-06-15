@@ -9,15 +9,23 @@ import {
 import { isSystemOnlyUserEvent } from '../utils/eventFilters';
 import { eventKind } from '../session/eventKind';
 
+interface BootTracker {
+  getSnapshot(): ServerMessage[] | null;
+}
+
 /**
  * Send the current persistent state of all active sessions to a freshly
  * connected client. Every session_status message in the burst carries
  * `replay: true` so the frontend can suppress notification firing — without
  * the flag, a backend restart re-fires notifications for every historical
  * non-archived session in done/error state.
+ *
+ * Pass bootTracker to also replay the in-progress boot reconciliation state
+ * for late-connecting clients.
  */
 export function sendInitialStateBurst(
   send: (msg: ServerMessage) => void,
+  bootTracker?: BootTracker | null,
 ): void {
   for (const s of getActiveSessions()) {
     const tags = s.tags
@@ -91,6 +99,15 @@ export function sendInitialStateBurst(
           tool_input: JSON.parse(d.tool_input) as Record<string, unknown>,
         })),
       });
+    }
+  }
+
+  if (bootTracker) {
+    const snapshot = bootTracker.getSnapshot();
+    if (snapshot) {
+      for (const msg of snapshot) {
+        send(msg);
+      }
     }
   }
 }

@@ -4,6 +4,7 @@ import { SetupWizard } from './wizard/SetupWizard';
 import type { ConnectionState } from './hooks/useWebSocket';
 import { useSessionStore } from './hooks/useSessionStore';
 import { useWebSocket } from './hooks/useWebSocket';
+import { useBootReconciliation } from './hooks/useBootReconciliation';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { useNotifications } from './hooks/useNotifications';
 import { useIsMobile } from './hooks/useIsMobile';
@@ -101,6 +102,8 @@ export default function App() {
     return () => window.removeEventListener('device-unauthorized', handler);
   }, []);
 
+  const bootReconciliation = useBootReconciliation();
+
   const {
     sessions,
     tasks,
@@ -171,6 +174,14 @@ export default function App() {
 
   const handleWsMessage = useCallback(
     (msg: Parameters<typeof dispatch>[0]) => {
+      if (
+        msg.type === 'boot_reconciliation_started' ||
+        msg.type === 'boot_reconciliation_step' ||
+        msg.type === 'boot_reconciliation_completed'
+      ) {
+        bootReconciliation.dispatch(msg);
+        return;
+      }
       if (msg.type === 'error') {
         const notifId = crypto.randomUUID();
         setNotifications((prev) => [
@@ -199,7 +210,7 @@ export default function App() {
       }
       dispatch(msg);
     },
-    [dispatch, dismissNotification],
+    [dispatch, dismissNotification, bootReconciliation.dispatch],
   );
 
   const { send, connectionState } = useWebSocket(handleWsMessage);
@@ -1133,6 +1144,7 @@ export default function App() {
           autoLaunchCap={autoLaunchCap}
           autoLaunchQueuedCount={autoLaunchQueuedCount}
           autoLaunchPollIntervalMs={autoLaunchPollIntervalMs}
+          bootReconciliation={bootReconciliation.state}
         />
       </ErrorBoundary>
       {updateInfo && (
