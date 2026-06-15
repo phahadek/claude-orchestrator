@@ -143,11 +143,11 @@ Both levels are scanned for dispatchable (`💻 Code`) issues in a `ready_status
 
 Jira priority names map to the orchestrator's priority vocabulary as follows:
 
-| Jira priority        | Orchestrator priority |
-| -------------------- | --------------------- |
-| `Highest` / `High`   | `🔴 High`             |
-| `Medium`             | `🟡 Medium`           |
-| `Low` / `Lowest`     | `🟢 Low`              |
+| Jira priority      | Orchestrator priority |
+| ------------------ | --------------------- |
+| `Highest` / `High` | `🔴 High`             |
+| `Medium`           | `🟡 Medium`           |
+| `Low` / `Lowest`   | `🟢 Low`              |
 
 Priority is read directly from the issue's `priority.name` field and displayed in the Tasks panel for human reference. It does not affect dispatch order.
 
@@ -232,13 +232,13 @@ JIRA_TOKEN=<your-PAT>
 
 The orchestrator uses the following Jira REST API v3 endpoints:
 
-| Endpoint | Purpose |
-| -------- | ------- |
-| `GET /rest/api/3/issue/{key}` | Fetch a single issue (task page) |
-| `GET /rest/api/3/issue/{key}/transitions` | Get available workflow transitions |
-| `POST /rest/api/3/issue/{key}/transitions` | Transition issue status |
-| `POST /rest/api/3/issue/{key}/comment` | Attach PR URL as a comment |
-| `GET /rest/api/3/search?jql=...` | Search issues (ready tasks, Epic children) |
+| Endpoint                                   | Purpose                                    |
+| ------------------------------------------ | ------------------------------------------ |
+| `GET /rest/api/3/issue/{key}`              | Fetch a single issue (task page)           |
+| `GET /rest/api/3/issue/{key}/transitions`  | Get available workflow transitions         |
+| `POST /rest/api/3/issue/{key}/transitions` | Transition issue status                    |
+| `POST /rest/api/3/issue/{key}/comment`     | Attach PR URL as a comment                 |
+| `GET /rest/api/3/search?jql=...`           | Search issues (ready tasks, Epic children) |
 
 For Jira Cloud, a standard API token tied to an account with **Project: Browse Projects** and **Issue: Edit Issues** permissions covers all of these. No admin scopes are required.
 
