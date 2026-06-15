@@ -3012,7 +3012,9 @@ export function getSchedulerAuditByJob(
     .prepare<{
       job: string;
       limit: number;
-    }>(`SELECT * FROM scheduler_audit WHERE job = @job ORDER BY started_at DESC LIMIT @limit`)
+    }>(
+      `SELECT * FROM scheduler_audit WHERE job = @job ORDER BY started_at DESC LIMIT @limit`,
+    )
     .all({ job, limit }) as SchedulerAuditRow[];
 }
 

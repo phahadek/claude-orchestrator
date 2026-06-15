@@ -204,7 +204,9 @@ scheduler.register({
   name: 'scheduler_audit_pruner',
   intervalMs: 24 * 60 * 60_000,
   runOnBoot: false,
-  run: async () => { pruneSchedulerAudit(1000); },
+  run: async () => {
+    pruneSchedulerAudit(1000);
+  },
 });
 
 // Broadcast all session events to every connected WS client
