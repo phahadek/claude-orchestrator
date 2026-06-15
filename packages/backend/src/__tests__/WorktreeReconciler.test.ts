@@ -13,6 +13,7 @@ vi.mock('node:fs', async (importOriginal) => {
     ...actual,
     default: {
       ...actual,
+      existsSync: vi.fn(),
       readdirSync: vi.fn(),
       statSync: vi.fn(),
       rmSync: vi.fn(),
@@ -37,6 +38,7 @@ import { runBootWorktreeReconciliation } from '../orchestration/WorktreeReconcil
 import type { ProjectConfig } from '../config.js';
 
 const mockedExecSync = vi.mocked(execSync);
+const mockedExistsSync = vi.mocked(fs.existsSync);
 const mockedReaddirSync = vi.mocked(fs.readdirSync);
 const mockedStatSync = vi.mocked(fs.statSync);
 const mockedRmSync = vi.mocked(fs.rmSync);
@@ -152,6 +154,8 @@ beforeEach(() => {
     if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
     return '' as never; // worktree list → empty (no registered worktrees by default)
   });
+  // Default: worktree dir exists on disk
+  mockedExistsSync.mockReturnValue(true);
   // Default: empty worktrees dir
   mockedReaddirSync.mockReturnValue(
     [] as unknown as ReturnType<typeof fs.readdirSync>,
@@ -456,6 +460,62 @@ describe('runBootWorktreeReconciliation — idempotent / no-op', () => {
     );
     expect(removeCalls).toHaveLength(1);
     expect(removeCalls[0][1]).toMatchObject({ cwd: '/p1' });
+  });
+});
+
+// ── Already-gone worktrees silently pruned ───────────────────────────────────
+
+describe('runBootWorktreeReconciliation — already-gone worktree dir', () => {
+  it('does not emit worktree_remove_failed when registered dir is absent', async () => {
+    const wtPath = `${WORKTREES_DIR}/sess-gone`;
+    mockedExecSync.mockImplementation((cmd: string) => {
+      if (String(cmd).includes('worktree list'))
+        return gitWorktreeListOutput(wtPath) as never;
+      return '' as never;
+    });
+    mockedExistsSync.mockReturnValue(false);
+    mockedGetSession.mockReturnValue(makeSession('done') as never);
+    mockedGetPR.mockReturnValue(null);
+
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
+
+    expect(mockedRecordEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'worktree_remove_failed' }),
+    );
+    expect(mockedExecSync).not.toHaveBeenCalledWith(
+      expect.stringContaining('git worktree remove'),
+      expect.anything(),
+    );
+    // git worktree prune still runs to reap the dangling registration
+    expect(mockedExecSync).toHaveBeenCalledWith(
+      'git worktree prune',
+      expect.objectContaining({ cwd: PROJECT_DIR }),
+    );
+  });
+
+  it('emits worktree_remove_failed when dir is present but git refuses to remove', async () => {
+    const wtPath = `${WORKTREES_DIR}/sess-locked`;
+    mockedExecSync.mockImplementation((cmd: string) => {
+      if (String(cmd).includes('worktree list'))
+        return gitWorktreeListOutput(wtPath) as never;
+      if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
+      if (String(cmd).includes('worktree remove'))
+        throw new Error('fatal: not a working tree');
+      return '' as never;
+    });
+    mockedExistsSync.mockReturnValue(true);
+    mockedGetSession.mockReturnValue(makeSession('done') as never);
+    mockedGetPR.mockReturnValue(null);
+
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
+
+    expect(mockedRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'worktree_remove_failed' }),
+    );
   });
 });
 
