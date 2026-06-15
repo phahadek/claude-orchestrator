@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ProjectsSettingsPanel } from './Settings/ProjectsSettingsPanel';
 import { SettingsDevices } from '../pages/SettingsDevices';
+import { SettingsSystemHealth } from '../pages/SettingsSystemHealth';
 import styles from './Settings.module.css';
 
 const NOTIFICATIONS_ENABLED_KEY = 'notificationsEnabled';
 
-type Tab = 'general' | 'projects' | 'devices';
+type Tab = 'general' | 'projects' | 'devices' | 'system_health';
 
 interface SettingsValues {
   max_concurrent_code_sessions: string;
@@ -242,20 +243,24 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
   return (
     <div className={styles.settings}>
       <div className={styles.tabs}>
-        {(['general', 'projects', 'devices'] as Tab[]).map((t) => (
-          <button
-            key={t}
-            type="button"
-            className={`${styles.tab}${activeTab === t ? ` ${styles.tabActive}` : ''}`}
-            onClick={() => setActiveTab(t)}
-          >
-            {t === 'general'
-              ? 'General'
-              : t === 'projects'
-                ? 'Projects'
-                : 'Devices'}
-          </button>
-        ))}
+        {(['general', 'projects', 'devices', 'system_health'] as Tab[]).map(
+          (t) => (
+            <button
+              key={t}
+              type="button"
+              className={`${styles.tab}${activeTab === t ? ` ${styles.tabActive}` : ''}`}
+              onClick={() => setActiveTab(t)}
+            >
+              {t === 'general'
+                ? 'General'
+                : t === 'projects'
+                  ? 'Projects'
+                  : t === 'devices'
+                    ? 'Devices'
+                    : 'System Health'}
+            </button>
+          ),
+        )}
       </div>
 
       <div className={styles.content}>
@@ -576,6 +581,12 @@ export function Settings({ initialTab = 'general', onProjectsChanged }: Props) {
         {activeTab === 'devices' && (
           <div className={styles.section}>
             <SettingsDevices />
+          </div>
+        )}
+
+        {activeTab === 'system_health' && (
+          <div>
+            <SettingsSystemHealth />
           </div>
         )}
       </div>
