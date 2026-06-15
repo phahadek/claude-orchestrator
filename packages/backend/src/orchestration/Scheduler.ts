@@ -9,7 +9,9 @@ export interface JobOptions {
   jitterMs?: number;
   enabled?: () => boolean;
   concurrency?: 'skip-if-running' | 'queue-next' | 'serial-no-overlap';
-  run: (ctx: { signal: AbortSignal }) => Promise<{ items_processed?: number } | void>;
+  run: (ctx: {
+    signal: AbortSignal;
+  }) => Promise<{ items_processed?: number } | void>;
   onError?: (err: unknown) => void;
 }
 
@@ -43,7 +45,9 @@ export class Scheduler {
 
   register(opts: JobOptions): void {
     if (this.jobs.has(opts.name)) {
-      logger.warn(`[Scheduler] job '${opts.name}' already registered — skipping`);
+      logger.warn(
+        `[Scheduler] job '${opts.name}' already registered — skipping`,
+      );
       return;
     }
     this.jobs.set(opts.name, {
@@ -82,10 +86,13 @@ export class Scheduler {
 
   private _scheduleNext(state: JobState): void {
     if (state.stopped) return;
-    const base = typeof state.opts.intervalMs === 'function'
-      ? state.opts.intervalMs()
-      : state.opts.intervalMs;
-    const jitter = state.opts.jitterMs ? Math.random() * state.opts.jitterMs : 0;
+    const base =
+      typeof state.opts.intervalMs === 'function'
+        ? state.opts.intervalMs()
+        : state.opts.intervalMs;
+    const jitter = state.opts.jitterMs
+      ? Math.random() * state.opts.jitterMs
+      : 0;
     const delay = base + jitter;
     state.nextRunAt = new Date(Date.now() + delay).toISOString();
     state.timer = setTimeout(() => {
@@ -100,7 +107,14 @@ export class Scheduler {
 
     if (state.running) {
       if (concurrency === 'skip-if-running') {
-        await this._emitAudit(state, 'skipped', Date.now(), Date.now(), undefined, undefined);
+        await this._emitAudit(
+          state,
+          'skipped',
+          Date.now(),
+          Date.now(),
+          undefined,
+          undefined,
+        );
         this._scheduleNext(state);
         return;
       }
@@ -114,7 +128,14 @@ export class Scheduler {
     }
 
     if (state.opts.enabled && !state.opts.enabled()) {
-      await this._emitAudit(state, 'skipped', Date.now(), Date.now(), undefined, undefined);
+      await this._emitAudit(
+        state,
+        'skipped',
+        Date.now(),
+        Date.now(),
+        undefined,
+        undefined,
+      );
       this._scheduleNext(state);
       return;
     }
@@ -147,8 +168,17 @@ export class Scheduler {
       const completedAt = Date.now();
       state.running = false;
       state.abortController = null;
-      const itemsProcessed = (result as { items_processed?: number } | undefined)?.items_processed;
-      await this._emitAudit(state, runStatus, startedAt, completedAt, itemsProcessed, runError);
+      const itemsProcessed = (
+        result as { items_processed?: number } | undefined
+      )?.items_processed;
+      await this._emitAudit(
+        state,
+        runStatus,
+        startedAt,
+        completedAt,
+        itemsProcessed,
+        runError,
+      );
 
       if (state.queued && !state.stopped) {
         state.queued = false;
@@ -185,7 +215,10 @@ export class Scheduler {
         error: error ? JSON.stringify(error) : null,
       });
     } catch (err) {
-      logger.error(`[Scheduler] failed to write audit row for '${state.opts.name}':`, err);
+      logger.error(
+        `[Scheduler] failed to write audit row for '${state.opts.name}':`,
+        err,
+      );
     }
 
     if (this.broadcast) {
@@ -196,7 +229,9 @@ export class Scheduler {
         started_at: startedAt,
         completed_at: completedAt,
         duration_ms: durationMs,
-        ...(itemsProcessed !== undefined && { items_processed: itemsProcessed }),
+        ...(itemsProcessed !== undefined && {
+          items_processed: itemsProcessed,
+        }),
         ...(error !== undefined && { error }),
       };
       this.broadcast(msg);
@@ -224,7 +259,9 @@ export class Scheduler {
     }));
   }
 
-  async stopAll(opts: { drain?: boolean; timeoutMs?: number } = {}): Promise<void> {
+  async stopAll(
+    opts: { drain?: boolean; timeoutMs?: number } = {},
+  ): Promise<void> {
     // Cancel all pending timers
     for (const state of this.jobs.values()) {
       state.stopped = true;
@@ -249,7 +286,9 @@ export class Scheduler {
 
     await new Promise<void>((resolve) => {
       const check = () => {
-        const stillRunning = Array.from(this.jobs.values()).some((s) => s.running);
+        const stillRunning = Array.from(this.jobs.values()).some(
+          (s) => s.running,
+        );
         if (!stillRunning || Date.now() >= deadline) {
           resolve();
         } else {

@@ -6,7 +6,10 @@ vi.mock('../db/queries.js', () => ({
   insertSchedulerAudit: vi.fn(),
 }));
 
-import { createDiagnosticsRouter, setScheduler } from '../routes/diagnostics.js';
+import {
+  createDiagnosticsRouter,
+  setScheduler,
+} from '../routes/diagnostics.js';
 import { Scheduler } from '../orchestration/Scheduler.js';
 
 function makeApp(scheduler: Scheduler) {
@@ -57,7 +60,9 @@ describe('POST /api/diagnostics/scheduler/:name/trigger', () => {
     scheduler.register({ name: 'pilot_job', intervalMs: 60_000, run: runFn });
     const app = makeApp(scheduler);
 
-    const res = await request(app).post('/api/diagnostics/scheduler/pilot_job/trigger');
+    const res = await request(app).post(
+      '/api/diagnostics/scheduler/pilot_job/trigger',
+    );
     expect(res.status).toBe(202);
     expect(res.body.job).toBe('pilot_job');
     expect(typeof res.body.triggered_at).toBe('string');
@@ -71,7 +76,9 @@ describe('POST /api/diagnostics/scheduler/:name/trigger', () => {
     const scheduler = new Scheduler();
     const app = makeApp(scheduler);
 
-    const res = await request(app).post('/api/diagnostics/scheduler/does_not_exist/trigger');
+    const res = await request(app).post(
+      '/api/diagnostics/scheduler/does_not_exist/trigger',
+    );
     // The trigger is fire-and-forget; the route returns 202 before the error resolves
     expect(res.status).toBe(202);
   });

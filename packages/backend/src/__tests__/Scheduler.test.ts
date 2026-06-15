@@ -135,7 +135,9 @@ describe('Scheduler audit + WS broadcast', () => {
     expect(auditArg.items_processed).toBe(3);
     expect(auditArg.error).toBeNull();
 
-    const ws = broadcasts.find((m: unknown) => (m as { type: string }).type === 'scheduler_job_run');
+    const ws = broadcasts.find(
+      (m: unknown) => (m as { type: string }).type === 'scheduler_job_run',
+    );
     expect(ws).toBeDefined();
     expect((ws as { job: string }).job).toBe('audit_ok');
     expect((ws as { status: string }).status).toBe('ok');
@@ -149,7 +151,9 @@ describe('Scheduler audit + WS broadcast', () => {
       name: 'audit_fail',
       intervalMs: 60_000,
       runOnBoot: true,
-      run: async () => { throw new Error('boom'); },
+      run: async () => {
+        throw new Error('boom');
+      },
     });
     scheduler.start();
     await vi.advanceTimersByTimeAsync(10);
@@ -180,7 +184,9 @@ describe('Scheduler concurrency modes', () => {
   it('skip-if-running emits skipped audit when triggerNow called while job in-flight', async () => {
     const { scheduler } = makeScheduler();
     let resolveRun!: () => void;
-    const pending = new Promise<void>((r) => { resolveRun = r; });
+    const pending = new Promise<void>((r) => {
+      resolveRun = r;
+    });
     scheduler.register({
       name: 'j_skip',
       intervalMs: 60_000,
@@ -195,7 +201,9 @@ describe('Scheduler concurrency modes', () => {
     // (it re-uses _runJob which checks state.running)
     void scheduler.triggerNow('j_skip');
     await vi.advanceTimersByTimeAsync(1);
-    const skipped = mockInsertAudit.mock.calls.filter((c) => c[0].status === 'skipped');
+    const skipped = mockInsertAudit.mock.calls.filter(
+      (c) => c[0].status === 'skipped',
+    );
     expect(skipped.length).toBeGreaterThanOrEqual(1);
     resolveRun();
     await scheduler.stopAll();
@@ -204,8 +212,13 @@ describe('Scheduler concurrency modes', () => {
   it('queue-next queues a run when a job is in-flight', async () => {
     const { scheduler } = makeScheduler();
     let resolve1!: () => void;
-    const run1Done = new Promise<void>((r) => { resolve1 = r; });
-    const runFn = vi.fn().mockReturnValueOnce(run1Done).mockResolvedValue(undefined);
+    const run1Done = new Promise<void>((r) => {
+      resolve1 = r;
+    });
+    const runFn = vi
+      .fn()
+      .mockReturnValueOnce(run1Done)
+      .mockResolvedValue(undefined);
     scheduler.register({
       name: 'j_queue',
       intervalMs: 60_000,
@@ -245,12 +258,17 @@ describe('Scheduler.stopAll', () => {
     const { scheduler } = makeScheduler();
     let finished = false;
     let resolve!: () => void;
-    const pending = new Promise<void>((r) => { resolve = r; });
+    const pending = new Promise<void>((r) => {
+      resolve = r;
+    });
     scheduler.register({
       name: 'j_drain',
       intervalMs: 60_000,
       runOnBoot: true,
-      run: async () => { await pending; finished = true; },
+      run: async () => {
+        await pending;
+        finished = true;
+      },
     });
     scheduler.start();
     // Let the boot run start
@@ -303,6 +321,8 @@ describe('Scheduler.triggerNow', () => {
 
   it('throws for unknown job name', async () => {
     const { scheduler } = makeScheduler();
-    await expect(scheduler.triggerNow('nonexistent')).rejects.toThrow('Unknown job');
+    await expect(scheduler.triggerNow('nonexistent')).rejects.toThrow(
+      'Unknown job',
+    );
   });
 });

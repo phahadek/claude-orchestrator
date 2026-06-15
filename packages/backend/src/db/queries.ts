@@ -3009,16 +3009,17 @@ export function getSchedulerAuditByJob(
   limit = 50,
 ): SchedulerAuditRow[] {
   return db
-    .prepare<{ job: string; limit: number }>(
-      `SELECT * FROM scheduler_audit WHERE job = @job ORDER BY started_at DESC LIMIT @limit`,
-    )
+    .prepare<{
+      job: string;
+      limit: number;
+    }>(`SELECT * FROM scheduler_audit WHERE job = @job ORDER BY started_at DESC LIMIT @limit`)
     .all({ job, limit }) as SchedulerAuditRow[];
 }
 
 export function pruneSchedulerAudit(keepPerJob = 1000): void {
-  const jobs = db
-    .prepare(`SELECT DISTINCT job FROM scheduler_audit`)
-    .all() as { job: string }[];
+  const jobs = db.prepare(`SELECT DISTINCT job FROM scheduler_audit`).all() as {
+    job: string;
+  }[];
   for (const { job } of jobs) {
     db.prepare<{ job: string; keep: number }>(
       `DELETE FROM scheduler_audit
