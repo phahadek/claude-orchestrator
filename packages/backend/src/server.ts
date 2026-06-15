@@ -39,7 +39,7 @@ import {
   createEnrollmentRouter,
   setEnrollmentBroadcast,
 } from './auth/Enrollment';
-import { getActiveDeviceCount } from './db/queries';
+import { getActiveDeviceCount, pruneSchedulerAudit } from './db/queries';
 import { importProjectsFromEnv } from './projects/projectImport';
 import { GitHubClient } from './github/GitHubClient';
 import { PRReviewService } from './github/PRReviewService';
@@ -199,6 +199,13 @@ setEnrollmentBroadcast(broadcast);
 const scheduler = new Scheduler();
 scheduler.setBroadcast(broadcast);
 setScheduler(scheduler);
+// Bound retention: prune scheduler_audit to last 1000 rows per job, daily.
+scheduler.register({
+  name: 'scheduler_audit_pruner',
+  intervalMs: 24 * 60 * 60_000,
+  runOnBoot: false,
+  run: async () => { pruneSchedulerAudit(1000); },
+});
 
 // Broadcast all session events to every connected WS client
 sessionManager.on('message', broadcast);
