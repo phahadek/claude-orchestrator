@@ -47,10 +47,20 @@ describe('BootStatusTracker', () => {
 
       await tracker.runStep('my_step', async () => {});
 
-      const stepMsgs = messages.filter((m) => m.type === 'boot_reconciliation_step');
+      const stepMsgs = messages.filter(
+        (m) => m.type === 'boot_reconciliation_step',
+      );
       expect(stepMsgs).toHaveLength(2);
-      expect(stepMsgs[0]).toMatchObject({ type: 'boot_reconciliation_step', step: 'my_step', status: 'started' });
-      expect(stepMsgs[1]).toMatchObject({ type: 'boot_reconciliation_step', step: 'my_step', status: 'completed' });
+      expect(stepMsgs[0]).toMatchObject({
+        type: 'boot_reconciliation_step',
+        step: 'my_step',
+        status: 'started',
+      });
+      expect(stepMsgs[1]).toMatchObject({
+        type: 'boot_reconciliation_step',
+        step: 'my_step',
+        status: 'completed',
+      });
       if (stepMsgs[1].type === 'boot_reconciliation_step') {
         expect(typeof stepMsgs[1].duration_ms).toBe('number');
       }
@@ -62,9 +72,13 @@ describe('BootStatusTracker', () => {
       tracker.startSequence(['my_step']);
 
       const err = new Error('something broke');
-      await tracker.runStep('my_step', async () => { throw err; });
+      await tracker.runStep('my_step', async () => {
+        throw err;
+      });
 
-      const stepMsgs = messages.filter((m) => m.type === 'boot_reconciliation_step');
+      const stepMsgs = messages.filter(
+        (m) => m.type === 'boot_reconciliation_step',
+      );
       expect(stepMsgs).toHaveLength(2);
       expect(stepMsgs[1]).toMatchObject({
         type: 'boot_reconciliation_step',
@@ -82,7 +96,13 @@ describe('BootStatusTracker', () => {
 
       const err = new Error('fatal');
       await expect(
-        tracker.runStep('fatal_step', async () => { throw err; }, { fatalOnError: true }),
+        tracker.runStep(
+          'fatal_step',
+          async () => {
+            throw err;
+          },
+          { fatalOnError: true },
+        ),
       ).rejects.toThrow('process.exit called');
 
       expect(exitSpy).toHaveBeenCalledWith(1);
@@ -97,7 +117,9 @@ describe('BootStatusTracker', () => {
       await tracker.runStep('a', async () => {});
       tracker.completeSequence();
 
-      const completed = messages.find((m) => m.type === 'boot_reconciliation_completed');
+      const completed = messages.find(
+        (m) => m.type === 'boot_reconciliation_completed',
+      );
       expect(completed).toBeDefined();
       if (completed?.type === 'boot_reconciliation_completed') {
         expect(typeof completed.duration_ms).toBe('number');
@@ -117,7 +139,8 @@ describe('BootStatusTracker', () => {
       tracker.completeSequence();
 
       const types = messages.map((m) => {
-        if (m.type === 'boot_reconciliation_step') return `step:${m.step}:${m.status}`;
+        if (m.type === 'boot_reconciliation_step')
+          return `step:${m.step}:${m.status}`;
         return m.type;
       });
 

@@ -85,7 +85,11 @@ export class BootStatusTracker {
     opts?: { fatalOnError?: boolean },
   ): Promise<void> {
     const stepStart = Date.now();
-    this.emit({ type: 'boot_reconciliation_step', step: name, status: 'started' });
+    this.emit({
+      type: 'boot_reconciliation_step',
+      step: name,
+      status: 'started',
+    });
     try {
       await fn();
       this.emit({
@@ -96,7 +100,12 @@ export class BootStatusTracker {
       });
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
-      this.emit({ type: 'boot_reconciliation_step', step: name, status: 'failed', error });
+      this.emit({
+        type: 'boot_reconciliation_step',
+        step: name,
+        status: 'failed',
+        error,
+      });
       if (opts?.fatalOnError) {
         logger.error(`[server] BOOT FAILURE in ${name}:`, err);
         process.exit(1);
@@ -175,10 +184,18 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
     deps.stuckSessionMonitor.rehydrate(),
   );
   deps.stuckSessionMonitor.startScan();
-  await tracker.runStep('auto_merger_rehydrate', () => deps.autoMerger.rehydrate());
-  await tracker.runStep('worktree_reconciliation', () => runBootWorktreeReconciliation());
-  await tracker.runStep('pr_boot_sweep', () => runPRBootSweep(deps.githubClient));
-  await tracker.runStep('boot_idle_reconciliation', () => runBootIdleReconciliation());
+  await tracker.runStep('auto_merger_rehydrate', () =>
+    deps.autoMerger.rehydrate(),
+  );
+  await tracker.runStep('worktree_reconciliation', () =>
+    runBootWorktreeReconciliation(),
+  );
+  await tracker.runStep('pr_boot_sweep', () =>
+    runPRBootSweep(deps.githubClient),
+  );
+  await tracker.runStep('boot_idle_reconciliation', () =>
+    runBootIdleReconciliation(),
+  );
   deps.prMergeWatcher.start();
   deps.reviewerCommentsWatcher.start();
   await tracker.runStep('auto_launcher_start', () => deps.autoLauncher.start());

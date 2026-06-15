@@ -15,11 +15,7 @@ function stepLabel(name: string): string {
 
 function StepRow({ entry }: { entry: BootStepEntry }) {
   const icon =
-    entry.status === 'completed'
-      ? '✓'
-      : entry.status === 'failed'
-        ? '✗'
-        : '…';
+    entry.status === 'completed' ? '✓' : entry.status === 'failed' ? '✗' : '…';
   return (
     <tr className={`${styles.stepRow} ${styles[`step_${entry.status}`]}`}>
       <td className={styles.stepIcon}>{icon}</td>

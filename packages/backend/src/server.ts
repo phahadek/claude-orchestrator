@@ -237,7 +237,10 @@ wss.on('connection', (ws, req) => {
   // session_status messages in this burst carry replay: true so the frontend can suppress
   // notification firing — otherwise every backend restart re-fires notifications for every
   // historical non-archived session.
-  sendInitialStateBurst((msg) => ws.send(JSON.stringify(msg)), getActiveBootTracker());
+  sendInitialStateBurst(
+    (msg) => ws.send(JSON.stringify(msg)),
+    getActiveBootTracker(),
+  );
 
   ws.on('message', (data) =>
     handleMessage(ws, data.toString(), sessionManager),

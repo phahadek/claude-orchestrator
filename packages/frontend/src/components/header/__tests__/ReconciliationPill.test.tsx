@@ -111,7 +111,9 @@ describe('ReconciliationPill', () => {
     const state = makeState({
       phase: 'completed',
       steps: ['jsonl_import'],
-      stepEntries: [{ name: 'jsonl_import', status: 'completed', duration_ms: 50 }],
+      stepEntries: [
+        { name: 'jsonl_import', status: 'completed', duration_ms: 50 },
+      ],
       currentStep: null,
       startedAt: new Date().toISOString(),
       totalDurationMs: 5000,
@@ -124,7 +126,9 @@ describe('ReconciliationPill', () => {
     const state = makeState({
       phase: 'completed',
       steps: ['jsonl_import'],
-      stepEntries: [{ name: 'jsonl_import', status: 'completed', duration_ms: 5000 }],
+      stepEntries: [
+        { name: 'jsonl_import', status: 'completed', duration_ms: 5000 },
+      ],
       currentStep: null,
       startedAt: new Date().toISOString(),
       totalDurationMs: 5000,
@@ -143,7 +147,8 @@ describe('ReconciliationPill', () => {
 
 describe('useBootReconciliation', () => {
   it('transitions from idle to in_progress on boot_reconciliation_started', async () => {
-    const { useBootReconciliation } = await import('../../../hooks/useBootReconciliation');
+    const { useBootReconciliation } =
+      await import('../../../hooks/useBootReconciliation');
     const { renderHook, act } = await import('@testing-library/react');
 
     const { result } = renderHook(() => useBootReconciliation());
@@ -158,11 +163,15 @@ describe('useBootReconciliation', () => {
     });
 
     expect(result.current.state.phase).toBe('in_progress');
-    expect(result.current.state.steps).toEqual(['jsonl_import', 'resume_orphan_sessions']);
+    expect(result.current.state.steps).toEqual([
+      'jsonl_import',
+      'resume_orphan_sessions',
+    ]);
   });
 
   it('tracks currentStep from boot_reconciliation_step started events', async () => {
-    const { useBootReconciliation } = await import('../../../hooks/useBootReconciliation');
+    const { useBootReconciliation } =
+      await import('../../../hooks/useBootReconciliation');
     const { renderHook, act } = await import('@testing-library/react');
 
     const { result } = renderHook(() => useBootReconciliation());
@@ -185,7 +194,8 @@ describe('useBootReconciliation', () => {
 
   it('transitions to completed and resets after 2s', async () => {
     vi.useFakeTimers();
-    const { useBootReconciliation } = await import('../../../hooks/useBootReconciliation');
+    const { useBootReconciliation } =
+      await import('../../../hooks/useBootReconciliation');
     const { renderHook, act } = await import('@testing-library/react');
 
     const { result } = renderHook(() => useBootReconciliation());
