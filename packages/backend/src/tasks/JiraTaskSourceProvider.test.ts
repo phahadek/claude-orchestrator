@@ -385,14 +385,6 @@ describe('Gap 2 — Epic tree scan', () => {
 
     // On second call, should not throw (no parent= attempt)
     expect(callCount).toBeGreaterThan(0);
-    // epic_link JQL should have been used (not parent= on second call)
-    const parentCalls = vi
-      .mocked(mockClient.searchIssues)
-      .mock.calls.filter(
-        ([jql]) =>
-          (jql as string).includes('parent =') &&
-          !(jql as string).includes('parent in'),
-      );
     // All parent= calls only happened in first round (before cache was set)
     expect(firstCallCount).toBeGreaterThan(0);
     // Verify Epic Link was used
