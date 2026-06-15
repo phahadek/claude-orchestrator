@@ -1,7 +1,7 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect } from 'vitest';
 import { ToolCallGroup } from '../ToolCallGroup';
-import { groupSessionEvents } from '../SessionDetail';
+import { groupSessionEvents } from '../EventTranscript.helpers';
 
 // ── Test helpers ──────────────────────────────────────────────────
 

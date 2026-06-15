@@ -1,6 +1,7 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
-import { SessionCard, truncate, CARD_PREVIEW_LINES } from '../SessionCard';
+import { SessionCard } from '../SessionCard';
+import { truncate, CARD_PREVIEW_LINES } from '../SessionCard.helpers';
 import { StatusBadge } from '../StatusBadge';
 import type { SessionState } from '../../hooks/useSessionStore';
 
