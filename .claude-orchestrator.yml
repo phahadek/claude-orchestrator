@@ -26,6 +26,18 @@ test: []
 # Per-command timeout in seconds for test commands. Default 300 (5 min).
 test_timeout_sec: 300
 
+# Commands the orchestrator runs on each PR before spawning review — catches lint errors and license contamination.
+# Phase 1 baseline: eslint errors + GPL/AGPL dependency check. Warnings tolerated (11-warning baseline on dev).
+analyze:
+  - npm run lint
+  - npm run audit:licenses
+
+# Timeout in seconds for the analyze phase.
+analyze_timeout_sec: 180
+
+# Maximum RSS in MB for the analyze phase.
+analyze_max_rss_mb: 2048
+
 # Extra Bash tool permission patterns merged with the base allowed-tools set.
 allowed_tools: []
 
