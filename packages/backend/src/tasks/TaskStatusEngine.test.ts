@@ -259,7 +259,9 @@ describe('deriveDisplayStatus', () => {
   // ─── empty / unknown notionStatus (cache miss) ─────────────────────────────
 
   it("returns 'backlog' when notionStatus is empty (cache miss)", () => {
-    expect(deriveDisplayStatus(makeInput({ notionStatus: '' }))).toBe('backlog');
+    expect(deriveDisplayStatus(makeInput({ notionStatus: '' }))).toBe(
+      'backlog',
+    );
   });
 
   it("returns 'backlog' when notionStatus is unrecognized", () => {
