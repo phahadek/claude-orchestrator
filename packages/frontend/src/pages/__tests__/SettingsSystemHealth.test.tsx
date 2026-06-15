@@ -40,7 +40,10 @@ const baseJobs = [
 
 function makeFetch(jobs = baseJobs) {
   return vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
-    if (url === '/api/diagnostics/scheduler' && (!opts || opts.method !== 'POST')) {
+    if (
+      url === '/api/diagnostics/scheduler' &&
+      (!opts || opts.method !== 'POST')
+    ) {
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve(jobs),
@@ -129,10 +132,7 @@ describe('SettingsSystemHealth', () => {
   });
 
   it('shows loading state before data arrives', () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockReturnValue(new Promise(() => {})),
-    );
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise(() => {})));
     render(<SettingsSystemHealth />);
     expect(screen.getByText('Loading…')).toBeDefined();
   });

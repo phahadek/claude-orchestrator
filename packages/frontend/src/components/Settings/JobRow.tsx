@@ -10,7 +10,8 @@ function formatRelative(iso: string | null): string {
   const diff = Date.now() - new Date(iso).getTime();
   const abs = Math.abs(diff);
   const isPast = diff >= 0;
-  if (abs < 60_000) return `${Math.round(abs / 1000)} s ${isPast ? 'ago' : 'from now'}`;
+  if (abs < 60_000)
+    return `${Math.round(abs / 1000)} s ${isPast ? 'ago' : 'from now'}`;
   if (abs < 3_600_000)
     return `${Math.round(abs / 60_000)} min ${isPast ? 'ago' : 'from now'}`;
   return `${Math.round(abs / 3_600_000)} h ${isPast ? 'ago' : 'from now'}`;
