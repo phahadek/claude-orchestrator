@@ -50,13 +50,20 @@ beforeEach(() => {
 describe('JiraTaskSourceProvider.fetchReadyTasks — dependsOn prefixing', () => {
   it('prefixes every dependsOn entry with jira: alongside the task id', async () => {
     const mockClient = {
-      searchIssues: vi.fn().mockResolvedValue([makeIssue('TEST-1'), makeIssue('TEST-2')]),
-      buildReadyJql: vi.fn().mockReturnValue("project = TEST AND status = 'To Do'"),
+      searchIssues: vi
+        .fn()
+        .mockResolvedValue([makeIssue('TEST-1'), makeIssue('TEST-2')]),
+      buildReadyJql: vi
+        .fn()
+        .mockReturnValue("project = TEST AND status = 'To Do'"),
       buildEpicParentJql: vi.fn().mockReturnValue('parent = "milestone-1"'),
       buildSubtaskJql: vi.fn().mockReturnValue('parent in ("TEST-1","TEST-2")'),
       buildKeyInJql: vi.fn().mockReturnValue(''),
     };
-    const provider = new JiraTaskSourceProvider(mockClient as never, PROJECT_CONFIG);
+    const provider = new JiraTaskSourceProvider(
+      mockClient as never,
+      PROJECT_CONFIG,
+    );
 
     const result = await provider.fetchReadyTasks('milestone-1');
 
@@ -72,12 +79,17 @@ describe('JiraTaskSourceProvider.fetchReadyTasks — dependsOn prefixing', () =>
   it('writes board cache with jira:-prefixed task IDs', async () => {
     const mockClient = {
       searchIssues: vi.fn().mockResolvedValue([makeIssue('TEST-1')]),
-      buildReadyJql: vi.fn().mockReturnValue("project = TEST AND status = 'To Do'"),
+      buildReadyJql: vi
+        .fn()
+        .mockReturnValue("project = TEST AND status = 'To Do'"),
       buildEpicParentJql: vi.fn().mockReturnValue('parent = "milestone-1"'),
       buildSubtaskJql: vi.fn().mockReturnValue(''),
       buildKeyInJql: vi.fn().mockReturnValue(''),
     };
-    const provider = new JiraTaskSourceProvider(mockClient as never, PROJECT_CONFIG);
+    const provider = new JiraTaskSourceProvider(
+      mockClient as never,
+      PROJECT_CONFIG,
+    );
 
     await provider.fetchReadyTasks('milestone-1');
 
@@ -101,7 +113,10 @@ describe('JiraTaskSourceProvider.fetchReadyTasks — dependsOn prefixing', () =>
         .mockReturnValue("project = TEST AND status = 'To Do'"),
       buildKeyInJql: vi.fn().mockReturnValue(''),
     };
-    const provider = new JiraTaskSourceProvider(mockClient as never, PROJECT_CONFIG);
+    const provider = new JiraTaskSourceProvider(
+      mockClient as never,
+      PROJECT_CONFIG,
+    );
 
     await provider.fetchReadyTasks(null);
 
@@ -132,7 +147,10 @@ describe('Gap 1 — issuelinks → dependsOn', () => {
       buildReadyJql: vi.fn().mockReturnValue('jql'),
       buildKeyInJql: vi.fn().mockReturnValue('key in ("TEST-99")'),
     };
-    const provider = new JiraTaskSourceProvider(mockClient as never, PROJECT_CONFIG);
+    const provider = new JiraTaskSourceProvider(
+      mockClient as never,
+      PROJECT_CONFIG,
+    );
     const result = await provider.fetchReadyTasks(null);
 
     const story = result.find((r) => r.task.id === 'jira:TEST-1')!;
@@ -155,7 +173,10 @@ describe('Gap 1 — issuelinks → dependsOn', () => {
       buildReadyJql: vi.fn().mockReturnValue('jql'),
       buildKeyInJql: vi.fn().mockReturnValue('key in ("TEST-99")'),
     };
-    const provider = new JiraTaskSourceProvider(mockClient as never, PROJECT_CONFIG);
+    const provider = new JiraTaskSourceProvider(
+      mockClient as never,
+      PROJECT_CONFIG,
+    );
     const result = await provider.fetchReadyTasks(null);
 
     const task = result.find((r) => r.task.id === 'jira:TEST-2')!;
@@ -187,7 +208,10 @@ describe('Gap 1 — issuelinks → dependsOn', () => {
       buildReadyJql: vi.fn().mockReturnValue('jql'),
       buildKeyInJql: vi.fn().mockReturnValue('key in (...)'),
     };
-    const provider = new JiraTaskSourceProvider(mockClient as never, PROJECT_CONFIG);
+    const provider = new JiraTaskSourceProvider(
+      mockClient as never,
+      PROJECT_CONFIG,
+    );
     const result = await provider.fetchReadyTasks(null);
 
     const st = result.find((r) => r.task.id === 'jira:TEST-11')!;
@@ -204,7 +228,9 @@ describe('Gap 1 — issuelinks → dependsOn', () => {
     const taskB = makeIssue('TEST-B', {
       issuelinks: [blockedByLink('BLK-2')],
     });
-    const nonDoneBlocker = makeIssue('BLK-1', { status: { name: 'In Progress' } });
+    const nonDoneBlocker = makeIssue('BLK-1', {
+      status: { name: 'In Progress' },
+    });
     const doneBlocker = makeIssue('BLK-2', { status: { name: 'Done' } });
 
     const mockClient = {
@@ -216,7 +242,10 @@ describe('Gap 1 — issuelinks → dependsOn', () => {
       buildReadyJql: vi.fn().mockReturnValue('jql'),
       buildKeyInJql: vi.fn().mockReturnValue('key in (...)'),
     };
-    const provider = new JiraTaskSourceProvider(mockClient as never, PROJECT_CONFIG);
+    const provider = new JiraTaskSourceProvider(
+      mockClient as never,
+      PROJECT_CONFIG,
+    );
     const result = await provider.fetchReadyTasks(null);
 
     const a = result.find((r) => r.task.id === 'jira:TEST-A')!;
@@ -249,10 +278,10 @@ describe('Gap 2 — Epic tree scan', () => {
       buildSubtaskJql: vi.fn().mockReturnValue('parent in ("TEST-20")'),
       buildKeyInJql: vi.fn().mockReturnValue('key in ()'),
     };
-    const provider = new JiraTaskSourceProvider(
-      mockClient as never,
-      { ...PROJECT_CONFIG, epic_field: 'parent' },
-    );
+    const provider = new JiraTaskSourceProvider(mockClient as never, {
+      ...PROJECT_CONFIG,
+      epic_field: 'parent',
+    });
     const result = await provider.fetchReadyTasks('EPIC-1');
 
     const ids = result.map((r) => r.task.id);
@@ -275,10 +304,10 @@ describe('Gap 2 — Epic tree scan', () => {
       buildSubtaskJql: vi.fn().mockReturnValue('parent in ("TEST-31")'),
       buildKeyInJql: vi.fn().mockReturnValue('key in ()'),
     };
-    const provider = new JiraTaskSourceProvider(
-      mockClient as never,
-      { ...PROJECT_CONFIG, epic_field: 'parent' },
-    );
+    const provider = new JiraTaskSourceProvider(mockClient as never, {
+      ...PROJECT_CONFIG,
+      epic_field: 'parent',
+    });
     const result = await provider.fetchReadyTasks('EPIC-1');
 
     const ids = result.map((r) => r.task.id);
@@ -310,10 +339,10 @@ describe('Gap 2 — Epic tree scan', () => {
       buildSubtaskJql: vi.fn().mockReturnValue(''),
       buildKeyInJql: vi.fn().mockReturnValue(''),
     };
-    const provider = new JiraTaskSourceProvider(
-      mockClient as never,
-      { ...PROJECT_CONFIG, epic_field: 'parent' },
-    );
+    const provider = new JiraTaskSourceProvider(mockClient as never, {
+      ...PROJECT_CONFIG,
+      epic_field: 'parent',
+    });
     const result = await provider.fetchReadyTasks('EPIC-1');
 
     const ids = result.map((r) => r.task.id);
@@ -341,7 +370,10 @@ describe('Gap 2 — Epic tree scan', () => {
       buildSubtaskJql: vi.fn().mockReturnValue('parent in ("TEST-50")'),
       buildKeyInJql: vi.fn().mockReturnValue('key in ()'),
     };
-    const provider = new JiraTaskSourceProvider(mockClient as never, PROJECT_CONFIG);
+    const provider = new JiraTaskSourceProvider(
+      mockClient as never,
+      PROJECT_CONFIG,
+    );
 
     // First call: should detect fallback to 'Epic Link'
     await provider.fetchReadyTasks('EPIC-1');
@@ -356,7 +388,11 @@ describe('Gap 2 — Epic tree scan', () => {
     // epic_link JQL should have been used (not parent= on second call)
     const parentCalls = vi
       .mocked(mockClient.searchIssues)
-      .mock.calls.filter(([jql]) => (jql as string).includes('parent =') && !(jql as string).includes('parent in'));
+      .mock.calls.filter(
+        ([jql]) =>
+          (jql as string).includes('parent =') &&
+          !(jql as string).includes('parent in'),
+      );
     // All parent= calls only happened in first round (before cache was set)
     expect(firstCallCount).toBeGreaterThan(0);
     // Verify Epic Link was used
@@ -383,13 +419,15 @@ describe('Gap 2 — Epic tree scan', () => {
       buildSubtaskJql: vi.fn().mockReturnValue(''),
       buildKeyInJql: vi.fn().mockReturnValue(''),
     };
-    const provider = new JiraTaskSourceProvider(
-      mockClient as never,
-      { ...PROJECT_CONFIG, epic_field: 'Epic Link' },
-    );
+    const provider = new JiraTaskSourceProvider(mockClient as never, {
+      ...PROJECT_CONFIG,
+      epic_field: 'Epic Link',
+    });
     await provider.fetchReadyTasks('EPIC-1');
 
-    expect(vi.mocked(mockClient.buildEpicLinkJql)).toHaveBeenCalledWith('EPIC-1');
+    expect(vi.mocked(mockClient.buildEpicLinkJql)).toHaveBeenCalledWith(
+      'EPIC-1',
+    );
     expect(vi.mocked(mockClient.buildEpicParentJql)).not.toHaveBeenCalled();
   });
 });
@@ -406,10 +444,10 @@ describe('Gap 3 — type mapping', () => {
       buildReadyJql: vi.fn().mockReturnValue('jql'),
       buildKeyInJql: vi.fn().mockReturnValue(''),
     };
-    const provider = new JiraTaskSourceProvider(
-      mockClient as never,
-      { ...PROJECT_CONFIG, type_mapping },
-    );
+    const provider = new JiraTaskSourceProvider(mockClient as never, {
+      ...PROJECT_CONFIG,
+      type_mapping,
+    });
     return { provider, issues, mockClient };
   }
 
@@ -421,35 +459,49 @@ describe('Gap 3 — type mapping', () => {
     issues.push(...issueList);
     mockClient.searchIssues.mockResolvedValue(issueList);
     const result = await provider.fetchReadyTasks(null);
-    return result.map((r) => ({ key: r.task.id.replace('jira:', ''), type: r.task.type, nonCode: r.nonCode }));
+    return result.map((r) => ({
+      key: r.task.id.replace('jira:', ''),
+      type: r.task.type,
+      nonCode: r.nonCode,
+    }));
   }
 
   it('Story maps to 📋 Planning (non-launchable) by default', async () => {
-    const items = await resolveTypes([makeIssue('S-1', { issuetype: { name: 'Story' } })]);
+    const items = await resolveTypes([
+      makeIssue('S-1', { issuetype: { name: 'Story' } }),
+    ]);
     expect(items[0].type).toBe('📋 Planning');
     expect(items[0].nonCode).toBe(true);
   });
 
   it('Task maps to 💻 Code (launchable) by default', async () => {
-    const items = await resolveTypes([makeIssue('T-1', { issuetype: { name: 'Task' } })]);
+    const items = await resolveTypes([
+      makeIssue('T-1', { issuetype: { name: 'Task' } }),
+    ]);
     expect(items[0].type).toBe('💻 Code');
     expect(items[0].nonCode).toBe(false);
   });
 
   it('Sub-task maps to 💻 Code (launchable) by default', async () => {
-    const items = await resolveTypes([makeIssue('ST-1', { issuetype: { name: 'Sub-task' } })]);
+    const items = await resolveTypes([
+      makeIssue('ST-1', { issuetype: { name: 'Sub-task' } }),
+    ]);
     expect(items[0].type).toBe('💻 Code');
     expect(items[0].nonCode).toBe(false);
   });
 
   it('Bug maps to 💻 Code (launchable) by default', async () => {
-    const items = await resolveTypes([makeIssue('B-1', { issuetype: { name: 'Bug' } })]);
+    const items = await resolveTypes([
+      makeIssue('B-1', { issuetype: { name: 'Bug' } }),
+    ]);
     expect(items[0].type).toBe('💻 Code');
     expect(items[0].nonCode).toBe(false);
   });
 
   it('Unknown type defaults to 💻 Code', async () => {
-    const items = await resolveTypes([makeIssue('U-1', { issuetype: { name: 'Chore' } })]);
+    const items = await resolveTypes([
+      makeIssue('U-1', { issuetype: { name: 'Chore' } }),
+    ]);
     expect(items[0].type).toBe('💻 Code');
     expect(items[0].nonCode).toBe(false);
   });

@@ -188,7 +188,10 @@ export class JiraTaskSourceProvider implements TaskBackend {
     for (const task of tasks) {
       if (dispatchableKeys.has(task.id)) {
         const prefixedId = formatTaskId('jira', task.id);
-        upsertTaskCache(prefixedId, JSON.stringify({ ...task, id: prefixedId }));
+        upsertTaskCache(
+          prefixedId,
+          JSON.stringify({ ...task, id: prefixedId }),
+        );
       }
     }
 
