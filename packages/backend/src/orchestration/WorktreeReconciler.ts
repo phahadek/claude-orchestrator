@@ -35,6 +35,7 @@ export async function runBootWorktreeReconciliation(options?: {
   let fsDeleted = 0;
   let skipped = 0;
   let failed = 0;
+  let pruned = 0;
 
   for (const project of projects) {
     const worktreesDir = path.join(project.projectDir, '.claude', 'worktrees');
@@ -70,6 +71,14 @@ export async function runBootWorktreeReconciliation(options?: {
 
       if (session && !TERMINAL_STATUSES.has(session.status)) {
         skipped++;
+        continue;
+      }
+
+      if (!fs.existsSync(wtPath)) {
+        pruned++;
+        logger.debug(
+          `[WorktreeReconciler] worktree dir already gone for session ${sessionId.slice(0, 8)}, letting prune reap registration`,
+        );
         continue;
       }
 
@@ -175,9 +184,9 @@ export async function runBootWorktreeReconciliation(options?: {
     }
   }
 
-  if (removed > 0 || fsDeleted > 0 || failed > 0) {
+  if (removed > 0 || fsDeleted > 0 || failed > 0 || pruned > 0) {
     logger.info(
-      `[WorktreeReconciler] boot sweep complete — removed: ${removed}, fs-deleted: ${fsDeleted}, failed: ${failed}, skipped: ${skipped}`,
+      `[WorktreeReconciler] boot sweep complete — removed: ${removed}, fs-deleted: ${fsDeleted}, pruned: ${pruned}, failed: ${failed}, skipped: ${skipped}`,
     );
   }
 }
