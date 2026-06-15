@@ -910,7 +910,9 @@ describe('OrphanedTaskSweeper', () => {
   );
 
   it('still reverts a Code genuine orphan (In Progress, session dead, no PR)', async () => {
-    const backend = makeBackend([makeTask('notion:abc', '🔄 In Progress', '💻 Code')]);
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '💻 Code'),
+    ]);
     vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
       makeSession('done', 30 * 60 * 1000) as ReturnType<
         typeof getLatestCodeSessionByNotionTaskId
@@ -935,7 +937,9 @@ describe('OrphanedTaskSweeper', () => {
   it('still reverts a failed-launch Code task (In Progress, latestSession === undefined)', async () => {
     // latestSession is undefined: task was marked In Progress before its session row was created
     // (e.g. launch failed). Must still revert to Ready so it can be re-dispatched.
-    const backend = makeBackend([makeTask('notion:abc', '🔄 In Progress', '💻 Code')]);
+    const backend = makeBackend([
+      makeTask('notion:abc', '🔄 In Progress', '💻 Code'),
+    ]);
     vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(undefined);
 
     const sweeper = new OrphanedTaskSweeper(broadcast, {
