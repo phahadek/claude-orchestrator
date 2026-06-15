@@ -142,10 +142,18 @@ function makeVerdictEventPayload(verdictJson: string): string {
 const VALID_APPROVED_VERDICT = JSON.stringify({
   verdict: 'approved',
   dimensions: [
-    { name: 'Title and description vs task Summary', passed: true, notes: 'ok' },
+    {
+      name: 'Title and description vs task Summary',
+      passed: true,
+      notes: 'ok',
+    },
     { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
     { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
-    { name: 'Changed files vs Files/paths affected list', passed: true, notes: 'ok' },
+    {
+      name: 'Changed files vs Files/paths affected list',
+      passed: true,
+      notes: 'ok',
+    },
     { name: 'Size proportionality', passed: true, notes: 'ok' },
   ],
   summary: 'All good.',
@@ -269,7 +277,9 @@ describe('waitForVerdict — malformed JSON repair (PR #403 repro)', () => {
     expect(result.dimensions.every((d) => d.passed)).toBe(true);
     // The repaired manualItemsForHuman string should contain the unescaped text
     expect(result.manualItemsForHuman).toBeDefined();
-    expect(result.manualItemsForHuman![0]).toContain('events-present-markets-unlinked');
+    expect(result.manualItemsForHuman![0]).toContain(
+      'events-present-markets-unlinked',
+    );
   });
 });
 
@@ -300,7 +310,9 @@ describe('waitForVerdict — bounded timeout (no leaked slot)', () => {
 
 describe('waitForVerdict — regression: valid verdicts still parse', () => {
   it('resolves approved verdict from valid JSON without repair', async () => {
-    const result = await runWithEvent(makeVerdictEventPayload(VALID_APPROVED_VERDICT));
+    const result = await runWithEvent(
+      makeVerdictEventPayload(VALID_APPROVED_VERDICT),
+    );
 
     expect(result.verdict).toBe('approved');
     expect(result.dimensions).toHaveLength(5);
@@ -311,10 +323,18 @@ describe('waitForVerdict — regression: valid verdicts still parse', () => {
     const verdictJson = JSON.stringify({
       verdict: 'needs_changes',
       dimensions: [
-        { name: 'Title and description vs task Summary', passed: false, notes: 'Missing scope' },
+        {
+          name: 'Title and description vs task Summary',
+          passed: false,
+          notes: 'Missing scope',
+        },
         { name: 'Diff vs Context spec', passed: true, notes: 'ok' },
         { name: 'Diff vs Acceptance Criteria', passed: true, notes: 'ok' },
-        { name: 'Changed files vs Files/paths affected list', passed: true, notes: 'ok' },
+        {
+          name: 'Changed files vs Files/paths affected list',
+          passed: true,
+          notes: 'ok',
+        },
         { name: 'Size proportionality', passed: true, notes: 'ok' },
       ],
       summary: 'Title is missing the required scope prefix.',
@@ -350,7 +370,9 @@ describe('waitForVerdict — regression: valid verdicts still parse', () => {
     };
 
     vi.mocked(queries.getPRByNumber).mockReturnValue(makePRRow());
-    vi.mocked(queries.getEventsBySession).mockReturnValue([storedEvent] as never);
+    vi.mocked(queries.getEventsBySession).mockReturnValue([
+      storedEvent,
+    ] as never);
     vi.mocked(queries.getSession).mockReturnValue(undefined);
 
     let capturedSessionId: string | undefined;
@@ -361,7 +383,11 @@ describe('waitForVerdict — regression: valid verdicts still parse', () => {
     );
 
     const workItem: WorkItem = { type: 'pr', prNumber: 42, repo: 'owner/repo' };
-    const resultPromise = reviewService.reviewPR(workItem, diffSource, 'proj-1');
+    const resultPromise = reviewService.reviewPR(
+      workItem,
+      diffSource,
+      'proj-1',
+    );
 
     await new Promise((r) => setTimeout(r, 20));
 

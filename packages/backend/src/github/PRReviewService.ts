@@ -970,12 +970,22 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         let j = i + 1;
         while (
           j < json.length &&
-          (json[j] === ' ' || json[j] === '\t' || json[j] === '\r' || json[j] === '\n')
+          (json[j] === ' ' ||
+            json[j] === '\t' ||
+            json[j] === '\r' ||
+            json[j] === '\n')
         ) {
           j++;
         }
         const next = j < json.length ? json[j] : '';
-        if (next === ',' || next === ']' || next === '}' || next === ':' || next === '"' || next === '') {
+        if (
+          next === ',' ||
+          next === ']' ||
+          next === '}' ||
+          next === ':' ||
+          next === '"' ||
+          next === ''
+        ) {
           // This quote closes the string value.
           inString = false;
           result += ch;
