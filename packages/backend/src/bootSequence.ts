@@ -34,7 +34,7 @@ export interface BootDeps {
   orphanedTaskSweeper: {
     start(): void;
   };
-  concludedSessionArchiver: {
+  scheduler: {
     start(): void;
   };
   updateChecker: {
@@ -200,7 +200,7 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   deps.reviewerCommentsWatcher.start();
   await tracker.runStep('auto_launcher_start', () => deps.autoLauncher.start());
   deps.orphanedTaskSweeper.start();
-  deps.concludedSessionArchiver.start();
+  deps.scheduler.start();
   deps.updateChecker.start();
   deps.taskCacheRefresher.start();
   tracker.completeSequence();

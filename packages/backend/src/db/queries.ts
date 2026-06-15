@@ -2969,3 +2969,62 @@ export function markSessionEventsPruned(
     `UPDATE sessions SET events_pruned_at = @pruned_at WHERE session_id = @session_id`,
   ).run({ session_id: sessionId, pruned_at: prunedAt });
 }
+
+// ─── scheduler_audit ──────────────────────────────────────────────────────
+
+export interface SchedulerAuditRow {
+  id: number;
+  job: string;
+  status: 'ok' | 'failed' | 'skipped';
+  started_at: string;
+  completed_at: string;
+  duration_ms: number;
+  items_processed: number | null;
+  error: string | null;
+}
+
+export interface NewSchedulerAuditRow {
+  job: string;
+  status: 'ok' | 'failed' | 'skipped';
+  started_at: string;
+  completed_at: string;
+  duration_ms: number;
+  items_processed?: number | null;
+  error?: string | null;
+}
+
+export function insertSchedulerAudit(row: NewSchedulerAuditRow): void {
+  db.prepare<NewSchedulerAuditRow>(
+    `INSERT INTO scheduler_audit (job, status, started_at, completed_at, duration_ms, items_processed, error)
+     VALUES (@job, @status, @started_at, @completed_at, @duration_ms, @items_processed, @error)`,
+  ).run({
+    items_processed: null,
+    error: null,
+    ...row,
+  });
+}
+
+export function getSchedulerAuditByJob(
+  job: string,
+  limit = 50,
+): SchedulerAuditRow[] {
+  return db
+    .prepare<{ job: string; limit: number }>(
+      `SELECT * FROM scheduler_audit WHERE job = @job ORDER BY started_at DESC LIMIT @limit`,
+    )
+    .all({ job, limit }) as SchedulerAuditRow[];
+}
+
+export function pruneSchedulerAudit(keepPerJob = 1000): void {
+  const jobs = db
+    .prepare(`SELECT DISTINCT job FROM scheduler_audit`)
+    .all() as { job: string }[];
+  for (const { job } of jobs) {
+    db.prepare<{ job: string; keep: number }>(
+      `DELETE FROM scheduler_audit
+       WHERE job = @job AND id NOT IN (
+         SELECT id FROM scheduler_audit WHERE job = @job ORDER BY started_at DESC LIMIT @keep
+       )`,
+    ).run({ job, keep: keepPerJob });
+  }
+}

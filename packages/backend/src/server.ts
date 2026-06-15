@@ -55,10 +55,12 @@ import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
 import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
 import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiver';
 import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
+import { Scheduler } from './orchestration/Scheduler';
 import { deleteGhostSessions, getPRBySessionId } from './db/queries';
 import { UpdateChecker, cleanUpdatesDir } from './updater/index';
 import { updateRouter, setUpdateChecker } from './routes/update';
 import setupRouter, { createSetupModeGuard } from './routes/setup';
+import { createDiagnosticsRouter, setScheduler } from './routes/diagnostics';
 import { runBootSequence, getActiveBootTracker } from './bootSequence';
 import { logger } from './logger';
 
@@ -166,6 +168,7 @@ app.use('/api/analytics', analyticsRouter);
 app.use('/api', projectsRouter);
 app.use('/api', configRouter);
 app.use('/api', updateRouter);
+app.use('/api/diagnostics', createDiagnosticsRouter());
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('*', (_req, res) =>
   res.sendFile(path.join(__dirname, 'public', 'index.html')),
@@ -191,6 +194,11 @@ setPRBroadcast(broadcast);
 setTaskBroadcast(broadcast);
 // Wire broadcast into enrollment (for enrollment_request events)
 setEnrollmentBroadcast(broadcast);
+
+// Scheduler: constructed once, broadcast wired in, exposed to diagnostics route
+const scheduler = new Scheduler();
+scheduler.setBroadcast(broadcast);
+setScheduler(scheduler);
 
 // Broadcast all session events to every connected WS client
 sessionManager.on('message', broadcast);
@@ -284,9 +292,9 @@ const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast, {
     sessionManager.sendOrResume(sessionId, text),
 });
 
-// Concluded-session archiver: periodically archives sessions that have been
-// in a terminal state longer than the configured grace period.
+// Concluded-session archiver: registers with Scheduler for cadence management.
 const concludedSessionArchiver = new ConcludedSessionArchiver(broadcast);
+concludedSessionArchiver.register(scheduler);
 
 const sessionEventsPruner = new SessionEventsPruner();
 
@@ -300,7 +308,7 @@ void runBootSequence({
   reviewerCommentsWatcher,
   autoLauncher,
   orphanedTaskSweeper,
-  concludedSessionArchiver,
+  scheduler,
   updateChecker,
   taskCacheRefresher,
   sessionEventsPruner,
@@ -315,10 +323,10 @@ async function gracefulShutdown(signal: string) {
   taskCacheRefresher.stop();
   stuckSessionMonitor.stop();
   orphanedTaskSweeper.stop();
-  concludedSessionArchiver.stop();
   sessionEventsPruner.stop();
   updateChecker.stop();
   reviewerCommentsWatcher.stop();
+  await scheduler.stopAll({ drain: true, timeoutMs: 15_000 });
   wss.close();
   await sessionManager.shutdownAll();
   server.close();
