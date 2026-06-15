@@ -7,6 +7,12 @@ export interface JiraIssueFields {
   issuetype: { name: string };
   priority: { name: string } | null;
   description: string | { content?: unknown[] } | null;
+  issuelinks?: Array<{
+    type: { inward: string; outward: string };
+    inwardIssue?: { key: string };
+    outwardIssue?: { key: string };
+  }>;
+  parent?: { key: string };
 }
 
 export interface JiraIssue {
@@ -85,6 +91,26 @@ export class JiraClient {
     return `project = "${projectKey}" AND status in (${statuses}) ORDER BY priority DESC`;
   }
 
+  /** Build JQL for direct children of an Epic via the next-gen parent field. */
+  buildEpicParentJql(epicKey: string): string {
+    return `parent = "${epicKey}" ORDER BY priority DESC`;
+  }
+
+  /** Build JQL for direct children of an Epic via the classic Epic Link field. */
+  buildEpicLinkJql(epicKey: string): string {
+    return `"Epic Link" = "${epicKey}" ORDER BY priority DESC`;
+  }
+
+  /** Build JQL for sub-tasks whose parent is one of the given keys. */
+  buildSubtaskJql(parentKeys: string[]): string {
+    return `parent in (${parentKeys.map((k) => `"${k}"`).join(', ')}) ORDER BY priority DESC`;
+  }
+
+  /** Build JQL to fetch a batch of issues by key. */
+  buildKeyInJql(keys: string[]): string {
+    return `key in (${keys.map((k) => `"${k}"`).join(', ')})`;
+  }
+
   /** Search issues using JQL, paginating through all results. */
   async searchIssues(jql: string): Promise<JiraIssue[]> {
     const all: JiraIssue[] = [];
@@ -96,7 +122,15 @@ export class JiraClient {
         jql,
         startAt,
         maxResults,
-        fields: ['summary', 'status', 'issuetype', 'priority', 'description'],
+        fields: [
+          'summary',
+          'status',
+          'issuetype',
+          'priority',
+          'description',
+          'issuelinks',
+          'parent',
+        ],
       });
       all.push(...resp.issues);
       if (all.length >= resp.total) break;
