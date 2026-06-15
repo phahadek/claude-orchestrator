@@ -265,9 +265,8 @@ wss.on('connection', (ws, req) => {
   ws.on('close', () => logger.info('[WS] client disconnected'));
 });
 
-// AutoLauncher is constructed up-front so it can be referenced during shutdown,
-// but .start() runs only after orphan resume so the two don't race on slot
-// reservations (orphan resume reserves slots from this.sessions.size).
+// AutoLauncher is constructed up-front; pollOnce() is called during boot after
+// orphan resume, and the Scheduler drives subsequent periodic polls.
 const autoLauncher = new AutoLauncher(sessionManager, broadcast);
 
 // TaskCacheRefresher: background loop that keeps per-project board caches warm.
@@ -293,13 +292,14 @@ const stuckSessionMonitor = new StuckSessionMonitor(
   githubClient,
 );
 
-// Orphaned-task sweep: runs at the auto-launch poll interval, finds tasks stuck
-// at In Progress with no live session and reverts them to Ready.
+// Orphaned-task sweep: finds tasks stuck at In Progress with no live session.
 // sendOrResume is wired so idle sessions without a PR are nudged rather than reverted.
 const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast, {
   sendOrResume: (sessionId, text) =>
     sessionManager.sendOrResume(sessionId, text),
 });
+
+const sessionEventsPruner = new SessionEventsPruner();
 
 // Concluded-session archiver: registers with Scheduler for cadence management.
 const concludedSessionArchiver = new ConcludedSessionArchiver(broadcast);
@@ -308,7 +308,12 @@ prMergeWatcher.register(scheduler);
 reviewerCommentsWatcher.register(scheduler);
 updateChecker.register(scheduler);
 
-const sessionEventsPruner = new SessionEventsPruner();
+// Register all periodic sweepers with the Scheduler.
+autoLauncher.register(scheduler);
+orphanedTaskSweeper.register(scheduler);
+taskCacheRefresher.register(scheduler);
+sessionEventsPruner.register(scheduler);
+stuckSessionMonitor.register(scheduler);
 
 void runBootSequence({
   jsonlReader,
@@ -317,9 +322,7 @@ void runBootSequence({
   autoMerger,
   githubClient,
   autoLauncher,
-  orphanedTaskSweeper,
   scheduler,
-  taskCacheRefresher,
   sessionEventsPruner,
   server,
   port: PORT,
@@ -328,11 +331,7 @@ void runBootSequence({
 
 async function gracefulShutdown(signal: string) {
   logger.info(`[server] ${signal} received — shutting down`);
-  autoLauncher.stop();
-  taskCacheRefresher.stop();
   stuckSessionMonitor.stop();
-  orphanedTaskSweeper.stop();
-  sessionEventsPruner.stop();
   await scheduler.stopAll({ drain: true, timeoutMs: 15_000 });
   wss.close();
   await sessionManager.shutdownAll();

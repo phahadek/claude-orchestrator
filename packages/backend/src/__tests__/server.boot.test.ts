@@ -45,7 +45,6 @@ function makeDeps(
     },
     stuckSessionMonitor: {
       rehydrate: vi.fn(),
-      startScan: vi.fn(),
     },
     autoMerger: {
       rehydrate: vi.fn(),
@@ -53,12 +52,10 @@ function makeDeps(
     githubClient: {} as Parameters<
       (typeof import('../bootSequence'))['runBootSequence']
     >[0]['githubClient'],
-    autoLauncher: { start: vi.fn().mockResolvedValue(undefined) },
-    orphanedTaskSweeper: { start: vi.fn() },
-    taskCacheRefresher: { start: vi.fn() },
+    autoLauncher: { pollOnce: vi.fn().mockResolvedValue(undefined) },
+    scheduler: { start: vi.fn() },
     sessionEventsPruner: {
       runAtBoot: vi.fn().mockResolvedValue(undefined),
-      start: vi.fn(),
     },
     broadcast: vi.fn() as (msg: ServerMessage) => void,
     server,
@@ -141,7 +138,7 @@ describe('runBootSequence — listen-first', () => {
     deps.autoMerger.rehydrate = vi.fn().mockImplementation(() => {
       callOrder.push('autoMergerRehydrate');
     });
-    deps.autoLauncher.start = vi.fn().mockImplementation(async () => {
+    deps.autoLauncher.pollOnce = vi.fn().mockImplementation(async () => {
       callOrder.push('autoLauncherStart');
     });
 
@@ -198,7 +195,6 @@ describe('runBootSequence — listen-first', () => {
         rehydrate: vi.fn().mockImplementation(() => {
           throw err;
         }),
-        startScan: vi.fn(),
       },
     });
 
@@ -222,6 +218,6 @@ describe('runBootSequence — listen-first', () => {
       expect.any(Function),
     );
     await flushQueue();
-    expect(deps.autoLauncher.start).toHaveBeenCalled();
+    expect(deps.autoLauncher.pollOnce).toHaveBeenCalled();
   });
 });

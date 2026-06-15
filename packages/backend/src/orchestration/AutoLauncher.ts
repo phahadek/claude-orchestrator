@@ -3,6 +3,7 @@ import type { SessionManager } from '../session/SessionManager';
 import { WorktreeSetupError } from '../session/WorktreeSetupError';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { getTaskBackend } from '../tasks/TaskBackend';
+import type { Scheduler } from './Scheduler';
 import { getAllProjects, runtimeSettings } from '../config';
 import type { ProjectConfig } from '../config';
 import type { ResolvedTask } from '../notion/types';
@@ -59,9 +60,6 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  * use the same code path as a manual UI launch.
  */
 export class AutoLauncher {
-  private timer: NodeJS.Timeout | null = null;
-  private polling = false;
-  private stopped = true;
   private pollLastStartedAt: number | null = null;
   private cycleCounter = 0;
   private notionUpdateAttempts = new Map<
@@ -89,60 +87,23 @@ export class AutoLauncher {
     } = {},
   ) {}
 
-  /**
-   * Begin polling. Returns immediately. The first poll runs synchronously
-   * inside the start() body (after `await`) so callers can sequence it after
-   * SessionManager.resumeOrphanSessions() and avoid races on this.sessions.size.
-   */
-  async start(): Promise<void> {
-    if (!this.stopped) return;
-    this.stopped = false;
-    if (this.options.pollOnStart !== false) {
-      await this.pollOnce();
-    }
-    this.scheduleNext();
-  }
-
-  /** Stop polling and clear any pending timer. */
-  stop(): void {
-    this.stopped = true;
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-  }
-
-  private scheduleNext(): void {
-    if (this.stopped) return;
-    // Backstop: if a previous pollOnce silently hung past 2× interval, force-reset.
-    if (
-      this.polling &&
-      this.pollLastStartedAt !== null &&
-      Date.now() - this.pollLastStartedAt >
-        2 * runtimeSettings.auto_launch_poll_interval_ms
-    ) {
-      logger.warn(
-        `[AutoLauncher] poll STALL DETECTED — force-resetting (age=${Date.now() - this.pollLastStartedAt}ms)`,
-      );
-      this.polling = false;
-    }
-    const interval = Math.max(
-      MIN_POLL_INTERVAL_MS,
-      runtimeSettings.auto_launch_poll_interval_ms,
-    );
-    this.timer = setTimeout(() => {
-      void this.pollOnce().finally(() => this.scheduleNext());
-    }, interval);
-    this.timer.unref?.();
+  register(scheduler: Scheduler): void {
+    scheduler.register({
+      name: 'auto_launcher',
+      intervalMs: () =>
+        Math.max(MIN_POLL_INTERVAL_MS, runtimeSettings.auto_launch_poll_interval_ms),
+      concurrency: 'skip-if-running',
+      run: async () => {
+        await this.pollOnce();
+      },
+    });
   }
 
   /**
-   * Run a single poll cycle. Exposed for tests and for the initial in-line call
-   * from start(). Guarded against overlap so a slow Notion fetch can't pile up.
+   * Run a single poll cycle. Called directly on boot (after resumeOrphanSessions)
+   * and periodically by the Scheduler thereafter.
    */
   async pollOnce(): Promise<void> {
-    if (this.polling) return;
-    this.polling = true;
     const cycleId = ++this.cycleCounter;
     this.pollLastStartedAt = Date.now();
     logger.info(`[AutoLauncher] poll start cycle=${cycleId}`);
@@ -167,7 +128,6 @@ export class AutoLauncher {
         skippedCount += counts.skipped;
       }
     } finally {
-      this.polling = false;
       const elapsedMs = Date.now() - (this.pollLastStartedAt ?? Date.now());
       logger.info(
         `[AutoLauncher] poll complete cycle=${cycleId} (eligible=${eligibleCount}, launched=${launchedCount}, skipped=${skippedCount}) durationMs=${elapsedMs}`,
