@@ -25,7 +25,7 @@
     "format": "prettier --write .",
     "format:write": "prettier --write .",
     "format:check": "prettier --check .",
-    "lint": "eslint packages/backend/src packages/frontend/src",
+    "lint": "eslint packages/backend/src packages/frontend/src --max-warnings=0",
     "lint:fix": "eslint packages/backend/src packages/frontend/src --fix",
     "test": "echo \"Error: no test specified\" && exit 1",
     "scan:identifiers": "node scripts/scan-identifiers.mjs",
