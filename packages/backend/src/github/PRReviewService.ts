@@ -37,6 +37,10 @@ const RETRY_DELAYS = [250, 500, 1000] as const;
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((r) => setTimeout(r, ms));
 
+// Timeout for waitForVerdict — chosen below the 30-min stall-detector cutoff so the
+// promise always resolves before the orchestrator force-clears the slot.
+const VERDICT_TIMEOUT_MS = 25 * 60 * 1000;
+
 export class FetchRetryExhaustedError extends Error {
   constructor(public readonly cause: Error) {
     super(
@@ -132,6 +136,8 @@ export class PRReviewService {
     private sessionManager: SessionManager,
     private readonly defaultProjectId: string = '',
     private readonly defaultProjectContextUrl: string = '',
+    /** Override the verdict wait timeout (ms). For tests only — production uses VERDICT_TIMEOUT_MS. */
+    private readonly verdictTimeoutMs: number = VERDICT_TIMEOUT_MS,
   ) {}
 
   // Optional reference to PRMergeWatcher used to trigger an immediate mergeability
@@ -750,10 +756,17 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     sessionId: string,
     prNumber: number,
     repo: string,
+    timeoutMs: number = this.verdictTimeoutMs,
   ): Promise<PRReviewResult> {
     return new Promise<PRReviewResult>((resolve) => {
+      let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
       const cleanup = () => {
         this.sessionManager.off('message', handler);
+        if (timeoutHandle !== null) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
       };
 
       const handler = (msg: ServerMessage) => {
@@ -788,7 +801,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
             });
             return;
           }
-          // Fallback: parse from stored events
+          // Fallback: parse from stored events (tolerant/repair parse included)
           const events = getEventsBySession(sessionId);
           const result = this.parseReviewResult(events, prNumber, repo);
           resolve(result);
@@ -796,6 +809,31 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       };
 
       this.sessionManager.on('message', handler);
+
+      timeoutHandle = setTimeout(() => {
+        cleanup();
+        logger.warn(
+          `[PRReviewService] waitForVerdict timed out after ${Math.round(timeoutMs / 60000)} min for session ${sessionId} (PR #${prNumber} ${repo}) — attempting lenient parse of stored events`,
+        );
+        // Try to recover the verdict from whatever events were stored before the hang.
+        // tryParseVerdict (called inside parseReviewResult) now includes a repair pass,
+        // so malformed-JSON verdicts (e.g. unescaped inner quotes) resolve here.
+        const events = getEventsBySession(sessionId);
+        const recovered = this.parseReviewResult(events, prNumber, repo);
+        if (recovered.verdict !== 'incomplete') {
+          resolve(recovered);
+          return;
+        }
+        // Could not recover a verdict — resolve as incomplete with a timeout summary.
+        resolve({
+          prNumber,
+          repo,
+          verdict: 'incomplete',
+          dimensions: [],
+          summary: `Review verdict timed out after ${Math.round(timeoutMs / 60000)} min — verdict JSON could not be parsed from stored events.`,
+          reviewedAt: new Date().toISOString(),
+        });
+      }, timeoutMs);
     });
   }
 
@@ -852,8 +890,24 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     if (!candidate) {
       return null;
     }
+    return (
+      this.parseVerdictObject(candidate) ??
+      this.parseVerdictObject(this.repairJsonStrings(candidate))
+    );
+  }
+
+  /**
+   * Attempt to parse a raw JSON string into a verdict object. Returns null if
+   * the string is not valid JSON or does not have the required shape.
+   */
+  private parseVerdictObject(json: string): {
+    verdict: PRReviewResult['verdict'];
+    dimensions: ReviewDimension[];
+    summary: string;
+    manualItemsForHuman?: string[];
+  } | null {
     try {
-      const parsed = JSON.parse(candidate) as Record<string, unknown>;
+      const parsed = JSON.parse(json) as Record<string, unknown>;
       if (
         typeof parsed.verdict === 'string' &&
         Array.isArray(parsed.dimensions) &&
@@ -874,9 +928,68 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         };
       }
     } catch {
-      // Not valid JSON — caller falls back to a default verdict
+      // Not valid JSON
     }
     return null;
+  }
+
+  /**
+   * Heuristic JSON repair: escape unescaped double-quotes inside string values.
+   * Handles the LLM-common pattern of embedding human-readable text with inner
+   * quotes, e.g. `"manualItemsForHuman": ["the "term" here is visible"]`.
+   * A closing string-quote is one followed (after optional whitespace) by a JSON
+   * structural character: , ] } : or end-of-input.
+   */
+  private repairJsonStrings(json: string): string {
+    let result = '';
+    let inString = false;
+    let escape = false;
+
+    for (let i = 0; i < json.length; i++) {
+      const ch = json[i];
+
+      if (escape) {
+        result += ch;
+        escape = false;
+        continue;
+      }
+
+      if (ch === '\\' && inString) {
+        result += ch;
+        escape = true;
+        continue;
+      }
+
+      if (ch === '"') {
+        if (!inString) {
+          inString = true;
+          result += ch;
+          continue;
+        }
+        // Peek ahead past whitespace to determine if this quote closes the string.
+        let j = i + 1;
+        while (
+          j < json.length &&
+          (json[j] === ' ' || json[j] === '\t' || json[j] === '\r' || json[j] === '\n')
+        ) {
+          j++;
+        }
+        const next = j < json.length ? json[j] : '';
+        if (next === ',' || next === ']' || next === '}' || next === ':' || next === '"' || next === '') {
+          // This quote closes the string value.
+          inString = false;
+          result += ch;
+        } else {
+          // Inner quote — escape it.
+          result += '\\"';
+        }
+        continue;
+      }
+
+      result += ch;
+    }
+
+    return result;
   }
 
   /**
