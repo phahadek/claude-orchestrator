@@ -993,7 +993,7 @@ export default function App() {
   );
 
   // taskViews is already fetched scoped to activeProjectId + activeBoardId;
-  // both are listed in the dep array to make the milestone scope explicit.
+  // its reference identity changes when either upstream value changes, so only taskViews is needed here.
   const autoLaunchQueuedCount = useMemo(
     () =>
       taskViews.filter(
@@ -1003,7 +1003,7 @@ export default function App() {
           !t.blocked &&
           !t.pauseReason,
       ).length,
-    [taskViews, activeProjectId, activeBoardId],
+    [taskViews],
   );
 
   // Keyboard navigation: sorted active sessions (same order as SessionGrid)
