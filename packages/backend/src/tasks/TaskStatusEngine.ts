@@ -65,8 +65,12 @@ export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
 
   if (notionStatus.includes('Backlog')) return 'backlog';
 
-  // 3. ready — default (includes 🗂️ Ready and any unrecognized status)
-  return 'ready';
+  // 3. ready — only for explicitly recognized Ready status
+  if (notionStatus.includes('Ready')) return 'ready';
+
+  // Empty or unrecognized notionStatus (e.g. no task_cache row) must not surface
+  // as launchable. Default to backlog so stale/unknown tasks don't appear in Ready.
+  return 'backlog';
 }
 
 function getReviewIterationCap(): number {
