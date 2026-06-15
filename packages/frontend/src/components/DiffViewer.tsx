@@ -1,8 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import {
-  type DiffLineKind,
-  parseDiffLines,
-} from './DiffViewer.helpers';
+import { type DiffLineKind, parseDiffLines } from './DiffViewer.helpers';
 import styles from './DiffViewer.module.css';
 
 // ── Component ─────────────────────────────────────────────────────

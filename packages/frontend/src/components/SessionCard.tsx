@@ -12,10 +12,7 @@ import {
   calculateCost,
 } from '@claude-orchestrator/backend/src/utils/usage';
 import { StatusBadge } from './StatusBadge';
-import {
-  CARD_PREVIEW_LINES,
-  formatModelName,
-} from './SessionCard.helpers';
+import { CARD_PREVIEW_LINES, formatModelName } from './SessionCard.helpers';
 import styles from './SessionCard.module.css';
 
 interface Props {
