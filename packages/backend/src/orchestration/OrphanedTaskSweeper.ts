@@ -126,6 +126,10 @@ export class OrphanedTaskSweeper {
           if (!taskId || seen.has(taskId)) continue;
           seen.add(taskId);
 
+          // Only sweep Code tasks — non-Code types (Planning, Testing, Tooling) are
+          // never auto-dispatched, so In Progress with no session is normal, not orphaned.
+          if (resolved.task.type !== '💻 Code') continue;
+
           try {
             await this.maybeRevertTask(taskId, project.id, backend);
           } catch (err) {

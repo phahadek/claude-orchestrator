@@ -11,6 +11,8 @@
  * - Nudge limit: after NUDGE_LIMIT nudges → operator surface (setSessionPauseReason), no revert
  * - Missing worktree → operator surface immediately
  * - Open PR → still skipped (unchanged)
+ * - Non-Code In-Progress task with no session → not reverted, not nudged (type filter)
+ * - Failed-launch Code task (latestSession === undefined) → still reverts to Ready
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -67,13 +69,13 @@ import type { ServerMessage } from '../ws/types.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function makeTask(id: string, status = '🔄 In Progress') {
+function makeTask(id: string, status = '🔄 In Progress', type = '💻 Code') {
   return {
     task: {
       id,
       title: 'Test Task',
       status,
-      type: '💻 Code',
+      type,
       dependsOn: [],
       notionUrl: '',
     },
@@ -875,6 +877,79 @@ describe('OrphanedTaskSweeper', () => {
     expect(setSessionPauseReason).not.toHaveBeenCalled();
     expect(recordEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'task_orphan_surfaced' }),
+    );
+  });
+
+  // ── Type filter (non-Code tasks must be skipped) ──────────────────────────
+
+  it.each(['📋 Planning', '🧪 Testing', '🛠️ Tooling'])(
+    'does not revert or nudge a non-Code In-Progress task with no session (type: %s)',
+    async (taskType) => {
+      const backend = makeBackend([
+        makeTask('notion:abc', '🔄 In Progress', taskType),
+      ]);
+      const sendOrResume = vi.fn().mockResolvedValue('sess-1');
+
+      const sweeper = new OrphanedTaskSweeper(broadcast, {
+        listProjects: () => [
+          { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+        ],
+        resolveBackend: () => backend,
+        sendOrResume,
+      });
+
+      await sweeper.sweepOnce();
+
+      expect(backend.updateStatus).not.toHaveBeenCalled();
+      expect(sendOrResume).not.toHaveBeenCalled();
+      expect(recordEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+      );
+      expect(broadcast).not.toHaveBeenCalled();
+    },
+  );
+
+  it('still reverts a Code genuine orphan (In Progress, session dead, no PR)', async () => {
+    const backend = makeBackend([makeTask('notion:abc', '🔄 In Progress', '💻 Code')]);
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(
+      makeSession('done', 30 * 60 * 1000) as ReturnType<
+        typeof getLatestCodeSessionByNotionTaskId
+      >,
+    );
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
+    );
+  });
+
+  it('still reverts a failed-launch Code task (In Progress, latestSession === undefined)', async () => {
+    // latestSession is undefined: task was marked In Progress before its session row was created
+    // (e.g. launch failed). Must still revert to Ready so it can be re-dispatched.
+    const backend = makeBackend([makeTask('notion:abc', '🔄 In Progress', '💻 Code')]);
+    vi.mocked(getLatestCodeSessionByNotionTaskId).mockReturnValue(undefined);
+
+    const sweeper = new OrphanedTaskSweeper(broadcast, {
+      listProjects: () => [
+        { id: 'proj-1' } as ReturnType<typeof getAllProjects>[number],
+      ],
+      resolveBackend: () => backend,
+    });
+
+    await sweeper.sweepOnce();
+
+    expect(backend.updateStatus).toHaveBeenCalledWith('notion:abc', '🗂️ Ready');
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ event_type: 'task_orphan_reverted' }),
     );
   });
 
