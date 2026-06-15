@@ -103,6 +103,7 @@ export default function App() {
   }, []);
 
   const bootReconciliation = useBootReconciliation();
+  const bootReconciliationDispatch = bootReconciliation.dispatch;
 
   const {
     sessions,
@@ -179,7 +180,7 @@ export default function App() {
         msg.type === 'boot_reconciliation_step' ||
         msg.type === 'boot_reconciliation_completed'
       ) {
-        bootReconciliation.dispatch(msg);
+        bootReconciliationDispatch(msg);
         return;
       }
       if (msg.type === 'error') {
@@ -210,7 +211,7 @@ export default function App() {
       }
       dispatch(msg);
     },
-    [dispatch, dismissNotification, bootReconciliation.dispatch],
+    [dispatch, dismissNotification, bootReconciliationDispatch],
   );
 
   const { send, connectionState } = useWebSocket(handleWsMessage);
