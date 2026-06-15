@@ -304,6 +304,9 @@ const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast, {
 // Concluded-session archiver: registers with Scheduler for cadence management.
 const concludedSessionArchiver = new ConcludedSessionArchiver(broadcast);
 concludedSessionArchiver.register(scheduler);
+prMergeWatcher.register(scheduler);
+reviewerCommentsWatcher.register(scheduler);
+updateChecker.register(scheduler);
 
 const sessionEventsPruner = new SessionEventsPruner();
 
@@ -313,12 +316,9 @@ void runBootSequence({
   stuckSessionMonitor,
   autoMerger,
   githubClient,
-  prMergeWatcher,
-  reviewerCommentsWatcher,
   autoLauncher,
   orphanedTaskSweeper,
   scheduler,
-  updateChecker,
   taskCacheRefresher,
   sessionEventsPruner,
   server,
@@ -333,8 +333,6 @@ async function gracefulShutdown(signal: string) {
   stuckSessionMonitor.stop();
   orphanedTaskSweeper.stop();
   sessionEventsPruner.stop();
-  updateChecker.stop();
-  reviewerCommentsWatcher.stop();
   await scheduler.stopAll({ drain: true, timeoutMs: 15_000 });
   wss.close();
   await sessionManager.shutdownAll();

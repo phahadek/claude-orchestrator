@@ -22,12 +22,6 @@ export interface BootDeps {
     rehydrate(): void;
   };
   githubClient: GitHubClient;
-  prMergeWatcher: {
-    start(): void;
-  };
-  reviewerCommentsWatcher: {
-    start(): void;
-  };
   autoLauncher: {
     start(): Promise<void>;
   };
@@ -35,9 +29,6 @@ export interface BootDeps {
     start(): void;
   };
   scheduler: {
-    start(): void;
-  };
-  updateChecker: {
     start(): void;
   };
   taskCacheRefresher: {
@@ -196,12 +187,9 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   await tracker.runStep('boot_idle_reconciliation', () =>
     runBootIdleReconciliation(),
   );
-  deps.prMergeWatcher.start();
-  deps.reviewerCommentsWatcher.start();
   await tracker.runStep('auto_launcher_start', () => deps.autoLauncher.start());
   deps.orphanedTaskSweeper.start();
   deps.scheduler.start();
-  deps.updateChecker.start();
   deps.taskCacheRefresher.start();
   tracker.completeSequence();
 }

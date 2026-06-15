@@ -5,6 +5,7 @@ import type { SessionManager } from '../session/SessionManager';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { getProjectByGithubRepo, AUTO_REVIEW_ENABLED } from '../config';
+import type { Scheduler } from '../orchestration/Scheduler';
 import { typedGetSetting } from '../config/settings';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { loadAutofixCommands, runAutofix } from '../session/autofix-runner';
@@ -69,7 +70,6 @@ function isTerminalMergePause(pauseReasonRaw: string | null): boolean {
 }
 
 export class PRMergeWatcher {
-  private timer: ReturnType<typeof setInterval> | null = null;
   /**
    * True until the first poll after boot completes. On that first poll, PRs
    * that GitHub reports as already merged are state-transitioned in SQLite
@@ -124,24 +124,18 @@ export class PRMergeWatcher {
     return getTaskBackend(project.id);
   }
 
-  start(intervalMs: number = DEFAULT_INTERVAL_MS): void {
-    if (this.timer) return;
-    this.timer = setInterval(() => {
-      this.poll().catch((err: unknown) =>
+  register(scheduler: Scheduler): void {
+    scheduler.register({
+      name: 'pr_merge_watcher',
+      intervalMs: () => DEFAULT_INTERVAL_MS,
+      runOnBoot: true,
+      concurrency: 'skip-if-running',
+      run: async () => {
+        await this.poll();
+      },
+      onError: (err: unknown) =>
         logger.warn('[PRMergeWatcher] poll error:', (err as Error).message),
-      );
-    }, intervalMs);
-    this.poll().catch((err: unknown) =>
-      logger.warn('[PRMergeWatcher] poll error:', (err as Error).message),
-    );
-    logger.info(`[PRMergeWatcher] started (interval=${intervalMs}ms)`);
-  }
-
-  stop(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
+    });
   }
 
   private handleRateLimit(err: GitHubRateLimitError): void {

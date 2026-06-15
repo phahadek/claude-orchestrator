@@ -53,12 +53,8 @@ function makeDeps(
     githubClient: {} as Parameters<
       (typeof import('../bootSequence'))['runBootSequence']
     >[0]['githubClient'],
-    prMergeWatcher: { start: vi.fn() },
-    reviewerCommentsWatcher: { start: vi.fn() },
     autoLauncher: { start: vi.fn().mockResolvedValue(undefined) },
     orphanedTaskSweeper: { start: vi.fn() },
-    concludedSessionArchiver: { start: vi.fn() },
-    updateChecker: { start: vi.fn() },
     taskCacheRefresher: { start: vi.fn() },
     sessionEventsPruner: {
       runAtBoot: vi.fn().mockResolvedValue(undefined),

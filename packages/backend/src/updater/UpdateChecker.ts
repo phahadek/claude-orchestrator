@@ -4,6 +4,7 @@ import type { GitHubRelease, UpdateInfo } from './types';
 import type { ServerMessage } from '../ws/types';
 import { typedGetSetting } from '../config/settings';
 import { logger } from '../logger';
+import type { Scheduler } from '../orchestration/Scheduler';
 
 const REPO = 'phahadek/claude-orchestrator';
 const RELEASES_LATEST_URL = `https://api.github.com/repos/${REPO}/releases/latest`;
@@ -87,27 +88,26 @@ export function selectNewest(
 }
 
 export class UpdateChecker {
-  private timer: NodeJS.Timeout | null = null;
   private dismissedVersion: string | null = null;
 
   constructor(private readonly broadcast: (msg: ServerMessage) => void) {}
 
-  /** Start polling. Called after server boots. */
-  start(): void {
+  register(scheduler: Scheduler): void {
     if (isDevMode()) {
       logger.info('[updater] dev mode — update checks disabled');
       return;
     }
-    void this.check();
-    this.timer = setInterval(() => void this.check(), POLL_INTERVAL_MS);
-    this.timer.unref();
-  }
-
-  stop(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
+    scheduler.register({
+      name: 'update_checker',
+      intervalMs: POLL_INTERVAL_MS,
+      runOnBoot: true,
+      concurrency: 'skip-if-running',
+      run: async () => {
+        await this.check();
+      },
+      onError: (err: unknown) =>
+        logger.warn('[updater] check error:', (err as Error).message),
+    });
   }
 
   /** Force an immediate check, ignoring dismiss state. */
