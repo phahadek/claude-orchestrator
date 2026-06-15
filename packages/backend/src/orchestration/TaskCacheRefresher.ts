@@ -29,7 +29,10 @@ export class TaskCacheRefresher {
     scheduler.register({
       name: 'task_cache_refresher',
       intervalMs: () =>
-        Math.max(MIN_REFRESH_INTERVAL_MS, runtimeSettings.task_cache_refresh_interval_ms),
+        Math.max(
+          MIN_REFRESH_INTERVAL_MS,
+          runtimeSettings.task_cache_refresh_interval_ms,
+        ),
       concurrency: 'skip-if-running',
       run: async () => {
         await this.refreshOnce();

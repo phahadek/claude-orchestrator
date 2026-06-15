@@ -91,7 +91,10 @@ export class AutoLauncher {
     scheduler.register({
       name: 'auto_launcher',
       intervalMs: () =>
-        Math.max(MIN_POLL_INTERVAL_MS, runtimeSettings.auto_launch_poll_interval_ms),
+        Math.max(
+          MIN_POLL_INTERVAL_MS,
+          runtimeSettings.auto_launch_poll_interval_ms,
+        ),
       concurrency: 'skip-if-running',
       run: async () => {
         await this.pollOnce();
