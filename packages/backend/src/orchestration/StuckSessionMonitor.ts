@@ -1,6 +1,7 @@
 import { logger } from '../logger';
 import type { SessionManager } from '../session/SessionManager';
 import { runtimeSettings } from '../config';
+import type { Scheduler } from './Scheduler';
 import {
   getPRBySessionId,
   setPauseReason,
@@ -64,9 +65,6 @@ const DEFAULT_SCAN_INTERVAL_MS = 60 * 1000;
 
 export class StuckSessionMonitor {
   private timers = new Map<string, TimerState>();
-  private scanTimer: NodeJS.Timeout | null = null;
-  private scanStopped = true;
-  private scanRunning = false;
 
   constructor(
     private readonly sessionManager: SessionManager,
@@ -76,42 +74,25 @@ export class StuckSessionMonitor {
     sessionManager.on('message', (msg: ServerMessage) => this.onMessage(msg));
   }
 
-  /**
-   * Start the periodic stuck-session scan. Runs at the given interval (or
-   * DEFAULT_SCAN_INTERVAL_MS) and calls recoverSession() for any session
-   * still at status='running' whose last event is 'result'.
-   */
-  startScan(intervalMs?: number): void {
-    if (!this.scanStopped) return;
-    this.scanStopped = false;
-    this.scheduleNextScan(intervalMs ?? DEFAULT_SCAN_INTERVAL_MS);
+  register(scheduler: Scheduler): void {
+    scheduler.register({
+      name: 'stuck_session_monitor',
+      intervalMs: DEFAULT_SCAN_INTERVAL_MS,
+      concurrency: 'skip-if-running',
+      run: async () => {
+        await this.scanForStuckSessions();
+      },
+    });
   }
 
-  /** Cancel all in-flight timers. Used on shutdown and from tests. */
+  /** Clear all per-session timers. Called on shutdown. */
   stop(): void {
-    this.scanStopped = true;
-    if (this.scanTimer) {
-      clearTimeout(this.scanTimer);
-      this.scanTimer = null;
-    }
     for (const sessionId of [...this.timers.keys()]) {
       this.clear(sessionId);
     }
   }
 
-  private scheduleNextScan(intervalMs: number): void {
-    if (this.scanStopped) return;
-    this.scanTimer = setTimeout(() => {
-      void this.scanForStuckSessions().finally(() =>
-        this.scheduleNextScan(intervalMs),
-      );
-    }, intervalMs);
-    this.scanTimer.unref?.();
-  }
-
   async scanForStuckSessions(): Promise<void> {
-    if (this.scanRunning) return;
-    this.scanRunning = true;
     try {
       const rows = getStuckResultSessionRows(PERIODIC_MIN_AGE_MS);
       for (const row of rows) {
@@ -184,8 +165,6 @@ export class StuckSessionMonitor {
       }
     } catch (e) {
       logger.error(`[StuckSessionMonitor] scanForStuckSessions error: ${e}`);
-    } finally {
-      this.scanRunning = false;
     }
   }
 

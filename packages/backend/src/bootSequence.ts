@@ -16,27 +16,19 @@ export interface BootDeps {
   };
   stuckSessionMonitor: {
     rehydrate(): void;
-    startScan(): void;
   };
   autoMerger: {
     rehydrate(): void;
   };
   githubClient: GitHubClient;
   autoLauncher: {
-    start(): Promise<void>;
-  };
-  orphanedTaskSweeper: {
-    start(): void;
+    pollOnce(): Promise<void>;
   };
   scheduler: {
     start(): void;
   };
-  taskCacheRefresher: {
-    start(): void;
-  };
   sessionEventsPruner: {
     runAtBoot(): Promise<void>;
-    start(): void;
   };
   server: http.Server;
   port: number;
@@ -165,7 +157,6 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   void tracker.runStep('session_events_pruner_at_boot', () =>
     deps.sessionEventsPruner.runAtBoot(),
   );
-  deps.sessionEventsPruner.start();
   await tracker.runStep(
     'resume_orphan_sessions',
     () => deps.sessionManager.resumeOrphanSessions(),
@@ -174,7 +165,6 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   await tracker.runStep('stuck_session_monitor_rehydrate', () =>
     deps.stuckSessionMonitor.rehydrate(),
   );
-  deps.stuckSessionMonitor.startScan();
   await tracker.runStep('auto_merger_rehydrate', () =>
     deps.autoMerger.rehydrate(),
   );
@@ -187,9 +177,9 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   await tracker.runStep('boot_idle_reconciliation', () =>
     runBootIdleReconciliation(),
   );
-  await tracker.runStep('auto_launcher_start', () => deps.autoLauncher.start());
-  deps.orphanedTaskSweeper.start();
+  await tracker.runStep('auto_launcher_start', () =>
+    deps.autoLauncher.pollOnce(),
+  );
   deps.scheduler.start();
-  deps.taskCacheRefresher.start();
   tracker.completeSequence();
 }

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { logger } from '../logger';
 import { runtimeSettings, getAllProjects } from '../config';
+import type { Scheduler } from './Scheduler';
 import type { ProjectConfig } from '../config';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
@@ -49,10 +50,6 @@ const IDLE_NUDGE_MESSAGE =
  * cadence so no additional timer is introduced to the system.
  */
 export class OrphanedTaskSweeper {
-  private timer: NodeJS.Timeout | null = null;
-  private running = false;
-  private stopped = true;
-
   constructor(
     private readonly broadcast: (msg: ServerMessage) => void,
     private readonly options: {
@@ -68,79 +65,61 @@ export class OrphanedTaskSweeper {
     } = {},
   ) {}
 
-  start(): void {
-    if (!this.stopped) return;
-    this.stopped = false;
-    this.scheduleNext();
-  }
-
-  stop(): void {
-    this.stopped = true;
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-  }
-
-  private scheduleNext(): void {
-    if (this.stopped) return;
-    const intervalMs =
-      this.options.intervalMs ?? runtimeSettings.auto_launch_poll_interval_ms;
-    this.timer = setTimeout(() => {
-      void this.sweepOnce().finally(() => this.scheduleNext());
-    }, intervalMs);
-    this.timer.unref?.();
+  register(scheduler: Scheduler): void {
+    scheduler.register({
+      name: 'orphaned_task_sweeper',
+      intervalMs: () =>
+        this.options.intervalMs ?? runtimeSettings.auto_launch_poll_interval_ms,
+      concurrency: 'skip-if-running',
+      run: async () => {
+        await this.sweepOnce();
+      },
+    });
   }
 
   async sweepOnce(): Promise<void> {
-    if (this.running) return;
-    this.running = true;
-    try {
-      const listProjects = this.options.listProjects ?? getAllProjects;
-      const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
-      const seen = new Set<string>();
+    const listProjects = this.options.listProjects ?? getAllProjects;
+    const resolveBackend = this.options.resolveBackend ?? getTaskBackend;
+    const seen = new Set<string>();
 
-      for (const project of listProjects()) {
-        let backend: TaskBackend;
+    for (const project of listProjects()) {
+      let backend: TaskBackend;
+      try {
+        backend = resolveBackend(project.id);
+      } catch (err) {
+        logger.warn(
+          `[OrphanedTaskSweeper] skipping project ${project.id}: ${(err as Error).message}`,
+        );
+        continue;
+      }
+
+      let tasks: ResolvedTask[];
+      try {
+        tasks = await backend.listTasksByStatus(IN_PROGRESS_STATUS);
+      } catch (err) {
+        logger.warn(
+          `[OrphanedTaskSweeper] listTasksByStatus failed for project ${project.id}: ${(err as Error).message}`,
+        );
+        continue;
+      }
+
+      for (const resolved of tasks) {
+        const taskId = resolved.task.id;
+        if (!taskId || seen.has(taskId)) continue;
+        seen.add(taskId);
+
+        // Only sweep Code tasks — non-Code types (Planning, Testing, Tooling) are
+        // never auto-dispatched, so In Progress with no session is normal, not orphaned.
+        if (resolved.task.type !== '💻 Code') continue;
+
         try {
-          backend = resolveBackend(project.id);
+          await this.maybeRevertTask(taskId, project.id, backend);
         } catch (err) {
           logger.warn(
-            `[OrphanedTaskSweeper] skipping project ${project.id}: ${(err as Error).message}`,
+            `[OrphanedTaskSweeper] revert check failed for ${taskId}: ${(err as Error).message}`,
           );
-          continue;
-        }
-
-        let tasks: ResolvedTask[];
-        try {
-          tasks = await backend.listTasksByStatus(IN_PROGRESS_STATUS);
-        } catch (err) {
-          logger.warn(
-            `[OrphanedTaskSweeper] listTasksByStatus failed for project ${project.id}: ${(err as Error).message}`,
-          );
-          continue;
-        }
-
-        for (const resolved of tasks) {
-          const taskId = resolved.task.id;
-          if (!taskId || seen.has(taskId)) continue;
-          seen.add(taskId);
-
-          // Only sweep Code tasks — non-Code types (Planning, Testing, Tooling) are
-          // never auto-dispatched, so In Progress with no session is normal, not orphaned.
-          if (resolved.task.type !== '💻 Code') continue;
-
-          try {
-            await this.maybeRevertTask(taskId, project.id, backend);
-          } catch (err) {
-            logger.warn(
-              `[OrphanedTaskSweeper] revert check failed for ${taskId}: ${(err as Error).message}`,
-            );
-          }
         }
       }
-    } finally {
-      this.running = false;
     }
   }
 

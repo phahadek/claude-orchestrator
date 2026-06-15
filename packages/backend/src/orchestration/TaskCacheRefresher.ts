@@ -6,6 +6,7 @@ import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
 import { ProjectService } from '../projects/ProjectService';
 import { runWithConcurrency } from '../utils/concurrency';
+import type { Scheduler } from './Scheduler';
 
 const MIN_REFRESH_INTERVAL_MS = 10_000;
 const PROJECT_CONCURRENCY = 5;
@@ -16,10 +17,6 @@ const PROJECT_CONCURRENCY = 5;
  * it broadcasts `task_cache_updated` so connected frontends can re-read the cache.
  */
 export class TaskCacheRefresher {
-  private timer: NodeJS.Timeout | null = null;
-  private stopped = true;
-  private refreshing = false;
-
   constructor(
     private readonly broadcast?: (msg: ServerMessage) => void,
     private readonly options: {
@@ -28,35 +25,22 @@ export class TaskCacheRefresher {
     } = {},
   ) {}
 
-  start(): void {
-    if (!this.stopped) return;
-    this.stopped = false;
-    this.scheduleNext();
-  }
-
-  stop(): void {
-    this.stopped = true;
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-  }
-
-  private scheduleNext(): void {
-    if (this.stopped) return;
-    const interval = Math.max(
-      MIN_REFRESH_INTERVAL_MS,
-      runtimeSettings.task_cache_refresh_interval_ms,
-    );
-    this.timer = setTimeout(() => {
-      void this.refreshOnce().finally(() => this.scheduleNext());
-    }, interval);
-    this.timer.unref?.();
+  register(scheduler: Scheduler): void {
+    scheduler.register({
+      name: 'task_cache_refresher',
+      intervalMs: () =>
+        Math.max(
+          MIN_REFRESH_INTERVAL_MS,
+          runtimeSettings.task_cache_refresh_interval_ms,
+        ),
+      concurrency: 'skip-if-running',
+      run: async () => {
+        await this.refreshOnce();
+      },
+    });
   }
 
   async refreshOnce(): Promise<void> {
-    if (this.refreshing) return;
-    this.refreshing = true;
     const start = Date.now();
     const listProjects = this.options.listProjects ?? getAllProjects;
     const projects = listProjects().filter((p) => p.taskSource === 'notion');
@@ -68,7 +52,6 @@ export class TaskCacheRefresher {
         this.refreshProject(project),
       );
     } finally {
-      this.refreshing = false;
       logger.info(
         `[TaskCacheRefresher] refresh complete projects=${projects.length} durationMs=${Date.now() - start}`,
       );
