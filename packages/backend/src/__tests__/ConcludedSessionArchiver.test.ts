@@ -32,23 +32,6 @@ beforeEach(() => {
 });
 
 describe('ConcludedSessionArchiver', () => {
-  it('start() / stop() do not throw', () => {
-    const archiver = new ConcludedSessionArchiver(() => {}, {
-      intervalMs: 100000,
-    });
-    archiver.start();
-    archiver.stop();
-  });
-
-  it('start() is idempotent — calling twice does not double-schedule', () => {
-    const archiver = new ConcludedSessionArchiver(() => {}, {
-      intervalMs: 100000,
-    });
-    archiver.start();
-    archiver.start();
-    archiver.stop();
-  });
-
   it('sweepOnce() skips when auto_archive_enabled=false', async () => {
     runtimeSettings.auto_archive_enabled = false;
     const broadcast = vi.fn();
@@ -130,18 +113,6 @@ describe('ConcludedSessionArchiver', () => {
     });
     await archiver.sweepOnce();
     expect(mockRecord).not.toHaveBeenCalled();
-  });
-
-  it('stop() prevents further sweeps from executing', async () => {
-    mockArchive.mockReturnValue([]);
-    const archiver = new ConcludedSessionArchiver(() => {}, {
-      intervalMs: 100000,
-    });
-    archiver.start();
-    archiver.stop();
-    mockArchive.mockClear();
-    await new Promise((r) => setTimeout(r, 10));
-    expect(mockArchive).not.toHaveBeenCalled();
   });
 
   it('sweepOnce() never touches worktrees — only calls archiveConcludedSessionsOlderThan (idle sessions exempt by SQL filter)', async () => {

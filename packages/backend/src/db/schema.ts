@@ -269,6 +269,18 @@ export function runMigrations(target: Database.Database): void {
       conflict_nudge_sha           TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS scheduler_audit (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      job            TEXT    NOT NULL,
+      status         TEXT    NOT NULL,
+      started_at     TEXT    NOT NULL,
+      completed_at   TEXT    NOT NULL,
+      duration_ms    INTEGER NOT NULL,
+      items_processed INTEGER,
+      error          TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_scheduler_audit_job ON scheduler_audit(job, started_at DESC);
+
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_id ON session_events(session_id, id DESC);
     CREATE INDEX IF NOT EXISTS idx_session_events_session_id_event_type ON session_events(session_id, event_type);
     CREATE INDEX IF NOT EXISTS idx_session_events_timestamp ON session_events(timestamp DESC);

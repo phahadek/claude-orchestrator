@@ -368,6 +368,16 @@ export type ServerMessage =
       type: 'boot_reconciliation_completed';
       duration_ms: number;
       completed_at: string;
+    }
+  | {
+      type: 'scheduler_job_run';
+      job: string;
+      status: 'ok' | 'failed' | 'skipped';
+      started_at: string;
+      completed_at: string;
+      duration_ms: number;
+      items_processed?: number;
+      error?: { message: string; stack?: string };
     };
 
 // ── Client → Server ──────────────────────────────────────────────
