@@ -2,6 +2,7 @@ import { logger } from '../logger';
 import type { GitHubClient } from './GitHubClient';
 import type { SessionManager } from '../session/SessionManager';
 import { GitHubRateLimitError } from './types';
+import type { Scheduler } from '../orchestration/Scheduler';
 import {
   getAllOpenPRs,
   getRoutedCommentIds,
@@ -36,7 +37,6 @@ function getAIReviewerUsernames(): Set<string> {
  * coding session promptly without a separate poll infrastructure.
  */
 export class ReviewerCommentsWatcher {
-  private timer: ReturnType<typeof setInterval> | null = null;
   private pausedUntil: Date | null = null;
   private rateLimitBroadcasted = false;
 
@@ -46,24 +46,21 @@ export class ReviewerCommentsWatcher {
     private broadcast: (msg: ServerMessage) => void = () => {},
   ) {}
 
-  start(intervalMs = 10_000): void {
-    if (this.timer) return;
-    this.timer = setInterval(() => {
-      this.pollAll().catch((err: unknown) =>
+  register(scheduler: Scheduler): void {
+    scheduler.register({
+      name: 'reviewer_comments_watcher',
+      intervalMs: 10_000,
+      runOnBoot: false,
+      concurrency: 'skip-if-running',
+      run: async () => {
+        await this.pollAll();
+      },
+      onError: (err: unknown) =>
         logger.warn(
           '[ReviewerCommentsWatcher] pollAll error:',
           (err as Error).message,
         ),
-      );
-    }, intervalMs);
-    logger.info(`[ReviewerCommentsWatcher] started (interval=${intervalMs}ms)`);
-  }
-
-  stop(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
+    });
   }
 
   private handleRateLimit(err: GitHubRateLimitError): void {
