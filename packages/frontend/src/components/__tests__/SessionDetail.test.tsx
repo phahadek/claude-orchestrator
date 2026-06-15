@@ -1,6 +1,7 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
-import { SessionDetail, EventRow } from '../SessionDetail';
+import { SessionDetail } from '../SessionDetail';
+import { EventRow } from '../EventTranscript';
 import type { SessionState } from '../../hooks/useSessionStore';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';

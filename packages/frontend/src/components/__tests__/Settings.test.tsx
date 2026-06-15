@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Settings, validateField } from '../Settings';
+import { Settings } from '../Settings';
+import { validateField } from '../Settings.helpers';
 
 vi.mock('../Settings/ProjectsSettingsPanel', () => ({
   ProjectsSettingsPanel: () => <div>ProjectsSettingsPanel</div>,

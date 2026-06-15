@@ -12,9 +12,11 @@ import {
   calculateCost,
 } from '@claude-orchestrator/backend/src/utils/usage';
 import { StatusBadge } from './StatusBadge';
+import {
+  CARD_PREVIEW_LINES,
+  formatModelName,
+} from './SessionCard.helpers';
 import styles from './SessionCard.module.css';
-
-export const CARD_PREVIEW_LINES = 3;
 
 interface Props {
   session: SessionState;
@@ -199,14 +201,4 @@ function taskTypeIcon(type: string): string {
   if (type.includes('📋')) return '📋';
   if (type.includes('🧪')) return '🧪';
   return '';
-}
-
-/** Strip the 'claude-' prefix for compact display, e.g. 'claude-sonnet-4-6' → 'sonnet-4-6'. */
-export function formatModelName(model: string): string {
-  return model.replace(/^claude-/, '');
-}
-
-export function truncate(text: string, maxLen: number): string {
-  if (text.length <= maxLen) return text;
-  return text.slice(0, maxLen) + '…';
 }

@@ -5,7 +5,7 @@ import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
 import { getTaskSourceLinkLabel } from '../utils/taskSourceLabel';
 import { calcElapsedMs, formatDuration } from '../utils/sessionTimer';
 import { StatusBadge } from './StatusBadge';
-import { formatModelName } from './SessionCard';
+import { formatModelName } from './SessionCard.helpers';
 import {
   formatTokenCount,
   formatCost,
