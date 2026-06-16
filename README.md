@@ -89,6 +89,7 @@ sequenceDiagram
 - [`claude`](https://docs.anthropic.com/en/docs/claude-code) CLI installed and authenticated (`claude login`)
 - Notion integration token (if using Notion as a task source)
 - GitHub PAT with `repo` scope (for PR tracking)
+- [`gitleaks`](https://github.com/gitleaks/gitleaks) ≥ 8.x (macOS: `brew install gitleaks` · Windows: `choco install gitleaks`) — used by the `analyze:` gate for secret scanning
 
 **Happy path**
 

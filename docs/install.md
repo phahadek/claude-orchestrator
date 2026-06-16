@@ -8,6 +8,10 @@ Detailed setup, Docker, and configuration reference for Claude Code Orchestrator
 - [`claude`](https://docs.anthropic.com/en/docs/claude-code) CLI installed and authenticated (`claude login`)
 - Notion integration token, if using Notion as a task source — [create an integration](https://www.notion.so/my-integrations)
 - GitHub personal access token with `repo` scope, for PR tracking
+- [`gitleaks`](https://github.com/gitleaks/gitleaks) ≥ 8.x — required for the `analyze:` gate secret-scanning step:
+  - macOS: `brew install gitleaks`
+  - Windows: `choco install gitleaks`
+  - Linux: see [gitleaks releases](https://github.com/gitleaks/gitleaks/releases) or `go install`
 
 ## Local development
 
