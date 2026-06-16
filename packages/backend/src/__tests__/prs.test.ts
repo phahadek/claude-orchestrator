@@ -20,6 +20,11 @@ vi.mock('../db/queries.js', () => ({
   setPRReviewResult: vi.fn(),
   updatePRDraftStatus: vi.fn(),
   getSessionsByProject: vi.fn().mockReturnValue([]),
+  markSessionDone: vi.fn(),
+}));
+
+vi.mock('../audit/AuditLog.js', () => ({
+  recordEvent: vi.fn(),
 }));
 
 const mockProjectsByGithubRepo: Record<
@@ -100,6 +105,7 @@ vi.mock('../config.js', () => ({
 
 import { createPrsRouter, setPRBroadcast } from '../routes/prs.js';
 import * as queries from '../db/queries.js';
+import * as auditLog from '../audit/AuditLog.js';
 import * as tasksRoute from '../routes/tasks.js';
 import type { PullRequest } from '../github/types.js';
 import { GitHubApiError } from '../github/types.js';
@@ -223,6 +229,7 @@ function makeMockSessionManager(): SessionManager {
   return {
     sendOrResume: vi.fn().mockResolvedValue(undefined),
     endSession: vi.fn(),
+    markForBranchDeletion: vi.fn(),
   } as unknown as SessionManager;
 }
 
@@ -766,6 +773,109 @@ describe('POST /api/prs/:prNumber/merge', () => {
     );
     expect(vi.mocked(sessionManager.endSession)).toHaveBeenCalledWith(
       'review-session-id',
+    );
+  });
+
+  it('calls markSessionDone for coding session with call_site manual_merge_rest', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const res = await supertest(buildApp())
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.status).toBe(200);
+    expect(vi.mocked(queries.markSessionDone)).toHaveBeenCalledWith(
+      'session-xyz',
+      expect.any(Number),
+      mockPRRow.pr_url,
+      'manual_merge_rest',
+    );
+  });
+
+  it('calls markSessionDone for review session with call_site manual_merge_rest', async () => {
+    const prWithReview: PullRequestRow = {
+      ...mockPRRow,
+      review_session_id: 'review-session-id',
+    };
+    vi.mocked(queries.getPRByNumber).mockReturnValue(prWithReview);
+    const res = await supertest(buildApp())
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.status).toBe(200);
+    expect(vi.mocked(queries.markSessionDone)).toHaveBeenCalledWith(
+      'review-session-id',
+      expect.any(Number),
+      prWithReview.pr_url,
+      'manual_merge_rest',
+    );
+  });
+
+  it('calls markForBranchDeletion for feature-branch PRs', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow); // head_branch: 'feature/add-something'
+    const sessionManager = makeMockSessionManager();
+    const res = await supertest(
+      buildApp(makeMockGitHub(), makeMockPRReviewService(), sessionManager),
+    )
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.status).toBe(200);
+    expect(
+      vi.mocked(sessionManager.markForBranchDeletion),
+    ).toHaveBeenCalledWith('session-xyz');
+  });
+
+  it('does NOT call markForBranchDeletion for non-feature branches', async () => {
+    const nonFeaturePR: PullRequestRow = {
+      ...mockPRRow,
+      head_branch: 'fix/some-bug',
+    };
+    vi.mocked(queries.getPRByNumber).mockReturnValue(nonFeaturePR);
+    const sessionManager = makeMockSessionManager();
+    const res = await supertest(
+      buildApp(makeMockGitHub(), makeMockPRReviewService(), sessionManager),
+    )
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.status).toBe(200);
+    expect(
+      vi.mocked(sessionManager.markForBranchDeletion),
+    ).not.toHaveBeenCalled();
+  });
+
+  it('emits pr_merged audit event with correct payload on merge', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const res = await supertest(buildApp())
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.status).toBe(200);
+    expect(vi.mocked(auditLog.recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'pr_merged',
+        actor_type: 'system',
+        project_id: 'proj-1',
+        task_id: mockPRRow.task_id,
+        payload: expect.objectContaining({
+          pr_number: 42,
+          repo: 'owner/repo',
+          merge_sha: 'abc123',
+        }),
+      }),
+    );
+  });
+
+  it('uses null project_id in audit event when repo is not in config', async () => {
+    const prUnknownRepo: PullRequestRow = {
+      ...mockPRRow,
+      repo: 'unknown/repo',
+    };
+    vi.mocked(queries.getPRByNumber).mockReturnValue(prUnknownRepo);
+    const res = await supertest(buildApp())
+      .post('/api/prs/unknown/repo/42/merge')
+      .send({});
+    expect(res.status).toBe(200);
+    expect(vi.mocked(auditLog.recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'pr_merged',
+        project_id: null,
+      }),
     );
   });
 

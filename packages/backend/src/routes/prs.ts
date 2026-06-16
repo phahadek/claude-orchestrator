@@ -16,7 +16,9 @@ import {
   updatePRDraftStatus,
   getSessionsByProject,
   lookupSessionByBranch,
+  markSessionDone,
 } from '../db/queries';
+import { recordEvent } from '../audit/AuditLog';
 import { GitHubApiError } from '../github/types';
 import type { MergeabilityCategory } from '../github/types';
 import type { GitHubClient } from '../github/GitHubClient';
@@ -459,8 +461,29 @@ export function createPrsRouter(
         const result = await github.mergePR(prNumber, commitTitle, repo);
         updatePRState(prNumber, repo, 'merged');
 
+        // Transition session DB status idle → done (must precede endSession subprocess cleanup)
+        if (prRow?.session_id) {
+          markSessionDone(
+            prRow.session_id,
+            Date.now(),
+            prRow.pr_url ?? null,
+            'manual_merge_rest',
+          );
+        }
+        if (prRow?.review_session_id) {
+          markSessionDone(
+            prRow.review_session_id,
+            Date.now(),
+            prRow.pr_url ?? null,
+            'manual_merge_rest',
+          );
+        }
+
         // End coding session gracefully (stdin close → clean CLI exit)
         if (prRow?.session_id) {
+          if (prRow.head_branch?.startsWith('feature/')) {
+            sessionManager.markForBranchDeletion(prRow.session_id);
+          }
           sessionManager.endSession(prRow.session_id);
         }
 
@@ -468,6 +491,20 @@ export function createPrsRouter(
         if (prRow?.review_session_id) {
           sessionManager.endSession(prRow.review_session_id);
         }
+
+        // Audit event — mirrors the AutoMerger path
+        recordEvent({
+          event_type: 'pr_merged',
+          actor_type: 'system',
+          actor_id: null,
+          project_id: getProjectByGithubRepo(repo)?.id ?? null,
+          task_id: prRow?.task_id ?? null,
+          payload: {
+            pr_number: prNumber,
+            repo,
+            merge_sha: (result as { sha?: string }).sha ?? null,
+          },
+        });
 
         // Update task to Done via the project-scoped task backend and broadcast task_updated
         if (prRow?.task_id) {
