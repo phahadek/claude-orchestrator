@@ -1111,7 +1111,7 @@ describe('runBootWorktreeReconciliation — parallelism', () => {
 
 // ── Structured per-repo duration logs ────────────────────────────────────────
 
-describe('runBootWorktreeReconciler — per-repo duration logs', () => {
+describe('runBootWorktreeReconciliation — per-repo duration logs', () => {
   it('emits a per-repo profile log with all four duration fields', async () => {
     await runBootWorktreeReconciliation({
       listProjects: () => [makeProject()],
