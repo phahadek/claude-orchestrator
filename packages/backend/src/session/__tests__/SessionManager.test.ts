@@ -151,6 +151,7 @@ vi.mock('fs', () => ({
     readFileSync: vi.fn().mockReturnValue(''),
     statSync: vi.fn().mockReturnValue({ isDirectory: () => true }),
     unlinkSync: vi.fn(),
+    rmSync: vi.fn(),
   },
   existsSync: vi
     .fn()
@@ -158,6 +159,7 @@ vi.mock('fs', () => ({
   mkdirSync: vi.fn(),
   writeFileSync: vi.fn(),
   unlinkSync: vi.fn(),
+  rmSync: vi.fn(),
 }));
 
 // ── Imports (after mocks) ─────────────────────────────────────────────────────
@@ -634,9 +636,172 @@ describe('cleanupWorktree — worktree_remove_failed audit on removal error', ()
         actor_id: SESSION_ID,
         payload: expect.objectContaining({
           stderr: expect.stringContaining('fatal: not a worktree'),
+          fallbackOk: expect.any(Boolean),
         }),
       }),
     );
+  });
+});
+
+// ── cleanupWorktree — post-remove prune (Fix A) ───────────────────────────────
+
+describe('cleanupWorktree — git worktree prune always runs', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'done' });
+  });
+
+  it('calls git worktree prune after a successful worktree remove', () => {
+    vi.mocked(execSync).mockReturnValue('');
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      `${PROJECT_DIR}/.claude/worktrees/${SESSION_ID}`,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    const pruneCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree prune'),
+      );
+    expect(pruneCalls).toHaveLength(1);
+  });
+
+  it('calls git worktree prune after a failed worktree remove', () => {
+    const removeErr = Object.assign(new Error('remove failed'), {
+      stderr: Buffer.from('fatal: not a working tree'),
+    });
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd.includes('worktree remove')) throw removeErr;
+      return '';
+    });
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      `${PROJECT_DIR}/.claude/worktrees/${SESSION_ID}`,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    const pruneCalls = vi
+      .mocked(execSync)
+      .mock.calls.filter(
+        ([cmd]) => typeof cmd === 'string' && cmd.includes('worktree prune'),
+      );
+    expect(pruneCalls).toHaveLength(1);
+  });
+});
+
+// ── cleanupWorktree — fs.rmSync fallback (Fix B) ─────────────────────────────
+
+describe('cleanupWorktree — fs.rmSync fallback on worktree remove failure', () => {
+  let sm: SessionManager;
+  const worktreePath = `${PROJECT_DIR}/.claude/worktrees/${SESSION_ID}`;
+
+  beforeEach(() => {
+    capturedSessions = [];
+    vi.clearAllMocks();
+    sm = new SessionManager();
+    vi.mocked(getProjectById).mockReturnValue(makeProject());
+    vi.mocked(getSession).mockReturnValue({ ...makeDeadRow(), status: 'done' });
+  });
+
+  it('attempts fs.rmSync when git worktree remove fails and dir exists', () => {
+    const removeErr = Object.assign(new Error('remove failed'), {
+      stderr: Buffer.from('Invalid argument'),
+    });
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd.includes('worktree remove')) throw removeErr;
+      return '';
+    });
+    // existsSync returns true for the worktree path (default mock behavior)
+    vi.mocked((fsModule as any).default.existsSync).mockReturnValue(true);
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      worktreePath,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    expect(vi.mocked((fsModule as any).default.rmSync)).toHaveBeenCalledWith(
+      worktreePath,
+      { recursive: true, force: true, maxRetries: 3, retryDelay: 500 },
+    );
+  });
+
+  it('sets fallbackOk: true in audit event when fs.rmSync succeeds', () => {
+    const removeErr = Object.assign(new Error('remove failed'), {
+      stderr: Buffer.from('Invalid argument'),
+    });
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd.includes('worktree remove')) throw removeErr;
+      return '';
+    });
+    vi.mocked((fsModule as any).default.existsSync).mockReturnValue(true);
+    vi.mocked((fsModule as any).default.rmSync).mockReturnValue(undefined);
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      worktreePath,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'worktree_remove_failed',
+        payload: expect.objectContaining({ fallbackOk: true }),
+      }),
+    );
+  });
+
+  it('sets fallbackOk: false in audit event when fs.rmSync also fails', () => {
+    const removeErr = Object.assign(new Error('remove failed'), {
+      stderr: Buffer.from('Invalid argument'),
+    });
+    vi.mocked(execSync).mockImplementation((cmd: string) => {
+      if (cmd.includes('worktree remove')) throw removeErr;
+      return '';
+    });
+    vi.mocked((fsModule as any).default.existsSync).mockReturnValue(true);
+    vi.mocked((fsModule as any).default.rmSync).mockImplementation(() => {
+      throw new Error('EBUSY');
+    });
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      worktreePath,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'worktree_remove_failed',
+        payload: expect.objectContaining({ fallbackOk: false }),
+      }),
+    );
+  });
+
+  it('does NOT attempt fs.rmSync when git worktree remove succeeds', () => {
+    vi.mocked(execSync).mockReturnValue('');
+
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      worktreePath,
+      undefined,
+      PROJECT_DIR,
+    );
+
+    expect(vi.mocked((fsModule as any).default.rmSync)).not.toHaveBeenCalled();
   });
 });
 
