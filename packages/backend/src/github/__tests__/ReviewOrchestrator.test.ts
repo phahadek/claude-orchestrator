@@ -304,7 +304,11 @@ describe('ReviewOrchestrator — session_ended re-review trigger', () => {
     const reviewService = makeReviewService('needs_changes');
     new ReviewOrchestrator(reviewService, sm, true);
 
-    sm.emit('message', { type: 'session_ended', sessionId: CODER_SESSION_ID, status: 'idle' });
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: CODER_SESSION_ID,
+      status: 'idle',
+    });
 
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -324,7 +328,11 @@ describe('ReviewOrchestrator — session_ended re-review trigger', () => {
     const reviewService = makeReviewService('needs_changes');
     new ReviewOrchestrator(reviewService, sm, true);
 
-    sm.emit('message', { type: 'session_ended', sessionId: CODER_SESSION_ID, status: 'idle' });
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: CODER_SESSION_ID,
+      status: 'idle',
+    });
 
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -340,7 +348,11 @@ describe('ReviewOrchestrator — session_ended re-review trigger', () => {
     const reviewService = makeReviewService('needs_changes');
     new ReviewOrchestrator(reviewService, sm, true);
 
-    sm.emit('message', { type: 'session_ended', sessionId: CODER_SESSION_ID, status: 'idle' });
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: CODER_SESSION_ID,
+      status: 'idle',
+    });
 
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -354,7 +366,11 @@ describe('ReviewOrchestrator — session_ended re-review trigger', () => {
     const reviewService = makeReviewService('needs_changes');
     new ReviewOrchestrator(reviewService, sm, true);
 
-    sm.emit('message', { type: 'session_ended', sessionId: CODER_SESSION_ID, status: 'idle' });
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: CODER_SESSION_ID,
+      status: 'idle',
+    });
 
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -371,7 +387,11 @@ describe('ReviewOrchestrator — session_ended re-review trigger', () => {
     const reviewService = makeReviewService('needs_changes');
     new ReviewOrchestrator(reviewService, sm, true);
 
-    sm.emit('message', { type: 'session_ended', sessionId: CODER_SESSION_ID, status: 'idle' });
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: CODER_SESSION_ID,
+      status: 'idle',
+    });
 
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -387,7 +407,11 @@ describe('ReviewOrchestrator — session_ended re-review trigger', () => {
     const reviewService = makeReviewService('approved');
     new ReviewOrchestrator(reviewService, sm, true);
 
-    sm.emit('message', { type: 'session_ended', sessionId: CODER_SESSION_ID, status: 'idle' });
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: CODER_SESSION_ID,
+      status: 'idle',
+    });
 
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -406,7 +430,11 @@ describe('ReviewOrchestrator — session_ended re-review trigger', () => {
     const reviewService = makeReviewService('needs_changes');
     new ReviewOrchestrator(reviewService, sm, true);
 
-    sm.emit('message', { type: 'session_ended', sessionId: CODER_SESSION_ID, status: 'idle' });
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: CODER_SESSION_ID,
+      status: 'idle',
+    });
 
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -422,7 +450,11 @@ describe('ReviewOrchestrator — session_ended re-review trigger', () => {
     const reviewService = makeReviewService('needs_changes');
     new ReviewOrchestrator(reviewService, sm, true);
 
-    sm.emit('message', { type: 'session_ended', sessionId: CODER_SESSION_ID, status: 'idle' });
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: CODER_SESSION_ID,
+      status: 'idle',
+    });
 
     await new Promise((resolve) => setTimeout(resolve, 20));
 
@@ -449,7 +481,11 @@ describe('ReviewOrchestrator — session_ended re-review trigger', () => {
     orchestrator.enqueueReview(job);
 
     // session_ended fires for the same PR — should NOT enqueue a second review
-    sm.emit('message', { type: 'session_ended', sessionId: CODER_SESSION_ID, status: 'idle' });
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: CODER_SESSION_ID,
+      status: 'idle',
+    });
 
     await new Promise((resolve) => setTimeout(resolve, 20));
 
