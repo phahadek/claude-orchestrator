@@ -394,6 +394,63 @@ describe('sendOrResume — live session fast path', () => {
       'live message',
     );
   });
+
+  it('updates status to running and emits session_status when live session is idle', async () => {
+    // Establish the session as live (DB row has status 'idle' from beforeEach).
+    const p = sm.sendOrResume(SESSION_ID, 'first');
+    capturedSessions[0].emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: 'boot',
+    });
+    await p;
+
+    vi.mocked(updateSessionStatus).mockClear();
+    const emittedMessages: unknown[] = [];
+    sm.on('message', (msg) => emittedMessages.push(msg));
+
+    await sm.sendOrResume(SESSION_ID, 'live message');
+
+    expect(vi.mocked(updateSessionStatus)).toHaveBeenCalledWith(
+      SESSION_ID,
+      'running',
+    );
+    expect(emittedMessages).toContainEqual({
+      type: 'session_status',
+      sessionId: SESSION_ID,
+      status: 'running',
+    });
+  });
+
+  it('does not emit redundant status update when live session is already running', async () => {
+    // Establish the session as live.
+    const p = sm.sendOrResume(SESSION_ID, 'first');
+    capturedSessions[0].emit('message', {
+      type: 'session_event',
+      sessionId: SESSION_ID,
+      eventType: 'system',
+      content: 'boot',
+    });
+    await p;
+
+    vi.mocked(updateSessionStatus).mockClear();
+    // Override: DB row already has status 'running'.
+    vi.mocked(getSession).mockReturnValue({
+      ...makeDeadRow(),
+      status: 'running',
+    } as any);
+
+    const emittedMessages: unknown[] = [];
+    sm.on('message', (msg) => emittedMessages.push(msg));
+
+    await sm.sendOrResume(SESSION_ID, 'live message');
+
+    expect(vi.mocked(updateSessionStatus)).not.toHaveBeenCalled();
+    expect(
+      emittedMessages.filter((m: any) => m.type === 'session_status'),
+    ).toHaveLength(0);
+  });
 });
 
 // ── respawnSession shared helper ──────────────────────────────────────────────

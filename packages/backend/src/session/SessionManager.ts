@@ -1939,6 +1939,17 @@ export class SessionManager extends EventEmitter {
     // Live session — deliver directly
     if (this.sessions.has(sessionId)) {
       this.send(sessionId, text);
+      // Mirror the respawn path: ensure status reflects the resumed activity
+      // so the UI doesn't keep rendering this session as idle.
+      const row = getSession(sessionId);
+      if (row && row.status !== 'running') {
+        updateSessionStatus(sessionId, 'running');
+        this.emit('message', {
+          type: 'session_status',
+          sessionId,
+          status: 'running',
+        } satisfies ServerMessage);
+      }
       return sessionId;
     }
 
