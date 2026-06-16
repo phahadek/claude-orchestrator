@@ -1,0 +1,31 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "ignore": [".clone/**", ".claude/worktrees/**", "dist/**", "node_modules/**"],
+  "ignoreBinaries": [
+    "tsc",
+    "ts-node",
+    "vitest",
+    "vite",
+    "AGPL",
+    "powershell",
+    "taskkill",
+    "open",
+    "pkexec"
+  ],
+  "workspaces": {
+    ".": {
+      "entry": ["scripts/*.mjs"]
+    },
+    "packages/backend": {
+      "entry": [
+        "src/server.ts",
+        "src/bootSequence.ts",
+        "test/helpers/**/*.ts",
+        "**/*.test.ts"
+      ]
+    },
+    "packages/frontend": {
+      "entry": ["src/main.tsx"]
+    }
+  }
+}
