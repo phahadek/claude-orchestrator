@@ -26,11 +26,13 @@ test: []
 # Per-command timeout in seconds for test commands. Default 300 (5 min).
 test_timeout_sec: 300
 
-# Commands the orchestrator runs on each PR before spawning review — catches lint errors and license contamination.
+# Commands the orchestrator runs on each PR before spawning review — catches lint errors, license contamination, and secret leaks.
 # Phase 1 baseline: eslint errors + GPL/AGPL dependency check. Warnings tolerated (11-warning baseline on dev).
+# Phase 4: gitleaks secret scanning — git-aware mode auto-respects .gitignore; allowlist in .gitleaks.toml.
 analyze:
   - npm run lint
   - npm run audit:licenses
+  - gitleaks dir .
 
 # Timeout in seconds for the analyze phase.
 analyze_timeout_sec: 180
