@@ -1,7 +1,4 @@
-export type {
-  CanonicalPauseReason,
-  PauseReasonStruct,
-} from './pauseReason';
+export type { CanonicalPauseReason, PauseReasonStruct } from './pauseReason';
 
 import type {
   CanonicalPauseReason as _CanonicalPauseReason,
@@ -108,11 +105,7 @@ export type NewSessionEvent = Omit<SessionEvent, 'id'>;
 
 // ─── permission_events ─────────────────────────────────────────────────────
 
-type PermissionDecision =
-  | 'auto_allow'
-  | 'auto_deny'
-  | 'approved'
-  | 'denied';
+type PermissionDecision = 'auto_allow' | 'auto_deny' | 'approved' | 'denied';
 
 export interface PermissionEvent {
   id: number;

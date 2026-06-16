@@ -66,7 +66,6 @@ const stmtGetSession = db.prepare<{ session_id: string }>(`
   SELECT * FROM sessions WHERE session_id = @session_id
 `);
 
-
 const stmtGetAllSessionIds = db.prepare(`
   SELECT session_id FROM sessions
 `);
@@ -349,7 +348,6 @@ export function getRunningSessionsWithMergedOrClosedPR(): StuckResultSessionRow[
 export function getSession(sessionId: string): Session | undefined {
   return stmtGetSession.get({ session_id: sessionId }) as Session | undefined;
 }
-
 
 export function getAllSessionIds(): string[] {
   return (stmtGetAllSessionIds.all() as { session_id: string }[]).map(
@@ -832,7 +830,6 @@ const stmtGetTaskCache = db.prepare<{ task_id: string }>(`
   SELECT * FROM task_cache WHERE task_id = @task_id
 `);
 
-
 export function updateTaskCacheStatus(taskId: string, status: string): void {
   const row = getTaskCache(taskId);
   if (!row) return;
@@ -1139,7 +1136,6 @@ export function getMergedPRForTask(taskId: string): PullRequestRow | null {
     )
     .get({ task_id: taskId }) as PullRequestRow | null;
 }
-
 
 export function getPRs(repo: string): PullRequestRow[] {
   return db
@@ -1876,9 +1872,7 @@ export function getProjectRowById(id: string): ProjectRow | undefined {
     .get({ id }) as ProjectRow | undefined;
 }
 
-function getProjectByGithubRepo(
-  githubRepo: string,
-): ProjectRow | undefined {
+function getProjectByGithubRepo(githubRepo: string): ProjectRow | undefined {
   return db
     .prepare<{
       github_repo: string;

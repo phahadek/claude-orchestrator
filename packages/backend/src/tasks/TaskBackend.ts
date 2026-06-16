@@ -89,7 +89,6 @@ export interface TaskBackend {
   listTasksByStatus(status: string): Promise<ResolvedTask[]>;
 }
 
-
 // ── AuditingTaskBackend ──────────────────────────────────────────────────────
 
 /**

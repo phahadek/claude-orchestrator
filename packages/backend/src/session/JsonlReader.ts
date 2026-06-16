@@ -19,7 +19,6 @@ import {
   toEventType,
 } from './eventTypes';
 
-
 export interface RawSessionEvent {
   type: EventType;
   content: unknown;

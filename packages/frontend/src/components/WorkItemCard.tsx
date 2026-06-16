@@ -62,7 +62,6 @@ export interface LocalBranchWorkItem {
 
 export type WorkItemListItem = PRWorkItem | LocalBranchWorkItem;
 
-
 export interface WorkItemCardProps {
   item: WorkItemListItem;
   onReview: (prNumber: number) => void;
@@ -523,4 +522,3 @@ export function WorkItemCard(props: WorkItemCardProps) {
   }
   return <PRWorkItemCard {...props} item={props.item} />;
 }
-
