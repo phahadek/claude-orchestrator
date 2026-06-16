@@ -41,6 +41,7 @@
     "eslint": "^10.4.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
+    "eslint-plugin-security": "^4.0.1",
     "globals": "^17.6.0",
     "js-yaml": "^4.1.1",
     "kill-port": "^2.0.1",
