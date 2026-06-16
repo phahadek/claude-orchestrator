@@ -69,6 +69,7 @@ const LABEL_DEFINITIONS = [
 ];
 
 // Matches: "Depends on: #1 #2 #3" (anchored at start of line in multiline mode)
+// eslint-disable-next-line security/detect-unsafe-regex -- Reason: verified non-backtracking; anchored by ^ and $, \d+ and \s+ char classes don't overlap, no catastrophic backtracking path against structured dependency-reference inputs.
 const DEPENDS_ON_RE = /^Depends on:\s+(#\d+(?:\s+#\d+)*)$/m;
 
 const resolver = new DependencyResolver();

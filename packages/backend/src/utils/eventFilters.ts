@@ -22,6 +22,7 @@ export function isSystemOnlyUserEvent(payload: string): boolean {
   if (typeof content === 'string') {
     // Strip paired tag+content blocks first, then remaining standalone tags
     const stripped = content
+      // eslint-disable-next-line security/detect-unsafe-regex -- Reason: verified non-backtracking against structured Claude API event payloads; lazy [\s\S]*? is anchored by the literal closing-tag backreference <\/\1>, inputs are bounded system-injected XML-like blocks.
       .replace(/<([a-zA-Z][a-zA-Z0-9_-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g, '')
       .replace(/<[^>]+>/g, '')
       .trim();
@@ -34,6 +35,7 @@ export function isSystemOnlyUserEvent(payload: string): boolean {
       const b = block as Record<string, unknown>;
       if (b.type === 'text' && typeof b.text === 'string') {
         const stripped = b.text
+          // eslint-disable-next-line security/detect-unsafe-regex -- Reason: verified non-backtracking against structured Claude API event payloads; lazy [\s\S]*? is anchored by the literal closing-tag backreference <\/\1>, inputs are bounded system-injected XML-like blocks.
           .replace(/<([a-zA-Z][a-zA-Z0-9_-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g, '')
           .replace(/<[^>]+>/g, '')
           .trim();

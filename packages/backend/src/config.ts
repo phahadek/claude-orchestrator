@@ -35,8 +35,8 @@ function resolveClaudePath(): string {
   // On Windows, spawn('claude', ..., { cwd }) fails if claude isn't in the
   // system PATH. Resolve the full path at startup so it always works.
   try {
-    const { execSync } =
-      require('child_process') as typeof import('child_process');
+    // eslint-disable-next-line security/detect-child-process -- Reason: orchestrator spawns claude CLI as the core dispatch primitive.
+    const { execSync } = require('child_process') as typeof import('child_process');
     return execSync(
       process.platform === 'win32' ? 'where claude' : 'which claude',
       {

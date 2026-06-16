@@ -3,6 +3,7 @@ const tseslint = require('typescript-eslint');
 const reactHooks = require('eslint-plugin-react-hooks');
 const reactRefresh = require('eslint-plugin-react-refresh').default;
 const globals = require('globals');
+const security = require('eslint-plugin-security');
 
 // Inline rule: reject relative imports ending in .js in backend runtime files.
 // The backend runs under ts-node + CommonJS which resolves './foo.ts' but crashes on './foo.js'.
@@ -82,6 +83,33 @@ module.exports = tseslint.config(
       // useEffect+fetch is the standard data-loading pattern; Suspense migration is out of scope
       'react-hooks/set-state-in-effect': 'off',
     },
+  },
+
+  // Backend + frontend SAST: eslint-plugin-security recommended rules.
+  // Two globally noisy rules are disabled here because they flag every bracket-access and fs
+  // call regardless of whether user input is actually involved — ~100% false-positive rate in
+  // this codebase. Real path-traversal and injection protections live at input boundaries.
+  //   detect-non-literal-fs-filename: every fs call with a variable path triggers it; our fs
+  //     paths are constructed from config/constants, not raw user input.
+  //   detect-object-injection: every obj[key] access triggers it; bracket access is idiomatic
+  //     TypeScript and the keys here come from typed enums/constants, not user-controlled input.
+  {
+    files: ['packages/backend/src/**/*.{ts,tsx}', 'packages/frontend/src/**/*.{ts,tsx}'],
+    plugins: { security },
+    rules: {
+      ...security.configs.recommended.rules,
+      'security/detect-non-literal-fs-filename': 'off',
+      'security/detect-object-injection': 'off',
+    },
+  },
+
+  // Test files: security rules disabled — tests legitimately exercise edge-case patterns
+  // (fs paths, child_process, regex shapes, eval-like constructs) to verify guard code works.
+  {
+    files: ['**/__tests__/**/*.{ts,tsx}', '**/*.test.{ts,tsx}', '**/test/**/*.{ts,tsx}'],
+    rules: Object.fromEntries(
+      Object.keys(security.configs.recommended.rules || {}).map((r) => [r, 'off']),
+    ),
   },
 
   // Test files: mocks legitimately use `any` casts

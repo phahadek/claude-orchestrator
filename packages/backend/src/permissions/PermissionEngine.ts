@@ -54,6 +54,7 @@ function matchPattern(
 ): boolean {
   if (matchType === 'regex') {
     try {
+      // eslint-disable-next-line security/detect-non-literal-regexp -- Reason: pattern is a user-configured permission rule from the settings UI, treated as trusted admin input by design.
       return new RegExp(pattern).test(subject);
     } catch {
       logger.warn(

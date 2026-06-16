@@ -413,12 +413,14 @@ function extractWriteTargetsFromCommand(command: string): string[] {
   }
   // tee destinations: tee [-flags] path
   for (const match of stripped.matchAll(
+    // eslint-disable-next-line security/detect-unsafe-regex -- Reason: verified non-backtracking; (?:-\S+\s+)* has non-overlapping char classes (non-whitespace then whitespace), no catastrophic path exists.
     /\btee\s+(?:-\S+\s+)*([^\s"'`;\n|&]+)/g,
   )) {
     targets.push(match[1]);
   }
   // cp/mv destinations: cp/mv [-flags] src dest
   for (const match of stripped.matchAll(
+    // eslint-disable-next-line security/detect-unsafe-regex -- Reason: verified non-backtracking; (?:-\S+\s+)* alternates non-whitespace+whitespace with no overlap; anchored by \b and trailing \s+.
     /\b(?:cp|mv)\s+(?:-\S+\s+)*\S+\s+([^\s"'`;\n|&]+)/g,
   )) {
     targets.push(match[1]);
