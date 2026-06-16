@@ -457,7 +457,8 @@ describe('runBootWorktreeReconciliation — per-worktree post-remove prune (Fix 
       if (String(cmd).includes('worktree list'))
         return gitWorktreeListOutput(wtPath) as never;
       if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
-      if (String(cmd).includes('worktree remove')) throw new Error('Result too large');
+      if (String(cmd).includes('worktree remove'))
+        throw new Error('Result too large');
       return '' as never;
     });
     mockedGetSession.mockReturnValue(makeSession('done') as never);
@@ -484,7 +485,8 @@ describe('runBootWorktreeReconciliation — fs.rmSync fallback (Fix B)', () => {
       if (String(cmd).includes('worktree list'))
         return gitWorktreeListOutput(wtPath) as never;
       if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
-      if (String(cmd).includes('worktree remove')) throw new Error('Invalid argument');
+      if (String(cmd).includes('worktree remove'))
+        throw new Error('Invalid argument');
       return '' as never;
     });
     mockedExistsSync.mockReturnValue(true);
@@ -509,7 +511,8 @@ describe('runBootWorktreeReconciliation — fs.rmSync fallback (Fix B)', () => {
       if (String(cmd).includes('worktree list'))
         return gitWorktreeListOutput(wtPath) as never;
       if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
-      if (String(cmd).includes('worktree remove')) throw new Error('not a working tree');
+      if (String(cmd).includes('worktree remove'))
+        throw new Error('not a working tree');
       return '' as never;
     });
     // Phase 1 existsSync (line 88): true → proceed to removal; Fix B existsSync: false → skip rmSync
