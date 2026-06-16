@@ -94,7 +94,10 @@ module.exports = tseslint.config(
   //   detect-object-injection: every obj[key] access triggers it; bracket access is idiomatic
   //     TypeScript and the keys here come from typed enums/constants, not user-controlled input.
   {
-    files: ['packages/backend/src/**/*.{ts,tsx}', 'packages/frontend/src/**/*.{ts,tsx}'],
+    files: [
+      'packages/backend/src/**/*.{ts,tsx}',
+      'packages/frontend/src/**/*.{ts,tsx}',
+    ],
     plugins: { security },
     rules: {
       ...security.configs.recommended.rules,
@@ -106,9 +109,16 @@ module.exports = tseslint.config(
   // Test files: security rules disabled — tests legitimately exercise edge-case patterns
   // (fs paths, child_process, regex shapes, eval-like constructs) to verify guard code works.
   {
-    files: ['**/__tests__/**/*.{ts,tsx}', '**/*.test.{ts,tsx}', '**/test/**/*.{ts,tsx}'],
+    files: [
+      '**/__tests__/**/*.{ts,tsx}',
+      '**/*.test.{ts,tsx}',
+      '**/test/**/*.{ts,tsx}',
+    ],
     rules: Object.fromEntries(
-      Object.keys(security.configs.recommended.rules || {}).map((r) => [r, 'off']),
+      Object.keys(security.configs.recommended.rules || {}).map((r) => [
+        r,
+        'off',
+      ]),
     ),
   },
 
