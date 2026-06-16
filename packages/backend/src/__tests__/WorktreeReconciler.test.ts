@@ -30,10 +30,29 @@ vi.mock('../audit/AuditLog.js', () => ({
   recordEvent: vi.fn(),
 }));
 
+vi.mock('../logger.js', () => ({
+  logger: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
+// Spy on runWithConcurrency so we can verify the concurrency cap and inject delays.
+vi.mock('../utils/concurrency.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/concurrency.js')>();
+  return {
+    runWithConcurrency: vi.fn().mockImplementation(actual.runWithConcurrency),
+  };
+});
+
 import { execSync } from 'child_process';
 import fs from 'node:fs';
 import { getSession, getPRBySessionId } from '../db/queries.js';
 import { recordEvent } from '../audit/AuditLog.js';
+import { logger } from '../logger.js';
+import { runWithConcurrency } from '../utils/concurrency.js';
 import { runBootWorktreeReconciliation } from '../orchestration/WorktreeReconciler.js';
 import type { ProjectConfig } from '../config.js';
 
@@ -45,6 +64,8 @@ const mockedRmSync = vi.mocked(fs.rmSync);
 const mockedGetSession = vi.mocked(getSession);
 const mockedGetPR = vi.mocked(getPRBySessionId);
 const mockedRecordEvent = vi.mocked(recordEvent);
+const mockedLoggerInfo = vi.mocked(logger.info);
+const mockedRunWithConcurrency = vi.mocked(runWithConcurrency);
 
 const PROJECT_DIR = '/fake/project';
 const WORKTREES_DIR = '/fake/project/.claude/worktrees';
@@ -148,7 +169,7 @@ function gitWorktreeListOutput(
   return `worktree ${wtPath}\nHEAD abc123\nbranch refs/heads/${branch}\n\n`;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   mockedExecSync.mockImplementation((cmd: string) => {
     if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
@@ -163,6 +184,12 @@ beforeEach(() => {
   mockedStatSync.mockReturnValue({ isDirectory: () => true } as ReturnType<
     typeof fs.statSync
   >);
+  // Restore runWithConcurrency to the real impl (clear any mockImplementationOnce overrides)
+  mockedRunWithConcurrency.mockReset();
+  const { runWithConcurrency: realRwc } = await vi.importActual<
+    typeof import('../utils/concurrency.js')
+  >('../utils/concurrency.js');
+  mockedRunWithConcurrency.mockImplementation(realRwc);
 });
 
 // ── Terminal sessions removed (registered path → git-remove) ─────────────────
@@ -701,5 +728,114 @@ describe('runBootWorktreeReconciliation — mixed fixture', () => {
       expect.anything(),
     );
     expect(mockedRmSync).not.toHaveBeenCalled();
+  });
+});
+
+// ── Parallelism — boot sweep uses runWithConcurrency with cap 4 ───────────────
+
+describe('runBootWorktreeReconciliation — parallelism', () => {
+  it('dispatches all projects to runWithConcurrency with concurrency cap 4', async () => {
+    const projects = Array.from({ length: 6 }, (_, i) =>
+      makeProject({ id: `proj-${i}`, projectDir: `/fake/p${i}` }),
+    );
+
+    await runBootWorktreeReconciliation({ listProjects: () => projects });
+
+    expect(mockedRunWithConcurrency).toHaveBeenCalledWith(
+      projects,
+      4,
+      expect.any(Function),
+    );
+  });
+
+  it('processes all N projects even when N > concurrency cap', async () => {
+    const N = 8;
+    const projects = Array.from({ length: N }, (_, i) =>
+      makeProject({ id: `proj-${i}`, projectDir: `/fake/p${i}` }),
+    );
+
+    mockedExecSync.mockImplementation(() => '' as never);
+
+    await runBootWorktreeReconciliation({ listProjects: () => projects });
+
+    const pruneCalls = mockedExecSync.mock.calls.filter(([cmd]) =>
+      String(cmd).includes('worktree prune'),
+    );
+    expect(pruneCalls).toHaveLength(N);
+  });
+
+  it('cap 4 completes faster than serial (cap 1) with async-delayed projects', async () => {
+    const N = 8;
+    const DELAY_MS = 20;
+    const projects = Array.from({ length: N }, (_, i) =>
+      makeProject({ id: `proj-${i}`, projectDir: `/fake/p${i}` }),
+    );
+
+    mockedExecSync.mockImplementation(() => '' as never);
+
+    // Override runWithConcurrency to add a real async delay per project,
+    // preserving the concurrency cap so parallel benefit is observable.
+    const { runWithConcurrency: realRwc } = await vi.importActual<
+      typeof import('../utils/concurrency.js')
+    >('../utils/concurrency.js');
+    mockedRunWithConcurrency.mockImplementationOnce(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (items: any[], cap: number, fn: (item: any) => Promise<any>) =>
+        realRwc(items, cap, async (item: unknown) => {
+          await new Promise<void>((resolve) => setTimeout(resolve, DELAY_MS));
+          return fn(item);
+        }),
+    );
+
+    const t0 = Date.now();
+    await runBootWorktreeReconciliation({ listProjects: () => projects });
+    const elapsed = Date.now() - t0;
+
+    // With cap=4 and N=8: ceil(8/4) * 20ms = 40ms.
+    // Serial (cap=1) would take 8 * 20ms = 160ms.
+    // Threshold: less than half the serial time gives generous room for CI noise.
+    expect(elapsed).toBeLessThan((N * DELAY_MS) / 2);
+  });
+});
+
+// ── Structured per-repo duration logs ────────────────────────────────────────
+
+describe('runBootWorktreeReconciliation — per-repo duration logs', () => {
+  it('emits a per-repo profile log with all four duration fields', async () => {
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
+
+    const profileCall = mockedLoggerInfo.mock.calls.find(
+      ([msg]) => typeof msg === 'string' && msg.includes('per-repo profile'),
+    );
+    expect(profileCall).toBeDefined();
+    const payload = profileCall![1] as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      project_id: 'proj-1',
+      worktree_list_duration_ms: expect.any(Number),
+      worktree_remove_duration_ms: expect.any(Number),
+      worktree_branch_delete_duration_ms: expect.any(Number),
+      worktree_prune_duration_ms: expect.any(Number),
+    });
+  });
+
+  it('emits one profile log per project', async () => {
+    const projects = [
+      makeProject({ id: 'proj-a', projectDir: '/pa' }),
+      makeProject({ id: 'proj-b', projectDir: '/pb' }),
+    ];
+
+    await runBootWorktreeReconciliation({ listProjects: () => projects });
+
+    const profileCalls = mockedLoggerInfo.mock.calls.filter(
+      ([msg]) => typeof msg === 'string' && msg.includes('per-repo profile'),
+    );
+    expect(profileCalls).toHaveLength(2);
+    const ids = profileCalls.map(
+      ([, payload]) => (payload as Record<string, unknown>).project_id,
+    );
+    expect(ids).toContain('proj-a');
+    expect(ids).toContain('proj-b');
   });
 });
