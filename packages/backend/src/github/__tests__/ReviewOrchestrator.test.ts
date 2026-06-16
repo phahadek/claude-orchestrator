@@ -46,7 +46,7 @@ vi.mock('../../session/test-runner', () => ({
   runTestCommands: vi.fn().mockResolvedValue({ passed: true, output: '' }),
 }));
 vi.mock('../../orchestration/verifyRunner', () => ({
-  runVerifyAsGate: vi.fn().mockResolvedValue(undefined),
+  runVerifyAsGate: vi.fn().mockResolvedValue({ passed: true }),
 }));
 vi.mock('../../audit/AuditLog', () => ({ recordEvent: vi.fn() }));
 vi.mock('../../config', () => ({
@@ -57,6 +57,7 @@ vi.mock('../../config', () => ({
 }));
 vi.mock('../../db/queries', () => ({
   getPRByNumber: vi.fn(),
+  getPRBySessionId: vi.fn(),
   getSession: vi.fn(),
   getLocalBranchBySession: vi.fn().mockReturnValue(null),
   setPRReviewResult: vi.fn(),
@@ -83,7 +84,12 @@ vi.mock('../../db/queries', () => ({
 
 import type { SessionManager } from '../../session/SessionManager';
 import { ReviewOrchestrator } from '../ReviewOrchestrator';
-import { getPRByNumber, getAllPendingReviewSyncs } from '../../db/queries';
+import {
+  getPRByNumber,
+  getPRBySessionId,
+  getSession,
+  getAllPendingReviewSyncs,
+} from '../../db/queries';
 import { getProjectByGithubRepo } from '../../config';
 import { formatReviewFeedback } from '../reviewUtils';
 import type { PRReviewService, PRReviewResult } from '../PRReviewService';
@@ -238,5 +244,252 @@ describe('ReviewOrchestrator — pr_opened subscription', () => {
       'pr_opened',
       expect.any(Function),
     );
+  });
+});
+
+// ── session_ended re-review trigger ──────────────────────────────────────────
+
+function makeStandardSession(sessionId = CODER_SESSION_ID) {
+  return {
+    session_id: sessionId,
+    session_type: 'standard',
+    task_url: 'https://notion.so/task-1',
+    worktree_path: null,
+    task_id: 'task-1',
+    project_id: 'project-1',
+    status: 'idle',
+  } as any;
+}
+
+function makePRRowWithVerdict(
+  verdict: string,
+  reviewIteration = 0,
+  sessionId = CODER_SESSION_ID,
+) {
+  return {
+    ...makePRRow(sessionId),
+    review_iteration: reviewIteration,
+    review_result: JSON.stringify({ verdict, summary: 'test', dimensions: [] }),
+  } as any;
+}
+
+describe('ReviewOrchestrator — session_ended re-review trigger', () => {
+  let sm: SessionManager;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getAllPendingReviewSyncs).mockReturnValue([]);
+    vi.mocked(getProjectByGithubRepo).mockReturnValue(makeProject());
+    vi.mocked(getPRByNumber).mockReturnValue(makePRRow());
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+    vi.mocked(getSession).mockReturnValue(undefined);
+    sm = makeSessionManager();
+  });
+
+  it('subscribes to session_ended via the message event handler', () => {
+    const spyOn = vi.spyOn(sm, 'on');
+    new ReviewOrchestrator(makeReviewService(), sm, true);
+    expect(spyOn).toHaveBeenCalledWith('message', expect.any(Function));
+  });
+
+  it('fires re-review when standard session ends with needs_changes verdict below cap', async () => {
+    vi.mocked(getSession).mockReturnValue(makeStandardSession());
+    vi.mocked(getPRBySessionId).mockReturnValue(
+      makePRRowWithVerdict('needs_changes', 0),
+    );
+    vi.mocked(getPRByNumber).mockReturnValue(
+      makePRRowWithVerdict('needs_changes', 0),
+    );
+
+    const reviewService = makeReviewService('needs_changes');
+    new ReviewOrchestrator(reviewService, sm, true);
+
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: CODER_SESSION_ID,
+      status: 'idle',
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(vi.mocked(reviewService.reviewPR)).toHaveBeenCalled();
+  });
+
+  it('doc-only fix: re-review fires when session ends without head_sha advance after needs_changes (PR #668 regression)', async () => {
+    const prRow = {
+      ...makePRRowWithVerdict('needs_changes', 0),
+      head_sha: 'abc123',
+      last_reviewed_sha: 'abc123',
+    };
+    vi.mocked(getSession).mockReturnValue(makeStandardSession());
+    vi.mocked(getPRBySessionId).mockReturnValue(prRow);
+    vi.mocked(getPRByNumber).mockReturnValue(prRow);
+
+    const reviewService = makeReviewService('needs_changes');
+    new ReviewOrchestrator(reviewService, sm, true);
+
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: CODER_SESSION_ID,
+      status: 'idle',
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(vi.mocked(reviewService.reviewPR)).toHaveBeenCalled();
+  });
+
+  it('does NOT fire re-review when review_iteration >= cap', async () => {
+    vi.mocked(getSession).mockReturnValue(makeStandardSession());
+    vi.mocked(getPRBySessionId).mockReturnValue(
+      makePRRowWithVerdict('needs_changes', 3),
+    );
+
+    const reviewService = makeReviewService('needs_changes');
+    new ReviewOrchestrator(reviewService, sm, true);
+
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: CODER_SESSION_ID,
+      status: 'idle',
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(vi.mocked(reviewService.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fire re-review when there is no PR paired with the session', async () => {
+    vi.mocked(getSession).mockReturnValue(makeStandardSession());
+    vi.mocked(getPRBySessionId).mockReturnValue(null);
+
+    const reviewService = makeReviewService('needs_changes');
+    new ReviewOrchestrator(reviewService, sm, true);
+
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: CODER_SESSION_ID,
+      status: 'idle',
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(vi.mocked(reviewService.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fire re-review when PR has no review result yet', async () => {
+    vi.mocked(getSession).mockReturnValue(makeStandardSession());
+    vi.mocked(getPRBySessionId).mockReturnValue({
+      ...makePRRow(),
+      review_result: null,
+    } as any);
+
+    const reviewService = makeReviewService('needs_changes');
+    new ReviewOrchestrator(reviewService, sm, true);
+
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: CODER_SESSION_ID,
+      status: 'idle',
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(vi.mocked(reviewService.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fire re-review when verdict is approved', async () => {
+    vi.mocked(getSession).mockReturnValue(makeStandardSession());
+    vi.mocked(getPRBySessionId).mockReturnValue(
+      makePRRowWithVerdict('approved', 0),
+    );
+
+    const reviewService = makeReviewService('approved');
+    new ReviewOrchestrator(reviewService, sm, true);
+
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: CODER_SESSION_ID,
+      status: 'idle',
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(vi.mocked(reviewService.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fire re-review when a review session ends (session_type !== standard)', async () => {
+    vi.mocked(getSession).mockReturnValue({
+      ...makeStandardSession(),
+      session_type: 'review',
+    });
+    vi.mocked(getPRBySessionId).mockReturnValue(
+      makePRRowWithVerdict('needs_changes', 0),
+    );
+
+    const reviewService = makeReviewService('needs_changes');
+    new ReviewOrchestrator(reviewService, sm, true);
+
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: CODER_SESSION_ID,
+      status: 'idle',
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(vi.mocked(reviewService.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fire re-review when session is not found in DB', async () => {
+    vi.mocked(getSession).mockReturnValue(undefined);
+    vi.mocked(getPRBySessionId).mockReturnValue(
+      makePRRowWithVerdict('needs_changes', 0),
+    );
+
+    const reviewService = makeReviewService('needs_changes');
+    new ReviewOrchestrator(reviewService, sm, true);
+
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: CODER_SESSION_ID,
+      status: 'idle',
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(vi.mocked(reviewService.reviewPR)).not.toHaveBeenCalled();
+  });
+
+  it('idempotency: does NOT enqueue a second review when one is already queued for the same PR', async () => {
+    vi.mocked(getSession).mockReturnValue(makeStandardSession());
+    const prRow = makePRRowWithVerdict('needs_changes', 0);
+    vi.mocked(getPRBySessionId).mockReturnValue(prRow);
+    vi.mocked(getPRByNumber).mockReturnValue(prRow);
+
+    const reviewService = makeReviewService('needs_changes');
+    const orchestrator = new ReviewOrchestrator(reviewService, sm, true);
+
+    // Simulate push_detected having enqueued a review already via ReviewOrchestrator
+    const job: ReviewJob = {
+      prNumber: PR_NUMBER,
+      repo: REPO,
+      taskId: 'task-1',
+      taskUrl: 'https://notion.so/task-1',
+      contextUrl: 'https://notion.so/project',
+    };
+    orchestrator.enqueueReview(job);
+
+    // session_ended fires for the same PR — should NOT enqueue a second review
+    sm.emit('message', {
+      type: 'session_ended',
+      sessionId: CODER_SESSION_ID,
+      status: 'idle',
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // reviewPR should only be called once (from the first enqueue)
+    expect(vi.mocked(reviewService.reviewPR)).toHaveBeenCalledTimes(1);
   });
 });
