@@ -63,7 +63,7 @@ export function emitTaskUpdated(notionTaskId: string): void {
 }
 
 /** Build a TaskView for a single notionTaskId from current DB state. Returns null if not found. */
-export function buildTaskView(notionTaskId: string): TaskView | null {
+function buildTaskView(notionTaskId: string): TaskView | null {
   const rows = getActiveTaskAggregates([notionTaskId]);
   if (rows.length === 0) return null;
   return buildTaskViewFromRow(rows[0], getReviewIterationCap());

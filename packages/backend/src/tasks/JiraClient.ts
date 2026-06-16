@@ -1,7 +1,7 @@
 // Thin REST wrapper for the Jira Cloud/Server v3 API.
 // Supports bearer token (JIRA_TOKEN only) or basic auth (JIRA_EMAIL + JIRA_TOKEN).
 
-export interface JiraIssueFields {
+interface JiraIssueFields {
   summary: string;
   status: { name: string };
   issuetype: { name: string };

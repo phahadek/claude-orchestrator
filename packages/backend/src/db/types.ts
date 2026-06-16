@@ -1,10 +1,4 @@
-export type {
-  CanonicalPauseReason,
-  PauseSource,
-  PauseSeverity,
-  PauseRetryStrategy,
-  PauseReasonStruct,
-} from './pauseReason';
+export type { CanonicalPauseReason, PauseReasonStruct } from './pauseReason';
 
 import type {
   CanonicalPauseReason as _CanonicalPauseReason,
@@ -16,7 +10,7 @@ export type { PauseReason };
 
 // ─── sessions ──────────────────────────────────────────────────────────────
 
-export type SessionStatus =
+type SessionStatus =
   | 'starting'
   | 'running'
   | 'needs_permission'
@@ -111,11 +105,7 @@ export type NewSessionEvent = Omit<SessionEvent, 'id'>;
 
 // ─── permission_events ─────────────────────────────────────────────────────
 
-export type PermissionDecision =
-  | 'auto_allow'
-  | 'auto_deny'
-  | 'approved'
-  | 'denied';
+type PermissionDecision = 'auto_allow' | 'auto_deny' | 'approved' | 'denied';
 
 export interface PermissionEvent {
   id: number;
@@ -131,8 +121,8 @@ export type NewPermissionEvent = Omit<PermissionEvent, 'id'>;
 
 // ─── permission_rules ──────────────────────────────────────────────────────
 
-export type MatchType = 'glob' | 'regex';
-export type RuleDecision = 'allow' | 'deny';
+type MatchType = 'glob' | 'regex';
+type RuleDecision = 'allow' | 'deny';
 
 export interface PermissionRule {
   id: number;
@@ -143,8 +133,6 @@ export interface PermissionRule {
   label: string | null;
   enabled: number; // 0 | 1 (SQLite boolean)
 }
-
-export type NewPermissionRule = Omit<PermissionRule, 'id'>;
 
 // ─── permission_denials ─────────────────────────────────────────────────────
 
@@ -243,7 +231,7 @@ export type NewMilestoneRow = Omit<
 
 // ─── local_branches ────────────────────────────────────────────────────────
 
-export type LocalBranchStatus = 'open' | 'merged' | 'abandoned';
+type LocalBranchStatus = 'open' | 'merged' | 'abandoned';
 
 export interface LocalBranchRow {
   id: number;
@@ -276,9 +264,6 @@ export interface WorktreeEscapeViolation {
   escapedTo: string;
 }
 
-/** Discriminated union of structured violation types stored in session_audits. */
-export type AuditViolation = WorktreeEscapeViolation;
-
 // ─── devices ────────────────────────────────────────────────────────────────
 
 export interface DeviceRow {
@@ -306,8 +291,6 @@ export interface SessionPauseInterval {
   paused_at: number;
   resumed_at: number | null;
 }
-
-export type NewSessionPauseInterval = Omit<SessionPauseInterval, 'id'>;
 
 // ─── pull_requests ──────────────────────────────────────────────────────────
 

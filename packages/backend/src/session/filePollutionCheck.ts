@@ -7,7 +7,7 @@ import type { GitHubClient } from '../github/GitHubClient';
 import { logger } from '../logger';
 
 /** Walk a directory tree collecting all .gitignore files, root-first. */
-export function collectGitignoreSources(
+function collectGitignoreSources(
   rootDir: string,
 ): Array<{ dir: string; content: string }> {
   const results: Array<{ dir: string; content: string }> = [];

@@ -17,9 +17,6 @@ export interface VerifyCIFailureArgs {
   truncatedOutput: string | undefined;
 }
 
-/** @deprecated Use GitHubCIFailureArgs directly */
-export type CIFailureResult = GitHubCIFailureArgs;
-
 const CI_LOG_EXCERPT_CAP = 800;
 
 function truncateLog(log: string, cap: number): string {

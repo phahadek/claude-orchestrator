@@ -1,4 +1,4 @@
-export type PauseSource =
+type PauseSource =
   | 'autofix'
   | 'verify'
   | 'analyze'
@@ -10,8 +10,8 @@ export type PauseSource =
   | 'launch'
   | 'session';
 
-export type PauseSeverity = 'recoverable' | 'needs_attention' | 'terminal';
-export type PauseRetryStrategy = 'automatic' | 'manual_action' | 'none';
+type PauseSeverity = 'recoverable' | 'needs_attention' | 'terminal';
+type PauseRetryStrategy = 'automatic' | 'manual_action' | 'none';
 
 export type CanonicalPauseReason =
   | 'max_reviews'

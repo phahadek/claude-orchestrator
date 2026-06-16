@@ -16,15 +16,15 @@ function log(sessionId: string, ...args: unknown[]) {
  * Container name prefix for session containers.
  * Used by the orphan-reap logic to identify containers owned by this system.
  */
-export const SESSION_CONTAINER_PREFIX = 'claude-session-';
-export const PROXY_CONTAINER_PREFIX = 'claude-session-proxy-';
-export const NETWORK_PREFIX = 'claude-session-net-';
+const SESSION_CONTAINER_PREFIX = 'claude-session-';
+const PROXY_CONTAINER_PREFIX = 'claude-session-proxy-';
+const NETWORK_PREFIX = 'claude-session-net-';
 
 /**
  * Default egress allowlist for the squid proxy.
  * Extended per-project with the Jira host from task_source_config when applicable.
  */
-export const DEFAULT_EGRESS_ALLOWLIST = [
+const DEFAULT_EGRESS_ALLOWLIST = [
   'api.anthropic.com',
   'api.github.com',
   'github.com',

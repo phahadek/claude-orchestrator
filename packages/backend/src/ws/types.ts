@@ -15,7 +15,7 @@ export interface PermissionDenial {
  * `session_started` WS messages. Populated from the `sessions` table joined
  * against `pull_requests` (for prUrl) on each WS connection.
  */
-export interface SessionState {
+interface SessionState {
   sessionId: string;
   taskName: string;
   notionTaskUrl: string;

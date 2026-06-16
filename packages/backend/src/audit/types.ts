@@ -1,4 +1,4 @@
-export type EventType =
+type EventType =
   | 'session_launched'
   | 'commit'
   | 'pr_opened'
@@ -41,7 +41,7 @@ export type EventType =
   | 'pipeline_stage_passed'
   | 'pipeline_stage_failed';
 
-export type ActorType = 'ai' | 'human' | 'system';
+type ActorType = 'ai' | 'human' | 'system';
 
 export interface AuditEvent {
   event_type: EventType;

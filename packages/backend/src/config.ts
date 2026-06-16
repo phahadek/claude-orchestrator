@@ -2,7 +2,7 @@ import { getSecret } from './security/secrets';
 import { getOrchestratorConfig } from './config/appConfig';
 import type { NonMilestoneSourceConfig } from './tasks/TaskBackend';
 
-export interface Board {
+interface Board {
   /** Milestone row id — used as the milestoneId for WS fetch_tasks. */
   id: string;
   /** Notion database id (milestone.source_id) — used internally by NotionTaskBackend. */

@@ -13,7 +13,7 @@ import styles from './Header.module.css';
 
 export type TopView = 'tasks' | 'sessions' | 'prs' | 'analytics' | 'settings';
 
-export interface AutoLaunchTogglePatch {
+interface AutoLaunchTogglePatch {
   autoLaunchEnabled: boolean;
   autoLaunchMilestoneId?: string | null;
 }

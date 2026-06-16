@@ -138,7 +138,7 @@ export function bootstrapEnroll(
 }
 
 // Exported for tests
-export { pendingEnrollments, generateCode };
+export { pendingEnrollments };
 
 type BroadcastFn = (msg: ServerMessage) => void;
 let broadcastFn: BroadcastFn | null = null;

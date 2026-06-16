@@ -1,6 +1,6 @@
 import { typedGetSetting } from './settings';
 
-export interface CorporateModeGates {
+interface CorporateModeGates {
   dockerMandatory: boolean;
   requireHumanApproval: boolean;
   requireZDR: boolean;

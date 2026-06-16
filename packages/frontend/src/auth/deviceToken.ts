@@ -7,7 +7,3 @@ export function getDeviceToken(): string | null {
 export function setDeviceToken(token: string): void {
   localStorage.setItem(DEVICE_TOKEN_KEY, token);
 }
-
-export function clearDeviceToken(): void {
-  localStorage.removeItem(DEVICE_TOKEN_KEY);
-}
