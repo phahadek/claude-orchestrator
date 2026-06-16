@@ -780,7 +780,6 @@ describe('runBootWorktreeReconciliation — parallelism', () => {
       typeof import('../utils/concurrency.js')
     >('../utils/concurrency.js');
     mockedRunWithConcurrency.mockImplementationOnce(
-       
       (items: any[], cap: number, fn: (item: any) => Promise<any>) =>
         realRwc(items, cap, async (item: unknown) => {
           await new Promise<void>((resolve) => setTimeout(resolve, DELAY_MS));

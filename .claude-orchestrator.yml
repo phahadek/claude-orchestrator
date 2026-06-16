@@ -30,11 +30,13 @@ test_timeout_sec: 300
 # Phase 1 baseline: eslint errors + GPL/AGPL dependency check. Warnings tolerated (11-warning baseline on dev).
 # Phase 4: gitleaks secret scanning — git-aware mode auto-respects .gitignore; allowlist in .gitleaks.toml.
 # Phase 6: knip unused-export / dead-code gate — knip.json silences false positives (gitignored dirs, scripts, test helpers).
+# Phase 7: npm audit vulnerability gate — high threshold, prod deps only (--omit=dev).
 analyze:
   - npm run lint
   - npm run audit:licenses
   - gitleaks dir .
   - npx knip --no-progress --reporter compact
+  - npm audit --audit-level=high --omit=dev
 
 # Timeout in seconds for the analyze phase.
 analyze_timeout_sec: 180
