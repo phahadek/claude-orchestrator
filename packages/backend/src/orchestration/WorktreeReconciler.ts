@@ -133,6 +133,25 @@ async function reconcileProject(project: ProjectConfig): Promise<ProjectStats> {
         `[WorktreeReconciler] removed worktree for session ${sessionId.slice(0, 8)} (project ${project.id})`,
       );
     } catch (err) {
+      let fallbackOk = false;
+      if (fs.existsSync(wtPath)) {
+        try {
+          fs.rmSync(wtPath, {
+            recursive: true,
+            force: true,
+            maxRetries: 3,
+            retryDelay: 500,
+          });
+          fallbackOk = true;
+          logger.info(
+            `[WorktreeReconciler] fs.rmSync fallback succeeded for session ${sessionId.slice(0, 8)} after git worktree remove failed`,
+          );
+        } catch (rmErr) {
+          logger.error(
+            `[WorktreeReconciler] fs.rmSync fallback also failed for session ${sessionId.slice(0, 8)}: ${rmErr}`,
+          );
+        }
+      }
       stats.failed++;
       logger.error(
         `[WorktreeReconciler] failed to remove worktree ${wtPath} for session ${sessionId.slice(0, 8)}: ${err}`,
@@ -145,8 +164,17 @@ async function reconcileProject(project: ProjectConfig): Promise<ProjectStats> {
           session_id: sessionId,
           worktree_path: wtPath,
           error: String(err),
+          fallbackOk,
         },
       });
+    }
+    // Fix A: per-worktree prune ensures stale registration is reaped even if a sibling remove also fails
+    try {
+      execSync('git worktree prune', { cwd: project.projectDir });
+    } catch (pruneErr) {
+      logger.warn(
+        `[WorktreeReconciler] post-remove prune failed for project ${project.id}: ${pruneErr}`,
+      );
     }
   }
 
