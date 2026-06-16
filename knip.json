@@ -1,11 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
-  "ignore": [
-    ".clone/**",
-    ".claude/worktrees/**",
-    "dist/**",
-    "node_modules/**"
-  ],
+  "ignore": [".clone/**", ".claude/worktrees/**", "dist/**", "node_modules/**"],
   "ignoreBinaries": [
     "tsc",
     "ts-node",
