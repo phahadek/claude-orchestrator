@@ -1666,14 +1666,43 @@ export class SessionManager extends EventEmitter {
       logger.error(
         `[SessionManager] failed to remove worktree for ${sessionId}: ${err}`,
       );
+      // Fix B: fall back to Node-side fs.rmSync for Windows EINVAL / file-handle errors
+      let fallbackOk = false;
+      if (fs.existsSync(worktreePath)) {
+        try {
+          fs.rmSync(worktreePath, {
+            recursive: true,
+            force: true,
+            maxRetries: 3,
+            retryDelay: 500,
+          });
+          fallbackOk = true;
+          logger.info(
+            `[SessionManager] fs.rmSync fallback succeeded for ${sessionId.slice(0, 8)} after git worktree remove failed`,
+          );
+        } catch (rmErr) {
+          logger.error(
+            `[SessionManager] fs.rmSync fallback also failed for ${sessionId.slice(0, 8)}: ${rmErr}`,
+          );
+        }
+      }
       recordEvent({
         event_type: 'worktree_remove_failed',
         actor_type: 'system',
         actor_id: sessionId,
         project_id: null,
         task_id: null,
-        payload: { sessionId, worktreePath, stderr },
+        payload: { sessionId, worktreePath, stderr, fallbackOk },
       });
+    }
+
+    // Fix A: always prune orphan registrations whether remove succeeded or failed
+    try {
+      execSync('git worktree prune', { cwd: projectDir });
+    } catch (pruneErr) {
+      logger.warn(
+        `[SessionManager] post-cleanup prune failed for ${sessionId.slice(0, 8)}: ${pruneErr}`,
+      );
     }
 
     const deleteBranch = !prUrl || this._mergedSessionIds.has(sessionId);
