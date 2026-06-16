@@ -41,7 +41,8 @@ vi.mock('../logger.js', () => ({
 
 // Spy on runWithConcurrency so we can verify the concurrency cap and inject delays.
 vi.mock('../utils/concurrency.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../utils/concurrency.js')>();
+  const actual =
+    await importOriginal<typeof import('../utils/concurrency.js')>();
   return {
     runWithConcurrency: vi.fn().mockImplementation(actual.runWithConcurrency),
   };
@@ -779,7 +780,7 @@ describe('runBootWorktreeReconciliation — parallelism', () => {
       typeof import('../utils/concurrency.js')
     >('../utils/concurrency.js');
     mockedRunWithConcurrency.mockImplementationOnce(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+       
       (items: any[], cap: number, fn: (item: any) => Promise<any>) =>
         realRwc(items, cap, async (item: unknown) => {
           await new Promise<void>((resolve) => setTimeout(resolve, DELAY_MS));
