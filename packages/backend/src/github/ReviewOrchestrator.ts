@@ -8,6 +8,7 @@ import { typedGetSetting } from '../config/settings';
 import {
   setPRReviewResult,
   getPRByNumber,
+  getPRBySessionId,
   setPendingPush,
   setPauseReason,
   getLocalBranchBySession,
@@ -214,6 +215,10 @@ export class ReviewOrchestrator {
 
   private onMessage(msg: ServerMessage): void {
     if (!this.enabled) return;
+    if (msg.type === 'session_ended') {
+      this.onSessionEnded(msg.sessionId);
+      return;
+    }
     if (msg.type !== 'local_branch_submitted') return;
 
     const { projectId, sessionId, branchName, baseBranch } = msg;
@@ -709,6 +714,51 @@ export class ReviewOrchestrator {
         );
       }
     }
+  }
+
+  private onSessionEnded(sessionId: string): void {
+    const session = getSession(sessionId);
+    if (session?.session_type !== 'standard') return;
+
+    const pr = getPRBySessionId(sessionId);
+    if (!pr || !pr.review_result) return;
+
+    let verdict: string | undefined;
+    try {
+      verdict = (JSON.parse(pr.review_result) as { verdict?: string }).verdict;
+    } catch {
+      return;
+    }
+    if (verdict !== 'needs_changes') return;
+
+    const maxIter = getMaxReviewIterations();
+    if (pr.review_iteration >= maxIter) return;
+
+    // Debounce: skip if review already queued or in-flight for this PR
+    // (handles the case where push_detected already enqueued a review this turn)
+    const prKey = `${pr.pr_number}:${pr.repo}`;
+    if (
+      this.inFlightPRKeys.has(prKey) ||
+      this.queue.some((j) => this.prKey(j) === prKey)
+    ) {
+      logger.info(
+        `[ReviewOrchestrator] session_ended for session ${sessionId.slice(0, 8)}: re-review already queued/in-flight for PR #${pr.pr_number} — skipping`,
+      );
+      return;
+    }
+
+    logger.info(
+      `[ReviewOrchestrator] session_ended for session ${sessionId.slice(0, 8)} — PR #${pr.pr_number} (${pr.repo}) has verdict needs_changes (iter ${pr.review_iteration}/${maxIter}) — triggering re-review`,
+    );
+
+    const project = getProjectByGithubRepo(pr.repo);
+    this.enqueueReview({
+      prNumber: pr.pr_number,
+      repo: pr.repo,
+      taskId: pr.task_id ?? '',
+      taskUrl: session.task_url ?? '',
+      contextUrl: project?.contextUrl ?? '',
+    });
   }
 
   private consumePendingPushIfSet(prNumber: number, repo: string): void {
