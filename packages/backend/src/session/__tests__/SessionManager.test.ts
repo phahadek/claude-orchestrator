@@ -724,7 +724,12 @@ describe('cleanupWorktree — fs.rmSync fallback on worktree remove failure', ()
     // existsSync returns true for the worktree path (default mock behavior)
     vi.mocked((fsModule as any).default.existsSync).mockReturnValue(true);
 
-    (sm as any).cleanupWorktree(SESSION_ID, worktreePath, undefined, PROJECT_DIR);
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      worktreePath,
+      undefined,
+      PROJECT_DIR,
+    );
 
     expect(vi.mocked((fsModule as any).default.rmSync)).toHaveBeenCalledWith(
       worktreePath,
@@ -743,7 +748,12 @@ describe('cleanupWorktree — fs.rmSync fallback on worktree remove failure', ()
     vi.mocked((fsModule as any).default.existsSync).mockReturnValue(true);
     vi.mocked((fsModule as any).default.rmSync).mockReturnValue(undefined);
 
-    (sm as any).cleanupWorktree(SESSION_ID, worktreePath, undefined, PROJECT_DIR);
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      worktreePath,
+      undefined,
+      PROJECT_DIR,
+    );
 
     expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -766,7 +776,12 @@ describe('cleanupWorktree — fs.rmSync fallback on worktree remove failure', ()
       throw new Error('EBUSY');
     });
 
-    (sm as any).cleanupWorktree(SESSION_ID, worktreePath, undefined, PROJECT_DIR);
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      worktreePath,
+      undefined,
+      PROJECT_DIR,
+    );
 
     expect(vi.mocked(recordEvent)).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -779,7 +794,12 @@ describe('cleanupWorktree — fs.rmSync fallback on worktree remove failure', ()
   it('does NOT attempt fs.rmSync when git worktree remove succeeds', () => {
     vi.mocked(execSync).mockReturnValue('');
 
-    (sm as any).cleanupWorktree(SESSION_ID, worktreePath, undefined, PROJECT_DIR);
+    (sm as any).cleanupWorktree(
+      SESSION_ID,
+      worktreePath,
+      undefined,
+      PROJECT_DIR,
+    );
 
     expect(vi.mocked((fsModule as any).default.rmSync)).not.toHaveBeenCalled();
   });
