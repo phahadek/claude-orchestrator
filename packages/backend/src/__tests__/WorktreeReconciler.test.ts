@@ -2,9 +2,28 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ── Module mocks ──────────────────────────────────────────────────────────
 
-vi.mock('child_process', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('child_process')>();
-  return { ...actual, execSync: vi.fn() };
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  const mockExec = vi.fn();
+  // The production code does `promisify(exec)`. The real exec carries a
+  // util.promisify.custom symbol that makes the promisified form resolve with
+  // `{ stdout, stderr }`. A bare vi.fn() lacks that symbol, so generic promisify
+  // would resolve with only the first callback value (stdout). Re-attach a custom
+  // implementation that drives the mock's callback and resolves `{ stdout, stderr }`.
+  (mockExec as unknown as Record<symbol, unknown>)[
+    Symbol.for('nodejs.util.promisify.custom')
+  ] = (command: string, options: unknown) =>
+    new Promise((resolve, reject) => {
+      (mockExec as unknown as (...args: unknown[]) => unknown)(
+        command,
+        options,
+        (err: Error | null, stdout: string, stderr: string) => {
+          if (err) reject(err);
+          else resolve({ stdout, stderr });
+        },
+      );
+    });
+  return { ...actual, exec: mockExec };
 });
 
 vi.mock('node:fs', async (importOriginal) => {
@@ -48,7 +67,7 @@ vi.mock('../utils/concurrency.js', async (importOriginal) => {
   };
 });
 
-import { execSync } from 'child_process';
+import { exec } from 'node:child_process';
 import fs from 'node:fs';
 import { getSession, getPRBySessionId } from '../db/queries.js';
 import { recordEvent } from '../audit/AuditLog.js';
@@ -57,7 +76,7 @@ import { runWithConcurrency } from '../utils/concurrency.js';
 import { runBootWorktreeReconciliation } from '../orchestration/WorktreeReconciler.js';
 import type { ProjectConfig } from '../config.js';
 
-const mockedExecSync = vi.mocked(execSync);
+const mockedExec = vi.mocked(exec);
 const mockedExistsSync = vi.mocked(fs.existsSync);
 const mockedReaddirSync = vi.mocked(fs.readdirSync);
 const mockedStatSync = vi.mocked(fs.statSync);
@@ -172,10 +191,14 @@ function gitWorktreeListOutput(
 
 beforeEach(async () => {
   vi.clearAllMocks();
-  mockedExecSync.mockImplementation((cmd: string) => {
-    if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
-    return '' as never; // worktree list → empty (no registered worktrees by default)
-  });
+  mockedExec.mockImplementation(
+    (cmd: string, _opts: unknown, callback: any) => {
+      if (String(cmd).includes('rev-parse'))
+        callback(null, 'feature/test\n', '');
+      else callback(null, '', ''); // worktree list → empty (no registered worktrees by default)
+      return {} as ReturnType<typeof exec>;
+    },
+  );
   // Default: worktree dir exists on disk
   mockedExistsSync.mockReturnValue(true);
   // Default: empty worktrees dir
@@ -200,12 +223,16 @@ describe('runBootWorktreeReconciliation — terminal sessions', () => {
     'removes registered worktree for %s session',
     async (status) => {
       const wtPath = `${WORKTREES_DIR}/sess-1`;
-      mockedExecSync.mockImplementation((cmd: string) => {
-        if (String(cmd).includes('worktree list'))
-          return gitWorktreeListOutput(wtPath) as never;
-        if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
-        return '' as never;
-      });
+      mockedExec.mockImplementation(
+        (cmd: string, _opts: unknown, callback: any) => {
+          if (String(cmd).includes('worktree list'))
+            callback(null, gitWorktreeListOutput(wtPath), '');
+          else if (String(cmd).includes('rev-parse'))
+            callback(null, 'feature/test\n', '');
+          else callback(null, '', '');
+          return {} as ReturnType<typeof exec>;
+        },
+      );
       mockedGetSession.mockReturnValue(makeSession(status) as never);
       mockedGetPR.mockReturnValue(null);
 
@@ -213,21 +240,26 @@ describe('runBootWorktreeReconciliation — terminal sessions', () => {
         listProjects: () => [makeProject()],
       });
 
-      expect(mockedExecSync).toHaveBeenCalledWith(
+      expect(mockedExec).toHaveBeenCalledWith(
         expect.stringContaining('git worktree remove --force'),
         expect.objectContaining({ cwd: PROJECT_DIR }),
+        expect.any(Function),
       );
     },
   );
 
   it('prunes after successful removal', async () => {
     const wtPath = `${WORKTREES_DIR}/sess-1`;
-    mockedExecSync.mockImplementation((cmd: string) => {
-      if (String(cmd).includes('worktree list'))
-        return gitWorktreeListOutput(wtPath) as never;
-      if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
-      return '' as never;
-    });
+    mockedExec.mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).includes('worktree list'))
+          callback(null, gitWorktreeListOutput(wtPath), '');
+        else if (String(cmd).includes('rev-parse'))
+          callback(null, 'feature/test\n', '');
+        else callback(null, '', '');
+        return {} as ReturnType<typeof exec>;
+      },
+    );
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
 
@@ -235,9 +267,10 @@ describe('runBootWorktreeReconciliation — terminal sessions', () => {
       listProjects: () => [makeProject()],
     });
 
-    expect(mockedExecSync).toHaveBeenCalledWith(
+    expect(mockedExec).toHaveBeenCalledWith(
       'git worktree prune',
       expect.objectContaining({ cwd: PROJECT_DIR }),
+      expect.any(Function),
     );
   });
 });
@@ -247,12 +280,16 @@ describe('runBootWorktreeReconciliation — terminal sessions', () => {
 describe('runBootWorktreeReconciliation — no DB row', () => {
   it('git-removes registered worktree with no sessions row', async () => {
     const wtPath = `${WORKTREES_DIR}/sess-1`;
-    mockedExecSync.mockImplementation((cmd: string) => {
-      if (String(cmd).includes('worktree list'))
-        return gitWorktreeListOutput(wtPath) as never;
-      if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
-      return '' as never;
-    });
+    mockedExec.mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).includes('worktree list'))
+          callback(null, gitWorktreeListOutput(wtPath), '');
+        else if (String(cmd).includes('rev-parse'))
+          callback(null, 'feature/test\n', '');
+        else callback(null, '', '');
+        return {} as ReturnType<typeof exec>;
+      },
+    );
     mockedGetSession.mockReturnValue(undefined);
     mockedGetPR.mockReturnValue(null);
 
@@ -260,9 +297,10 @@ describe('runBootWorktreeReconciliation — no DB row', () => {
       listProjects: () => [makeProject()],
     });
 
-    expect(mockedExecSync).toHaveBeenCalledWith(
+    expect(mockedExec).toHaveBeenCalledWith(
       expect.stringContaining('git worktree remove --force'),
       expect.objectContaining({ cwd: PROJECT_DIR }),
+      expect.any(Function),
     );
   });
 });
@@ -274,20 +312,24 @@ describe('runBootWorktreeReconciliation — live sessions skipped', () => {
     'skips registered worktree with %s session',
     async (status) => {
       const wtPath = `${WORKTREES_DIR}/sess-1`;
-      mockedExecSync.mockImplementation((cmd: string) => {
-        if (String(cmd).includes('worktree list'))
-          return gitWorktreeListOutput(wtPath) as never;
-        return '' as never;
-      });
+      mockedExec.mockImplementation(
+        (cmd: string, _opts: unknown, callback: any) => {
+          if (String(cmd).includes('worktree list'))
+            callback(null, gitWorktreeListOutput(wtPath), '');
+          else callback(null, '', '');
+          return {} as ReturnType<typeof exec>;
+        },
+      );
       mockedGetSession.mockReturnValue(makeSession(status) as never);
 
       await runBootWorktreeReconciliation({
         listProjects: () => [makeProject()],
       });
 
-      expect(mockedExecSync).not.toHaveBeenCalledWith(
+      expect(mockedExec).not.toHaveBeenCalledWith(
         expect.stringContaining('git worktree remove'),
         expect.anything(),
+        expect.any(Function),
       );
     },
   );
@@ -301,12 +343,16 @@ describe('runBootWorktreeReconciliation — branch deletion', () => {
     pr: ReturnType<typeof makePR> | null = null,
   ) {
     const wtPath = `${WORKTREES_DIR}/sess-1`;
-    mockedExecSync.mockImplementation((cmd: string) => {
-      if (String(cmd).includes('worktree list'))
-        return gitWorktreeListOutput(wtPath) as never;
-      if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
-      return '' as never;
-    });
+    mockedExec.mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).includes('worktree list'))
+          callback(null, gitWorktreeListOutput(wtPath), '');
+        else if (String(cmd).includes('rev-parse'))
+          callback(null, 'feature/test\n', '');
+        else callback(null, '', '');
+        return {} as ReturnType<typeof exec>;
+      },
+    );
     mockedGetSession.mockReturnValue(makeSession(status) as never);
     mockedGetPR.mockReturnValue(pr as never);
   }
@@ -318,9 +364,10 @@ describe('runBootWorktreeReconciliation — branch deletion', () => {
       listProjects: () => [makeProject()],
     });
 
-    expect(mockedExecSync).toHaveBeenCalledWith(
+    expect(mockedExec).toHaveBeenCalledWith(
       expect.stringContaining('git branch -D'),
       expect.objectContaining({ cwd: PROJECT_DIR }),
+      expect.any(Function),
     );
   });
 
@@ -331,9 +378,10 @@ describe('runBootWorktreeReconciliation — branch deletion', () => {
       listProjects: () => [makeProject()],
     });
 
-    expect(mockedExecSync).toHaveBeenCalledWith(
+    expect(mockedExec).toHaveBeenCalledWith(
       expect.stringContaining('git branch -D'),
       expect.objectContaining({ cwd: PROJECT_DIR }),
+      expect.any(Function),
     );
   });
 
@@ -344,9 +392,10 @@ describe('runBootWorktreeReconciliation — branch deletion', () => {
       listProjects: () => [makeProject()],
     });
 
-    expect(mockedExecSync).toHaveBeenCalledWith(
+    expect(mockedExec).toHaveBeenCalledWith(
       expect.stringContaining('git branch -D'),
       expect.objectContaining({ cwd: PROJECT_DIR }),
+      expect.any(Function),
     );
   });
 
@@ -357,9 +406,10 @@ describe('runBootWorktreeReconciliation — branch deletion', () => {
       listProjects: () => [makeProject()],
     });
 
-    expect(mockedExecSync).not.toHaveBeenCalledWith(
+    expect(mockedExec).not.toHaveBeenCalledWith(
       expect.stringContaining('git branch -D'),
       expect.anything(),
+      expect.any(Function),
     );
   });
 });
@@ -369,13 +419,18 @@ describe('runBootWorktreeReconciliation — branch deletion', () => {
 describe('runBootWorktreeReconciliation — failure tolerance', () => {
   it('records audit event on removal failure', async () => {
     const wtPath = `${WORKTREES_DIR}/sess-fail`;
-    mockedExecSync.mockImplementation((cmd: string) => {
-      if (String(cmd).includes('worktree list'))
-        return gitWorktreeListOutput(wtPath) as never;
-      if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
-      if (String(cmd).includes('worktree remove')) throw new Error('locked');
-      return '' as never;
-    });
+    mockedExec.mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).includes('worktree list'))
+          callback(null, gitWorktreeListOutput(wtPath), '');
+        else if (String(cmd).includes('rev-parse'))
+          callback(null, 'feature/test\n', '');
+        else if (String(cmd).includes('worktree remove'))
+          callback(new Error('locked'), '', '');
+        else callback(null, '', '');
+        return {} as ReturnType<typeof exec>;
+      },
+    );
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
 
@@ -393,17 +448,26 @@ describe('runBootWorktreeReconciliation — failure tolerance', () => {
     const wt2 = `${WORKTREES_DIR}/sess-ok`;
 
     let callCount = 0;
-    mockedExecSync.mockImplementation((cmd: string) => {
-      if (String(cmd).includes('worktree list')) {
-        return `${gitWorktreeListOutput(wt1)}${gitWorktreeListOutput(wt2)}` as never;
-      }
-      if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
-      if (String(cmd).includes('worktree remove')) {
-        callCount++;
-        if (callCount === 1) throw new Error('locked');
-      }
-      return '' as never;
-    });
+    mockedExec.mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).includes('worktree list'))
+          callback(
+            null,
+            `${gitWorktreeListOutput(wt1)}${gitWorktreeListOutput(wt2)}`,
+            '',
+          );
+        else if (String(cmd).includes('rev-parse'))
+          callback(null, 'feature/test\n', '');
+        else if (String(cmd).includes('worktree remove')) {
+          callCount++;
+          if (callCount === 1) callback(new Error('locked'), '', '');
+          else callback(null, '', '');
+        } else {
+          callback(null, '', '');
+        }
+        return {} as ReturnType<typeof exec>;
+      },
+    );
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
 
@@ -431,12 +495,16 @@ describe('runBootWorktreeReconciliation — failure tolerance', () => {
 describe('runBootWorktreeReconciliation — per-worktree post-remove prune (Fix A)', () => {
   it('runs git worktree prune after successful per-worktree remove', async () => {
     const wtPath = `${WORKTREES_DIR}/sess-1`;
-    mockedExecSync.mockImplementation((cmd: string) => {
-      if (String(cmd).includes('worktree list'))
-        return gitWorktreeListOutput(wtPath) as never;
-      if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
-      return '' as never;
-    });
+    mockedExec.mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).includes('worktree list'))
+          callback(null, gitWorktreeListOutput(wtPath), '');
+        else if (String(cmd).includes('rev-parse'))
+          callback(null, 'feature/test\n', '');
+        else callback(null, '', '');
+        return {} as ReturnType<typeof exec>;
+      },
+    );
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
 
@@ -444,7 +512,7 @@ describe('runBootWorktreeReconciliation — per-worktree post-remove prune (Fix 
       listProjects: () => [makeProject()],
     });
 
-    const pruneCalls = mockedExecSync.mock.calls.filter(
+    const pruneCalls = mockedExec.mock.calls.filter(
       ([cmd]) => String(cmd) === 'git worktree prune',
     );
     // Per-worktree prune (Fix A) + end-of-project prune = 2
@@ -453,14 +521,18 @@ describe('runBootWorktreeReconciliation — per-worktree post-remove prune (Fix 
 
   it('runs git worktree prune after failed per-worktree remove', async () => {
     const wtPath = `${WORKTREES_DIR}/sess-fail`;
-    mockedExecSync.mockImplementation((cmd: string) => {
-      if (String(cmd).includes('worktree list'))
-        return gitWorktreeListOutput(wtPath) as never;
-      if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
-      if (String(cmd).includes('worktree remove'))
-        throw new Error('Result too large');
-      return '' as never;
-    });
+    mockedExec.mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).includes('worktree list'))
+          callback(null, gitWorktreeListOutput(wtPath), '');
+        else if (String(cmd).includes('rev-parse'))
+          callback(null, 'feature/test\n', '');
+        else if (String(cmd).includes('worktree remove'))
+          callback(new Error('Result too large'), '', '');
+        else callback(null, '', '');
+        return {} as ReturnType<typeof exec>;
+      },
+    );
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
 
@@ -468,7 +540,7 @@ describe('runBootWorktreeReconciliation — per-worktree post-remove prune (Fix 
       listProjects: () => [makeProject()],
     });
 
-    const pruneCalls = mockedExecSync.mock.calls.filter(
+    const pruneCalls = mockedExec.mock.calls.filter(
       ([cmd]) => String(cmd) === 'git worktree prune',
     );
     // Per-worktree prune (Fix A) + end-of-project prune = 2
@@ -481,14 +553,18 @@ describe('runBootWorktreeReconciliation — per-worktree post-remove prune (Fix 
 describe('runBootWorktreeReconciliation — fs.rmSync fallback (Fix B)', () => {
   it('attempts fs.rmSync when dir exists and git worktree remove fails', async () => {
     const wtPath = `${WORKTREES_DIR}/sess-fail`;
-    mockedExecSync.mockImplementation((cmd: string) => {
-      if (String(cmd).includes('worktree list'))
-        return gitWorktreeListOutput(wtPath) as never;
-      if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
-      if (String(cmd).includes('worktree remove'))
-        throw new Error('Invalid argument');
-      return '' as never;
-    });
+    mockedExec.mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).includes('worktree list'))
+          callback(null, gitWorktreeListOutput(wtPath), '');
+        else if (String(cmd).includes('rev-parse'))
+          callback(null, 'feature/test\n', '');
+        else if (String(cmd).includes('worktree remove'))
+          callback(new Error('Invalid argument'), '', '');
+        else callback(null, '', '');
+        return {} as ReturnType<typeof exec>;
+      },
+    );
     mockedExistsSync.mockReturnValue(true);
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
@@ -507,14 +583,18 @@ describe('runBootWorktreeReconciliation — fs.rmSync fallback (Fix B)', () => {
 
   it('does not attempt fs.rmSync when dir is absent after git worktree remove fails', async () => {
     const wtPath = `${WORKTREES_DIR}/sess-fail`;
-    mockedExecSync.mockImplementation((cmd: string) => {
-      if (String(cmd).includes('worktree list'))
-        return gitWorktreeListOutput(wtPath) as never;
-      if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
-      if (String(cmd).includes('worktree remove'))
-        throw new Error('not a working tree');
-      return '' as never;
-    });
+    mockedExec.mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).includes('worktree list'))
+          callback(null, gitWorktreeListOutput(wtPath), '');
+        else if (String(cmd).includes('rev-parse'))
+          callback(null, 'feature/test\n', '');
+        else if (String(cmd).includes('worktree remove'))
+          callback(new Error('not a working tree'), '', '');
+        else callback(null, '', '');
+        return {} as ReturnType<typeof exec>;
+      },
+    );
     // Phase 1 existsSync (line 88): true → proceed to removal; Fix B existsSync: false → skip rmSync
     mockedExistsSync.mockReturnValueOnce(true).mockReturnValueOnce(false);
     mockedGetSession.mockReturnValue(makeSession('done') as never);
@@ -529,13 +609,18 @@ describe('runBootWorktreeReconciliation — fs.rmSync fallback (Fix B)', () => {
 
   it('sets fallbackOk: true in audit event when fs.rmSync succeeds', async () => {
     const wtPath = `${WORKTREES_DIR}/sess-fail`;
-    mockedExecSync.mockImplementation((cmd: string) => {
-      if (String(cmd).includes('worktree list'))
-        return gitWorktreeListOutput(wtPath) as never;
-      if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
-      if (String(cmd).includes('worktree remove')) throw new Error('locked');
-      return '' as never;
-    });
+    mockedExec.mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).includes('worktree list'))
+          callback(null, gitWorktreeListOutput(wtPath), '');
+        else if (String(cmd).includes('rev-parse'))
+          callback(null, 'feature/test\n', '');
+        else if (String(cmd).includes('worktree remove'))
+          callback(new Error('locked'), '', '');
+        else callback(null, '', '');
+        return {} as ReturnType<typeof exec>;
+      },
+    );
     mockedExistsSync.mockReturnValue(true);
     mockedRmSync.mockReturnValue(undefined);
     mockedGetSession.mockReturnValue(makeSession('done') as never);
@@ -555,13 +640,18 @@ describe('runBootWorktreeReconciliation — fs.rmSync fallback (Fix B)', () => {
 
   it('sets fallbackOk: false in audit event when fs.rmSync also fails', async () => {
     const wtPath = `${WORKTREES_DIR}/sess-fail`;
-    mockedExecSync.mockImplementation((cmd: string) => {
-      if (String(cmd).includes('worktree list'))
-        return gitWorktreeListOutput(wtPath) as never;
-      if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
-      if (String(cmd).includes('worktree remove')) throw new Error('locked');
-      return '' as never;
-    });
+    mockedExec.mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).includes('worktree list'))
+          callback(null, gitWorktreeListOutput(wtPath), '');
+        else if (String(cmd).includes('rev-parse'))
+          callback(null, 'feature/test\n', '');
+        else if (String(cmd).includes('worktree remove'))
+          callback(new Error('locked'), '', '');
+        else callback(null, '', '');
+        return {} as ReturnType<typeof exec>;
+      },
+    );
     mockedExistsSync.mockReturnValue(true);
     mockedRmSync.mockImplementation(() => {
       throw new Error('permission denied');
@@ -583,13 +673,18 @@ describe('runBootWorktreeReconciliation — fs.rmSync fallback (Fix B)', () => {
 
   it('still records worktree_remove_failed even when fs.rmSync fallback succeeds', async () => {
     const wtPath = `${WORKTREES_DIR}/sess-fail`;
-    mockedExecSync.mockImplementation((cmd: string) => {
-      if (String(cmd).includes('worktree list'))
-        return gitWorktreeListOutput(wtPath) as never;
-      if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
-      if (String(cmd).includes('worktree remove')) throw new Error('locked');
-      return '' as never;
-    });
+    mockedExec.mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).includes('worktree list'))
+          callback(null, gitWorktreeListOutput(wtPath), '');
+        else if (String(cmd).includes('rev-parse'))
+          callback(null, 'feature/test\n', '');
+        else if (String(cmd).includes('worktree remove'))
+          callback(new Error('locked'), '', '');
+        else callback(null, '', '');
+        return {} as ReturnType<typeof exec>;
+      },
+    );
     mockedExistsSync.mockReturnValue(true);
     mockedRmSync.mockReturnValue(undefined);
     mockedGetSession.mockReturnValue(makeSession('done') as never);
@@ -618,9 +713,10 @@ describe('runBootWorktreeReconciliation — idempotent / no-op', () => {
       listProjects: () => [makeProject()],
     });
 
-    expect(mockedExecSync).not.toHaveBeenCalledWith(
+    expect(mockedExec).not.toHaveBeenCalledWith(
       expect.stringContaining('worktree remove'),
       expect.anything(),
+      expect.any(Function),
     );
   });
 
@@ -632,9 +728,10 @@ describe('runBootWorktreeReconciliation — idempotent / no-op', () => {
       listProjects: () => [makeProject()],
     });
 
-    expect(mockedExecSync).not.toHaveBeenCalledWith(
+    expect(mockedExec).not.toHaveBeenCalledWith(
       expect.stringContaining('worktree remove'),
       expect.anything(),
+      expect.any(Function),
     );
   });
 
@@ -643,15 +740,20 @@ describe('runBootWorktreeReconciliation — idempotent / no-op', () => {
     const proj2 = makeProject({ id: 'proj-2', projectDir: '/p2' });
     const wt1 = '/p1/.claude/worktrees/sess-1';
 
-    mockedExecSync.mockImplementation((cmd: string, opts?: unknown) => {
-      if (String(cmd).includes('worktree list')) {
-        if ((opts as { cwd?: string })?.cwd === '/p1')
-          return gitWorktreeListOutput(wt1) as never;
-        return '' as never;
-      }
-      if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
-      return '' as never;
-    });
+    mockedExec.mockImplementation(
+      (cmd: string, opts: unknown, callback: any) => {
+        if (String(cmd).includes('worktree list')) {
+          if ((opts as { cwd?: string })?.cwd === '/p1')
+            callback(null, gitWorktreeListOutput(wt1), '');
+          else callback(null, '', '');
+        } else if (String(cmd).includes('rev-parse')) {
+          callback(null, 'feature/test\n', '');
+        } else {
+          callback(null, '', '');
+        }
+        return {} as ReturnType<typeof exec>;
+      },
+    );
     mockedReaddirSync.mockImplementation((dir) => {
       if (String(dir).includes('p1'))
         return ['sess-1'] as unknown as ReturnType<typeof fs.readdirSync>;
@@ -662,7 +764,7 @@ describe('runBootWorktreeReconciliation — idempotent / no-op', () => {
 
     await runBootWorktreeReconciliation({ listProjects: () => [proj1, proj2] });
 
-    const removeCalls = mockedExecSync.mock.calls.filter(([cmd]) =>
+    const removeCalls = mockedExec.mock.calls.filter(([cmd]) =>
       String(cmd).includes('worktree remove'),
     );
     expect(removeCalls).toHaveLength(1);
@@ -675,11 +777,14 @@ describe('runBootWorktreeReconciliation — idempotent / no-op', () => {
 describe('runBootWorktreeReconciliation — already-gone worktree dir', () => {
   it('does not emit worktree_remove_failed when registered dir is absent', async () => {
     const wtPath = `${WORKTREES_DIR}/sess-gone`;
-    mockedExecSync.mockImplementation((cmd: string) => {
-      if (String(cmd).includes('worktree list'))
-        return gitWorktreeListOutput(wtPath) as never;
-      return '' as never;
-    });
+    mockedExec.mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).includes('worktree list'))
+          callback(null, gitWorktreeListOutput(wtPath), '');
+        else callback(null, '', '');
+        return {} as ReturnType<typeof exec>;
+      },
+    );
     mockedExistsSync.mockReturnValue(false);
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
@@ -691,27 +796,33 @@ describe('runBootWorktreeReconciliation — already-gone worktree dir', () => {
     expect(mockedRecordEvent).not.toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'worktree_remove_failed' }),
     );
-    expect(mockedExecSync).not.toHaveBeenCalledWith(
+    expect(mockedExec).not.toHaveBeenCalledWith(
       expect.stringContaining('git worktree remove'),
       expect.anything(),
+      expect.any(Function),
     );
     // git worktree prune still runs to reap the dangling registration
-    expect(mockedExecSync).toHaveBeenCalledWith(
+    expect(mockedExec).toHaveBeenCalledWith(
       'git worktree prune',
       expect.objectContaining({ cwd: PROJECT_DIR }),
+      expect.any(Function),
     );
   });
 
   it('emits worktree_remove_failed when dir is present but git refuses to remove', async () => {
     const wtPath = `${WORKTREES_DIR}/sess-locked`;
-    mockedExecSync.mockImplementation((cmd: string) => {
-      if (String(cmd).includes('worktree list'))
-        return gitWorktreeListOutput(wtPath) as never;
-      if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
-      if (String(cmd).includes('worktree remove'))
-        throw new Error('fatal: not a working tree');
-      return '' as never;
-    });
+    mockedExec.mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).includes('worktree list'))
+          callback(null, gitWorktreeListOutput(wtPath), '');
+        else if (String(cmd).includes('rev-parse'))
+          callback(null, 'feature/test\n', '');
+        else if (String(cmd).includes('worktree remove'))
+          callback(new Error('fatal: not a working tree'), '', '');
+        else callback(null, '', '');
+        return {} as ReturnType<typeof exec>;
+      },
+    );
     mockedExistsSync.mockReturnValue(true);
     mockedGetSession.mockReturnValue(makeSession('done') as never);
     mockedGetPR.mockReturnValue(null);
@@ -753,9 +864,10 @@ describe('runBootWorktreeReconciliation — eligibility from registrations', () 
       listProjects: () => [makeProject()],
     });
 
-    expect(mockedExecSync).not.toHaveBeenCalledWith(
+    expect(mockedExec).not.toHaveBeenCalledWith(
       expect.stringContaining('git worktree remove'),
       expect.anything(),
+      expect.any(Function),
     );
   });
 });
@@ -775,9 +887,10 @@ describe('runBootWorktreeReconciliation — orphaned dir sweep', () => {
       recursive: true,
       force: true,
     });
-    expect(mockedExecSync).not.toHaveBeenCalledWith(
+    expect(mockedExec).not.toHaveBeenCalledWith(
       expect.stringContaining('git worktree remove'),
       expect.anything(),
+      expect.any(Function),
     );
   });
 
@@ -806,9 +919,10 @@ describe('runBootWorktreeReconciliation — orphaned dir sweep', () => {
       });
 
       expect(mockedRmSync).not.toHaveBeenCalled();
-      expect(mockedExecSync).not.toHaveBeenCalledWith(
+      expect(mockedExec).not.toHaveBeenCalledWith(
         expect.stringContaining('git worktree remove'),
         expect.anything(),
+        expect.any(Function),
       );
     },
   );
@@ -822,9 +936,10 @@ describe('runBootWorktreeReconciliation — orphaned dir sweep', () => {
     });
 
     expect(mockedRmSync).not.toHaveBeenCalled();
-    expect(mockedExecSync).not.toHaveBeenCalledWith(
+    expect(mockedExec).not.toHaveBeenCalledWith(
       expect.stringContaining('git worktree remove'),
       expect.anything(),
+      expect.any(Function),
     );
   });
 
@@ -836,9 +951,10 @@ describe('runBootWorktreeReconciliation — orphaned dir sweep', () => {
       listProjects: () => [makeProject()],
     });
 
-    expect(mockedExecSync).toHaveBeenCalledWith(
+    expect(mockedExec).toHaveBeenCalledWith(
       'git worktree prune',
       expect.objectContaining({ cwd: PROJECT_DIR }),
+      expect.any(Function),
     );
   });
 });
@@ -849,12 +965,16 @@ describe('runBootWorktreeReconciliation — mixed fixture', () => {
   it('produces zero worktree_remove_failed audits on a mixed fixture', async () => {
     const regPath = `${WORKTREES_DIR}/${UUID_1}`;
 
-    mockedExecSync.mockImplementation((cmd: string) => {
-      if (String(cmd).includes('worktree list'))
-        return gitWorktreeListOutput(regPath) as never;
-      if (String(cmd).includes('rev-parse')) return 'feature/test\n' as never;
-      return '' as never;
-    });
+    mockedExec.mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        if (String(cmd).includes('worktree list'))
+          callback(null, gitWorktreeListOutput(regPath), '');
+        else if (String(cmd).includes('rev-parse'))
+          callback(null, 'feature/test\n', '');
+        else callback(null, '', '');
+        return {} as ReturnType<typeof exec>;
+      },
+    );
     // FS has: registered-terminal UUID, unregistered-terminal UUID, live UUID, non-UUID
     setupWorktreeDir([UUID_1, UUID_2, UUID_3, 'not-a-uuid']);
     mockedGetSession.mockImplementation((id: string) => {
@@ -872,9 +992,10 @@ describe('runBootWorktreeReconciliation — mixed fixture', () => {
       expect.objectContaining({ event_type: 'worktree_remove_failed' }),
     );
     // Registered terminal UUID → git-removed
-    expect(mockedExecSync).toHaveBeenCalledWith(
+    expect(mockedExec).toHaveBeenCalledWith(
       expect.stringContaining('git worktree remove --force'),
       expect.anything(),
+      expect.any(Function),
     );
     // Unregistered terminal UUID → fs.rm
     expect(mockedRmSync).toHaveBeenCalledWith(
@@ -903,9 +1024,10 @@ describe('runBootWorktreeReconciliation — mixed fixture', () => {
       listProjects: () => [makeProject()],
     });
 
-    expect(mockedExecSync).not.toHaveBeenCalledWith(
+    expect(mockedExec).not.toHaveBeenCalledWith(
       expect.stringContaining('git worktree remove'),
       expect.anything(),
+      expect.any(Function),
     );
     expect(mockedRmSync).not.toHaveBeenCalled();
   });
@@ -934,11 +1056,16 @@ describe('runBootWorktreeReconciliation — parallelism', () => {
       makeProject({ id: `proj-${i}`, projectDir: `/fake/p${i}` }),
     );
 
-    mockedExecSync.mockImplementation(() => '' as never);
+    mockedExec.mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        callback(null, '', '');
+        return {} as ReturnType<typeof exec>;
+      },
+    );
 
     await runBootWorktreeReconciliation({ listProjects: () => projects });
 
-    const pruneCalls = mockedExecSync.mock.calls.filter(([cmd]) =>
+    const pruneCalls = mockedExec.mock.calls.filter(([cmd]) =>
       String(cmd).includes('worktree prune'),
     );
     expect(pruneCalls).toHaveLength(N);
@@ -951,7 +1078,12 @@ describe('runBootWorktreeReconciliation — parallelism', () => {
       makeProject({ id: `proj-${i}`, projectDir: `/fake/p${i}` }),
     );
 
-    mockedExecSync.mockImplementation(() => '' as never);
+    mockedExec.mockImplementation(
+      (_cmd: string, _opts: unknown, callback: any) => {
+        callback(null, '', '');
+        return {} as ReturnType<typeof exec>;
+      },
+    );
 
     // Override runWithConcurrency to add a real async delay per project,
     // preserving the concurrency cap so parallel benefit is observable.
@@ -979,7 +1111,7 @@ describe('runBootWorktreeReconciliation — parallelism', () => {
 
 // ── Structured per-repo duration logs ────────────────────────────────────────
 
-describe('runBootWorktreeReconciliation — per-repo duration logs', () => {
+describe('runBootWorktreeReconciler — per-repo duration logs', () => {
   it('emits a per-repo profile log with all four duration fields', async () => {
     await runBootWorktreeReconciliation({
       listProjects: () => [makeProject()],
@@ -1016,5 +1148,43 @@ describe('runBootWorktreeReconciliation — per-repo duration logs', () => {
     );
     expect(ids).toContain('proj-a');
     expect(ids).toContain('proj-b');
+  });
+});
+
+// ── Event-loop responsiveness ─────────────────────────────────────────────────
+
+describe('runBootWorktreeReconciliation — event-loop responsiveness', () => {
+  it('yields the event loop during git operations so concurrent I/O can proceed', async () => {
+    const wtPath = `${WORKTREES_DIR}/${UUID_1}`;
+    let eventLoopTaskRan = false;
+
+    // Use setImmediate in the mock to simulate genuine async I/O
+    mockedExec.mockImplementation(
+      (cmd: string, _opts: unknown, callback: any) => {
+        setImmediate(() => {
+          if (String(cmd).includes('worktree list'))
+            callback(null, gitWorktreeListOutput(wtPath), '');
+          else if (String(cmd).includes('rev-parse'))
+            callback(null, 'feature/test\n', '');
+          else callback(null, '', '');
+        });
+        return {} as ReturnType<typeof exec>;
+      },
+    );
+
+    mockedGetSession.mockReturnValue(makeSession('done') as never);
+    mockedGetPR.mockReturnValue(null);
+
+    // Schedule a macrotask that must execute while reconciliation awaits exec
+    setImmediate(() => {
+      eventLoopTaskRan = true;
+    });
+
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject()],
+    });
+
+    // If execAsync properly yields the event loop, the scheduled task will have run
+    expect(eventLoopTaskRan).toBe(true);
   });
 });

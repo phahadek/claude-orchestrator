@@ -1,12 +1,15 @@
 import path from 'node:path';
 import fs from 'node:fs';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import { logger } from '../logger';
-import { execSync } from 'child_process';
 import { getAllProjects } from '../config';
 import type { ProjectConfig } from '../config';
 import { getSession, getPRBySessionId } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { runWithConcurrency } from '../utils/concurrency';
+
+const execAsync = promisify(exec);
 
 const TERMINAL_STATUSES = new Set(['done', 'error', 'killed']);
 const UUID_RE =
@@ -51,10 +54,9 @@ async function reconcileProject(project: ProjectConfig): Promise<ProjectStats> {
   let registeredPaths: string[];
   const listStart = Date.now();
   try {
-    const out = execSync('git worktree list --porcelain', {
+    const { stdout: out } = await execAsync('git worktree list --porcelain', {
       cwd: project.projectDir,
-      encoding: 'utf8',
-    }) as string;
+    });
     registeredPaths = parseRegisteredPaths(out);
   } catch {
     registeredPaths = [];
@@ -95,18 +97,20 @@ async function reconcileProject(project: ProjectConfig): Promise<ProjectStats> {
 
     let branchName: string | undefined;
     try {
-      const head = execSync('git rev-parse --abbrev-ref HEAD', {
-        cwd: wtPath,
-        encoding: 'utf8',
-      }).trim();
-      if (head !== 'HEAD') branchName = head;
+      const { stdout: head } = await execAsync(
+        'git rev-parse --abbrev-ref HEAD',
+        {
+          cwd: wtPath,
+        },
+      );
+      if (head.trim() !== 'HEAD') branchName = head.trim();
     } catch {
       // stale — skip branch detection
     }
 
     try {
       const removeStart = Date.now();
-      execSync(`git worktree remove --force "${wtPath}"`, {
+      await execAsync(`git worktree remove --force "${wtPath}"`, {
         cwd: project.projectDir,
       });
       worktree_remove_duration_ms += Date.now() - removeStart;
@@ -117,7 +121,7 @@ async function reconcileProject(project: ProjectConfig): Promise<ProjectStats> {
       if (deleteBranch && branchName) {
         try {
           const branchStart = Date.now();
-          execSync(`git branch -D "${branchName}"`, {
+          await execAsync(`git branch -D "${branchName}"`, {
             cwd: project.projectDir,
           });
           worktree_branch_delete_duration_ms += Date.now() - branchStart;
@@ -170,7 +174,7 @@ async function reconcileProject(project: ProjectConfig): Promise<ProjectStats> {
     }
     // Fix A: per-worktree prune ensures stale registration is reaped even if a sibling remove also fails
     try {
-      execSync('git worktree prune', { cwd: project.projectDir });
+      await execAsync('git worktree prune', { cwd: project.projectDir });
     } catch (pruneErr) {
       logger.warn(
         `[WorktreeReconciler] post-remove prune failed for project ${project.id}: ${pruneErr}`,
@@ -220,7 +224,7 @@ async function reconcileProject(project: ProjectConfig): Promise<ProjectStats> {
   // Phase: prune stale git metadata
   const pruneStart = Date.now();
   try {
-    execSync('git worktree prune', { cwd: project.projectDir });
+    await execAsync('git worktree prune', { cwd: project.projectDir });
   } catch (pruneErr) {
     logger.warn(
       `[WorktreeReconciler] git worktree prune failed for project ${project.id}: ${pruneErr}`,
