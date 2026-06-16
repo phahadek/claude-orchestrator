@@ -14,7 +14,6 @@ import type {
   PermissionEvent,
   NewPermissionEvent,
   PermissionRule,
-  NewPermissionRule,
   PermissionDenialRow,
   NewPermissionDenialRow,
   TaskCache,
@@ -67,9 +66,6 @@ const stmtGetSession = db.prepare<{ session_id: string }>(`
   SELECT * FROM sessions WHERE session_id = @session_id
 `);
 
-const stmtGetAllSessions = db.prepare(`
-  SELECT * FROM sessions ORDER BY started_at DESC
-`);
 
 const stmtGetAllSessionIds = db.prepare(`
   SELECT session_id FROM sessions
@@ -354,9 +350,6 @@ export function getSession(sessionId: string): Session | undefined {
   return stmtGetSession.get({ session_id: sessionId }) as Session | undefined;
 }
 
-export function getAllSessions(): Session[] {
-  return stmtGetAllSessions.all() as Session[];
-}
 
 export function getAllSessionIds(): string[] {
   return (stmtGetAllSessionIds.all() as { session_id: string }[]).map(
@@ -776,81 +769,8 @@ const stmtGetRules = db.prepare(`
   SELECT * FROM permission_rules WHERE enabled = 1 ORDER BY order_index ASC
 `);
 
-const stmtGetAllRules = db.prepare(`
-  SELECT * FROM permission_rules ORDER BY order_index ASC
-`);
-
-const stmtGetRuleById = db.prepare<{ id: number }>(`
-  SELECT * FROM permission_rules WHERE id = @id
-`);
-
-const stmtGetMaxOrderIndex = db.prepare(`
-  SELECT COALESCE(MAX(order_index), 0) AS max_idx FROM permission_rules
-`);
-
-const stmtInsertRule = db.prepare<NewPermissionRule>(`
-  INSERT INTO permission_rules
-    (order_index, pattern, match_type, decision, label, enabled)
-  VALUES
-    (@order_index, @pattern, @match_type, @decision, @label, @enabled)
-`);
-
-const stmtUpdateRule = db.prepare<{
-  id: number;
-  order_index?: number;
-  pattern?: string;
-  match_type?: string;
-  decision?: string;
-  label?: string | null;
-  enabled?: number;
-}>(`
-  UPDATE permission_rules
-  SET
-    order_index = COALESCE(@order_index, order_index),
-    pattern     = COALESCE(@pattern,     pattern),
-    match_type  = COALESCE(@match_type,  match_type),
-    decision    = COALESCE(@decision,    decision),
-    label       = CASE WHEN @label IS NULL AND @label IS NOT @label
-                       THEN label ELSE COALESCE(@label, label) END,
-    enabled     = COALESCE(@enabled,     enabled)
-  WHERE id = @id
-`);
-
-const stmtDeleteRule = db.prepare<{ id: number }>(`
-  DELETE FROM permission_rules WHERE id = @id
-`);
-
 export function getRules(): PermissionRule[] {
   return stmtGetRules.all() as PermissionRule[];
-}
-
-export function getAllRules(): PermissionRule[] {
-  return stmtGetAllRules.all() as PermissionRule[];
-}
-
-export function getRuleById(id: number): PermissionRule | undefined {
-  return stmtGetRuleById.get({ id }) as PermissionRule | undefined;
-}
-
-export function insertRule(r: NewPermissionRule): void {
-  stmtInsertRule.run(r);
-}
-
-export function insertRuleReturning(
-  body: Omit<NewPermissionRule, 'order_index'>,
-): PermissionRule {
-  const { max_idx } = stmtGetMaxOrderIndex.get() as { max_idx: number };
-  const r: NewPermissionRule = { ...body, order_index: max_idx + 1 };
-  const result = stmtInsertRule.run(r);
-  return getRuleById(result.lastInsertRowid as number)!;
-}
-
-export function updateRule(id: number, patch: Partial<PermissionRule>): void {
-  stmtUpdateRule.run({ id, ...patch });
-}
-
-export function deleteRule(id: number): void {
-  stmtDeleteRule.run({ id });
 }
 
 // ─── permission_denials ─────────────────────────────────────────────────────
@@ -912,13 +832,6 @@ const stmtGetTaskCache = db.prepare<{ task_id: string }>(`
   SELECT * FROM task_cache WHERE task_id = @task_id
 `);
 
-const stmtDeleteTaskCache = db.prepare<{ task_id: string }>(`
-  DELETE FROM task_cache WHERE task_id = @task_id
-`);
-
-export function deleteTaskCache(taskId: string): void {
-  stmtDeleteTaskCache.run({ task_id: taskId });
-}
 
 export function updateTaskCacheStatus(taskId: string, status: string): void {
   const row = getTaskCache(taskId);
@@ -1200,7 +1113,7 @@ export function getPRBySessionId(sessionId: string): PullRequestRow | null {
     .get({ session_id: sessionId }) as PullRequestRow | null;
 }
 
-export function getPRByTaskId(taskId: string): PullRequestRow | null {
+function getPRByTaskId(taskId: string): PullRequestRow | null {
   return db
     .prepare<{ task_id: string }>(
       `
@@ -1210,7 +1123,6 @@ export function getPRByTaskId(taskId: string): PullRequestRow | null {
     .get({ task_id: taskId }) as PullRequestRow | null;
 }
 
-/** @deprecated Use getPRByTaskId instead */
 export const getPRByNotionTaskId = getPRByTaskId;
 
 /**
@@ -1228,15 +1140,6 @@ export function getMergedPRForTask(taskId: string): PullRequestRow | null {
     .get({ task_id: taskId }) as PullRequestRow | null;
 }
 
-export function getOpenPRs(repo: string): PullRequestRow[] {
-  return db
-    .prepare<{ repo: string }>(
-      `
-    SELECT * FROM pull_requests WHERE repo = @repo AND state = 'open' ORDER BY pr_number DESC
-  `,
-    )
-    .all({ repo }) as PullRequestRow[];
-}
 
 export function getPRs(repo: string): PullRequestRow[] {
   return db
@@ -1423,18 +1326,6 @@ export function insertSessionAudit(row: Omit<SessionAuditRow, 'id'>): void {
       (@session_id, @pr_opened, @pr_targets, @task_status, @violations, @spec_mismatch, @audited_at)
   `,
   ).run(row);
-}
-
-export function getSessionAudit(
-  sessionId: string,
-): SessionAuditRow | undefined {
-  return db
-    .prepare<{ session_id: string }>(
-      `
-    SELECT * FROM session_audits WHERE session_id = @session_id ORDER BY id DESC LIMIT 1
-  `,
-    )
-    .get({ session_id: sessionId }) as SessionAuditRow | undefined;
 }
 
 export function updateMergeState(
@@ -1932,32 +1823,6 @@ export function getActiveTaskAggregates(taskIds: string[]): TaskAggregateRow[] {
     .all(...taskIds) as TaskAggregateRow[];
 }
 
-export function getLatestNonSystemEventPayload(
-  sessionId: string,
-): string | null {
-  const row = db
-    .prepare(
-      `
-    SELECT payload FROM session_events
-    WHERE session_id = ?
-      AND event_type IN ('text', 'tool_use', 'tool_result', 'error')
-    ORDER BY id DESC
-    LIMIT 1
-  `,
-    )
-    .get(sessionId) as { payload: string } | undefined;
-  return row?.payload ?? null;
-}
-
-export function setSessionReviewResult(
-  sessionId: string,
-  result: string,
-): void {
-  db.prepare<{ session_id: string; review_result: string }>(
-    `UPDATE sessions SET review_result = @review_result WHERE session_id = @session_id`,
-  ).run({ session_id: sessionId, review_result: result });
-}
-
 /** Returns the most recent standard (non-review) session for a given task ID. */
 export function getLatestCodeSessionByNotionTaskId(
   taskId: string,
@@ -2011,7 +1876,7 @@ export function getProjectRowById(id: string): ProjectRow | undefined {
     .get({ id }) as ProjectRow | undefined;
 }
 
-export function getProjectByGithubRepo(
+function getProjectByGithubRepo(
   githubRepo: string,
 ): ProjectRow | undefined {
   return db
@@ -2260,27 +2125,6 @@ export function getLocalBranchBySession(
   return db
     .prepare(`SELECT * FROM local_branches WHERE session_id = ? LIMIT 1`)
     .get(sessionId) as LocalBranchRow | undefined;
-}
-
-export function getOpenLocalBranchesByProject(
-  projectId: string,
-): LocalBranchRow[] {
-  return db
-    .prepare(
-      `SELECT * FROM local_branches WHERE project_id = ? AND status = 'open' ORDER BY created_at DESC`,
-    )
-    .all(projectId) as LocalBranchRow[];
-}
-
-export function updateLocalBranchStatus(
-  id: number,
-  status: string,
-  reviewResult?: string | null,
-): void {
-  const now = new Date().toISOString();
-  db.prepare(
-    `UPDATE local_branches SET status = ?, review_result = COALESCE(?, review_result), updated_at = ? WHERE id = ?`,
-  ).run(status, reviewResult ?? null, now, id);
 }
 
 export function setLocalBranchReviewResult(
@@ -2546,7 +2390,7 @@ export function bumpTaskNoOpAttempts(taskId: string): void {
 
 // ─── task_crash_counts ────────────────────────────────────────────────────────
 
-export function getTaskCrashCount(taskId: string): number {
+function getTaskCrashCount(taskId: string): number {
   const row = db
     .prepare<{
       task_id: string;
@@ -2972,17 +2816,6 @@ export function markSessionEventsPruned(
 
 // ─── scheduler_audit ──────────────────────────────────────────────────────
 
-export interface SchedulerAuditRow {
-  id: number;
-  job: string;
-  status: 'ok' | 'failed' | 'skipped';
-  started_at: string;
-  completed_at: string;
-  duration_ms: number;
-  items_processed: number | null;
-  error: string | null;
-}
-
 export interface NewSchedulerAuditRow {
   job: string;
   status: 'ok' | 'failed' | 'skipped';
@@ -3002,20 +2835,6 @@ export function insertSchedulerAudit(row: NewSchedulerAuditRow): void {
     error: null,
     ...row,
   });
-}
-
-export function getSchedulerAuditByJob(
-  job: string,
-  limit = 50,
-): SchedulerAuditRow[] {
-  return db
-    .prepare<{
-      job: string;
-      limit: number;
-    }>(
-      `SELECT * FROM scheduler_audit WHERE job = @job ORDER BY started_at DESC LIMIT @limit`,
-    )
-    .all({ job, limit }) as SchedulerAuditRow[];
 }
 
 export function pruneSchedulerAudit(keepPerJob = 1000): void {

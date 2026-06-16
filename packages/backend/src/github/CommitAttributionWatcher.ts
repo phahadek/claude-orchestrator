@@ -7,7 +7,7 @@ import type { GitHubClient } from './GitHubClient';
 /** Matches the AI-Authored-By trailer in a commit message. */
 export const AI_TRAILER_REGEX = /^AI-Authored-By:/m;
 
-export interface CommitInfo {
+interface CommitInfo {
   sha: string;
   message: string;
   author?: string | null;

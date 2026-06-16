@@ -2,8 +2,6 @@
 import { WorkItemCard } from './WorkItemCard';
 import type { PRWorkItem, WorkItemCardProps } from './WorkItemCard';
 
-export type { PRReviewResult, PRReviewDimension } from './WorkItemCard';
-
 // Legacy flat type (no 'type' discriminant) — used by existing tests and external callers.
 export interface PRListItem {
   prNumber: number;

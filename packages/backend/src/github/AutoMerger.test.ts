@@ -114,6 +114,7 @@ import type { GitHubClient, PRReviewDecision } from './GitHubClient';
 import type { PRMergeWatcher } from './PRMergeWatcher';
 import type { PullRequestRow, LocalBranchRow, Session } from '../db/types';
 import type { MergeabilityCategory } from './types';
+import type { ServerMessage } from '../ws/types';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -589,7 +590,7 @@ describe('AutoMerger.attempt() — failure modes', () => {
 // Asserts that pauseWithReason decides its broadcast/merge-state side effects from
 // the pause-reason struct (.source / .reason) rather than raw-string matches.
 describe('AutoMerger.pauseWithReason() — branches on pause-reason structure', () => {
-  type Msg = import('../../ws/types').ServerMessage;
+  type Msg = ServerMessage;
   function captureBroadcast() {
     const messages: Msg[] = [];
     return { messages, broadcast: (m: Msg) => messages.push(m) };
@@ -861,7 +862,7 @@ describe('AutoMerger.pollOnce() — local branch dispatch', () => {
       mockBackend as unknown as ReturnType<typeof getTaskBackend>,
     );
 
-    const broadcasts: import('../../ws/types').ServerMessage[] = [];
+    const broadcasts: ServerMessage[] = [];
     const github = makeMockGitHub([]);
     const watcher = makeMockWatcher();
     const sessions = makeMockSessions();

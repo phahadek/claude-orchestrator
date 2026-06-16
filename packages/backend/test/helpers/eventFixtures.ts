@@ -1,6 +1,6 @@
 import type { EventKind } from '../../src/session/eventKind';
 
-export interface TestEventRow {
+interface TestEventRow {
   event_type: string;
   payload: string;
 }

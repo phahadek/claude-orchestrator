@@ -1,6 +1,6 @@
 import type { SessionState } from '../hooks/useSessionStore';
 
-export interface ReviewDimension {
+interface ReviewDimension {
   name: string;
   passed: boolean;
   notes: string;

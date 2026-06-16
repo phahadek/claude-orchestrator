@@ -6,7 +6,7 @@ import { ProjectService } from '../projects/ProjectService';
 export type BranchMode = 'two_tier' | 'flat';
 
 /** Returns the corporate-mode setting from runtimeSettings. */
-export function getCorporateMode(): { enabled: boolean } {
+function getCorporateMode(): { enabled: boolean } {
   return { enabled: runtimeSettings.corporate_mode_enabled };
 }
 

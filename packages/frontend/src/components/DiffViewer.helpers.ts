@@ -11,7 +11,7 @@ export interface DiffLine {
   lineNum: number;
 }
 
-export function classifyDiffLine(line: string): DiffLineKind {
+function classifyDiffLine(line: string): DiffLineKind {
   if (
     line.startsWith('diff --git') ||
     line.startsWith('--- ') ||

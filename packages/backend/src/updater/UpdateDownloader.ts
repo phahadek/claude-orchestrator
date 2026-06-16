@@ -73,7 +73,7 @@ export function selectAsset(info: UpdateInfo): GitHubAsset | null {
   );
 }
 
-export function getUpdatesDir(): string {
+function getUpdatesDir(): string {
   return path.join(getDataDir(), 'updates');
 }
 

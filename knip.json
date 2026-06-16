@@ -22,7 +22,8 @@
         "src/bootSequence.ts",
         "test/helpers/**/*.ts",
         "**/*.test.ts"
-      ]
+      ],
+      "ignoreDependencies": ["ts-node"]
     },
     "packages/frontend": {
       "entry": ["src/main.tsx"]

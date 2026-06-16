@@ -35,13 +35,13 @@ export interface OrchestratorConfigResponse {
   config: OrchestratorConfig;
 }
 
-export interface DatabaseValidation {
+interface DatabaseValidation {
   type: 'database';
   title: string;
   id: string;
 }
 
-export interface PageValidation {
+interface PageValidation {
   type: 'page';
   childDatabaseId: string | null;
   childDatabaseTitle: string | null;

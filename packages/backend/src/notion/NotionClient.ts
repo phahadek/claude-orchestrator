@@ -11,13 +11,13 @@ import { toExternalId } from '../tasks/taskId';
 
 // ─── Board validation types ─────────────────────────────────────────────────
 
-export interface DatabaseValidation {
+interface DatabaseValidation {
   type: 'database';
   title: string;
   id: string;
 }
 
-export interface PageValidation {
+interface PageValidation {
   type: 'page';
   childDatabaseId: string | null;
   childDatabaseTitle: string | null;
@@ -33,7 +33,7 @@ function formatAsUuid(raw: string): string {
   return `${clean.slice(0, 8)}-${clean.slice(8, 12)}-${clean.slice(12, 16)}-${clean.slice(16, 20)}-${clean.slice(20)}`;
 }
 
-export function extractNotionId(input: string): string | null {
+function extractNotionId(input: string): string | null {
   const cleaned = input.split('?')[0].split('#')[0];
   const match = cleaned.match(
     /([0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12})/i,
@@ -286,7 +286,7 @@ function blockToLine(block: NotionBlock): string {
  * like "### 🤖 Automated tests" that do not match any keyword are treated as
  * content within the current section.
  */
-export const TOP_LEVEL_SECTIONS = [
+const TOP_LEVEL_SECTIONS = [
   'summary',
   'dependencies',
   'context',

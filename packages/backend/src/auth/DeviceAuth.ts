@@ -6,11 +6,11 @@ import {
 } from '../db/queries';
 import type { DeviceRow } from '../db/types';
 
-export function validateDeviceToken(token: string): DeviceRow | null {
+function validateDeviceToken(token: string): DeviceRow | null {
   return getDeviceByToken(token);
 }
 
-export function getTokenFromRequest(req: Request): string | null {
+function getTokenFromRequest(req: Request): string | null {
   const auth = req.headers['authorization'];
   if (auth?.startsWith('Bearer ')) {
     return auth.slice(7);

@@ -1,7 +1,7 @@
 import styles from './CIBadges.module.css';
 import { parsePauseReason } from '@claude-orchestrator/backend/src/db/pauseReason';
 
-export type PreReviewStage =
+type PreReviewStage =
   | 'autofix'
   | 'verify'
   | 'analyzing'

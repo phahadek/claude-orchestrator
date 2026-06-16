@@ -89,11 +89,6 @@ export interface TaskBackend {
   listTasksByStatus(status: string): Promise<ResolvedTask[]>;
 }
 
-/**
- * Backwards-compatible alias for the previous interface name.
- * Prefer `TaskBackend` in new code.
- */
-export type TaskTrackerBackend = TaskBackend;
 
 // ── AuditingTaskBackend ──────────────────────────────────────────────────────
 

@@ -299,5 +299,3 @@ export class Scheduler {
     });
   }
 }
-
-export const scheduler = new Scheduler();

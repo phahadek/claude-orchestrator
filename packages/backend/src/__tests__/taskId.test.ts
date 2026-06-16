@@ -287,7 +287,7 @@ describe('Schema migration — task_id column in sessions and task_cache', () =>
 import {
   upsertPullRequest,
   getPRByNumber,
-  getPRByTaskId,
+  getPRByNotionTaskId,
   getPausedPrReasonForTask,
   setPauseReason,
 } from '../db/queries.js';
@@ -336,8 +336,8 @@ describe('Schema migration — task_id column in pull_requests', () => {
     expect(row?.task_id).toBe(TEST_TASK_ID);
   });
 
-  it('getPRByTaskId returns the row written with task_id = "notion:test-task-abc"', () => {
-    const row = getPRByTaskId(TEST_TASK_ID);
+  it('getPRByNotionTaskId returns the row written with task_id = "notion:test-task-abc"', () => {
+    const row = getPRByNotionTaskId(TEST_TASK_ID);
     expect(row).not.toBeNull();
     expect(row?.pr_number).toBe(TEST_PR_NUMBER);
     expect(row?.task_id).toBe(TEST_TASK_ID);

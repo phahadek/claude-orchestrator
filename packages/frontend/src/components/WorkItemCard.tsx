@@ -3,7 +3,7 @@ import styles from './WorkItemCard.module.css';
 import { CIBadges } from './CIBadges';
 import { parsePauseReason } from '@claude-orchestrator/backend/src/db/pauseReason';
 
-export interface PRReviewDimension {
+interface PRReviewDimension {
   name: string;
   passed: boolean;
   notes: string;
@@ -62,10 +62,6 @@ export interface LocalBranchWorkItem {
 
 export type WorkItemListItem = PRWorkItem | LocalBranchWorkItem;
 
-// ── Backward-compat alias used by existing tests and PRPanel ──────
-
-/** @deprecated Use PRWorkItem or WorkItemListItem instead */
-export type PRListItem = PRWorkItem;
 
 export interface WorkItemCardProps {
   item: WorkItemListItem;
@@ -528,8 +524,3 @@ export function WorkItemCard(props: WorkItemCardProps) {
   return <PRWorkItemCard {...props} item={props.item} />;
 }
 
-// ── Backward-compat named export ──────────────────────────────────
-
-/** @deprecated Use WorkItemCard instead */
-export const PRCard = WorkItemCard;
-export type PRCardProps = WorkItemCardProps;

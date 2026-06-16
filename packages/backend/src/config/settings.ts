@@ -10,7 +10,7 @@ const zodBoolCoerce = z.union([
   z.literal('false').transform((): false => false),
 ]);
 
-export const SettingsSchema = z.object({
+const SettingsSchema = z.object({
   // Numeric settings (z.coerce accepts both numbers and parseable strings)
   max_concurrent_code_sessions: z.coerce.number().int().min(1),
   auto_review_concurrency: z.coerce.number().int().min(1),
@@ -47,7 +47,6 @@ export const SettingsSchema = z.object({
 
 export type Settings = z.infer<typeof SettingsSchema>;
 export type SettingKey = keyof Settings;
-export type SettingValue<K extends SettingKey> = Settings[K];
 
 export const SETTING_DEFAULTS: Settings = {
   max_concurrent_code_sessions: 20,

@@ -19,7 +19,6 @@ import {
   toEventType,
 } from './eventTypes';
 
-export { VALID_EVENT_TYPES, SILENT_SKIP_TYPES, toEventType };
 
 export interface RawSessionEvent {
   type: EventType;

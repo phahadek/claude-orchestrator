@@ -138,7 +138,7 @@ export function extractToolResult(
   return rawContent;
 }
 
-export const SYSTEM_SUBTYPE_LABELS: Record<string, string> = {
+const SYSTEM_SUBTYPE_LABELS: Record<string, string> = {
   thinking: 'Thinking…',
   success: 'Session complete',
   error_during_execution: 'Execution error',
