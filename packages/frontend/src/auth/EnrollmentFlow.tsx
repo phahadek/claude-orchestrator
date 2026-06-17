@@ -49,7 +49,7 @@ export function EnrollmentFlow({ onEnrolled }: EnrollmentFlowProps) {
   // On mount: check bootstrap mode
   useEffect(() => {
     void doBootstrap();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- Reason: intentionally empty — doBootstrap must run exactly once on mount; adding it to deps would re-trigger on deviceName/onEnrolled changes
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const requestCode = useCallback(async () => {
     try {
