@@ -2,6 +2,8 @@ import styles from './CIBadges.module.css';
 import { parsePauseReason } from '@claude-orchestrator/backend/src/db/pauseReason';
 
 type PreReviewStage =
+  | 'implementing'
+  | 'reviewing'
   | 'autofix'
   | 'verify'
   | 'analyzing'
@@ -15,6 +17,18 @@ const STAGE_CONFIG: Record<
   PreReviewStage,
   { emoji: string; label: string; compactLabel: string; styleKey: string }
 > = {
+  implementing: {
+    emoji: '💻',
+    label: 'Implementing',
+    compactLabel: 'Implementing',
+    styleKey: 'running',
+  },
+  reviewing: {
+    emoji: '👀',
+    label: 'Reviewing',
+    compactLabel: 'Reviewing',
+    styleKey: 'running',
+  },
   autofix: {
     emoji: '⚙',
     label: 'Running autofix',

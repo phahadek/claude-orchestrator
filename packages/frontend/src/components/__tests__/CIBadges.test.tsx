@@ -203,6 +203,42 @@ describe('PipelineStageBadge', () => {
     render(<PipelineStageBadge stage="awaiting_review" />);
     expect(document.querySelector('[aria-hidden="true"]')).toBeNull();
   });
+
+  it('renders implementing badge with spinner', () => {
+    render(<PipelineStageBadge stage="implementing" />);
+    expect(screen.getByText(/Implementing/)).toBeDefined();
+    expect(document.querySelector('[aria-hidden="true"]')).not.toBeNull();
+  });
+
+  it('renders reviewing badge with spinner', () => {
+    render(<PipelineStageBadge stage="reviewing" />);
+    expect(screen.getByText(/Reviewing/)).toBeDefined();
+    expect(document.querySelector('[aria-hidden="true"]')).not.toBeNull();
+  });
+
+  it('renders compact implementing badge', () => {
+    render(<PipelineStageBadge stage="implementing" compact />);
+    expect(screen.getByText(/💻 Implementing/)).toBeDefined();
+  });
+
+  it('renders compact reviewing badge', () => {
+    render(<PipelineStageBadge stage="reviewing" compact />);
+    expect(screen.getByText(/👀 Reviewing/)).toBeDefined();
+  });
+
+  it('suppresses implementing badge when prState is merged', () => {
+    const { container } = render(
+      <PipelineStageBadge stage="implementing" prState="merged" />,
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('suppresses reviewing badge when prState is closed', () => {
+    const { container } = render(
+      <PipelineStageBadge stage="reviewing" prState="closed" />,
+    );
+    expect(container.firstChild).toBeNull();
+  });
 });
 
 describe('CIBadges — awaiting re-review state', () => {

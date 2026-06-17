@@ -90,6 +90,7 @@ function buildTaskViewFromRow(row: TaskAggregateRow, cap: number): TaskView {
     codeSession = {
       sessionId: row.code_session_id,
       status: row.code_session_status ?? '',
+      sessionType: row.code_session_type ?? 'standard',
       startedAt: row.code_session_started_at ?? 0,
       endedAt: row.code_session_ended_at ?? null,
       lastMessage,

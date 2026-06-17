@@ -83,6 +83,24 @@ function launchTooltip(task: TaskView): string {
 export function TaskCard({ task, selected, onClick, send, project }: Props) {
   const { codeSession, pr, review } = task;
   const statusKey = task.displayStatus.replace(/_/g, '-') as string;
+
+  // Derive implementing/reviewing pre-stages when no post-PR pipeline stage is active.
+  // Post-PR stages (pr.preReviewStage) always take precedence.
+  const derivedPreStage: string | null = (() => {
+    if (
+      !pr &&
+      codeSession?.status === 'running' &&
+      (codeSession.sessionType === 'standard' || !codeSession.sessionType)
+    )
+      return 'implementing';
+    if (
+      pr &&
+      review?.status === 'running' &&
+      (review.verdict === null || review.iterationCount > 1)
+    )
+      return 'reviewing';
+    return null;
+  })();
   const dispatchTask = useDispatch(send, project);
   const isNonCode = !task.taskType.includes('💻');
   const pauseStruct = parsePauseReason(task.pauseReason);
@@ -198,10 +216,14 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
                 prState={pr.state}
               />
               <PipelineStageBadge
-                stage={pr.preReviewStage ?? null}
+                stage={pr.preReviewStage ?? derivedPreStage}
                 prState={pr.state}
                 compact
               />
+            </div>
+          ) : derivedPreStage ? (
+            <div className={styles.prRow}>
+              <PipelineStageBadge stage={derivedPreStage} compact />
             </div>
           ) : (
             <span className={styles.placeholder}>—</span>
