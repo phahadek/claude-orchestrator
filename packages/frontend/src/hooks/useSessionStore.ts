@@ -210,7 +210,10 @@ export function useSessionStore() {
           const existing = next.get(msg.sessionId);
           // Do not wipe a live (non-terminal) session with a hydration snapshot.
           // Terminal sessions (done/error/killed) and new sessions are replaced normally.
-          if (existing && !['done', 'error', 'killed'].includes(existing.status)) {
+          if (
+            existing &&
+            !['done', 'error', 'killed'].includes(existing.status)
+          ) {
             break;
           }
           next.set(msg.sessionId, {
