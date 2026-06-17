@@ -40,7 +40,7 @@ import {
   setPendingPush,
   getTestResult,
   markSessionDone,
-  setPreReviewStage,
+  clearTerminalPRFlags,
 } from '../db/queries';
 import { emitTaskUpdated } from '../routes/tasks';
 import { logger } from '../logger';
@@ -251,7 +251,7 @@ export class PRMergeWatcher {
       await this.handleMerged(pr, null, { silent: silentMerges });
     } else if (state === 'closed') {
       updatePRState(pr.pr_number, pr.repo, 'closed');
-      setPreReviewStage(pr.pr_number, pr.repo, null);
+      clearTerminalPRFlags(pr.pr_number, pr.repo);
       deleteAllAutofixShasForPR(pr.pr_number, pr.repo);
       // Transition coding session idle → error on close-without-merge
       if (pr.session_id) {
@@ -866,8 +866,8 @@ export class PRMergeWatcher {
           }
 
           setLastReviewedSha(prRow.pr_number, prRow.repo, headSha);
-          if (result.verdict === 'approved' && prRow.pause_reason !== null) {
-            setPauseReason(prRow.pr_number, prRow.repo, null);
+          if (result.verdict === 'approved') {
+            clearTerminalPRFlags(prRow.pr_number, prRow.repo);
           }
           this.broadcast({
             type: 'review_verdict',
@@ -992,7 +992,7 @@ export class PRMergeWatcher {
     options: { silent?: boolean } = {},
   ): Promise<void> {
     updatePRState(pr.pr_number, pr.repo, 'merged');
-    setPreReviewStage(pr.pr_number, pr.repo, null);
+    clearTerminalPRFlags(pr.pr_number, pr.repo);
     deleteAllAutofixShasForPR(pr.pr_number, pr.repo);
 
     // Delete the origin branch for feature/* branches.

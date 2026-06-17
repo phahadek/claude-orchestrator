@@ -39,7 +39,8 @@ type EventType =
   | 'review_side_effect_failed'
   | 'pipeline_stage_entered'
   | 'pipeline_stage_passed'
-  | 'pipeline_stage_failed';
+  | 'pipeline_stage_failed'
+  | 'pr_terminal_flags_cleared';
 
 type ActorType = 'ai' | 'human' | 'system';
 

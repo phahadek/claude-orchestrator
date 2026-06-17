@@ -17,6 +17,7 @@ import {
   getSessionsByProject,
   lookupSessionByBranch,
   markSessionDone,
+  clearTerminalPRFlags,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import { GitHubApiError } from '../github/types';
@@ -460,6 +461,7 @@ export function createPrsRouter(
 
         const result = await github.mergePR(prNumber, commitTitle, repo);
         updatePRState(prNumber, repo, 'merged');
+        clearTerminalPRFlags(prNumber, repo);
 
         // Transition session DB status idle → done (must precede endSession subprocess cleanup)
         if (prRow?.session_id) {
