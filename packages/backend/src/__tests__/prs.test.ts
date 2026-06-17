@@ -21,6 +21,8 @@ vi.mock('../db/queries.js', () => ({
   updatePRDraftStatus: vi.fn(),
   getSessionsByProject: vi.fn().mockReturnValue([]),
   markSessionDone: vi.fn(),
+  clearTerminalPRFlags: vi.fn(),
+  lookupSessionByBranch: vi.fn().mockReturnValue(null),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -751,6 +753,18 @@ describe('POST /api/prs/:prNumber/merge', () => {
       42,
       'owner/repo',
       'merged',
+    );
+  });
+
+  it('calls clearTerminalPRFlags on successful manual merge', async () => {
+    vi.mocked(queries.getPRByNumber).mockReturnValue(mockPRRow);
+    const res = await supertest(buildApp())
+      .post('/api/prs/owner/repo/42/merge')
+      .send({});
+    expect(res.status).toBe(200);
+    expect(vi.mocked(queries.clearTerminalPRFlags)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
     );
   });
 
