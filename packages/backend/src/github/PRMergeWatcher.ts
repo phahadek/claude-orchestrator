@@ -825,8 +825,20 @@ export class PRMergeWatcher {
             });
 
             try {
+              const reviewProject = getProjectByGithubRepo(prRow.repo);
+              if (!reviewProject) {
+                logger.warn(
+                  `[PRMergeWatcher] no project for repo ${prRow.repo} — skipping push re-review`,
+                );
+                return;
+              }
               result = await Promise.race([
-                this.prReviewService!.reReviewPR(prRow.pr_number, prRow.repo),
+                this.prReviewService!.reReviewPR(
+                  prRow.pr_number,
+                  prRow.repo,
+                  reviewProject.id,
+                  reviewProject.contextUrl,
+                ),
                 timeoutPromise,
               ]);
             } finally {

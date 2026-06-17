@@ -533,7 +533,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     projectId?: string,
   ): Promise<boolean> {
     let draftTransitioned = false;
-    const resolvedProjectId = projectId ?? this.defaultProjectId;
+    const resolvedProjectId = projectId || this.defaultProjectId;
     try {
       await this.github.markPRReady(repo, prNumber);
       updatePRDraftStatus(prNumber, repo, 0);
@@ -557,7 +557,7 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
         },
       });
     }
-    if (taskId) {
+    if (taskId && resolvedProjectId) {
       try {
         await this.resolveBackend(resolvedProjectId).updateStatus(
           taskId,
