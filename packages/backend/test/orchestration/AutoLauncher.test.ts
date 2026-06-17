@@ -81,7 +81,6 @@ function makeMockBackend(tasks: ResolvedTask[]): TaskBackend {
 function makeMockSessionManager(): SessionManager {
   const sm = new EventEmitter() as unknown as SessionManager;
   let liveCount = 0;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (sm as any).start = vi.fn(() => {
     liveCount++;
     return `session-${liveCount}`;
