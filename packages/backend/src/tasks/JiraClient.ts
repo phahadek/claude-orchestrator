@@ -117,7 +117,8 @@ export class JiraClient {
     let startAt = 0;
     const maxResults = 100;
 
-    do {
+    let total = Infinity;
+    while (all.length < total) {
       const resp = await this.request<JiraSearchResponse>('POST', '/search', {
         jql,
         startAt,
@@ -133,10 +134,10 @@ export class JiraClient {
         ],
       });
       all.push(...resp.issues);
-      if (all.length >= resp.total) break;
+      total = resp.total;
       startAt += resp.issues.length;
-      // eslint-disable-next-line no-constant-condition
-    } while (true);
+      if (resp.issues.length === 0) break;
+    }
 
     return all;
   }
