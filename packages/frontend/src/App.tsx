@@ -803,9 +803,11 @@ export default function App() {
   }, [activeProjectId]);
 
   const fetchedArchivedRef = useRef<Set<string>>(new Set());
-  // Kept current on every render so async fetch callbacks see the latest sessions state.
+  // Kept current after every render so async fetch callbacks see the latest sessions state.
   const sessionsRef = useRef(sessions);
-  sessionsRef.current = sessions;
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  });
 
   useEffect(() => {
     if (!selectedId) return;
