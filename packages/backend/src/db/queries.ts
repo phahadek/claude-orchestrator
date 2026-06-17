@@ -1428,6 +1428,24 @@ export function setPauseReason(
 }
 
 /**
+ * Clear both pause_reason and pre_review_stage on terminal PR transitions
+ * (merged, closed, or approved verdict). Composes the existing setters so that
+ * pause_reason_set_at is also nulled correctly. Re-nulling already-null fields
+ * is a no-op in SQLite and is safe.
+ */
+export function clearTerminalPRFlags(prNumber: number, repo: string): void {
+  setPauseReason(prNumber, repo, null);
+  setPreReviewStage(prNumber, repo, null);
+  recordEvent({
+    event_type: 'pr_terminal_flags_cleared',
+    actor_type: 'system',
+    actor_id: null,
+    task_id: null,
+    payload: { pr_number: prNumber, repo },
+  });
+}
+
+/**
  * PRs that are open, approved, mergeable=1, merge_state='clean', and have no
  * pause_reason — i.e. orphaned merge-ready rows that AutoMerger missed because
  * they were already in this state before the backend started.
