@@ -87,8 +87,18 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
   // Derive implementing/reviewing pre-stages when no post-PR pipeline stage is active.
   // Post-PR stages (pr.preReviewStage) always take precedence.
   const derivedPreStage: string | null = (() => {
-    if (!pr && codeSession?.status === 'running') return 'implementing';
-    if (pr && review?.status === 'running') return 'reviewing';
+    if (
+      !pr &&
+      codeSession?.status === 'running' &&
+      (codeSession.sessionType === 'standard' || !codeSession.sessionType)
+    )
+      return 'implementing';
+    if (
+      pr &&
+      review?.status === 'running' &&
+      (review.verdict === null || review.iterationCount > 1)
+    )
+      return 'reviewing';
     return null;
   })();
   const dispatchTask = useDispatch(send, project);

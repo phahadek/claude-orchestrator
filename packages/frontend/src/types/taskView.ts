@@ -26,6 +26,7 @@ export interface TaskView {
   codeSession: {
     sessionId: string;
     status: string;
+    sessionType?: string | null;
     startedAt: number;
     endedAt: number | null;
     lastMessage: string;
