@@ -107,7 +107,10 @@ describe('PRReviewService.handleApprovedVerdict — empty/whitespace projectId',
 
     await svc.handleApprovedVerdict(1, 'org/repo', 'task-123', 'project-1');
 
-    expect(mockBackend.updateStatus).toHaveBeenCalledWith('task-123', '👀 In Review');
+    expect(mockBackend.updateStatus).toHaveBeenCalledWith(
+      'task-123',
+      '👀 In Review',
+    );
   });
 
   it('falls back to defaultProjectId when projectId is undefined', async () => {
@@ -121,7 +124,10 @@ describe('PRReviewService.handleApprovedVerdict — empty/whitespace projectId',
 
     await svc.handleApprovedVerdict(1, 'org/repo', 'task-123');
 
-    expect(mockBackend.updateStatus).toHaveBeenCalledWith('task-123', '👀 In Review');
+    expect(mockBackend.updateStatus).toHaveBeenCalledWith(
+      'task-123',
+      '👀 In Review',
+    );
   });
 
   it('skips updateStatus when taskId is null even with valid projectId', async () => {

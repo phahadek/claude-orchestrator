@@ -50,7 +50,9 @@ vi.mock('../reviewUtils', () => ({
   formatReviewFeedback: vi.fn().mockReturnValue('feedback'),
 }));
 vi.mock('../conflictNudge', () => ({ sendConflictNudge: vi.fn() }));
-vi.mock('../pollUtils', () => ({ isTerminalStalePR: vi.fn().mockReturnValue(false) }));
+vi.mock('../pollUtils', () => ({
+  isTerminalStalePR: vi.fn().mockReturnValue(false),
+}));
 vi.mock('../../db/pauseReason', () => ({
   parsePauseReason: vi.fn().mockReturnValue(null),
 }));
@@ -74,7 +76,9 @@ const HEAD_SHA = 'abc1234567890';
 
 function makeGithubClient(): GitHubClient {
   return {
-    fetchPR: vi.fn().mockResolvedValue({ headSha: HEAD_SHA, number: PR_NUMBER }),
+    fetchPR: vi
+      .fn()
+      .mockResolvedValue({ headSha: HEAD_SHA, number: PR_NUMBER }),
     categorizeMergeability: vi.fn(),
     listOpenPRStates: vi.fn(),
     markPRReady: vi.fn(),
@@ -186,7 +190,7 @@ describe('PRMergeWatcher push re-review — project id forwarding', () => {
     // second call (line ~828) returns undefined to simulate the broken state.
     vi.mocked(getProjectByGithubRepo)
       .mockReturnValueOnce(makeProject()) // test pipeline check
-      .mockReturnValueOnce(undefined);    // project guard before reReviewPR
+      .mockReturnValueOnce(undefined); // project guard before reReviewPR
 
     await watcher.handlePushDetected(makePRRow());
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -201,7 +205,9 @@ describe('PRMergeWatcher push re-review — project id forwarding', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     const reReviewCalls = vi.mocked(reviewService.reReviewPR).mock.calls;
-    const emptyIdCalls = reReviewCalls.filter(([, , projectId]) => projectId === '');
+    const emptyIdCalls = reReviewCalls.filter(
+      ([, , projectId]) => projectId === '',
+    );
     expect(emptyIdCalls).toHaveLength(0);
     expect(reviewService.reReviewPR).not.toHaveBeenCalled();
   });
