@@ -206,7 +206,16 @@ export function useSessionStore() {
     setSessions((prev) => {
       const next = new Map(prev);
       switch (msg.type) {
-        case 'session_started':
+        case 'session_started': {
+          const existing = next.get(msg.sessionId);
+          // Do not wipe a live (non-terminal) session with a hydration snapshot.
+          // Terminal sessions (done/error/killed) and new sessions are replaced normally.
+          if (
+            existing &&
+            !['done', 'error', 'killed'].includes(existing.status)
+          ) {
+            break;
+          }
           next.set(msg.sessionId, {
             sessionId: msg.sessionId,
             taskName: msg.taskName,
@@ -232,6 +241,7 @@ export function useSessionStore() {
             prUrl: msg.prUrl,
           });
           break;
+        }
         case 'session_event': {
           const s = next.get(msg.sessionId);
           if (s) {

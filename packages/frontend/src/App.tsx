@@ -63,6 +63,8 @@ const ACTIVE_PROJECT_KEY = 'activeProjectId';
 const ACTIVE_MILESTONE_KEY_PREFIX = 'activeMilestone_';
 const NON_MILESTONE_BOARD_ID = '__non_milestone__';
 
+const TERMINAL_STATUSES = new Set(['done', 'error', 'killed']);
+
 function getMilestoneKey(projectId: string) {
   return `${ACTIVE_MILESTONE_KEY_PREFIX}${projectId}`;
 }
@@ -801,6 +803,11 @@ export default function App() {
   }, [activeProjectId]);
 
   const fetchedArchivedRef = useRef<Set<string>>(new Set());
+  // Kept current after every render so async fetch callbacks see the latest sessions state.
+  const sessionsRef = useRef(sessions);
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  });
 
   useEffect(() => {
     if (!selectedId) return;
@@ -825,11 +832,19 @@ export default function App() {
           favorited: session.favorited === 1,
           project_id: session.project_id,
         } as ServerMessage);
-        dispatch({
-          type: 'session_status',
-          sessionId: session.session_id,
-          status: session.status,
-        } as ServerMessage);
+        // Re-read latest sessions to avoid clobbering a live session that came
+        // online while the fetch was in-flight.
+        const live = sessionsRef.current.find(
+          (s) => s.sessionId === session.session_id,
+        );
+        if (!live || TERMINAL_STATUSES.has(live.status)) {
+          dispatch({
+            type: 'session_status',
+            sessionId: session.session_id,
+            status: session.status,
+            replay: true,
+          } as ServerMessage);
+        }
         for (const ev of events) {
           dispatch({
             type: 'session_event',
@@ -881,11 +896,19 @@ export default function App() {
             favorited: session.favorited === 1,
             project_id: session.project_id,
           } as ServerMessage);
-          dispatch({
-            type: 'session_status',
-            sessionId: session.session_id,
-            status: session.status,
-          } as ServerMessage);
+          // Re-read latest sessions to avoid clobbering a live session that
+          // came online while the fetch was in-flight.
+          const live = sessionsRef.current.find(
+            (s) => s.sessionId === session.session_id,
+          );
+          if (!live || TERMINAL_STATUSES.has(live.status)) {
+            dispatch({
+              type: 'session_status',
+              sessionId: session.session_id,
+              status: session.status,
+              replay: true,
+            } as ServerMessage);
+          }
           for (const ev of events) {
             dispatch({
               type: 'session_event',
