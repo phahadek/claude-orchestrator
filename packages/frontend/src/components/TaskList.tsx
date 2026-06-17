@@ -324,7 +324,7 @@ export function TaskList({
     syncPendingRef.current = false;
     if (syncTimeoutRef.current) {
       clearTimeout(syncTimeoutRef.current);
-      // eslint-disable-next-line react-hooks/immutability
+      // eslint-disable-next-line react-hooks/immutability -- Reason: deliberate ref mutation — syncTimeoutRef holds a timeout handle for bookkeeping, not a rendered value; clearing it imperatively is correct
       syncTimeoutRef.current = null;
     }
     setSyncing(false);
@@ -372,7 +372,7 @@ export function TaskList({
     }
     // Safety timeout: clear syncing if no tasks_ready arrives within 5 seconds
     if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
-    // eslint-disable-next-line react-hooks/immutability
+    // eslint-disable-next-line react-hooks/immutability -- Reason: deliberate ref mutation — syncTimeoutRef holds a timeout handle for bookkeeping; assigning it imperatively is the correct pattern
     syncTimeoutRef.current = setTimeout(() => {
       syncTimeoutRef.current = null;
       if (syncPendingRef.current) {
