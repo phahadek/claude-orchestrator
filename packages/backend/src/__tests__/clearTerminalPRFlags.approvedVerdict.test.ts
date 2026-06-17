@@ -31,14 +31,18 @@ vi.mock('../db/queries.js', () => ({
 }));
 
 vi.mock('../config.js', () => ({
-  getProjectByGithubRepo: vi.fn().mockReturnValue({ id: 'proj-1', projectDir: '/test' }),
+  getProjectByGithubRepo: vi
+    .fn()
+    .mockReturnValue({ id: 'proj-1', projectDir: '/test' }),
   getProjectById: vi.fn().mockReturnValue(null),
   AUTO_REVIEW_ENABLED: true, // must be true to reach the approved-verdict branch
   runtimeSettings: {},
 }));
 
 vi.mock('../session/orchestrator-config.js', () => ({
-  loadOrchestratorConfig: vi.fn().mockReturnValue({ test: [], ci_check_name: [] }),
+  loadOrchestratorConfig: vi
+    .fn()
+    .mockReturnValue({ test: [], ci_check_name: [] }),
 }));
 
 vi.mock('../config/settings.js', () => ({
@@ -98,7 +102,8 @@ function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
     merge_state_checked_at: null,
     failing_checks: null,
     pending_push: 0,
-    pause_reason: '{"reason":"review_failed","source":"review","severity":"needs_attention","retry_strategy":"manual_action"}',
+    pause_reason:
+      '{"reason":"review_failed","source":"review","severity":"needs_attention","retry_strategy":"manual_action"}',
     pre_review_stage: 'autofix',
     pause_reason_set_at: null,
     conflict_nudge_sha: null,
