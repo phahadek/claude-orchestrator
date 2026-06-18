@@ -15,7 +15,9 @@ export type DisplayStatus =
   | 'needs_attention'
   | 'ready_to_merge'
   | 'done'
-  | 'backlog';
+  | 'backlog'
+  | 'blocked'
+  | 'deferred';
 
 export interface TaskStatusInput {
   notionStatus: string; // raw Notion status string
@@ -57,6 +59,12 @@ export function deriveDisplayStatus(input: TaskStatusInput): DisplayStatus {
     if (pauseReason) return 'needs_attention';
     return 'in_review';
   }
+
+  // Explicit Notion status wins over pause_reason so a 🚫 Blocked task is never
+  // silently demoted to needs_attention or backlog. The pause detail still surfaces
+  // in the tooltip via the pauseReason field on the task view.
+  if (notionStatus.includes('Blocked')) return 'blocked';
+  if (notionStatus.includes('Deferred')) return 'deferred';
 
   // Any non-null pause_reason marks the task as needing attention.
   if (pauseReason) return 'needs_attention';

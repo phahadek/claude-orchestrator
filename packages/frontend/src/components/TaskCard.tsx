@@ -24,7 +24,9 @@ const STATUS_LABELS: Record<DisplayStatus, string> = {
   in_review: '👀 In Review',
   ready: '🗂️ Ready',
   done: '✔️ Done',
-  backlog: '🗂️ Backlog',
+  backlog: '🔲 Backlog',
+  blocked: '🚫 Blocked',
+  deferred: '⏭️ Deferred',
 };
 
 const PAUSE_REASON_LABELS: Record<PauseReason, string> = {

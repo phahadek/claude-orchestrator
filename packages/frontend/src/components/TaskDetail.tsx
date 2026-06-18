@@ -20,7 +20,9 @@ const DISPLAY_STATUS_LABELS: Record<DisplayStatus, string> = {
   needs_attention: '⚠️ Needs Attention',
   ready_to_merge: '✅ Ready to Merge',
   done: '✓ Done',
-  backlog: '🗂️ Backlog',
+  backlog: '🔲 Backlog',
+  blocked: '🚫 Blocked',
+  deferred: '⏭️ Deferred',
 };
 
 const DISPLAY_STATUS_CSS_KEYS: Record<DisplayStatus, string> = {
@@ -31,6 +33,8 @@ const DISPLAY_STATUS_CSS_KEYS: Record<DisplayStatus, string> = {
   ready_to_merge: 'status--ready-to-merge',
   done: 'status--done',
   backlog: 'status--backlog',
+  blocked: 'status--blocked',
+  deferred: 'status--deferred',
 };
 
 const VERDICT_LABELS: Record<string, string> = {
