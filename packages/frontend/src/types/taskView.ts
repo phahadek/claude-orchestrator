@@ -7,7 +7,9 @@ export type DisplayStatus =
   | 'needs_attention'
   | 'ready_to_merge'
   | 'done'
-  | 'backlog';
+  | 'backlog'
+  | 'blocked'
+  | 'deferred';
 
 export type PauseReason = CanonicalPauseReason;
 

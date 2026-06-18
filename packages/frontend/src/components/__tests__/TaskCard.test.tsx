@@ -367,6 +367,45 @@ describe('TaskCard', () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
+  it('renders 🚫 Blocked label for blocked displayStatus', () => {
+    render(
+      <TaskCard
+        task={makeTask({ displayStatus: 'blocked' })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('🚫 Blocked')).toBeDefined();
+  });
+
+  it('renders ⏭️ Deferred label for deferred displayStatus', () => {
+    render(
+      <TaskCard
+        task={makeTask({ displayStatus: 'deferred' })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('⏭️ Deferred')).toBeDefined();
+  });
+
+  it('renders 🔲 Backlog label for backlog displayStatus', () => {
+    render(
+      <TaskCard
+        task={makeTask({ displayStatus: 'backlog' })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByText('🔲 Backlog')).toBeDefined();
+  });
+
   it('applies correct data-status for each displayStatus value', () => {
     const statuses: DisplayStatus[] = [
       'ready',
@@ -375,6 +414,8 @@ describe('TaskCard', () => {
       'needs_attention',
       'ready_to_merge',
       'done',
+      'blocked',
+      'deferred',
     ];
     for (const status of statuses) {
       const { container, unmount } = render(

@@ -36,6 +36,8 @@ const GROUP_ORDER: DisplayStatus[] = [
   'in_review',
   'ready',
   'done',
+  'blocked',
+  'deferred',
 ];
 
 const GROUP_LABELS: Record<DisplayStatus, string> = {
@@ -45,7 +47,9 @@ const GROUP_LABELS: Record<DisplayStatus, string> = {
   in_review: '👀 In Review',
   ready: '🗂️ Ready',
   done: '✔️ Done',
-  backlog: '🗂️ Backlog',
+  backlog: '🔲 Backlog',
+  blocked: '🚫 Blocked',
+  deferred: '⏭️ Deferred',
 };
 
 const PRIORITY_RANK: Record<string, number> = {
@@ -608,7 +612,7 @@ export function TaskList({
               <span className={styles.toggle} aria-hidden="true">
                 {!collapsed.has('backlog') ? '▼' : '▶'}
               </span>
-              <span className={styles.groupLabel}>🗂️ Backlog</span>
+              <span className={styles.groupLabel}>{GROUP_LABELS.backlog}</span>
               <span className={styles.groupCount}>{backlogTasks.length}</span>
             </div>
             {!collapsed.has('backlog') && (
