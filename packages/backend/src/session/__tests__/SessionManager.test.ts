@@ -137,15 +137,20 @@ vi.mock('../../config', () => ({
 vi.mock('child_process', () => ({
   execSync: vi.fn().mockReturnValue('dev\n'),
   // Default: call back immediately with success so promisify(exec) resolves.
-  exec: vi.fn().mockImplementation(
-    (
-      _cmd: string,
-      _opts: unknown,
-      callback: (err: Error | null, result?: { stdout: string; stderr: string }) => void,
-    ) => {
-      callback(null, { stdout: '', stderr: '' });
-    },
-  ),
+  exec: vi
+    .fn()
+    .mockImplementation(
+      (
+        _cmd: string,
+        _opts: unknown,
+        callback: (
+          err: Error | null,
+          result?: { stdout: string; stderr: string },
+        ) => void,
+      ) => {
+        callback(null, { stdout: '', stderr: '' });
+      },
+    ),
 }));
 
 vi.mock('fs', () => ({
@@ -1063,7 +1068,12 @@ describe('gitWorktreeAddWithRetry — direct unit tests', () => {
   it('resolves on first attempt when exec succeeds', async () => {
     // Default mock already calls callback with success.
     await expect(
-      gitWorktreeAddWithRetry('git worktree add /path branch', { cwd: '/project' }, 3, NO_DELAY),
+      gitWorktreeAddWithRetry(
+        'git worktree add /path branch',
+        { cwd: '/project' },
+        3,
+        NO_DELAY,
+      ),
     ).resolves.toBeUndefined();
     expect(vi.mocked(execCb)).toHaveBeenCalledTimes(1);
   });
@@ -1085,7 +1095,12 @@ describe('gitWorktreeAddWithRetry — direct unit tests', () => {
     );
 
     await expect(
-      gitWorktreeAddWithRetry('git worktree add /path branch', { cwd: '/project' }, 3, NO_DELAY),
+      gitWorktreeAddWithRetry(
+        'git worktree add /path branch',
+        { cwd: '/project' },
+        3,
+        NO_DELAY,
+      ),
     ).resolves.toBeUndefined();
     expect(vi.mocked(execCb)).toHaveBeenCalledTimes(2);
   });
@@ -1101,7 +1116,12 @@ describe('gitWorktreeAddWithRetry — direct unit tests', () => {
     );
 
     await expect(
-      gitWorktreeAddWithRetry('git worktree add /path branch', { cwd: '/project' }, 3, NO_DELAY),
+      gitWorktreeAddWithRetry(
+        'git worktree add /path branch',
+        { cwd: '/project' },
+        3,
+        NO_DELAY,
+      ),
     ).rejects.toMatchObject({ stderr: BRANCH_EXISTS_STDERR });
     // Only one attempt — no retry for non-lock errors.
     expect(vi.mocked(execCb)).toHaveBeenCalledTimes(1);
@@ -1118,7 +1138,12 @@ describe('gitWorktreeAddWithRetry — direct unit tests', () => {
     );
 
     await expect(
-      gitWorktreeAddWithRetry('git worktree add /path branch', { cwd: '/project' }, 3, NO_DELAY),
+      gitWorktreeAddWithRetry(
+        'git worktree add /path branch',
+        { cwd: '/project' },
+        3,
+        NO_DELAY,
+      ),
     ).rejects.toMatchObject({ stderr: LOCK_STDERR });
     // 3 attempts (default maxAttempts).
     expect(vi.mocked(execCb)).toHaveBeenCalledTimes(3);

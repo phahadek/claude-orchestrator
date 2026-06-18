@@ -303,9 +303,7 @@ export async function gitWorktreeAddWithRetry(
           `[SessionManager] git worktree add .git/config lock contention (attempt ${attempt}/${maxAttempts}), retry in ${Math.round(backoffMs)}ms: ${stderr.trim()}`,
         );
         if (backoffMs > 0) {
-          await new Promise<void>((resolve) =>
-            setTimeout(resolve, backoffMs),
-          );
+          await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
         }
       }
     }
