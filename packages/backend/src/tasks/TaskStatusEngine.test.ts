@@ -287,9 +287,9 @@ describe('deriveDisplayStatus', () => {
   // ─── blocked ───────────────────────────────────────────────────────────────
 
   it("returns 'blocked' when notionStatus is '🚫 Blocked' with no pauseReason", () => {
-    expect(
-      deriveDisplayStatus(makeInput({ notionStatus: '🚫 Blocked' })),
-    ).toBe('blocked');
+    expect(deriveDisplayStatus(makeInput({ notionStatus: '🚫 Blocked' }))).toBe(
+      'blocked',
+    );
   });
 
   it("returns 'blocked' (not 'needs_attention') when notionStatus is '🚫 Blocked' with a pauseReason", () => {
