@@ -5,6 +5,10 @@ import { promisify } from 'util';
 import { EventEmitter } from 'events';
 
 const exec = promisify(execCb);
+
+const GIT_CONFIG_LOCK_RE =
+  /could not lock config file .*\.git[/\\]config: File exists/;
+
 import { recordEvent } from '../audit/AuditLog';
 import { scrubSecrets } from '../security/scrubSecrets';
 import { AgentSession, parseNotionPageIdDashed } from './AgentSession';
@@ -264,6 +268,48 @@ export function pruneSessionBranch(
  */
 export const RESUME_NUDGE_MESSAGE =
   'Continue implementing the task. Check git status and your todo list to see where you left off.';
+
+/**
+ * Wraps `git worktree add` with a retry loop that fires **only** on transient
+ * .git/config lock contention (the "could not lock config file" error). All
+ * other errors propagate immediately so the caller's existing branch-already-exists
+ * / directory-exists handling is unaffected.
+ *
+ * The lock is typically held for milliseconds; a short jittered backoff is more
+ * than enough to clear it across concurrent session launches.
+ */
+export async function gitWorktreeAddWithRetry(
+  cmd: string,
+  opts: { cwd: string; timeout?: number },
+  maxAttempts = 3,
+  /** Overrideable for unit tests; defaults to 100–300 ms jitter. */
+  getDelayMs: () => number = () => 100 + Math.random() * 200,
+): Promise<void> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await exec(cmd, opts);
+      return;
+    } catch (err) {
+      const stderr =
+        (err as { stderr?: string | Buffer })?.stderr?.toString() ?? '';
+      if (!GIT_CONFIG_LOCK_RE.test(stderr)) {
+        throw err; // non-lock error: fail immediately, no retry
+      }
+      lastErr = err;
+      if (attempt < maxAttempts) {
+        const backoffMs = getDelayMs();
+        logger.warn(
+          `[SessionManager] git worktree add .git/config lock contention (attempt ${attempt}/${maxAttempts}), retry in ${Math.round(backoffMs)}ms: ${stderr.trim()}`,
+        );
+        if (backoffMs > 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, backoffMs));
+        }
+      }
+    }
+  }
+  throw lastErr;
+}
 
 export class SessionManager extends EventEmitter {
   private sessions = new Map<string, AgentSession>();
@@ -749,7 +795,7 @@ export class SessionManager extends EventEmitter {
     const featureBranch = taskName ? deriveBranchSlug(taskName) : null;
     if (featureBranch) {
       try {
-        await exec(
+        await gitWorktreeAddWithRetry(
           `git worktree add -b "${featureBranch}" "${worktreePath}" ${worktreeBase}`,
           { cwd: projectDir },
         );
@@ -849,7 +895,7 @@ export class SessionManager extends EventEmitter {
 
             // Single retry — if this also fails, propagate normally (no loop).
             try {
-              await exec(
+              await gitWorktreeAddWithRetry(
                 `git worktree add -b "${featureBranch}" "${worktreePath}" ${worktreeBase}`,
                 { cwd: projectDir },
               );
@@ -885,7 +931,7 @@ export class SessionManager extends EventEmitter {
       }
     } else {
       try {
-        await exec(
+        await gitWorktreeAddWithRetry(
           `git worktree add --detach "${worktreePath}" ${worktreeBase}`,
           { cwd: projectDir },
         );
@@ -2128,7 +2174,7 @@ export class SessionManager extends EventEmitter {
       if (resumeFeatureBranch) {
         try {
           // Attach to existing branch — preserves all PR commits.
-          execSync(
+          await gitWorktreeAddWithRetry(
             `git worktree add "${worktreePath}" "${resumeFeatureBranch}"`,
             { cwd: projectDir },
           );
@@ -2147,14 +2193,14 @@ export class SessionManager extends EventEmitter {
             } catch {
               // best-effort
             }
-            execSync(
+            await gitWorktreeAddWithRetry(
               `git worktree add "${worktreePath}" "${resumeFeatureBranch}"`,
               { cwd: projectDir },
             );
           } else {
             // Branch doesn't exist locally (cleaned up) — try to recreate with -b.
             try {
-              execSync(
+              await gitWorktreeAddWithRetry(
                 `git worktree add -b "${resumeFeatureBranch}" "${worktreePath}" ${worktreeBase}`,
                 { cwd: projectDir },
               );
@@ -2171,7 +2217,7 @@ export class SessionManager extends EventEmitter {
                 } catch {
                   // best-effort
                 }
-                execSync(
+                await gitWorktreeAddWithRetry(
                   `git worktree add "${worktreePath}" "${resumeFeatureBranch}"`,
                   { cwd: projectDir },
                 );
@@ -2182,7 +2228,7 @@ export class SessionManager extends EventEmitter {
           }
         }
       } else {
-        execSync(
+        await gitWorktreeAddWithRetry(
           `git worktree add --detach "${worktreePath}" ${worktreeBase}`,
           { cwd: projectDir },
         );
