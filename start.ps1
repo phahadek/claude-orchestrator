@@ -1,4 +1,4 @@
-# start.ps1 — Launch backend and frontend dev servers as background jobs
+# start.ps1 - Launch backend and frontend dev servers as background jobs
 # Saves PIDs to .dashboard.pids for use by stop.ps1 / restart.ps1
 
 $BackendPort = 3000
@@ -57,7 +57,7 @@ $fePidActual = Get-PortPid $FrontendPort
 } | ConvertTo-Json | Set-Content -Path $PidFile
 
 Write-Host "[dashboard] PID file written to $PidFile" -ForegroundColor Cyan
-Write-Host "[dashboard] Streaming output (Ctrl+C to stop streaming — servers keep running)" -ForegroundColor Yellow
+Write-Host "[dashboard] Streaming output (Ctrl+C to stop streaming - servers keep running)" -ForegroundColor Yellow
 Write-Host ""
 
 # Stream output with color-coded prefixes until interrupted
@@ -87,7 +87,7 @@ try {
     }
 }
 catch [System.Management.Automation.PipelineStoppedException] {
-    # User pressed Ctrl+C — this is expected; servers remain running as background jobs
+    # User pressed Ctrl+C - this is expected; servers remain running as background jobs
     Write-Host ""
     Write-Host "[dashboard] Output streaming stopped. Servers continue running in the background." -ForegroundColor Yellow
     Write-Host "[dashboard] Run stop.ps1 (or npm run stop:win) to shut them down." -ForegroundColor Yellow
