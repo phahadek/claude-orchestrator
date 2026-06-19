@@ -34,7 +34,7 @@ import {
 import { TaskCacheRefresher } from './orchestration/TaskCacheRefresher';
 import { analyticsRouter } from './routes/analytics';
 import { projectsRouter, setAutoMerger } from './routes/projects';
-import { requireDeviceAuth, validateWsToken } from './auth/DeviceAuth';
+import { requireDeviceAuth, validateWsToken, isLoopbackIp } from './auth/DeviceAuth';
 import {
   createEnrollmentRouter,
   setEnrollmentBroadcast,
@@ -244,6 +244,12 @@ wss.on('connection', (ws, req) => {
     const deviceCount = getActiveDeviceCount();
     if (deviceCount > 0) {
       ws.close(4001, 'Unauthorized');
+      return;
+    }
+    // Bootstrap window is loopback-only to prevent enrollment hijack from the network.
+    const remoteAddr = req.socket.remoteAddress ?? '';
+    if (!isLoopbackIp(remoteAddr)) {
+      ws.close(4003, 'Bootstrap only available on localhost');
       return;
     }
   }

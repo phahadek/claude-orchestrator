@@ -4,7 +4,26 @@ import { runPRBootSweep } from './github/PRBootSweep';
 import { runBootIdleReconciliation } from './session/bootIdleReconciliation';
 import { runBootWorktreeReconciliation } from './orchestration/WorktreeReconciler';
 import { logger } from './logger';
+import { getCorporateMode } from './config/corporateMode';
 import type { ServerMessage } from './ws/types';
+
+function isLoopback(host: string): boolean {
+  return host === '127.0.0.1' || host === '::1' || host === 'localhost' || host.startsWith('127.');
+}
+
+export function resolveBindHost(): string {
+  const envHost = process.env.ORCHESTRATOR_BIND_HOST;
+  const corporateMode = getCorporateMode();
+
+  if (corporateMode.enabled && envHost && !isLoopback(envHost)) {
+    logger.warn(
+      `[server] ORCHESTRATOR_BIND_HOST=${envHost} ignored in corporate mode — binding localhost only`,
+    );
+    return '127.0.0.1';
+  }
+
+  return envHost ?? '127.0.0.1';
+}
 
 export interface BootDeps {
   jsonlReader: {
@@ -124,10 +143,15 @@ export function getActiveBootTracker(): BootStatusTracker | null {
 
 export async function runBootSequence(deps: BootDeps): Promise<void> {
   const { server, port } = deps;
+  const bindHost = resolveBindHost();
   await new Promise<void>((resolve) =>
-    server.listen(port, '0.0.0.0', () => {
+    server.listen(port, bindHost, () => {
       logger.info(`[server] listening on port ${port}`);
-      logger.info('[server] LAN access enabled — device auth required');
+      if (isLoopback(bindHost)) {
+        logger.info('[server] bound to localhost only');
+      } else {
+        logger.info('[server] LAN access enabled — device auth required');
+      }
       resolve();
     }),
   );

@@ -11,7 +11,7 @@ export default defineConfig({
     },
   },
   server: {
-    host: true,
+    host: process.env.ORCHESTRATOR_BIND_HOST ?? 'localhost',
     strictPort: true,
     watch: {
       ignored: ['**/.claude/worktrees/**'],
