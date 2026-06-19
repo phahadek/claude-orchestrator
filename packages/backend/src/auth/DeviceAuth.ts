@@ -6,6 +6,15 @@ import {
 } from '../db/queries';
 import type { DeviceRow } from '../db/types';
 
+export function isLoopbackIp(addr: string): boolean {
+  return (
+    addr === '127.0.0.1' ||
+    addr === '::1' ||
+    addr === '::ffff:127.0.0.1' ||
+    addr.startsWith('127.')
+  );
+}
+
 function validateDeviceToken(token: string): DeviceRow | null {
   return getDeviceByToken(token);
 }
@@ -41,6 +50,14 @@ export function requireDeviceAuth(
     // We block all other endpoints until enrollment completes.
     const deviceCount = getActiveDeviceCount();
     if (deviceCount === 0) {
+      // Bootstrap window is loopback-only to prevent enrollment hijack from the network.
+      const remoteAddr = req.socket.remoteAddress ?? '';
+      if (!isLoopbackIp(remoteAddr)) {
+        res
+          .status(403)
+          .json({ error: 'forbidden', code: 'bootstrap_loopback_only' });
+        return;
+      }
       next();
       return;
     }
