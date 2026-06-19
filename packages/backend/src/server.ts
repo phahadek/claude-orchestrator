@@ -34,7 +34,11 @@ import {
 import { TaskCacheRefresher } from './orchestration/TaskCacheRefresher';
 import { analyticsRouter } from './routes/analytics';
 import { projectsRouter, setAutoMerger } from './routes/projects';
-import { requireDeviceAuth, validateWsToken, isLoopbackIp } from './auth/DeviceAuth';
+import {
+  requireDeviceAuth,
+  validateWsToken,
+  isLoopbackIp,
+} from './auth/DeviceAuth';
 import {
   createEnrollmentRouter,
   setEnrollmentBroadcast,

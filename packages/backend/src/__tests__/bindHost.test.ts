@@ -95,24 +95,19 @@ describe('resolveBindHost', () => {
 import { isLoopbackIp } from '../auth/DeviceAuth.js';
 
 describe('isLoopbackIp', () => {
-  it.each([
-    '127.0.0.1',
-    '::1',
-    '::ffff:127.0.0.1',
-    '127.0.0.2',
-  ])('returns true for loopback address %s', (addr) => {
-    expect(isLoopbackIp(addr)).toBe(true);
-  });
+  it.each(['127.0.0.1', '::1', '::ffff:127.0.0.1', '127.0.0.2'])(
+    'returns true for loopback address %s',
+    (addr) => {
+      expect(isLoopbackIp(addr)).toBe(true);
+    },
+  );
 
-  it.each([
-    '192.168.1.1',
-    '10.0.0.1',
-    '0.0.0.0',
-    '172.16.0.1',
-    '',
-  ])('returns false for non-loopback address %s', (addr) => {
-    expect(isLoopbackIp(addr)).toBe(false);
-  });
+  it.each(['192.168.1.1', '10.0.0.1', '0.0.0.0', '172.16.0.1', ''])(
+    'returns false for non-loopback address %s',
+    (addr) => {
+      expect(isLoopbackIp(addr)).toBe(false);
+    },
+  );
 });
 
 // ── Bootstrap loopback gate (HTTP — requireDeviceAuth) ───────────────────────

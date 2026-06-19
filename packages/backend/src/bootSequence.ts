@@ -8,7 +8,12 @@ import { getCorporateMode } from './config/corporateMode';
 import type { ServerMessage } from './ws/types';
 
 function isLoopback(host: string): boolean {
-  return host === '127.0.0.1' || host === '::1' || host === 'localhost' || host.startsWith('127.');
+  return (
+    host === '127.0.0.1' ||
+    host === '::1' ||
+    host === 'localhost' ||
+    host.startsWith('127.')
+  );
 }
 
 export function resolveBindHost(): string {
