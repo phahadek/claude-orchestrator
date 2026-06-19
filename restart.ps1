@@ -1,8 +1,8 @@
-# restart.ps1 — Restart backend and/or frontend dev servers
+# restart.ps1 - Restart backend and/or frontend dev servers
 # Usage:
-#   .\restart.ps1              — restart both
-#   .\restart.ps1 -backend    — restart backend only
-#   .\restart.ps1 -frontend   — restart frontend only
+#   .\restart.ps1              - restart both
+#   .\restart.ps1 -backend    - restart backend only
+#   .\restart.ps1 -frontend   - restart frontend only
 
 param(
     [switch]$backend,

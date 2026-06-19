@@ -1,4 +1,4 @@
-# stop.ps1 — Stop backend and frontend dev servers
+# stop.ps1 - Stop backend and frontend dev servers
 # Reads PIDs from .dashboard.pids; falls back to port-based detection if file is missing/stale
 
 $BackendPort = 3000
