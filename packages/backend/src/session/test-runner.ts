@@ -28,11 +28,15 @@ function killProcessTree(pid: number): void {
   }
 }
 
-function getChildRssMb(pid: number): number {
-  if (process.platform !== 'linux') return 0;
+export function getChildRssMb(
+  pid: number,
+  _platform: NodeJS.Platform = process.platform,
+  readFn: (path: string) => string = (p) => readFileSync(p, 'utf8') as string,
+): number {
+  if (_platform !== 'linux') return 0;
   try {
-    const data = readFileSync(`/proc/${pid}/status`, 'utf8');
-    const match = (data as string).match(/^VmRSS:\s+(\d+)\s+kB/m);
+    const data = readFn(`/proc/${pid}/status`);
+    const match = data.match(/^VmRSS:\s+(\d+)\s+kB/m);
     if (match) return parseInt(match[1], 10) / 1024;
   } catch {
     // process may have exited

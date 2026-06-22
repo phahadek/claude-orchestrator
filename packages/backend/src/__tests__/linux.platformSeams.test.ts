@@ -2,12 +2,40 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import os from 'os';
 import path from 'path';
 
+import { getDataDir } from '../config/dataDir.js';
 import { resolveClaudePath } from '../config.js';
 import { claudeCredentialsPath } from '../config/credentialsPath.js';
 import {
   normalizePath,
   detectInFlightEscape,
 } from '../session/SessionAuditor.js';
+import { getChildRssMb } from '../session/test-runner.js';
+
+// ── getDataDir — Linux / XDG ───────────────────────────────────────────────────
+
+describe('getDataDir — linux platform injection', () => {
+  const originalXdg = process.env.XDG_DATA_HOME;
+
+  beforeEach(() => {
+    delete process.env.XDG_DATA_HOME;
+  });
+
+  afterEach(() => {
+    if (originalXdg !== undefined) process.env.XDG_DATA_HOME = originalXdg;
+    else delete process.env.XDG_DATA_HOME;
+  });
+
+  it('returns ${XDG_DATA_HOME}/claude-orchestrator when XDG_DATA_HOME is set', () => {
+    process.env.XDG_DATA_HOME = '/custom/xdg';
+    expect(getDataDir('linux')).toBe(path.join('/custom/xdg', 'claude-orchestrator'));
+  });
+
+  it('returns ~/.local/share/claude-orchestrator when XDG_DATA_HOME is unset', () => {
+    expect(getDataDir('linux')).toBe(
+      path.join(os.homedir(), '.local', 'share', 'claude-orchestrator'),
+    );
+  });
+});
 
 // ── resolveClaudePath ──────────────────────────────────────────────────────────
 
@@ -154,50 +182,93 @@ describe('normalizePath — platform injection', () => {
   });
 });
 
-// ── detectInFlightEscape — Linux path separators (Linux-only) ─────────────────
+// ── getChildRssMb — /proc RSS bounding ────────────────────────────────────────
 
-describe.skipIf(process.platform !== 'linux')(
-  'detectInFlightEscape — Linux path separators',
-  () => {
-    const WORKTREE = '/home/user/projects/.claude/worktrees/abc123';
+describe('getChildRssMb — platform injection', () => {
+  it('returns 0 on non-linux platforms', () => {
+    expect(getChildRssMb(12345, 'win32')).toBe(0);
+    expect(getChildRssMb(12345, 'darwin')).toBe(0);
+  });
 
-    it('path inside worktree is not an escape', () => {
-      const result = detectInFlightEscape(
-        'Write',
-        { file_path: `${WORKTREE}/src/index.ts`, content: '' },
-        WORKTREE,
-      );
-      expect(result).toBeNull();
+  it('parses VmRSS from /proc/<pid>/status on linux', () => {
+    const mockRead = vi
+      .fn()
+      .mockReturnValue('Name: claude\nVmRSS:   51200 kB\nSomethingElse: 0\n');
+    const result = getChildRssMb(99, 'linux', mockRead);
+    expect(mockRead).toHaveBeenCalledWith('/proc/99/status');
+    expect(result).toBe(50); // 51200 kB / 1024 = 50 MB
+  });
+
+  it('returns 0 when VmRSS line is absent', () => {
+    const mockRead = vi.fn().mockReturnValue('Name: claude\nVmPeak: 1024 kB\n');
+    expect(getChildRssMb(99, 'linux', mockRead)).toBe(0);
+  });
+
+  it('returns 0 when /proc/<pid>/status cannot be read (process exited)', () => {
+    const mockRead = vi.fn().mockImplementation(() => {
+      throw new Error('ENOENT: no such file');
     });
+    expect(getChildRssMb(99, 'linux', mockRead)).toBe(0);
+  });
+});
 
-    it('path outside worktree is detected as an escape', () => {
-      const result = detectInFlightEscape(
-        'Write',
-        { file_path: '/tmp/malicious.sh', content: '' },
-        WORKTREE,
-      );
-      expect(result).not.toBeNull();
-      expect(result?.type).toBe('worktree_escape');
-    });
+// ── detectInFlightEscape — Linux path separators (cross-platform) ──────────────
+//
+// Pass `platform: 'linux'` so normalizePath uses path.posix internally,
+// making these tests verifiable on Windows without the physical Ubuntu box.
 
-    it('/c/... path outside worktree is not mistakenly converted to C:\\ and is detected as escape', () => {
-      const result = detectInFlightEscape(
-        'Write',
-        { file_path: '/c/tmp/file.ts', content: '' },
-        WORKTREE,
-      );
-      expect(result).not.toBeNull();
-      // escapedTo should be a Linux-style path, not a Windows C:\ path
-      expect(result?.escapedTo).not.toMatch(/^C:/i);
-    });
+describe('detectInFlightEscape — Linux path separators', () => {
+  const WORKTREE = '/home/user/projects/.claude/worktrees/abc123';
 
-    it('Bash redirect outside worktree is detected', () => {
-      const result = detectInFlightEscape(
-        'Bash',
-        { command: 'echo hello > /etc/hosts' },
-        WORKTREE,
-      );
-      expect(result).not.toBeNull();
-    });
-  },
-);
+  it('path inside worktree is not an escape', () => {
+    const result = detectInFlightEscape(
+      'Write',
+      { file_path: `${WORKTREE}/src/index.ts`, content: '' },
+      WORKTREE,
+      'linux',
+    );
+    expect(result).toBeNull();
+  });
+
+  it('path outside worktree is detected as an escape', () => {
+    const result = detectInFlightEscape(
+      'Write',
+      { file_path: '/tmp/malicious.sh', content: '' },
+      WORKTREE,
+      'linux',
+    );
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('worktree_escape');
+  });
+
+  it('/c/... path is not mangled to C:\\ on linux and is detected as escape', () => {
+    const result = detectInFlightEscape(
+      'Write',
+      { file_path: '/c/tmp/file.ts', content: '' },
+      WORKTREE,
+      'linux',
+    );
+    expect(result).not.toBeNull();
+    expect(result?.escapedTo).not.toMatch(/^C:/i);
+  });
+
+  it('Bash redirect outside worktree is detected', () => {
+    const result = detectInFlightEscape(
+      'Bash',
+      { command: 'echo hello > /etc/hosts' },
+      WORKTREE,
+      'linux',
+    );
+    expect(result).not.toBeNull();
+  });
+
+  it('path equal to worktree root itself is not an escape', () => {
+    const result = detectInFlightEscape(
+      'Write',
+      { file_path: WORKTREE, content: '' },
+      WORKTREE,
+      'linux',
+    );
+    expect(result).toBeNull();
+  });
+});
