@@ -960,7 +960,7 @@ export class SessionManager extends EventEmitter {
 
     if (orchConfig.bootstrap_script) {
       try {
-        await exec(`bash ${orchConfig.bootstrap_script} "${worktreePath}"`, {
+        await exec(`bash "${orchConfig.bootstrap_script}" "${worktreePath}"`, {
           cwd: projectDir,
           timeout: 120_000,
         });

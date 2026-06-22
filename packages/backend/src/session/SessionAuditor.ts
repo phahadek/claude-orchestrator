@@ -432,17 +432,25 @@ function extractWriteTargetsFromCommand(command: string): string[] {
 
 /**
  * Normalize a path to a canonical absolute form for comparison.
- * Converts Git-Bash /c/... paths to Windows C:\... on Windows hosts.
+ * On win32: converts Git-Bash /c/... paths to C:\... before resolving.
  * When baseDir is provided, drive-rootless absolute paths (e.g. /Users/foo)
  * inherit the drive letter from baseDir via path.resolve, preventing false-positive
  * worktree_escape violations when the Claude CLI reports Unix-style paths on Windows.
+ *
+ * The `platform` parameter is injectable for unit tests.
  */
-function normalizePath(p: string, baseDir?: string): string {
-  // Git-Bash /c/foo → C:\foo. Must precede path.resolve, which would otherwise
-  // mangle the single-letter drive segment into a literal \c\ component.
-  const gitBashMatch = /^\/([a-zA-Z])\//i.exec(p);
-  if (gitBashMatch) {
-    p = `${gitBashMatch[1].toUpperCase()}:\\${p.slice(3)}`;
+export function normalizePath(
+  p: string,
+  baseDir?: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === 'win32') {
+    // Git-Bash /c/foo → C:\foo. Must precede path.resolve, which would otherwise
+    // mangle the single-letter drive segment into a literal \c\ component.
+    const gitBashMatch = /^\/([a-zA-Z])\//i.exec(p);
+    if (gitBashMatch) {
+      p = `${gitBashMatch[1].toUpperCase()}:\\${p.slice(3)}`;
+    }
   }
   return baseDir ? path.resolve(baseDir, p) : path.normalize(p);
 }
