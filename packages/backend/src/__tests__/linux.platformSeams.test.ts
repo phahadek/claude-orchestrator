@@ -27,7 +27,9 @@ describe('getDataDir — linux platform injection', () => {
 
   it('returns ${XDG_DATA_HOME}/claude-orchestrator when XDG_DATA_HOME is set', () => {
     process.env.XDG_DATA_HOME = '/custom/xdg';
-    expect(getDataDir('linux')).toBe(path.join('/custom/xdg', 'claude-orchestrator'));
+    expect(getDataDir('linux')).toBe(
+      path.join('/custom/xdg', 'claude-orchestrator'),
+    );
   });
 
   it('returns ~/.local/share/claude-orchestrator when XDG_DATA_HOME is unset', () => {
