@@ -64,7 +64,9 @@ describe('resolveClaudePath — platform injection', () => {
   });
 
   it('returns first line only when exec returns multiple lines', () => {
-    const mockExec = vi.fn().mockReturnValue('/usr/bin/claude\n/usr/local/bin/claude\n');
+    const mockExec = vi
+      .fn()
+      .mockReturnValue('/usr/bin/claude\n/usr/local/bin/claude\n');
     const result = resolveClaudePath('linux', mockExec);
     expect(result).toBe('/usr/bin/claude');
   });
@@ -89,19 +91,27 @@ describe('claudeCredentialsPath — platform injection', () => {
 
   it('returns ~/.claude/.credentials.json on linux', () => {
     const result = claudeCredentialsPath('linux');
-    expect(result).toBe(path.join(os.homedir(), '.claude', '.credentials.json'));
+    expect(result).toBe(
+      path.join(os.homedir(), '.claude', '.credentials.json'),
+    );
   });
 
   it('returns ~/.claude/.credentials.json on darwin', () => {
     const result = claudeCredentialsPath('darwin');
-    expect(result).toBe(path.join(os.homedir(), '.claude', '.credentials.json'));
+    expect(result).toBe(
+      path.join(os.homedir(), '.claude', '.credentials.json'),
+    );
   });
 
   it('returns %APPDATA%\\Claude\\.credentials.json on win32 when APPDATA is set', () => {
     process.env.APPDATA = 'C:\\Users\\test\\AppData\\Roaming';
     const result = claudeCredentialsPath('win32');
     expect(result).toBe(
-      path.join('C:\\Users\\test\\AppData\\Roaming', 'Claude', '.credentials.json'),
+      path.join(
+        'C:\\Users\\test\\AppData\\Roaming',
+        'Claude',
+        '.credentials.json',
+      ),
     );
   });
 
@@ -135,7 +145,11 @@ describe('normalizePath — platform injection', () => {
   });
 
   it('leaves regular absolute paths unchanged on linux (no Git-Bash conversion)', () => {
-    const result = normalizePath('/home/user/worktrees/abc/file.ts', undefined, 'linux');
+    const result = normalizePath(
+      '/home/user/worktrees/abc/file.ts',
+      undefined,
+      'linux',
+    );
     expect(result).not.toMatch(/^[A-Z]:\\/);
   });
 });

@@ -212,7 +212,10 @@ export class CliSessionRunner implements ISessionRunner {
     });
   }
 
-  private killProcessTree(pid: number, signal: 'SIGTERM' | 'SIGKILL' = 'SIGTERM'): void {
+  private killProcessTree(
+    pid: number,
+    signal: 'SIGTERM' | 'SIGKILL' = 'SIGTERM',
+  ): void {
     if (process.platform === 'win32') {
       try {
         execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' });
