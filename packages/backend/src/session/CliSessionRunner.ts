@@ -192,14 +192,14 @@ export class CliSessionRunner implements ISessionRunner {
   async kill(): Promise<void> {
     if (!this.proc || this.proc.exitCode !== null) return;
     try {
-      this.killProcessTree(this.proc.pid!);
+      this.killProcessTree(this.proc.pid!, 'SIGTERM');
     } catch {
       // Process may have exited between guard check and here
     }
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
         try {
-          this.killProcessTree(this.proc!.pid!);
+          this.killProcessTree(this.proc!.pid!, 'SIGKILL');
         } catch {
           // Already gone
         }
@@ -212,7 +212,10 @@ export class CliSessionRunner implements ISessionRunner {
     });
   }
 
-  private killProcessTree(pid: number): void {
+  private killProcessTree(
+    pid: number,
+    signal: 'SIGTERM' | 'SIGKILL' = 'SIGTERM',
+  ): void {
     if (process.platform === 'win32') {
       try {
         execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' });
@@ -221,7 +224,7 @@ export class CliSessionRunner implements ISessionRunner {
       }
     } else {
       try {
-        process.kill(-pid, 'SIGTERM');
+        process.kill(-pid, signal);
       } catch {
         // ESRCH = process already gone
       }

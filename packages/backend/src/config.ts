@@ -29,23 +29,21 @@ export interface ProjectConfig {
   baseBranch: string; // default branch used when creating worktrees (e.g. 'dev' or 'main')
 }
 
-function resolveClaudePath(): string {
+export function resolveClaudePath(
+  platform: NodeJS.Platform = process.platform,
+  _exec?: (cmd: string, opts: { encoding: string }) => string,
+): string {
   const explicit = process.env.CLAUDE_PATH;
   if (explicit) return explicit;
   // On Windows, spawn('claude', ..., { cwd }) fails if claude isn't in the
   // system PATH. Resolve the full path at startup so it always works.
+  const cmd = platform === 'win32' ? 'where claude' : 'which claude';
   try {
-    const { execSync } =
+    const execFn =
+      _exec ??
       // eslint-disable-next-line security/detect-child-process -- Reason: orchestrator spawns claude CLI as the core dispatch primitive.
-      require('child_process') as typeof import('child_process');
-    return execSync(
-      process.platform === 'win32' ? 'where claude' : 'which claude',
-      {
-        encoding: 'utf8',
-      },
-    )
-      .trim()
-      .split('\n')[0];
+      (require('child_process') as typeof import('child_process')).execSync;
+    return (execFn(cmd, { encoding: 'utf8' }) as string).trim().split('\n')[0];
   } catch {
     return 'claude'; // fallback — hope it's on PATH
   }
