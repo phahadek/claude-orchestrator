@@ -957,6 +957,7 @@ export function upsertPullRequest(
     | 'pause_reason_set_at'
     | 'ci_remediation_attempted_sha'
     | 'pre_review_stage'
+    | 'stalled_pr_retry_count'
   > & {
     review_session_id?: string | null;
     review_iteration?: number;
@@ -1082,10 +1083,28 @@ export function setHeadSha(
   db.prepare<{ pr_number: number; repo: string; head_sha: string | null }>(
     `
     UPDATE pull_requests
-    SET head_sha = @head_sha
+    SET head_sha = @head_sha, stalled_pr_retry_count = 0
     WHERE pr_number = @pr_number AND repo = @repo
   `,
   ).run({ pr_number: prNumber, repo, head_sha: sha });
+}
+
+export function incrementStalledPRRetryCount(
+  prNumber: number,
+  repo: string,
+): number {
+  db.prepare<{ pr_number: number; repo: string }>(
+    `UPDATE pull_requests SET stalled_pr_retry_count = stalled_pr_retry_count + 1 WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({ pr_number: prNumber, repo });
+  return (
+    (getPRByNumber(prNumber, repo)?.stalled_pr_retry_count ?? 0)
+  );
+}
+
+export function clearReviewSessionId(prNumber: number, repo: string): void {
+  db.prepare<{ pr_number: number; repo: string }>(
+    `UPDATE pull_requests SET review_session_id = NULL WHERE pr_number = @pr_number AND repo = @repo`,
+  ).run({ pr_number: prNumber, repo });
 }
 
 export function setPendingPush(

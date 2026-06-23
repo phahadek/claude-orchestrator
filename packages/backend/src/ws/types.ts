@@ -379,6 +379,12 @@ export type ServerMessage =
       duration_ms: number;
       items_processed?: number;
       error?: { message: string; stack?: string };
+    }
+  | {
+      type: 'pr_stalled_escalated';
+      prNumber: number;
+      repo: string;
+      kind: 'incomplete_verdict' | 'errored_review_session' | 'gate_failed';
     };
 
 // ── Client → Server ──────────────────────────────────────────────

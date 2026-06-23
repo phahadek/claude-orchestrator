@@ -54,6 +54,9 @@ export interface BootDeps {
   sessionEventsPruner: {
     runAtBoot(): Promise<void>;
   };
+  stalledPRReconciler: {
+    reconcileOnce(): Promise<void>;
+  };
   server: http.Server;
   port: number;
   broadcast: (msg: ServerMessage) => void;
@@ -177,6 +180,7 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
     'worktree_reconciliation',
     'pr_boot_sweep',
     'boot_idle_reconciliation',
+    'stalled_pr_reconciliation',
     'auto_launcher_start',
   ]);
   await tracker.runStep('jsonl_import', () => deps.jsonlReader.importAll(), {
@@ -205,6 +209,9 @@ async function runReconciliationChain(deps: BootDeps): Promise<void> {
   );
   await tracker.runStep('boot_idle_reconciliation', () =>
     runBootIdleReconciliation(),
+  );
+  await tracker.runStep('stalled_pr_reconciliation', () =>
+    deps.stalledPRReconciler.reconcileOnce(),
   );
   await tracker.runStep('auto_launcher_start', () =>
     deps.autoLauncher.pollOnce(),

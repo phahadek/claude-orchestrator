@@ -334,4 +334,5 @@ export interface PullRequestRow {
   ci_remediation_attempted_sha: string | null; // last head_sha for which CI remediation was attempted
   pre_review_stage: string | null;
   conflict_nudge_sha: string | null; // SHA for which a conflict nudge was last sent (dedup key)
+  stalled_pr_retry_count: number; // reconciler attempt counter; resets when head_sha changes
 }

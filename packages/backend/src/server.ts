@@ -57,6 +57,7 @@ import { getOrchestratorConfig } from './config/appConfig';
 import { AutoLauncher } from './orchestration/AutoLauncher';
 import { StuckSessionMonitor } from './orchestration/StuckSessionMonitor';
 import { OrphanedTaskSweeper } from './orchestration/OrphanedTaskSweeper';
+import { StalledPRReconciler } from './orchestration/StalledPRReconciler';
 import { ConcludedSessionArchiver } from './orchestration/ConcludedSessionArchiver';
 import { SessionEventsPruner } from './orchestration/SessionEventsPruner';
 import { Scheduler } from './orchestration/Scheduler';
@@ -311,6 +312,9 @@ const orphanedTaskSweeper = new OrphanedTaskSweeper(broadcast, {
 
 const sessionEventsPruner = new SessionEventsPruner();
 
+const stalledPRReconciler = new StalledPRReconciler(broadcast);
+stalledPRReconciler.setReviewOrchestrator(reviewOrchestrator);
+
 // Concluded-session archiver: registers with Scheduler for cadence management.
 const concludedSessionArchiver = new ConcludedSessionArchiver(broadcast);
 concludedSessionArchiver.register(scheduler);
@@ -321,6 +325,7 @@ updateChecker.register(scheduler);
 // Register all periodic sweepers with the Scheduler.
 autoLauncher.register(scheduler);
 orphanedTaskSweeper.register(scheduler);
+stalledPRReconciler.register(scheduler);
 taskCacheRefresher.register(scheduler);
 sessionEventsPruner.register(scheduler);
 stuckSessionMonitor.register(scheduler);
@@ -334,6 +339,7 @@ void runBootSequence({
   autoLauncher,
   scheduler,
   sessionEventsPruner,
+  stalledPRReconciler,
   server,
   port: PORT,
   broadcast,

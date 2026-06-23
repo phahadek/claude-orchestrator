@@ -61,6 +61,7 @@ const TERMINAL_MERGE_PAUSE_REASONS: ReadonlySet<string> = new Set([
   'pr_body_invalid',
   'attribution_missing',
   'merge_conflict',
+  'stalled_reconcile_cap',
 ]);
 
 function isTerminalMergePause(pauseReasonRaw: string | null): boolean {
@@ -179,7 +180,7 @@ export class PRMergeWatcher {
       }
       if (isTerminalStalePR(pr)) {
         logger.info(
-          `[PRMergeWatcher] PR #${pr.pr_number}: verdict=incomplete with no new push — skipping poll`,
+          `[PRMergeWatcher] PR #${pr.pr_number}: parked with no incoming push — skipping poll (StalledPRReconciler handles re-drive)`,
         );
         continue;
       }
