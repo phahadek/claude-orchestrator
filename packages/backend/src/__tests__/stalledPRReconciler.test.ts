@@ -337,7 +337,8 @@ describe('StalledPRReconciler', () => {
 
     await reconciler.reconcileOnce();
 
-    // incrementStalledPRRetryCount called but no enqueue
-    expect(incrementStalledPRRetryCount).toHaveBeenCalled();
+    // reDrive returns at the !reviewOrchestrator guard before incrementing —
+    // nothing happens.
+    expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
   });
 });
