@@ -109,7 +109,10 @@ vi.mock('../github/conflictNudge.js', () => ({
 
 import { AutoMerger } from '../github/AutoMerger.js';
 import { ConcludedSessionArchiver } from '../orchestration/ConcludedSessionArchiver.js';
-import { markSessionDone, archiveConcludedSessionsOlderThan } from '../db/queries.js';
+import {
+  markSessionDone,
+  archiveConcludedSessionsOlderThan,
+} from '../db/queries.js';
 import { getPRByNumber } from '../db/queries.js';
 import { runtimeSettings } from '../config.js';
 import type { GitHubClient } from '../github/GitHubClient.js';
@@ -167,7 +170,11 @@ function makePRRow(overrides: Partial<PullRequestRow> = {}): PullRequestRow {
     base_branch: 'dev',
     state: 'open',
     draft: 0,
-    review_result: JSON.stringify({ verdict: 'approved', dimensions: [], summary: 'ok' }),
+    review_result: JSON.stringify({
+      verdict: 'approved',
+      dimensions: [],
+      summary: 'ok',
+    }),
     review_at: null,
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',
@@ -201,7 +208,11 @@ describe('AC1 — AutoMerger merge success concludes both sessions (idle→done)
     const pr = makePRRow({ session_id: 'code-sess-001' });
     vi.mocked(getPRByNumber).mockReturnValue(pr);
 
-    const merger = new AutoMerger(makeCleanMergeGitHub(), makeMergeWatcher(), () => {});
+    const merger = new AutoMerger(
+      makeCleanMergeGitHub(),
+      makeMergeWatcher(),
+      () => {},
+    );
     merger.attempt(42, 'owner/repo');
 
     // Allow the async polling loop to complete
@@ -222,7 +233,11 @@ describe('AC1 — AutoMerger merge success concludes both sessions (idle→done)
     });
     vi.mocked(getPRByNumber).mockReturnValue(pr);
 
-    const merger = new AutoMerger(makeCleanMergeGitHub(), makeMergeWatcher(), () => {});
+    const merger = new AutoMerger(
+      makeCleanMergeGitHub(),
+      makeMergeWatcher(),
+      () => {},
+    );
     merger.attempt(42, 'owner/repo');
 
     await new Promise((r) => setTimeout(r, 50));
@@ -239,7 +254,11 @@ describe('AC1 — AutoMerger merge success concludes both sessions (idle→done)
     const pr = makePRRow({ review_session_id: null });
     vi.mocked(getPRByNumber).mockReturnValue(pr);
 
-    const merger = new AutoMerger(makeCleanMergeGitHub(), makeMergeWatcher(), () => {});
+    const merger = new AutoMerger(
+      makeCleanMergeGitHub(),
+      makeMergeWatcher(),
+      () => {},
+    );
     merger.attempt(42, 'owner/repo');
 
     await new Promise((r) => setTimeout(r, 50));
@@ -252,16 +271,25 @@ describe('AC1 — AutoMerger merge success concludes both sessions (idle→done)
   });
 
   it('a merged-PR idle session is not left idle after the auto-merge path runs', async () => {
-    const pr = makePRRow({ session_id: 'idle-code-sess', review_session_id: 'idle-review-sess' });
+    const pr = makePRRow({
+      session_id: 'idle-code-sess',
+      review_session_id: 'idle-review-sess',
+    });
     vi.mocked(getPRByNumber).mockReturnValue(pr);
 
-    const merger = new AutoMerger(makeCleanMergeGitHub(), makeMergeWatcher(), () => {});
+    const merger = new AutoMerger(
+      makeCleanMergeGitHub(),
+      makeMergeWatcher(),
+      () => {},
+    );
     merger.attempt(42, 'owner/repo');
 
     await new Promise((r) => setTimeout(r, 50));
 
     // Both sessions must have been transitioned to done
-    const markedDoneIds = vi.mocked(markSessionDone).mock.calls.map(([id]) => id);
+    const markedDoneIds = vi
+      .mocked(markSessionDone)
+      .mock.calls.map(([id]) => id);
     expect(markedDoneIds).toContain('idle-code-sess');
     expect(markedDoneIds).toContain('idle-review-sess');
   });
@@ -271,15 +299,26 @@ describe('AC1 — AutoMerger merge success concludes both sessions (idle→done)
 
 describe('AC2 — ConcludedSessionArchiver archives done sessions on next sweep', () => {
   it('sweepOnce() calls archiveConcludedSessionsOlderThan (which covers done/error/killed only)', async () => {
-    vi.mocked(archiveConcludedSessionsOlderThan).mockReturnValue(['code-sess-001', 'review-sess-002']);
+    vi.mocked(archiveConcludedSessionsOlderThan).mockReturnValue([
+      'code-sess-001',
+      'review-sess-002',
+    ]);
     const broadcast = vi.fn();
-    const archiver = new ConcludedSessionArchiver(broadcast, { nowFn: () => 1_000_000 });
+    const archiver = new ConcludedSessionArchiver(broadcast, {
+      nowFn: () => 1_000_000,
+    });
 
     await archiver.sweepOnce();
 
     expect(vi.mocked(archiveConcludedSessionsOlderThan)).toHaveBeenCalledOnce();
-    expect(broadcast).toHaveBeenCalledWith({ type: 'session_archived', sessionId: 'code-sess-001' });
-    expect(broadcast).toHaveBeenCalledWith({ type: 'session_archived', sessionId: 'review-sess-002' });
+    expect(broadcast).toHaveBeenCalledWith({
+      type: 'session_archived',
+      sessionId: 'code-sess-001',
+    });
+    expect(broadcast).toHaveBeenCalledWith({
+      type: 'session_archived',
+      sessionId: 'review-sess-002',
+    });
   });
 
   it('idle sessions are not archived — SQL filter excludes them structurally', async () => {
@@ -288,7 +327,9 @@ describe('AC2 — ConcludedSessionArchiver archives done sessions on next sweep'
     // Simulate: query returns empty (no done sessions), even though idle ones exist.
     vi.mocked(archiveConcludedSessionsOlderThan).mockReturnValue([]);
     const broadcast = vi.fn();
-    const archiver = new ConcludedSessionArchiver(broadcast, { nowFn: () => 1_000_000 });
+    const archiver = new ConcludedSessionArchiver(broadcast, {
+      nowFn: () => 1_000_000,
+    });
 
     await archiver.sweepOnce();
 
@@ -300,15 +341,22 @@ describe('AC2 — ConcludedSessionArchiver archives done sessions on next sweep'
     // → archiver picks it up on the next sweep.
     // markSessionDone is the bridge: once called, archiveConcludedSessionsOlderThan
     // will return the session_id (because the SQL now matches status='done').
-    vi.mocked(archiveConcludedSessionsOlderThan).mockReturnValue(['code-sess-001']);
+    vi.mocked(archiveConcludedSessionsOlderThan).mockReturnValue([
+      'code-sess-001',
+    ]);
     const broadcast = vi.fn();
-    const archiver = new ConcludedSessionArchiver(broadcast, { nowFn: () => 1_000_000 });
+    const archiver = new ConcludedSessionArchiver(broadcast, {
+      nowFn: () => 1_000_000,
+    });
 
     // Step 1: sessions transitioned to done by AutoMerger (markSessionDone already called)
     // Step 2: archiver sweeps without restart
     await archiver.sweepOnce();
 
     expect(vi.mocked(archiveConcludedSessionsOlderThan)).toHaveBeenCalledOnce();
-    expect(broadcast).toHaveBeenCalledWith({ type: 'session_archived', sessionId: 'code-sess-001' });
+    expect(broadcast).toHaveBeenCalledWith({
+      type: 'session_archived',
+      sessionId: 'code-sess-001',
+    });
   });
 });
