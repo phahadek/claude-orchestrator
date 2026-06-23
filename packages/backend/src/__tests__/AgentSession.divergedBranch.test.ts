@@ -82,9 +82,11 @@ import type { TaskBackend } from '../tasks/TaskBackend';
 function mockDivergedBranch() {
   vi.mocked(execSync).mockImplementation((cmd) => {
     const c = String(cmd);
-    if (c.includes('rev-parse --abbrev-ref HEAD')) return Buffer.from('feature/my-task');
+    if (c.includes('rev-parse --abbrev-ref HEAD'))
+      return Buffer.from('feature/my-task');
     if (c.includes('rev-parse HEAD')) return Buffer.from('abc123local');
-    if (c.includes('ls-remote origin')) return Buffer.from('def456remote\trefs/heads/feature/my-task');
+    if (c.includes('ls-remote origin'))
+      return Buffer.from('def456remote\trefs/heads/feature/my-task');
     if (c.includes('rev-list')) return Buffer.from('2\t3'); // behind=2, ahead=3
     return Buffer.from('');
   });
@@ -99,7 +101,9 @@ function fakeTaskBackend(): TaskBackend {
   } as unknown as TaskBackend;
 }
 
-function makeSessionManager(): ISessionManager & { sendOrResume: ReturnType<typeof vi.fn> } {
+function makeSessionManager(): ISessionManager & {
+  sendOrResume: ReturnType<typeof vi.fn>;
+} {
   return {
     send: vi.fn(),
     isAlive: vi.fn(() => true),
@@ -175,7 +179,11 @@ describe('AgentSession — diverged-branch rebase routing', () => {
     mockProc.proc.emit('exit', 0);
     await runPromise;
 
-    expect(setPauseReason).toHaveBeenCalledWith(42, 'org/repo', 'diverged_branch');
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'org/repo',
+      'diverged_branch',
+    );
     expect(sessionManager.sendOrResume).toHaveBeenCalledTimes(1);
     expect(sessionManager.sendOrResume).toHaveBeenCalledWith(
       'diverged-session-1',
@@ -215,7 +223,11 @@ describe('AgentSession — diverged-branch rebase routing', () => {
     await runPromise;
 
     // pause_reason must be set so AutoMerger skips this PR (pr.pause_reason !== null)
-    expect(setPauseReason).toHaveBeenCalledWith(99, 'org/repo', 'diverged_branch');
+    expect(setPauseReason).toHaveBeenCalledWith(
+      99,
+      'org/repo',
+      'diverged_branch',
+    );
   });
 
   it(`stops nudging after ${MAX_REBASE_NUDGES} rebase attempts (no infinite nudging)`, async () => {
@@ -252,7 +264,9 @@ describe('AgentSession — diverged-branch rebase routing', () => {
     mockProc.proc.emit('exit', 0);
     await runPromise;
 
-    expect(sessionManager.sendOrResume).toHaveBeenCalledTimes(MAX_REBASE_NUDGES);
+    expect(sessionManager.sendOrResume).toHaveBeenCalledTimes(
+      MAX_REBASE_NUDGES,
+    );
     // pause_reason is still set on every detection (PR stays paused for human attention)
     expect(setPauseReason).toHaveBeenCalledTimes(MAX_REBASE_NUDGES + 1);
   });

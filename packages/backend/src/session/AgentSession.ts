@@ -1725,7 +1725,10 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               const nudgeMsg =
                 `Your branch has diverged from origin/${branch} (${behind} commit(s) behind). ` +
                 `Run: git fetch origin && git rebase origin/${baseBranch}, resolve any conflicts, then push.`;
-              void this.sessionManager?.sendOrResume?.(this.sessionId, nudgeMsg);
+              void this.sessionManager?.sendOrResume?.(
+                this.sessionId,
+                nudgeMsg,
+              );
             } else {
               sessionLog(
                 this.sessionId,
