@@ -33,6 +33,7 @@ export type CanonicalPauseReason =
   | 'notion_done_update_stuck'
   | 'launch_failed'
   | 'diverged_branch'
+  | 'diverged_branch_unresolved'
   | 'analyze_failing'
   | 'rate_limit';
 
@@ -141,6 +142,11 @@ export const PAUSE_REASON_REGISTRY: Record<
     retry_strategy: 'manual_action',
   },
   diverged_branch: {
+    source: 'merge',
+    severity: 'needs_attention',
+    retry_strategy: 'manual_action',
+  },
+  diverged_branch_unresolved: {
     source: 'merge',
     severity: 'needs_attention',
     retry_strategy: 'manual_action',

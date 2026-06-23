@@ -264,10 +264,15 @@ describe('AgentSession — diverged-branch rebase routing', () => {
     mockProc.proc.emit('exit', 0);
     await runPromise;
 
-    expect(sessionManager.sendOrResume).toHaveBeenCalledTimes(
-      MAX_REBASE_NUDGES,
-    );
-    // pause_reason is still set on every detection (PR stays paused for human attention)
+    // Nudges capped at MAX_REBASE_NUDGES
+    expect(sessionManager.sendOrResume).toHaveBeenCalledTimes(MAX_REBASE_NUDGES);
+    // All detections set a pause reason (PR stays paused)
     expect(setPauseReason).toHaveBeenCalledTimes(MAX_REBASE_NUDGES + 1);
+    // First MAX detections use 'diverged_branch'; final detection escalates to 'diverged_branch_unresolved'
+    expect(setPauseReason).toHaveBeenLastCalledWith(
+      7,
+      'org/repo',
+      'diverged_branch_unresolved',
+    );
   });
 });

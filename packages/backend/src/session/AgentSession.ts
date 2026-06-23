@@ -1711,29 +1711,29 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               commits: ahead,
             });
           } else if (behind > 0) {
-            sessionLog(
-              this.sessionId,
-              `auto-push skipped: branch ${branch} has diverged (ahead=${ahead}, behind=${behind}) — nudging session to rebase`,
-            );
             const pr = getPRBySessionId(this.sessionId);
-            if (pr) {
-              setPauseReason(pr.pr_number, pr.repo, 'diverged_branch');
-            }
             if (this.rebaseNudgeCount < MAX_REBASE_NUDGES) {
               this.rebaseNudgeCount++;
+              sessionLog(
+                this.sessionId,
+                `auto-push skipped: branch ${branch} has diverged (ahead=${ahead}, behind=${behind}) — sending rebase nudge ${this.rebaseNudgeCount}/${MAX_REBASE_NUDGES}`,
+              );
+              if (pr) {
+                setPauseReason(pr.pr_number, pr.repo, 'diverged_branch');
+              }
               const baseBranch = pr?.base_branch ?? 'dev';
               const nudgeMsg =
                 `Your branch has diverged from origin/${branch} (${behind} commit(s) behind). ` +
                 `Run: git fetch origin && git rebase origin/${baseBranch}, resolve any conflicts, then push.`;
-              void this.sessionManager?.sendOrResume?.(
-                this.sessionId,
-                nudgeMsg,
-              );
+              void this.sessionManager?.sendOrResume?.(this.sessionId, nudgeMsg);
             } else {
               sessionLog(
                 this.sessionId,
-                `rebase nudge limit reached (${MAX_REBASE_NUDGES}) — leaving paused for human attention`,
+                `auto-push skipped: branch ${branch} has diverged — rebase nudge limit reached (${MAX_REBASE_NUDGES}), escalating to needs_attention`,
               );
+              if (pr) {
+                setPauseReason(pr.pr_number, pr.repo, 'diverged_branch_unresolved');
+              }
             }
             this.broadcast({
               type: 'session_auto_pushed',
