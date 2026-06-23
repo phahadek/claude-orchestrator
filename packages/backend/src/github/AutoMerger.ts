@@ -20,6 +20,7 @@ import {
   upsertActiveMerge,
   deleteActiveMerge,
   getAllActiveMerges,
+  markSessionDone,
 } from '../db/queries';
 import type { GitHubClient, PRReviewDecision } from './GitHubClient';
 import { GitHubApiError, GitHubRateLimitError } from './types';
@@ -587,6 +588,7 @@ export class AutoMerger {
         pr.repo,
       );
       await this.mergeWatcher.handleMerged(pr, result.sha ?? null);
+      this._concludeSessions(pr);
       recordEvent({
         event_type: 'pr_merged',
         actor_type: 'system',
@@ -621,6 +623,7 @@ export class AutoMerger {
             pr.repo,
           );
           await this.mergeWatcher.handleMerged(pr, retryResult.sha ?? null);
+          this._concludeSessions(pr);
           recordEvent({
             event_type: 'pr_merged',
             actor_type: 'system',
@@ -707,6 +710,28 @@ export class AutoMerger {
         `[AutoMerger] PR #${pr.pr_number}: merge failed: ${(err as Error).message}`,
       );
       await this.pauseWithReason(pr, 'auto_merge_failed');
+    }
+  }
+
+  /**
+   * Transition the coding session and paired review session from idle → done
+   * immediately after a successful merge. Calling markSessionDone here (in the
+   * AutoMerger merge-success path) is the single authoritative transition point
+   * for auto-merged PRs, ensuring ConcludedSessionArchiver can reap them on the
+   * next sweep without waiting for a backend restart.
+   */
+  private _concludeSessions(pr: PullRequestRow): void {
+    const now = Date.now();
+    if (pr.session_id) {
+      markSessionDone(pr.session_id, now, pr.pr_url ?? null, 'auto_merger');
+    }
+    if (pr.review_session_id) {
+      markSessionDone(
+        pr.review_session_id,
+        now,
+        pr.pr_url ?? null,
+        'auto_merger',
+      );
     }
   }
 
