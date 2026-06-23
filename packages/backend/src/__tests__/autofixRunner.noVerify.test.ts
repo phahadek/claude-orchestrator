@@ -33,14 +33,12 @@ function makeProc(cfg: SpawnCfg = {}) {
 }
 
 vi.mock('child_process', () => ({
-  spawn: vi.fn(
-    (cmd: string, argsOrOpts?: string[] | object, opts?: object) => {
-      const args = Array.isArray(argsOrOpts) ? argsOrOpts : undefined;
-      spawnCalls.push({ cmd, args, opts: opts ?? argsOrOpts });
-      const cfg = spawnQueue.shift() ?? { exitCode: 0, stdout: '' };
-      return makeProc(cfg);
-    },
-  ),
+  spawn: vi.fn((cmd: string, argsOrOpts?: string[] | object, opts?: object) => {
+    const args = Array.isArray(argsOrOpts) ? argsOrOpts : undefined;
+    spawnCalls.push({ cmd, args, opts: opts ?? argsOrOpts });
+    const cfg = spawnQueue.shift() ?? { exitCode: 0, stdout: '' };
+    return makeProc(cfg);
+  }),
 }));
 
 // ── Other mocks ────────────────────────────────────────────────────────────────
@@ -97,17 +95,17 @@ beforeEach(() => {
 function queueGitSuccess(stagedFile = 'src/foo.py') {
   spawnQueue.push(
     { exitCode: 0, stdout: `M ${stagedFile}\n` }, // git status --porcelain (dirty)
-    { exitCode: 0, stdout: '' },                   // git add -A
-    { exitCode: 0, stdout: `${stagedFile}\n` },    // git diff --cached --name-only
-    { exitCode: 0, stdout: `${stagedFile}\n` },    // git diff --cached --name-only (post un-stage)
-    { exitCode: 0, stdout: '' },                   // git commit
-    { exitCode: 0, stdout: 'deadbeef\n' },         // git rev-parse HEAD
-    { exitCode: 0, stdout: `${stagedFile}\n` },    // git diff --name-only HEAD~1 HEAD
-    { exitCode: 0, stdout: 'feature/test\n' },     // git rev-parse --abbrev-ref HEAD
-    { exitCode: 0, stdout: '' },                   // git push
-    { exitCode: 0, stdout: '' },                   // git fetch
-    { exitCode: 0, stdout: '' },                   // git reset --hard
-    { exitCode: 0, stdout: 'deadbeef\n' },         // git rev-parse HEAD (synced)
+    { exitCode: 0, stdout: '' }, // git add -A
+    { exitCode: 0, stdout: `${stagedFile}\n` }, // git diff --cached --name-only
+    { exitCode: 0, stdout: `${stagedFile}\n` }, // git diff --cached --name-only (post un-stage)
+    { exitCode: 0, stdout: '' }, // git commit
+    { exitCode: 0, stdout: 'deadbeef\n' }, // git rev-parse HEAD
+    { exitCode: 0, stdout: `${stagedFile}\n` }, // git diff --name-only HEAD~1 HEAD
+    { exitCode: 0, stdout: 'feature/test\n' }, // git rev-parse --abbrev-ref HEAD
+    { exitCode: 0, stdout: '' }, // git push
+    { exitCode: 0, stdout: '' }, // git fetch
+    { exitCode: 0, stdout: '' }, // git reset --hard
+    { exitCode: 0, stdout: 'deadbeef\n' }, // git rev-parse HEAD (synced)
   );
 }
 
@@ -123,9 +121,7 @@ describe('git commit --no-verify', () => {
 
     const commitCall = spawnCalls.find(
       (c) =>
-        c.cmd === 'git' &&
-        Array.isArray(c.args) &&
-        c.args.includes('commit'),
+        c.cmd === 'git' && Array.isArray(c.args) && c.args.includes('commit'),
     );
     expect(commitCall).toBeDefined();
     expect(commitCall?.args).toContain('--no-verify');
@@ -181,7 +177,10 @@ describe('unfixable violations (exit 1 with output)', () => {
 
 describe('fatal error (exit >= 2)', () => {
   it('returns success=false when a command exits 2 (e.g. ruff internal error)', async () => {
-    spawnQueue.push({ exitCode: 2, stdout: 'internal error: config parse failed' });
+    spawnQueue.push({
+      exitCode: 2,
+      stdout: 'internal error: config parse failed',
+    });
     // Worktree is dirty
     spawnQueue.push({ exitCode: 0, stdout: 'M src/foo.py\n' }); // git status
     // git add, diff --cached, diff --cached, commit (not reached due to failures)
@@ -235,7 +234,8 @@ describe('banned-file-only stage', () => {
     expect(result.summary).toMatch(/only banned files were staged/);
     // No git commit call should have happened
     const commitCall = spawnCalls.find(
-      (c) => c.cmd === 'git' && Array.isArray(c.args) && c.args.includes('commit'),
+      (c) =>
+        c.cmd === 'git' && Array.isArray(c.args) && c.args.includes('commit'),
     );
     expect(commitCall).toBeUndefined();
   });
