@@ -1096,9 +1096,7 @@ export function incrementStalledPRRetryCount(
   db.prepare<{ pr_number: number; repo: string }>(
     `UPDATE pull_requests SET stalled_pr_retry_count = stalled_pr_retry_count + 1 WHERE pr_number = @pr_number AND repo = @repo`,
   ).run({ pr_number: prNumber, repo });
-  return (
-    (getPRByNumber(prNumber, repo)?.stalled_pr_retry_count ?? 0)
-  );
+  return getPRByNumber(prNumber, repo)?.stalled_pr_retry_count ?? 0;
 }
 
 export function clearReviewSessionId(prNumber: number, repo: string): void {

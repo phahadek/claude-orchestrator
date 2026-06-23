@@ -130,7 +130,9 @@ describe('StalledPRReconciler', () => {
       expect.objectContaining({ event_type: 'stalled_pr_reconcile_attempt' }),
     );
     // No escalation yet
-    expect(messages.find((m) => m.type === 'pr_stalled_escalated')).toBeUndefined();
+    expect(
+      messages.find((m) => m.type === 'pr_stalled_escalated'),
+    ).toBeUndefined();
   });
 
   it('clears review_session_id and enqueues fresh review for errored review session', async () => {
@@ -220,8 +222,14 @@ describe('StalledPRReconciler', () => {
 
     await reconciler.reconcileOnce();
 
-    expect(setPauseReason).toHaveBeenCalledWith(42, 'org/repo', 'stalled_reconcile_cap');
-    expect(messages.find((m) => m.type === 'pr_stalled_escalated')).toMatchObject({
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'org/repo',
+      'stalled_reconcile_cap',
+    );
+    expect(
+      messages.find((m) => m.type === 'pr_stalled_escalated'),
+    ).toMatchObject({
       type: 'pr_stalled_escalated',
       prNumber: 42,
       repo: 'org/repo',
