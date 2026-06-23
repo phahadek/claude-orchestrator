@@ -62,6 +62,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Launch failed repeatedly — fix the underlying issue (e.g. delete the stale branch) then restart the backend.',
   diverged_branch:
     'Branch has diverged from origin — manual reconciliation needed before auto-push can resume.',
+  diverged_branch_unresolved:
+    'Branch diverged and repeated rebase nudges failed — manual rebase required.',
   analyze_failing:
     'Static analysis gate failed — fix the reported issues and re-push.',
   rate_limit:

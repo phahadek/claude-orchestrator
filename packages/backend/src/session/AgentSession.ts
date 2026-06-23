@@ -58,6 +58,9 @@ import { logger } from '../logger';
 const PR_URL_REGEX = /https:\/\/github\.com\/[^"\\]+\/pull\/\d+/;
 const PR_BODY_MARKER_REGEX = /<pr-body>([\s\S]*?)<\/pr-body>/;
 
+/** Maximum number of rebase nudges sent to a session before escalating to needs_attention. */
+export const MAX_REBASE_NUDGES = 3;
+
 /**
  * Returns true if the tool call represents a git push operation.
  * Exported for unit testing.
@@ -238,6 +241,8 @@ export class AgentSession extends EventEmitter {
   private _pendingEscalationNudge: string | null = null;
   /** Text that triggered an overflow on this resume; re-delivered to the escalated session. */
   private _pendingOverflowText: string | null = null;
+  /** Number of rebase nudges sent for diverged-branch recovery. Bounded by MAX_REBASE_NUDGES. */
+  private rebaseNudgeCount = 0;
 
   /** The underlying I/O adapter (CLI subprocess or Agent SDK). */
   private runner: ISessionRunner;
@@ -1706,13 +1711,36 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               commits: ahead,
             });
           } else if (behind > 0) {
-            sessionLog(
-              this.sessionId,
-              `auto-push skipped: branch ${branch} has diverged (ahead=${ahead}, behind=${behind}) — manual reconciliation needed`,
-            );
             const pr = getPRBySessionId(this.sessionId);
-            if (pr) {
-              setPauseReason(pr.pr_number, pr.repo, 'diverged_branch');
+            if (this.rebaseNudgeCount < MAX_REBASE_NUDGES) {
+              this.rebaseNudgeCount++;
+              sessionLog(
+                this.sessionId,
+                `auto-push skipped: branch ${branch} has diverged (ahead=${ahead}, behind=${behind}) — sending rebase nudge ${this.rebaseNudgeCount}/${MAX_REBASE_NUDGES}`,
+              );
+              if (pr) {
+                setPauseReason(pr.pr_number, pr.repo, 'diverged_branch');
+              }
+              const baseBranch = pr?.base_branch ?? 'dev';
+              const nudgeMsg =
+                `Your branch has diverged from origin/${branch} (${behind} commit(s) behind). ` +
+                `Run: git fetch origin && git rebase origin/${baseBranch}, resolve any conflicts, then push.`;
+              void this.sessionManager?.sendOrResume?.(
+                this.sessionId,
+                nudgeMsg,
+              );
+            } else {
+              sessionLog(
+                this.sessionId,
+                `auto-push skipped: branch ${branch} has diverged — rebase nudge limit reached (${MAX_REBASE_NUDGES}), escalating to needs_attention`,
+              );
+              if (pr) {
+                setPauseReason(
+                  pr.pr_number,
+                  pr.repo,
+                  'diverged_branch_unresolved',
+                );
+              }
             }
             this.broadcast({
               type: 'session_auto_pushed',
