@@ -40,7 +40,9 @@ type EventType =
   | 'pipeline_stage_entered'
   | 'pipeline_stage_passed'
   | 'pipeline_stage_failed'
-  | 'pr_terminal_flags_cleared';
+  | 'pr_terminal_flags_cleared'
+  | 'stalled_pr_reconcile_attempt'
+  | 'stalled_pr_escalated';
 
 type ActorType = 'ai' | 'human' | 'system';
 

@@ -820,4 +820,11 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+  try {
+    target.exec(
+      `ALTER TABLE pull_requests ADD COLUMN stalled_pr_retry_count INTEGER NOT NULL DEFAULT 0`,
+    );
+  } catch {
+    /* already exists */
+  }
 }

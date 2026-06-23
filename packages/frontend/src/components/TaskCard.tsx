@@ -68,6 +68,8 @@ const PAUSE_REASON_LABELS: Record<PauseReason, string> = {
     'Static analysis gate failed — fix the reported issues and re-push.',
   rate_limit:
     'API rate limit reached — session paused. Will resume automatically.',
+  stalled_reconcile_cap:
+    'PR stalled — reconciler retry cap reached. Manual intervention required.',
 };
 
 function verdictLabel(verdict: string): string {

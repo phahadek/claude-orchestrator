@@ -131,25 +131,23 @@ export class OrphanedTaskSweeper {
     const latestSession = getLatestCodeSessionByNotionTaskId(taskId);
 
     if (latestSession) {
-      // Skip tasks whose latest session already reached error|killed —
-      // the sibling "non-zero / killed exit" fix handles those.
-      if (
-        latestSession.status === 'error' ||
-        latestSession.status === 'killed'
-      ) {
-        return;
-      }
-      // Anti-race: skip if the most recent session started < 5 min ago.
-      // This guards against a just-launched session that hasn't fully registered.
-      if (Date.now() - latestSession.started_at < ANTI_RACE_MS) {
-        return;
-      }
-      // Defense-in-depth: skip if the session ended cleanly (idle) within the
-      // grace window — async PR creation (marker flow) may still be in flight.
-      if (latestSession.status === 'idle') {
-        const endedAt = latestSession.ended_at ?? latestSession.started_at;
-        if (Date.now() - endedAt < POST_CLEAN_EXIT_GRACE_MS) {
+      // error|killed sessions have no active presence — fall through to revert.
+      // (The originally cited sibling fix was never landed.)
+      const isTerminal =
+        latestSession.status === 'error' || latestSession.status === 'killed';
+      if (!isTerminal) {
+        // Anti-race: skip if the most recent session started < 5 min ago.
+        // This guards against a just-launched session that hasn't fully registered.
+        if (Date.now() - latestSession.started_at < ANTI_RACE_MS) {
           return;
+        }
+        // Defense-in-depth: skip if the session ended cleanly (idle) within the
+        // grace window — async PR creation (marker flow) may still be in flight.
+        if (latestSession.status === 'idle') {
+          const endedAt = latestSession.ended_at ?? latestSession.started_at;
+          if (Date.now() - endedAt < POST_CLEAN_EXIT_GRACE_MS) {
+            return;
+          }
         }
       }
     }
@@ -170,7 +168,17 @@ export class OrphanedTaskSweeper {
       const pr = getPRBySessionId(latestSession.session_id);
       // If the task has an open PR, the session did its job — skip revert.
       // (Merged/closed PRs fall through to the Done path below.)
+      // Exception: an idle session with a parked/stalled open PR should still be
+      // nudged — the StalledPRReconciler re-drives the review, but the idle
+      // session may need a prompt to act on the incoming feedback.
       if (pr && pr.state !== 'merged' && pr.state !== 'closed') {
+        if (latestSession.status === 'idle' && !latestSession.archived) {
+          await this.maybeNudgeIdleSession(
+            latestSession,
+            taskId,
+            effectiveProjectId,
+          );
+        }
         return;
       }
     }
