@@ -44,7 +44,6 @@ vi.mock('../tasks/TaskBackend.js', () => ({
 import { PRReviewService } from '../github/PRReviewService.js';
 import type { SessionEvent } from '../db/types.js';
 import type { GitHubClient } from '../github/GitHubClient.js';
-import type { DiffSource } from '../github/DiffSource.js';
 import type { TaskTrackerBackend } from '../tasks/TaskTrackerBackend.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
