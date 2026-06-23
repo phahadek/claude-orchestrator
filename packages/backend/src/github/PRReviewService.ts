@@ -890,15 +890,21 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     if (!candidate) {
       return null;
     }
+    const repaired = this.repairTrailingCommas(candidate);
     return (
       this.parseVerdictObject(candidate) ??
-      this.parseVerdictObject(this.repairJsonStrings(candidate))
+      this.parseVerdictObject(repaired) ??
+      this.parseVerdictObject(this.repairJsonStrings(candidate)) ??
+      this.parseVerdictObject(this.repairJsonStrings(repaired))
     );
   }
 
   /**
    * Attempt to parse a raw JSON string into a verdict object. Returns null if
-   * the string is not valid JSON or does not have the required shape.
+   * the string is not valid JSON or does not contain a verdict token.
+   * dimensions and summary are optional and default to [] / '' when absent
+   * so that near-miss reviewer output (verdict present, schema incomplete)
+   * is not incorrectly classified as incomplete.
    */
   private parseVerdictObject(json: string): {
     verdict: PRReviewResult['verdict'];
@@ -908,11 +914,12 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
   } | null {
     try {
       const parsed = JSON.parse(json) as Record<string, unknown>;
-      if (
-        typeof parsed.verdict === 'string' &&
-        Array.isArray(parsed.dimensions) &&
-        typeof parsed.summary === 'string'
-      ) {
+      if (typeof parsed.verdict === 'string') {
+        const dimensions = Array.isArray(parsed.dimensions)
+          ? (parsed.dimensions as ReviewDimension[])
+          : [];
+        const summary =
+          typeof parsed.summary === 'string' ? parsed.summary : '';
         const manualItems = Array.isArray(parsed.manualItemsForHuman)
           ? (parsed.manualItemsForHuman as string[]).filter(
               (item) => typeof item === 'string',
@@ -920,8 +927,8 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
           : undefined;
         return {
           verdict: parsed.verdict as PRReviewResult['verdict'],
-          dimensions: parsed.dimensions as ReviewDimension[],
-          summary: parsed.summary,
+          dimensions,
+          summary,
           ...(manualItems && manualItems.length > 0
             ? { manualItemsForHuman: manualItems }
             : {}),
@@ -931,6 +938,11 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       // Not valid JSON
     }
     return null;
+  }
+
+  /** Remove trailing commas before } or ] to repair common LLM JSON near-misses. */
+  private repairTrailingCommas(json: string): string {
+    return json.replace(/,(\s*[}\]])/g, '$1');
   }
 
   /**
@@ -1082,6 +1094,10 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     let verdict: PRReviewResult['verdict'];
     if (result.verdict === 'error' || result.verdict === 'incomplete') {
       verdict = result.verdict; // Never override error/incomplete
+    } else if (result.verdict === 'needs_changes' && otherDims.length === 0) {
+      // Reviewer explicitly declared needs_changes without providing dimension
+      // details (near-miss recovery). Size signal alone cannot upgrade this.
+      verdict = 'needs_changes';
     } else if (passedCount === dimensions.length) {
       verdict = 'approved';
     } else if (passedCount === 0) {
@@ -1177,6 +1193,11 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
     // Only use text blocks from the LAST assistant message to avoid pollution
     // from earlier tool-call assistant events.
     let lastAssistantContent: Array<Record<string, unknown>> | null = null;
+    // Track whether the session ended with status_category:"review_ready" — a signal
+    // that the model completed its review turn even if the last assistant message was
+    // tool-call-only (no text block).
+    let hasReviewReadyResult = false;
+
     for (const ev of events) {
       try {
         const parsed = JSON.parse(ev.payload) as Record<string, unknown>;
@@ -1186,6 +1207,11 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
             | Array<Record<string, unknown>>
             | undefined;
           if (content) lastAssistantContent = content;
+        } else if (
+          parsed.type === 'result' &&
+          parsed.status_category === 'review_ready'
+        ) {
+          hasReviewReadyResult = true;
         }
       } catch {
         // Skip unparseable events
@@ -1215,6 +1241,21 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
           ? { manualItemsForHuman: parsed.manualItemsForHuman }
           : {}),
       };
+    }
+
+    // If the last assistant message was tool-call-only (no text blocks) or the
+    // session ended with status_category:"review_ready" (confirmed the review
+    // completed), scan all events in reverse to find the most recent text-block
+    // verdict from an earlier assistant turn.
+    if (textParts.length === 0 || hasReviewReadyResult) {
+      for (let i = events.length - 1; i >= 0; i--) {
+        const recovered = this.tryParseVerdictFromRawEvent(
+          events[i].payload,
+          prNumber,
+          repo,
+        );
+        if (recovered) return recovered;
+      }
     }
 
     return {
