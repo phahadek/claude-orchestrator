@@ -1040,6 +1040,16 @@ export class PRMergeWatcher {
       this.sessions.endSession(pr.session_id);
     }
 
+    // Mark the review session done — same terminal transition as the code session.
+    if (pr.review_session_id) {
+      markSessionDone(
+        pr.review_session_id,
+        Date.now(),
+        pr.pr_url ?? null,
+        'pr_merge_watcher',
+      );
+    }
+
     // End review session gracefully (stdin close → clean CLI exit)
     if (pr.review_session_id) {
       this.sessions.endSession(pr.review_session_id);
