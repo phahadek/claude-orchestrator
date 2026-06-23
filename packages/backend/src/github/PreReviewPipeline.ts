@@ -119,6 +119,31 @@ export class PreReviewPipeline {
             success = result.success;
             summary = result.summary;
 
+            // When autofix commands exit 1 and leave violations they could not
+            // fix automatically (e.g. ruff E501), route a nudge to the
+            // implementing session so the coding agent can address them.
+            // The gate still passes — the commit captured all auto-fixable
+            // changes; the remaining violations are the agent's responsibility.
+            if (result.unfixableViolations) {
+              const prRow = getPRByNumber(ctx.prNumber, ctx.repo);
+              const sessionId = prRow?.session_id;
+              if (sessionId) {
+                const nudge =
+                  `## Autofix Found Unfixable Violations\n\n` +
+                  `The autofix pass committed what it could, but some violations ` +
+                  `could not be fixed automatically (e.g. line-length E501). ` +
+                  `Please fix these manually and re-push.\n\n` +
+                  `**Violations:**\n\`\`\`\n${result.unfixableViolations}\n\`\`\``;
+                try {
+                  await this.sessionManager.sendOrResume(sessionId, nudge);
+                } catch (e) {
+                  logger.warn(
+                    `[PreReviewPipeline] unfixable-violation nudge failed for PR #${ctx.prNumber}: ${e}`,
+                  );
+                }
+              }
+            }
+
             if (result.commitSha) {
               addAutofixSha(ctx.prNumber, ctx.repo, result.commitSha);
               const prRow = getPRByNumber(ctx.prNumber, ctx.repo);
