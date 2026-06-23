@@ -113,7 +113,7 @@ export class StalledPRReconciler {
     taskId: string | null,
     sessionId: string | null,
     kind: StalledPRKind,
-    currentCount: number,
+    _currentCount: number,
   ): Promise<boolean> {
     if (!this.reviewOrchestrator) {
       logger.warn(
