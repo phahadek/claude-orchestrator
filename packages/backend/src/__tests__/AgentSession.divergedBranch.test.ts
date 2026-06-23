@@ -265,7 +265,9 @@ describe('AgentSession — diverged-branch rebase routing', () => {
     await runPromise;
 
     // Nudges capped at MAX_REBASE_NUDGES
-    expect(sessionManager.sendOrResume).toHaveBeenCalledTimes(MAX_REBASE_NUDGES);
+    expect(sessionManager.sendOrResume).toHaveBeenCalledTimes(
+      MAX_REBASE_NUDGES,
+    );
     // All detections set a pause reason (PR stays paused)
     expect(setPauseReason).toHaveBeenCalledTimes(MAX_REBASE_NUDGES + 1);
     // First MAX detections use 'diverged_branch'; final detection escalates to 'diverged_branch_unresolved'

@@ -1725,14 +1725,21 @@ Begin implementing the task immediately. Do NOT fetch Notion pages.
               const nudgeMsg =
                 `Your branch has diverged from origin/${branch} (${behind} commit(s) behind). ` +
                 `Run: git fetch origin && git rebase origin/${baseBranch}, resolve any conflicts, then push.`;
-              void this.sessionManager?.sendOrResume?.(this.sessionId, nudgeMsg);
+              void this.sessionManager?.sendOrResume?.(
+                this.sessionId,
+                nudgeMsg,
+              );
             } else {
               sessionLog(
                 this.sessionId,
                 `auto-push skipped: branch ${branch} has diverged — rebase nudge limit reached (${MAX_REBASE_NUDGES}), escalating to needs_attention`,
               );
               if (pr) {
-                setPauseReason(pr.pr_number, pr.repo, 'diverged_branch_unresolved');
+                setPauseReason(
+                  pr.pr_number,
+                  pr.repo,
+                  'diverged_branch_unresolved',
+                );
               }
             }
             this.broadcast({
