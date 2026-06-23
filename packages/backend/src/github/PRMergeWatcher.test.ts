@@ -20,6 +20,7 @@ vi.mock('../db/queries.js', () => ({
   getSetting: vi.fn().mockReturnValue(null),
   getTestResult: vi.fn().mockReturnValue(undefined),
   markSessionDone: vi.fn(),
+  clearTerminalPRFlags: vi.fn(),
   setPreReviewStage: vi.fn(),
   setConflictNudgeSha: vi.fn(),
 }));
@@ -88,6 +89,7 @@ function makeMockGitHub(): GitHubClient {
       .mockResolvedValue({ mergeable: null, mergeableState: null }),
     getFailingChecks: vi.fn().mockResolvedValue([]),
     fetchPR: vi.fn().mockResolvedValue({ headSha: null }),
+    deleteBranch: vi.fn().mockResolvedValue(undefined),
     // Default: GitHub still computing — watcher should skip.
     categorizeMergeability: vi.fn().mockResolvedValue({
       category: 'unknown',
@@ -874,11 +876,12 @@ describe('PRMergeWatcher.handleMerged()', () => {
       'sess-idle-123',
       expect.any(Number),
       'https://github.com/owner/repo/pull/42',
+      'pr_merge_watcher',
     );
   });
 
   it('does not call markSessionDone when session_id is null', async () => {
-    const pr = makePRRow({ session_id: null });
+    const pr = makePRRow({ session_id: null, review_session_id: null });
     const watcher = new PRMergeWatcher(
       makeMockGitHub(),
       makeMockSessions(),
@@ -888,6 +891,50 @@ describe('PRMergeWatcher.handleMerged()', () => {
     await watcher.handleMerged(pr, 'abc123');
 
     expect(vi.mocked(markSessionDone)).not.toHaveBeenCalled();
+  });
+
+  it('calls markSessionDone for the review session on merge (idle → done)', async () => {
+    const pr = makePRRow({
+      session_id: 'code-sess',
+      review_session_id: 'review-sess-456',
+      pr_url: 'https://github.com/owner/repo/pull/42',
+    });
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.handleMerged(pr, 'abc123');
+
+    expect(vi.mocked(markSessionDone)).toHaveBeenCalledWith(
+      'review-sess-456',
+      expect.any(Number),
+      'https://github.com/owner/repo/pull/42',
+      'pr_merge_watcher',
+    );
+  });
+
+  it('does not call markSessionDone for review session when review_session_id is null', async () => {
+    const pr = makePRRow({
+      session_id: 'code-sess',
+      review_session_id: null,
+    });
+    const watcher = new PRMergeWatcher(
+      makeMockGitHub(),
+      makeMockSessions(),
+      makeMockNotion(),
+      () => {},
+    );
+    await watcher.handleMerged(pr, 'abc123');
+
+    expect(vi.mocked(markSessionDone)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(markSessionDone)).not.toHaveBeenCalledWith(
+      null,
+      expect.any(Number),
+      expect.anything(),
+      expect.anything(),
+    );
   });
 });
 
