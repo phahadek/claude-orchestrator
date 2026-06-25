@@ -351,8 +351,11 @@ describe('Scheduler next_run_at in WS event', () => {
   it('scheduler_job_run event carries next_run_at: null for a running job (queued re-run)', async () => {
     const { scheduler, broadcasts } = makeScheduler();
     let resolve1!: () => void;
-    const run1Done = new Promise<void>((r) => { resolve1 = r; });
-    const runFn = vi.fn()
+    const run1Done = new Promise<void>((r) => {
+      resolve1 = r;
+    });
+    const runFn = vi
+      .fn()
       .mockReturnValueOnce(run1Done)
       .mockResolvedValue(undefined);
     scheduler.register({

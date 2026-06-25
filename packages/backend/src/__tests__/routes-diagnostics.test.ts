@@ -59,9 +59,15 @@ describe('GET /api/diagnostics/scheduler', () => {
 
   it('augments each job with audit-derived lastDurationMs, runCount24h, errorCount24h', async () => {
     const scheduler = new Scheduler();
-    scheduler.register({ name: 'archiver', intervalMs: 60_000, run: async () => {} });
+    scheduler.register({
+      name: 'archiver',
+      intervalMs: 60_000,
+      run: async () => {},
+    });
     mockGetSchedulerAuditStats.mockReturnValue(
-      new Map([['archiver', { lastDurationMs: 312, runCount24h: 5, errorCount24h: 1 }]]),
+      new Map([
+        ['archiver', { lastDurationMs: 312, runCount24h: 5, errorCount24h: 1 }],
+      ]),
     );
     const app = makeApp(scheduler);
     const res = await request(app).get('/api/diagnostics/scheduler');
@@ -76,7 +82,11 @@ describe('GET /api/diagnostics/scheduler', () => {
 
   it('fills in null/0 defaults for jobs with no audit rows', async () => {
     const scheduler = new Scheduler();
-    scheduler.register({ name: 'new_job', intervalMs: 60_000, run: async () => {} });
+    scheduler.register({
+      name: 'new_job',
+      intervalMs: 60_000,
+      run: async () => {},
+    });
     mockGetSchedulerAuditStats.mockReturnValue(new Map());
     const app = makeApp(scheduler);
     const res = await request(app).get('/api/diagnostics/scheduler');
