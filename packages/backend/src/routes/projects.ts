@@ -667,11 +667,9 @@ projectsRouter.get(
     }
     const n = parseInt(rawId, 10);
     if (isNaN(n) || n <= 0 || String(n) !== rawId) {
-      res
-        .status(400)
-        .json({
-          error: 'id must be a positive integer (GitHub milestone number)',
-        });
+      res.status(400).json({
+        error: 'id must be a positive integer (GitHub milestone number)',
+      });
       return;
     }
 
