@@ -4,7 +4,14 @@ import { logger } from '../logger';
 import { getProjectById, runtimeSettings } from '../config';
 import { ProjectService } from '../projects/ProjectService';
 import { getTaskBackend } from '../tasks/TaskBackend';
-import { getTaskCache, getActiveTaskAggregates } from '../db/queries';
+import {
+  getTaskCache,
+  getActiveTaskAggregates,
+  clearTaskPauseReason,
+  resetTaskCrashCount,
+  deleteTaskCacheRow,
+} from '../db/queries';
+import { recordEvent } from '../audit/AuditLog';
 import { typedGetSetting } from '../config/settings';
 import type { TaskAggregateRow } from '../db/queries';
 import { deriveDisplayStatus } from '../tasks/TaskStatusEngine';
@@ -511,6 +518,62 @@ export function createTasksRouter(): Router {
       });
     }
     res.status(202).json({ ok: true, message: 'Refresh queued' });
+  });
+
+  // ── POST /api/tasks/:taskId/unblock ─────────────────────────────────────
+  router.post('/tasks/:taskId/unblock', async (req: Request, res: Response) => {
+    const taskId = String(req.params.taskId);
+    const projectId =
+      typeof req.query.projectId === 'string' ? req.query.projectId : null;
+
+    if (!projectId) {
+      res.status(422).json({ error: 'projectId is required' });
+      return;
+    }
+
+    let backend: Awaited<ReturnType<typeof getTaskBackend>>;
+    try {
+      backend = getTaskBackend(projectId);
+    } catch {
+      res
+        .status(422)
+        .json({ error: `Cannot resolve backend for project '${projectId}'` });
+      return;
+    }
+
+    clearTaskPauseReason(taskId);
+    resetTaskCrashCount(taskId);
+    deleteTaskCacheRow(taskId);
+
+    try {
+      await backend.updateStatus(taskId, '🗂️ Ready', {
+        source: 'orchestrator',
+      });
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Failed to update status',
+      });
+      return;
+    }
+
+    emitTaskUpdated(taskId);
+    if (taskBroadcastFn) {
+      taskBroadcastFn({
+        type: 'task_status_changed',
+        notionTaskId: taskId,
+        newStatus: '🗂️ Ready',
+      });
+    }
+
+    recordEvent({
+      event_type: 'task_unblocked',
+      actor_type: 'human',
+      project_id: projectId,
+      task_id: taskId,
+      payload: { taskId, projectId },
+    });
+
+    res.json({ ok: true, newStatus: '🗂️ Ready' });
   });
 
   // ── PATCH /api/tasks/:id/status ──────────────────────────────────────────

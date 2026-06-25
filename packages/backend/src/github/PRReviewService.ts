@@ -4,6 +4,7 @@ import {
   setPRReviewResult,
   getPRByNumber,
   setReviewSessionId,
+  clearReviewSessionId,
   updatePRDraftStatus,
   incrementReviewIteration,
   setLastReviewedSha,
@@ -320,36 +321,64 @@ export class PRReviewService {
         parseExpectedSize(taskBody),
       );
 
-      // Case 2: Dead existing review session — resume via sendOrResume with the
-      // original session ID (do NOT generate a new one here). The returned value
-      // is the actual session ID used (may be a new resumed session ID).
-      if (existingReviewSessionId) {
+      // Guard: determine whether the stored session is still resumable before
+      // entering Case 2. A session is resumable if its DB row exists and is not
+      // in a terminal state. Rows missing entirely (pruned) or terminal
+      // (done/error/killed) must not be passed to sendOrResume — that call
+      // returns the dead ID unchanged, re-stores it, and wedges waitForVerdict.
+      const existingSession = existingReviewSessionId
+        ? (getSession(existingReviewSessionId) ?? null)
+        : null;
+      const isResumable =
+        existingSession !== null &&
+        !['done', 'error', 'killed'].includes(existingSession.status);
+
+      if (existingReviewSessionId && !isResumable) {
+        logger.warn(
+          `[PRReviewService] Stale review_session_id ${existingReviewSessionId} for PR #${prNumber} ` +
+            `(${existingSession ? `status=${existingSession.status}` : 'no DB row'}) — clearing and spawning fresh.`,
+        );
+        clearReviewSessionId(prNumber, repo);
+        // Fall through to Case 3.
+      }
+
+      // Case 2: Dead-but-resumable existing review session — resume via
+      // sendOrResume. Only reached when the stored session row exists and is
+      // not in a terminal state.
+      if (existingReviewSessionId && isResumable) {
         const resumedSessionId = await this.sessionManager.sendOrResume(
           existingReviewSessionId,
           prompt,
         );
-        setReviewSessionId(prNumber, repo, resumedSessionId);
-        const aiResult = await this.waitForVerdict(
-          resumedSessionId,
-          prNumber,
-          repo,
-        );
-        const finalResult = this.appendSizeProportionalityDimension(
-          aiResult,
-          sizeSignal,
-        );
-        // Persist immediately after parse — before any side effects (GitHub/Notion).
-        setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
-        setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
-        if (finalResult.verdict === 'approved') {
-          await this.handleApprovedVerdict(
+        if (resumedSessionId != null) {
+          setReviewSessionId(prNumber, repo, resumedSessionId);
+          const aiResult = await this.waitForVerdict(
+            resumedSessionId,
             prNumber,
             repo,
-            prRow.task_id,
-            projectId,
           );
+          const finalResult = this.appendSizeProportionalityDimension(
+            aiResult,
+            sizeSignal,
+          );
+          // Persist immediately after parse — before any side effects (GitHub/Notion).
+          setPRReviewResult(prNumber, repo, JSON.stringify(finalResult));
+          setLastReviewedSha(prNumber, repo, prData.headSha ?? null);
+          if (finalResult.verdict === 'approved') {
+            await this.handleApprovedVerdict(
+              prNumber,
+              repo,
+              prRow.task_id,
+              projectId,
+            );
+          }
+          return finalResult;
         }
-        return finalResult;
+        // Defensive: sendOrResume rejected despite appearing resumable — treat as stale.
+        logger.warn(
+          `[PRReviewService] sendOrResume returned null for ${existingReviewSessionId} — spawning fresh.`,
+        );
+        clearReviewSessionId(prNumber, repo);
       }
 
       // Case 3: No prior review session — spawn a fresh session.
@@ -726,6 +755,11 @@ ${REVIEW_JSON_SCHEMA_BLOCK}`;
       pr.review_session_id,
       followUp,
     );
+    if (resumedSessionId == null) {
+      throw new Error(
+        `reReviewPR: review session ${pr.review_session_id} is terminal or missing — cannot re-review PR #${prNumber}`,
+      );
+    }
     if (resumedSessionId !== pr.review_session_id) {
       setReviewSessionId(prNumber, repo, resumedSessionId);
     }

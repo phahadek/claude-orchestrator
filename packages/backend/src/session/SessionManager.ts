@@ -318,7 +318,7 @@ export class SessionManager extends EventEmitter {
     { sessionType: 'standard' | 'review' }
   >();
   /** Concurrency guard: prevents double-spawning when two concurrent sendOrResume calls race. */
-  private resumesInFlight = new Map<string, Promise<string>>();
+  private resumesInFlight = new Map<string, Promise<string | null>>();
 
   /** Last known DisplayStatus per taskId — used to skip no-op broadcasts. */
   private _lastDisplayStatus = new Map<string, DisplayStatus>();
@@ -1981,7 +1981,7 @@ export class SessionManager extends EventEmitter {
    * is wired via wireSession, and the message is sent after the first event.
    * A concurrency guard ensures only one respawn runs per session ID at a time.
    */
-  async sendOrResume(sessionId: string, text: string): Promise<string> {
+  async sendOrResume(sessionId: string, text: string): Promise<string | null> {
     // Live session — deliver directly
     if (this.sessions.has(sessionId)) {
       this.send(sessionId, text);
@@ -2016,14 +2016,14 @@ export class SessionManager extends EventEmitter {
   private async _doSendOrResume(
     sessionId: string,
     text: string,
-  ): Promise<string> {
+  ): Promise<string | null> {
     // Session not live — look up details from DB and re-launch with --resume
     const row = getSession(sessionId);
     if (!row) {
       logger.error(
         `[SessionManager] sendOrResume: session ${sessionId} not found in DB`,
       );
-      return sessionId;
+      return null;
     }
 
     // Refuse to respawn sessions that reached a terminal state — done/error/killed
@@ -2043,7 +2043,7 @@ export class SessionManager extends EventEmitter {
         reason: 'terminal_session',
         detail: `Session is in terminal state: ${row.status}`,
       } satisfies ServerMessage);
-      return sessionId;
+      return null;
     }
 
     const project = getProjectById(row.project_id ?? '');

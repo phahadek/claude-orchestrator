@@ -8,6 +8,7 @@ vi.mock('../db/queries.js', () => ({
   setPRReviewResult: vi.fn(),
   getEventsBySession: vi.fn(),
   setReviewSessionId: vi.fn(),
+  clearReviewSessionId: vi.fn(),
   updatePRDraftStatus: vi.fn(),
   incrementReviewIteration: vi.fn(),
   setLastReviewedSha: vi.fn(),
@@ -27,11 +28,13 @@ import {
   setPRReviewResult,
   getEventsBySession,
   setReviewSessionId,
+  clearReviewSessionId,
   updatePRDraftStatus,
   incrementReviewIteration,
   setLocalBranchReviewResult,
   getLocalBranchById,
   setLastReviewedSha,
+  getSession,
 } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
 import type { GitHubClient } from './GitHubClient';
@@ -1237,12 +1240,14 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
     expect(result.verdict).toBe('approved');
   });
 
-  it('resumes a dead review session via sendOrResume with the original session ID', async () => {
+  it('resumes a dead-but-resumable review session via sendOrResume (Case 2)', async () => {
     const prRowWithDeadSession = {
       ...mockPRRow,
       review_session_id: 'dead-review-session-id',
     };
     vi.mocked(getPRByNumber).mockReturnValue(prRowWithDeadSession as any);
+    // Session row exists and is idle (not terminal) — qualifies for Case 2
+    vi.mocked(getSession).mockReturnValueOnce({ status: 'idle' } as any);
 
     const mockSM = makeMockSessionManager();
     (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(false);
@@ -1282,6 +1287,104 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
       'owner/repo',
       resumedId,
     );
+    expect(result.verdict).toBe('approved');
+  });
+
+  it('spawns fresh session when review_session_id has no DB row (pruned) and clears the stale pointer', async () => {
+    const prRowWithPrunedSession = {
+      ...mockPRRow,
+      review_session_id: 'pruned-session-id',
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithPrunedSession as any);
+    // Default mock returns null — simulates pruned/missing session row
+    vi.mocked(getSession).mockReturnValue(null);
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(false);
+
+    const startMock = mockSM.start as ReturnType<typeof vi.fn>;
+    startMock.mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(id, JSON.stringify(claudePayload)),
+          ),
+        );
+        return id;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    // stale pointer cleared
+    expect(vi.mocked(clearReviewSessionId)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
+    // fresh session spawned (Case 3), not sendOrResume
+    expect(startMock).toHaveBeenCalledOnce();
+    expect(mockSM.sendOrResume).not.toHaveBeenCalled();
+    expect(result.verdict).toBe('approved');
+  });
+
+  it('spawns fresh session when review_session_id is terminal (done/error/killed) and clears the stale pointer', async () => {
+    const prRowWithTerminalSession = {
+      ...mockPRRow,
+      review_session_id: 'terminal-session-id',
+    };
+    vi.mocked(getPRByNumber).mockReturnValue(prRowWithTerminalSession as any);
+    vi.mocked(getSession).mockReturnValueOnce({ status: 'done' } as any);
+
+    const mockSM = makeMockSessionManager();
+    (mockSM.isAlive as ReturnType<typeof vi.fn>).mockReturnValue(false);
+
+    const startMock = mockSM.start as ReturnType<typeof vi.fn>;
+    startMock.mockImplementationOnce(
+      (_taskUrl: string, _ctxUrl: string, opts: { sessionId: string }) => {
+        const id = opts.sessionId;
+        setImmediate(() =>
+          mockSM.emit(
+            'message',
+            makeSessionEventMessage(id, JSON.stringify(claudePayload)),
+          ),
+        );
+        return id;
+      },
+    );
+
+    const service = new PRReviewService(
+      makeMockGitHub(),
+      makeMockNotion(),
+      mockSM as any,
+      'proj-1',
+      'https://notion.so/ctx',
+    );
+    const result = await service.reviewPR(
+      { type: 'pr', prNumber: 42, repo: 'owner/repo' },
+      makeMockDiffSource(),
+    );
+
+    // stale terminal pointer cleared
+    expect(vi.mocked(clearReviewSessionId)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
+    // fresh session spawned, sendOrResume never called on dead ID
+    expect(startMock).toHaveBeenCalledOnce();
+    expect(mockSM.sendOrResume).not.toHaveBeenCalled();
+    // waitForVerdict never called on the terminal ID — it completes via fresh session
     expect(result.verdict).toBe('approved');
   });
 
@@ -1826,6 +1929,8 @@ describe('PRReviewService — verdict persisted before side effects', () => {
       review_session_id: 'dead-session-id',
       draft: 1,
     } as any);
+    // Session row exists and is idle — qualifies for Case 2
+    vi.mocked(getSession).mockReturnValueOnce({ status: 'idle' } as any);
 
     const callOrder: string[] = [];
     const mockGH = makeMockGitHub();

@@ -11,6 +11,9 @@ vi.mock('../db/queries.js', () => ({
   getActiveTaskAggregates: vi.fn(),
   getSetting: vi.fn().mockReturnValue(null),
   getMilestoneById: vi.fn().mockReturnValue(null),
+  clearTaskPauseReason: vi.fn(),
+  resetTaskCrashCount: vi.fn(),
+  deleteTaskCacheRow: vi.fn(),
 }));
 
 vi.mock('../config.js', () => ({
@@ -28,8 +31,22 @@ vi.mock('../config.js', () => ({
   }),
 }));
 
-import { createTasksRouter, summarizeEvent } from '../routes/tasks.js';
+vi.mock('../tasks/TaskBackend.js', () => ({
+  getTaskBackend: vi.fn(),
+}));
+
+vi.mock('../audit/AuditLog.js', () => ({
+  recordEvent: vi.fn(),
+}));
+
+import {
+  createTasksRouter,
+  summarizeEvent,
+  setTaskBroadcast,
+} from '../routes/tasks.js';
 import * as queries from '../db/queries.js';
+import { getTaskBackend } from '../tasks/TaskBackend.js';
+import { recordEvent } from '../audit/AuditLog.js';
 import type { NotionTask } from '../notion/types.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -860,5 +877,105 @@ describe('summarizeEvent — tool-call formatting', () => {
         toolUsePayload('Read', { file_path: 'src\\components\\App.tsx' }),
       ),
     ).toBe('Read(App.tsx)');
+  });
+});
+
+// ── POST /api/tasks/:taskId/unblock ────────────────────────────────────────────
+
+function setupFakeBackend(
+  updateStatusImpl = vi.fn().mockResolvedValue(undefined),
+) {
+  vi.mocked(getTaskBackend).mockReturnValue({
+    updateStatus: updateStatusImpl,
+    fetchTaskPage: vi.fn().mockResolvedValue(''),
+  } as never);
+  return updateStatusImpl;
+}
+
+describe('POST /api/tasks/:taskId/unblock', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupFakeBackend();
+    vi.mocked(queries.getActiveTaskAggregates).mockReturnValue([]);
+  });
+
+  it('returns 422 when projectId is missing', async () => {
+    const res = await supertest(buildApp()).post('/api/tasks/task-1/unblock');
+    expect(res.status).toBe(422);
+  });
+
+  it('returns 422 when getTaskBackend throws', async () => {
+    vi.mocked(getTaskBackend).mockImplementation(() => {
+      throw new Error('no backend');
+    });
+    const res = await supertest(buildApp()).post(
+      '/api/tasks/task-1/unblock?projectId=proj-1',
+    );
+    expect(res.status).toBe(422);
+  });
+
+  it('clears pause reason and crash count before calling updateStatus', async () => {
+    const updateStatus = setupFakeBackend();
+    const res = await supertest(buildApp()).post(
+      '/api/tasks/task-1/unblock?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    expect(queries.clearTaskPauseReason).toHaveBeenCalledWith('task-1');
+    expect(queries.resetTaskCrashCount).toHaveBeenCalledWith('task-1');
+    expect(queries.deleteTaskCacheRow).toHaveBeenCalledWith('task-1');
+    expect(updateStatus).toHaveBeenCalledWith('task-1', '🗂️ Ready', {
+      source: 'orchestrator',
+    });
+  });
+
+  it('calls updateStatus with 🗂️ Ready and broadcasts task_status_changed', async () => {
+    const broadcasts: unknown[] = [];
+    setTaskBroadcast((msg) => broadcasts.push(msg));
+
+    const res = await supertest(buildApp()).post(
+      '/api/tasks/task-1/unblock?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    const changed = broadcasts.find(
+      (m) => (m as { type: string }).type === 'task_status_changed',
+    ) as { newStatus: string } | undefined;
+    expect(changed).toBeDefined();
+    expect(changed!.newStatus).toBe('🗂️ Ready');
+
+    setTaskBroadcast(null as never);
+  });
+
+  it('records a task_unblocked audit event', async () => {
+    const res = await supertest(buildApp()).post(
+      '/api/tasks/task-1/unblock?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    expect(recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'task_unblocked',
+        actor_type: 'human',
+        task_id: 'task-1',
+        project_id: 'proj-1',
+      }),
+    );
+  });
+
+  it('returns 200 with newStatus on success', async () => {
+    const res = await supertest(buildApp()).post(
+      '/api/tasks/task-1/unblock?projectId=proj-1',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ ok: true, newStatus: '🗂️ Ready' });
+  });
+
+  it('does not mutate state when projectId cannot be resolved (422)', async () => {
+    vi.mocked(getTaskBackend).mockImplementation(() => {
+      throw new Error('no backend');
+    });
+    await supertest(buildApp()).post(
+      '/api/tasks/task-1/unblock?projectId=proj-1',
+    );
+    expect(queries.clearTaskPauseReason).not.toHaveBeenCalled();
+    expect(queries.resetTaskCrashCount).not.toHaveBeenCalled();
   });
 });

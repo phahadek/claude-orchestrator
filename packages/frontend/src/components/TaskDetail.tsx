@@ -117,6 +117,7 @@ export function TaskDetail({
   const [markMergedInFlight, setMarkMergedInFlight] = useState(false);
   const [fixConflictsInFlight, setFixConflictsInFlight] = useState(false);
   const [abortInFlight, setAbortInFlight] = useState(false);
+  const [unblockInFlight, setUnblockInFlight] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
   const [optimisticDisplayStatus, setOptimisticDisplayStatus] =
     useState<DisplayStatus | null>(null);
@@ -127,7 +128,12 @@ export function TaskDetail({
     setMobileOpenSection('review');
     setReviewError(null);
     setFixConflictsInFlight(false);
+    setUnblockInFlight(false);
     setOptimisticDisplayStatus(null);
+    setReviewInFlight(false);
+    setMergeInFlight(false);
+    setMarkMergedInFlight(false);
+    setAbortInFlight(false);
   }, [task.taskId]);
 
   // Look up live session state
@@ -280,6 +286,28 @@ export function TaskDetail({
     }
   }
 
+  async function handleUnblock() {
+    if (!projectId) return;
+    setUnblockInFlight(true);
+    setReviewError(null);
+    try {
+      const res = await fetch(
+        `/api/tasks/${encodeURIComponent(task.taskId)}/unblock?projectId=${encodeURIComponent(projectId)}`,
+        { method: 'POST' },
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setReviewError(body.error ?? `HTTP ${res.status}`);
+      } else {
+        setOptimisticDisplayStatus('ready');
+      }
+    } catch (err) {
+      setReviewError(err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setUnblockInFlight(false);
+    }
+  }
+
   // Accordion: on mobile, REVIEW and PULL REQUEST are mutually exclusive when both exist.
   const mobileAccordionActive = isMobile && !!task.review && !!task.pr;
   const isReviewExpanded = mobileAccordionActive
@@ -380,6 +408,26 @@ export function TaskDetail({
                 title="Kill the session and reset the task to Ready. Work in progress will be discarded."
               >
                 {abortInFlight ? 'Aborting…' : 'Abort'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Unblock — clear pause/crash state and reset to Ready ── */}
+        {effectiveDisplayStatus === 'blocked' && (
+          <div className={styles.abortSection}>
+            {reviewError && (
+              <div className={styles.errorBanner}>{reviewError}</div>
+            )}
+            <div className={styles.abortActions}>
+              <button
+                className={styles.unblockButton}
+                disabled={unblockInFlight}
+                onClick={() => void handleUnblock()}
+                title="Clear the block and reset this task to 🗂️ Ready"
+                aria-label="Unblock task"
+              >
+                {unblockInFlight ? 'Unblocking…' : '↩ Unblock'}
               </button>
             </div>
           </div>

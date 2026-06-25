@@ -50,8 +50,11 @@ export function resolveClaudePath(
 }
 
 /** Convert Git Bash paths like /c/Users/... to C:/Users/... for Windows Node. */
-export function normalizePath(p: string): string {
-  if (process.platform === 'win32' && /^\/[a-zA-Z]\//.test(p)) {
+export function normalizePath(
+  p: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === 'win32' && /^\/[a-zA-Z]\//.test(p)) {
     return p[1].toUpperCase() + ':' + p.slice(2);
   }
   return p;
