@@ -109,7 +109,8 @@ export default function App() {
   useEffect(() => {
     const handler = () => setLoopbackRequired(true);
     window.addEventListener('device-loopback-required', handler);
-    return () => window.removeEventListener('device-loopback-required', handler);
+    return () =>
+      window.removeEventListener('device-loopback-required', handler);
   }, []);
 
   const bootReconciliation = useBootReconciliation();
@@ -1144,11 +1145,40 @@ export default function App() {
 
   if (loopbackRequired) {
     return (
-      <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ background: '#1e1e2e', border: '1px solid #313244', borderRadius: 12, padding: '32px 40px', maxWidth: 480, width: '90%', textAlign: 'center' }}>
-          <h2 style={{ color: '#cdd6f4', margin: '0 0 16px', fontSize: 20, fontWeight: 600 }}>Local Access Required</h2>
+      <div
+        style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.85)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <div
+          style={{
+            background: '#1e1e2e',
+            border: '1px solid #313244',
+            borderRadius: 12,
+            padding: '32px 40px',
+            maxWidth: 480,
+            width: '90%',
+            textAlign: 'center',
+          }}
+        >
+          <h2
+            style={{
+              color: '#cdd6f4',
+              margin: '0 0 16px',
+              fontSize: 20,
+              fontWeight: 600,
+            }}
+          >
+            Local Access Required
+          </h2>
           <p style={{ color: '#a6adc8', lineHeight: 1.5, margin: 0 }}>
-            Setup must be initialized from <code style={{ color: '#89b4fa' }}>localhost (127.0.0.1)</code>.
+            Setup must be initialized from{' '}
+            <code style={{ color: '#89b4fa' }}>localhost (127.0.0.1)</code>.
             Connect via SSH tunnel or local access, then enroll this device.
           </p>
         </div>
@@ -1544,7 +1574,6 @@ export default function App() {
           Reconnected
         </div>
       )}
-
     </div>
   );
 }

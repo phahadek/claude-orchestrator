@@ -23,7 +23,15 @@ describe('request() — 401 handling', () => {
   it('throws and dispatches device-unauthorized on 401', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockReturnValue(makeFetchResponse(401, { error: 'unauthorized', code: 'device_not_enrolled' }, false)),
+      vi
+        .fn()
+        .mockReturnValue(
+          makeFetchResponse(
+            401,
+            { error: 'unauthorized', code: 'device_not_enrolled' },
+            false,
+          ),
+        ),
     );
     const dispatched: string[] = [];
     vi.spyOn(window, 'dispatchEvent').mockImplementation((e) => {
@@ -39,12 +47,20 @@ describe('request() — 401 handling', () => {
     const store: Record<string, string> = { device_token: 'existing-token' };
     vi.stubGlobal('localStorage', {
       getItem: (k: string) => store[k] ?? null,
-      setItem: (k: string, v: string) => { store[k] = v; },
-      removeItem: (k: string) => { delete store[k]; },
+      setItem: (k: string, v: string) => {
+        store[k] = v;
+      },
+      removeItem: (k: string) => {
+        delete store[k];
+      },
     });
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockReturnValue(makeFetchResponse(401, { error: 'unauthorized' }, false)),
+      vi
+        .fn()
+        .mockReturnValue(
+          makeFetchResponse(401, { error: 'unauthorized' }, false),
+        ),
     );
     vi.spyOn(window, 'dispatchEvent').mockImplementation(() => true);
 
@@ -55,9 +71,11 @@ describe('request() — 401 handling', () => {
   it('never returns 401 body as data', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockReturnValue(
-        makeFetchResponse(401, { error: 'unauthorized', find: null }, false),
-      ),
+      vi
+        .fn()
+        .mockReturnValue(
+          makeFetchResponse(401, { error: 'unauthorized', find: null }, false),
+        ),
     );
     vi.spyOn(window, 'dispatchEvent').mockImplementation(() => true);
 
@@ -71,9 +89,15 @@ describe('request() — 403 handling', () => {
   it('dispatches device-loopback-required on 403 bootstrap_loopback_only', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockReturnValue(
-        makeFetchResponse(403, { error: 'forbidden', code: 'bootstrap_loopback_only' }, false),
-      ),
+      vi
+        .fn()
+        .mockReturnValue(
+          makeFetchResponse(
+            403,
+            { error: 'forbidden', code: 'bootstrap_loopback_only' },
+            false,
+          ),
+        ),
     );
     const dispatched: string[] = [];
     vi.spyOn(window, 'dispatchEvent').mockImplementation((e) => {
@@ -89,9 +113,9 @@ describe('request() — 403 handling', () => {
   it('does not dispatch device-loopback-required on other 403s', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockReturnValue(
-        makeFetchResponse(403, { error: 'forbidden' }, false),
-      ),
+      vi
+        .fn()
+        .mockReturnValue(makeFetchResponse(403, { error: 'forbidden' }, false)),
     );
     const dispatched: string[] = [];
     vi.spyOn(window, 'dispatchEvent').mockImplementation((e) => {
@@ -118,9 +142,16 @@ describe('request() — 2xx handling', () => {
   it('returns undefined on 204', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockReturnValue(
-        Promise.resolve({ ok: true, status: 204, statusText: '204', json: async () => null }),
-      ),
+      vi
+        .fn()
+        .mockReturnValue(
+          Promise.resolve({
+            ok: true,
+            status: 204,
+            statusText: '204',
+            json: async () => null,
+          }),
+        ),
     );
 
     const result = await request('/api/test');

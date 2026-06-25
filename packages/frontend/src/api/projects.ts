@@ -128,7 +128,10 @@ export interface UpdateMilestoneInput {
   displayOrder?: number;
 }
 
-export async function request<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
+export async function request<T>(
+  input: RequestInfo,
+  init?: RequestInit,
+): Promise<T> {
   const token = getDeviceToken(); // may be null before enrollment
   const headers: Record<string, string> = {
     ...(init?.headers as Record<string, string> | undefined),

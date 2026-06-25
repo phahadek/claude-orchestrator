@@ -73,9 +73,15 @@ const localStore: Record<string, string> = {};
 beforeEach(() => {
   vi.stubGlobal('localStorage', {
     getItem: (k: string) => localStore[k] ?? null,
-    setItem: (k: string, v: string) => { localStore[k] = v; },
-    removeItem: (k: string) => { delete localStore[k]; },
-    clear: () => { Object.keys(localStore).forEach((k) => delete localStore[k]); },
+    setItem: (k: string, v: string) => {
+      localStore[k] = v;
+    },
+    removeItem: (k: string) => {
+      delete localStore[k];
+    },
+    clear: () => {
+      Object.keys(localStore).forEach((k) => delete localStore[k]);
+    },
   });
 });
 
@@ -102,7 +108,12 @@ describe('App — unauthorized device routing', () => {
         if ((url as string).includes('setup/status'))
           return Promise.resolve(makeResponse(200, { setupNeeded: false }));
         if ((url as string).includes('/api/config'))
-          return Promise.resolve(makeResponse(401, { error: 'unauthorized', code: 'device_not_enrolled' }));
+          return Promise.resolve(
+            makeResponse(401, {
+              error: 'unauthorized',
+              code: 'device_not_enrolled',
+            }),
+          );
         return Promise.resolve(makeResponse(200, {}));
       }),
     );
@@ -125,7 +136,10 @@ describe('App — unauthorized device routing', () => {
           return Promise.resolve(makeResponse(200, { setupNeeded: false }));
         if ((url as string).includes('/api/config'))
           return Promise.resolve(
-            makeResponse(403, { error: 'forbidden', code: 'bootstrap_loopback_only' }),
+            makeResponse(403, {
+              error: 'forbidden',
+              code: 'bootstrap_loopback_only',
+            }),
           );
         return Promise.resolve(makeResponse(200, {}));
       }),
