@@ -41,12 +41,22 @@ $feJob = Start-Job -ScriptBlock {
 
 Write-Host "[dashboard] Backend job ID: $($beJob.Id), Frontend job ID: $($feJob.Id)" -ForegroundColor Cyan
 
-# Wait briefly for processes to start and acquire ports
-Start-Sleep -Seconds 3
-
-# Try to resolve actual PIDs from port binding
-$bePidActual = Get-PortPid $BackendPort
-$fePidActual = Get-PortPid $FrontendPort
+# Poll for port binding with a 30s upper bound (500ms interval)
+$pollMaxMs = 30000
+$pollIntervalMs = 500
+$pollElapsed = 0
+$bePidActual = $null
+$fePidActual = $null
+Write-Host "[dashboard] Waiting for ports to bind..." -ForegroundColor Cyan
+while ($pollElapsed -lt $pollMaxMs) {
+    if (-not $bePidActual) { $bePidActual = Get-PortPid $BackendPort }
+    if (-not $fePidActual) { $fePidActual = Get-PortPid $FrontendPort }
+    if ($bePidActual -and $fePidActual) { break }
+    Start-Sleep -Milliseconds $pollIntervalMs
+    $pollElapsed += $pollIntervalMs
+}
+if (-not $bePidActual) { Write-Warning "[dashboard] Backend port $BackendPort did not bind within ${pollMaxMs}ms" }
+if (-not $fePidActual) { Write-Warning "[dashboard] Frontend port $FrontendPort did not bind within ${pollMaxMs}ms" }
 
 # Save job IDs and PIDs to file
 @{
