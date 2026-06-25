@@ -682,9 +682,9 @@ describe('SessionManager.markSessionErrored() — blocked path side-effects', ()
     sm.markSessionErrored('test-session', 'error', 'launch_failed');
 
     expect(msgs.find((m) => m.type === 'auto_launch_paused')).toBeUndefined();
-    const launchFailedMsg = msgs.find((m) => m.type === 'session_launch_failed') as
-      | { type: string; taskId: string; sessionId: string }
-      | undefined;
+    const launchFailedMsg = msgs.find(
+      (m) => m.type === 'session_launch_failed',
+    ) as { type: string; taskId: string; sessionId: string } | undefined;
     expect(launchFailedMsg).toBeDefined();
     expect(launchFailedMsg!.taskId).toBe('notion-task-id');
     expect(launchFailedMsg!.sessionId).toBe('test-session');

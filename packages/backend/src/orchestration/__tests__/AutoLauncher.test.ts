@@ -1170,7 +1170,10 @@ describe('AutoLauncher — launch failure tracking', () => {
   ): Map<string, { count: number; nextRetryAt: number }> {
     return (
       launcher as unknown as {
-        launchFailedAttempts: Map<string, { count: number; nextRetryAt: number }>;
+        launchFailedAttempts: Map<
+          string,
+          { count: number; nextRetryAt: number }
+        >;
       }
     ).launchFailedAttempts;
   }
@@ -1225,10 +1228,14 @@ describe('AutoLauncher — launch failure tracking', () => {
   });
 
   it('second launch_failed applies 2m cooldown', () => {
-    const launcher = new AutoLauncher(makeSessionManager(0) as never, undefined, {
-      listProjects: () => [],
-      pollOnStart: false,
-    });
+    const launcher = new AutoLauncher(
+      makeSessionManager(0) as never,
+      undefined,
+      {
+        listProjects: () => [],
+        pollOnStart: false,
+      },
+    );
 
     fireLaunchFailed(launcher, 'task-backoff2');
     fireLaunchFailed(launcher, 'task-backoff2');
@@ -1265,10 +1272,14 @@ describe('AutoLauncher — launch failure tracking', () => {
   });
 
   it('after 3 consecutive launch_failed, escalates to needs_attention via setTaskPauseReason', () => {
-    const launcher = new AutoLauncher(makeSessionManager(0) as never, undefined, {
-      listProjects: () => [],
-      pollOnStart: false,
-    });
+    const launcher = new AutoLauncher(
+      makeSessionManager(0) as never,
+      undefined,
+      {
+        listProjects: () => [],
+        pollOnStart: false,
+      },
+    );
 
     fireLaunchFailed(launcher, 'task-escalate');
     fireLaunchFailed(launcher, 'task-escalate');
