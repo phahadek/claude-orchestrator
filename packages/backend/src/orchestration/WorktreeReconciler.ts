@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { logger } from '../logger';
-import { getAllProjects } from '../config';
+import { getAllProjects, normalizePath } from '../config';
 import type { ProjectConfig } from '../config';
 import { getSession, getPRBySessionId } from '../db/queries';
 import { recordEvent } from '../audit/AuditLog';
@@ -38,7 +38,10 @@ interface ProjectStats {
   pruned: number;
 }
 
-async function reconcileProject(project: ProjectConfig): Promise<ProjectStats> {
+async function reconcileProject(
+  project: ProjectConfig,
+  platform: NodeJS.Platform = process.platform,
+): Promise<ProjectStats> {
   const stats: ProjectStats = {
     removed: 0,
     fsDeleted: 0,
@@ -47,7 +50,8 @@ async function reconcileProject(project: ProjectConfig): Promise<ProjectStats> {
     pruned: 0,
   };
 
-  const worktreesDir = path.join(project.projectDir, '.claude', 'worktrees');
+  const projectDir = normalizePath(project.projectDir, platform);
+  const worktreesDir = path.join(projectDir, '.claude', 'worktrees');
   const worktreesDirNorm = normalizeSlashes(worktreesDir);
 
   // Phase: enumerate git-registered worktrees
@@ -55,7 +59,7 @@ async function reconcileProject(project: ProjectConfig): Promise<ProjectStats> {
   const listStart = Date.now();
   try {
     const { stdout: out } = await execAsync('git worktree list --porcelain', {
-      cwd: project.projectDir,
+      cwd: projectDir,
     });
     registeredPaths = parseRegisteredPaths(out);
   } catch {
@@ -111,7 +115,7 @@ async function reconcileProject(project: ProjectConfig): Promise<ProjectStats> {
     try {
       const removeStart = Date.now();
       await execAsync(`git worktree remove --force "${wtPath}"`, {
-        cwd: project.projectDir,
+        cwd: projectDir,
       });
       worktree_remove_duration_ms += Date.now() - removeStart;
 
@@ -122,7 +126,7 @@ async function reconcileProject(project: ProjectConfig): Promise<ProjectStats> {
         try {
           const branchStart = Date.now();
           await execAsync(`git branch -D "${branchName}"`, {
-            cwd: project.projectDir,
+            cwd: projectDir,
           });
           worktree_branch_delete_duration_ms += Date.now() - branchStart;
         } catch (branchErr) {
@@ -174,7 +178,7 @@ async function reconcileProject(project: ProjectConfig): Promise<ProjectStats> {
     }
     // Fix A: per-worktree prune ensures stale registration is reaped even if a sibling remove also fails
     try {
-      await execAsync('git worktree prune', { cwd: project.projectDir });
+      await execAsync('git worktree prune', { cwd: projectDir });
     } catch (pruneErr) {
       logger.warn(
         `[WorktreeReconciler] post-remove prune failed for project ${project.id}: ${pruneErr}`,
@@ -224,7 +228,7 @@ async function reconcileProject(project: ProjectConfig): Promise<ProjectStats> {
   // Phase: prune stale git metadata
   const pruneStart = Date.now();
   try {
-    await execAsync('git worktree prune', { cwd: project.projectDir });
+    await execAsync('git worktree prune', { cwd: projectDir });
   } catch (pruneErr) {
     logger.warn(
       `[WorktreeReconciler] git worktree prune failed for project ${project.id}: ${pruneErr}`,
@@ -245,14 +249,16 @@ async function reconcileProject(project: ProjectConfig): Promise<ProjectStats> {
 
 export async function runBootWorktreeReconciliation(options?: {
   listProjects?: () => ProjectConfig[];
+  platform?: NodeJS.Platform;
 }): Promise<void> {
   const listProjects = options?.listProjects ?? getAllProjects;
+  const platform = options?.platform ?? process.platform;
   const projects = listProjects();
 
   const results = await runWithConcurrency(
     projects,
     SWEEP_CONCURRENCY,
-    reconcileProject,
+    (project) => reconcileProject(project, platform),
   );
 
   let removed = 0;
