@@ -263,6 +263,7 @@ Ensure your project's workflow includes these status names (or configure `status
 Add transitions between them as needed. The `Backlog → To Do` transition is the readiness gate — moving an issue to `To Do` makes it eligible for dispatch.
 
 **Required transitions:** The orchestrator applies transitions along the forward path only. At minimum, your Jira workflow must allow:
+
 - `To Do → In Progress` (session start)
 - `In Progress → In Review` (PR opened)
 - `In Review → Done` (PR merged)
@@ -329,10 +330,10 @@ Backlog → To Do → In Progress → In Review → Done
 
 **Orchestrator-only states (not written to Jira):**
 
-| Orchestrator status | Jira behavior                                                                 |
-| ------------------- | ----------------------------------------------------------------------------- |
-| `🚫 Blocked`        | No Jira transition — issue stays at its current Jira status                   |
-| `⏭️ Deferred`       | No Jira transition — issue stays at its current Jira status                   |
+| Orchestrator status | Jira behavior                                               |
+| ------------------- | ----------------------------------------------------------- |
+| `🚫 Blocked`        | No Jira transition — issue stays at its current Jira status |
+| `⏭️ Deferred`       | No Jira transition — issue stays at its current Jira status |
 
 These states exist purely inside the orchestrator dashboard. No Jira status or transition is needed for them.
 

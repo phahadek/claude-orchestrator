@@ -243,7 +243,10 @@ export class JiraTaskSourceProvider implements TaskBackend {
     if (!transition) {
       // No direct transition available — check if already in the target state.
       const issue = await this.client.getIssue(externalId);
-      if (issue.fields.status.name.toLowerCase() === targetJiraStatus.toLowerCase()) {
+      if (
+        issue.fields.status.name.toLowerCase() ===
+        targetJiraStatus.toLowerCase()
+      ) {
         return; // Already in target state — nothing to do.
       }
       logger.warn(
