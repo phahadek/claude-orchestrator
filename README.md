@@ -133,6 +133,7 @@ The Analytics tab tracks per-session token usage and per-model cost across the p
 - [Notion template](docs/notion-template.md) — set up a Notion workspace compatible with this orchestrator
 - [GitHub template](docs/github-template.md) — label vocabulary, issue body structure, and repo bootstrap for GitHub-backed projects
 - [Jira template](docs/jira-template.md) — issue type mapping, workflow statuses, Epic milestone semantics, and project bootstrap for Jira-backed projects
+- [Jira Task Writing Guidelines](docs/jira-task-writing.md) — how to scope and write Jira issues as orchestrator tasks
 - [YAML template](docs/yaml-template.md) — schema reference and conventions for YAML-backed projects
 - [Orchestrator project setup](docs/orchestrator-project-setup.md) — point the orchestrator at an external project (C#, Rust, Godot, …) via `.claude/orchestrator.json` and a bootstrap script
 

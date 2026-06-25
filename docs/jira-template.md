@@ -6,6 +6,8 @@ The orchestrator reads issues from an Epic's issue tree and transitions their st
 
 > **Prefer Notion, GitHub, or YAML?** Jira is one of four task sources. See [`notion-template.md`](notion-template.md), [`github-template.md`](github-template.md), or [`yaml-template.md`](yaml-template.md) for the other backends.
 
+> **Writing a task, not configuring Jira?** This guide covers Jira _setup_ and the orchestrator's field/status mappings. For how to _author_ a well-scoped orchestrator task on Jira (the Jira peer of [`task-writing.md`](task-writing.md)), see [`jira-task-writing.md`](jira-task-writing.md).
+
 ---
 
 ## Prerequisites

@@ -187,4 +187,4 @@ For YAML-backed projects, the encoding of these conventions in YAML is documente
 
 For GitHub-backed projects, the encoding of these conventions on GitHub (label vocabulary, issue body sections, Depends-On syntax, milestone semantics) is documented in [github-template.md](./github-template.md).
 
-For Jira-backed projects, the encoding of these conventions on Jira (issue types, workflow statuses, Story=Planning / Task=Code distinction, Depends-On links, Epic milestone semantics) is documented in [jira-template.md](./jira-template.md).
+For Jira-backed projects, the encoding of these conventions on Jira (issue types, workflow statuses, Story=Planning / Task=Code distinction, Depends-On links, Epic milestone semantics) is documented in [jira-template.md](./jira-template.md), and the Jira-specific authoring guidance — the Jira peer of this page — is in [jira-task-writing.md](./jira-task-writing.md).
