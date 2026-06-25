@@ -262,6 +262,15 @@ Ensure your project's workflow includes these status names (or configure `status
 
 Add transitions between them as needed. The `Backlog → To Do` transition is the readiness gate — moving an issue to `To Do` makes it eligible for dispatch.
 
+**Required transitions:** The orchestrator applies transitions along the forward path only. At minimum, your Jira workflow must allow:
+- `To Do → In Progress` (session start)
+- `In Progress → In Review` (PR opened)
+- `In Review → Done` (PR merged)
+
+If a required transition is unavailable from the issue's current state, the orchestrator logs a warning and skips the Jira update — it does **not** fail the session. This means a misconfigured workflow results in issues silently staying at the wrong status rather than crashing.
+
+**Orchestrator-only statuses (`🚫 Blocked`, `⏭️ Deferred`):** These are internal orchestrator states only. The orchestrator does **not** attempt a Jira transition for them — the issue remains at its current Jira status. You do **not** need to add `Blocked` or `Deferred` statuses to your Jira workflow.
+
 ### Step 2: Create an Epic for your milestone
 
 Create a Jira Epic in the project. Note its issue key (e.g. `PROJ-1`). This is the milestone ID you will use in the dashboard.
@@ -317,3 +326,14 @@ Backlog → To Do → In Progress → In Review → Done
 - Move to **To Do** only after human review confirms scope (this is the readiness gate)
 - The orchestrator handles **In Progress** and **In Review** transitions automatically
 - **Done** is set after PR merge
+
+**Orchestrator-only states (not written to Jira):**
+
+| Orchestrator status | Jira behavior                                                                 |
+| ------------------- | ----------------------------------------------------------------------------- |
+| `🚫 Blocked`        | No Jira transition — issue stays at its current Jira status                   |
+| `⏭️ Deferred`       | No Jira transition — issue stays at its current Jira status                   |
+
+These states exist purely inside the orchestrator dashboard. No Jira status or transition is needed for them.
+
+**Resilience:** If the orchestrator cannot find a direct transition to the target status (e.g. a workflow gap), it checks whether the issue is already in that status (in which case it's a no-op) and otherwise logs a warning and continues — it never fails the session due to a missing Jira transition.
