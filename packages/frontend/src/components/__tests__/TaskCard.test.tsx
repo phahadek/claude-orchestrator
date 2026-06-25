@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
 import { TaskCard } from '../TaskCard';
 import type {
@@ -738,6 +738,66 @@ describe('TaskCard', () => {
     // severity derived from parsed struct
     expect(badge.getAttribute('data-pause-severity')).toBe('needs_attention');
     expect(badge.getAttribute('data-pause-source')).toBe('merge');
+  });
+
+  // ── Unblock button ────────────────────────────────────────────────────────
+
+  it('renders Unblock button for blocked tasks', () => {
+    render(
+      <TaskCard
+        task={makeTask({ displayStatus: 'blocked', taskType: '💻 Code' })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /unblock/i })).toBeDefined();
+  });
+
+  it('does not render Unblock button for non-blocked tasks', () => {
+    render(
+      <TaskCard
+        task={makeTask({ displayStatus: 'ready', taskType: '💻 Code' })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /unblock/i })).toBeNull();
+  });
+
+  it('Unblock button POSTs to the unblock route and optimistically sets status to ready', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ ok: true, newStatus: '🗂️ Ready' }),
+    } as Response);
+
+    render(
+      <TaskCard
+        task={makeTask({
+          taskId: 'task-blocked',
+          displayStatus: 'blocked',
+          taskType: '💻 Code',
+        })}
+        selected={false}
+        onClick={vi.fn()}
+        send={noop}
+        project={makeProject({ id: 'proj-1' })}
+      />,
+    );
+
+    const btn = screen.getByRole('button', { name: /unblock/i });
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/tasks/task-blocked/unblock'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    fetchSpy.mockRestore();
   });
 
   it('derives source tag and severity from JSON struct pauseReason', () => {
