@@ -166,6 +166,19 @@ export class JiraClient {
     });
   }
 
+  /** Probe the Jira credentials by fetching the current user. */
+  static async probe(
+    host: string,
+    token: string,
+    email?: string,
+  ): Promise<{ displayName: string; emailAddress?: string }> {
+    const client = new JiraClient(host, token, email);
+    return client.request<{ displayName: string; emailAddress?: string }>(
+      'GET',
+      '/myself',
+    );
+  }
+
   /** Add a plain-text comment to an issue. */
   async addComment(issueKey: string, text: string): Promise<void> {
     await this.request<unknown>('POST', `/issue/${issueKey}/comment`, {

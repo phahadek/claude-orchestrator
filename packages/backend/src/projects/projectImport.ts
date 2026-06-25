@@ -11,6 +11,9 @@ interface RawProjectEntry {
   projectDir?: string;
   contextUrl?: string;
   githubRepo?: string;
+  // Intentionally limited to notion/yaml: this one-shot migration predates jira/github sources.
+  // importProjectsFromEnv no-ops once the projects table is non-empty, so no existing project
+  // uses this path for jira or github — widening the type would add dead code with no users.
   taskSource?: 'notion' | 'yaml';
   boardId?: string;
   boards?: RawBoard[];
