@@ -10,11 +10,11 @@ This section covers running the orchestrator directly from the cloned repository
 
 ### Prerequisites
 
-| Tool    | Purpose                              |
-| ------- | ------------------------------------ |
-| `node`  | Runtime — install system-wide, not via nvm |
-| `npm`   | Bundled with Node.js                 |
-| `git`   | Clone and pull updates               |
+| Tool   | Purpose                                    |
+| ------ | ------------------------------------------ |
+| `node` | Runtime — install system-wide, not via nvm |
+| `npm`  | Bundled with Node.js                       |
+| `git`  | Clone and pull updates                     |
 
 Install Node.js (system-wide, not via nvm so the systemd unit can find it):
 
@@ -94,12 +94,12 @@ sudo journalctl -u orchestrator -f
 
 ### 5. Lifecycle management
 
-| Action          | Command                              |
-| --------------- | ------------------------------------ |
-| Status          | `sudo systemctl status orchestrator` |
-| Logs            | `sudo journalctl -u orchestrator -f` |
-| Restart         | `sudo systemctl restart orchestrator` |
-| Stop            | `sudo systemctl stop orchestrator`   |
+| Action            | Command                               |
+| ----------------- | ------------------------------------- |
+| Status            | `sudo systemctl status orchestrator`  |
+| Logs              | `sudo journalctl -u orchestrator -f`  |
+| Restart           | `sudo systemctl restart orchestrator` |
+| Stop              | `sudo systemctl stop orchestrator`    |
 | Disable autostart | `sudo systemctl disable orchestrator` |
 
 On `systemctl stop`, systemd sends SIGTERM and waits up to `TimeoutStopSec=20` seconds for the process to exit gracefully before sending SIGKILL. The orchestrator's graceful-shutdown handler runs agent-session cleanup during this window.
