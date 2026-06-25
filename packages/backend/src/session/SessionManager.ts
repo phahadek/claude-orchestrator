@@ -206,12 +206,17 @@ const TERMINAL_STATUSES = new Set(['done', 'error', 'killed', 'superseded']);
 const ALWAYS_GUARDED_BRANCHES = new Set(['dev', 'main']);
 
 /**
- * Error causes that are operator-intentional and should NOT count against the
- * crash budget (user explicitly killed the session or the PR was closed).
- * All other causes increment the per-task consecutive crash counter; reaching
- * 2+ consecutive counted failures → 🚫 Blocked (circuit breaker).
+ * Error causes that are operator-intentional or infra-level and should NOT
+ * count against the crash budget. All other causes increment the per-task
+ * consecutive crash counter; reaching 2+ consecutive counted failures → 🚫
+ * Blocked (circuit breaker).
+ *
+ * launch_failed is excluded because it reflects pre-spawn infrastructure
+ * problems (git fetch / worktree add / bootstrap), not in-session crashes.
+ * AutoLauncher owns backoff + escalation for these via session_launch_failed
+ * messages.
  */
-const UNCOUNTED_REASONS = new Set(['user_kill', 'pr_closed']);
+const UNCOUNTED_REASONS = new Set(['user_kill', 'pr_closed', 'launch_failed']);
 
 /**
  * Delete the local session/<sessionId> branch if it exists and conditions are met:
@@ -516,6 +521,15 @@ export class SessionManager extends EventEmitter {
       }
     } else {
       notionStatus = '🗂️ Ready';
+      // Notify AutoLauncher about launch failures so it can apply per-task
+      // cooldown and escalate after repeated infra failures.
+      if (reason === 'launch_failed') {
+        this.emit('message', {
+          type: 'session_launch_failed',
+          taskId: notionTaskId,
+          sessionId,
+        } satisfies ServerMessage);
+      }
     }
 
     // Update Notion task status (fire-and-forget; failures logged, not thrown)
@@ -1137,7 +1151,20 @@ export class SessionManager extends EventEmitter {
 
   /**
    * Remove a partially-created worktree and its feature branch after a failed
-   * completeStart(). Safe to call even if nothing was created (idempotent).
+   * completeStart() (e.g. a transient launch_failed). Safe to call even if
+   * nothing was created (idempotent).
+   *
+   * A `git worktree add -b <branch> <path>` that fails partway can leave the
+   * environment in any of these states:
+   *   - the worktree directory exists and is registered,
+   *   - the directory is gone but a *stale registration* remains,
+   *   - the branch was created even though the worktree wasn't.
+   * If any of these survive, the cooldown retry's `git worktree add` re-fails
+   * with "A branch named X already exists" — defeating the backoff. So we
+   * unconditionally: (1) remove the worktree if its dir exists, (2) prune stale
+   * registrations, then (3) delete the feature branch. Steps run in that order
+   * because a branch checked out in a (possibly stale) worktree can't be
+   * deleted until the worktree/registration is gone.
    */
   private async cleanupPartialWorktree(sessionId: string): Promise<void> {
     const row = getSession(sessionId);
@@ -1163,6 +1190,15 @@ export class SessionManager extends EventEmitter {
           `[SessionManager] cleanupPartialWorktree: worktree remove failed for ${sessionId.slice(0, 8)}: ${err}`,
         );
       }
+    }
+
+    // Prune stale worktree registrations (covers the dir-gone-but-registered
+    // case that the existsSync guard above skips) so a retry's `git worktree
+    // add` and the branch delete below aren't blocked by a phantom checkout.
+    try {
+      await exec(`git worktree prune`, { cwd: projectDir });
+    } catch {
+      // Best-effort — nothing to prune is a no-op
     }
 
     const featureBranch = row.task_name

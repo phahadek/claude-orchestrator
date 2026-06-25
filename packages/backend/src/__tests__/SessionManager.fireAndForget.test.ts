@@ -375,4 +375,59 @@ describe('SessionManager.cleanupPartialWorktree() idempotency', () => {
       .mock.calls.filter(([cmd]) => String(cmd).includes('worktree remove'));
     expect(worktreeRemoveCalls).toHaveLength(0);
   });
+
+  it('prunes stale worktree registrations even when the dir is gone (unblocks launch_failed retry)', async () => {
+    // A half-created `git worktree add` can register the worktree and create the
+    // feature branch even when the directory was never materialized. existsSync
+    // returns false, so `git worktree remove` is skipped — but `git worktree
+    // prune` must still run to clear the stale registration, and the branch must
+    // be deleted, otherwise the cooldown retry re-fails with "already exists".
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_type: 'standard',
+      task_id: 'task-123',
+      project_id: 'test-proj',
+      worktree_path: '/tmp/test/.claude/worktrees/session-stale',
+      task_name: 'Test Task',
+    } as never);
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    const sm = new SessionManager();
+    await (
+      sm as never as { cleanupPartialWorktree(id: string): Promise<void> }
+    ).cleanupPartialWorktree('session-stale');
+
+    const cmds = vi.mocked(execCb).mock.calls.map(([cmd]) => String(cmd));
+    // remove skipped (dir absent) but prune + branch delete still run
+    expect(cmds.some((c) => c.includes('worktree remove'))).toBe(false);
+    expect(cmds.some((c) => c.includes('worktree prune'))).toBe(true);
+    expect(cmds.some((c) => c.includes('branch -D'))).toBe(true);
+  });
+
+  it('removes worktree, prunes, then deletes branch when dir exists', async () => {
+    vi.mocked(queries.getSession).mockReturnValue({
+      session_type: 'standard',
+      task_id: 'task-123',
+      project_id: 'test-proj',
+      worktree_path: '/tmp/test/.claude/worktrees/session-full',
+      task_name: 'Test Task',
+    } as never);
+    // SessionManager uses the default `fs` export; set both so existsSync is true.
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    (
+      fs as unknown as { default: { existsSync: ReturnType<typeof vi.fn> } }
+    ).default.existsSync.mockReturnValue(true);
+
+    const sm = new SessionManager();
+    await (
+      sm as never as { cleanupPartialWorktree(id: string): Promise<void> }
+    ).cleanupPartialWorktree('session-full');
+
+    const cmds = vi.mocked(execCb).mock.calls.map(([cmd]) => String(cmd));
+    const removeIdx = cmds.findIndex((c) => c.includes('worktree remove'));
+    const pruneIdx = cmds.findIndex((c) => c.includes('worktree prune'));
+    const branchIdx = cmds.findIndex((c) => c.includes('branch -D'));
+    expect(removeIdx).toBeGreaterThanOrEqual(0);
+    expect(pruneIdx).toBeGreaterThan(removeIdx);
+    expect(branchIdx).toBeGreaterThan(pruneIdx);
+  });
 });
