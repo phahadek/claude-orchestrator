@@ -128,6 +128,10 @@ export function TaskDetail({
     setReviewError(null);
     setFixConflictsInFlight(false);
     setOptimisticDisplayStatus(null);
+    setReviewInFlight(false);
+    setMergeInFlight(false);
+    setMarkMergedInFlight(false);
+    setAbortInFlight(false);
   }, [task.taskId]);
 
   // Look up live session state
