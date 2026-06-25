@@ -997,4 +997,124 @@ describe('TaskDetail', () => {
     expect(screen.getByText('Task B')).toBeTruthy();
     expect(screen.queryByText('Task A')).toBeNull();
   });
+
+  // ── In-flight state reset on task navigation ──
+
+  it('resets reviewInFlight when taskId changes — Run Review re-enables', async () => {
+    // Never-resolving fetch keeps reviewInFlight=true after click
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+
+    const pr = makePr({ state: 'open', prNumber: 42 });
+    const taskA = makeTask({ taskId: 'task-a', pr });
+    const taskB = makeTask({ taskId: 'task-b', pr });
+
+    const { rerender } = render(
+      <TaskDetail task={taskA} send={vi.fn()} onClose={vi.fn()} projectId="proj-1" />,
+    );
+
+    fireEvent.click(screen.getByText('Run Review'));
+    expect(screen.getByText('Reviewing…')).toBeTruthy();
+    expect((screen.getByText('Reviewing…') as HTMLButtonElement).disabled).toBe(true);
+
+    // Navigate to a different task — leaked flag must be cleared
+    rerender(<TaskDetail task={taskB} send={vi.fn()} onClose={vi.fn()} projectId="proj-1" />);
+    expect(screen.getByText('Run Review')).toBeTruthy();
+    expect((screen.getByText('Run Review') as HTMLButtonElement).disabled).toBe(false);
+
+    vi.unstubAllGlobals();
+  });
+
+  it('resets mergeInFlight when taskId changes — Merge button re-enables', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    const pr = makePr({ state: 'open', prNumber: 42 });
+    const review = makeReview({ verdict: 'approved' });
+    const taskA = makeTask({ taskId: 'task-a', pr, review });
+    const taskB = makeTask({ taskId: 'task-b', pr, review });
+
+    const { rerender } = render(
+      <TaskDetail task={taskA} send={vi.fn()} onClose={vi.fn()} projectId="proj-1" />,
+    );
+
+    fireEvent.click(screen.getByText('Merge ↓'));
+    expect(screen.getByText('Merging…')).toBeTruthy();
+
+    rerender(<TaskDetail task={taskB} send={vi.fn()} onClose={vi.fn()} projectId="proj-1" />);
+    expect(screen.getByText('Merge ↓')).toBeTruthy();
+    expect((screen.getByText('Merge ↓') as HTMLButtonElement).disabled).toBe(false);
+
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('resets markMergedInFlight when taskId changes — Mark Merged button re-enables', async () => {
+    const sessionsApi = await import('../../api/projects').then(m => m.sessionsApi);
+    vi.spyOn(sessionsApi, 'markMerged').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    // isLocalOnly requires no pr; verdict approved enables the button
+    const review = makeReview({ verdict: 'approved' });
+    const taskA = makeTask({ taskId: 'task-a', pr: null, review });
+    const taskB = makeTask({ taskId: 'task-b', pr: null, review });
+
+    const { rerender } = render(
+      <TaskDetail task={taskA} send={vi.fn()} onClose={vi.fn()} isLocalOnly={true} />,
+    );
+
+    fireEvent.click(screen.getByText('Mark Merged ↓'));
+    expect(screen.getByText('Marking…')).toBeTruthy();
+
+    rerender(<TaskDetail task={taskB} send={vi.fn()} onClose={vi.fn()} isLocalOnly={true} />);
+    expect(screen.getByText('Mark Merged ↓')).toBeTruthy();
+    expect((screen.getByText('Mark Merged ↓') as HTMLButtonElement).disabled).toBe(false);
+
+    vi.restoreAllMocks();
+  });
+
+  it('resets abortInFlight when taskId changes — Abort button re-enables', async () => {
+    const sessionsApi = await import('../../api/projects').then(m => m.sessionsApi);
+    vi.spyOn(sessionsApi, 'abort').mockReturnValue(new Promise(() => {}));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    const codeSession = makeCodeSession({ sessionId: 'sess-a', status: 'running' });
+    const taskA = makeTask({ taskId: 'task-a', codeSession });
+    const taskB = makeTask({ taskId: 'task-b', codeSession });
+
+    const { rerender } = render(
+      <TaskDetail task={taskA} send={vi.fn()} onClose={vi.fn()} />,
+    );
+
+    fireEvent.click(screen.getByText('Abort'));
+    expect(screen.getByText('Aborting…')).toBeTruthy();
+
+    rerender(<TaskDetail task={taskB} send={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getByText('Abort')).toBeTruthy();
+    expect((screen.getByText('Abort') as HTMLButtonElement).disabled).toBe(false);
+
+    vi.restoreAllMocks();
+  });
+
+  it('finally block clears reviewInFlight after review completes', async () => {
+    let resolveFetch!: (value: { ok: boolean; json: () => Promise<object> }) => void;
+    const fetchPromise = new Promise<{ ok: boolean; json: () => Promise<object> }>((resolve) => {
+      resolveFetch = resolve;
+    });
+    vi.stubGlobal('fetch', vi.fn(() => fetchPromise));
+
+    const pr = makePr({ state: 'open', prNumber: 42 });
+    render(
+      <TaskDetail task={makeTask({ pr })} send={vi.fn()} onClose={vi.fn()} projectId="proj-1" />,
+    );
+
+    fireEvent.click(screen.getByText('Run Review'));
+    expect(screen.getByText('Reviewing…')).toBeTruthy();
+
+    resolveFetch({ ok: true, json: async () => ({}) });
+    await waitFor(() => {
+      expect(screen.getByText('Run Review')).toBeTruthy();
+    });
+
+    vi.unstubAllGlobals();
+  });
 });
