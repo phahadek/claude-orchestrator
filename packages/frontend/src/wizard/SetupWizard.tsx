@@ -210,7 +210,9 @@ export function SetupWizard({ onComplete }: Props) {
 
   const handleSaveCredentials = useCallback(async () => {
     if (githubToken.trim() && validation.github === 'error') {
-      setCredError('Your GitHub PAT failed validation. Fix it or clear the field to skip.');
+      setCredError(
+        'Your GitHub PAT failed validation. Fix it or clear the field to skip.',
+      );
       return;
     }
     setCredError(null);
@@ -568,7 +570,9 @@ export function SetupWizard({ onComplete }: Props) {
               <button
                 className={styles.btnPrimary}
                 onClick={() => void handleSaveCredentials()}
-                disabled={githubToken.trim() !== '' && validation.github === 'checking'}
+                disabled={
+                  githubToken.trim() !== '' && validation.github === 'checking'
+                }
                 type="button"
               >
                 Continue
