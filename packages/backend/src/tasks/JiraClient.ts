@@ -29,9 +29,8 @@ export interface JiraTransition {
 
 interface JiraSearchResponse {
   issues: JiraIssue[];
-  total: number;
-  maxResults: number;
-  startAt: number;
+  nextPageToken?: string;
+  isLast?: boolean;
 }
 
 interface JiraTransitionsResponse {
@@ -114,14 +113,12 @@ export class JiraClient {
   /** Search issues using JQL, paginating through all results. */
   async searchIssues(jql: string): Promise<JiraIssue[]> {
     const all: JiraIssue[] = [];
-    let startAt = 0;
     const maxResults = 100;
+    let nextPageToken: string | undefined;
 
-    let total = Infinity;
-    while (all.length < total) {
-      const resp = await this.request<JiraSearchResponse>('POST', '/search', {
+    do {
+      const body: Record<string, unknown> = {
         jql,
-        startAt,
         maxResults,
         fields: [
           'summary',
@@ -132,12 +129,14 @@ export class JiraClient {
           'issuelinks',
           'parent',
         ],
-      });
+      };
+      if (nextPageToken !== undefined) {
+        body.nextPageToken = nextPageToken;
+      }
+      const resp = await this.request<JiraSearchResponse>('POST', '/search/jql', body);
       all.push(...resp.issues);
-      total = resp.total;
-      startAt += resp.issues.length;
-      if (resp.issues.length === 0) break;
-    }
+      nextPageToken = resp.nextPageToken;
+    } while (nextPageToken !== undefined);
 
     return all;
   }
