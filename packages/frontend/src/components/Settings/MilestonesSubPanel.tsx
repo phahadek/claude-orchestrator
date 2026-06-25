@@ -356,8 +356,8 @@ function MilestonesSubPanelInner({
                                 ...draft,
                                 sourceId:
                                   sourceValidation.data.type === 'page'
-                                    ? (sourceValidation.data
-                                        .childDatabaseId ?? '')
+                                    ? (sourceValidation.data.childDatabaseId ??
+                                      '')
                                     : '',
                               });
                               setSourceValidation(null);
@@ -370,32 +370,34 @@ function MilestonesSubPanelInner({
                       )}
                   </p>
                 )}
-                {!sourceValidating && !sourceValidationError && sourceValidation && (
-                  <>
-                    {sourceValidation.source === 'notion' &&
-                      sourceValidation.data.type === 'database' && (
+                {!sourceValidating &&
+                  !sourceValidationError &&
+                  sourceValidation && (
+                    <>
+                      {sourceValidation.source === 'notion' &&
+                        sourceValidation.data.type === 'database' && (
+                          <p className={styles.muted}>
+                            ✓{' '}
+                            {sourceValidation.data.title ||
+                              'Valid Notion database'}
+                          </p>
+                        )}
+                      {sourceValidation.source === 'github' && (
                         <p className={styles.muted}>
-                          ✓{' '}
-                          {sourceValidation.data.title ||
-                            'Valid Notion database'}
+                          ✓ {sourceValidation.data.title} (#
+                          {sourceValidation.data.id},{' '}
+                          {sourceValidation.data.state})
                         </p>
                       )}
-                    {sourceValidation.source === 'github' && (
-                      <p className={styles.muted}>
-                        ✓ {sourceValidation.data.title} (#
-                        {sourceValidation.data.id},{' '}
-                        {sourceValidation.data.state})
-                      </p>
-                    )}
-                    {sourceValidation.source === 'jira' && (
-                      <p className={styles.muted}>
-                        ✓ {sourceValidation.data.key}:{' '}
-                        {sourceValidation.data.summary} (
-                        {sourceValidation.data.type})
-                      </p>
-                    )}
-                  </>
-                )}
+                      {sourceValidation.source === 'jira' && (
+                        <p className={styles.muted}>
+                          ✓ {sourceValidation.data.key}:{' '}
+                          {sourceValidation.data.summary} (
+                          {sourceValidation.data.type})
+                        </p>
+                      )}
+                    </>
+                  )}
               </div>
               <div className={styles.formField}>
                 <label htmlFor="ms-order" className={styles.formLabel}>

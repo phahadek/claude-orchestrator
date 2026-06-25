@@ -434,7 +434,8 @@ function validateSourceIdFormat(
       if (isNaN(n) || n <= 0 || String(n) !== sourceId.trim()) {
         return {
           ok: false,
-          error: 'sourceId must be a positive integer (GitHub milestone number)',
+          error:
+            'sourceId must be a positive integer (GitHub milestone number)',
         };
       }
       return { ok: true };
@@ -443,8 +444,7 @@ function validateSourceIdFormat(
       if (!JIRA_EPIC_KEY_RE.test(sourceId.trim())) {
         return {
           ok: false,
-          error:
-            'sourceId must be a Jira Epic key in the format PROJ-123',
+          error: 'sourceId must be a Jira Epic key in the format PROJ-123',
         };
       }
       return { ok: true };
@@ -669,7 +669,9 @@ projectsRouter.get(
     if (isNaN(n) || n <= 0 || String(n) !== rawId) {
       res
         .status(400)
-        .json({ error: 'id must be a positive integer (GitHub milestone number)' });
+        .json({
+          error: 'id must be a positive integer (GitHub milestone number)',
+        });
       return;
     }
 
@@ -702,7 +704,9 @@ projectsRouter.get(
       });
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : 'GitHub milestone validation failed';
+        err instanceof Error
+          ? err.message
+          : 'GitHub milestone validation failed';
       res.status(400).json({ error: message });
     }
   },
