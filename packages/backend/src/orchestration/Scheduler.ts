@@ -171,6 +171,16 @@ export class Scheduler {
       const itemsProcessed = (
         result as { items_processed?: number } | undefined
       )?.items_processed;
+
+      // Schedule next before emitting so the WS event carries a fresh next_run_at.
+      // For queued jobs nextRunAt stays null (job will re-run immediately).
+      const isQueued = state.queued && !state.stopped;
+      if (isQueued) {
+        state.queued = false;
+      } else {
+        this._scheduleNext(state);
+      }
+
       await this._emitAudit(
         state,
         runStatus,
@@ -180,11 +190,8 @@ export class Scheduler {
         runError,
       );
 
-      if (state.queued && !state.stopped) {
-        state.queued = false;
+      if (isQueued) {
         void this._runJob(state);
-      } else {
-        this._scheduleNext(state);
       }
     }
   }
@@ -229,6 +236,7 @@ export class Scheduler {
         started_at: startedAt,
         completed_at: completedAt,
         duration_ms: durationMs,
+        next_run_at: state.nextRunAt,
         ...(itemsProcessed !== undefined && {
           items_processed: itemsProcessed,
         }),

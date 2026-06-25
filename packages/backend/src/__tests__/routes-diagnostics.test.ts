@@ -4,6 +4,7 @@ import request from 'supertest';
 
 vi.mock('../db/queries.js', () => ({
   insertSchedulerAudit: vi.fn(),
+  getSchedulerAuditStats: vi.fn().mockReturnValue(new Map()),
 }));
 
 import {
@@ -11,6 +12,9 @@ import {
   setScheduler,
 } from '../routes/diagnostics.js';
 import { Scheduler } from '../orchestration/Scheduler.js';
+import { getSchedulerAuditStats } from '../db/queries.js';
+
+const mockGetSchedulerAuditStats = vi.mocked(getSchedulerAuditStats);
 
 function makeApp(scheduler: Scheduler) {
   setScheduler(scheduler);
@@ -22,6 +26,7 @@ function makeApp(scheduler: Scheduler) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockGetSchedulerAuditStats.mockReturnValue(new Map());
 });
 
 describe('GET /api/diagnostics/scheduler', () => {
@@ -50,6 +55,38 @@ describe('GET /api/diagnostics/scheduler', () => {
     const res = await request(app).get('/api/diagnostics/scheduler');
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
+  });
+
+  it('augments each job with audit-derived lastDurationMs, runCount24h, errorCount24h', async () => {
+    const scheduler = new Scheduler();
+    scheduler.register({ name: 'archiver', intervalMs: 60_000, run: async () => {} });
+    mockGetSchedulerAuditStats.mockReturnValue(
+      new Map([['archiver', { lastDurationMs: 312, runCount24h: 5, errorCount24h: 1 }]]),
+    );
+    const app = makeApp(scheduler);
+    const res = await request(app).get('/api/diagnostics/scheduler');
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({
+      name: 'archiver',
+      lastDurationMs: 312,
+      runCount24h: 5,
+      errorCount24h: 1,
+    });
+  });
+
+  it('fills in null/0 defaults for jobs with no audit rows', async () => {
+    const scheduler = new Scheduler();
+    scheduler.register({ name: 'new_job', intervalMs: 60_000, run: async () => {} });
+    mockGetSchedulerAuditStats.mockReturnValue(new Map());
+    const app = makeApp(scheduler);
+    const res = await request(app).get('/api/diagnostics/scheduler');
+    expect(res.status).toBe(200);
+    expect(res.body[0]).toMatchObject({
+      name: 'new_job',
+      lastDurationMs: null,
+      runCount24h: 0,
+      errorCount24h: 0,
+    });
   });
 });
 

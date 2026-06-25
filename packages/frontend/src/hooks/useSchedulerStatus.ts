@@ -38,6 +38,8 @@ export function useSchedulerStatus() {
               lastRunAt: msg.completed_at,
               lastStatus: msg.status,
               lastDurationMs: msg.duration_ms,
+              nextRunAt:
+                msg.next_run_at !== undefined ? msg.next_run_at : j.nextRunAt,
               running: false,
             }
           : j,

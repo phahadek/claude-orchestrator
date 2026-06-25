@@ -326,3 +326,57 @@ describe('Scheduler.triggerNow', () => {
     );
   });
 });
+
+describe('Scheduler next_run_at in WS event', () => {
+  it('scheduler_job_run event carries a future next_run_at after job completes', async () => {
+    const { scheduler, broadcasts } = makeScheduler();
+    scheduler.register({
+      name: 'j_next',
+      intervalMs: 60_000,
+      runOnBoot: true,
+      run: async () => {},
+    });
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(10);
+    const event = broadcasts.find(
+      (m: unknown) => (m as { type: string }).type === 'scheduler_job_run',
+    ) as { next_run_at: string | null } | undefined;
+    expect(event).toBeDefined();
+    // next_run_at should be a future ISO string (job just ran, next is 60s from now)
+    expect(event?.next_run_at).not.toBeNull();
+    expect(typeof event?.next_run_at).toBe('string');
+    await scheduler.stopAll();
+  });
+
+  it('scheduler_job_run event carries next_run_at: null for a running job (queued re-run)', async () => {
+    const { scheduler, broadcasts } = makeScheduler();
+    let resolve1!: () => void;
+    const run1Done = new Promise<void>((r) => { resolve1 = r; });
+    const runFn = vi.fn()
+      .mockReturnValueOnce(run1Done)
+      .mockResolvedValue(undefined);
+    scheduler.register({
+      name: 'j_queued',
+      intervalMs: 60_000,
+      runOnBoot: true,
+      concurrency: 'queue-next',
+      run: runFn,
+    });
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(1);
+    // Trigger while in-flight → queues a second run
+    void scheduler.triggerNow('j_queued');
+    await vi.advanceTimersByTimeAsync(1);
+    // Resolve first run; queued run starts immediately
+    resolve1();
+    await vi.advanceTimersByTimeAsync(10);
+    // The first WS event (from run 1 completing with a queued re-run pending)
+    // should have next_run_at: null because the job is about to run again
+    const firstEvent = broadcasts.find(
+      (m: unknown) => (m as { type: string }).type === 'scheduler_job_run',
+    ) as { next_run_at: string | null } | undefined;
+    expect(firstEvent).toBeDefined();
+    expect(firstEvent?.next_run_at).toBeNull();
+    await scheduler.stopAll();
+  });
+});

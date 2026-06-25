@@ -136,4 +136,51 @@ describe('SettingsSystemHealth', () => {
     render(<SettingsSystemHealth />);
     expect(screen.getByText('Loading…')).toBeDefined();
   });
+
+  it('updates nextRunAt from scheduler_job_run WS event so NEXT RUN is not stale', async () => {
+    const futureIso = new Date(Date.now() + 60_000).toISOString();
+    render(<SettingsSystemHealth />);
+    await screen.findByText('concluded_session_archiver');
+
+    act(() => {
+      capturedWsHandler?.({
+        type: 'scheduler_job_run',
+        job: 'concluded_session_archiver',
+        status: 'ok',
+        started_at: '2026-06-15T10:05:00.000Z',
+        completed_at: '2026-06-15T10:05:00.300Z',
+        duration_ms: 300,
+        next_run_at: futureIso,
+      });
+    });
+
+    // Should show "from now" because next_run_at is in the future
+    await waitFor(() => {
+      expect(screen.getByText(/from now/)).toBeDefined();
+    });
+  });
+
+  it('sets nextRunAt to null (renders —) when WS event carries next_run_at: null (running job)', async () => {
+    render(<SettingsSystemHealth />);
+    await screen.findByText('concluded_session_archiver');
+
+    act(() => {
+      capturedWsHandler?.({
+        type: 'scheduler_job_run',
+        job: 'concluded_session_archiver',
+        status: 'ok',
+        started_at: '2026-06-15T10:05:00.000Z',
+        completed_at: '2026-06-15T10:05:00.300Z',
+        duration_ms: 300,
+        next_run_at: null,
+      });
+    });
+
+    // nextRunAt null → formatRelative returns '—'
+    // The cell for NEXT RUN should show '—'
+    await waitFor(() => {
+      const cells = screen.getAllByText('—');
+      expect(cells.length).toBeGreaterThan(0);
+    });
+  });
 });

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import type { Scheduler } from '../orchestration/Scheduler';
+import { getSchedulerAuditStats } from '../db/queries';
 
 let _scheduler: Scheduler | null = null;
 
@@ -17,7 +18,19 @@ export function createDiagnosticsRouter(): Router {
       res.status(503).json({ error: 'Scheduler not initialized' });
       return;
     }
-    res.json(_scheduler.status());
+    const statuses = _scheduler.status();
+    const auditStats = getSchedulerAuditStats();
+    res.json(
+      statuses.map((s) => {
+        const stats = auditStats.get(s.name);
+        return {
+          ...s,
+          lastDurationMs: stats?.lastDurationMs ?? null,
+          runCount24h: stats?.runCount24h ?? 0,
+          errorCount24h: stats?.errorCount24h ?? 0,
+        };
+      }),
+    );
   });
 
   // POST /api/diagnostics/scheduler/:name/trigger
