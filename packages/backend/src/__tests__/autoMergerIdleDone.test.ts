@@ -114,7 +114,6 @@ import {
   archiveConcludedSessionsOlderThan,
 } from '../db/queries.js';
 import { getPRByNumber } from '../db/queries.js';
-import { runtimeSettings } from '../config.js';
 import type { GitHubClient } from '../github/GitHubClient.js';
 import type { PRMergeWatcher } from '../github/PRMergeWatcher.js';
 import type { PullRequestRow } from '../db/types.js';
