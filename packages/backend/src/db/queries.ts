@@ -869,6 +869,10 @@ export function getCacheAge(taskId: string): number {
   return Date.now() - row.fetched_at;
 }
 
+export function deleteTaskCacheRow(taskId: string): void {
+  db.prepare(`DELETE FROM task_cache WHERE task_id = ?`).run(taskId);
+}
+
 export function incrementTokens(
   sessionId: string,
   inputTokens: number,

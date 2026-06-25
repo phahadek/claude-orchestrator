@@ -42,7 +42,9 @@ type EventType =
   | 'pipeline_stage_failed'
   | 'pr_terminal_flags_cleared'
   | 'stalled_pr_reconcile_attempt'
-  | 'stalled_pr_escalated';
+  | 'stalled_pr_escalated'
+  | 'task_launch_escalated'
+  | 'task_unblocked';
 
 type ActorType = 'ai' | 'human' | 'system';
 

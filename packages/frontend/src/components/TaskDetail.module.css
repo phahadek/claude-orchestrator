@@ -591,6 +591,26 @@
   cursor: not-allowed;
 }
 
+.unblockButton {
+  background: rgba(137, 180, 250, 0.08);
+  border: 1px solid rgba(137, 180, 250, 0.3);
+  border-radius: var(--radius-sm);
+  color: #89b4fa;
+  cursor: pointer;
+  font-size: 0.82rem;
+  padding: 5px 12px;
+  transition: background 0.15s;
+}
+
+.unblockButton:hover:not(:disabled) {
+  background: rgba(137, 180, 250, 0.18);
+}
+
+.unblockButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ── Empty state ─────────────────────────────────────────────────── */
 .emptyState {
   padding: 32px 16px;

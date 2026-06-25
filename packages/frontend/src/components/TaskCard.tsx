@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import type { TaskView, DisplayStatus, PauseReason } from '../types/taskView';
 import type { ClientMessage } from '@claude-orchestrator/backend/src/ws/types';
 import type { ProjectConfig } from '@claude-orchestrator/backend/src/config';
@@ -88,7 +89,11 @@ function launchTooltip(task: TaskView): string {
 
 export function TaskCard({ task, selected, onClick, send, project }: Props) {
   const { codeSession, pr, review } = task;
-  const statusKey = task.displayStatus.replace(/_/g, '-') as string;
+  const [unblockInFlight, setUnblockInFlight] = useState(false);
+  const [optimisticStatus, setOptimisticStatus] =
+    useState<DisplayStatus | null>(null);
+  const effectiveDisplayStatus = optimisticStatus ?? task.displayStatus;
+  const statusKey = effectiveDisplayStatus.replace(/_/g, '-') as string;
 
   // Derive implementing/reviewing pre-stages when no post-PR pipeline stage is active.
   // Post-PR stages (pr.preReviewStage) always take precedence.
@@ -131,11 +136,28 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
     ]);
   };
 
+  const handleUnblock = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (unblockInFlight || !project?.id) return;
+    setUnblockInFlight(true);
+    setOptimisticStatus('ready');
+    try {
+      await fetch(
+        `/api/tasks/${encodeURIComponent(task.taskId)}/unblock?projectId=${encodeURIComponent(project.id)}`,
+        { method: 'POST' },
+      );
+    } catch {
+      setOptimisticStatus(null);
+    } finally {
+      setUnblockInFlight(false);
+    }
+  };
+
   return (
     <div
       className={`${styles.card} ${selected ? styles.selected : ''} ${isNonCode ? styles.nonCode : ''}`}
       onClick={onClick}
-      data-status={task.displayStatus}
+      data-status={effectiveDisplayStatus}
     >
       <div className={styles.header}>
         <span className={styles.taskName}>{task.taskName}</span>
@@ -149,7 +171,7 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
           data-pause-severity={pauseStruct?.severity}
           data-pause-source={pauseStruct?.source}
         >
-          {STATUS_LABELS[task.displayStatus]}
+          {STATUS_LABELS[effectiveDisplayStatus]}
         </span>
       </div>
 
@@ -258,17 +280,30 @@ export function TaskCard({ task, selected, onClick, send, project }: Props) {
         {isNonCode ? (
           <span className={styles.taskTypeLabel}>{task.taskType}</span>
         ) : (
-          <button
-            className={styles.launchButton}
-            disabled={!isLaunchable}
-            onClick={handleLaunch}
-            title={tooltip || 'Launch session'}
-            aria-label={
-              isLaunchable ? `Launch session for ${task.taskName}` : tooltip
-            }
-          >
-            🚀
-          </button>
+          <>
+            {effectiveDisplayStatus === 'blocked' && (
+              <button
+                className={styles.unblockButton}
+                disabled={unblockInFlight}
+                onClick={(e) => void handleUnblock(e)}
+                title="Clear block and set to Ready"
+                aria-label={`Unblock ${task.taskName}`}
+              >
+                ↩ Unblock
+              </button>
+            )}
+            <button
+              className={styles.launchButton}
+              disabled={!isLaunchable}
+              onClick={handleLaunch}
+              title={tooltip || 'Launch session'}
+              aria-label={
+                isLaunchable ? `Launch session for ${task.taskName}` : tooltip
+              }
+            >
+              🚀
+            </button>
+          </>
         )}
       </div>
     </div>
