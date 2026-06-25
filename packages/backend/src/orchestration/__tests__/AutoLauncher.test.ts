@@ -1136,15 +1136,14 @@ describe('AutoLauncher — Notion Done-update backoff', () => {
 
 // ── Launch-failure tracking tests ─────────────────────────────────────────────
 //
-// Note: the in-memory launchFailures counter was removed (it never tripped in
-// practice because start() fire-and-forgets completeStart — by the time
-// launch_failed fires in markSessionErrored, launchTask had already called
-// launchFailures.delete on the "successful" start() return). The crash budget
-// in markSessionErrored is now the single breaker; AutoLauncher gates on
-// getTaskPauseReason (DB-persisted, restart-safe).
+// launch_failed is in UNCOUNTED_REASONS (SessionManager) so it never touches
+// the crash budget. AutoLauncher owns per-task cooldown via onSessionLaunchFailed
+// (triggered by session_launch_failed messages from SessionManager) and escalates
+// to needs_attention after 3 consecutive failures.
 
 describe('AutoLauncher — launch failure tracking', () => {
   beforeEach(() => {
+    vi.useFakeTimers();
     vi.clearAllMocks();
     vi.mocked(hasActiveSessionForTask).mockReturnValue(false);
     vi.mocked(getPausedPrReasonForTask).mockReturnValue(null);
@@ -1155,6 +1154,10 @@ describe('AutoLauncher — launch failure tracking', () => {
     ).auto_launch_concurrency = 2;
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   function makeFailingBackend(task = makeResolvedTask()) {
     return {
       type: 'notion' as const,
@@ -1162,56 +1165,129 @@ describe('AutoLauncher — launch failure tracking', () => {
     };
   }
 
-  it('launch failure logs a warning but does not pause via in-memory counter', async () => {
-    // The in-memory launchFailures counter was removed; pausing is driven by the
-    // crash budget in markSessionErrored (persisted to task_pause_reasons).
-    // AutoLauncher only gates on getTaskPauseReason.
-    const task = makeResolvedTask({ id: 'task-fail' });
+  function getLaunchFailedAttempts(
+    launcher: AutoLauncher,
+  ): Map<string, { count: number; nextRetryAt: number }> {
+    return (
+      launcher as unknown as {
+        launchFailedAttempts: Map<string, { count: number; nextRetryAt: number }>;
+      }
+    ).launchFailedAttempts;
+  }
+
+  function fireLaunchFailed(launcher: AutoLauncher, taskId: string): void {
+    (
+      launcher as unknown as {
+        onSessionLaunchFailed: (id: string) => void;
+      }
+    ).onSessionLaunchFailed(taskId);
+  }
+
+  it('task is skipped during cooldown after launch_failed', async () => {
+    const task = makeResolvedTask({ id: 'task-cooldown' });
     const backend = makeFailingBackend(task);
     const sessionManager = makeSessionManager(0);
-    const broadcastMsgs: unknown[] = [];
-    const broadcast = vi.fn((msg: unknown) => broadcastMsgs.push(msg));
 
-    const worktreeErr = new WorktreeSetupError(
-      "Command failed: git worktree add -b\nstderr: fatal: A branch named 'feature/test-task' already exists.",
-      { isBranchAlreadyExists: true },
-    );
-    sessionManager.start.mockImplementation(() => {
-      throw worktreeErr;
-    });
-
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
-    const launcher = new AutoLauncher(sessionManager as never, broadcast, {
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
       listProjects: () => [makeProject()],
       resolveBackend: () => backend as never,
       pollOnStart: false,
     });
 
-    // 5 consecutive failures — no in-memory counter pauses the task
-    for (let i = 0; i < 5; i++) {
-      backend.fetchReadyTasks.mockResolvedValue([task]);
-      await launcher.pollOnce();
-    }
-    // No auto_launch_paused broadcast from AutoLauncher (crash budget handles it)
-    expect(broadcast).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'auto_launch_paused' }),
-    );
-    // setTaskPauseReason NOT called from AutoLauncher (moved to markSessionErrored)
-    expect(setTaskPauseReason).not.toHaveBeenCalled();
+    // Simulate one launch_failed notification (as SessionManager would emit)
+    fireLaunchFailed(launcher, 'task-cooldown');
 
-    warnSpy.mockRestore();
+    backend.fetchReadyTasks.mockResolvedValue([task]);
+    await launcher.pollOnce();
+
+    // Task is in cooldown → not launched
+    expect(sessionManager.start).not.toHaveBeenCalled();
   });
 
-  it('task is skipped when getTaskPauseReason returns non-null (crash budget blocked)', async () => {
-    // The crash budget in markSessionErrored sets task_pause_reasons on 2nd consecutive
-    // failure. AutoLauncher gates on getTaskPauseReason — this test verifies that gate.
+  it('first launch_failed applies 30s cooldown', () => {
+    const task = makeResolvedTask({ id: 'task-backoff1' });
+    const backend = makeFailingBackend(task);
+    const sessionManager = makeSessionManager(0);
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    const before = Date.now();
+    fireLaunchFailed(launcher, 'task-backoff1');
+
+    const map = getLaunchFailedAttempts(launcher);
+    const entry = map.get('task-backoff1');
+    expect(entry).toBeDefined();
+    expect(entry!.count).toBe(1);
+    expect(entry!.nextRetryAt).toBeGreaterThanOrEqual(before + 30_000);
+  });
+
+  it('second launch_failed applies 2m cooldown', () => {
+    const launcher = new AutoLauncher(makeSessionManager(0) as never, undefined, {
+      listProjects: () => [],
+      pollOnStart: false,
+    });
+
+    fireLaunchFailed(launcher, 'task-backoff2');
+    fireLaunchFailed(launcher, 'task-backoff2');
+
+    const entry = getLaunchFailedAttempts(launcher).get('task-backoff2');
+    expect(entry!.count).toBe(2);
+    expect(entry!.nextRetryAt).toBeGreaterThanOrEqual(Date.now() + 2 * 60_000);
+  });
+
+  it('task is launched again after cooldown expires', async () => {
+    const task = makeResolvedTask({ id: 'task-retry' });
+    const backend = makeFailingBackend(task);
+    const sessionManager = makeSessionManager(0);
+
+    const launcher = new AutoLauncher(sessionManager as never, undefined, {
+      listProjects: () => [makeProject()],
+      resolveBackend: () => backend as never,
+      pollOnStart: false,
+    });
+
+    fireLaunchFailed(launcher, 'task-retry');
+
+    // Still in cooldown — skipped
+    backend.fetchReadyTasks.mockResolvedValue([task]);
+    await launcher.pollOnce();
+    expect(sessionManager.start).not.toHaveBeenCalled();
+
+    // Advance past the 30s cooldown
+    await vi.advanceTimersByTimeAsync(30_001);
+
+    // Now should launch
+    await launcher.pollOnce();
+    expect(sessionManager.start).toHaveBeenCalledOnce();
+  });
+
+  it('after 3 consecutive launch_failed, escalates to needs_attention via setTaskPauseReason', () => {
+    const launcher = new AutoLauncher(makeSessionManager(0) as never, undefined, {
+      listProjects: () => [],
+      pollOnStart: false,
+    });
+
+    fireLaunchFailed(launcher, 'task-escalate');
+    fireLaunchFailed(launcher, 'task-escalate');
+    fireLaunchFailed(launcher, 'task-escalate');
+
+    expect(setTaskPauseReason).toHaveBeenCalledWith(
+      'task-escalate',
+      'launch_failed',
+      'launch_failed_escalated',
+    );
+  });
+
+  it('escalated task is skipped by isLaunchCandidate via getTaskPauseReason gate', async () => {
     const task = makeResolvedTask({ id: 'task-budget-blocked' });
     const backend = makeFailingBackend(task);
     const sessionManager = makeSessionManager(0);
 
     vi.mocked(getTaskPauseReason).mockImplementation((id) =>
-      id === 'task-budget-blocked' ? 'launch_failed' : null,
+      id === 'task-budget-blocked' ? 'needs_attention' : null,
     );
 
     const launcher = new AutoLauncher(sessionManager as never, undefined, {
@@ -1228,9 +1304,7 @@ describe('AutoLauncher — launch failure tracking', () => {
     vi.mocked(getTaskPauseReason).mockReturnValue(null);
   });
 
-  it('successful launch clears task_pause_reasons DB entry', async () => {
-    // Verify that a successful start() still calls clearTaskPauseReason so a
-    // previously-blocked task (unblocked manually in Notion) can be relaunched.
+  it('successful launch clears both task_pause_reasons DB entry and in-memory cooldown', async () => {
     const task = makeResolvedTask({ id: 'task-reset' });
     const backend = makeFailingBackend(task);
     const sessionManager = makeSessionManager(0);
@@ -1242,16 +1316,24 @@ describe('AutoLauncher — launch failure tracking', () => {
       pollOnStart: false,
     });
 
+    // Simulate a prior launch_failed
+    fireLaunchFailed(launcher, 'task-reset');
+    expect(getLaunchFailedAttempts(launcher).has('task-reset')).toBe(true);
+
+    // Advance past cooldown so task is eligible
+    await vi.advanceTimersByTimeAsync(30_001);
+
     backend.fetchReadyTasks.mockResolvedValue([task]);
     await launcher.pollOnce();
 
     expect(clearTaskPauseReason).toHaveBeenCalledWith('task-reset');
+    expect(getLaunchFailedAttempts(launcher).has('task-reset')).toBe(false);
   });
 
-  it('task is not retried after reaching MAX_FAILURES_BEFORE_PAUSE (DB check)', async () => {
+  it('task is not retried when getTaskPauseReason returns non-null (needs_attention persisted)', async () => {
     const task = makeResolvedTask({ id: 'task-db-pause' });
     vi.mocked(getTaskPauseReason).mockImplementation((id) =>
-      id === 'task-db-pause' ? 'launch_failed' : null,
+      id === 'task-db-pause' ? 'needs_attention' : null,
     );
     const backend = {
       type: 'notion' as const,
@@ -1272,7 +1354,7 @@ describe('AutoLauncher — launch failure tracking', () => {
     vi.mocked(getTaskPauseReason).mockReturnValue(null);
   });
 
-  it('warn log includes full stderr when a WorktreeSetupError is thrown', async () => {
+  it('warn log includes full stderr when a WorktreeSetupError is thrown synchronously', async () => {
     const task = makeResolvedTask({ id: 'task-stderr' });
     const backend = makeFailingBackend(task);
     const sessionManager = makeSessionManager(0);

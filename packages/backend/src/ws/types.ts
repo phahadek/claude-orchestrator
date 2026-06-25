@@ -251,6 +251,7 @@ export type ServerMessage =
       reason: 'launch_failed';
       detail: string;
     }
+  | { type: 'session_launch_failed'; taskId: string; sessionId: string }
   | {
       type: 'github_rate_limit_hit';
       resetAt: string; // ISO-8601

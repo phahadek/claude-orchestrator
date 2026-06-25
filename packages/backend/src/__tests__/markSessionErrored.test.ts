@@ -347,8 +347,7 @@ describe('SessionManager.markSessionErrored() — per-cause Notion status', () =
     );
   });
 
-  it('sets Notion status to 🗂️ Ready for launch_failed (first crash)', async () => {
-    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
+  it('sets Notion status to 🗂️ Ready for launch_failed (first failure — never auto-blocks)', async () => {
     const mockUpdate = setupFakeBackend();
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'error', 'launch_failed');
@@ -360,15 +359,14 @@ describe('SessionManager.markSessionErrored() — per-cause Notion status', () =
     );
   });
 
-  it('sets Notion status to 🚫 Blocked for launch_failed (second consecutive crash)', async () => {
-    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(2);
+  it('sets Notion status to 🗂️ Ready for launch_failed (second consecutive — never 🚫 Blocked)', async () => {
     const mockUpdate = setupFakeBackend();
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'error', 'launch_failed');
     await new Promise((r) => setTimeout(r, 0));
     expect(mockUpdate).toHaveBeenCalledWith(
       'notion-task-id',
-      '🚫 Blocked',
+      '🗂️ Ready',
       expect.anything(),
     );
   });
@@ -556,13 +554,10 @@ describe('SessionManager.markSessionErrored() — crash budget counter', () => {
     expect(queries.incrementTaskCrashCount).not.toHaveBeenCalled();
   });
 
-  it('DOES increment crash counter for launch_failed', () => {
-    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
+  it('does NOT increment crash counter for launch_failed (infra error, not in-session crash)', () => {
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'error', 'launch_failed');
-    expect(queries.incrementTaskCrashCount).toHaveBeenCalledWith(
-      'notion-task-id',
-    );
+    expect(queries.incrementTaskCrashCount).not.toHaveBeenCalled();
   });
 
   it('DOES increment crash counter for worktree_recreate_failed', () => {
@@ -634,18 +629,7 @@ describe('SessionManager.markSessionErrored() — blocked path side-effects', ()
     );
   });
 
-  it('writes task_pause_reasons row for launch_failed on 2nd consecutive crash', () => {
-    const sm = new SessionManager();
-    sm.markSessionErrored('test-session', 'error', 'launch_failed');
-    expect(queries.setTaskPauseReason).toHaveBeenCalledWith(
-      'notion-task-id',
-      'launch_failed',
-      'launch_failed',
-    );
-  });
-
-  it('does NOT write task_pause_reasons on 1st crash', () => {
-    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
+  it('does NOT write task_pause_reasons for launch_failed (AutoLauncher owns escalation)', () => {
     const sm = new SessionManager();
     sm.markSessionErrored('test-session', 'error', 'launch_failed');
     expect(queries.setTaskPauseReason).not.toHaveBeenCalled();
@@ -679,9 +663,9 @@ describe('SessionManager.markSessionErrored() — blocked path side-effects', ()
     expect(pausedMsg!.detail).toBe('worktree_recreate_failed');
   });
 
-  it('emits auto_launch_paused audit event on 2nd consecutive crash', () => {
+  it('emits auto_launch_paused audit event on 2nd consecutive crash (non-launch_failed reason)', () => {
     const sm = new SessionManager();
-    sm.markSessionErrored('test-session', 'error', 'launch_failed');
+    sm.markSessionErrored('test-session', 'error', 'worktree_recreate_failed');
     expect(recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         event_type: 'auto_launch_paused',
@@ -690,8 +674,7 @@ describe('SessionManager.markSessionErrored() — blocked path side-effects', ()
     );
   });
 
-  it('does NOT emit auto_launch_paused on 1st crash', () => {
-    vi.mocked(queries.incrementTaskCrashCount).mockReturnValue(1);
+  it('emits session_launch_failed (not auto_launch_paused) for launch_failed reason', () => {
     const sm = new SessionManager();
     const msgs: ServerMessage[] = [];
     sm.on('message', (m: ServerMessage) => msgs.push(m));
@@ -699,5 +682,11 @@ describe('SessionManager.markSessionErrored() — blocked path side-effects', ()
     sm.markSessionErrored('test-session', 'error', 'launch_failed');
 
     expect(msgs.find((m) => m.type === 'auto_launch_paused')).toBeUndefined();
+    const launchFailedMsg = msgs.find((m) => m.type === 'session_launch_failed') as
+      | { type: string; taskId: string; sessionId: string }
+      | undefined;
+    expect(launchFailedMsg).toBeDefined();
+    expect(launchFailedMsg!.taskId).toBe('notion-task-id');
+    expect(launchFailedMsg!.sessionId).toBe('test-session');
   });
 });

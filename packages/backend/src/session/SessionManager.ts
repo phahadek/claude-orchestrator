@@ -206,12 +206,17 @@ const TERMINAL_STATUSES = new Set(['done', 'error', 'killed', 'superseded']);
 const ALWAYS_GUARDED_BRANCHES = new Set(['dev', 'main']);
 
 /**
- * Error causes that are operator-intentional and should NOT count against the
- * crash budget (user explicitly killed the session or the PR was closed).
- * All other causes increment the per-task consecutive crash counter; reaching
- * 2+ consecutive counted failures → 🚫 Blocked (circuit breaker).
+ * Error causes that are operator-intentional or infra-level and should NOT
+ * count against the crash budget. All other causes increment the per-task
+ * consecutive crash counter; reaching 2+ consecutive counted failures → 🚫
+ * Blocked (circuit breaker).
+ *
+ * launch_failed is excluded because it reflects pre-spawn infrastructure
+ * problems (git fetch / worktree add / bootstrap), not in-session crashes.
+ * AutoLauncher owns backoff + escalation for these via session_launch_failed
+ * messages.
  */
-const UNCOUNTED_REASONS = new Set(['user_kill', 'pr_closed']);
+const UNCOUNTED_REASONS = new Set(['user_kill', 'pr_closed', 'launch_failed']);
 
 /**
  * Delete the local session/<sessionId> branch if it exists and conditions are met:
@@ -516,6 +521,15 @@ export class SessionManager extends EventEmitter {
       }
     } else {
       notionStatus = '🗂️ Ready';
+      // Notify AutoLauncher about launch failures so it can apply per-task
+      // cooldown and escalate after repeated infra failures.
+      if (reason === 'launch_failed') {
+        this.emit('message', {
+          type: 'session_launch_failed',
+          taskId: notionTaskId,
+          sessionId,
+        } satisfies ServerMessage);
+      }
     }
 
     // Update Notion task status (fire-and-forget; failures logged, not thrown)
