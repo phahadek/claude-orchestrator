@@ -535,7 +535,9 @@ export function createTasksRouter(): Router {
     try {
       backend = getTaskBackend(projectId);
     } catch {
-      res.status(422).json({ error: `Cannot resolve backend for project '${projectId}'` });
+      res
+        .status(422)
+        .json({ error: `Cannot resolve backend for project '${projectId}'` });
       return;
     }
 
@@ -544,7 +546,9 @@ export function createTasksRouter(): Router {
     deleteTaskCacheRow(taskId);
 
     try {
-      await backend.updateStatus(taskId, '🗂️ Ready', { source: 'orchestrator' });
+      await backend.updateStatus(taskId, '🗂️ Ready', {
+        source: 'orchestrator',
+      });
     } catch (err) {
       res.status(500).json({
         error: err instanceof Error ? err.message : 'Failed to update status',
@@ -554,7 +558,11 @@ export function createTasksRouter(): Router {
 
     emitTaskUpdated(taskId);
     if (taskBroadcastFn) {
-      taskBroadcastFn({ type: 'task_status_changed', notionTaskId: taskId, newStatus: '🗂️ Ready' });
+      taskBroadcastFn({
+        type: 'task_status_changed',
+        notionTaskId: taskId,
+        newStatus: '🗂️ Ready',
+      });
     }
 
     recordEvent({

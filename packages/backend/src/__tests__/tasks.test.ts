@@ -39,7 +39,11 @@ vi.mock('../audit/AuditLog.js', () => ({
   recordEvent: vi.fn(),
 }));
 
-import { createTasksRouter, summarizeEvent, setTaskBroadcast } from '../routes/tasks.js';
+import {
+  createTasksRouter,
+  summarizeEvent,
+  setTaskBroadcast,
+} from '../routes/tasks.js';
 import * as queries from '../db/queries.js';
 import { getTaskBackend } from '../tasks/TaskBackend.js';
 import { recordEvent } from '../audit/AuditLog.js';

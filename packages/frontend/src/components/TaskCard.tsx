@@ -90,7 +90,8 @@ function launchTooltip(task: TaskView): string {
 export function TaskCard({ task, selected, onClick, send, project }: Props) {
   const { codeSession, pr, review } = task;
   const [unblockInFlight, setUnblockInFlight] = useState(false);
-  const [optimisticStatus, setOptimisticStatus] = useState<DisplayStatus | null>(null);
+  const [optimisticStatus, setOptimisticStatus] =
+    useState<DisplayStatus | null>(null);
   const effectiveDisplayStatus = optimisticStatus ?? task.displayStatus;
   const statusKey = effectiveDisplayStatus.replace(/_/g, '-') as string;
 
