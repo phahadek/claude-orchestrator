@@ -1,6 +1,122 @@
 # Linux Installer — Build Guide
 
-This directory contains scripts to build the Linux `.deb` and `.AppImage` packages for Claude Orchestrator.
+This directory contains scripts to build the Linux `.deb` and `.AppImage` packages for Claude Orchestrator, and the systemd unit for running from source on a dedicated Ubuntu host.
+
+---
+
+## Run from Source under systemd (Recommended for servers)
+
+This section covers running the orchestrator directly from the cloned repository under systemd, owned by a dedicated non-root user. This is the supported server deployment model. The packaged `.deb`/`.AppImage` installer sections below are for desktop/user installs.
+
+### Prerequisites
+
+| Tool   | Purpose                                    |
+| ------ | ------------------------------------------ |
+| `node` | Runtime — install system-wide, not via nvm |
+| `npm`  | Bundled with Node.js                       |
+| `git`  | Clone and pull updates                     |
+
+Install Node.js (system-wide, not via nvm so the systemd unit can find it):
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs git
+```
+
+Verify the paths the unit expects:
+
+```bash
+which node   # must be /usr/bin/node or /usr/local/bin/node
+which git    # must be on PATH
+node --version
+```
+
+### 1. Provision the service user
+
+```bash
+sudo useradd --system --create-home --shell /bin/bash orchestrator
+```
+
+All subsequent steps that touch `/home/orchestrator/` must run as that user:
+
+```bash
+sudo -u orchestrator -i   # open a shell as the orchestrator user
+```
+
+### 2. Clone and build
+
+Run the following **as the `orchestrator` user**:
+
+```bash
+cd ~
+git clone https://github.com/your-org/claude-orchestrator.git
+cd claude-orchestrator
+npm ci
+npm run build
+```
+
+> **Note on native modules**: `better-sqlite3` contains a native addon compiled for the build host. Never copy `node_modules/` from a Windows or macOS machine — always run `npm ci` on the Ubuntu host so the addon is compiled for Linux. If you update Node.js, re-run `npm ci` to recompile.
+
+Re-run `npm ci && npm run build` after every `git pull` to keep the built output in sync.
+
+### 3. Authenticate the claude CLI as the service user
+
+The orchestrator reads claude CLI credentials from the service user's home directory (`~/.claude/.credentials.json`). Authenticate **as the `orchestrator` user**:
+
+```bash
+claude auth login
+```
+
+Verify the credentials file was created:
+
+```bash
+ls -la ~/.claude/.credentials.json
+```
+
+### 4. Install and enable the systemd unit
+
+Exit back to your admin shell, then:
+
+```bash
+sudo cp /home/orchestrator/claude-orchestrator/installers/linux/orchestrator.service \
+     /etc/systemd/system/orchestrator.service
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now orchestrator
+```
+
+Check that it started:
+
+```bash
+sudo systemctl status orchestrator
+sudo journalctl -u orchestrator -f
+```
+
+### 5. Lifecycle management
+
+| Action            | Command                               |
+| ----------------- | ------------------------------------- |
+| Status            | `sudo systemctl status orchestrator`  |
+| Logs              | `sudo journalctl -u orchestrator -f`  |
+| Restart           | `sudo systemctl restart orchestrator` |
+| Stop              | `sudo systemctl stop orchestrator`    |
+| Disable autostart | `sudo systemctl disable orchestrator` |
+
+On `systemctl stop`, systemd sends SIGTERM and waits up to `TimeoutStopSec=20` seconds for the process to exit gracefully before sending SIGKILL. The orchestrator's graceful-shutdown handler runs agent-session cleanup during this window.
+
+### Updating
+
+```bash
+sudo -u orchestrator -i
+cd ~/claude-orchestrator
+git pull
+npm ci
+npm run build
+exit
+sudo systemctl restart orchestrator
+```
+
+---
 
 ## Prerequisites
 
