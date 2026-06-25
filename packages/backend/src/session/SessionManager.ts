@@ -1151,7 +1151,20 @@ export class SessionManager extends EventEmitter {
 
   /**
    * Remove a partially-created worktree and its feature branch after a failed
-   * completeStart(). Safe to call even if nothing was created (idempotent).
+   * completeStart() (e.g. a transient launch_failed). Safe to call even if
+   * nothing was created (idempotent).
+   *
+   * A `git worktree add -b <branch> <path>` that fails partway can leave the
+   * environment in any of these states:
+   *   - the worktree directory exists and is registered,
+   *   - the directory is gone but a *stale registration* remains,
+   *   - the branch was created even though the worktree wasn't.
+   * If any of these survive, the cooldown retry's `git worktree add` re-fails
+   * with "A branch named X already exists" — defeating the backoff. So we
+   * unconditionally: (1) remove the worktree if its dir exists, (2) prune stale
+   * registrations, then (3) delete the feature branch. Steps run in that order
+   * because a branch checked out in a (possibly stale) worktree can't be
+   * deleted until the worktree/registration is gone.
    */
   private async cleanupPartialWorktree(sessionId: string): Promise<void> {
     const row = getSession(sessionId);
@@ -1177,6 +1190,15 @@ export class SessionManager extends EventEmitter {
           `[SessionManager] cleanupPartialWorktree: worktree remove failed for ${sessionId.slice(0, 8)}: ${err}`,
         );
       }
+    }
+
+    // Prune stale worktree registrations (covers the dir-gone-but-registered
+    // case that the existsSync guard above skips) so a retry's `git worktree
+    // add` and the branch delete below aren't blocked by a phantom checkout.
+    try {
+      await exec(`git worktree prune`, { cwd: projectDir });
+    } catch {
+      // Best-effort — nothing to prune is a no-op
     }
 
     const featureBranch = row.task_name
