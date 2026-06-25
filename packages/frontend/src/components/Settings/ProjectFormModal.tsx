@@ -275,13 +275,16 @@ export function ProjectFormModal({
                     ? 'yaml'
                     : val === 'github'
                       ? 'github'
-                      : 'notion',
+                      : val === 'jira'
+                        ? 'jira'
+                        : 'notion',
                 );
               }}
             >
               <option value="notion">Notion</option>
               <option value="yaml">YAML (tasks.yaml in projectDir)</option>
               <option value="github">GitHub Issues</option>
+              <option value="jira">Jira</option>
             </select>
           </div>
 

@@ -1,6 +1,6 @@
 import { getDeviceToken } from '../auth/deviceToken';
 
-export type TaskSource = 'notion' | 'yaml' | 'github';
+export type TaskSource = 'notion' | 'yaml' | 'github' | 'jira';
 export type GitMode = 'github' | 'local-only';
 
 export interface GithubTaskSourceConfig {
