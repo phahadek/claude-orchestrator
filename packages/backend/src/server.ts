@@ -125,7 +125,12 @@ app.use('/api/enrollment', createEnrollmentRouter());
 app.use('/api', setupRouter);
 // Gate all other /api routes when setup has not been completed
 app.use('/api', createSetupModeGuard());
-app.use(requireDeviceAuth);
+// Gate the data API only. The static SPA shell (served further below) must stay
+// publicly loadable: browser navigations carry no Bearer token (it lives only in
+// localStorage, with no cookie/service-worker), so gating the shell globally
+// returned JSON instead of the app on every fresh load/reload once a device was
+// enrolled — locking all devices out. The API/WS stay gated.
+app.use('/api', requireDeviceAuth);
 app.use('/api/permission-events', permissionEventsRouter);
 app.use('/api/permission-denials', permissionDenialsRouter);
 app.use('/api/settings', settingsRouter);
