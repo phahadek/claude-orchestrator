@@ -88,7 +88,11 @@ export class JiraClient {
           if (!isNaN(secs)) retryAfterMs = secs * 1000;
         }
       }
-      throw new JiraApiError(res.status, `Jira API ${method} ${path}: ${text}`, retryAfterMs);
+      throw new JiraApiError(
+        res.status,
+        `Jira API ${method} ${path}: ${text}`,
+        retryAfterMs,
+      );
     }
     if (res.status === 204) return undefined as T;
     return res.json() as Promise<T>;

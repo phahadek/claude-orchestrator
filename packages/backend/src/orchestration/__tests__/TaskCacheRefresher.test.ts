@@ -108,7 +108,10 @@ describe('TaskCacheRefresher', () => {
 
       expect(backend.fetchReadyTasks).toHaveBeenCalledWith('m1');
       expect(broadcast).toHaveBeenCalledWith(
-        expect.objectContaining({ type: 'task_cache_updated', projectId: 'jp1' }),
+        expect.objectContaining({
+          type: 'task_cache_updated',
+          projectId: 'jp1',
+        }),
       );
     });
 
@@ -130,7 +133,10 @@ describe('TaskCacheRefresher', () => {
 
       expect(backend.fetchReadyTasks).toHaveBeenCalledWith('m1');
       expect(broadcast).toHaveBeenCalledWith(
-        expect.objectContaining({ type: 'task_cache_updated', projectId: 'gp1' }),
+        expect.objectContaining({
+          type: 'task_cache_updated',
+          projectId: 'gp1',
+        }),
       );
     });
 
@@ -325,7 +331,7 @@ describe('TaskCacheRefresher', () => {
       const notionBackend = makeBackend();
 
       vi.mocked(getTaskBackend)
-        .mockReturnValueOnce(jiraBackend)  // first cycle: jira
+        .mockReturnValueOnce(jiraBackend) // first cycle: jira
         .mockReturnValueOnce(notionBackend) // first cycle: notion
         .mockReturnValueOnce(notionBackend); // second cycle: notion (jira skipped)
 
