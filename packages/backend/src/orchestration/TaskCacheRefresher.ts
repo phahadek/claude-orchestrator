@@ -4,11 +4,13 @@ import type { ProjectConfig } from '../config';
 import type { ServerMessage } from '../ws/types';
 import { getTaskBackend } from '../tasks/TaskBackend';
 import type { TaskBackend } from '../tasks/TaskBackend';
+import { JiraApiError } from '../tasks/JiraClient';
 import { ProjectService } from '../projects/ProjectService';
 import { runWithConcurrency } from '../utils/concurrency';
 import type { Scheduler } from './Scheduler';
 
 const MIN_REFRESH_INTERVAL_MS = 10_000;
+const JIRA_MIN_REFRESH_INTERVAL_MS = 120_000;
 const PROJECT_CONCURRENCY = 5;
 
 /**
@@ -17,6 +19,9 @@ const PROJECT_CONCURRENCY = 5;
  * it broadcasts `task_cache_updated` so connected frontends can re-read the cache.
  */
 export class TaskCacheRefresher {
+  // Per-project throttle gate for Jira (epoch ms after which a project may refresh again).
+  private readonly jiraNextAllowed = new Map<string, number>();
+
   constructor(
     private readonly broadcast?: (msg: ServerMessage) => void,
     private readonly options: {
@@ -43,7 +48,15 @@ export class TaskCacheRefresher {
   async refreshOnce(): Promise<void> {
     const start = Date.now();
     const listProjects = this.options.listProjects ?? getAllProjects;
-    const projects = listProjects().filter((p) => p.taskSource === 'notion');
+    // Warm notion, github, and jira projects; skip yaml (no remote backend).
+    // Jira projects in their rate-limit backoff window are skipped this cycle.
+    const projects = listProjects().filter((p) => {
+      if (p.taskSource === 'yaml') return false;
+      if (p.taskSource === 'jira') {
+        return start >= (this.jiraNextAllowed.get(p.id) ?? 0);
+      }
+      return true;
+    });
     logger.info(
       `[TaskCacheRefresher] refresh start projects=${projects.length}`,
     );
@@ -89,6 +102,17 @@ export class TaskCacheRefresher {
           refreshedAt: Date.now(),
         });
       } catch (err) {
+        if (err instanceof JiraApiError && err.statusCode === 429) {
+          const backoffMs = Math.max(
+            JIRA_MIN_REFRESH_INTERVAL_MS,
+            err.retryAfterMs ?? 0,
+          );
+          this.jiraNextAllowed.set(project.id, Date.now() + backoffMs);
+          logger.warn(
+            `[TaskCacheRefresher] Jira 429 for project=${project.id} — backing off ${backoffMs}ms`,
+          );
+          break;
+        }
         logger.warn(
           `[TaskCacheRefresher] failed to refresh project=${project.id} milestone=${milestone.id}: ${String(err)}`,
         );

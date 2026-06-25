@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ProjectConfig } from '../../config';
 import type { TaskBackend } from '../../tasks/TaskBackend';
+import { JiraApiError } from '../../tasks/JiraClient';
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
@@ -77,7 +78,7 @@ describe('TaskCacheRefresher', () => {
   });
 
   describe('refreshOnce', () => {
-    it('skips non-notion projects', async () => {
+    it('skips yaml projects', async () => {
       const yamlProject = makeProject({ taskSource: 'yaml' });
       vi.mocked(getAllProjects).mockReturnValue([yamlProject]);
 
@@ -87,6 +88,50 @@ describe('TaskCacheRefresher', () => {
       await refresher.refreshOnce();
 
       expect(getTaskBackend).not.toHaveBeenCalled();
+    });
+
+    it('refreshes jira projects', async () => {
+      const jiraProject = makeProject({ id: 'jp1', taskSource: 'jira' });
+      vi.mocked(getAllProjects).mockReturnValue([jiraProject]);
+      vi.mocked(ProjectService.listMilestones).mockReturnValue([
+        makeMilestone('m1', 'jira-src-1'),
+      ]);
+      const backend = makeBackend();
+      vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+      const broadcast = vi.fn();
+      const refresher = new TaskCacheRefresher(broadcast, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+      await refresher.refreshOnce();
+
+      expect(backend.fetchReadyTasks).toHaveBeenCalledWith('m1');
+      expect(broadcast).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'task_cache_updated', projectId: 'jp1' }),
+      );
+    });
+
+    it('refreshes github projects', async () => {
+      const githubProject = makeProject({ id: 'gp1', taskSource: 'github' });
+      vi.mocked(getAllProjects).mockReturnValue([githubProject]);
+      vi.mocked(ProjectService.listMilestones).mockReturnValue([
+        makeMilestone('m1', 'gh-src-1'),
+      ]);
+      const backend = makeBackend();
+      vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+      const broadcast = vi.fn();
+      const refresher = new TaskCacheRefresher(broadcast, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+      await refresher.refreshOnce();
+
+      expect(backend.fetchReadyTasks).toHaveBeenCalledWith('m1');
+      expect(broadcast).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'task_cache_updated', projectId: 'gp1' }),
+      );
     });
 
     it('fans out parallel fetches for multiple notion projects', async () => {
@@ -179,20 +224,71 @@ describe('TaskCacheRefresher', () => {
       );
     });
 
-    it('is guarded against overlapping cycles', async () => {
+    it('two concurrent refreshOnce calls both complete without error', async () => {
+      // The overlapping-cycle guard is in Scheduler (concurrency: skip-if-running),
+      // not in refreshOnce() itself — both calls run independently.
       const project = makeProject();
       vi.mocked(getAllProjects).mockReturnValue([project]);
       vi.mocked(ProjectService.listMilestones).mockReturnValue([
         makeMilestone('m1', 'src-1'),
       ]);
 
-      let resolveFetch!: () => void;
+      const backend = makeBackend();
+      vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+      const refresher = new TaskCacheRefresher(undefined, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+
+      await expect(
+        Promise.all([refresher.refreshOnce(), refresher.refreshOnce()]),
+      ).resolves.not.toThrow();
+    });
+  });
+
+  describe('Jira rate-limit throttling', () => {
+    it('aborts remaining milestones and sets backoff on Jira 429', async () => {
+      const jiraProject = makeProject({ id: 'jp1', taskSource: 'jira' });
+      vi.mocked(getAllProjects).mockReturnValue([jiraProject]);
+      vi.mocked(ProjectService.listMilestones).mockReturnValue([
+        makeMilestone('m1', 'jira-src-1'),
+        makeMilestone('m2', 'jira-src-2'),
+      ]);
+
+      const error429 = new JiraApiError(429, 'Too Many Requests');
       const backend = makeBackend({
-        fetchReadyTasks: vi.fn().mockReturnValue(
-          new Promise<never[]>((res) => {
-            resolveFetch = () => res([]);
-          }),
-        ),
+        fetchReadyTasks: vi.fn().mockRejectedValue(error429),
+      });
+      vi.mocked(getTaskBackend).mockReturnValue(backend);
+
+      const broadcast = vi.fn();
+      const refresher = new TaskCacheRefresher(broadcast, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+
+      await refresher.refreshOnce();
+
+      // Only one call — aborted after first 429
+      expect(backend.fetchReadyTasks).toHaveBeenCalledTimes(1);
+      expect(broadcast).not.toHaveBeenCalled();
+    });
+
+    it('honors Retry-After header from Jira 429', async () => {
+      const jiraProject = makeProject({ id: 'jp1', taskSource: 'jira' });
+      vi.mocked(getAllProjects).mockReturnValue([jiraProject]);
+      vi.mocked(ProjectService.listMilestones).mockReturnValue([
+        makeMilestone('m1', 'jira-src-1'),
+      ]);
+
+      // 429 with a very long Retry-After (300s = 300_000ms)
+      const error429 = new JiraApiError(429, 'Too Many Requests', 300_000);
+      const backend = makeBackend({
+        fetchReadyTasks: vi
+          .fn()
+          .mockRejectedValueOnce(error429)
+          .mockResolvedValue([]),
       });
       vi.mocked(getTaskBackend).mockReturnValue(backend);
 
@@ -201,14 +297,56 @@ describe('TaskCacheRefresher', () => {
         resolveBackend: getTaskBackend,
       });
 
-      const first = refresher.refreshOnce();
-      const second = refresher.refreshOnce(); // concurrent — should be a no-op
-
-      resolveFetch();
-      await Promise.all([first, second]);
-
-      // fetchReadyTasks should only have been called once (second call was guard-rejected)
+      // First cycle hits 429
+      await refresher.refreshOnce();
       expect(backend.fetchReadyTasks).toHaveBeenCalledTimes(1);
+
+      // Second cycle immediately after — project should be skipped (still in backoff)
+      await refresher.refreshOnce();
+      // Still only 1 call — the project was gated out
+      expect(backend.fetchReadyTasks).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips jira project in backoff window on next cycle', async () => {
+      const jiraProject = makeProject({ id: 'jp1', taskSource: 'jira' });
+      const notionProject = makeProject({ id: 'np1', taskSource: 'notion' });
+      vi.mocked(getAllProjects).mockReturnValue([jiraProject, notionProject]);
+      vi.mocked(ProjectService.listMilestones).mockReturnValue([
+        makeMilestone('m1', 'src-1'),
+      ]);
+
+      const error429 = new JiraApiError(429, 'Too Many Requests');
+      const jiraBackend = makeBackend({
+        fetchReadyTasks: vi
+          .fn()
+          .mockRejectedValueOnce(error429)
+          .mockResolvedValue([]),
+      });
+      const notionBackend = makeBackend();
+
+      vi.mocked(getTaskBackend)
+        .mockReturnValueOnce(jiraBackend)  // first cycle: jira
+        .mockReturnValueOnce(notionBackend) // first cycle: notion
+        .mockReturnValueOnce(notionBackend); // second cycle: notion (jira skipped)
+
+      const broadcast = vi.fn();
+      const refresher = new TaskCacheRefresher(broadcast, {
+        listProjects: getAllProjects,
+        resolveBackend: getTaskBackend,
+      });
+
+      // First cycle: jira gets 429, notion succeeds
+      await refresher.refreshOnce();
+      expect(jiraBackend.fetchReadyTasks).toHaveBeenCalledTimes(1);
+
+      broadcast.mockClear();
+      vi.mocked(getTaskBackend).mockReset();
+      vi.mocked(getTaskBackend).mockReturnValue(notionBackend);
+
+      // Second cycle immediately after: jira is in backoff, only notion refreshes
+      await refresher.refreshOnce();
+      expect(jiraBackend.fetchReadyTasks).toHaveBeenCalledTimes(1); // no new jira calls
+      expect(notionBackend.fetchReadyTasks).toHaveBeenCalled();
     });
   });
 
