@@ -1329,7 +1329,10 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
     );
 
     // stale pointer cleared
-    expect(vi.mocked(clearReviewSessionId)).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(vi.mocked(clearReviewSessionId)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
     // fresh session spawned (Case 3), not sendOrResume
     expect(startMock).toHaveBeenCalledOnce();
     expect(mockSM.sendOrResume).not.toHaveBeenCalled();
@@ -1374,7 +1377,10 @@ describe('PRReviewService.reviewPR() — session reuse', () => {
     );
 
     // stale terminal pointer cleared
-    expect(vi.mocked(clearReviewSessionId)).toHaveBeenCalledWith(42, 'owner/repo');
+    expect(vi.mocked(clearReviewSessionId)).toHaveBeenCalledWith(
+      42,
+      'owner/repo',
+    );
     // fresh session spawned, sendOrResume never called on dead ID
     expect(startMock).toHaveBeenCalledOnce();
     expect(mockSM.sendOrResume).not.toHaveBeenCalled();

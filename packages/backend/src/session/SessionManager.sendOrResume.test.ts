@@ -66,7 +66,9 @@ vi.mock('./orchestrator-config.js', () => ({
   loadOrchestratorConfig: vi.fn().mockReturnValue({}),
 }));
 
-vi.mock('./WorktreeSetupError.js', () => ({ WorktreeSetupError: class extends Error {} }));
+vi.mock('./WorktreeSetupError.js', () => ({
+  WorktreeSetupError: class extends Error {},
+}));
 
 vi.mock('./CliSessionRunner.js', () => ({ CliSessionRunner: vi.fn() }));
 
@@ -161,7 +163,9 @@ describe('SessionManager.sendOrResume — null sentinel on non-resumable session
     const sm = new SessionManager();
     // Simulate a live session in the in-memory map by injecting a stub
     const fakeSendMessage = vi.fn();
-    (sm as any).sessions.set('live-session-id', { sendMessage: fakeSendMessage });
+    (sm as any).sessions.set('live-session-id', {
+      sendMessage: fakeSendMessage,
+    });
     vi.mocked(getSession).mockReturnValue({ status: 'running' } as any);
 
     const result = await sm.sendOrResume('live-session-id', 'hello');
