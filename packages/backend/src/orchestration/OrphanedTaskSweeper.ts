@@ -57,7 +57,10 @@ export class OrphanedTaskSweeper {
       resolveBackend?: (projectId: string) => TaskBackend;
       intervalMs?: number;
       /** Shared nudge path — calls SessionManager.sendOrResume under the hood. */
-      sendOrResume?: (sessionId: string, text: string) => Promise<string>;
+      sendOrResume?: (
+        sessionId: string,
+        text: string,
+      ) => Promise<string | null>;
       /** Override recency gate threshold (ms). Defaults to RECENCY_GATE_MS. */
       recencyGateMs?: number;
       /** Override minimum nudge spacing (ms). Defaults to MIN_NUDGE_SPACING_MS. */
