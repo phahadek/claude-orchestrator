@@ -16,6 +16,7 @@ import { logger } from '../logger';
  * Transitions:
  *   idle + merged PR → done  (PR merged while server was down)
  *   idle + closed PR → error (PR closed without merge while server was down)
+ * Both the coding session and the paired review session (if any) receive the same transition.
  */
 export function runBootIdleReconciliation(): void {
   const rows = getIdleSessionsWithResolvedPRs();
@@ -32,11 +33,28 @@ export function runBootIdleReconciliation(): void {
       logger.info(
         `[BootIdleReconciliation] ${row.session_id.slice(0, 8)} idle→done (PR #${row.pr_number} ${row.repo} merged)`,
       );
+      if (row.review_session_id) {
+        markSessionDone(
+          row.review_session_id,
+          now,
+          row.pr_url,
+          'boot_idle_merged_pr',
+        );
+        logger.info(
+          `[BootIdleReconciliation] review ${row.review_session_id.slice(0, 8)} idle→done (PR #${row.pr_number} ${row.repo} merged)`,
+        );
+      }
     } else {
       updateSessionStatus(row.session_id, 'error', now);
       logger.info(
         `[BootIdleReconciliation] ${row.session_id.slice(0, 8)} idle→error (PR #${row.pr_number} ${row.repo} closed)`,
       );
+      if (row.review_session_id) {
+        updateSessionStatus(row.review_session_id, 'error', now);
+        logger.info(
+          `[BootIdleReconciliation] review ${row.review_session_id.slice(0, 8)} idle→error (PR #${row.pr_number} ${row.repo} closed)`,
+        );
+      }
     }
   }
 }
