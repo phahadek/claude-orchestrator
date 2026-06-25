@@ -827,4 +827,21 @@ export function runMigrations(target: Database.Database): void {
   } catch {
     /* already exists */
   }
+
+  // ── Git-Bash project_dir backfill (win32-only, idempotent) ──────────────────
+  // Converts any /c/... or /D/... style project_dir stored by Git-Bash
+  // into the native Win32 form C:/... / D:/... so exec cwd is valid.
+  // Guard: substr(1,1)='/' ensures already-normalized C:/... rows are skipped.
+  if (process.platform === 'win32') {
+    target.exec(`
+      UPDATE projects
+      SET project_dir = upper(substr(project_dir, 2, 1)) || ':' || substr(project_dir, 3)
+      WHERE substr(project_dir, 1, 1) = '/'
+        AND substr(project_dir, 3, 1) = '/'
+        AND (
+          (substr(project_dir, 2, 1) BETWEEN 'a' AND 'z')
+          OR (substr(project_dir, 2, 1) BETWEEN 'A' AND 'Z')
+        )
+    `);
+  }
 }

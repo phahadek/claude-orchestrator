@@ -21,6 +21,7 @@ import type {
 } from '../db/types';
 import type { NonMilestoneSourceConfig } from '../tasks/TaskBackend';
 import { recordEvent } from '../audit/AuditLog';
+import { normalizePath } from '../config';
 
 export interface ProjectMilestone {
   id: string;
@@ -148,7 +149,7 @@ export const ProjectService = {
     const row = insertProject({
       id: input.id,
       name: input.name,
-      project_dir: input.projectDir,
+      project_dir: normalizePath(input.projectDir),
       context_url: input.contextUrl ?? null,
       github_repo: input.githubRepo ?? null,
       task_source: input.taskSource ?? 'notion',

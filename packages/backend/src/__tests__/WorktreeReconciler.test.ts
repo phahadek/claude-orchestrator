@@ -1151,6 +1151,66 @@ describe('runBootWorktreeReconciliation — per-repo duration logs', () => {
   });
 });
 
+// ── cwd normalization — OS-aware Git-Bash path conversion ────────────────────
+
+describe('runBootWorktreeReconciliation — cwd normalization', () => {
+  const GITBASH_DIR = '/c/Users/phadek/IdeaProjects/proj';
+  const WIN32_DIR = 'C:/Users/phadek/IdeaProjects/proj';
+  const POSIX_DIR = '/home/orchestrator/repo';
+
+  it('normalizes /c/... project_dir to C:/ cwd on win32', async () => {
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject({ projectDir: GITBASH_DIR })],
+      platform: 'win32',
+    });
+
+    const cwds = mockedExec.mock.calls.map(
+      ([, opts]) => (opts as { cwd?: string })?.cwd,
+    );
+    expect(cwds).toEqual(expect.arrayContaining([WIN32_DIR]));
+    expect(cwds).not.toContain(GITBASH_DIR);
+  });
+
+  it('leaves native POSIX project_dir unchanged on linux', async () => {
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject({ projectDir: POSIX_DIR })],
+      platform: 'linux',
+    });
+
+    const cwds = mockedExec.mock.calls.map(
+      ([, opts]) => (opts as { cwd?: string })?.cwd,
+    );
+    expect(cwds).toEqual(expect.arrayContaining([POSIX_DIR]));
+  });
+
+  it('leaves native POSIX project_dir unchanged on darwin', async () => {
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject({ projectDir: POSIX_DIR })],
+      platform: 'darwin',
+    });
+
+    const cwds = mockedExec.mock.calls.map(
+      ([, opts]) => (opts as { cwd?: string })?.cwd,
+    );
+    expect(cwds).toEqual(expect.arrayContaining([POSIX_DIR]));
+  });
+
+  it('win32: git worktree prune uses normalized C:/ cwd, not the raw /c/ path', async () => {
+    await runBootWorktreeReconciliation({
+      listProjects: () => [makeProject({ projectDir: GITBASH_DIR })],
+      platform: 'win32',
+    });
+
+    const pruneCalls = mockedExec.mock.calls.filter(([cmd]) =>
+      String(cmd) === 'git worktree prune',
+    );
+    expect(pruneCalls.length).toBeGreaterThan(0);
+    for (const call of pruneCalls) {
+      expect((call[1] as { cwd?: string })?.cwd).toBe(WIN32_DIR);
+    }
+  });
+});
+
 // ── Event-loop responsiveness ─────────────────────────────────────────────────
 
 describe('runBootWorktreeReconciliation — event-loop responsiveness', () => {
