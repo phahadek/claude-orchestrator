@@ -39,6 +39,7 @@ import type {
   Session,
   EventType,
 } from '@claude-orchestrator/backend/src/db/types';
+import { request } from './api/projects';
 import styles from './App.module.css';
 
 interface ArchivedSessionEvent {
@@ -84,6 +85,7 @@ function resolveActiveBoardId(project: ProjectConfig): string {
 
 export default function App() {
   const [needsEnrollment, setNeedsEnrollment] = useState(false);
+  const [loopbackRequired, setLoopbackRequired] = useState(false);
   const [setupNeeded, setSetupNeeded] = useState(false);
   const [wizardGoToSettings, setWizardGoToSettings] = useState(false);
 
@@ -102,6 +104,12 @@ export default function App() {
     const handler = () => setNeedsEnrollment(true);
     window.addEventListener('device-unauthorized', handler);
     return () => window.removeEventListener('device-unauthorized', handler);
+  }, []);
+
+  useEffect(() => {
+    const handler = () => setLoopbackRequired(true);
+    window.addEventListener('device-loopback-required', handler);
+    return () => window.removeEventListener('device-loopback-required', handler);
   }, []);
 
   const bootReconciliation = useBootReconciliation();
@@ -332,9 +340,8 @@ export default function App() {
   }, [sessions, send]);
 
   useEffect(() => {
-    fetch('/api/settings')
-      .then((r) => r.json())
-      .then((s: Record<string, string>) => {
+    request<Record<string, string>>('/api/settings')
+      .then((s) => {
         const lines = Number(s.card_preview_lines);
         if (lines > 0) setCardPreviewLines(lines);
         if (s.session_mode === 'api' || s.session_mode === 'cli')
@@ -350,9 +357,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    fetch('/api/config')
-      .then((r) => r.json())
-      .then((loaded: ProjectConfig[]) => {
+    request<ProjectConfig[]>('/api/config')
+      .then((loaded) => {
         if (loaded.length === 0) return;
         setProjects(loaded);
 
@@ -1136,6 +1142,31 @@ export default function App() {
     );
   }
 
+  if (loopbackRequired) {
+    return (
+      <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ background: '#1e1e2e', border: '1px solid #313244', borderRadius: 12, padding: '32px 40px', maxWidth: 480, width: '90%', textAlign: 'center' }}>
+          <h2 style={{ color: '#cdd6f4', margin: '0 0 16px', fontSize: 20, fontWeight: 600 }}>Local Access Required</h2>
+          <p style={{ color: '#a6adc8', lineHeight: 1.5, margin: 0 }}>
+            Setup must be initialized from <code style={{ color: '#89b4fa' }}>localhost (127.0.0.1)</code>.
+            Connect via SSH tunnel or local access, then enroll this device.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (needsEnrollment) {
+    return (
+      <EnrollmentFlow
+        onEnrolled={() => {
+          setNeedsEnrollment(false);
+          window.location.reload();
+        }}
+      />
+    );
+  }
+
   return (
     <div
       className={`${styles.appContainer}${anyDragging ? ` ${styles.dragging}` : ''}`}
@@ -1514,14 +1545,6 @@ export default function App() {
         </div>
       )}
 
-      {needsEnrollment && (
-        <EnrollmentFlow
-          onEnrolled={() => {
-            setNeedsEnrollment(false);
-            window.location.reload();
-          }}
-        />
-      )}
     </div>
   );
 }
