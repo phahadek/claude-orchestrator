@@ -121,14 +121,31 @@ if ($restartBoth -or $frontend) {
     $newPids.FrontendJobId = $feJob.Id
 }
 
-# Wait for ports to bind
-Start-Sleep -Seconds 3
-
-if ($restartBoth -or $backend) {
-    $newPids.BackendPid = Get-PortPid $BackendPort
+# Poll for port binding with a 30s upper bound (500ms interval)
+$pollMaxMs = 30000
+$pollIntervalMs = 500
+$pollElapsed = 0
+$beResolved = (-not $restartBoth -and -not $backend)
+$feResolved = (-not $restartBoth -and -not $frontend)
+Write-Host "[dashboard] Waiting for ports to bind..." -ForegroundColor Cyan
+while ($pollElapsed -lt $pollMaxMs) {
+    if (-not $beResolved) {
+        $bePollPid = Get-PortPid $BackendPort
+        if ($bePollPid) { $newPids.BackendPid = $bePollPid; $beResolved = $true }
+    }
+    if (-not $feResolved) {
+        $fePollPid = Get-PortPid $FrontendPort
+        if ($fePollPid) { $newPids.FrontendPid = $fePollPid; $feResolved = $true }
+    }
+    if ($beResolved -and $feResolved) { break }
+    Start-Sleep -Milliseconds $pollIntervalMs
+    $pollElapsed += $pollIntervalMs
 }
-if ($restartBoth -or $frontend) {
-    $newPids.FrontendPid = Get-PortPid $FrontendPort
+if (($restartBoth -or $backend) -and -not $newPids.BackendPid) {
+    Write-Warning "[dashboard] Backend port $BackendPort did not bind within ${pollMaxMs}ms"
+}
+if (($restartBoth -or $frontend) -and -not $newPids.FrontendPid) {
+    Write-Warning "[dashboard] Frontend port $FrontendPort did not bind within ${pollMaxMs}ms"
 }
 
 # Write updated PID file
