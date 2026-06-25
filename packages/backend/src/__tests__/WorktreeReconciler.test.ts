@@ -1201,8 +1201,8 @@ describe('runBootWorktreeReconciliation — cwd normalization', () => {
       platform: 'win32',
     });
 
-    const pruneCalls = mockedExec.mock.calls.filter(([cmd]) =>
-      String(cmd) === 'git worktree prune',
+    const pruneCalls = mockedExec.mock.calls.filter(
+      ([cmd]) => String(cmd) === 'git worktree prune',
     );
     expect(pruneCalls.length).toBeGreaterThan(0);
     for (const call of pruneCalls) {

@@ -36,12 +36,22 @@ function makeDb() {
   return db;
 }
 
-function insertProject(db: InstanceType<typeof Database>, id: string, dir: string) {
-  db.prepare('INSERT INTO projects(id, name, project_dir) VALUES(?,?,?)').run(id, 'Test', dir);
+function insertProject(
+  db: InstanceType<typeof Database>,
+  id: string,
+  dir: string,
+) {
+  db.prepare('INSERT INTO projects(id, name, project_dir) VALUES(?,?,?)').run(
+    id,
+    'Test',
+    dir,
+  );
 }
 
 function getProjectDir(db: InstanceType<typeof Database>, id: string): string {
-  const row = db.prepare('SELECT project_dir FROM projects WHERE id = ?').get(id) as { project_dir: string };
+  const row = db
+    .prepare('SELECT project_dir FROM projects WHERE id = ?')
+    .get(id) as { project_dir: string };
   return row.project_dir;
 }
 
