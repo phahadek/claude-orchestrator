@@ -1,6 +1,6 @@
 import { getDeviceToken } from '../auth/deviceToken';
 
-export type TaskSource = 'notion' | 'yaml' | 'github';
+export type TaskSource = 'notion' | 'yaml' | 'github' | 'jira';
 export type GitMode = 'github' | 'local-only';
 
 export interface GithubTaskSourceConfig {
@@ -48,6 +48,20 @@ interface PageValidation {
 }
 
 export type BoardValidation = DatabaseValidation | PageValidation;
+
+export interface GithubMilestoneValidation {
+  id: number;
+  title: string;
+  state: 'open' | 'closed';
+  openIssues: number;
+  closedIssues: number;
+}
+
+export interface JiraMilestoneValidation {
+  key: string;
+  summary: string;
+  type: string;
+}
 
 export interface ProjectMilestone {
   id: string;
@@ -238,6 +252,46 @@ export const projectsApi = {
       );
     }
     return body as BoardValidation;
+  },
+
+  async validateGithubMilestone(
+    projectId: string,
+    id: string,
+  ): Promise<GithubMilestoneValidation> {
+    const res = await fetch(
+      `/api/projects/${encodeURIComponent(projectId)}/github/validate-milestone?id=${encodeURIComponent(id)}`,
+    );
+    const body = (await res.json()) as
+      | GithubMilestoneValidation
+      | { error: string };
+    if (!res.ok) {
+      throw new Error(
+        'error' in body && body.error
+          ? body.error
+          : `${res.status} ${res.statusText}`,
+      );
+    }
+    return body as GithubMilestoneValidation;
+  },
+
+  async validateJiraMilestone(
+    projectId: string,
+    id: string,
+  ): Promise<JiraMilestoneValidation> {
+    const res = await fetch(
+      `/api/projects/${encodeURIComponent(projectId)}/jira/validate-milestone?id=${encodeURIComponent(id)}`,
+    );
+    const body = (await res.json()) as
+      | JiraMilestoneValidation
+      | { error: string };
+    if (!res.ok) {
+      throw new Error(
+        'error' in body && body.error
+          ? body.error
+          : `${res.status} ${res.statusText}`,
+      );
+    }
+    return body as JiraMilestoneValidation;
   },
 
   createTasksYamlStub(projectId: string): Promise<{ path: string }> {

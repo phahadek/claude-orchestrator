@@ -15,6 +15,8 @@ import { getMergeReadyPRs } from '../db/queries';
 import { NotionClient, normalizeNotionId } from '../notion/NotionClient';
 import { loadOrchestratorConfig } from '../session/orchestrator-config';
 import { GitHubClient } from '../github/GitHubClient';
+import { JiraClient } from '../tasks/JiraClient';
+import { JIRA_HOST, JIRA_TOKEN, JIRA_EMAIL } from '../config';
 
 let _autoMerger: AutoMerger | null = null;
 export function setAutoMerger(merger: AutoMerger): void {
@@ -408,6 +410,50 @@ projectsRouter.delete('/projects/:id', (req: Request, res: Response) => {
   res.status(204).send();
 });
 
+// ── Milestone sourceId format validation ─────────────────────────────────────
+
+const JIRA_EPIC_KEY_RE = /^[A-Z][A-Z0-9]+-\d+$/;
+
+function validateSourceIdFormat(
+  taskSource: string,
+  sourceId: string | null,
+): { ok: true } | { ok: false; error: string } {
+  if (sourceId === null || sourceId === '') return { ok: true };
+  switch (taskSource) {
+    case 'notion': {
+      if (!normalizeNotionId(sourceId)) {
+        return {
+          ok: false,
+          error: 'sourceId must be a valid Notion database UUID or URL',
+        };
+      }
+      return { ok: true };
+    }
+    case 'github': {
+      const n = parseInt(sourceId, 10);
+      if (isNaN(n) || n <= 0 || String(n) !== sourceId.trim()) {
+        return {
+          ok: false,
+          error: 'sourceId must be a positive integer (GitHub milestone number)',
+        };
+      }
+      return { ok: true };
+    }
+    case 'jira': {
+      if (!JIRA_EPIC_KEY_RE.test(sourceId.trim())) {
+        return {
+          ok: false,
+          error:
+            'sourceId must be a Jira Epic key in the format PROJ-123',
+        };
+      }
+      return { ok: true };
+    }
+    default:
+      return { ok: true };
+  }
+}
+
 // ── Milestones (nested + flat) ───────────────────────────────────────────────
 
 projectsRouter.get(
@@ -426,7 +472,8 @@ projectsRouter.post(
   '/projects/:id/milestones',
   (req: Request, res: Response) => {
     const projectId = String(req.params.id);
-    if (!ProjectService.getById(projectId)) {
+    const project = ProjectService.getById(projectId);
+    if (!project) {
       res.status(404).json({ error: `Project '${projectId}' not found` });
       return;
     }
@@ -435,6 +482,15 @@ projectsRouter.post(
     const name = typeof body.name === 'string' ? body.name : '';
     if (!name) {
       res.status(400).json({ error: 'name is required' });
+      return;
+    }
+
+    const rawSourceId =
+      typeof body.sourceId === 'string' ? body.sourceId.trim() : null;
+    const sourceId = rawSourceId === '' ? null : rawSourceId;
+    const formatCheck = validateSourceIdFormat(project.taskSource, sourceId);
+    if (!formatCheck.ok) {
+      res.status(400).json({ error: formatCheck.error });
       return;
     }
 
@@ -451,7 +507,7 @@ projectsRouter.post(
       id,
       projectId,
       name,
-      sourceId: typeof body.sourceId === 'string' ? body.sourceId : null,
+      sourceId,
       displayOrder:
         typeof body.displayOrder === 'number' ? body.displayOrder : 0,
     });
@@ -466,7 +522,24 @@ projectsRouter.patch('/milestones/:id', (req: Request, res: Response) => {
   const patch: MilestonePatch = {};
   if (typeof body.name === 'string') patch.name = body.name;
   if ('sourceId' in body) {
-    patch.source_id = typeof body.sourceId === 'string' ? body.sourceId : null;
+    const rawSourceId =
+      typeof body.sourceId === 'string' ? body.sourceId.trim() : null;
+    const sourceId = rawSourceId === '' ? null : rawSourceId;
+
+    const existing = ProjectService.getMilestone(id);
+    if (!existing) {
+      res.status(404).json({ error: `Milestone '${id}' not found` });
+      return;
+    }
+    const project = ProjectService.getById(existing.projectId);
+    if (project) {
+      const formatCheck = validateSourceIdFormat(project.taskSource, sourceId);
+      if (!formatCheck.ok) {
+        res.status(400).json({ error: formatCheck.error });
+        return;
+      }
+    }
+    patch.source_id = sourceId;
   }
   if (typeof body.displayOrder === 'number')
     patch.display_order = body.displayOrder;
@@ -564,6 +637,130 @@ projectsRouter.get(
     } catch (err) {
       const message =
         err instanceof Error ? err.message : 'Notion validation failed';
+      res.status(400).json({ error: message });
+    }
+  },
+);
+
+// ── GitHub milestone validation ───────────────────────────────────────────────
+
+projectsRouter.get(
+  '/projects/:id/github/validate-milestone',
+  async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const project = ProjectService.getById(id);
+    if (!project) {
+      res.status(404).json({ error: `Project '${id}' not found` });
+      return;
+    }
+    if (project.taskSource !== 'github') {
+      res
+        .status(400)
+        .json({ error: 'Project is not configured for GitHub task source' });
+      return;
+    }
+
+    const rawId = typeof req.query.id === 'string' ? req.query.id.trim() : '';
+    if (!rawId) {
+      res.status(400).json({ error: 'id query parameter is required' });
+      return;
+    }
+    const n = parseInt(rawId, 10);
+    if (isNaN(n) || n <= 0 || String(n) !== rawId) {
+      res
+        .status(400)
+        .json({ error: 'id must be a positive integer (GitHub milestone number)' });
+      return;
+    }
+
+    let ownerRepo: string;
+    try {
+      const cfg = project.taskSourceConfig
+        ? (JSON.parse(project.taskSourceConfig) as GithubTaskSourceConfig)
+        : null;
+      if (!cfg?.owner || !cfg?.repo) {
+        res
+          .status(400)
+          .json({ error: 'GitHub task source config is missing owner/repo' });
+        return;
+      }
+      ownerRepo = `${cfg.owner}/${cfg.repo}`;
+    } catch {
+      res.status(400).json({ error: 'GitHub task source config is malformed' });
+      return;
+    }
+
+    try {
+      const client = new GitHubClient();
+      const milestone = await client.getMilestoneByNumber(ownerRepo, n);
+      res.json({
+        id: milestone.id,
+        title: milestone.title,
+        state: milestone.state,
+        openIssues: milestone.openIssues,
+        closedIssues: milestone.closedIssues,
+      });
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'GitHub milestone validation failed';
+      res.status(400).json({ error: message });
+    }
+  },
+);
+
+// ── Jira epic validation ──────────────────────────────────────────────────────
+
+projectsRouter.get(
+  '/projects/:id/jira/validate-milestone',
+  async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const project = ProjectService.getById(id);
+    if (!project) {
+      res.status(404).json({ error: `Project '${id}' not found` });
+      return;
+    }
+    if (project.taskSource !== 'jira') {
+      res
+        .status(400)
+        .json({ error: 'Project is not configured for Jira task source' });
+      return;
+    }
+
+    const rawId = typeof req.query.id === 'string' ? req.query.id.trim() : '';
+    if (!rawId) {
+      res.status(400).json({ error: 'id query parameter is required' });
+      return;
+    }
+    if (!JIRA_EPIC_KEY_RE.test(rawId)) {
+      res
+        .status(400)
+        .json({ error: 'id must be a Jira Epic key in the format PROJ-123' });
+      return;
+    }
+
+    let host = JIRA_HOST;
+    try {
+      if (project.taskSourceConfig) {
+        const cfg = JSON.parse(project.taskSourceConfig) as {
+          host?: string;
+        };
+        if (cfg.host) host = cfg.host;
+      }
+    } catch {
+      /* use default host */
+    }
+
+    try {
+      const client = new JiraClient(host, JIRA_TOKEN, JIRA_EMAIL || undefined);
+      const issue = await client.getIssue(rawId);
+      res.json({
+        key: issue.key,
+        summary: issue.fields.summary,
+        type: issue.fields.issuetype.name,
+      });
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Jira epic validation failed';
       res.status(400).json({ error: message });
     }
   },

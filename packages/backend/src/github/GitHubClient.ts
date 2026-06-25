@@ -1030,6 +1030,13 @@ export class GitHubClient {
     return mapMilestone(data);
   }
 
+  async getMilestoneByNumber(repo: string, number: number): Promise<Milestone> {
+    const data = await this.request<GitHubRawMilestone>(
+      `/repos/${repo}/milestones/${number}`,
+    );
+    return mapMilestone(data);
+  }
+
   async updateMilestone(
     repo: string,
     number: number,

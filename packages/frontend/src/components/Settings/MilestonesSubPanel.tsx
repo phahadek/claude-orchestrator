@@ -6,7 +6,14 @@ import {
   type Project,
   type ProjectMilestone,
   type BoardValidation,
+  type GithubMilestoneValidation,
+  type JiraMilestoneValidation,
 } from '../../api/projects';
+
+type SourceValidation =
+  | { source: 'notion'; data: BoardValidation }
+  | { source: 'github'; data: GithubMilestoneValidation }
+  | { source: 'jira'; data: JiraMilestoneValidation };
 import { getTaskSourceShortLabel } from '../../utils/taskSourceLabel';
 import styles from './ProjectsSettingsPanel.module.css';
 
@@ -41,7 +48,7 @@ function MilestonesSubPanelInner({
     null,
   );
   const [sourceValidation, setSourceValidation] =
-    useState<BoardValidation | null>(null);
+    useState<SourceValidation | null>(null);
   const [sourceValidating, setSourceValidating] = useState(false);
   const [sourceValidationError, setSourceValidationError] = useState<
     string | null
@@ -98,25 +105,39 @@ function MilestonesSubPanelInner({
     setSourceValidationError(null);
   }
 
-  async function validateNotionSource(value: string) {
+  async function validateSource(value: string) {
     const trimmed = value.trim();
-    if (!trimmed || project.taskSource !== 'notion') return;
+    if (!trimmed) return;
     setSourceValidating(true);
     setSourceValidationError(null);
     setSourceValidation(null);
     try {
-      const result = await projectsApi.validateNotionBoard(trimmed);
-      setSourceValidation(result);
-      if (result.type === 'page') {
-        if (result.childDatabaseId) {
-          setSourceValidationError(
-            `This is a Notion page, not a database. It contains one child database ("${result.childDatabaseTitle ?? result.childDatabaseId}"). Use it instead?`,
-          );
-        } else {
-          setSourceValidationError(
-            'This is a Notion page, not a database. Please paste the URL of a Notion database.',
-          );
+      if (project.taskSource === 'notion') {
+        const data = await projectsApi.validateNotionBoard(trimmed);
+        setSourceValidation({ source: 'notion', data });
+        if (data.type === 'page') {
+          if (data.childDatabaseId) {
+            setSourceValidationError(
+              `This is a Notion page, not a database. It contains one child database ("${data.childDatabaseTitle ?? data.childDatabaseId}"). Use it instead?`,
+            );
+          } else {
+            setSourceValidationError(
+              'This is a Notion page, not a database. Please paste the URL of a Notion database.',
+            );
+          }
         }
+      } else if (project.taskSource === 'github') {
+        const data = await projectsApi.validateGithubMilestone(
+          project.id,
+          trimmed,
+        );
+        setSourceValidation({ source: 'github', data });
+      } else if (project.taskSource === 'jira') {
+        const data = await projectsApi.validateJiraMilestone(
+          project.id,
+          trimmed,
+        );
+        setSourceValidation({ source: 'jira', data });
       }
     } catch (err) {
       setSourceValidationError(
@@ -134,7 +155,10 @@ function MilestonesSubPanelInner({
       setFormError('Name is required');
       return;
     }
-    if (sourceValidation?.type === 'page') {
+    if (
+      sourceValidation?.source === 'notion' &&
+      sourceValidation.data.type === 'page'
+    ) {
       setFormError(
         'The source ID points to a Notion page, not a database. Please fix the field above.',
       );
@@ -144,12 +168,13 @@ function MilestonesSubPanelInner({
     setFormError(null);
     try {
       const trimmedSource = draft.sourceId.trim();
-      // Prefer the normalized database ID returned by validation
+      // For Notion, prefer the normalized database ID returned by validation
       const resolvedSourceId =
         trimmedSource === ''
           ? null
-          : sourceValidation?.type === 'database'
-            ? sourceValidation.id
+          : sourceValidation?.source === 'notion' &&
+              sourceValidation.data.type === 'database'
+            ? sourceValidation.data.id
             : trimmedSource;
       if (editing) {
         await projectsApi.updateMilestone(editing.id, {
@@ -194,11 +219,19 @@ function MilestonesSubPanelInner({
   const sourceLabel =
     project.taskSource === 'yaml'
       ? 'YAML milestone id'
-      : 'Notion database URL or ID';
+      : project.taskSource === 'github'
+        ? 'GitHub milestone number'
+        : project.taskSource === 'jira'
+          ? 'Jira Epic key'
+          : 'Notion database URL or ID';
   const sourcePlaceholder =
     project.taskSource === 'yaml'
       ? 'm1'
-      : 'https://www.notion.so/workspace/My-Board-abc123…';
+      : project.taskSource === 'github'
+        ? '1'
+        : project.taskSource === 'jira'
+          ? 'PROJ-123'
+          : 'https://www.notion.so/workspace/My-Board-abc123…';
 
   return (
     <div className={styles.subPanel}>
@@ -301,7 +334,7 @@ function MilestonesSubPanelInner({
                     setSourceValidation(null);
                     setSourceValidationError(null);
                   }}
-                  onBlur={(e) => void validateNotionSource(e.target.value)}
+                  onBlur={(e) => void validateSource(e.target.value)}
                   placeholder={sourcePlaceholder}
                 />
                 {sourceValidating && (
@@ -310,8 +343,9 @@ function MilestonesSubPanelInner({
                 {!sourceValidating && sourceValidationError && (
                   <p className={styles.serverError}>
                     {sourceValidationError}
-                    {sourceValidation?.type === 'page' &&
-                      sourceValidation.childDatabaseId && (
+                    {sourceValidation?.source === 'notion' &&
+                      sourceValidation.data.type === 'page' &&
+                      sourceValidation.data.childDatabaseId && (
                         <>
                           {' '}
                           <button
@@ -321,7 +355,10 @@ function MilestonesSubPanelInner({
                               setDraft({
                                 ...draft,
                                 sourceId:
-                                  sourceValidation.childDatabaseId ?? '',
+                                  sourceValidation.data.type === 'page'
+                                    ? (sourceValidation.data
+                                        .childDatabaseId ?? '')
+                                    : '',
                               });
                               setSourceValidation(null);
                               setSourceValidationError(null);
@@ -333,16 +370,32 @@ function MilestonesSubPanelInner({
                       )}
                   </p>
                 )}
-                {!sourceValidating &&
-                  !sourceValidationError &&
-                  sourceValidation?.type === 'database' && (
-                    <p className={styles.muted}>
-                      ✓{' '}
-                      {sourceValidation.title
-                        ? sourceValidation.title
-                        : 'Valid Notion database'}
-                    </p>
-                  )}
+                {!sourceValidating && !sourceValidationError && sourceValidation && (
+                  <>
+                    {sourceValidation.source === 'notion' &&
+                      sourceValidation.data.type === 'database' && (
+                        <p className={styles.muted}>
+                          ✓{' '}
+                          {sourceValidation.data.title ||
+                            'Valid Notion database'}
+                        </p>
+                      )}
+                    {sourceValidation.source === 'github' && (
+                      <p className={styles.muted}>
+                        ✓ {sourceValidation.data.title} (#
+                        {sourceValidation.data.id},{' '}
+                        {sourceValidation.data.state})
+                      </p>
+                    )}
+                    {sourceValidation.source === 'jira' && (
+                      <p className={styles.muted}>
+                        ✓ {sourceValidation.data.key}:{' '}
+                        {sourceValidation.data.summary} (
+                        {sourceValidation.data.type})
+                      </p>
+                    )}
+                  </>
+                )}
               </div>
               <div className={styles.formField}>
                 <label htmlFor="ms-order" className={styles.formLabel}>
