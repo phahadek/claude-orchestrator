@@ -42,11 +42,11 @@ Aim for 5–10 acceptance-criteria items total. Each must be pass/fail without j
 
 | Jira field      | How the orchestrator reads it                                                                                                                            |
 | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Summary**     | The task name. Verb phrase: _Implement_, _Add_, _Fix_, _Migrate_. Include the primary file/class.                                                         |
-| **Issue type**  | Maps to the orchestrator type via `type_mapping` (default below). Decides **dispatchable vs not**.                                                        |
+| **Summary**     | The task name. Verb phrase: _Implement_, _Add_, _Fix_, _Migrate_. Include the primary file/class.                                                        |
+| **Issue type**  | Maps to the orchestrator type via `type_mapping` (default below). Decides **dispatchable vs not**.                                                       |
 | **Status**      | Workflow status. `ready_statuses` (default `To Do`, `Ready`) is the dispatch gate. The orchestrator drives In Progress / In Review / Done automatically. |
-| **Priority**    | `Highest`/`High` → 🔴, `Medium` → 🟡, `Low`/`Lowest` → 🟢. Display only; does not affect dispatch order.                                                   |
-| **Issue links** | `is blocked by` links are the `Depends On` graph (see Dependencies below). Not a custom field.                                                            |
+| **Priority**    | `Highest`/`High` → 🔴, `Medium` → 🟡, `Low`/`Lowest` → 🟢. Display only; does not affect dispatch order.                                                 |
+| **Issue links** | `is blocked by` links are the `Depends On` graph (see Dependencies below). Not a custom field.                                                           |
 
 ### Type → role: the Story vs Task distinction (load-bearing)
 

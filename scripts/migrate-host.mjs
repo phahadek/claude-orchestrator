@@ -86,7 +86,8 @@ const TABLES = ['sessions', 'session_events', 'pull_requests'];
 
 function counts(db) {
   const out = {};
-  for (const t of TABLES) out[t] = db.prepare(`SELECT COUNT(*) n FROM "${t}"`).get().n;
+  for (const t of TABLES)
+    out[t] = db.prepare(`SELECT COUNT(*) n FROM "${t}"`).get().n;
   return out;
 }
 
@@ -99,7 +100,9 @@ function main() {
     process.exit(2);
   }
   if (!args.toRoot) {
-    console.error('--to-root is required (e.g. --to-root /home/orchestrator/IdeaProjects)');
+    console.error(
+      '--to-root is required (e.g. --to-root /home/orchestrator/IdeaProjects)',
+    );
     process.exit(2);
   }
   if (/Program Files[\\/]Git[\\/]/i.test(args.toRoot)) {
@@ -119,12 +122,18 @@ function main() {
 
   // ── Safety gate: refuse to migrate with active sessions ────────────────────
   const running = src
-    .prepare("SELECT session_id, project_id, session_type FROM sessions WHERE status = 'running'")
+    .prepare(
+      "SELECT session_id, project_id, session_type FROM sessions WHERE status = 'running'",
+    )
     .all();
   if (running.length > 0) {
-    console.error(`\n⚠ ${running.length} active ('running') session(s) in the source DB:`);
+    console.error(
+      `\n⚠ ${running.length} active ('running') session(s) in the source DB:`,
+    );
     for (const r of running)
-      console.error(`    ${r.session_id.slice(0, 8)} ${r.project_id} ${r.session_type}`);
+      console.error(
+        `    ${r.session_id.slice(0, 8)} ${r.project_id} ${r.session_type}`,
+      );
     if (!args.force && !args.dryRun) {
       console.error(
         '\nRefusing to migrate with active sessions (worktrees would be orphaned and\n' +
@@ -133,11 +142,14 @@ function main() {
       );
       process.exit(1);
     }
-    if (!args.dryRun) console.error('--force given; proceeding despite active sessions.\n');
+    if (!args.dryRun)
+      console.error('--force given; proceeding despite active sessions.\n');
   }
 
   // ── Plan the project_dir rewrites ──────────────────────────────────────────
-  const projects = src.prepare('SELECT id, name, project_dir FROM projects').all();
+  const projects = src
+    .prepare('SELECT id, name, project_dir FROM projects')
+    .all();
   const plan = [];
   for (const p of projects) {
     const next = rewriteDir(p.project_dir, fromRoot, args.toRoot);
@@ -147,17 +159,22 @@ function main() {
   console.log(`Source DB : ${dbPath}`);
   console.log(`From root : ${fromRoot}`);
   console.log(`To root   : ${args.toRoot}`);
-  console.log(`Dest DB   : ${args.dryRun ? '(dry-run — not written)' : outPath}`);
+  console.log(
+    `Dest DB   : ${args.dryRun ? '(dry-run — not written)' : outPath}`,
+  );
   console.log(`\nproject_dir rewrites:`);
   for (const r of plan) {
-    if (r.to === null) console.log(`  • ${r.id}: (unchanged — not under from-root) ${r.from}`);
+    if (r.to === null)
+      console.log(`  • ${r.id}: (unchanged — not under from-root) ${r.from}`);
     else console.log(`  • ${r.id}:\n      ${r.from}\n   →  ${r.to}`);
   }
   const srcCounts = counts(src);
   console.log(`\nrow counts (source): ${JSON.stringify(srcCounts)}`);
 
   if (args.dryRun) {
-    const wouldRemain = plan.filter((r) => r.to === null && WIN_PATH_RE.test(canonicalizeWin(r.from)));
+    const wouldRemain = plan.filter(
+      (r) => r.to === null && WIN_PATH_RE.test(canonicalizeWin(r.from)),
+    );
     if (wouldRemain.length) {
       console.log(
         `\n⚠ ${wouldRemain.length} project_dir(s) look like Windows paths but would NOT be ` +
@@ -171,15 +188,18 @@ function main() {
 
   // ── Produce the self-contained dest via VACUUM INTO ────────────────────────
   if (existsSync(outPath)) rmSync(outPath); // VACUUM INTO requires a non-existent target
-  src.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  src.exec('PRAGMA wal_checkpoint(TRUNCATE)');
   src.exec(`VACUUM INTO '${outPath.replace(/'/g, "''")}'`);
   src.close();
 
   // ── Rewrite project_dir on the dest ────────────────────────────────────────
   const dst = new Database(outPath);
-  const upd = dst.prepare('UPDATE projects SET project_dir = @to WHERE id = @id');
+  const upd = dst.prepare(
+    'UPDATE projects SET project_dir = @to WHERE id = @id',
+  );
   const tx = dst.transaction(() => {
-    for (const r of plan) if (r.to !== null && r.to !== r.from) upd.run({ id: r.id, to: r.to });
+    for (const r of plan)
+      if (r.to !== null && r.to !== r.from) upd.run({ id: r.id, to: r.to });
   });
   tx();
 
@@ -194,14 +214,20 @@ function main() {
 
   console.log(`\nrow counts (dest)  : ${JSON.stringify(dstCounts)}`);
   console.log(`parity             : ${parityOk ? 'OK' : 'MISMATCH'}`);
-  console.log(`windows paths left : ${leftover.length === 0 ? 'none' : leftover.map((p) => p.id).join(', ')}`);
+  console.log(
+    `windows paths left : ${leftover.length === 0 ? 'none' : leftover.map((p) => p.id).join(', ')}`,
+  );
 
   if (!parityOk || leftover.length > 0) {
-    console.error('\n✗ Verification failed — dest DB is NOT safe to cut over to.');
+    console.error(
+      '\n✗ Verification failed — dest DB is NOT safe to cut over to.',
+    );
     process.exit(1);
   }
   console.log(`\n✓ Migration complete: ${outPath}`);
-  console.log('  Copy it to the target host as the orchestrator DB, then boot there and verify.');
+  console.log(
+    '  Copy it to the target host as the orchestrator DB, then boot there and verify.',
+  );
 }
 
 main();
