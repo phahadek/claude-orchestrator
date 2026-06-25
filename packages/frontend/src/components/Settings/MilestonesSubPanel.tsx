@@ -9,13 +9,13 @@ import {
   type GithubMilestoneValidation,
   type JiraMilestoneValidation,
 } from '../../api/projects';
+import { getTaskSourceShortLabel } from '../../utils/taskSourceLabel';
+import styles from './ProjectsSettingsPanel.module.css';
 
 type SourceValidation =
   | { source: 'notion'; data: BoardValidation }
   | { source: 'github'; data: GithubMilestoneValidation }
   | { source: 'jira'; data: JiraMilestoneValidation };
-import { getTaskSourceShortLabel } from '../../utils/taskSourceLabel';
-import styles from './ProjectsSettingsPanel.module.css';
 
 interface Props {
   project: Project;
