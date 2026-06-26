@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import type { Scheduler } from '../orchestration/Scheduler';
-import { getSchedulerAuditStats } from '../db/queries.js';
+import { getSchedulerAuditStats } from '../db/queries';
 
 let _scheduler: Scheduler | null = null;
 
