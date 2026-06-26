@@ -4,7 +4,8 @@ import { parsePauseReason } from '../db/pauseReason';
 export type StalledPRKind =
   | 'incomplete_verdict'
   | 'errored_review_session'
-  | 'gate_failed';
+  | 'gate_failed'
+  | 'analyze_failing';
 
 /**
  * True when a PR is in a terminal-stale state where PRMergeWatcher polling
@@ -66,6 +67,11 @@ export function classifyStalledPR(
   if (parsed?.reason === 'stalled_reconcile_cap') return null;
 
   if (!pr.head_sha) return null;
+
+  // Analyze-gate failure: parked with analyze_failing and no pending push
+  if (parsed?.reason === 'analyze_failing' && !pr.pending_push) {
+    return { kind: 'analyze_failing' };
+  }
 
   const verdict = parseVerdict(pr.review_result);
 

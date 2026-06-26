@@ -386,7 +386,7 @@ export type ServerMessage =
       type: 'pr_stalled_escalated';
       prNumber: number;
       repo: string;
-      kind: 'incomplete_verdict' | 'errored_review_session' | 'gate_failed';
+      kind: 'incomplete_verdict' | 'errored_review_session' | 'gate_failed' | 'analyze_failing';
     };
 
 // ── Client → Server ──────────────────────────────────────────────
