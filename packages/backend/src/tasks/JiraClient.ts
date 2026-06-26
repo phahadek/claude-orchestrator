@@ -182,3 +182,26 @@ export class JiraClient {
     });
   }
 }
+
+/** Probe-validate Jira credentials by calling /rest/api/3/myself. */
+export async function probeJiraToken(
+  host: string,
+  token: string,
+  email?: string,
+): Promise<{ displayName?: string; emailAddress?: string }> {
+  const baseUrl = host.replace(/\/$/, '') + '/rest/api/3';
+  const authHeader = email
+    ? 'Basic ' + Buffer.from(`${email}:${token}`).toString('base64')
+    : `Bearer ${token}`;
+  const res = await fetch(`${baseUrl}/myself`, {
+    headers: {
+      Authorization: authHeader,
+      Accept: 'application/json',
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new JiraApiError(res.status, text);
+  }
+  return res.json() as Promise<{ displayName?: string; emailAddress?: string }>;
+}

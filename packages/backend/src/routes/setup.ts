@@ -12,6 +12,7 @@ import { GitHubClient } from '../github/GitHubClient';
 import { GitHubApiError } from '../github/types';
 import { probeNotionToken } from '../notion/NotionClient';
 import { NotionApiError } from '../notion/types';
+import { probeJiraToken, JiraApiError } from '../tasks/JiraClient';
 
 const router = Router();
 
@@ -107,21 +108,53 @@ async function validateNotionToken(
   }
 }
 
+async function validateJiraToken(
+  host: string,
+  token: string,
+  email?: string,
+): Promise<{ valid: boolean; message: string }> {
+  try {
+    const data = await probeJiraToken(host, token, email);
+    return {
+      valid: true,
+      message: `Authenticated as ${data.displayName ?? data.emailAddress ?? 'unknown'}`,
+    };
+  } catch (err) {
+    if (err instanceof JiraApiError) {
+      return { valid: false, message: `Jira API error: ${err.statusCode}` };
+    }
+    return { valid: false, message: `Request failed: ${String(err)}` };
+  }
+}
+
 router.post('/setup/validate', async (req, res) => {
-  const { type, token } = req.body as { type?: string; token?: string };
-  if (type !== 'github' && type !== 'notion') {
-    res.status(400).json({ error: 'type must be "github" or "notion"' });
+  const { type, token, host, email } = req.body as {
+    type?: string;
+    token?: string;
+    host?: string;
+    email?: string;
+  };
+  if (type !== 'github' && type !== 'notion' && type !== 'jira') {
+    res.status(400).json({ error: 'type must be "github", "notion", or "jira"' });
     return;
   }
   if (typeof token !== 'string' || !token) {
     res.status(400).json({ error: 'token is required' });
     return;
   }
+  if (type === 'jira' && (typeof host !== 'string' || !host)) {
+    res.status(400).json({ error: 'host is required for jira' });
+    return;
+  }
 
-  const result =
-    type === 'github'
-      ? await validateGitHubToken(token)
-      : await validateNotionToken(token);
+  let result: { valid: boolean; message: string };
+  if (type === 'github') {
+    result = await validateGitHubToken(token);
+  } else if (type === 'notion') {
+    result = await validateNotionToken(token);
+  } else {
+    result = await validateJiraToken(host as string, token, email);
+  }
 
   res.json(result);
 });

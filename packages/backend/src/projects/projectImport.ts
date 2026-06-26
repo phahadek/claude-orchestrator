@@ -11,6 +11,7 @@ interface RawProjectEntry {
   projectDir?: string;
   contextUrl?: string;
   githubRepo?: string;
+  // Intentionally omits jira/github: this one-shot migration predates those sources and is never used to import jira/github projects.
   taskSource?: 'notion' | 'yaml';
   boardId?: string;
   boards?: RawBoard[];
