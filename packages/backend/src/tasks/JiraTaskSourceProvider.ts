@@ -6,6 +6,7 @@ import { JiraClient, JiraApiError } from './JiraClient';
 import type { JiraIssue } from './JiraClient';
 import { DependencyResolver } from '../notion/DependencyResolver';
 import { upsertTaskCache } from '../db/queries';
+import { ProjectService } from '../projects/ProjectService';
 
 export interface JiraProjectConfig {
   host: string;
@@ -76,8 +77,21 @@ export class JiraTaskSourceProvider implements TaskBackend {
     let dispatchableKeys: Set<string>;
 
     if (milestoneId !== null) {
+      const milestoneRow = ProjectService.getMilestone(milestoneId);
+      if (!milestoneRow) {
+        throw new Error(
+          `[JiraTaskSourceProvider] milestone not found: ${milestoneId}`,
+        );
+      }
+      if (!milestoneRow.sourceId) {
+        throw new Error(
+          `[JiraTaskSourceProvider] milestone ${milestoneId} has no source_id — set the Jira Epic key`,
+        );
+      }
+      const epicKey = milestoneRow.sourceId;
+
       // Gap 2: 2-level Epic tree scan
-      const level1 = await this.fetchEpicChildren(milestoneId);
+      const level1 = await this.fetchEpicChildren(epicKey);
 
       // Level 2: sub-tasks of non-Epic, non-SubTask children
       const parentCandidateKeys = level1
