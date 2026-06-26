@@ -9,11 +9,21 @@
  * Idempotent and cross-platform (Node fs; Windows + Linux). Copies:
  *   scripts/{groom-load,design-load,groom-gate,notion-page}.mjs → ~/.claude/scripts/
  *   skills/groom/**  +  skills/design/**                         → ~/.claude/skills/
+ *   config-template/hooks/load-procedures.mjs → <config-tree>/hooks/  (overwrite)
+ *   config-template/procedures.md             → <config-tree>/procedures.md  (seed-only)
+ *
+ * The config-template/* artifacts go into the central config tree (outside every repo),
+ * not ~/.claude — that's where the Remote Control SessionStart hook runs from. The config
+ * tree is resolved via $ORCHESTRATOR_CONFIG_DIR, else a `config/` dir beside the projects
+ * root (dev `<repo>/../config`, prod `<repo>/../../config`), else `<repo>/../config`.
+ * load-procedures.mjs is overwritten each run (pure mechanism); procedures.md is seeded
+ * only if absent (it's deployment-edited — fill in its Project index).
  *
  * By design there is NO auto-run (no postinstall, no symlink, no watcher) — see the M9
- * "Productize the Backlog Grooming procedure" task. It also does NOT register the
- * PreToolUse hook in ~/.claude/settings.json — that stays a documented one-time manual
- * step (auto-editing user-global settings is riskier). See README § Grooming/design skills.
+ * "Productize the Backlog Grooming procedure" task. It also does NOT register any hooks in
+ * ~/.claude/settings.json — both the `groom-gate.mjs` PreToolUse hook and the
+ * `load-procedures.mjs` SessionStart hook stay documented one-time manual steps
+ * (auto-editing user-global settings is riskier). See README § Grooming/design skills.
  *
  * Note: groom-load.mjs / design-load.mjs also call sibling scripts notion-query.mjs and
  * notion-move-tasks.mjs, which are deployed to ~/.claude/scripts separately (they predate
@@ -48,6 +58,39 @@ function copy(src, dest, label) {
   cpSync(src, dest, { recursive: true, force: true });
 }
 
+// Copy only if the destination does not already exist — for deployment-edited
+// files (e.g. procedures.md) that must never be clobbered by a re-deploy.
+function seedIfAbsent(src, dest, label) {
+  if (!existsSync(src)) {
+    console.error(`  ! missing source: ${src}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (existsSync(dest)) {
+    console.log(`  skip (exists)  ${label}`);
+    return;
+  }
+  console.log(`  ${dryRun ? '[dry-run] would seed' : 'seeded'}  ${label}`);
+  if (dryRun) return;
+  mkdirSync(dirname(dest), { recursive: true });
+  cpSync(src, dest, { force: true });
+}
+
+// Resolve the central config tree (outside every repo). Same precedence the
+// loaders use: $ORCHESTRATOR_CONFIG_DIR, else a `config/` dir beside the projects
+// root (an established tree has a `projects/` subdir), else the dev-layout default.
+function resolveConfigDir(root) {
+  const explicit = process.env.ORCHESTRATOR_CONFIG_DIR;
+  if (explicit) return resolve(explicit);
+  for (const c of [
+    resolve(root, '..', 'config'),
+    resolve(root, '..', '..', 'config'),
+  ]) {
+    if (existsSync(join(c, 'projects'))) return c;
+  }
+  return resolve(root, '..', 'config');
+}
+
 console.log(
   `deploy-grooming: ${repoRoot} -> ${claudeHome}${dryRun ? '  (dry-run)' : ''}`,
 );
@@ -68,8 +111,24 @@ for (const s of SKILLS)
     `skills/${s}/`,
   );
 
+// Central config tree (outside every repo): the Remote Control SessionStart hook
+// (overwrite) + a procedures.md to fill in (seed only).
+const configDir = resolveConfigDir(repoRoot);
+console.log(`config tree -> ${configDir}`);
+copy(
+  join(repoRoot, 'config-template', 'hooks', 'load-procedures.mjs'),
+  join(configDir, 'hooks', 'load-procedures.mjs'),
+  'config/hooks/load-procedures.mjs',
+);
+seedIfAbsent(
+  join(repoRoot, 'config-template', 'procedures.md'),
+  join(configDir, 'procedures.md'),
+  'config/procedures.md',
+);
+
 console.log(dryRun ? 'dry-run complete (no changes).' : 'deploy complete.');
 console.log(
-  'Reminder: the groom-gate.mjs PreToolUse hook must be registered once in ~/.claude/settings.json ' +
-    '(manual — see README § Grooming/design skills).',
+  'Reminder: register BOTH hooks once in ~/.claude/settings.json (manual — see README ' +
+    '§ Grooming/design skills): the groom-gate.mjs PreToolUse gate and the ' +
+    'load-procedures.mjs SessionStart bootstrap.',
 );
