@@ -5,6 +5,8 @@ import { platform } from 'process';
 export interface TestCommandResult {
   passed: boolean;
   output: string;
+  timedOut?: boolean;
+  oomKilled?: boolean;
 }
 
 export interface TestRunOptions {
@@ -160,6 +162,8 @@ export async function runTestCommands(
   const timeoutMs = timeoutSec * 1000;
   const outputParts: string[] = [];
   let allPassed = true;
+  let anyTimedOut = false;
+  let anyOomKilled = false;
 
   for (const cmd of commands) {
     log(`[test-runner] running: ${cmd}\n`);
@@ -172,9 +176,11 @@ export async function runTestCommands(
         `[test-runner] OOM_KILL after exceeding ${maxRssMb} MB RSS: ${cmd}\n`,
       );
       allPassed = false;
+      anyOomKilled = true;
     } else if (timedOut) {
       log(`[test-runner] TIMEOUT after ${timeoutSec}s: ${cmd}\n`);
       allPassed = false;
+      anyTimedOut = true;
     } else if (exitCode !== 0) {
       log(`[test-runner] FAILED (exit ${exitCode}): ${cmd}\n`);
       allPassed = false;
@@ -185,5 +191,10 @@ export async function runTestCommands(
     if (!allPassed && failFast) break;
   }
 
-  return { passed: allPassed, output: outputParts.join('\n') };
+  return {
+    passed: allPassed,
+    output: outputParts.join('\n'),
+    timedOut: anyTimedOut,
+    oomKilled: anyOomKilled,
+  };
 }

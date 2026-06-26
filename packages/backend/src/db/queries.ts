@@ -2747,6 +2747,7 @@ export interface AnalyzeResultRow {
   passed: number;
   output: string;
   ran_at: string;
+  is_transient: number;
 }
 
 export function hasAnalyzeResultForSha(
@@ -2772,6 +2773,7 @@ export function upsertAnalyzeResult(
   sha: string,
   passed: boolean,
   output: string,
+  isTransient = false,
 ): void {
   db.prepare<{
     pr_number: number;
@@ -2780,9 +2782,10 @@ export function upsertAnalyzeResult(
     passed: number;
     output: string;
     ran_at: string;
+    is_transient: number;
   }>(
-    `INSERT OR REPLACE INTO orchestrator_analyze_results (pr_number, repo, sha, passed, output, ran_at)
-     VALUES (@pr_number, @repo, @sha, @passed, @output, @ran_at)`,
+    `INSERT OR REPLACE INTO orchestrator_analyze_results (pr_number, repo, sha, passed, output, ran_at, is_transient)
+     VALUES (@pr_number, @repo, @sha, @passed, @output, @ran_at, @is_transient)`,
   ).run({
     pr_number: prNumber,
     repo,
@@ -2790,7 +2793,18 @@ export function upsertAnalyzeResult(
     passed: passed ? 1 : 0,
     output,
     ran_at: new Date().toISOString(),
+    is_transient: isTransient ? 1 : 0,
   });
+}
+
+export function deleteAnalyzeResult(
+  prNumber: number,
+  repo: string,
+  sha: string,
+): void {
+  db.prepare<{ pr_number: number; repo: string; sha: string }>(
+    `DELETE FROM orchestrator_analyze_results WHERE pr_number = @pr_number AND repo = @repo AND sha = @sha`,
+  ).run({ pr_number: prNumber, repo, sha });
 }
 
 export function getAnalyzeResult(

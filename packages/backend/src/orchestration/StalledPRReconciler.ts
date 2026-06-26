@@ -7,6 +7,7 @@ import {
   getSession,
   incrementStalledPRRetryCount,
   clearReviewSessionId,
+  deleteAnalyzeResult,
 } from '../db/queries';
 import { parsePauseReason } from '../db/pauseReason';
 import { getProjectByGithubRepo } from '../config';
@@ -96,6 +97,7 @@ export class StalledPRReconciler {
         pr.session_id,
         stalled.kind,
         count,
+        pr.head_sha ?? null,
       );
       if (drove) itemsProcessed++;
     }
@@ -114,6 +116,7 @@ export class StalledPRReconciler {
     sessionId: string | null,
     kind: StalledPRKind,
     _currentCount: number,
+    headSha: string | null,
   ): Promise<boolean> {
     if (!this.reviewOrchestrator) {
       logger.warn(
@@ -150,6 +153,17 @@ export class StalledPRReconciler {
       // Clear the terminal review_session_id so PRReviewService spawns a fresh
       // session rather than calling sendOrResume on a terminal session.
       clearReviewSessionId(prNumber, repo);
+    }
+
+    if (kind === 'analyze_failing') {
+      // Invalidate the per-SHA analyze cache so the pipeline re-runs analyze
+      // rather than returning the stale cached failure.
+      if (headSha) {
+        deleteAnalyzeResult(prNumber, repo, headSha);
+      }
+      // Clear the pause so it doesn't re-trigger reconciliation after a
+      // successful analyze pass. The pipeline will re-set it on next failure.
+      setPauseReason(prNumber, repo, null);
     }
 
     this.reviewOrchestrator.enqueueReview({

@@ -21,6 +21,7 @@ vi.mock('../db/queries.js', () => ({
   setPauseReason: vi.fn(),
   incrementStalledPRRetryCount: vi.fn(),
   clearReviewSessionId: vi.fn(),
+  deleteAnalyzeResult: vi.fn(),
 }));
 
 vi.mock('../audit/AuditLog.js', () => ({
@@ -37,6 +38,7 @@ import {
   setPauseReason,
   incrementStalledPRRetryCount,
   clearReviewSessionId,
+  deleteAnalyzeResult,
 } from '../db/queries.js';
 import { recordEvent } from '../audit/AuditLog.js';
 import { StalledPRReconciler } from '../orchestration/StalledPRReconciler.js';
@@ -340,5 +342,96 @@ describe('StalledPRReconciler', () => {
     // reDrive returns at the !reviewOrchestrator guard before incrementing —
     // nothing happens.
     expect(incrementStalledPRRetryCount).not.toHaveBeenCalled();
+  });
+
+  it('re-drives an analyze_failing PR, deletes analyze cache, and clears pause_reason', async () => {
+    const pr = makePR({
+      pause_reason: JSON.stringify({
+        reason: 'analyze_failing',
+        source: 'review',
+        severity: 'needs_attention',
+        retry_strategy: 'manual_action',
+      }),
+      head_sha: 'sha1',
+      review_result: JSON.stringify({ verdict: 'analyze_failed' }),
+      pending_push: 0,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(deleteAnalyzeResult).toHaveBeenCalledWith(42, 'org/repo', 'sha1');
+    expect(setPauseReason).toHaveBeenCalledWith(42, 'org/repo', null);
+    expect(ro.enqueueReview).toHaveBeenCalledWith(
+      expect.objectContaining({ prNumber: 42, repo: 'org/repo' }),
+    );
+    expect(incrementStalledPRRetryCount).toHaveBeenCalledWith(42, 'org/repo');
+  });
+
+  it('escalates analyze_failing PR to stalled_reconcile_cap after retry cap', async () => {
+    const pr = makePR({
+      pause_reason: JSON.stringify({
+        reason: 'analyze_failing',
+        source: 'review',
+        severity: 'needs_attention',
+        retry_strategy: 'manual_action',
+      }),
+      head_sha: 'sha1',
+      review_result: JSON.stringify({ verdict: 'analyze_failed' }),
+      pending_push: 0,
+      stalled_pr_retry_count: 2, // at cap
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast, messages } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(setPauseReason).toHaveBeenCalledWith(
+      42,
+      'org/repo',
+      'stalled_reconcile_cap',
+    );
+    expect(
+      messages.find((m) => m.type === 'pr_stalled_escalated'),
+    ).toMatchObject({
+      type: 'pr_stalled_escalated',
+      prNumber: 42,
+      repo: 'org/repo',
+      kind: 'analyze_failing',
+    });
+    expect(ro.enqueueReview).not.toHaveBeenCalled();
+  });
+
+  it('skips analyze_failing PR with pending_push (push flow handles it)', async () => {
+    const pr = makePR({
+      pause_reason: JSON.stringify({
+        reason: 'analyze_failing',
+        source: 'review',
+        severity: 'needs_attention',
+        retry_strategy: 'manual_action',
+      }),
+      head_sha: 'sha1',
+      pending_push: 1,
+    });
+    vi.mocked(getAllOpenPRs).mockReturnValue([pr] as any);
+
+    const { fn: broadcast } = makeBroadcast();
+    const ro = makeReviewOrchestrator();
+    const reconciler = new StalledPRReconciler(broadcast, { retryCap: 2 });
+    reconciler.setReviewOrchestrator(ro as any);
+
+    await reconciler.reconcileOnce();
+
+    expect(ro.enqueueReview).not.toHaveBeenCalled();
+    expect(deleteAnalyzeResult).not.toHaveBeenCalled();
   });
 });

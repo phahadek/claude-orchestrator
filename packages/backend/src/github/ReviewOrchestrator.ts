@@ -533,7 +533,7 @@ export class ReviewOrchestrator {
       `[ReviewOrchestrator] running analyze for PR #${prNumber} SHA ${headSha.slice(0, 7)} (timeout ${timeoutSec}s)`,
     );
 
-    const { passed, output } = await runTestCommands(
+    const result = await runTestCommands(
       worktreePath,
       commands,
       timeoutSec,
@@ -541,8 +541,16 @@ export class ReviewOrchestrator {
         logger.info(`[ReviewOrchestrator] analyze PR #${prNumber}: ${msg}`),
       { maxRssMb, failFast },
     );
+    const { passed, output } = result;
 
-    upsertAnalyzeResult(prNumber, repo, headSha, passed, output);
+    upsertAnalyzeResult(
+      prNumber,
+      repo,
+      headSha,
+      passed,
+      output,
+      !!(result.timedOut || result.oomKilled),
+    );
 
     logger.info(
       `[ReviewOrchestrator] analyze ${passed ? 'PASSED' : 'FAILED'} for PR #${prNumber} SHA ${headSha.slice(0, 7)}`,

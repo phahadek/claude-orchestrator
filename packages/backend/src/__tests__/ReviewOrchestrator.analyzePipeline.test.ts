@@ -236,6 +236,7 @@ describe('runAnalyzePipeline — commands pass', () => {
       'abc123',
       true,
       'All checks passed',
+      false,
     );
   });
 });
@@ -269,6 +270,7 @@ describe('runAnalyzePipeline — commands fail', () => {
       'abc123',
       false,
       'error: unused import',
+      false,
     );
   });
 });
@@ -285,6 +287,7 @@ describe('runAnalyzePipeline — deduplication', () => {
       passed: 0,
       output: 'cached error output',
       ran_at: '2024-01-01T00:00:00Z',
+      is_transient: 0,
     });
 
     const { orchestrator } = makeOrchestrator();
@@ -314,6 +317,7 @@ describe('runAnalyzePipeline — deduplication', () => {
       passed: 1,
       output: '',
       ran_at: '2024-01-01T00:00:00Z',
+      is_transient: 0,
     });
 
     const { orchestrator } = makeOrchestrator();
@@ -416,6 +420,7 @@ describe('pre_review_stage — analyzing transition', () => {
       'abc123',
       true,
       '',
+      false,
     );
   });
 });
@@ -475,6 +480,7 @@ describe('analyze gate — failure handling in executeReview', () => {
       'abc123',
       false,
       'E501 line too long',
+      false,
     );
 
     // Verify setPauseReason and sendOrResume would be called by the gate

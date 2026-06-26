@@ -291,6 +291,7 @@ export class PreReviewPipeline {
             ctx.headSha,
             passed,
             output,
+            !!(result.timedOut || result.oomKilled),
           );
         }
 
