@@ -11,11 +11,11 @@ This section covers running the orchestrator directly from the cloned repository
 ### Prerequisites
 
 | Tool       | Purpose                                                              |
-| ---------- | ------------------------------------------------------------------- |
-| `node`     | Runtime — install system-wide, not via nvm                          |
-| `npm`      | Bundled with Node.js                                                |
-| `git`      | Clone and pull updates                                              |
-| `gh`       | GitHub CLI — PR creation/lifecycle for `github` git-mode projects   |
+| ---------- | -------------------------------------------------------------------- |
+| `node`     | Runtime — install system-wide, not via nvm                           |
+| `npm`      | Bundled with Node.js                                                 |
+| `git`      | Clone and pull updates                                               |
+| `gh`       | GitHub CLI — PR creation/lifecycle for `github` git-mode projects    |
 | `gitleaks` | Secret scanning in the orchestrator `analyze` gate (no npm fallback) |
 
 Install Node.js (system-wide, not via nvm so the systemd unit can find it):
