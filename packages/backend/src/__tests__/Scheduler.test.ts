@@ -168,8 +168,11 @@ describe('Scheduler audit + WS broadcast', () => {
   it('broadcasts next_run_at: null for a job that is immediately re-queued', async () => {
     const { scheduler, broadcasts } = makeScheduler();
     let resolve1!: () => void;
-    const run1Done = new Promise<void>((r) => { resolve1 = r; });
-    const runFn = vi.fn()
+    const run1Done = new Promise<void>((r) => {
+      resolve1 = r;
+    });
+    const runFn = vi
+      .fn()
       .mockReturnValueOnce(run1Done)
       .mockResolvedValue(undefined);
     scheduler.register({

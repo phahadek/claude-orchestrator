@@ -2893,12 +2893,15 @@ export interface SchedulerAuditStats {
   errorCount24h: number;
 }
 
-const stmtSchedulerAuditStats = db.prepare<[], {
-  job: string;
-  last_duration_ms: number | null;
-  run_count_24h: number;
-  error_count_24h: number;
-}>(`
+const stmtSchedulerAuditStats = db.prepare<
+  [],
+  {
+    job: string;
+    last_duration_ms: number | null;
+    run_count_24h: number;
+    error_count_24h: number;
+  }
+>(`
   WITH ranked AS (
     SELECT
       job,

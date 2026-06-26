@@ -59,10 +59,19 @@ describe('GET /api/diagnostics/scheduler', () => {
 
   it('backfills lastDurationMs, runCount24h, errorCount24h from audit stats', async () => {
     mockGetAuditStats.mockReturnValue([
-      { job: 'test_job', lastDurationMs: 1234, runCount24h: 5, errorCount24h: 1 },
+      {
+        job: 'test_job',
+        lastDurationMs: 1234,
+        runCount24h: 5,
+        errorCount24h: 1,
+      },
     ]);
     const scheduler = new Scheduler();
-    scheduler.register({ name: 'test_job', intervalMs: 1000, run: async () => {} });
+    scheduler.register({
+      name: 'test_job',
+      intervalMs: 1000,
+      run: async () => {},
+    });
     const app = makeApp(scheduler);
     const res = await request(app).get('/api/diagnostics/scheduler');
     expect(res.status).toBe(200);
@@ -77,7 +86,11 @@ describe('GET /api/diagnostics/scheduler', () => {
   it('returns null/0 for audit fields when no audit data for a job', async () => {
     mockGetAuditStats.mockReturnValue([]);
     const scheduler = new Scheduler();
-    scheduler.register({ name: 'new_job', intervalMs: 1000, run: async () => {} });
+    scheduler.register({
+      name: 'new_job',
+      intervalMs: 1000,
+      run: async () => {},
+    });
     const app = makeApp(scheduler);
     const res = await request(app).get('/api/diagnostics/scheduler');
     expect(res.status).toBe(200);
@@ -94,15 +107,31 @@ describe('GET /api/diagnostics/scheduler', () => {
       { job: 'job_a', lastDurationMs: 500, runCount24h: 3, errorCount24h: 0 },
     ]);
     const scheduler = new Scheduler();
-    scheduler.register({ name: 'job_a', intervalMs: 1000, run: async () => {} });
-    scheduler.register({ name: 'job_b', intervalMs: 1000, run: async () => {} });
+    scheduler.register({
+      name: 'job_a',
+      intervalMs: 1000,
+      run: async () => {},
+    });
+    scheduler.register({
+      name: 'job_b',
+      intervalMs: 1000,
+      run: async () => {},
+    });
     const app = makeApp(scheduler);
     const res = await request(app).get('/api/diagnostics/scheduler');
     expect(res.status).toBe(200);
     const a = res.body.find((j: { name: string }) => j.name === 'job_a');
     const b = res.body.find((j: { name: string }) => j.name === 'job_b');
-    expect(a).toMatchObject({ lastDurationMs: 500, runCount24h: 3, errorCount24h: 0 });
-    expect(b).toMatchObject({ lastDurationMs: null, runCount24h: 0, errorCount24h: 0 });
+    expect(a).toMatchObject({
+      lastDurationMs: 500,
+      runCount24h: 3,
+      errorCount24h: 0,
+    });
+    expect(b).toMatchObject({
+      lastDurationMs: null,
+      runCount24h: 0,
+      errorCount24h: 0,
+    });
   });
 });
 
