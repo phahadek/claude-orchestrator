@@ -49,6 +49,24 @@ interface PageValidation {
 
 export type BoardValidation = DatabaseValidation | PageValidation;
 
+export interface GithubMilestoneValidation {
+  type: 'github-milestone';
+  number: number;
+  title: string;
+  state: 'open' | 'closed';
+}
+
+export interface JiraEpicValidation {
+  type: 'jira-epic';
+  key: string;
+  summary: string;
+}
+
+export type SourceValidation =
+  | BoardValidation
+  | GithubMilestoneValidation
+  | JiraEpicValidation;
+
 export interface ProjectMilestone {
   id: string;
   projectId: string;
@@ -233,6 +251,42 @@ export const projectsApi = {
     return request<void>(`/api/milestones/${encodeURIComponent(milestoneId)}`, {
       method: 'DELETE',
     });
+  },
+
+  async validateGithubMilestone(
+    projectId: string,
+    number: number,
+  ): Promise<GithubMilestoneValidation> {
+    const res = await fetch(
+      `/api/projects/${encodeURIComponent(projectId)}/github/validate-milestone?number=${number}`,
+    );
+    const body = (await res.json()) as GithubMilestoneValidation | { error: string };
+    if (!res.ok) {
+      throw new Error(
+        'error' in body && body.error
+          ? body.error
+          : `${res.status} ${res.statusText}`,
+      );
+    }
+    return body as GithubMilestoneValidation;
+  },
+
+  async validateJiraEpic(
+    projectId: string,
+    key: string,
+  ): Promise<JiraEpicValidation> {
+    const res = await fetch(
+      `/api/projects/${encodeURIComponent(projectId)}/jira/validate-epic?key=${encodeURIComponent(key)}`,
+    );
+    const body = (await res.json()) as JiraEpicValidation | { error: string };
+    if (!res.ok) {
+      throw new Error(
+        'error' in body && body.error
+          ? body.error
+          : `${res.status} ${res.statusText}`,
+      );
+    }
+    return body as JiraEpicValidation;
   },
 
   async validateNotionBoard(id: string): Promise<BoardValidation> {
